@@ -11,7 +11,8 @@ else()
 endif()
 
 option(LIBTORCH_ROOTDIR "libtorch root dir")
-set(LIBTORCH_ROOTDIR ${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/)
+set(LIBTORCH_DIR_NAME "libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}")
+set(LIBTORCH_ROOTDIR ${CMAKE_CURRENT_SOURCE_DIR}/modules/${LIBTORCH_DIR_NAME}/)
 
 if(EXISTS ${LIBTORCH_ROOTDIR})
     message(STATUS "Libtorch-Runtime library found at ${LIBTORCH_ROOTDIR}")
@@ -110,3 +111,5 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 # Suppress warnings by setting -w flag as a linker option
 target_link_options(torch INTERFACE "-w")
 target_link_options(torch_library INTERFACE "-w")
+
+list(APPEND BACKEND_INSTALL_HEADER_DIR ${LIBTORCH_DIR_NAME})
