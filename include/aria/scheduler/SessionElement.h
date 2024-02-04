@@ -14,9 +14,9 @@
 #include "../InferenceConfig.h"
 
 // TODO replace this with inferenceConfig
-#define BATCH_SIZE 128
-#define MODEL_INPUT_SIZE_BACKEND 150
-#define MODEL_OUTPUT_SIZE_BACKEND 1
+#define TEMP_BATCH_SIZE 128
+#define TEMP_MODEL_INPUT_SIZE_BACKEND 150
+#define TEMP_MODEL_OUTPUT_SIZE_BACKEND 1
 
 struct SessionElement {
     SessionElement(int newSessionID, PrePostProcessor& prePostProcessor, InferenceConfig& config);
@@ -29,8 +29,8 @@ struct SessionElement {
         std::binary_semaphore ready{false};
         std::binary_semaphore done{false};
         std::chrono::time_point<std::chrono::system_clock> time;
-        AudioBufferF processedModelInput = AudioBufferF(1, BATCH_SIZE * MODEL_INPUT_SIZE_BACKEND);
-        AudioBufferF rawModelOutput = AudioBufferF(1, BATCH_SIZE * MODEL_OUTPUT_SIZE_BACKEND);
+        AudioBufferF processedModelInput = AudioBufferF(1, TEMP_BATCH_SIZE * TEMP_MODEL_INPUT_SIZE_BACKEND);
+        AudioBufferF rawModelOutput = AudioBufferF(1, TEMP_BATCH_SIZE * TEMP_MODEL_OUTPUT_SIZE_BACKEND);
     };
 
     // TODO define a dynamic number instead of 5000

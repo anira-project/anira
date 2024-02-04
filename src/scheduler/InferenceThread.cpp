@@ -1,12 +1,18 @@
 #include <aria/scheduler/InferenceThread.h>
 
 InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, std::vector<std::shared_ptr<SessionElement>>& ses, InferenceConfig& config) :
+#ifdef USE_LIBTORCH
+        torchProcessor(config),
+#endif
+#ifdef USE_ONNXRUNTIME
+        onnxProcessor(config),
+#endif
+#ifdef USE_TFLITE
+        tfliteProcessor(config),
+#endif
     shouldExit(false),
     globalSemaphore(s),
-    sessions(ses),
-    torchProcessor(config),
-    onnxProcessor(config),
-    tfliteProcessor(config)
+    sessions(ses)
 {
 #ifdef USE_LIBTORCH
     torchProcessor.prepareToPlay();

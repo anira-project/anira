@@ -23,7 +23,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Shall the library be built as a shared library?
-option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
+option(BUILD_SHARED_LIBS "Build the library as a shared library" OFF)
 
 # Define options for backends
 option(WITH_LIBTORCH "Build with LibTorch backend" OFF)
@@ -69,7 +69,7 @@ endif()
 # ==============================================================================
 
 # No STATIC or SHARED keyword is needed here, since the BUILD_SHARED_LIBS option is set
-add_library(${PROJECT_NAME})
+add_library(${PROJECT_NAME} STATIC)
 
 # target_sources(${PROJECT_NAME} PRIVATE ${BACKEND_SOURCES})
 
@@ -111,28 +111,41 @@ target_compile_definitions(${PROJECT_NAME}
 
 # Link backend-specific libraries conditionally
 if(BACKEND_LIBTORCH)
-    target_link_libraries(${PROJECT_NAME} PRIVATE torch)
+    target_link_libraries(${PROJECT_NAME} PUBLIC torch)
 endif()
 
 if(BACKEND_ONNXRUNTIME)
-    target_link_libraries(${PROJECT_NAME} PRIVATE onnxruntime)
+    target_link_directories(${PROJECT_NAME} PUBLIC onnxruntime
+            modules/onnxruntime-1.15.0/lib
+    )
+    target_link_libraries(${PROJECT_NAME} PUBLIC onnxruntime)
+    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
+            modules/onnxruntime-1.15.0/include
+            modules/onnxruntime-1.15.0/include/onnxruntime/core/session
+    )
 endif()
 
 if(BACKEND_TFLITE)
-    target_link_libraries(${PROJECT_NAME} PRIVATE tensorflowlite_c)
+    target_link_directories(${PROJECT_NAME} PUBLIC onnxruntime
+            modules/tensorflowlite-2.14.0/lib
+    )
+    target_link_libraries(${PROJECT_NAME} PUBLIC tensorflowlite_c)
+    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
+            modules/tensorflowlite-2.14.0/include
+    )
 endif()
 
-if (MSVC)
-    file(GLOB_RECURSE INFERENCE_ENGINE_DLLS "modules/*.dll")
-    foreach(FORMAT IN LISTS FORMATS_TO_BUILD)
-        string(CONCAT CONCATENATED_TARGET ${PROJECT_NAME}_${FORMAT})
-        add_custom_command(TARGET ${CONCATENATED_TARGET}
-                POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${INFERENCE_ENGINE_DLLS}
-                $<TARGET_FILE_DIR:${PROJECT_NAME}>/${FORMAT})
-    endforeach()
-endif (MSVC)
+#if (MSVC)
+#    file(GLOB_RECURSE INFERENCE_ENGINE_DLLS "modules/*.dll")
+#    foreach(FORMAT IN LISTS FORMATS_TO_BUILD)
+#        string(CONCAT CONCATENATED_TARGET ${PROJECT_NAME}_${FORMAT})
+#        add_custom_command(TARGET ${CONCATENATED_TARGET}
+#                POST_BUILD
+#                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+#                ${INFERENCE_ENGINE_DLLS}
+#                $<TARGET_FILE_DIR:${PROJECT_NAME}>/${FORMAT})
+#    endforeach()
+#endif (MSVC)
 
 # ==============================================================================
 # Install the library

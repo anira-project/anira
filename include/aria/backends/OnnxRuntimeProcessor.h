@@ -1,6 +1,8 @@
 #ifndef ARIA_ONNXRUNTIMEPROCESSOR_H
 #define ARIA_ONNXRUNTIMEPROCESSOR_H
 
+#ifdef USE_ONNXRUNTIME
+
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
 #include <onnxruntime_cxx_api.h>
@@ -29,5 +31,5 @@ private:
     // Define output tensor vector
     std::vector<Ort::Value> outputTensors;
 };
-
+#endif
 #endif //ARIA_ONNXRUNTIMEPROCESSOR_H

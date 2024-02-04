@@ -1,6 +1,7 @@
 #ifndef ARIA_TFLITEPROCESSOR_H
 #define ARIA_TFLITEPROCESSOR_H
 
+#ifdef USE_TFLITE
 
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
@@ -25,4 +26,5 @@ private:
     const TfLiteTensor* outputTensor;
 };
 
+#endif
 #endif //ARIA_TFLITEPROCESSOR_H
