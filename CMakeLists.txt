@@ -132,15 +132,28 @@ target_compile_definitions(${PROJECT_NAME}
 
 # Link backend-specific libraries conditionally
 if(BACKEND_LIBTORCH)
-    target_link_libraries(${PROJECT_NAME} PRIVATE torch)
+    target_link_libraries(${PROJECT_NAME} PUBLIC torch)
 endif()
 
 if(BACKEND_ONNXRUNTIME)
-    target_link_libraries(${PROJECT_NAME} PRIVATE onnxruntime)
+    target_link_directories(${PROJECT_NAME} PUBLIC onnxruntime
+            modules/onnxruntime-1.15.0/lib
+    )
+    target_link_libraries(${PROJECT_NAME} PUBLIC onnxruntime)
+    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
+            modules/onnxruntime-1.15.0/include
+            modules/onnxruntime-1.15.0/include/onnxruntime/core/session
+    )
 endif()
 
 if(BACKEND_TFLITE)
-    target_link_libraries(${PROJECT_NAME} PRIVATE tensorflowlite_c)
+    target_link_directories(${PROJECT_NAME} PUBLIC onnxruntime
+            modules/tensorflowlite-2.14.0/lib
+    )
+    target_link_libraries(${PROJECT_NAME} PUBLIC tensorflowlite_c)
+    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
+            modules/tensorflowlite-2.14.0/include
+    )
 endif()
 
 # ==============================================================================

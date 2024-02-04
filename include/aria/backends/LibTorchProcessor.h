@@ -1,6 +1,8 @@
 #ifndef ARIA_LIBTORCHPROCESSOR_H
 #define ARIA_LIBTORCHPROCESSOR_H
 
+#ifdef USE_LIBTORCH
+
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
 #include <torch/script.h>
@@ -24,5 +26,5 @@ private:
     std::vector<torch::jit::IValue> inputs;
 };
 
-
+#endif
 #endif //ARIA_LIBTORCHPROCESSOR_H
