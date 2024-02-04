@@ -23,17 +23,35 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Shall the library be built as a shared library?
-option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
+option(ARIA_BUILD_DYNAMIC_LIBRARY "Build the library as a shared library" OFF)
 
 # Define options for backends
-option(WITH_LIBTORCH "Build with LibTorch backend" OFF)
-option(WITH_ONNXRUNTIME "Build with ONNX Runtime backend" OFF)
-option(WITH_TFLITE "Build with TensorFlow Lite backend" OFF)
-option(WITH_ALL "Build with all backends" OFF)
+option(ARIA_WITH_LIBTORCH "Build with LibTorch backend" OFF)
+option(ARIA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" OFF)
+option(ARIA_WITH_TFLITE "Build with TensorFlow Lite backend" OFF)
+option(ARIA_WITH_ALL "Build with all backends" OFF)
 
-option(BACKEND_ALL "Build with BACKEND_ALL" ON)
+option(ARIA_BACKEND_ALL "Build with BACKEND_ALL" ON)
 
-if(BACKEND_ALL)
+if(ARIA_WITH_LIBTORCH)
+    set(BACKEND_LIBTORCH ON)
+else()
+    set(BACKEND_LIBTORCH OFF)
+endif()
+
+if(ARIA_WITH_ONNXRUNTIME)
+    set(BACKEND_ONNXRUNTIME ON)
+else()
+    set(BACKEND_ONNXRUNTIME OFF)
+endif()
+
+if(ARIA_WITH_TFLITE)
+    set(BACKEND_TFLITE ON)
+else()
+    set(BACKEND_TFLITE OFF)
+endif()
+
+if(ARIA_BACKEND_ALL)
     set(BACKEND_LIBTORCH ON)
     set(BACKEND_ONNXRUNTIME ON)
     set(BACKEND_TFLITE ON)
@@ -68,8 +86,11 @@ endif()
 # Build the library
 # ==============================================================================
 
-# No STATIC or SHARED keyword is needed here, since the BUILD_SHARED_LIBS option is set
-add_library(${PROJECT_NAME})
+if (ARIA_BUILD_DYNAMIC_LIBRARY)
+    add_library(${PROJECT_NAME} SHARED)
+else()
+    add_library(${PROJECT_NAME} STATIC)
+endif()
 
 # target_sources(${PROJECT_NAME} PRIVATE ${BACKEND_SOURCES})
 
@@ -122,61 +143,112 @@ if(BACKEND_TFLITE)
     target_link_libraries(${PROJECT_NAME} PRIVATE tensorflowlite_c)
 endif()
 
-if (MSVC)
-    file(GLOB_RECURSE INFERENCE_ENGINE_DLLS "modules/*.dll")
-    foreach(FORMAT IN LISTS FORMATS_TO_BUILD)
-        string(CONCAT CONCATENATED_TARGET ${PROJECT_NAME}_${FORMAT})
-        add_custom_command(TARGET ${CONCATENATED_TARGET}
-                POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${INFERENCE_ENGINE_DLLS}
-                $<TARGET_FILE_DIR:${PROJECT_NAME}>/${FORMAT})
-    endforeach()
-endif (MSVC)
-
 # ==============================================================================
 # Install the library
 # ==============================================================================
 
-# # note that it is not CMAKE_INSTALL_PREFIX we are checking here
-# if(DEFINED CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-#     message(
-#         STATUS
-#         "CMAKE_INSTALL_PREFIX is not set\n"
-#         "Default value: ${CMAKE_INSTALL_PREFIX}\n"
-#         "Will set it to ${CMAKE_SOURCE_DIR}/install"
-#     )
-#     set(CMAKE_INSTALL_PREFIX
-#         "${CMAKE_SOURCE_DIR}/install"
-#         CACHE PATH "Where the library will be installed to" FORCE
-#     )
-# else()
-#     message(
-#         STATUS
-#         "CMAKE_INSTALL_PREFIX was already set\n"
-#         "Current value: ${CMAKE_INSTALL_PREFIX}"
-#     )
-# endif()
+# note that it is not CMAKE_INSTALL_PREFIX we are checking here
+if(DEFINED CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    message(
+        STATUS
+        "CMAKE_INSTALL_PREFIX is not set\n"
+        "Default value: ${CMAKE_INSTALL_PREFIX}\n"
+        "Will set it to ${CMAKE_SOURCE_DIR}/install"
+    )
+    set(CMAKE_INSTALL_PREFIX
+        "${CMAKE_SOURCE_DIR}/install"
+        CACHE PATH "Where the library will be installed to" FORCE
+    )
+else()
+    message(
+        STATUS
+        "CMAKE_INSTALL_PREFIX was already set\n"
+        "Current value: ${CMAKE_INSTALL_PREFIX}"
+    )
+endif()
 
-# # for CMAKE_INSTALL_INCLUDEDIR definition
-# include(GNUInstallDirs)
+# without it public headers won't get installed
+set(PUBLIC_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/InferenceHandler.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/PrePostProcessor.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/InferenceConfig.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/backends/LibTorchProcessor.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/backends/OnnxRuntimeProcessor.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/backends/TFLiteProcessor.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/scheduler/InferenceManager.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/scheduler/InferenceThread.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/scheduler/InferenceThreadPool.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/scheduler/SessionElement.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/utils/AudioBuffer.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/utils/HostAudioConfig.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/utils/InferenceBackend.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/utils/RingBuffer.h
+)
 
-# # without it public headers won't get installed
-# set(public_headers
-#     include/
-# )
+# for CMAKE_INSTALL_INCLUDEDIR definition
+include(GNUInstallDirs)
 
-# # the variant with PUBLIC_HEADER property unfortunately does not preserve the folder structure
-# # set_target_properties(${PROJECT_NAME} PROPERTIES PUBLIC_HEADER "${public_headers}")
-# # so instead we iterate through public headers and install them "manually"
-# foreach(header ${public_headers})
-#     file(RELATIVE_PATH header_file_path "${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}" "${header}")
-#     get_filename_component(header_directory_path "${header_file_path}" DIRECTORY)
-#     install(
-#         FILES ${header}
-#         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${header_directory_path}"
-#     )
-# endforeach()
+# the variant with PUBLIC_HEADER property unfortunately does not preserve the folder structure
+#set_target_properties(${PROJECT_NAME} PROPERTIES PUBLIC_HEADER "${public_headers}")
+# so instead we iterate through public headers and install them "manually"
+foreach(HEADER ${PUBLIC_HEADERS})
+    file(RELATIVE_PATH HEADER_PATH_RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${HEADER}")
+    get_filename_component(HEADER_DIRECTORY_PATH "${HEADER_PATH_RELATIVE}" DIRECTORY)
+    install(
+        FILES ${HEADER}
+        DESTINATION "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/${HEADER_DIRECTORY_PATH}"
+    )
+endforeach()
+
+# install the target and create export-set
+install(TARGETS ${PROJECT_NAME}
+    EXPORT "${PROJECT_NAME}Targets"
+    # these get default values from GNUInstallDirs, no need to set them
+    #RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} # bin
+    #LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} # lib
+    #ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} # lib
+    #PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} # include
+)
+
+# set a debug postfix for the library
+set_target_properties(${PROJECT_NAME} PROPERTIES DEBUG_POSTFIX "d")
+
+# ==============================================================================
+# Generate config files
+# ==============================================================================
+
+message(STATUS "namespace: ${PROJECT_NAME}")
+message(STATUS "version: ${PROJECT_VERSION}")
+message(STATUS "Data root dir: ${CMAKE_INSTALL_DATAROOTDIR}")
+
+# generate and install export file in the folder cmake with the name of the project and namespace
+# this generates files called ariaTargets.cmake, ariaTargets-debug.cmake, ariaTargets-release.cmake
+install(EXPORT "${PROJECT_NAME}Targets"
+    NAMESPACE ${PROJECT_NAME}::
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/cmake
+)
+
+include(CMakePackageConfigHelpers)
+
+# create config file from the template file Config.cmake.in and specify the install destination
+configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in
+    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/cmake
+)
+
+# generate the version file for the config file
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
+    VERSION "${PROJECT_VERSION}"
+    COMPATIBILITY AnyNewerVersion
+)
+
+# install config files
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/cmake
+)
 
 # # ==============================================================================
 

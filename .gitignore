@@ -4,3 +4,4 @@ build/
 modules/
 cmake-build*
 .vscode
+install/
