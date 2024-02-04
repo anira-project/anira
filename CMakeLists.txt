@@ -18,6 +18,9 @@ project (${PROJECT_NAME} VERSION 0.0.1)
 
 option(BUILD_ARCHITECTURE "Architecture to build for")
 
+# for CMAKE_INSTALL_INCLUDEDIR definition
+include(GNUInstallDirs)
+
 # Sets the cpp language minimum
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -62,6 +65,8 @@ endif()
 # ==============================================================================
 
 set(BACKEND_SOURCES)
+set(BACKEND_BUILD_HEADER_DIR)
+set(BACKEND_BUILD_LIBRARY_DIRS)
 
 if(BACKEND_LIBTORCH)
     include(cmake/SetupLibTorch.cmake)
@@ -86,11 +91,15 @@ endif()
 # Build the library
 # ==============================================================================
 
+# add the library as a shared or static library
 if (ARIA_BUILD_DYNAMIC_LIBRARY)
     add_library(${PROJECT_NAME} SHARED)
 else()
     add_library(${PROJECT_NAME} STATIC)
 endif()
+
+# add an alias so that the project can be used with add_subdirectory
+add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
 # target_sources(${PROJECT_NAME} PRIVATE ${BACKEND_SOURCES})
 
@@ -114,6 +123,20 @@ target_sources(${PROJECT_NAME}
         src/PrePostProcessor.cpp
 )
 
+# add the include directories for the backends to the build interface as well as the install interface
+foreach(HEADER_DIR ${BACKEND_BUILD_HEADER_DIR})
+    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
+        $<BUILD_INTERFACE:${HEADER_DIR}>
+    )
+    file(RELATIVE_PATH HEADER_PATH_RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/modules" "${HEADER_DIR}")
+    get_filename_component(HEADER_DIRECTORY_PATH "${HEADER_PATH_RELATIVE}" DIRECTORY)
+    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/${HEADER_DIRECTORY_PATH}>
+    )
+    message(STATUS "Install header dir: ${CMAKE_INSTALL_INCLUDEDIR}/${HEADER_DIRECTORY_PATH}")
+endforeach()
+
+# include the public headers of the aria library
 target_include_directories(${PROJECT_NAME}
     PUBLIC
     # where top-level project will look for the library's public headers
@@ -122,8 +145,21 @@ target_include_directories(${PROJECT_NAME}
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
+# include the link directories for all the backends to the build interface as well as the install interface
+foreach(LIBRARY_DIR ${BACKEND_BUILD_LIBRARY_DIRS})
+    target_link_directories(${PROJECT_NAME} PUBLIC
+        $<BUILD_INTERFACE:${LIBRARY_DIR}>
+    )
+    file(RELATIVE_PATH LIBRARY_PATH_RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/modules" "${LIBRARY_DIR}")
+    get_filename_component(LIBRARY_DIRECTORY_PATH "${LIBRARY_PATH_RELATIVE}" DIRECTORY)
+    target_link_directories(${PROJECT_NAME} PUBLIC
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_LIBDIR}/${LIBRARY_DIRECTORY_PATH}>
+    )
+    message(STATUS "Install library path: ${CMAKE_INSTALL_LIBDIR}/${LIBRARY_DIRECTORY_PATH}")
+endforeach()
+
 target_compile_definitions(${PROJECT_NAME}
-    PRIVATE
+    PUBLIC
     # Backend-specific definitions
     $<$<BOOL:${BACKEND_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${BACKEND_ONNXRUNTIME}>:USE_ONNXRUNTIME>
@@ -132,28 +168,15 @@ target_compile_definitions(${PROJECT_NAME}
 
 # Link backend-specific libraries conditionally
 if(BACKEND_LIBTORCH)
-    target_link_libraries(${PROJECT_NAME} PUBLIC torch)
+    target_link_libraries(${PROJECT_NAME} PRIVATE torch)
 endif()
 
 if(BACKEND_ONNXRUNTIME)
-    target_link_directories(${PROJECT_NAME} PUBLIC onnxruntime
-            modules/onnxruntime-1.15.0/lib
-    )
-    target_link_libraries(${PROJECT_NAME} PUBLIC onnxruntime)
-    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
-            modules/onnxruntime-1.15.0/include
-            modules/onnxruntime-1.15.0/include/onnxruntime/core/session
-    )
+    target_link_libraries(${PROJECT_NAME} PRIVATE onnxruntime)
 endif()
 
 if(BACKEND_TFLITE)
-    target_link_directories(${PROJECT_NAME} PUBLIC onnxruntime
-            modules/tensorflowlite-2.14.0/lib
-    )
-    target_link_libraries(${PROJECT_NAME} PUBLIC tensorflowlite_c)
-    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
-            modules/tensorflowlite-2.14.0/include
-    )
+    target_link_libraries(${PROJECT_NAME} PRIVATE tensorflowlite_c)
 endif()
 
 # ==============================================================================
@@ -180,48 +203,46 @@ else()
     )
 endif()
 
-# without it public headers won't get installed
-set(PUBLIC_HEADERS
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/InferenceHandler.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/PrePostProcessor.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/InferenceConfig.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/backends/LibTorchProcessor.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/backends/OnnxRuntimeProcessor.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/backends/TFLiteProcessor.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/scheduler/InferenceManager.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/scheduler/InferenceThread.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/scheduler/InferenceThreadPool.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/scheduler/SessionElement.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/utils/AudioBuffer.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/utils/HostAudioConfig.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/utils/InferenceBackend.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/aria/utils/RingBuffer.h
+# the variant with PUBLIC_HEADER property unfortunately does not preserve the folder structure therefore we use the simple install directory command
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/aria
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
-
-# for CMAKE_INSTALL_INCLUDEDIR definition
-include(GNUInstallDirs)
-
-# the variant with PUBLIC_HEADER property unfortunately does not preserve the folder structure
-#set_target_properties(${PROJECT_NAME} PROPERTIES PUBLIC_HEADER "${public_headers}")
-# so instead we iterate through public headers and install them "manually"
-foreach(HEADER ${PUBLIC_HEADERS})
-    file(RELATIVE_PATH HEADER_PATH_RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${HEADER}")
-    get_filename_component(HEADER_DIRECTORY_PATH "${HEADER_PATH_RELATIVE}" DIRECTORY)
-    install(
-        FILES ${HEADER}
-        DESTINATION "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/${HEADER_DIRECTORY_PATH}"
-    )
-endforeach()
 
 # install the target and create export-set
 install(TARGETS ${PROJECT_NAME}
     EXPORT "${PROJECT_NAME}Targets"
-    # these get default values from GNUInstallDirs, no need to set them
-    #RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} # bin
-    #LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} # lib
-    #ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} # lib
-    #PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} # include
+    # these get default values from GNUInstallDirs
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME} # lib
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME} # lib
 )
+
+# libtorch has cmake config files that we can use to install the library later with find_package and then just link to it
+# if we would implement the install manually we would have to include the include and lib directories to our install interface
+if(BACKEND_LIBTORCH)
+    install(DIRECTORY "${LIBTORCH_ROOTDIR}/"
+        DESTINATION "${CMAKE_INSTALL_PREFIX}/modules/${LIBTORCH_DIR_NAME}"
+    )
+endif()
+
+# the other ones don't have cmake config files so we have to install them manually
+if(BACKEND_ONNXRUNTIME)
+    install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/include/"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${ONNXRUNTIME_DIR_NAME}"
+    )
+    install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/lib/"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/${ONNXRUNTIME_DIR_NAME}"
+    )
+endif()
+
+if(BACKEND_TFLITE)
+    install(DIRECTORY "${TENSORFLOWLITE_ROOTDIR}/include/"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${TENSORFLOWLITE_DIR_NAME}"
+    )
+    install(DIRECTORY "${TENSORFLOWLITE_ROOTDIR}/lib/"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/${TENSORFLOWLITE_DIR_NAME}"
+    )
+endif()
+
 
 # set a debug postfix for the library
 set_target_properties(${PROJECT_NAME} PROPERTIES DEBUG_POSTFIX "d")
@@ -230,15 +251,11 @@ set_target_properties(${PROJECT_NAME} PROPERTIES DEBUG_POSTFIX "d")
 # Generate config files
 # ==============================================================================
 
-message(STATUS "namespace: ${PROJECT_NAME}")
-message(STATUS "version: ${PROJECT_VERSION}")
-message(STATUS "Data root dir: ${CMAKE_INSTALL_DATAROOTDIR}")
-
 # generate and install export file in the folder cmake with the name of the project and namespace
 # this generates files called ariaTargets.cmake, ariaTargets-debug.cmake, ariaTargets-release.cmake
 install(EXPORT "${PROJECT_NAME}Targets"
     NAMESPACE ${PROJECT_NAME}::
-    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/cmake
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_NAME}/cmake
 )
 
 include(CMakePackageConfigHelpers)
@@ -246,7 +263,7 @@ include(CMakePackageConfigHelpers)
 # create config file from the template file Config.cmake.in and specify the install destination
 configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in
     "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-    INSTALL_DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_NAME}/cmake
 )
 
 # generate the version file for the config file
@@ -260,7 +277,7 @@ write_basic_package_version_file(
 install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
-    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/cmake
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_NAME}/cmake
 )
 
 # # ==============================================================================
