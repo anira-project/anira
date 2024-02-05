@@ -26,7 +26,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Shall the library be built as a shared library?
-option(ARIA_BUILD_DYNAMIC_LIBRARY "Build the library as a shared library" OFF)
+option(ARIA_BUILD_DYNAMIC_LIBRARY "Build the library as a shared library" ON)
 
 # Define options for backends
 option(ARIA_WITH_LIBTORCH "Build with LibTorch backend" OFF)
@@ -98,6 +98,9 @@ else()
     add_library(${PROJECT_NAME} STATIC)
 endif()
 
+# enable position independent code because otherwise the library cannot be linked into a shared library
+set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # add an alias so that the project can be used with add_subdirectory
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
@@ -167,16 +170,17 @@ target_compile_definitions(${PROJECT_NAME}
 )
 
 # Link backend-specific libraries conditionally
+# We use the PUBLIC keyword here to make sure that we don't get the DSO missing from command line error
 if(BACKEND_LIBTORCH)
-    target_link_libraries(${PROJECT_NAME} PRIVATE torch)
+    target_link_libraries(${PROJECT_NAME} PUBLIC torch)
 endif()
 
 if(BACKEND_ONNXRUNTIME)
-    target_link_libraries(${PROJECT_NAME} PRIVATE onnxruntime)
+    target_link_libraries(${PROJECT_NAME} PUBLIC onnxruntime)
 endif()
 
 if(BACKEND_TFLITE)
-    target_link_libraries(${PROJECT_NAME} PRIVATE tensorflowlite_c)
+    target_link_libraries(${PROJECT_NAME} PUBLIC tensorflowlite_c)
 endif()
 
 # ==============================================================================
@@ -381,4 +385,3 @@ install(FILES
 #             ${INFERENCE_ENGINE_DLLS}
 #             $<TARGET_FILE_DIR:${TEST_TARGET}>)
 # endif (MSVC)
-
