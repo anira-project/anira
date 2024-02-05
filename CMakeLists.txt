@@ -94,8 +94,10 @@ endif()
 # add the library as a shared or static library
 if (ARIA_BUILD_DYNAMIC_LIBRARY)
     add_library(${PROJECT_NAME} SHARED)
+    message(STATUS "Building aria as a shared library")
 else()
     add_library(${PROJECT_NAME} STATIC)
+    message(STATUS "Building aria as static library")
 endif()
 
 # enable position independent code because otherwise the library cannot be linked into a shared library
@@ -187,6 +189,7 @@ endif()
 # Install the library
 # ==============================================================================
 
+# define the dircetory where the library will be installed CMAKE_INSTALL_PREFIX
 # note that it is not CMAKE_INSTALL_PREFIX we are checking here
 if(DEFINED CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     message(
@@ -206,6 +209,16 @@ else()
         "Current value: ${CMAKE_INSTALL_PREFIX}"
     )
 endif()
+
+# at install the rpath is cleared by default so we have to set it again for the installed shared library to find the other libraries
+# in this case we set the rpath to the directories where the other libraries are installed
+# $ORIGIN is a special token that gets replaced by the directory of the library at runtime
+# from that point we can navigate to the other libraries
+# it is a little strange but the onnxruntime library and libtorch work without this setting in the JUCE example... but tensorflowlite does not
+set_target_properties(${PROJECT_NAME}
+    PROPERTIES
+        INSTALL_RPATH "$ORIGIN/../${TENSORFLOWLITE_DIR_NAME};$ORIGIN/../${ONNXRUNTIME_DIR_NAME};$ORIGIN/../../modules/${LIBTORCH_DIR_NAME}/lib"
+)
 
 # the variant with PUBLIC_HEADER property unfortunately does not preserve the folder structure therefore we use the simple install directory command
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/aria
