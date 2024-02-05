@@ -1,5 +1,5 @@
-#ifndef ARIA_INFERENCEBACKEND_H
-#define ARIA_INFERENCEBACKEND_H
+#ifndef AARI_INFERENCEBACKEND_H
+#define AARI_INFERENCEBACKEND_H
 
 enum InferenceBackend {
 #ifdef USE_LIBTORCH
@@ -13,4 +13,4 @@ enum InferenceBackend {
 #endif
 };
 
-#endif //ARIA_INFERENCEBACKEND_H
+#endif //AARI_INFERENCEBACKEND_H

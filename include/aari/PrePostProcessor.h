@@ -1,5 +1,5 @@
-#ifndef ARIA_PREPOSTPROCESSOR_H
-#define ARIA_PREPOSTPROCESSOR_H
+#ifndef AARI_PREPOSTPROCESSOR_H
+#define AARI_PREPOSTPROCESSOR_H
 
 #include "utils/RingBuffer.h"
 #include "utils/InferenceBackend.h"
@@ -23,4 +23,4 @@ protected:
     void pushSamplesToBuffer(const AudioBufferF& input, RingBuffer& output);
 };
 
-#endif //ARIA_PREPOSTPROCESSOR_H
+#endif //AARI_PREPOSTPROCESSOR_H

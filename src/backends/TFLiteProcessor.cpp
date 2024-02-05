@@ -1,4 +1,4 @@
-#include <aria/backends/TFLiteProcessor.h>
+#include <aari/backends/TFLiteProcessor.h>
 
 #ifdef _WIN32
 #include <comdef.h>

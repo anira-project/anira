@@ -12,7 +12,7 @@ endif ()
 # Setup the project
 # ==============================================================================
 
-set (PROJECT_NAME aria)
+set (PROJECT_NAME aari)
 
 project (${PROJECT_NAME} VERSION 0.0.1)
 
@@ -26,35 +26,35 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Shall the library be built as a shared library?
-option(ARIA_BUILD_DYNAMIC_LIBRARY "Build the library as a shared library" ON)
+option(AARI_BUILD_DYNAMIC_LIBRARY "Build the library as a shared library" ON)
 
 # Define options for backends
-option(ARIA_WITH_LIBTORCH "Build with LibTorch backend" OFF)
-option(ARIA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" OFF)
-option(ARIA_WITH_TFLITE "Build with TensorFlow Lite backend" OFF)
-option(ARIA_WITH_ALL "Build with all backends" OFF)
+option(AARI_WITH_LIBTORCH "Build with LibTorch backend" OFF)
+option(AARI_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" OFF)
+option(AARI_WITH_TFLITE "Build with TensorFlow Lite backend" OFF)
+option(AARI_WITH_ALL "Build with all backends" OFF)
 
-option(ARIA_BACKEND_ALL "Build with BACKEND_ALL" ON)
+option(AARI_BACKEND_ALL "Build with BACKEND_ALL" ON)
 
-if(ARIA_WITH_LIBTORCH)
+if(AARI_WITH_LIBTORCH)
     set(BACKEND_LIBTORCH ON)
 else()
     set(BACKEND_LIBTORCH OFF)
 endif()
 
-if(ARIA_WITH_ONNXRUNTIME)
+if(AARI_WITH_ONNXRUNTIME)
     set(BACKEND_ONNXRUNTIME ON)
 else()
     set(BACKEND_ONNXRUNTIME OFF)
 endif()
 
-if(ARIA_WITH_TFLITE)
+if(AARI_WITH_TFLITE)
     set(BACKEND_TFLITE ON)
 else()
     set(BACKEND_TFLITE OFF)
 endif()
 
-if(ARIA_BACKEND_ALL)
+if(AARI_BACKEND_ALL)
     set(BACKEND_LIBTORCH ON)
     set(BACKEND_ONNXRUNTIME ON)
     set(BACKEND_TFLITE ON)
@@ -92,12 +92,12 @@ endif()
 # ==============================================================================
 
 # add the library as a shared or static library
-if (ARIA_BUILD_DYNAMIC_LIBRARY)
+if (AARI_BUILD_DYNAMIC_LIBRARY)
     add_library(${PROJECT_NAME} SHARED)
-    message(STATUS "Building aria as a shared library")
+    message(STATUS "Building AARI as a shared library")
 else()
     add_library(${PROJECT_NAME} STATIC)
-    message(STATUS "Building aria as static library")
+    message(STATUS "Building AARI as static library")
 endif()
 
 # enable position independent code because otherwise the library cannot be linked into a shared library
@@ -141,7 +141,7 @@ foreach(HEADER_DIR ${BACKEND_BUILD_HEADER_DIR})
     message(STATUS "Install header dir: ${CMAKE_INSTALL_INCLUDEDIR}/${HEADER_DIRECTORY_PATH}")
 endforeach()
 
-# include the public headers of the aria library
+# include the public headers of the AARI library
 target_include_directories(${PROJECT_NAME}
     PUBLIC
     # where top-level project will look for the library's public headers
@@ -221,13 +221,13 @@ set_target_properties(${PROJECT_NAME}
 )
 
 # the variant with PUBLIC_HEADER property unfortunately does not preserve the folder structure therefore we use the simple install directory command
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/aria
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/aari
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
 # install the target and create export-set
 install(TARGETS ${PROJECT_NAME}
-    EXPORT "${PROJECT_NAME}Targets"
+    EXPORT "AARITargets"
     # these get default values from GNUInstallDirs
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME} # lib
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME} # lib
@@ -269,8 +269,8 @@ set_target_properties(${PROJECT_NAME} PROPERTIES DEBUG_POSTFIX "d")
 # ==============================================================================
 
 # generate and install export file in the folder cmake with the name of the project and namespace
-# this generates files called ariaTargets.cmake, ariaTargets-debug.cmake, ariaTargets-release.cmake
-install(EXPORT "${PROJECT_NAME}Targets"
+# this generates files called AARITargets.cmake, AARITargets-debug.cmake, AARITargets-release.cmake
+install(EXPORT "AARITargets"
     NAMESPACE ${PROJECT_NAME}::
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_NAME}/cmake
 )
@@ -279,21 +279,21 @@ include(CMakePackageConfigHelpers)
 
 # create config file from the template file Config.cmake.in and specify the install destination
 configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in
-    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/AARIConfig.cmake"
     INSTALL_DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_NAME}/cmake
 )
 
 # generate the version file for the config file
 write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/AARIConfigVersion.cmake"
     VERSION "${PROJECT_VERSION}"
     COMPATIBILITY AnyNewerVersion
 )
 
 # install config files
 install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/AARIConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/AARIConfigVersion.cmake"
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_NAME}/cmake
 )
 

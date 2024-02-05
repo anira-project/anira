@@ -1,4 +1,4 @@
-#include <aria/scheduler/InferenceManager.h>
+#include <aari/scheduler/InferenceManager.h>
 
 InferenceManager::InferenceManager(PrePostProcessor& ppP, InferenceConfig& config) :
     inferenceThreadPool(InferenceThreadPool::getInstance(config)),

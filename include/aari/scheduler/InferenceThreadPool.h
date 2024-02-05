@@ -1,5 +1,5 @@
-#ifndef ARIA_INFERENCETHREADPOOL_H
-#define ARIA_INFERENCETHREADPOOL_H
+#ifndef AARI_INFERENCETHREADPOOL_H
+#define AARI_INFERENCETHREADPOOL_H
 
 #include <semaphore>
 
@@ -41,4 +41,4 @@ private:
     inline static std::vector<std::unique_ptr<InferenceThread>> threadPool;
 };
 
-#endif //ARIA_INFERENCETHREADPOOL_H
+#endif //AARI_INFERENCETHREADPOOL_H

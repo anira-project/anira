@@ -1,5 +1,5 @@
-#ifndef ARIA_RINGBUFFER_H
-#define ARIA_RINGBUFFER_H
+#ifndef AARI_RINGBUFFER_H
+#define AARI_RINGBUFFER_H
 
 #include <vector>
 #include <cmath>
@@ -21,4 +21,4 @@ private:
     std::vector<size_t> readPos, writePos;
 };
 
-#endif //ARIA_RINGBUFFER_H
+#endif //AARI_RINGBUFFER_H

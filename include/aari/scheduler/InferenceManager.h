@@ -1,5 +1,5 @@
-#ifndef ARIA_INFERENCEMANAGER_H
-#define ARIA_INFERENCEMANAGER_H
+#ifndef AARI_INFERENCEMANAGER_H
+#define AARI_INFERENCEMANAGER_H
 
 #include "InferenceThread.h"
 #include "InferenceThreadPool.h"
@@ -47,4 +47,4 @@ private:
     std::atomic<int> inferenceCounter {0};
 };
 
-#endif //ARIA_INFERENCEMANAGER_H
+#endif //AARI_INFERENCEMANAGER_H

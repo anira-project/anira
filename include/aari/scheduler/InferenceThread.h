@@ -1,5 +1,5 @@
-#ifndef ARIA_INFERENCETHREAD_H
-#define ARIA_INFERENCETHREAD_H
+#ifndef AARI_INFERENCETHREAD_H
+#define AARI_INFERENCETHREAD_H
 
 #include <semaphore>
 
@@ -54,4 +54,4 @@ private:
 
  };
 
-#endif //ARIA_INFERENCETHREAD_H
+#endif //AARI_INFERENCETHREAD_H

@@ -1,4 +1,4 @@
-#include <aria/scheduler/InferenceThreadPool.h>
+#include <aari/scheduler/InferenceThreadPool.h>
 
 InferenceThreadPool::InferenceThreadPool(InferenceConfig& config)  {
     for (int i = 0; i < config.m_number_of_threads; ++i) {

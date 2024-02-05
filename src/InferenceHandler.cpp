@@ -1,4 +1,4 @@
-#include <aria/InferenceHandler.h>
+#include <aari/InferenceHandler.h>
 
 InferenceHandler::InferenceHandler(PrePostProcessor &ppP, InferenceConfig& config) : inferenceManager(ppP, config) {
 }

@@ -1,4 +1,4 @@
-#include <aria/utils/RingBuffer.h>
+#include <aari/utils/RingBuffer.h>
 
 RingBuffer::RingBuffer() = default;
 

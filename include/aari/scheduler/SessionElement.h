@@ -1,5 +1,5 @@
-#ifndef ARIA_SESSIONELEMENT_H
-#define ARIA_SESSIONELEMENT_H
+#ifndef AARI_SESSIONELEMENT_H
+#define AARI_SESSIONELEMENT_H
 
 #include <semaphore>
 #include <queue>
@@ -47,4 +47,4 @@ struct SessionElement {
 };
 
 
-#endif //ARIA_SESSIONELEMENT_H
+#endif //AARI_SESSIONELEMENT_H

@@ -1,4 +1,4 @@
-#include <aria/scheduler/InferenceThread.h>
+#include <aari/scheduler/InferenceThread.h>
 
 InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, std::vector<std::shared_ptr<SessionElement>>& ses, InferenceConfig& config) :
 #ifdef USE_LIBTORCH

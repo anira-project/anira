@@ -1,5 +1,5 @@
-#ifndef ARIA_INFERENCECONFIG_H
-#define ARIA_INFERENCECONFIG_H
+#ifndef AARI_INFERENCECONFIG_H
+#define AARI_INFERENCECONFIG_H
 
 #include <array>
 #include <string>
@@ -86,4 +86,4 @@ struct InferenceConfig {
 };
 
 
-#endif //ARIA_INFERENCECONFIG_H
+#endif //AARI_INFERENCECONFIG_H

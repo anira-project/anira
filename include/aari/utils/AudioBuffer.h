@@ -1,5 +1,5 @@
-#ifndef ARIA_AUDIO_BUFFER_H
-#define ARIA_AUDIO_BUFFER_H
+#ifndef AARI_AUDIO_BUFFER_H
+#define AARI_AUDIO_BUFFER_H
 
 #include <iostream>
 #include <cstring>
@@ -243,4 +243,4 @@ private:
 
 using AudioBufferF = AudioBuffer<float>;
 
-#endif //ARIA_AUDIO_BUFFER_H
+#endif //AARI_AUDIO_BUFFER_H

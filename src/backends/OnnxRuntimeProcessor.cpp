@@ -1,4 +1,4 @@
-#include <aria/backends/OnnxRuntimeProcessor.h>
+#include <aari/backends/OnnxRuntimeProcessor.h>
 
 OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& config) :
     memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU)),

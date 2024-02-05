@@ -1,4 +1,4 @@
-![ARIA Logo](/docs/img/aria-logo.png)
+![AARI Logo](/docs/img/aari-logo.png)
 
 --------------------------------------------------------------------------------
 

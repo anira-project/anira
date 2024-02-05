@@ -1,4 +1,4 @@
-#include <aria/PrePostProcessor.h>
+#include <aari/PrePostProcessor.h>
 
 void PrePostProcessor::preProcess(RingBuffer& input, AudioBufferF& output, [[maybe_unused]] InferenceBackend currentInferenceBackend) {
     popSamplesFromBuffer(input, output);

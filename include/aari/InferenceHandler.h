@@ -1,5 +1,5 @@
-#ifndef ARIA_INFERENCEHANDLER_H
-#define ARIA_INFERENCEHANDLER_H
+#ifndef AARI_INFERENCEHANDLER_H
+#define AARI_INFERENCEHANDLER_H
 
 #include "scheduler/InferenceManager.h"
 #include "PrePostProcessor.h"
@@ -24,4 +24,4 @@ private:
     InferenceManager inferenceManager;
 };
 
-#endif //ARIA_INFERENCEHANDLER_H
+#endif //AARI_INFERENCEHANDLER_H

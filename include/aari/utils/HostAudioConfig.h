@@ -1,5 +1,5 @@
-#ifndef ARIA_HOSTAUDIOCONFIG_H
-#define ARIA_HOSTAUDIOCONFIG_H
+#ifndef AARI_HOSTAUDIOCONFIG_H
+#define AARI_HOSTAUDIOCONFIG_H
 
 #include <cstddef>
 
@@ -9,4 +9,4 @@ struct HostAudioConfig {
     double hostSampleRate;
 };
 
-#endif //ARIA_HOSTAUDIOCONFIG_H
+#endif //AARI_HOSTAUDIOCONFIG_H

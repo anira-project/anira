@@ -1,4 +1,4 @@
-#include <aria/backends/LibTorchProcessor.h>
+#include <aari/backends/LibTorchProcessor.h>
 
 LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : inferenceConfig(config) {
 #if WIN32
