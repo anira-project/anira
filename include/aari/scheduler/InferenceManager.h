@@ -7,6 +7,8 @@
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
 
+namespace aari {
+    
 class InferenceManager {
 public:
     InferenceManager() = delete;
@@ -46,5 +48,7 @@ private:
     size_t initSamples = 0;
     std::atomic<int> inferenceCounter {0};
 };
+
+} // namespace aari
 
 #endif //AARI_INFERENCEMANAGER_H

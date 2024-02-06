@@ -1,5 +1,7 @@
 #include <aari/scheduler/InferenceThread.h>
 
+namespace aari {
+
 InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, std::vector<std::shared_ptr<SessionElement>>& ses, InferenceConfig& config) :
 #ifdef USE_LIBTORCH
         torchProcessor(config),
@@ -144,3 +146,5 @@ void InferenceThread::setRealTimeOrLowerPriority() {
 
 #endif
 }
+
+} // namespace aari

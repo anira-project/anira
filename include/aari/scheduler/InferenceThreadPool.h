@@ -7,6 +7,8 @@
 #include "InferenceThread.h"
 #include "../PrePostProcessor.h"
 
+namespace aari {
+
 class InferenceThreadPool{
 public:
     InferenceThreadPool(InferenceConfig& config);
@@ -40,5 +42,7 @@ private:
 
     inline static std::vector<std::unique_ptr<InferenceThread>> threadPool;
 };
+
+} // namespace aari
 
 #endif //AARI_INFERENCETHREADPOOL_H

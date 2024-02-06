@@ -1,5 +1,7 @@
 #include <aari/backends/OnnxRuntimeProcessor.h>
 
+namespace aari {
+
 OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& config) :
     memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU)),
     inferenceConfig(config)
@@ -62,3 +64,5 @@ void OnnxRuntimeProcessor::processBlock(AudioBufferF& input, AudioBufferF& outpu
         output.setSample(0, i, outputTensors[0].GetTensorMutableData<float>()[i]); // TODO: Multichannel support
     }
 }
+
+} // namespace aari

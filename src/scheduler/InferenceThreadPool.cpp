@@ -1,5 +1,7 @@
 #include <aari/scheduler/InferenceThreadPool.h>
 
+namespace aari {
+
 InferenceThreadPool::InferenceThreadPool(InferenceConfig& config)  {
     for (int i = 0; i < config.m_number_of_threads; ++i) {
         threadPool.emplace_back(std::make_unique<InferenceThread>(globalSemaphore, sessions, config));
@@ -111,3 +113,5 @@ void InferenceThreadPool::postProcess(SessionElement& session, SessionElement::T
 int InferenceThreadPool::getNumberOfSessions() {
     return activeSessions.load();
 }
+
+} // namespace aari

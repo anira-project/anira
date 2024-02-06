@@ -4,6 +4,8 @@
 #include "utils/RingBuffer.h"
 #include "utils/InferenceBackend.h"
 
+namespace aari {
+
 class PrePostProcessor
 {
 public:
@@ -22,5 +24,7 @@ protected:
 
     void pushSamplesToBuffer(const AudioBufferF& input, RingBuffer& output);
 };
+
+} // namespace aari
 
 #endif //AARI_PREPOSTPROCESSOR_H

@@ -6,6 +6,8 @@
 #include <vector>
 #include <thread>
 
+namespace aari {
+
 struct InferenceConfig {
     InferenceConfig(
 #ifdef USE_LIBTORCH
@@ -85,5 +87,6 @@ struct InferenceConfig {
 #endif
 };
 
+} // namespace aari
 
 #endif //AARI_INFERENCECONFIG_H

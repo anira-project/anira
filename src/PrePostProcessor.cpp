@@ -1,5 +1,7 @@
 #include <aari/PrePostProcessor.h>
 
+namespace aari {
+
 void PrePostProcessor::preProcess(RingBuffer& input, AudioBufferF& output, [[maybe_unused]] InferenceBackend currentInferenceBackend) {
     popSamplesFromBuffer(input, output);
 };
@@ -33,3 +35,5 @@ void PrePostProcessor::pushSamplesToBuffer(const AudioBufferF& input, RingBuffer
         output.pushSample(0, input.getSample(0, j));
     }
 }
+
+} // namespace aari

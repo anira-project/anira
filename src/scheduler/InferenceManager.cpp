@@ -1,5 +1,7 @@
 #include <aari/scheduler/InferenceManager.h>
 
+namespace aari {
+
 InferenceManager::InferenceManager(PrePostProcessor& ppP, InferenceConfig& config) :
     inferenceThreadPool(InferenceThreadPool::getInstance(config)),
     session(inferenceThreadPool->createSession(ppP, config)),
@@ -125,3 +127,5 @@ int InferenceManager::getMissingBlocks() {
 int InferenceManager::getSessionID() const {
     return session.sessionID;
 }
+
+} // namespace aari

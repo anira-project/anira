@@ -4,6 +4,8 @@
 #include <comdef.h>
 #endif
 
+namespace aari {
+
 TFLiteProcessor::TFLiteProcessor(InferenceConfig& config) : inferenceConfig(config)
 {
 #ifdef _WIN32
@@ -49,3 +51,5 @@ void TFLiteProcessor::processBlock(AudioBufferF& input, AudioBufferF& output) {
     TfLiteInterpreterInvoke(interpreter);
     TfLiteTensorCopyToBuffer(outputTensor, output.getRawData(), output.getNumSamples() * sizeof(float)); //TODO: Multichannel support
 }
+
+} // namespace aari

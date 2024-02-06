@@ -1,5 +1,7 @@
 #include <aari/utils/RingBuffer.h>
 
+namespace aari {
+
 RingBuffer::RingBuffer() = default;
 
 void RingBuffer::initializeWithPositions(size_t numChannels, size_t numSamples) {
@@ -62,3 +64,5 @@ size_t RingBuffer::getAvailableSamples(size_t channel) {
 
     return returnValue;
 }
+
+} // namespace aari

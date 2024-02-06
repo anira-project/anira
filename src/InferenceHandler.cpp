@@ -1,5 +1,7 @@
 #include <aari/InferenceHandler.h>
 
+namespace aari {
+
 InferenceHandler::InferenceHandler(PrePostProcessor &ppP, InferenceConfig& config) : inferenceManager(ppP, config) {
 }
 
@@ -28,4 +30,4 @@ InferenceManager &InferenceHandler::getInferenceManager() {
     return inferenceManager;
 }
 
-
+} // namespace aari

@@ -1,6 +1,8 @@
 #ifndef AARI_INFERENCEBACKEND_H
 #define AARI_INFERENCEBACKEND_H
 
+namespace aari {
+
 enum InferenceBackend {
 #ifdef USE_LIBTORCH
     LIBTORCH,
@@ -12,5 +14,7 @@ enum InferenceBackend {
     TFLITE,
 #endif
 };
+
+} // namespace aari
 
 #endif //AARI_INFERENCEBACKEND_H

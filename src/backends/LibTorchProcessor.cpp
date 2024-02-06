@@ -1,5 +1,7 @@
 #include <aari/backends/LibTorchProcessor.h>
 
+namespace aari {
+
 LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : inferenceConfig(config) {
 #if WIN32
     _putenv("OMP_NUM_THREADS=1");
@@ -54,3 +56,5 @@ void LibtorchProcessor::processBlock(AudioBufferF& input, AudioBufferF& output) 
 #endif
     }
 }
+
+} // namespace aari

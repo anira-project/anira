@@ -4,6 +4,8 @@
 #include <iostream>
 #include <cstring>
 
+namespace aari {
+
 template <typename T>
 class AudioBuffer
 {
@@ -242,5 +244,7 @@ private:
 
 
 using AudioBufferF = AudioBuffer<float>;
+
+} // namespace aari
 
 #endif //AARI_AUDIO_BUFFER_H

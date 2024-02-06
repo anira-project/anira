@@ -7,6 +7,8 @@
 #include "../utils/AudioBuffer.h"
 #include <onnxruntime_cxx_api.h>
 
+namespace aari {
+
 class OnnxRuntimeProcessor {
 public:
     OnnxRuntimeProcessor(InferenceConfig& config);
@@ -31,5 +33,8 @@ private:
     // Define output tensor vector
     std::vector<Ort::Value> outputTensors;
 };
+
+} // namespace aari
+
 #endif
 #endif //AARI_ONNXRUNTIMEPROCESSOR_H

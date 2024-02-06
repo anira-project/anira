@@ -7,6 +7,8 @@
 #include "../utils/AudioBuffer.h"
 #include <tensorflow/lite/c_api.h>
 
+namespace aari {
+
 class TFLiteProcessor {
 public:
     TFLiteProcessor(InferenceConfig& config);
@@ -25,6 +27,8 @@ private:
     TfLiteTensor* inputTensor;
     const TfLiteTensor* outputTensor;
 };
+
+} // namespace aari
 
 #endif
 #endif //AARI_TFLITEPROCESSOR_H

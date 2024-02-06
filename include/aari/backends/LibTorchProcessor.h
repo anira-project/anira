@@ -8,6 +8,8 @@
 #include <torch/script.h>
 #include <stdlib.h>
 
+namespace aari {
+
 class LibtorchProcessor {
 public:
     LibtorchProcessor(InferenceConfig& config);
@@ -25,6 +27,8 @@ private:
     at::Tensor outputTensor;
     std::vector<torch::jit::IValue> inputs;
 };
+
+} // namespace aari
 
 #endif
 #endif //AARI_LIBTORCHPROCESSOR_H

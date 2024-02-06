@@ -5,6 +5,8 @@
 #include <cmath>
 #include "AudioBuffer.h"
 
+namespace aari {
+
 class RingBuffer : public AudioBuffer<float>
 {
 public:
@@ -20,5 +22,7 @@ public:
 private:
     std::vector<size_t> readPos, writePos;
 };
+
+} // namespace aari
 
 #endif //AARI_RINGBUFFER_H

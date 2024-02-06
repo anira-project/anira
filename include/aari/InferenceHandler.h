@@ -5,6 +5,8 @@
 #include "PrePostProcessor.h"
 #include "InferenceConfig.h"
 
+namespace aari {
+
 class InferenceHandler {
 public:
     InferenceHandler() = delete;
@@ -23,5 +25,7 @@ public:
 private:
     InferenceManager inferenceManager;
 };
+
+} // namespace aari
 
 #endif //AARI_INFERENCEHANDLER_H
