@@ -1,6 +1,6 @@
-#include <aari/scheduler/InferenceThreadPool.h>
+#include <anira/scheduler/InferenceThreadPool.h>
 
-namespace aari {
+namespace anira {
 
 InferenceThreadPool::InferenceThreadPool(InferenceConfig& config)  {
     for (int i = 0; i < config.m_number_of_threads; ++i) {
@@ -114,4 +114,4 @@ int InferenceThreadPool::getNumberOfSessions() {
     return activeSessions.load();
 }
 
-} // namespace aari
+} // namespace anira

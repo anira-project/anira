@@ -1,6 +1,6 @@
-#include <aari/scheduler/SessionElement.h>
+#include <anira/scheduler/SessionElement.h>
 
-namespace aari {
+namespace anira {
 
 SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, InferenceConfig& config) :
     sessionID(newSessionID),
@@ -9,4 +9,4 @@ SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, Inferenc
 {
 }
 
-} // namespace aari
+} // namespace anira

@@ -1,4 +1,4 @@
-![AARI Logo](/docs/img/aari-logo.png)
+![anira Logo](/docs/img/anira-logo.png)
 
 --------------------------------------------------------------------------------
 

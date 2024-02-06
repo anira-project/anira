@@ -1,6 +1,6 @@
-#include <aari/scheduler/InferenceManager.h>
+#include <anira/scheduler/InferenceManager.h>
 
-namespace aari {
+namespace anira {
 
 InferenceManager::InferenceManager(PrePostProcessor& ppP, InferenceConfig& config) :
     inferenceThreadPool(InferenceThreadPool::getInstance(config)),
@@ -128,4 +128,4 @@ int InferenceManager::getSessionID() const {
     return session.sessionID;
 }
 
-} // namespace aari
+} // namespace anira

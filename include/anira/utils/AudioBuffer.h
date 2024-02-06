@@ -1,10 +1,10 @@
-#ifndef AARI_AUDIO_BUFFER_H
-#define AARI_AUDIO_BUFFER_H
+#ifndef ANIRA_AUDIO_BUFFER_H
+#define ANIRA_AUDIO_BUFFER_H
 
 #include <iostream>
 #include <cstring>
 
-namespace aari {
+namespace anira {
 
 template <typename T>
 class AudioBuffer
@@ -245,6 +245,6 @@ private:
 
 using AudioBufferF = AudioBuffer<float>;
 
-} // namespace aari
+} // namespace anira
 
-#endif //AARI_AUDIO_BUFFER_H
+#endif //ANIRA_AUDIO_BUFFER_H

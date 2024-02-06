@@ -1,11 +1,11 @@
 @PACKAGE_INIT@
 
-message(STATUS "Configuring AARI")
+message(STATUS "Configuring anira")
 
-include("${CMAKE_CURRENT_LIST_DIR}/AARITargets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/aniraTargets.cmake")
 
 # Import the packages
 set(Torch_DIR "${PACKAGE_PREFIX_DIR}/modules/@LIBTORCH_DIR_NAME@/share/cmake/Torch")
 find_package(Torch REQUIRED)
 
-check_required_components(AARI)
+check_required_components(anira)

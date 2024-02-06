@@ -1,5 +1,5 @@
-#ifndef AARI_INFERENCEMANAGER_H
-#define AARI_INFERENCEMANAGER_H
+#ifndef ANIRA_INFERENCEMANAGER_H
+#define ANIRA_INFERENCEMANAGER_H
 
 #include "InferenceThread.h"
 #include "InferenceThreadPool.h"
@@ -7,7 +7,7 @@
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
 
-namespace aari {
+namespace anira {
     
 class InferenceManager {
 public:
@@ -49,6 +49,6 @@ private:
     std::atomic<int> inferenceCounter {0};
 };
 
-} // namespace aari
+} // namespace anira
 
-#endif //AARI_INFERENCEMANAGER_H
+#endif //ANIRA_INFERENCEMANAGER_H

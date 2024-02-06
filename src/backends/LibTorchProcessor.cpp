@@ -1,6 +1,6 @@
-#include <aari/backends/LibTorchProcessor.h>
+#include <anira/backends/LibTorchProcessor.h>
 
-namespace aari {
+namespace anira {
 
 LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : inferenceConfig(config) {
 #if WIN32
@@ -57,4 +57,4 @@ void LibtorchProcessor::processBlock(AudioBufferF& input, AudioBufferF& output) 
     }
 }
 
-} // namespace aari
+} // namespace anira

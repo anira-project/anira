@@ -1,5 +1,5 @@
-#ifndef AARI_TFLITEPROCESSOR_H
-#define AARI_TFLITEPROCESSOR_H
+#ifndef ANIRA_TFLITEPROCESSOR_H
+#define ANIRA_TFLITEPROCESSOR_H
 
 #ifdef USE_TFLITE
 
@@ -7,7 +7,7 @@
 #include "../utils/AudioBuffer.h"
 #include <tensorflow/lite/c_api.h>
 
-namespace aari {
+namespace anira {
 
 class TFLiteProcessor {
 public:
@@ -28,7 +28,7 @@ private:
     const TfLiteTensor* outputTensor;
 };
 
-} // namespace aari
+} // namespace anira
 
 #endif
-#endif //AARI_TFLITEPROCESSOR_H
+#endif //ANIRA_TFLITEPROCESSOR_H

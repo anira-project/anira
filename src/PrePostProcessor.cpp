@@ -1,6 +1,6 @@
-#include <aari/PrePostProcessor.h>
+#include <anira/PrePostProcessor.h>
 
-namespace aari {
+namespace anira {
 
 void PrePostProcessor::preProcess(RingBuffer& input, AudioBufferF& output, [[maybe_unused]] InferenceBackend currentInferenceBackend) {
     popSamplesFromBuffer(input, output);
@@ -36,4 +36,4 @@ void PrePostProcessor::pushSamplesToBuffer(const AudioBufferF& input, RingBuffer
     }
 }
 
-} // namespace aari
+} // namespace anira

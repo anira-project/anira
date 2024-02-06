@@ -1,11 +1,11 @@
-#ifndef AARI_INFERENCEHANDLER_H
-#define AARI_INFERENCEHANDLER_H
+#ifndef ANIRA_INFERENCEHANDLER_H
+#define ANIRA_INFERENCEHANDLER_H
 
 #include "scheduler/InferenceManager.h"
 #include "PrePostProcessor.h"
 #include "InferenceConfig.h"
 
-namespace aari {
+namespace anira {
 
 class InferenceHandler {
 public:
@@ -26,6 +26,6 @@ private:
     InferenceManager inferenceManager;
 };
 
-} // namespace aari
+} // namespace anira
 
-#endif //AARI_INFERENCEHANDLER_H
+#endif //ANIRA_INFERENCEHANDLER_H

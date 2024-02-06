@@ -1,6 +1,6 @@
-#include <aari/scheduler/InferenceThread.h>
+#include <anira/scheduler/InferenceThread.h>
 
-namespace aari {
+namespace anira {
 
 InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, std::vector<std::shared_ptr<SessionElement>>& ses, InferenceConfig& config) :
 #ifdef USE_LIBTORCH
@@ -147,4 +147,4 @@ void InferenceThread::setRealTimeOrLowerPriority() {
 #endif
 }
 
-} // namespace aari
+} // namespace anira

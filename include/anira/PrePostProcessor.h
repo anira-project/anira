@@ -1,10 +1,10 @@
-#ifndef AARI_PREPOSTPROCESSOR_H
-#define AARI_PREPOSTPROCESSOR_H
+#ifndef ANIRA_PREPOSTPROCESSOR_H
+#define ANIRA_PREPOSTPROCESSOR_H
 
 #include "utils/RingBuffer.h"
 #include "utils/InferenceBackend.h"
 
-namespace aari {
+namespace anira {
 
 class PrePostProcessor
 {
@@ -25,6 +25,6 @@ protected:
     void pushSamplesToBuffer(const AudioBufferF& input, RingBuffer& output);
 };
 
-} // namespace aari
+} // namespace anira
 
-#endif //AARI_PREPOSTPROCESSOR_H
+#endif //ANIRA_PREPOSTPROCESSOR_H

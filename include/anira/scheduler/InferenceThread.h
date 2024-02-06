@@ -1,5 +1,5 @@
-#ifndef AARI_INFERENCETHREAD_H
-#define AARI_INFERENCETHREAD_H
+#ifndef ANIRA_INFERENCETHREAD_H
+#define ANIRA_INFERENCETHREAD_H
 
 #include <semaphore>
 
@@ -22,7 +22,7 @@
     #include <pthread.h>
 #endif
 
-namespace aari {
+namespace anira {
     
 class InferenceThread {
 public:
@@ -56,6 +56,6 @@ private:
 
  };
 
-} // namespace aari
+} // namespace anira
 
-#endif //AARI_INFERENCETHREAD_H
+#endif //ANIRA_INFERENCETHREAD_H

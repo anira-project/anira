@@ -1,12 +1,12 @@
-#ifndef AARI_INFERENCECONFIG_H
-#define AARI_INFERENCECONFIG_H
+#ifndef ANIRA_INFERENCECONFIG_H
+#define ANIRA_INFERENCECONFIG_H
 
 #include <array>
 #include <string>
 #include <vector>
 #include <thread>
 
-namespace aari {
+namespace anira {
 
 struct InferenceConfig {
     InferenceConfig(
@@ -87,6 +87,6 @@ struct InferenceConfig {
 #endif
 };
 
-} // namespace aari
+} // namespace anira
 
-#endif //AARI_INFERENCECONFIG_H
+#endif //ANIRA_INFERENCECONFIG_H

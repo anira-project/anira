@@ -1,6 +1,6 @@
-#include <aari/utils/RingBuffer.h>
+#include <anira/utils/RingBuffer.h>
 
-namespace aari {
+namespace anira {
 
 RingBuffer::RingBuffer() = default;
 
@@ -65,4 +65,4 @@ size_t RingBuffer::getAvailableSamples(size_t channel) {
     return returnValue;
 }
 
-} // namespace aari
+} // namespace anira

@@ -1,10 +1,10 @@
-#include <aari/backends/TFLiteProcessor.h>
+#include <anira/backends/TFLiteProcessor.h>
 
 #ifdef _WIN32
 #include <comdef.h>
 #endif
 
-namespace aari {
+namespace anira {
 
 TFLiteProcessor::TFLiteProcessor(InferenceConfig& config) : inferenceConfig(config)
 {
@@ -52,4 +52,4 @@ void TFLiteProcessor::processBlock(AudioBufferF& input, AudioBufferF& output) {
     TfLiteTensorCopyToBuffer(outputTensor, output.getRawData(), output.getNumSamples() * sizeof(float)); //TODO: Multichannel support
 }
 
-} // namespace aari
+} // namespace anira

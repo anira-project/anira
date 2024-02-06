@@ -1,5 +1,5 @@
-#ifndef AARI_INFERENCETHREADPOOL_H
-#define AARI_INFERENCETHREADPOOL_H
+#ifndef ANIRA_INFERENCETHREADPOOL_H
+#define ANIRA_INFERENCETHREADPOOL_H
 
 #include <semaphore>
 
@@ -7,7 +7,7 @@
 #include "InferenceThread.h"
 #include "../PrePostProcessor.h"
 
-namespace aari {
+namespace anira {
 
 class InferenceThreadPool{
 public:
@@ -43,6 +43,6 @@ private:
     inline static std::vector<std::unique_ptr<InferenceThread>> threadPool;
 };
 
-} // namespace aari
+} // namespace anira
 
-#endif //AARI_INFERENCETHREADPOOL_H
+#endif //ANIRA_INFERENCETHREADPOOL_H

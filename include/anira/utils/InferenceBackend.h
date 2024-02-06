@@ -1,7 +1,7 @@
-#ifndef AARI_INFERENCEBACKEND_H
-#define AARI_INFERENCEBACKEND_H
+#ifndef ANIRA_INFERENCEBACKEND_H
+#define ANIRA_INFERENCEBACKEND_H
 
-namespace aari {
+namespace anira {
 
 enum InferenceBackend {
 #ifdef USE_LIBTORCH
@@ -15,6 +15,6 @@ enum InferenceBackend {
 #endif
 };
 
-} // namespace aari
+} // namespace anira
 
-#endif //AARI_INFERENCEBACKEND_H
+#endif //ANIRA_INFERENCEBACKEND_H

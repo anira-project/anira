@@ -1,11 +1,11 @@
-#ifndef AARI_RINGBUFFER_H
-#define AARI_RINGBUFFER_H
+#ifndef ANIRA_RINGBUFFER_H
+#define ANIRA_RINGBUFFER_H
 
 #include <vector>
 #include <cmath>
 #include "AudioBuffer.h"
 
-namespace aari {
+namespace anira {
 
 class RingBuffer : public AudioBuffer<float>
 {
@@ -23,6 +23,6 @@ private:
     std::vector<size_t> readPos, writePos;
 };
 
-} // namespace aari
+} // namespace anira
 
-#endif //AARI_RINGBUFFER_H
+#endif //ANIRA_RINGBUFFER_H

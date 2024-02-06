@@ -1,5 +1,5 @@
-#ifndef AARI_SESSIONELEMENT_H
-#define AARI_SESSIONELEMENT_H
+#ifndef ANIRA_SESSIONELEMENT_H
+#define ANIRA_SESSIONELEMENT_H
 
 #include <semaphore>
 #include <queue>
@@ -18,7 +18,7 @@
 #define TEMP_MODEL_INPUT_SIZE_BACKEND 150
 #define TEMP_MODEL_OUTPUT_SIZE_BACKEND 1
 
-namespace aari {
+namespace anira {
 
 struct SessionElement {
     SessionElement(int newSessionID, PrePostProcessor& prePostProcessor, InferenceConfig& config);
@@ -48,6 +48,6 @@ struct SessionElement {
     InferenceConfig& inferenceConfig;
 };
 
-} // namespace aari
+} // namespace anira
 
-#endif //AARI_SESSIONELEMENT_H
+#endif //ANIRA_SESSIONELEMENT_H

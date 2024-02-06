@@ -1,6 +1,6 @@
-#include <aari/InferenceHandler.h>
+#include <anira/InferenceHandler.h>
 
-namespace aari {
+namespace anira {
 
 InferenceHandler::InferenceHandler(PrePostProcessor &ppP, InferenceConfig& config) : inferenceManager(ppP, config) {
 }
@@ -30,4 +30,4 @@ InferenceManager &InferenceHandler::getInferenceManager() {
     return inferenceManager;
 }
 
-} // namespace aari
+} // namespace anira

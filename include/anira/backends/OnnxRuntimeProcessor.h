@@ -1,5 +1,5 @@
-#ifndef AARI_ONNXRUNTIMEPROCESSOR_H
-#define AARI_ONNXRUNTIMEPROCESSOR_H
+#ifndef ANIRA_ONNXRUNTIMEPROCESSOR_H
+#define ANIRA_ONNXRUNTIMEPROCESSOR_H
 
 #ifdef USE_ONNXRUNTIME
 
@@ -7,7 +7,7 @@
 #include "../utils/AudioBuffer.h"
 #include <onnxruntime_cxx_api.h>
 
-namespace aari {
+namespace anira {
 
 class OnnxRuntimeProcessor {
 public:
@@ -34,7 +34,7 @@ private:
     std::vector<Ort::Value> outputTensors;
 };
 
-} // namespace aari
+} // namespace anira
 
 #endif
-#endif //AARI_ONNXRUNTIMEPROCESSOR_H
+#endif //ANIRA_ONNXRUNTIMEPROCESSOR_H

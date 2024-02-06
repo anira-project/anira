@@ -1,6 +1,6 @@
-#include <aari/backends/OnnxRuntimeProcessor.h>
+#include <anira/backends/OnnxRuntimeProcessor.h>
 
-namespace aari {
+namespace anira {
 
 OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& config) :
     memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU)),
@@ -65,4 +65,4 @@ void OnnxRuntimeProcessor::processBlock(AudioBufferF& input, AudioBufferF& outpu
     }
 }
 
-} // namespace aari
+} // namespace anira

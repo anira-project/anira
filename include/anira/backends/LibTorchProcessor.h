@@ -1,5 +1,5 @@
-#ifndef AARI_LIBTORCHPROCESSOR_H
-#define AARI_LIBTORCHPROCESSOR_H
+#ifndef ANIRA_LIBTORCHPROCESSOR_H
+#define ANIRA_LIBTORCHPROCESSOR_H
 
 #ifdef USE_LIBTORCH
 
@@ -8,7 +8,7 @@
 #include <torch/script.h>
 #include <stdlib.h>
 
-namespace aari {
+namespace anira {
 
 class LibtorchProcessor {
 public:
@@ -28,7 +28,7 @@ private:
     std::vector<torch::jit::IValue> inputs;
 };
 
-} // namespace aari
+} // namespace anira
 
 #endif
-#endif //AARI_LIBTORCHPROCESSOR_H
+#endif //ANIRA_LIBTORCHPROCESSOR_H
