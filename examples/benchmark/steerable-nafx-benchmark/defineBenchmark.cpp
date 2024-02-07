@@ -25,49 +25,34 @@
 typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 MyPrePostProcessor myPrePostProcessor;
 
-BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_LIBTORCH_BACKEND)(benchmark::State& state) {
-    constructInferenceHandler(myPrePostProcessor, myConfig);
-    setInferenceBackend(anira::LIBTORCH);
+BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_LIBTORCH_BACKEND)(::benchmark::State& state) {
 
-    // the buffer size is set to the first value of the state range
-    prepareInferenceHandler(anira::HostAudioConfig(1, getBufferSize(), 44100));
+    m_inferenceHandler = std::make_unique<anira::InferenceHandler>(myPrePostProcessor, myConfig);
+    m_inferenceHandler->prepare(anira::HostAudioConfig(1, getBufferSize(), 44100));
+    m_inferenceHandler->setInferenceBackend(anira::LIBTORCH);
+
+    m_buffer = std::make_unique<anira::AudioBuffer<float>>(1, getBufferSize());
 
     int iteration = 0;
 
     for (auto _ : state) {
-        pushSamplesInBuffer(anira::HostAudioConfig(1, getBufferSize(), 44100));
+        pushRandomSamplesInBuffer(anira::HostAudioConfig(1, getBufferSize(), 44100));
 
-        bool init = isInitializing();
-        int prevNumReceivedSamples = getNumReceivedSamples();
+        initializeIteration();
 
         auto start = std::chrono::high_resolution_clock::now();
         
-        inferenceHandler->process(getArrayOfWritePointers(), getBufferSize());
+        m_inferenceHandler->process(m_buffer->getArrayOfWritePointers(), getBufferSize());
 
-        if (init) {
-            while (getNumReceivedSamples() < prevNumReceivedSamples + getBufferSize()){
-                std::this_thread::sleep_for(std::chrono::nanoseconds (10));
-            }
+        while (!bufferHasBeenProcessed()) {
+            std::this_thread::sleep_for(std::chrono::nanoseconds (10));
         }
-        else {
-            while (getNumReceivedSamples() < prevNumReceivedSamples){
-                std::this_thread::sleep_for(std::chrono::nanoseconds (10));
-            }
-        }
-
+        
         auto end = std::chrono::high_resolution_clock::now();
-        auto elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(end - start);
 
-        state.SetIterationTime(elapsed_seconds.count());
-
-        auto elapsedTimeMS = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start);
-
-        std::cout << state.name() << "/" << state.range(0) << "/iteration:" << iteration << "/repetition:" << getRepetition() << "\t\t\t" << elapsedTimeMS.count() << std::endl;
-        iteration++;
+        interationStep(start, end, iteration, state);
     }
     repetitionStep();
-
-    std::cout << "\n------------------------------------------------------------------------------------------------\n" << std::endl;
 }
 
 // /* ============================================================ *
