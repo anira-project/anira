@@ -2,7 +2,7 @@
 
 namespace anira {
 
-LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : inferenceConfig(config) {
+LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : BackendBase(config) {
 #if WIN32
     _putenv("OMP_NUM_THREADS=1");
     _putenv("MKL_NUM_THREADS=1");
@@ -37,6 +37,11 @@ void LibtorchProcessor::prepareToPlay() {
 }
 
 void LibtorchProcessor::processBlock(AudioBufferF& input, AudioBufferF& output) {
+    if (inferenceConfig.m_bypass_inference) {
+        returnAudio(input, output);
+        return;
+    }
+
     // Create input tensor object from input data values and shape
     inputTensor = torch::from_blob(input.getRawData(), (const long long) input.getNumSamples()).reshape(inferenceConfig.m_model_input_shape_torch); // TODO: Multichannel support
 

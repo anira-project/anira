@@ -5,18 +5,11 @@
 #include <queue>
 #include <atomic>
 
-#include "../InferenceConfig.h"
-
 #include "../utils/AudioBuffer.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/InferenceBackend.h"
 #include "../PrePostProcessor.h"
 #include "../InferenceConfig.h"
-
-// TODO replace this with inferenceConfig
-#define TEMP_BATCH_SIZE 1
-#define TEMP_MODEL_INPUT_SIZE_BACKEND 15380
-#define TEMP_MODEL_OUTPUT_SIZE_BACKEND 2048
 
 namespace anira {
 
@@ -27,16 +20,18 @@ struct SessionElement {
     RingBuffer receiveBuffer;
 
     struct ThreadSafeStruct {
+        ThreadSafeStruct(size_t batch_size, size_t model_input_size, size_t model_output_size);
         std::binary_semaphore free{true};
         std::binary_semaphore ready{false};
         std::binary_semaphore done{false};
         std::chrono::time_point<std::chrono::system_clock> time;
-        AudioBufferF processedModelInput = AudioBufferF(1, TEMP_BATCH_SIZE * TEMP_MODEL_INPUT_SIZE_BACKEND);
-        AudioBufferF rawModelOutput = AudioBufferF(1, TEMP_BATCH_SIZE * TEMP_MODEL_OUTPUT_SIZE_BACKEND);
+        AudioBufferF processedModelInput = AudioBufferF();
+        AudioBufferF rawModelOutput = AudioBufferF();
     };
-
-    // TODO define a dynamic number instead of 5000
-    std::array<ThreadSafeStruct, 5000> inferenceQueue;
+    // Using std::unique_ptr to manage ownership of ThreadSafeStruct objects
+    // avoids issues with copying or moving objects containing std::binary_semaphore members,
+    // which would otherwise prevent the generation of copy constructors.
+    std::vector<std::unique_ptr<ThreadSafeStruct>> inferenceQueue;
 
     std::atomic<InferenceBackend> currentBackend {ONNX};
     std::queue<std::chrono::time_point<std::chrono::system_clock>> timeStamps;

@@ -3,23 +3,22 @@
 
 #ifdef USE_ONNXRUNTIME
 
+#include "BackendBase.h"
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
 #include <onnxruntime_cxx_api.h>
 
 namespace anira {
 
-class OnnxRuntimeProcessor {
+class OnnxRuntimeProcessor : private BackendBase {
 public:
     OnnxRuntimeProcessor(InferenceConfig& config);
     ~OnnxRuntimeProcessor();
 
-    void prepareToPlay();
-    void processBlock(AudioBufferF& input, AudioBufferF& output);
+    void prepareToPlay() override;
+    void processBlock(AudioBufferF& input, AudioBufferF& output) override;
 
 private:
-    InferenceConfig& inferenceConfig;
-
     Ort::Env env;
     Ort::MemoryInfo memory_info;
     Ort::AllocatorWithDefaultOptions ort_alloc;

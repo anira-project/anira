@@ -3,23 +3,22 @@
 
 #ifdef USE_TFLITE
 
+#include "BackendBase.h"
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
 #include <tensorflow/lite/c_api.h>
 
 namespace anira {
 
-class TFLiteProcessor {
+class TFLiteProcessor : private BackendBase {
 public:
     TFLiteProcessor(InferenceConfig& config);
     ~TFLiteProcessor();
 
-    void prepareToPlay();
-    void processBlock(AudioBufferF& input, AudioBufferF& output);
+    void prepareToPlay() override;
+    void processBlock(AudioBufferF& input, AudioBufferF& output) override;
 
 private:
-    InferenceConfig& inferenceConfig;
-
     TfLiteModel* model;
     TfLiteInterpreterOptions* options;
     TfLiteInterpreter* interpreter;

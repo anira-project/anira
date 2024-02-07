@@ -33,7 +33,8 @@ struct InferenceConfig {
             int model_latency,
             bool warm_up = false,
             int numberOfThreads = std::thread::hardware_concurrency() - 1,
-            float wait_in_process_block = 0.5f) :
+            float wait_in_process_block = 0.5f,
+            bool bypass_inference = false) :
 #ifdef USE_LIBTORCH
             m_model_path_torch(model_path_torch),
             m_model_input_shape_torch(model_input_shape_torch),
@@ -57,7 +58,8 @@ struct InferenceConfig {
             m_model_latency(model_latency),
             m_warm_up(warm_up),
             m_number_of_threads(numberOfThreads),
-            m_wait_in_process_block(wait_in_process_block)
+            m_wait_in_process_block(wait_in_process_block),
+            m_bypass_inference(bypass_inference)
     {}
 
     const size_t m_batch_size;
@@ -67,6 +69,7 @@ struct InferenceConfig {
     const size_t m_max_inference_time;
     const int m_model_latency;
     const bool m_warm_up;
+    const bool m_bypass_inference;
 
     const int m_number_of_threads;
     const float m_wait_in_process_block;

@@ -5,27 +5,27 @@
 
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
+#include "BackendBase.h"
 #include <torch/script.h>
 #include <stdlib.h>
 
 namespace anira {
 
-class LibtorchProcessor {
+class LibtorchProcessor : private BackendBase {
 public:
     LibtorchProcessor(InferenceConfig& config);
     ~LibtorchProcessor();
 
-    void prepareToPlay();
-    void processBlock(AudioBufferF& input, AudioBufferF& output);
+    void prepareToPlay() override;
+    void processBlock(AudioBufferF& input, AudioBufferF& output) override;
 
 private:
-    InferenceConfig& inferenceConfig;
-
     torch::jit::script::Module module;
 
     at::Tensor inputTensor;
     at::Tensor outputTensor;
     std::vector<torch::jit::IValue> inputs;
+
 };
 
 } // namespace anira
