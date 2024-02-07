@@ -35,6 +35,8 @@ private:
     static void postProcess(SessionElement& session, SessionElement::ThreadSafeStruct& nextBuffer);
 
 private:
+    InferenceConfig& inferenceConfig;
+
     inline static std::vector<std::shared_ptr<SessionElement>> sessions;
     inline static std::atomic<int> nextId = 0;
     inline static std::atomic<int> activeSessions = 0;

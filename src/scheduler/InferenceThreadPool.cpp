@@ -2,7 +2,7 @@
 
 namespace anira {
 
-InferenceThreadPool::InferenceThreadPool(InferenceConfig& config)  {
+InferenceThreadPool::InferenceThreadPool(InferenceConfig& config) : inferenceConfig(config) {
     for (int i = 0; i < config.m_number_of_threads; ++i) {
         threadPool.emplace_back(std::make_unique<InferenceThread>(globalSemaphore, sessions, config));
     }
@@ -71,7 +71,7 @@ void InferenceThreadPool::newDataSubmitted(SessionElement& session) {
 }
 
 void InferenceThreadPool::newDataRequest(SessionElement& session, double bufferSizeInSec) {
-    auto timeToProcess = std::chrono::milliseconds(static_cast<int>(bufferSizeInSec / 1000 * 0.5));
+    auto timeToProcess = std::chrono::microseconds(static_cast<long>(bufferSizeInSec * 1e6 * inferenceConfig.m_wait_in_process_block));
     auto currentTime = std::chrono::system_clock::now();
     auto waitUntil = currentTime + timeToProcess;
 
