@@ -77,10 +77,10 @@ void InferenceThreadPool::newDataRequest(SessionElement& session, double bufferS
 
     for (size_t i = 0; i < session.inferenceQueue.size(); ++i) {
         // TODO: find better way to do this fix of SEGFAULT when comparing with empty TimeStampQueue
-        if (session.timeStamps.size() > 0 && session.inferenceQueue[i].time == session.timeStamps.front()) {
-            if (session.inferenceQueue[i].done.try_acquire_until(waitUntil)) {
+        if (session.timeStamps.size() > 0 && session.inferenceQueue[i]->time == session.timeStamps.front()) {
+            if (session.inferenceQueue[i]->done.try_acquire_until(waitUntil)) {
                 session.timeStamps.pop();
-                postProcess(session, session.inferenceQueue[i]);
+                postProcess(session, *session.inferenceQueue[i]);
             }
         }
     }
@@ -92,13 +92,13 @@ std::vector<std::shared_ptr<SessionElement>>& InferenceThreadPool::getSessions()
 
 void InferenceThreadPool::preProcess(SessionElement& session) {
     for (size_t i = 0; i < session.inferenceQueue.size(); ++i) {
-        if (session.inferenceQueue[i].free.try_acquire()) {
-            session.prePostProcessor.preProcess(session.sendBuffer, session.inferenceQueue[i].processedModelInput, session.currentBackend.load());
+        if (session.inferenceQueue[i]->free.try_acquire()) {
+            session.prePostProcessor.preProcess(session.sendBuffer, session.inferenceQueue[i]->processedModelInput, session.currentBackend.load());
 
             const std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
             session.timeStamps.push(now);
-            session.inferenceQueue[i].time = now;
-            session.inferenceQueue[i].ready.release();
+            session.inferenceQueue[i]->time = now;
+            session.inferenceQueue[i]->ready.release();
             break;
         }
     }
