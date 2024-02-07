@@ -14,9 +14,9 @@
 #include "../InferenceConfig.h"
 
 // TODO replace this with inferenceConfig
-#define TEMP_BATCH_SIZE 128
-#define TEMP_MODEL_INPUT_SIZE_BACKEND 150
-#define TEMP_MODEL_OUTPUT_SIZE_BACKEND 1
+#define TEMP_BATCH_SIZE 1
+#define TEMP_MODEL_INPUT_SIZE_BACKEND 15380
+#define TEMP_MODEL_OUTPUT_SIZE_BACKEND 2048
 
 namespace anira {
 

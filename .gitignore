@@ -5,3 +5,4 @@ modules/
 cmake-build*
 .vscode
 install/
+models/

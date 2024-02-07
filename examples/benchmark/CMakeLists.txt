@@ -1,0 +1,1 @@
+add_subdirectory(steerable-nafx-benchmark)
