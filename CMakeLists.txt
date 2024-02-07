@@ -112,6 +112,7 @@ target_sources(${PROJECT_NAME}
     PRIVATE
 
         # Backend
+        src/backends/BackendBase.cpp
         ${BACKEND_SOURCES}
 
         # Scheduler

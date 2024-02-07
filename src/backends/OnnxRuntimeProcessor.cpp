@@ -4,7 +4,7 @@ namespace anira {
 
 OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& config) :
     memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU)),
-    inferenceConfig(config)
+    BackendBase(config)
 {
 }
 
@@ -37,6 +37,11 @@ void OnnxRuntimeProcessor::prepareToPlay() {
 }
 
 void OnnxRuntimeProcessor::processBlock(AudioBufferF& input, AudioBufferF& output) {
+    if (inferenceConfig.m_bypass_inference) {
+        returnAudio(input, output);
+        return;
+    }
+
     // Create input tensor object from input data values and shape
     const Ort::Value inputTensor = Ort::Value::CreateTensor<float>  (memory_info,
                                                                     input.getRawData(),
