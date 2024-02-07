@@ -237,7 +237,10 @@ if(ANIRA_WITH_BENCHMARK)
         get_property(BENCHMARK_INCLUDE_DIRS TARGET benchmark PROPERTY INTERFACE_INCLUDE_DIRECTORIES)
         target_include_directories(benchmark SYSTEM INTERFACE ${BENCHMARK_INCLUDE_DIRS})
     endif()
-
+    
+    # enable position independent code because otherwise the library cannot be linked into a shared library
+    set_target_properties(gtest PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    set_target_properties(benchmark PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_link_libraries(${PROJECT_NAME} PUBLIC gtest_main benchmark)
 
     # include Loads and runs CMake code from the file given. Loads and runs CMake code from the file given.
