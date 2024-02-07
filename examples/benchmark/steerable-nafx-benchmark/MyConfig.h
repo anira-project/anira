@@ -28,7 +28,11 @@ anira::InferenceConfig myConfig(
         MODEL_INPUT_SIZE_BACKEND,
         MODEL_OUTPUT_SIZE_BACKEND,
         0,
-        15380
+        15380,
+        false,
+        std::thread::hardware_concurrency() - 1,
+        0.5f,
+        false
 );
 
 #endif // MYCONFIG_H

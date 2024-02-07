@@ -69,10 +69,10 @@ struct InferenceConfig {
     const size_t m_max_inference_time;
     const int m_model_latency;
     const bool m_warm_up;
-    const bool m_bypass_inference;
 
     const int m_number_of_threads;
     const float m_wait_in_process_block;
+    const bool m_bypass_inference;
 
 #ifdef USE_LIBTORCH
     const std::string m_model_path_torch;
