@@ -92,7 +92,7 @@ int ProcessBlockFixture::getBufferSize() {
     return m_bufferSize;
 }
 
-void ProcessBlockFixture::interationStep(const std::chrono::_V2::system_clock::time_point& start, const std::chrono::_V2::system_clock::time_point& end, ::benchmark::State& state) {
+void ProcessBlockFixture::interationStep(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end, ::benchmark::State& state) {
     auto elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(end - start);
 
     state.SetIterationTime(elapsed_seconds.count());
