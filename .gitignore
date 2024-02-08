@@ -6,3 +6,5 @@ cmake-build*
 .vscode
 install/
 models/
+logs/
+results/
