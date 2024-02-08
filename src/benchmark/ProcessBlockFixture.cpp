@@ -19,38 +19,41 @@ void ProcessBlockFixture::initializeIteration() {
 
 void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceConfig, const HostAudioConfig& hostAudioConfig, const InferenceBackend& inferenceBackend) {
     m_iteration = 0;
-    if (m_inferenceBackend != inferenceBackend) {
-        m_inferenceBackend = inferenceBackend;
-        if (m_inferenceBackend == anira::LIBTORCH) {
-            m_inference_backend_name = "libtorch";
-        } else if (m_inferenceBackend == anira::ONNX) {
-            m_inference_backend_name = "onnx";
-        } else if (m_inferenceBackend == anira::TFLITE) {
-            m_inference_backend_name = "tflite";
-        } else {
-            m_inference_backend_name = "unknown_backend";
+    if (m_inferenceBackend != inferenceBackend || m_inferenceConfig != &inferenceConfig || m_hostAudioConfig != hostAudioConfig) {
+        m_repetition = 0;
+        if (m_inferenceBackend != inferenceBackend) {
+            m_inferenceBackend = inferenceBackend;
+            if (m_inferenceBackend == anira::LIBTORCH) {
+                m_inference_backend_name = "libtorch";
+            } else if (m_inferenceBackend == anira::ONNX) {
+                m_inference_backend_name = "onnx";
+            } else if (m_inferenceBackend == anira::TFLITE) {
+                m_inference_backend_name = "tflite";
+            } else {
+                m_inference_backend_name = "unknown_backend";
+            }
         }
-    }
-    if (m_inferenceConfig != &inferenceConfig) {
-        m_inferenceConfig = &inferenceConfig;
-        std::string path;
-        if (m_inferenceBackend == anira::LIBTORCH) {
-            path = m_inferenceConfig->m_model_path_torch;
-        } else if (m_inferenceBackend == anira::ONNX) {
-            path = m_inferenceConfig->m_model_path_onnx;
-        } else if (m_inferenceBackend == anira::TFLITE) {
-            path = m_inferenceConfig->m_model_path_tflite;
-        } else {
-            path = "unknown_model_path";
+        if (m_inferenceConfig != &inferenceConfig) {
+            m_inferenceConfig = &inferenceConfig;
+            std::string path;
+            if (m_inferenceBackend == anira::LIBTORCH) {
+                path = m_inferenceConfig->m_model_path_torch;
+            } else if (m_inferenceBackend == anira::ONNX) {
+                path = m_inferenceConfig->m_model_path_onnx;
+            } else if (m_inferenceBackend == anira::TFLITE) {
+                path = m_inferenceConfig->m_model_path_tflite;
+            } else {
+                path = "unknown_model_path";
+            }
+            // find the last of any instance of / or \ and take the substring from there to the end
+            m_model_name = path.substr(path.find_last_of("/\\") + 1);
         }
-        // find the last of any instance of / or \ and take the substring from there to the end
-        m_model_name = path.substr(path.find_last_of("/\\") + 1);
-    }
-    if (m_hostAudioConfig != hostAudioConfig) {
-        m_hostAudioConfig = hostAudioConfig;
-        std::cout << "\n------------------------------------------------------------------------------------------------" << std::endl;
-        std::cout << "Sample Rate " << std::fixed << std::setprecision(0) << m_hostAudioConfig.hostSampleRate << " Hz | Buffer Size " << m_hostAudioConfig.hostBufferSize << " = " << std::fixed << std::setprecision(4) << (float) m_hostAudioConfig.hostBufferSize * 1000.f/m_hostAudioConfig.hostSampleRate << " ms" << std::endl;
-        std::cout << "------------------------------------------------------------------------------------------------\n" << std::endl;
+        if (m_hostAudioConfig != hostAudioConfig) {
+            m_hostAudioConfig = hostAudioConfig;
+        }
+        std::cout << "\n----------------------------------------------------------------------------------------------------------------------------------------" << std::endl;
+        std::cout << "Model: " << m_model_name << " | Backend: " << m_inference_backend_name << " | Sample Rate: " << std::fixed << std::setprecision(0) << m_hostAudioConfig.hostSampleRate << " Hz | Buffer Size: " << m_hostAudioConfig.hostBufferSize << " = " << std::fixed << std::setprecision(4) << (float) m_hostAudioConfig.hostBufferSize * 1000.f/m_hostAudioConfig.hostSampleRate << " ms" << std::endl;
+        std::cout << "----------------------------------------------------------------------------------------------------------------------------------------\n" << std::endl;
     }
 
 }
@@ -94,13 +97,12 @@ void ProcessBlockFixture::interationStep(const std::chrono::_V2::system_clock::t
 
 void ProcessBlockFixture::repetitionStep() {
     m_repetition += 1;
-    std::cout << "\n------------------------------------------------------------------------------------------------\n" << std::endl;
+    std::cout << "\n----------------------------------------------------------------------------------------------------------------------------------------\n" << std::endl;
 }
 
 void ProcessBlockFixture::SetUp(const ::benchmark::State& state) {
     if (m_bufferSize != (int) state.range(0)) {
         m_bufferSize = (int) state.range(0);
-        m_repetition = 0;
     }
 }
 

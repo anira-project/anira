@@ -34,7 +34,8 @@ add_compile_definitions(STEERABLENAFX_MODELS_PATH_PYTORCH="${CMAKE_SOURCE_DIR}/e
 message("CMAKE_SOURCE_DIR: " ${CMAKE_SOURCE_DIR})
 
 target_sources(${PROJECT_NAME} PRIVATE
-    defineBenchmark.cpp
+    # defineSimpleBenchmark.cpp
+    defineAdvancedBenchmark.cpp
     defineTest.cpp
     MyPrePostProcessor.h
     MyConfig.h
