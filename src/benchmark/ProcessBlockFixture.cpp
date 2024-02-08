@@ -23,15 +23,22 @@ void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceC
         m_repetition = 0;
         if (m_inferenceBackend != inferenceBackend) {
             m_inferenceBackend = inferenceBackend;
+            std::string path;
             if (m_inferenceBackend == anira::LIBTORCH) {
                 m_inference_backend_name = "libtorch";
+                path = m_inferenceConfig->m_model_path_torch;
             } else if (m_inferenceBackend == anira::ONNX) {
                 m_inference_backend_name = "onnx";
+                path = m_inferenceConfig->m_model_path_onnx;
             } else if (m_inferenceBackend == anira::TFLITE) {
                 m_inference_backend_name = "tflite";
+                path = m_inferenceConfig->m_model_path_tflite;
             } else {
                 m_inference_backend_name = "unknown_backend";
+                path = "unknown_model_path";
             }
+            // find the last of any instance of / or \ and take the substring from there to the end
+            m_model_name = path.substr(path.find_last_of("/\\") + 1);
         }
         if (m_inferenceConfig != &inferenceConfig) {
             m_inferenceConfig = &inferenceConfig;
@@ -60,6 +67,7 @@ void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceC
 
 bool ProcessBlockFixture::bufferHasBeenProcessed() {
     if (m_init) {
+        // if we have init the process output does not get called so, we never pop samples out
         // when asking for the number of received samples, we dont wait since the time bufferInSec time we give to the request is zero 
         return m_inferenceHandler->getInferenceManager().getNumReceivedSamples() >= m_prev_num_received_samples + m_bufferSize;
     }
