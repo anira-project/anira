@@ -5,6 +5,6 @@ modules/
 cmake-build*
 .vscode
 install/
-models/
+extras/models/
 logs/
 results/

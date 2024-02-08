@@ -30,6 +30,8 @@ option(ANIRA_BUILD_DYNAMIC_LIBRARY "Build the library as a shared library" ON)
 
 option(ANIRA_WITH_BENCHMARK "Build with benchmark" ON)
 
+option(ANIRA_WITH_EXTRAS "Build with extras" ON)
+
 # Define options for backends
 option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" OFF)
 option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" OFF)
@@ -138,6 +140,10 @@ if(ANIRA_WITH_BENCHMARK)
             src/benchmark/ProcessBlockFixture.cpp
     )
 endif()
+
+if(ANIRA_WITH_EXTRAS)
+    add_subdirectory(extras)
+endif ()
 
 # add the include directories for the backends to the build interface as well as the install interface
 foreach(HEADER_DIR ${BACKEND_BUILD_HEADER_DIR})
