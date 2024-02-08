@@ -26,7 +26,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Shall the library be built as a shared library?
-option(ANIRA_BUILD_DYNAMIC_LIBRARY "Build the library as a shared library" ON)
+option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
 
 option(ANIRA_WITH_BENCHMARK "Build with benchmark" ON)
 
@@ -95,16 +95,10 @@ endif()
 # Build the library
 # ==============================================================================
 
-# add the library as a shared or static library
-if (ANIRA_BUILD_DYNAMIC_LIBRARY)
-    add_library(${PROJECT_NAME} SHARED)
-    message(STATUS "Building anira as a shared library")
-else()
-    add_library(${PROJECT_NAME} STATIC)
-    message(STATUS "Building anira as static library")
-endif()
+# add the library as a shared or static library depending on the option BUILD_SHARED_LIBS
+add_library(${PROJECT_NAME})
 
-# enable position independent code because otherwise the library cannot be linked into a shared library
+# enable position independent code because otherwise the static library cannot be linked into a shared library
 set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # add an alias so that the project can be used with add_subdirectory
@@ -233,6 +227,7 @@ if(ANIRA_WITH_BENCHMARK)
 
         # Set custom variables, policies, etc.
         set(BENCHMARK_ENABLE_TESTING OFF)
+        set(BENCHMARK_ENABLE_GTEST_TESTS OFF)
 
         if (APPLE AND (BUILD_ARCHITECTURE STREQUAL "arm64" OR CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64"))
         set(HAVE_STD_REGEX ON)

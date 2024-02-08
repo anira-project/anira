@@ -31,8 +31,6 @@ add_executable(${PROJECT_NAME})
 add_compile_definitions(STEERABLENAFX_MODELS_PATH_TENSORFLOW="${CMAKE_SOURCE_DIR}/extras/models/steerable-nafx/models/")
 add_compile_definitions(STEERABLENAFX_MODELS_PATH_PYTORCH="${CMAKE_SOURCE_DIR}/extras/models/steerable-nafx/models/")
 
-message("CMAKE_SOURCE_DIR: " ${CMAKE_SOURCE_DIR})
-
 target_sources(${PROJECT_NAME} PRIVATE
     # defineSimpleBenchmark.cpp
     defineAdvancedBenchmark.cpp
