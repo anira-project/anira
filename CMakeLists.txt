@@ -197,6 +197,8 @@ endif()
 if(ANIRA_WITH_BENCHMARK)
     include(FetchContent)
 
+    # This disables the default behavior of adding all targets to the CTest dashboard.
+    set_property(GLOBAL PROPERTY CTEST_TARGETS_ADDED 1)
     # enable ctest
     include(CTest)
 
