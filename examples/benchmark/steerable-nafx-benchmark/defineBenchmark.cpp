@@ -27,16 +27,20 @@ MyPrePostProcessor myPrePostProcessor;
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_LIBTORCH_BACKEND)(::benchmark::State& state) {
 
+    // The buffer size return in getBufferSize() is populated by state.range(0) param of the google benchmark
+    anira::HostAudioConfig hostAudioConfig(1, getBufferSize(), 48000);
+    anira::InferenceBackend inferenceBackend = anira::LIBTORCH;
+
     m_inferenceHandler = std::make_unique<anira::InferenceHandler>(myPrePostProcessor, myConfig);
-    m_inferenceHandler->prepare(anira::HostAudioConfig(1, getBufferSize(), 44100));
-    m_inferenceHandler->setInferenceBackend(anira::LIBTORCH);
+    m_inferenceHandler->prepare(hostAudioConfig);
+    m_inferenceHandler->setInferenceBackend(inferenceBackend);
 
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(1, getBufferSize());
+    m_buffer = std::make_unique<anira::AudioBuffer<float>>(hostAudioConfig.hostChannels, hostAudioConfig.hostBufferSize);
 
-    int iteration = 0;
+    initializeRepetition(myConfig, hostAudioConfig, inferenceBackend);
 
     for (auto _ : state) {
-        pushRandomSamplesInBuffer(anira::HostAudioConfig(1, getBufferSize(), 44100));
+        pushRandomSamplesInBuffer(hostAudioConfig);
 
         initializeIteration();
 
@@ -50,7 +54,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_LIBTORCH_BACKEND)(::benchmark::State&
         
         auto end = std::chrono::high_resolution_clock::now();
 
-        interationStep(start, end, iteration, state);
+        interationStep(start, end, state);
     }
     repetitionStep();
 }
