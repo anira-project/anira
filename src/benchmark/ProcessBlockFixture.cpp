@@ -49,7 +49,7 @@ void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceC
     if (m_hostAudioConfig != hostAudioConfig) {
         m_hostAudioConfig = hostAudioConfig;
         std::cout << "\n------------------------------------------------------------------------------------------------" << std::endl;
-        std::cout << "Sample Rate " << std::fixed << std::setprecision(0) << m_hostAudioConfig.hostSampleRate << " Hz | Buffer Size " << m_hostAudioConfig.hostBufferSize << " = " << (float) m_hostAudioConfig.hostBufferSize * 1000.f/m_hostAudioConfig.hostSampleRate << " ms" << std::endl;
+        std::cout << "Sample Rate " << std::fixed << std::setprecision(0) << m_hostAudioConfig.hostSampleRate << " Hz | Buffer Size " << m_hostAudioConfig.hostBufferSize << " = " << std::fixed << std::setprecision(4) << (float) m_hostAudioConfig.hostBufferSize * 1000.f/m_hostAudioConfig.hostSampleRate << " ms" << std::endl;
         std::cout << "------------------------------------------------------------------------------------------------\n" << std::endl;
     }
 
