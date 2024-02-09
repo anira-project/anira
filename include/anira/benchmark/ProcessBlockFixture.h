@@ -20,7 +20,13 @@ public:
     void pushRandomSamplesInBuffer(anira::HostAudioConfig hostAudioConfig);
     int getBufferSize();
     int getRepetition();
-    void interationStep(const std::chrono::system_clock::time_point& start, const std::chrono::system_clock::time_point& end, ::benchmark::State& state);
+
+#ifdef _WIN32
+        void interationStep(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end, ::benchmark::State& state);
+#else
+        void interationStep(const std::chrono::system_clock::time_point& start, const std::chrono::system_clock::time_point& end, ::benchmark::State& state);
+#endif
+
     void repetitionStep();
 
     inline static std::unique_ptr<anira::InferenceHandler> m_inferenceHandler = nullptr;

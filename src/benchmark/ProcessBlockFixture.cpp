@@ -92,7 +92,11 @@ int ProcessBlockFixture::getBufferSize() {
     return m_bufferSize;
 }
 
+#ifdef _WIN32
+void ProcessBlockFixture::interationStep(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end, ::benchmark::State& state) {
+#else
 void ProcessBlockFixture::interationStep(const std::chrono::system_clock::time_point& start, const std::chrono::system_clock::time_point& end, ::benchmark::State& state) {
+#endif
     auto elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(end - start);
 
     state.SetIterationTime(elapsed_seconds.count());
