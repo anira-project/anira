@@ -6,7 +6,7 @@
 
 namespace anira {
 
-class BackendBase {
+class ANIRA_API BackendBase {
 public:
     BackendBase(InferenceConfig& config);
     virtual void prepareToPlay() = 0;

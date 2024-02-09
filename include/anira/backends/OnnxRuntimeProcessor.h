@@ -10,7 +10,7 @@
 
 namespace anira {
 
-class OnnxRuntimeProcessor : private BackendBase {
+class ANIRA_API OnnxRuntimeProcessor : private BackendBase {
 public:
     OnnxRuntimeProcessor(InferenceConfig& config);
     ~OnnxRuntimeProcessor();

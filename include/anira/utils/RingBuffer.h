@@ -7,7 +7,7 @@
 
 namespace anira {
 
-class RingBuffer : public AudioBuffer<float>
+class ANIRA_API RingBuffer : public AudioBuffer<float>
 {
 public:
     RingBuffer();

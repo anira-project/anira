@@ -10,7 +10,7 @@
 
 namespace anira {
 
-class TFLiteProcessor : private BackendBase {
+class ANIRA_API TFLiteProcessor : private BackendBase {
 public:
     TFLiteProcessor(InferenceConfig& config);
     ~TFLiteProcessor();

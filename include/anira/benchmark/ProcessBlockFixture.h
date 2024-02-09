@@ -8,7 +8,7 @@
 namespace anira {
 namespace benchmark {
 
-class ProcessBlockFixture : public ::benchmark::Fixture {
+class ANIRA_API ProcessBlockFixture : public ::benchmark::Fixture {
 public:
 
     ProcessBlockFixture();

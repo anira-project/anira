@@ -5,10 +5,11 @@
 #include <string>
 #include <vector>
 #include <thread>
+#include "anira/system/AnriaConfig.h"
 
 namespace anira {
 
-struct InferenceConfig {
+struct ANIRA_API InferenceConfig {
     InferenceConfig(
 #ifdef USE_LIBTORCH
             const std::string model_path_torch,

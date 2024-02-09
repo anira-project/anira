@@ -9,7 +9,7 @@
 
 namespace anira {
 
-class InferenceThreadPool{
+class ANIRA_API InferenceThreadPool{
 public:
     InferenceThreadPool(InferenceConfig& config);
     ~InferenceThreadPool();

@@ -24,7 +24,7 @@
 
 namespace anira {
     
-class InferenceThread {
+class ANIRA_API InferenceThread {
 public:
     InferenceThread(std::counting_semaphore<1000>& globalSemaphore, std::vector<std::shared_ptr<SessionElement>>& sessions, InferenceConfig& config);
     ~InferenceThread();

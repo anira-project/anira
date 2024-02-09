@@ -3,11 +3,12 @@
 
 #include <iostream>
 #include <cstring>
+#include "anira/system/AnriaConfig.h"
 
 namespace anira {
 
 template <typename T>
-class AudioBuffer
+class ANIRA_API AudioBuffer
 {
 public:
     // Default constructor creates an empty buffer with channelcount 0 and no memory allocated

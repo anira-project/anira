@@ -11,7 +11,7 @@
 
 namespace anira {
 
-class LibtorchProcessor : private BackendBase {
+class ANIRA_API LibtorchProcessor : private BackendBase {
 public:
     LibtorchProcessor(InferenceConfig& config);
     ~LibtorchProcessor();

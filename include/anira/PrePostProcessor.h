@@ -3,10 +3,11 @@
 
 #include "utils/RingBuffer.h"
 #include "utils/InferenceBackend.h"
+#include "anira/system/AnriaConfig.h"
 
 namespace anira {
 
-class PrePostProcessor
+class ANIRA_API PrePostProcessor
 {
 public:
     PrePostProcessor() = default;

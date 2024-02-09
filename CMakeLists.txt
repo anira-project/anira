@@ -180,6 +180,10 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${BACKEND_TFLITE}>:USE_TFLITE>
 )
 
+if (MSVC)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE ANIRA_EXPORTS)
+endif()
+
 # Link backend-specific libraries conditionally
 # We use the PUBLIC keyword here to make sure that we don't get the DSO missing from command line error
 if(BACKEND_LIBTORCH)

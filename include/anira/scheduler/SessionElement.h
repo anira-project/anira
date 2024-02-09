@@ -13,7 +13,7 @@
 
 namespace anira {
 
-struct SessionElement {
+struct ANIRA_API SessionElement {
     SessionElement(int newSessionID, PrePostProcessor& prePostProcessor, InferenceConfig& config);
 
     RingBuffer sendBuffer;

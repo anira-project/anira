@@ -9,7 +9,7 @@
 
 namespace anira {
     
-class InferenceManager {
+class ANIRA_API InferenceManager {
 public:
     InferenceManager() = delete;
     InferenceManager(PrePostProcessor &prePostProcessor, InferenceConfig& config);

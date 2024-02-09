@@ -4,10 +4,11 @@
 #include "scheduler/InferenceManager.h"
 #include "PrePostProcessor.h"
 #include "InferenceConfig.h"
+#include "anira/system/AnriaConfig.h"
 
 namespace anira {
 
-class InferenceHandler {
+class ANIRA_API InferenceHandler {
 public:
     InferenceHandler() = delete;
     InferenceHandler(PrePostProcessor &prePostProcessor, InferenceConfig& config);

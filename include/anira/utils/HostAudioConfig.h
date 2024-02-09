@@ -5,7 +5,7 @@
 
 namespace anira {
 
-struct HostAudioConfig {
+struct ANIRA_API HostAudioConfig {
     size_t hostChannels;
     size_t hostBufferSize;
     double hostSampleRate;
