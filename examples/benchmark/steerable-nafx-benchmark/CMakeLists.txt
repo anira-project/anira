@@ -43,3 +43,20 @@ target_link_libraries(${PROJECT_NAME} anira)
 
 # gtest_discover_tests will register a CTest test for each gtest and run them all in parallel with the rest of the Test.
 gtest_discover_tests(${PROJECT_NAME} DISCOVERY_TIMEOUT 90)
+
+if (MSVC)
+	set(NECESSARY_DLLS
+	        ${INFERENCE_ENGINE_DLLS_ONNX}
+	        ${INFERENCE_ENGINE_DLLS_TFLITE}
+	        ${INFERENCE_ENGINE_DLLS_LIBTORCH}
+	        ${GOOGLE_BENCHMARK_DLL}
+	        ${GOOGLE_TEST_DLL}
+			${ANIRA_DLL}
+	)
+
+	add_custom_command(TARGET ${PROJECT_NAME}
+			POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			${NECESSARY_DLLS}
+			$<TARGET_FILE_DIR:${PROJECT_NAME}>)
+endif (MSVC)
