@@ -54,9 +54,11 @@ if (MSVC)
 			${ANIRA_DLL}
 	)
 
-	add_custom_command(TARGET ${PROJECT_NAME}
-			POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-			${NECESSARY_DLLS}
-			$<TARGET_FILE_DIR:${PROJECT_NAME}>)
+	foreach(DLL ${NECESSARY_DLLS})
+		add_custom_command(TARGET ${PROJECT_NAME}
+				PRE_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				${DLL}
+				$<TARGET_FILE_DIR:${PROJECT_NAME}>)
+	endforeach()
 endif (MSVC)

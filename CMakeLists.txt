@@ -257,10 +257,6 @@ endif()
 
 option(ANIRA_BUILD_EXAMPLES "Add Example Targets" ON)
 
-if(ANIRA_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-endif()
-
 # ==============================================================================
 # Install the library
 # ==============================================================================
@@ -374,8 +370,8 @@ install(FILES
 )
 
 if (MSVC)
-    file(GLOB_RECURSE INFERENCE_ENGINE_DLLS_ONNX "${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH}*.dll")
-    file(GLOB_RECURSE INFERENCE_ENGINE_DLLS_TFLITE "${ANIRA_TENSORFLOWLITE_SHARED_LIB_PATH}*.dll")
+    file(GLOB_RECURSE INFERENCE_ENGINE_DLLS_ONNX "${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH}/*.dll")
+    file(GLOB_RECURSE INFERENCE_ENGINE_DLLS_TFLITE "${ANIRA_TENSORFLOWLITE_SHARED_LIB_PATH}/*.dll")
     file(GLOB_RECURSE INFERENCE_ENGINE_DLLS_LIBTORCH "${ANIRA_LIBTORCH_SHARED_LIB_PATH}*.dll")
 
     # These shared libs are only available after build
@@ -383,3 +379,7 @@ if (MSVC)
     file(GLOB_RECURSE GOOGLE_TEST_DLL "${CMAKE_BINARY_DIR}/bin/*.dll")
     file(GLOB_RECURSE ANIRA_DLL "${anira_BINARY_DIR}/*anira.dll")
 endif (MSVC)
+
+if(ANIRA_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
