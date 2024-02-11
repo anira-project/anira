@@ -5,6 +5,8 @@ modules/
 cmake-build*
 .vscode
 install/
-extras/models/
 logs/
 results/
+extras/models/stateful-rnn/stateful-lstm/
+extras/models/stateless-rnn/GuitarLSTM/
+extras/models/cnn/steerable-nafx/
