@@ -1,5 +1,4 @@
 #include "PluginProcessor.h"
-#include "PluginEditor.h"
 
 //==============================================================================
 AudioPluginAudioProcessor::AudioPluginAudioProcessor() 
@@ -108,6 +107,7 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
 
     monoBuffer.setSize(1, samplesPerBlock);
     inferenceHandler.prepare(monoConfig);
+
     auto newLatency = inferenceHandler.getLatency();
     dryWetMixer.setWetLatency(newLatency);
     setLatencySamples(newLatency);
@@ -156,14 +156,14 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    monoStereoProcessor.stereoToMono(monoBuffer, buffer);
-    dryWetMixer.setDrySamples(monoBuffer);
+    stereoToMono(monoBuffer, buffer);
+    dryWetMixer.pushDrySamples(monoBuffer);
 
     auto inferenceBuffer = const_cast<float **>(monoBuffer.getArrayOfWritePointers());
     inferenceHandler.process(inferenceBuffer, (size_t) buffer.getNumSamples());
 
-    dryWetMixer.setWetSamples(monoBuffer);
-    monoStereoProcessor.monoToStereo(buffer, monoBuffer);
+    dryWetMixer.mixWetSamples(monoBuffer);
+    monoToStereo(buffer, monoBuffer);
 }
 
 //==============================================================================
@@ -174,7 +174,7 @@ bool AudioPluginAudioProcessor::hasEditor() const
 
 juce::AudioProcessorEditor* AudioPluginAudioProcessor::createEditor()
 {
-    return new AudioPluginAudioProcessorEditor (*this);
+    return new juce::GenericAudioProcessorEditor(*this);
 }
 
 //==============================================================================
@@ -195,7 +195,7 @@ void AudioPluginAudioProcessor::setStateInformation (const void* data, int sizeI
 
 void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID, float newValue) {
     if (parameterID == PluginParameters::DRY_WET_ID.getParamID()) {
-        dryWetMixer.setDryWetProportion(newValue);
+        dryWetMixer.setWetMixProportion(newValue);
     } else if (parameterID == PluginParameters::BACKEND_TYPE_ID.getParamID()) {
         const auto paramInt = static_cast<int>(newValue);
         auto paramString = PluginParameters::backendTypes.getReference(paramInt);
@@ -219,4 +219,37 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 
 anira::InferenceManager &AudioPluginAudioProcessor::getInferenceManager() {
     return inferenceHandler.getInferenceManager();
+}
+
+void AudioPluginAudioProcessor::stereoToMono(juce::AudioBuffer<float> &targetMonoBlock,
+                                             juce::AudioBuffer<float> &sourceBlock) {
+    if (sourceBlock.getNumChannels() == 1) {
+        targetMonoBlock.makeCopyOf(sourceBlock);
+    } else {
+        auto nSamples = sourceBlock.getNumSamples();
+
+        auto monoWrite = targetMonoBlock.getWritePointer(0);
+        auto lRead = sourceBlock.getReadPointer(0);
+        auto rRead = sourceBlock.getReadPointer(1);
+
+        juce::FloatVectorOperations::copy(monoWrite, lRead, nSamples);
+        juce::FloatVectorOperations::add(monoWrite, rRead, nSamples);
+        juce::FloatVectorOperations::multiply(monoWrite, 0.5f, nSamples);
+    }
+}
+
+void AudioPluginAudioProcessor::monoToStereo(juce::AudioBuffer<float> &targetStereoBlock,
+                                             juce::AudioBuffer<float> &sourceBlock) {
+    if (targetStereoBlock.getNumChannels() == 1) {
+        targetStereoBlock.makeCopyOf(sourceBlock);
+    } else {
+        auto nSamples = sourceBlock.getNumSamples();
+
+        auto lWrite = targetStereoBlock.getWritePointer(0);
+        auto rWrite = targetStereoBlock.getWritePointer(1);
+        auto monoRead = sourceBlock.getReadPointer(0);
+
+        juce::FloatVectorOperations::copy(lWrite, monoRead, nSamples);
+        juce::FloatVectorOperations::copy(rWrite, monoRead, nSamples);
+    }
 }

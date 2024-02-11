@@ -1,10 +1,8 @@
 #pragma once
 
-#include <juce_audio_processors/juce_audio_processors.h>
+#include <JuceHeader.h>
 
 #include "PluginParameters.h"
-#include "dsp/utils/Mixer.h"
-#include "dsp/utils/MonoStereo.h"
 #include "MyPrePostProcessor.h"
 #include "Configs.h"
 
@@ -55,6 +53,8 @@ public:
 
 private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
+    void stereoToMono(juce::AudioBuffer<float> &targetMonoBlock, juce::AudioBuffer<float> &sourceBlock);
+    void monoToStereo(juce::AudioBuffer<float> &targetStereoBlock, juce::AudioBuffer<float> &sourceBlock);
 
 private:
     juce::AudioProcessorValueTreeState parameters;
@@ -63,8 +63,7 @@ private:
     MyPrePostProcessor prePostProcessor;
     anira::InferenceHandler inferenceHandler;
 
-    Mixer dryWetMixer;
-    MonoStereo monoStereoProcessor;
+    juce::dsp::DryWetMixer<float> dryWetMixer;
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)

@@ -275,11 +275,8 @@ if(DEFINED CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
         CACHE PATH "Where the library will be installed to" FORCE
     )
 else()
-    message(
-        STATUS
-        "CMAKE_INSTALL_PREFIX was already set\n"
-        "Current value: ${CMAKE_INSTALL_PREFIX}"
-    )
+    message(STATUS "CMAKE_INSTALL_PREFIX was already set")
+    message(STATUS "Current value: ${CMAKE_INSTALL_PREFIX}")
 endif()
 
 # at install the rpath is cleared by default so we have to set it again for the installed shared library to find the other libraries
