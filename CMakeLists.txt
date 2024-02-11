@@ -378,6 +378,15 @@ if (MSVC)
     file(GLOB_RECURSE GOOGLE_BENCHMARK_DLL "${benchmark_BINARY_DIR}/*.dll")
     file(GLOB_RECURSE GOOGLE_TEST_DLL "${CMAKE_BINARY_DIR}/bin/*.dll")
     file(GLOB_RECURSE ANIRA_DLL "${anira_BINARY_DIR}/*anira.dll")
+
+    set(NECESSARY_DLLS
+            ${INFERENCE_ENGINE_DLLS_ONNX}
+            ${INFERENCE_ENGINE_DLLS_TFLITE}
+            ${INFERENCE_ENGINE_DLLS_LIBTORCH}
+            ${GOOGLE_BENCHMARK_DLL}
+            ${GOOGLE_TEST_DLL}
+            ${ANIRA_DLL}
+    )
 endif (MSVC)
 
 if(ANIRA_BUILD_EXAMPLES)

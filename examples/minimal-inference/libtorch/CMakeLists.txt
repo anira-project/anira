@@ -7,16 +7,14 @@ add_executable(minimal-libtorch
   minimal-libtorch.cpp
 )
 
-target_link_libraries(minimal-libtorch
-  anira::anira
-)
+target_link_libraries(minimal-libtorch anira)
 
 if (MSVC)
-    file(GLOB_RECURSE LIBTORCH_DLLS "${ANIRA_LIBTORCH_SHARED_LIB_PATH}/*.dll")
-    add_custom_command(TARGET minimal-libtorch
-            POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${LIBTORCH_DLLS}
-            $<TARGET_FILE_DIR:minimal-libtorch>)
+    foreach(DLL ${NECESSARY_DLLS})
+        add_custom_command(TARGET ${PROJECT_NAME}
+                PRE_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${DLL}
+                $<TARGET_FILE_DIR:minimal-libtorch>)
+    endforeach()
 endif (MSVC)
-

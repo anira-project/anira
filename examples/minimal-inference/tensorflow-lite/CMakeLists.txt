@@ -7,15 +7,14 @@ add_executable(minimal-tflite
   minimal-tflite.cpp
 )
 
-target_link_libraries(minimal-tflite
-  anira::anira
-)
+target_link_libraries(minimal-tflite anira)
 
 if (MSVC)
-    file(GLOB_RECURSE TFLITE_DLLS "${ANIRA_TENSORFLOWLITE_SHARED_LIB_PATH}/*.dll")
-    add_custom_command(TARGET minimal-tflite
-            POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${TFLITE_DLLS}
-            $<TARGET_FILE_DIR:minimal-tflite>)
+    foreach(DLL ${NECESSARY_DLLS})
+        add_custom_command(TARGET minimal-tflite
+                PRE_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${DLL}
+                $<TARGET_FILE_DIR:minimal-tflite>)
+    endforeach()
 endif (MSVC)
