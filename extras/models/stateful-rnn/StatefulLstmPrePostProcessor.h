@@ -8,7 +8,7 @@
 #include "StatefulLstmConfig.h"
 #include <anira/PrePostProcessor.h>
 
-class MyPrePostProcessor : public anira::PrePostProcessor
+class StatefulLstmPrePostProcessor : public anira::PrePostProcessor
 {
 public:
     // The third model uses the default preProcess method

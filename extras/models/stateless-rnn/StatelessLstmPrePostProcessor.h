@@ -8,7 +8,7 @@
 #include "StatelessLstmConfig.h"
 #include <anira/PrePostProcessor.h>
 
-class MyPrePostProcessor : public anira::PrePostProcessor
+class StatelessLstmPrePostProcessor : public anira::PrePostProcessor
 {
 public:
     virtual void preProcess(anira::RingBuffer& input, anira::AudioBufferF& output, [[maybe_unused]] anira::InferenceBackend currentInferenceBackend) override {
