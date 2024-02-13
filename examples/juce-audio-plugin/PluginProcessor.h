@@ -1,12 +1,15 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <anira/anira.h>
 
 #include "PluginParameters.h"
-#include "MyPrePostProcessor.h"
-#include "Configs.h"
-
-#include <anira/InferenceHandler.h>
+#include "../../extras/models/stateful-rnn/StatefulLstmConfig.h"
+#include "../../extras/models/stateful-rnn/StatefulLstmPrePostProcessor.h"
+#include "../../extras/models/stateless-rnn/StatelessLstmConfig.h"
+#include "../../extras/models/stateless-rnn/StatelessLstmPrePostProcessor.h"
+#include "../../extras/models/cnn/CnnConfig.h"
+#include "../../extras/models/cnn/CnnPrePostProcessor.h"
 
 //==============================================================================
 class AudioPluginAudioProcessor  : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener
@@ -60,7 +63,13 @@ private:
     juce::AudioProcessorValueTreeState parameters;
     juce::AudioBuffer<float> monoBuffer;
 
-    MyPrePostProcessor prePostProcessor;
+#if MODEL_TO_USE == 1
+    CnnPrePostProcessor prePostProcessor;
+#elif MODEL_TO_USE == 2
+    StatelessLstmPrePostProcessor prePostProcessor;
+#elif MODEL_TO_USE == 3
+    StatefulLstmPrePostProcessor prePostProcessor;
+#endif
     anira::InferenceHandler inferenceHandler;
 
     juce::dsp::DryWetMixer<float> dryWetMixer;
