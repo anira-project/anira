@@ -1,1 +1,2 @@
-add_subdirectory(steerable-nafx-benchmark)
+add_subdirectory(advanced-benchmark)
+add_subdirectory(simple-benchmark)
