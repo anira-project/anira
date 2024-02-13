@@ -9,7 +9,7 @@
 #define MAX_INFERENCE_TIME 15380
 #endif
 
-static const anira::InferenceConfig cnnConfig(
+static anira::InferenceConfig cnnConfig(
 #ifdef USE_LIBTORCH
         STEERABLENAFX_MODELS_PATH_PYTORCH + std::string("model_0/steerable-nafx-2048.pt"),
         {1, 1, 15380},
