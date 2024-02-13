@@ -6,9 +6,9 @@
 #define ANIRA_STATELESSLSTMPREPOSTPROCESSOR_H
 
 #include "StatelessLstmConfig.h"
-#include <anira/PrePostProcessor.h>
+#include <anira/anira.h>
 
-class MyPrePostProcessor : public anira::PrePostProcessor
+class StatelessLstmPrePostProcessor : public anira::PrePostProcessor
 {
 public:
     virtual void preProcess(anira::RingBuffer& input, anira::AudioBufferF& output, [[maybe_unused]] anira::InferenceBackend currentInferenceBackend) override {
@@ -17,6 +17,7 @@ public:
             popSamplesFromBuffer(input, output, config.m_model_input_size, config.m_model_input_size_backend-config.m_model_input_size, baseIdx);
         }
     };
+    
 private:
     anira::InferenceConfig config = statelessRnnConfig;
 };

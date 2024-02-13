@@ -6,12 +6,12 @@
 #define ANIRA_STATEFULLSTMPREPOSTPROCESSOR_H
 
 #include "StatefulLstmConfig.h"
-#include <anira/PrePostProcessor.h>
+#include <anira/anira.h>
 
-class MyPrePostProcessor : public anira::PrePostProcessor
+class StatefulLstmPrePostProcessor : public anira::PrePostProcessor
 {
 public:
-    // The third model uses the default preProcess method
+    // This model uses the default preProcess method from PrePostProcessor
 };
 
 #endif //ANIRA_STATEFULLSTMPREPOSTPROCESSOR_H
