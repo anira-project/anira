@@ -22,8 +22,9 @@ public:
 private:
     torch::jit::script::Module module;
 
-    at::Tensor inputTensor;
-    at::Tensor outputTensor;
+    torch::Tensor inputTensor;
+    torch::Tensor outputTensor;
+
     std::vector<torch::jit::IValue> inputs;
 
 };
