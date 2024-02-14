@@ -1,15 +1,15 @@
-#ifndef ANIRA_STATEFULLSTMCONFIG_H
-#define ANIRA_STATEFULLSTMCONFIG_H
+#ifndef ANIRA_STATEFULRNNCONFIG_H
+#define ANIRA_STATEFULRNNCONFIG_H
 
-#include <anira/InferenceConfig.h>
+#include <anira/anira.h>
 
 #if WIN32
-#define MAX_INFERENCE_TIME 16384
+#define STATEFULRNN_MAX_INFERENCE_TIME 16384
 #else
-#define MAX_INFERENCE_TIME 15380
+#define STATEFULRNN_MAX_INFERENCE_TIME 15380
 #endif
 
-static anira::InferenceConfig statefulRnnConfig(
+static anira::InferenceConfig statefulRNNConfig(
 #ifdef USE_LIBTORCH
         STATEFULLSTM_MODELS_PATH_PYTORCH + std::string("model_0/stateful-lstm.pt"),
         {2048, 1, 1},
@@ -29,10 +29,11 @@ static anira::InferenceConfig statefulRnnConfig(
         2048,
         2048,
         2048,
-        MAX_INFERENCE_TIME,
+        STATEFULRNN_MAX_INFERENCE_TIME,
         0,
         false,
-        1
+        0.5f,
+        true
 );
 
-#endif //ANIRA_STATEFULLSTMCONFIG_H
+#endif //ANIRA_STATEFULRNNCONFIG_H

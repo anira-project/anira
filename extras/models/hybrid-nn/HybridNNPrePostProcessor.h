@@ -1,10 +1,10 @@
-#ifndef ANIRA_STATELESSLSTMPREPOSTPROCESSOR_H
-#define ANIRA_STATELESSLSTMPREPOSTPROCESSOR_H
+#ifndef ANIRA_HYBRIDNNPREPOSTPROCESSOR_H
+#define ANIRA_HYBRIDNNPREPOSTPROCESSOR_H
 
-#include "StatelessLstmConfig.h"
+#include "HybridNNConfig.h"
 #include <anira/anira.h>
 
-class StatelessLstmPrePostProcessor : public anira::PrePostProcessor
+class HybridNNPrePostProcessor : public anira::PrePostProcessor
 {
 public:
     virtual void preProcess(anira::RingBuffer& input, anira::AudioBufferF& output, [[maybe_unused]] anira::InferenceBackend currentInferenceBackend) override {
@@ -15,7 +15,7 @@ public:
     };
     
 private:
-    anira::InferenceConfig config = statelessRnnConfig;
+    anira::InferenceConfig config = hybridNNConfig;
 };
 
-#endif //ANIRA_STATELESSLSTMPREPOSTPROCESSOR_H
+#endif //ANIRA_HYBRIDNNPREPOSTPROCESSOR_H

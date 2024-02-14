@@ -10,7 +10,7 @@ InferenceManager::InferenceManager(PrePostProcessor& ppP, InferenceConfig& confi
 }
 
 InferenceManager::~InferenceManager() {
-    inferenceThreadPool->releaseSession(session);
+    inferenceThreadPool->releaseSession(session, inferenceConfig);
 }
 
 void InferenceManager::setBackend(InferenceBackend newInferenceBackend) {

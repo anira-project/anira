@@ -10,21 +10,24 @@ Licence: modified BSD
 #include <iostream>
 #include <memory>
 
-#include "../../../extras/models/stateful-rnn/StatefulLstmConfig.h"
-#include "../../../extras/models/stateless-rnn/StatelessLstmConfig.h"
-#include "../../../extras/models/cnn/CnnConfig.h"
+#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../extras/models/cnn/CNNConfig.h"
 
 void minimal_inference(anira::InferenceConfig config) {
     std::cout << "Minimal LibTorch example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
     std::cout << "Using model: " << config.m_model_path_torch << std::endl;
 
+    std::string omp_num_threads = "OMP_NUM_THREADS=1";
+    std::string mkl_num_threads = "MKL_NUM_THREADS=1";
+
 #if WIN32
-    _putenv("OMP_NUM_THREADS=1");
-    _putenv("MKL_NUM_THREADS=1");
+    _putenv(omp_num_threads.data());
+    _putenv(mkl_num_threads.data());
 #else
-    putenv("OMP_NUM_THREADS=1");
-    putenv("MKL_NUM_THREADS=1");
+    putenv(omp_num_threads.data());
+    putenv(mkl_num_threads.data());
 #endif
 
     // Load model
@@ -78,7 +81,7 @@ void minimal_inference(anira::InferenceConfig config) {
 
 int main(int argc, const char* argv[]) {
 
-    std::vector<anira::InferenceConfig> modelsToInference = {statelessRnnConfig, cnnConfig, statefulRnnConfig};
+    std::vector<anira::InferenceConfig> modelsToInference = {hybridNNConfig, cnnConfig, statefulRNNConfig};
 
     for (int i = 0; i < modelsToInference.size(); ++i) {
         minimal_inference(modelsToInference[i]);

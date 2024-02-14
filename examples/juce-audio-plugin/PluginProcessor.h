@@ -4,12 +4,12 @@
 #include <anira/anira.h>
 
 #include "PluginParameters.h"
-#include "../../extras/models/stateful-rnn/StatefulLstmConfig.h"
-#include "../../extras/models/stateful-rnn/StatefulLstmPrePostProcessor.h"
-#include "../../extras/models/stateless-rnn/StatelessLstmConfig.h"
-#include "../../extras/models/stateless-rnn/StatelessLstmPrePostProcessor.h"
-#include "../../extras/models/cnn/CnnConfig.h"
-#include "../../extras/models/cnn/CnnPrePostProcessor.h"
+#include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
+#include "../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../extras/models/cnn/CNNConfig.h"
+#include "../../extras/models/cnn/CNNPrePostProcessor.h"
 
 //==============================================================================
 class AudioPluginAudioProcessor  : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener
@@ -64,11 +64,11 @@ private:
     juce::AudioBuffer<float> monoBuffer;
 
 #if MODEL_TO_USE == 1
-    CnnPrePostProcessor prePostProcessor;
+    CNNPrePostProcessor prePostProcessor;
 #elif MODEL_TO_USE == 2
-    StatelessLstmPrePostProcessor prePostProcessor;
+    HybridNNPrePostProcessor prePostProcessor;
 #elif MODEL_TO_USE == 3
-    StatefulLstmPrePostProcessor prePostProcessor;
+    StatefulRNNPrePostProcessor prePostProcessor;
 #endif
     anira::InferenceHandler inferenceHandler;
 

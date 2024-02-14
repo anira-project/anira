@@ -3,12 +3,12 @@
 #include <anira/anira.h>
 #include <anira/benchmark.h>
 
-#include "../../../extras/models/cnn/CnnConfig.h"
-#include "../../../extras/models/cnn/CnnPrePostProcessor.h"
-#include "../../../extras/models/stateless-rnn/StatelessLstmConfig.h"
-#include "../../../extras/models/stateless-rnn/StatelessLstmPrePostProcessor.h"
-#include "../../../extras/models/stateful-rnn/StatefulLstmConfig.h"
-#include "../../../extras/models/stateful-rnn/StatefulLstmPrePostProcessor.h"
+#include "../../../extras/models/cnn/CNNConfig.h"
+#include "../../../extras/models/cnn/CNNPrePostProcessor.h"
+#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
 
 // TODO Make sure that benchmarks also work when HOST_BUFFER_SIZE % MODEL_INPUT_SIZE != 0
 
@@ -23,14 +23,16 @@
 
 std::vector<int> bufferSizes = {2048, 4096, 8192};
 std::vector<anira::InferenceBackend> inferenceBackends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE};
-std::vector<anira::InferenceConfig> inferenceConfigs = {cnnConfig, statelessRnnConfig, statefulRnnConfig};
+std::vector<anira::InferenceConfig> inferenceConfigs = {cnnConfig, hybridNNConfig, statefulRNNConfig};
 
 // define the buffer sizes to be used in the benchmark and the backends to be used
 static void Arguments(::benchmark::internal::Benchmark* b) {
     for (int i = 0; i < bufferSizes.size(); ++i)
         for (int j = 0; j < inferenceBackends.size(); ++j)
             for (int k = 0; k < inferenceConfigs.size(); ++k)
-                b->Args({bufferSizes[i], j, k});
+                // ONNX backend does not support stateful RNN
+                if (!(j == 2 && k == 3))
+                    b->Args({bufferSizes[i], j, k});
 }
 
 /* ============================================================ *
@@ -47,11 +49,11 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     // TODO: Why is this necessary?
     anira::PrePostProcessor *myPrePostProcessor;
     if (state.range(2) == 0) {
-        myPrePostProcessor = new CnnPrePostProcessor();
+        myPrePostProcessor = new CNNPrePostProcessor();
     } else if (state.range(2) == 1) {
-        myPrePostProcessor = new StatelessLstmPrePostProcessor();
+        myPrePostProcessor = new HybridNNPrePostProcessor();
     } else if (state.range(2) == 2) {
-        myPrePostProcessor = new StatefulLstmPrePostProcessor();
+        myPrePostProcessor = new StatefulRNNPrePostProcessor();
     }
 
     m_inferenceHandler = std::make_unique<anira::InferenceHandler>(*myPrePostProcessor, inferenceConfigs[state.range(2)]);
@@ -82,6 +84,8 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     repetitionStep();
 
     delete myPrePostProcessor;
+
+    std::this_thread::sleep_for(std::chrono::seconds(3));
 }
 
 // /* ============================================================ *

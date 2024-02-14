@@ -33,8 +33,9 @@ struct ANIRA_API InferenceConfig {
             size_t max_inference_time,
             int model_latency,
             bool warm_up = false,
-            int numberOfThreads = std::thread::hardware_concurrency() - 1,
             float wait_in_process_block = 0.5f,
+            bool bind_session_to_thread = false,
+            int numberOfThreads = ((int) std::thread::hardware_concurrency() - 1 > 0) ? (int) std::thread::hardware_concurrency() - 1 : 1,
             bool bypass_inference = false) :
 #ifdef USE_LIBTORCH
             m_model_path_torch(model_path_torch),
@@ -58,22 +59,11 @@ struct ANIRA_API InferenceConfig {
             m_max_inference_time(max_inference_time),
             m_model_latency(model_latency),
             m_warm_up(warm_up),
-            m_number_of_threads(numberOfThreads),
             m_wait_in_process_block(wait_in_process_block),
+            m_bind_session_to_thread(bind_session_to_thread),
+            m_number_of_threads(numberOfThreads),
             m_bypass_inference(bypass_inference)
     {}
-
-    const size_t m_batch_size;
-    const size_t m_model_input_size;
-    const size_t m_model_input_size_backend;
-    const size_t m_model_output_size_backend;
-    const size_t m_max_inference_time;
-    const int m_model_latency;
-    const bool m_warm_up;
-
-    const int m_number_of_threads;
-    const float m_wait_in_process_block;
-    const bool m_bypass_inference;
 
 #ifdef USE_LIBTORCH
     const std::string m_model_path_torch;
@@ -92,6 +82,19 @@ struct ANIRA_API InferenceConfig {
     const std::vector<int64_t> m_model_input_shape_tflite;
     const std::vector<int64_t> m_model_output_shape_tflite;
 #endif
+
+    const size_t m_batch_size;
+    const size_t m_model_input_size;
+    const size_t m_model_input_size_backend;
+    const size_t m_model_output_size_backend;
+    const size_t m_max_inference_time;
+    const int m_model_latency;
+    const bool m_warm_up;
+
+    const float m_wait_in_process_block;
+    const bool m_bind_session_to_thread;
+    const int m_number_of_threads;
+    const bool m_bypass_inference;
 };
 
 } // namespace anira

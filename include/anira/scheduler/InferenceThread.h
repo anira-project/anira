@@ -26,12 +26,14 @@ namespace anira {
     
 class ANIRA_API InferenceThread {
 public:
-    InferenceThread(std::counting_semaphore<1000>& globalSemaphore, std::vector<std::shared_ptr<SessionElement>>& sessions, InferenceConfig& config);
+    InferenceThread(std::counting_semaphore<1000>& globalSemaphore, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& sessions);
+    InferenceThread(std::counting_semaphore<1000>& globalSemaphore, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID);
     ~InferenceThread();
 
     void start();
     void run();
     void stop();
+    int getSessionID() const { return sessionID; }
 
     void setRealTimeOrLowerPriority();
 
@@ -39,10 +41,11 @@ private:
     void inference(InferenceBackend backend, AudioBufferF& input, AudioBufferF& output);
 
 private:
-     std::thread thread;
-     std::atomic<bool> shouldExit;
-     std::counting_semaphore<1000>& globalSemaphore;
-     std::vector<std::shared_ptr<SessionElement>>& sessions;
+    std::thread thread;
+    std::atomic<bool> shouldExit;
+    std::counting_semaphore<1000>& globalSemaphore;
+    std::vector<std::shared_ptr<SessionElement>>& sessions;
+    int sessionID = -1;
 
 #ifdef USE_LIBTORCH
     LibtorchProcessor torchProcessor;

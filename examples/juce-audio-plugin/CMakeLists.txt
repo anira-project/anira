@@ -71,9 +71,9 @@ if(NOT BACKEND_LIBTORCH AND NOT BACKEND_ONNXRUNTIME AND NOT BACKEND_TFLITE)
     message(FATAL_ERROR "No backend selected. Please select at least one backend by setting one of the following options to ON: BACKEND_LIBTORCH, BACKEND_ONNXRUNTIME, or BACKEND_TFLITE. For example, add '-DBACKEND_LIBTORCH=ON' to your CMake command line")
 endif()
 
-add_compile_definitions(MODEL_TO_USE=1) # steerable-nafx
+# add_compile_definitions(MODEL_TO_USE=1) # steerable-nafx
 #add_compile_definitions(MODEL_TO_USE=2) # GuitarLSTM
-#add_compile_definitions(MODEL_TO_USE=3) # stateful-LSTM
+add_compile_definitions(MODEL_TO_USE=3) # stateful-LSTM
 
 set (TARGET_NAME NN_Inference_Template)
 
