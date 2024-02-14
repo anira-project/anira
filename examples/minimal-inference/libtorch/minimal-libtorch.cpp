@@ -19,12 +19,15 @@ void minimal_inference(anira::InferenceConfig config) {
     std::cout << "-----------------------------------------" << std::endl;
     std::cout << "Using model: " << config.m_model_path_torch << std::endl;
 
+    std::string omp_num_threads = "OMP_NUM_THREADS=1";
+    std::string mkl_num_threads = "MKL_NUM_THREADS=1";
+
 #if WIN32
-    _putenv("OMP_NUM_THREADS=1");
-    _putenv("MKL_NUM_THREADS=1");
+    _putenv(omp_num_threads.data());
+    _putenv(mkl_num_threads.data());
 #else
-    putenv("OMP_NUM_THREADS=1");
-    putenv("MKL_NUM_THREADS=1");
+    putenv(omp_num_threads.data());
+    putenv(mkl_num_threads.data());
 #endif
 
     // Load model
