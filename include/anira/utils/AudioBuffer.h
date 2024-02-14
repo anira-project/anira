@@ -14,7 +14,7 @@ public:
     // Default constructor creates an empty buffer with channelcount 0 and no memory allocated
     AudioBuffer()
     {
-    };
+    }
     
     // Constructor creates a buffer with the given number of channels and samples
     AudioBuffer(size_t number_of_channels, size_t size)
@@ -71,7 +71,7 @@ public:
     {
         delete[] m_p_data;
         delete[] m_p_channels;
-    };
+    }
 
     // Copy assignment operator takes an lvalue reference to another buffer and copies the data from the other buffer to this buffer
     AudioBuffer& operator=(const AudioBuffer& other)
