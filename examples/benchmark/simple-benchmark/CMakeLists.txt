@@ -12,7 +12,7 @@ endif ()
 # Setup the project
 # ==============================================================================
 
-set (PROJECT_NAME steerable-nafx-benchmark)
+set (PROJECT_NAME simple-benchmark)
 
 project (${PROJECT_NAME} VERSION 0.0.1)
 
@@ -28,15 +28,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 add_executable(${PROJECT_NAME})
 
-add_compile_definitions(STEERABLENAFX_MODELS_PATH_TENSORFLOW="${CMAKE_SOURCE_DIR}/extras/models/steerable-nafx/models/")
-add_compile_definitions(STEERABLENAFX_MODELS_PATH_PYTORCH="${CMAKE_SOURCE_DIR}/extras/models/steerable-nafx/models/")
-
 target_sources(${PROJECT_NAME} PRIVATE
-    # defineSimpleBenchmark.cpp
-    defineAdvancedBenchmark.cpp
-    defineTest.cpp
-    MyPrePostProcessor.h
-    MyConfig.h
+    defineSimpleBenchmark.cpp
+	defineTestSimpleBenchmark.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} anira)

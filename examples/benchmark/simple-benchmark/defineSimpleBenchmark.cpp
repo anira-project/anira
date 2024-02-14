@@ -3,8 +3,12 @@
 #include <anira/anira.h>
 #include <anira/benchmark.h>
 
-#include "MyConfig.h"
-#include "MyPrePostProcessor.h"
+#include "../../../extras/models/cnn/CnnConfig.h"
+#include "../../../extras/models/cnn/CnnPrePostProcessor.h"
+#include "../../../extras/models/stateless-rnn/StatelessLstmConfig.h"
+#include "../../../extras/models/stateless-rnn/StatelessLstmPrePostProcessor.h"
+#include "../../../extras/models/stateful-rnn/StatefulLstmConfig.h"
+#include "../../../extras/models/stateful-rnn/StatefulLstmPrePostProcessor.h"
 
 // TODO Make sure that benchmarks also work when HOST_BUFFER_SIZE % MODEL_INPUT_SIZE != 0
 
@@ -14,37 +18,28 @@
 
 #define NUM_ITERATIONS 50
 #define NUM_REPETITIONS 10
-#define PERCENTILE 0.999
-#define BUFFER_SIZES {2048, 4096, 8192}
+#define BUFFER_SIZE 2048
 #define SAMPLE_RATE 44100
-
-// define the buffer sizes to be used in the benchmark and the backends to be used
-static void Arguments(::benchmark::internal::Benchmark* b) {
-    std::vector<int> bufferSizes = BUFFER_SIZES;
-    for (int i = 0; i < bufferSizes.size(); ++i)
-        for (int j = 0; j < 3; ++j)
-            b->Args({bufferSizes[i], j});
-}
 
 /* ============================================================ *
  * ================== BENCHMARK DEFINITIONS =================== *
  * ============================================================ */
 
 typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
-MyPrePostProcessor myPrePostProcessor;
 
-BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) {
+CnnPrePostProcessor myPrePostProcessor;
+// StatelessLstmPrePostProcessor myPrePostProcessor;
+// StatefulLstmPrePostProcessor myPrePostProcessor;
+
+anira::InferenceConfig myConfig = cnnConfig;
+// anira::InferenceHandler myConfig = statelessLstmConfig;
+// anira::InferenceHandler myConfig = statefulLstmConfig;
+
+BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
 
     // The buffer size return in getBufferSize() is populated by state.range(0) param of the google benchmark
-    anira::HostAudioConfig hostAudioConfig(1, getBufferSize(), SAMPLE_RATE);
-    anira::InferenceBackend inferenceBackend;
-
-    if (state.range(1) == 0)
-        inferenceBackend = anira::LIBTORCH;
-    else if (state.range(1) == 1)
-        inferenceBackend = anira::ONNX;
-    else if (state.range(1) == 2)
-        inferenceBackend = anira::TFLITE;
+    anira::HostAudioConfig hostAudioConfig = {1, (size_t) getBufferSize(), SAMPLE_RATE};
+    anira::InferenceBackend inferenceBackend = anira::LIBTORCH;
 
     m_inferenceHandler = std::make_unique<anira::InferenceHandler>(myPrePostProcessor, myConfig);
     m_inferenceHandler->prepare(hostAudioConfig);
@@ -78,14 +73,8 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
 //  * ================== BENCHMARK REGISTRATION ================== *
 //  * ============================================================ */
 
-BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_ADVANCED)
+BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_SIMPLE)
 ->Unit(benchmark::kMillisecond)
 ->Iterations(NUM_ITERATIONS)->Repetitions(NUM_REPETITIONS)
-->Apply(Arguments)
-->ComputeStatistics("min", anira::benchmark::calculateMin)
-->ComputeStatistics("max", anira::benchmark::calculateMax)
-->ComputeStatistics("percentile", [](const std::vector<double>& v) -> double {
-    return anira::benchmark::calculatePercentile(v, PERCENTILE);
-  })
-->DisplayAggregatesOnly(false)
+->Arg(BUFFER_SIZE)
 ->UseManualTime();

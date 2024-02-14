@@ -21,7 +21,7 @@ public:
     int getBufferSize();
     int getRepetition();
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
         void interationStep(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end, ::benchmark::State& state);
 #else
         void interationStep(const std::chrono::system_clock::time_point& start, const std::chrono::system_clock::time_point& end, ::benchmark::State& state);

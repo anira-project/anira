@@ -92,7 +92,7 @@ int ProcessBlockFixture::getBufferSize() {
     return m_bufferSize;
 }
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
 void ProcessBlockFixture::interationStep(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end, ::benchmark::State& state) {
 #else
 void ProcessBlockFixture::interationStep(const std::chrono::system_clock::time_point& start, const std::chrono::system_clock::time_point& end, ::benchmark::State& state) {

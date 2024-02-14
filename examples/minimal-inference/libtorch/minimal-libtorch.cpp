@@ -57,20 +57,21 @@ void minimal_inference(anira::InferenceConfig config) {
     inputs.push_back(inputTensor);
 
     // Execute inference
-    at::Tensor outputTensor = module.forward(inputs).toTensor();
+    torch::Tensor outputTensor = module.forward(inputs).toTensor();
 
     for (int i = 0; i < outputTensor.sizes().size(); ++i) {
         std::cout << "Output shape " << i << ": " << outputTensor.sizes()[i] << '\n';
     }
 
-    auto flatOutputTensor = outputTensor.reshape({-1});
+    // Flatten the output tensor
+    outputTensor = outputTensor.view({-1});
 
     const int outputSize = config.m_batch_size * config.m_model_output_size_backend;
     std::vector<float> outputData;
 
     // Copy the data to the outputData vector
     for (int i = 0; i < outputSize; ++i) {
-        outputData.push_back(flatOutputTensor[i].item().toFloat());
+        outputData.push_back(outputTensor[i].item().toFloat());
         std::cout << "Output data [" << i << "]: " << outputData[i] << std::endl;
     }
 }

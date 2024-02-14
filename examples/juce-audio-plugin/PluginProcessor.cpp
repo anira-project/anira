@@ -11,7 +11,13 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                      #endif
                        ),
         parameters (*this, nullptr, juce::Identifier (getName()), PluginParameters::createParameterLayout()),
-        inferenceHandler(prePostProcessor, config)
+#if MODEL_TO_USE == 1
+        inferenceHandler(prePostProcessor, cnnConfig)
+#elif MODEL_TO_USE == 2
+        inferenceHandler(prePostProcessor, statelessLstmConfig)
+#elif MODEL_TO_USE == 3
+        inferenceHandler(prePostProcessor, statefulLstmConfig)
+#endif
 {
     for (auto & parameterID : PluginParameters::getPluginParameterList()) {
         parameters.addParameterListener(parameterID, this);
@@ -109,7 +115,7 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     inferenceHandler.prepare(monoConfig);
 
     auto newLatency = inferenceHandler.getLatency();
-    dryWetMixer.setWetLatency(newLatency);
+    // dryWetMixer.setWetLatency(newLatency);
     setLatencySamples(newLatency);
 
 }

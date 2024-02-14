@@ -1,12 +1,8 @@
-//
-// Created by Valentin Ackva on 10/02/2024.
-//
-
 #ifndef ANIRA_STATELESSLSTMPREPOSTPROCESSOR_H
 #define ANIRA_STATELESSLSTMPREPOSTPROCESSOR_H
 
 #include "StatelessLstmConfig.h"
-#include <anira/PrePostProcessor.h>
+#include <anira/anira.h>
 
 class StatelessLstmPrePostProcessor : public anira::PrePostProcessor
 {
@@ -17,6 +13,7 @@ public:
             popSamplesFromBuffer(input, output, config.m_model_input_size, config.m_model_input_size_backend-config.m_model_input_size, baseIdx);
         }
     };
+    
 private:
     anira::InferenceConfig config = statelessRnnConfig;
 };
