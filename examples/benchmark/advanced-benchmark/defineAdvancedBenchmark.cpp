@@ -30,7 +30,9 @@ static void Arguments(::benchmark::internal::Benchmark* b) {
     for (int i = 0; i < bufferSizes.size(); ++i)
         for (int j = 0; j < inferenceBackends.size(); ++j)
             for (int k = 0; k < inferenceConfigs.size(); ++k)
-                b->Args({bufferSizes[i], j, k});
+                // ONNX backend does not support stateful RNN
+                if (!(j == 2 && k == 3))
+                    b->Args({bufferSizes[i], j, k});
 }
 
 /* ============================================================ *
