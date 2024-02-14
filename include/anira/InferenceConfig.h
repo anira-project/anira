@@ -33,7 +33,7 @@ struct ANIRA_API InferenceConfig {
             size_t max_inference_time,
             int model_latency,
             bool warm_up = false,
-            int numberOfThreads = std::thread::hardware_concurrency() - 1,
+            int numberOfThreads = ((int) std::thread::hardware_concurrency() - 1 > 0) ? (int) std::thread::hardware_concurrency() - 1 : 1,
             float wait_in_process_block = 0.5f,
             bool bypass_inference = false) :
 #ifdef USE_LIBTORCH
