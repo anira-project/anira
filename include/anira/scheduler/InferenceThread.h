@@ -27,7 +27,7 @@ namespace anira {
 class ANIRA_API InferenceThread {
 public:
     InferenceThread(std::counting_semaphore<1000>& globalSemaphore, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& sessions);
-    InferenceThread(std::counting_semaphore<1000>& globalSemaphore, InferenceConfig& config, std::shared_ptr<SessionElement>& session);
+    InferenceThread(std::counting_semaphore<1000>& globalSemaphore, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID);
     ~InferenceThread();
 
     void start();
@@ -44,8 +44,8 @@ private:
     std::thread thread;
     std::atomic<bool> shouldExit;
     std::counting_semaphore<1000>& globalSemaphore;
-    const std::vector<std::shared_ptr<SessionElement>>& sessions;
-    int sessionID;
+    std::vector<std::shared_ptr<SessionElement>>& sessions;
+    int sessionID = -1;
 
 #ifdef USE_LIBTORCH
     LibtorchProcessor torchProcessor;

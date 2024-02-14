@@ -35,11 +35,10 @@ SessionElement& InferenceThreadPool::createSession(PrePostProcessor& prePostProc
     }
 
     int sessionID = getAvailableSessionID();
-    std::shared_ptr<SessionElement> session = std::make_shared<SessionElement>(sessionID, prePostProcessor, config);
-    sessions.emplace_back(session);
+    sessions.emplace_back(std::make_shared<SessionElement>(sessionID, prePostProcessor, config));
 
     if (config.m_bind_session_to_thread) {
-        threadPool.emplace_back(std::make_unique<InferenceThread>(globalSemaphore, config, session));
+        threadPool.emplace_back(std::make_unique<InferenceThread>(globalSemaphore, config, sessions, sessionID));
     }
 
     for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
@@ -69,12 +68,14 @@ void InferenceThreadPool::releaseSession(SessionElement& session, InferenceConfi
     if (activeSessions == 0) {
         releaseThreadPool();
     }
+
     for (size_t i = 0; i < sessions.size(); ++i) {
         if (sessions[i].get() == &session) {
             sessions.erase(sessions.begin() + (ptrdiff_t) i);
             break;
         }
     }
+    
     if (activeSessions == 0) {
         releaseInstance();
     }

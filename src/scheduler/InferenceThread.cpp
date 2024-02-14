@@ -4,39 +4,33 @@ namespace anira {
 
 InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses) :
 #ifdef USE_LIBTORCH
-        torchProcessor(config),
+    torchProcessor(config),
 #endif
 #ifdef USE_ONNXRUNTIME
-        onnxProcessor(config),
+    onnxProcessor(config),
 #endif
 #ifdef USE_TFLITE
-        tfliteProcessor(config),
+    tfliteProcessor(config),
 #endif
     shouldExit(false),
     globalSemaphore(s),
     sessions(ses)
 {
-    sessionID = -1;
-    std::cout << "InferenceThread::InferenceThread vector" << std::endl;
-}
-
-InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, InferenceConfig& config, std::shared_ptr<SessionElement>& session) :
 #ifdef USE_LIBTORCH
-        torchProcessor(config),
+    torchProcessor.prepareToPlay();
 #endif
 #ifdef USE_ONNXRUNTIME
-        onnxProcessor(config),
+    onnxProcessor.prepareToPlay();
 #endif
 #ifdef USE_TFLITE
-        tfliteProcessor(config),
+    tfliteProcessor.prepareToPlay();
 #endif
-    shouldExit(false),
-    globalSemaphore(s),
-    sessions(std::move(std::vector<std::shared_ptr<SessionElement>>{session}))
+}
+
+InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID) :
+    InferenceThread(s, config, ses)
 {
-    // sessions.emplace_back(session);
-    sessionID = session->sessionID;
-    std::cout << "InferenceThread::InferenceThread shared_ptr" << std::endl;
+    sessionID = sesID;
 }
 
 InferenceThread::~InferenceThread() {
@@ -62,16 +56,33 @@ void InferenceThread::run() {
     std::chrono::milliseconds timeForExit(1);
     while (!shouldExit) {
         [[maybe_unused]] auto success = globalSemaphore.try_acquire_for(timeForExit);
-        for (const auto& session : sessions) {
-            if (session->sendSemaphore.try_acquire()) {
-                for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
-                    if (session->inferenceQueue[i]->ready.try_acquire()) {
-                        inference(session->currentBackend, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
-                        session->inferenceQueue[i]->done.release();
+        if (sessionID < 0) {
+            for (const auto& session : sessions) {
+                if (session->sendSemaphore.try_acquire()) {
+                    for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
+                        if (session->inferenceQueue[i]->ready.try_acquire()) {
+                            inference(session->currentBackend, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
+                            session->inferenceQueue[i]->done.release();
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        } else {
+            for (const auto& session : sessions) {
+                if (session->sessionID == sessionID) {
+                    if (session->sendSemaphore.try_acquire()) {
+                        for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
+                            if (session->inferenceQueue[i]->ready.try_acquire()) {
+                                inference(session->currentBackend, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
+                                session->inferenceQueue[i]->done.release();
+                                break;
+                            }
+                        }
                         break;
                     }
                 }
-                break;
             }
         }
     }
