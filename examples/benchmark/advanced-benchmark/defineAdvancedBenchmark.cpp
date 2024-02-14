@@ -84,6 +84,8 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     repetitionStep();
 
     delete myPrePostProcessor;
+
+    std::this_thread::sleep_for(std::chrono::seconds(3));
 }
 
 // /* ============================================================ *
