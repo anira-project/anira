@@ -8,5 +8,5 @@ install/
 logs/
 results/
 extras/models/stateful-rnn/stateful-lstm/
-extras/models/stateless-rnn/GuitarLSTM/
+extras/models/hybrid-nn/GuitarLSTM/
 extras/models/cnn/steerable-nafx/

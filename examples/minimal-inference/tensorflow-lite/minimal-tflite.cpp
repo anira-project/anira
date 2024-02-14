@@ -10,9 +10,9 @@ Licence: Apache 2.0
 #include <array>
 #include <tensorflow/lite/c_api.h>
 
-#include "../../../extras/models/stateful-rnn/StatefulLstmConfig.h"
-#include "../../../extras/models/stateless-rnn/StatelessLstmConfig.h"
-#include "../../../extras/models/cnn/CnnConfig.h"
+#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../extras/models/cnn/CNNConfig.h"
 
 #define TFLITE_MINIMAL_CHECK(x)                              \
     if (!(x)) {                                                \
@@ -84,7 +84,7 @@ void minimal_inference(anira::InferenceConfig config) {
 
 int main(int argc, const char* argv[]) {
 
-    std::vector<anira::InferenceConfig> modelsToInference = {statelessRnnConfig, cnnConfig, statefulRnnConfig};
+    std::vector<anira::InferenceConfig> modelsToInference = {hybridNNConfig, cnnConfig, statefulRNNConfig};
 
     for (int i = 0; i < modelsToInference.size(); ++i) {
         minimal_inference(modelsToInference[i]);

@@ -1,10 +1,10 @@
 #ifndef ANIRA_CNNPREPOSTPROCESSOR_H
 #define ANIRA_CNNPREPOSTPROCESSOR_H
 
-#include "CnnConfig.h"
+#include "CNNConfig.h"
 #include <anira/anira.h>
 
-class CnnPrePostProcessor : public anira::PrePostProcessor
+class CNNPrePostProcessor : public anira::PrePostProcessor
 {
 public:
     virtual void preProcess(anira::RingBuffer& input, anira::AudioBufferF& output, [[maybe_unused]] anira::InferenceBackend currentInferenceBackend) override {

@@ -1,5 +1,5 @@
 set(MODEL_REPOSITORIES
-        "https://github.com/faressc/GuitarLSTM.git stateless-rnn/GuitarLSTM"
+        "https://github.com/faressc/GuitarLSTM.git hybrid-nn/GuitarLSTM"
         "https://github.com/faressc/steerable-nafx.git cnn/steerable-nafx"
         "https://github.com/vackva/stateful-lstm.git stateful-rnn/stateful-lstm"
 )
@@ -28,8 +28,8 @@ foreach(repo IN LISTS MODEL_REPOSITORIES)
     endif()
 endforeach()
 
-set(GUITARLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_SOURCE_DIR}/extras/models/stateless-rnn/GuitarLSTM/tensorflow-version/models/" PARENT_SCOPE)
-set(GUITARLSTM_MODELS_PATH_PYTORCH "${CMAKE_SOURCE_DIR}/extras/models/stateless-rnn/GuitarLSTM/pytorch-version/models/" PARENT_SCOPE)
+set(GUITARLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_SOURCE_DIR}/extras/models/hybrid-nn/GuitarLSTM/tensorflow-version/models/" PARENT_SCOPE)
+set(GUITARLSTM_MODELS_PATH_PYTORCH "${CMAKE_SOURCE_DIR}/extras/models/hybrid-nn/GuitarLSTM/pytorch-version/models/" PARENT_SCOPE)
 
 set(STEERABLENAFX_MODELS_PATH_TENSORFLOW "${CMAKE_SOURCE_DIR}/extras/models/cnn/steerable-nafx/models/" PARENT_SCOPE)
 set(STEERABLENAFX_MODELS_PATH_PYTORCH "${CMAKE_SOURCE_DIR}/extras/models/cnn/steerable-nafx/models/" PARENT_SCOPE)

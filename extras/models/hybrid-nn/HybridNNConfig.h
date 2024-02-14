@@ -1,15 +1,15 @@
-#ifndef ANIRA_STATELESSLSTMCONFIG_H
-#define ANIRA_STATELESSLSTMCONFIG_H
+#ifndef ANIRA_HYBRIDNNCONFIG_H
+#define ANIRA_HYBRIDNNCONFIG_H
 
 #include <anira/anira.h>
 
 #if WIN32
-#define STATELESSLSTM_MAX_INFERENCE_TIME 16384
+#define HYBRIDNN_MAX_INFERENCE_TIME 16384
 #else
-#define STATELESSLSTM_MAX_INFERENCE_TIME 256
+#define HYBRIDNN_MAX_INFERENCE_TIME 256
 #endif
 
-static anira::InferenceConfig statelessRnnConfig(
+static anira::InferenceConfig hybridNNConfig(
 #ifdef USE_LIBTORCH
         GUITARLSTM_MODELS_PATH_PYTORCH + std::string("model_0/model_0-streaming.pt"),
         {128, 1, 150},
@@ -29,11 +29,11 @@ static anira::InferenceConfig statelessRnnConfig(
         1,
         150,
         1,
-        STATELESSLSTM_MAX_INFERENCE_TIME,
+        HYBRIDNN_MAX_INFERENCE_TIME,
         0,
         false,
         0.5f,
         false
 );
 
-#endif //ANIRA_STATELESSLSTMCONFIG_H
+#endif //ANIRA_HYBRIDNNCONFIG_H
