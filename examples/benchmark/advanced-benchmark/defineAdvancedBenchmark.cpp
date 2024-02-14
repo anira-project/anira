@@ -42,7 +42,7 @@ typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) {
 
     // The buffer size return in getBufferSize() is populated by state.range(0) param of the google benchmark
-    anira::HostAudioConfig hostAudioConfig(1, getBufferSize(), SAMPLE_RATE);
+    anira::HostAudioConfig hostAudioConfig = {1, (size_t) getBufferSize(), SAMPLE_RATE};
 
     // TODO: Why is this necessary?
     anira::PrePostProcessor *myPrePostProcessor;
