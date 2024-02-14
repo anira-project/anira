@@ -15,7 +15,7 @@ public:
     ~InferenceThreadPool();
     static std::shared_ptr<InferenceThreadPool> getInstance(InferenceConfig& config);
     static SessionElement& createSession(PrePostProcessor& prePostProcessor, InferenceConfig& config);
-    static void releaseSession(SessionElement& session);
+    static void releaseSession(SessionElement& session, InferenceConfig& config);
     static void releaseInstance();
     static void releaseThreadPool();
 

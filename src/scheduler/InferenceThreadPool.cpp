@@ -3,8 +3,10 @@
 namespace anira {
 
 InferenceThreadPool::InferenceThreadPool(InferenceConfig& config) : inferenceConfig(config) {
-    for (int i = 0; i < config.m_number_of_threads; ++i) {
-        threadPool.emplace_back(std::make_unique<InferenceThread>(globalSemaphore, sessions, config));
+    if (! config.m_bind_session_to_thread) {
+        for (int i = 0; i < config.m_number_of_threads; ++i) {
+            threadPool.emplace_back(std::make_unique<InferenceThread>(globalSemaphore, config, sessions));
+        }
     }
 }
 
@@ -33,7 +35,12 @@ SessionElement& InferenceThreadPool::createSession(PrePostProcessor& prePostProc
     }
 
     int sessionID = getAvailableSessionID();
-    sessions.emplace_back(std::make_unique<SessionElement>(sessionID, prePostProcessor, config));
+    std::shared_ptr<SessionElement> session = std::make_shared<SessionElement>(sessionID, prePostProcessor, config);
+    sessions.emplace_back(session);
+
+    if (config.m_bind_session_to_thread) {
+        threadPool.emplace_back(std::make_unique<InferenceThread>(globalSemaphore, config, session));
+    }
 
     for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
         threadPool[i]->start();
@@ -46,8 +53,19 @@ void InferenceThreadPool::releaseThreadPool() {
     threadPool.clear();
 }
 
-void InferenceThreadPool::releaseSession(SessionElement& session) {
+void InferenceThreadPool::releaseSession(SessionElement& session, InferenceConfig& config) {
     activeSessions--;
+
+    if (config.m_bind_session_to_thread) {
+        for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
+            if (threadPool[i]->getSessionID() == session.sessionID) { // überlegen
+                threadPool[i]->stop();
+                threadPool.erase(threadPool.begin() + (ptrdiff_t) i);
+                break;
+            }
+        }
+    }
+
     if (activeSessions == 0) {
         releaseThreadPool();
     }

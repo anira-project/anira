@@ -1,12 +1,12 @@
 #ifndef ANIRA_STATEFULLSTMCONFIG_H
 #define ANIRA_STATEFULLSTMCONFIG_H
 
-#include <anira/InferenceConfig.h>
+#include <anira/anira.h>
 
 #if WIN32
-#define MAX_INFERENCE_TIME 16384
+#define STATEFULLSTM_MAX_INFERENCE_TIME 16384
 #else
-#define MAX_INFERENCE_TIME 15380
+#define STATEFULLSTM_MAX_INFERENCE_TIME 15380
 #endif
 
 static anira::InferenceConfig statefulRnnConfig(
@@ -29,10 +29,11 @@ static anira::InferenceConfig statefulRnnConfig(
         2048,
         2048,
         2048,
-        MAX_INFERENCE_TIME,
+        STATEFULLSTM_MAX_INFERENCE_TIME,
         0,
         false,
-        1
+        0.5f,
+        true
 );
 
 #endif //ANIRA_STATEFULLSTMCONFIG_H

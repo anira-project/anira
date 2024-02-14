@@ -14,9 +14,9 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
 #if MODEL_TO_USE == 1
         inferenceHandler(prePostProcessor, cnnConfig)
 #elif MODEL_TO_USE == 2
-        inferenceHandler(prePostProcessor, statelessLstmConfig)
+        inferenceHandler(prePostProcessor, statelessRnnConfig)
 #elif MODEL_TO_USE == 3
-        inferenceHandler(prePostProcessor, statefulLstmConfig)
+        inferenceHandler(prePostProcessor, statefulRnnConfig)
 #endif
 {
     for (auto & parameterID : PluginParameters::getPluginParameterList()) {

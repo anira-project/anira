@@ -1,12 +1,12 @@
 #ifndef ANIRA_CNNCONFIG_H
 #define ANIRA_CNNCONFIG_H
 
-#include <anira/InferenceConfig.h>
+#include <anira/anira.h>
 
 #if WIN32
-#define MAX_INFERENCE_TIME 16384
+#define CNN_MAX_INFERENCE_TIME 16384
 #else
-#define MAX_INFERENCE_TIME 15380
+#define CNN_MAX_INFERENCE_TIME 15380
 #endif
 
 static anira::InferenceConfig cnnConfig(
@@ -29,8 +29,11 @@ static anira::InferenceConfig cnnConfig(
         2048,
         15380,
         2048,
+        CNN_MAX_INFERENCE_TIME,
         0,
-        MAX_INFERENCE_TIME
+        false,
+        0.5f,
+        false
 );
 
 

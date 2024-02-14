@@ -2,7 +2,7 @@
 
 namespace anira {
 
-InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, std::vector<std::shared_ptr<SessionElement>>& ses, InferenceConfig& config) :
+InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses) :
 #ifdef USE_LIBTORCH
         torchProcessor(config),
 #endif
@@ -16,15 +16,27 @@ InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, std::vector<s
     globalSemaphore(s),
     sessions(ses)
 {
+    sessionID = -1;
+    std::cout << "InferenceThread::InferenceThread vector" << std::endl;
+}
+
+InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, InferenceConfig& config, std::shared_ptr<SessionElement>& session) :
 #ifdef USE_LIBTORCH
-    torchProcessor.prepareToPlay();
+        torchProcessor(config),
 #endif
 #ifdef USE_ONNXRUNTIME
-    onnxProcessor.prepareToPlay();
+        onnxProcessor(config),
 #endif
 #ifdef USE_TFLITE
-    tfliteProcessor.prepareToPlay();
+        tfliteProcessor(config),
 #endif
+    shouldExit(false),
+    globalSemaphore(s),
+    sessions(std::move(std::vector<std::shared_ptr<SessionElement>>{session}))
+{
+    // sessions.emplace_back(session);
+    sessionID = session->sessionID;
+    std::cout << "InferenceThread::InferenceThread shared_ptr" << std::endl;
 }
 
 InferenceThread::~InferenceThread() {
@@ -95,7 +107,6 @@ void InferenceThread::setRealTimeOrLowerPriority() {
 
     for (int priority : priorities) {
         if (SetThreadPriority(thread.native_handle(), priority)) {
-            std::cout << "Thread priority set to " << priority << std::endl;
             return;
         } else {
             std::cerr << "Failed to set thread priority " << priority << std::endl;
