@@ -209,7 +209,7 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID
         if (paramString == "TFLITE") inferenceHandler.setInferenceBackend(anira::TFLITE);
 #endif
 #ifdef USE_ONNXRUNTIME
-        if (paramString == "ONNX") inferenceHandler.setInferenceBackend(anira::ONNX);
+        if (paramString == "ONNXRUNTIME") inferenceHandler.setInferenceBackend(anira::ONNX);
 #endif
 #ifdef USE_LIBTORCH
         if (paramString == "LIBTORCH") inferenceHandler.setInferenceBackend(anira::LIBTORCH);
