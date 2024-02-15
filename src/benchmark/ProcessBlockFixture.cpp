@@ -17,7 +17,11 @@ void ProcessBlockFixture::initializeIteration() {
     m_prev_num_received_samples = m_inferenceHandler->getInferenceManager().getNumReceivedSamples();
 }
 
-void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceConfig, const HostAudioConfig& hostAudioConfig, const InferenceBackend& inferenceBackend) {
+void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceConfig, const HostAudioConfig& hostAudioConfig, const InferenceBackend& inferenceBackend, bool sleep_after_repetition) {
+    m_sleep_after_repetition = sleep_after_repetition;
+    if (m_sleep_after_repetition) {
+        m_runtime_last_repetition = std::chrono::duration<double, std::milli>(0);
+    }
     m_iteration = 0;
     if (m_inferenceBackend != inferenceBackend || m_inferenceConfig != &inferenceConfig || m_hostAudioConfig != hostAudioConfig) {
         m_repetition = 0;
@@ -103,6 +107,8 @@ void ProcessBlockFixture::interationStep(const std::chrono::system_clock::time_p
 
     auto elapsedTimeMS = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start);
 
+    m_runtime_last_repetition += elapsedTimeMS;
+
     std::cout << "SingleIteration/" << state.name() << "/" << m_model_name << "/" << m_inference_backend_name << "/" << state.range(0) << "/iteration:" << m_iteration << "/repetition:" << m_repetition << "\t\t\t" << std::fixed << std::setprecision(4) << elapsedTimeMS.count() << " ms" << std::endl;
     m_iteration++;
 }
@@ -121,6 +127,10 @@ void ProcessBlockFixture::SetUp(const ::benchmark::State& state) {
 void ProcessBlockFixture::TearDown(const ::benchmark::State& state) {
     m_buffer.reset();
     m_inferenceHandler.reset();
+
+    if (m_sleep_after_repetition) {
+        std::this_thread::sleep_for(m_runtime_last_repetition);
+    }
 }
 
 } // namespace benchmark

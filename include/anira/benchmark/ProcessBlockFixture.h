@@ -15,7 +15,7 @@ public:
     ~ProcessBlockFixture();
 
     void initializeIteration();
-    void initializeRepetition(const InferenceConfig& inferenceConfig, const HostAudioConfig& hostAudioConfig, const InferenceBackend& inferenceBackend);
+    void initializeRepetition(const InferenceConfig& inferenceConfig, const HostAudioConfig& hostAudioConfig, const InferenceBackend& inferenceBackend, bool sleep_after_repetition = true);
     bool bufferHasBeenProcessed();
     void pushRandomSamplesInBuffer(anira::HostAudioConfig hostAudioConfig);
     int getBufferSize();
@@ -35,7 +35,9 @@ public:
 private:
     int m_bufferSize = 0;
     int m_repetition = 0;
+    bool m_sleep_after_repetition = true;
     int m_iteration = 0;
+    std::chrono::duration<double, std::milli> m_runtime_last_repetition = std::chrono::duration<double, std::milli>(0);
     bool m_init = false;
     int m_prev_num_received_samples = 0;
     std::string m_model_name;
@@ -43,7 +45,6 @@ private:
     InferenceBackend m_inferenceBackend = anira::LIBTORCH;
     const InferenceConfig* m_inferenceConfig = nullptr;
     HostAudioConfig m_hostAudioConfig;
-
 
     void SetUp(const ::benchmark::State& state);
     void TearDown(const ::benchmark::State& state);
