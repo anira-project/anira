@@ -94,7 +94,7 @@ struct ANIRA_API InferenceConfig {
     const float m_wait_in_process_block;
     const bool m_bind_session_to_thread;
     const int m_number_of_threads;
-    const bool m_bypass_inference;
+    bool m_bypass_inference;
 };
 
 } // namespace anira
