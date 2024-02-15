@@ -31,7 +31,7 @@ static void Arguments(::benchmark::internal::Benchmark* b) {
         for (int j = 0; j < inferenceBackends.size(); ++j)
             for (int k = 0; k < inferenceConfigs.size(); ++k)
                 // ONNX backend does not support stateful RNN
-                if (!(j == 2 && k == 3))
+                if (!(j == 1 && k == 2))
                     b->Args({bufferSizes[i], j, k});
 }
 
@@ -84,8 +84,6 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     repetitionStep();
 
     delete myPrePostProcessor;
-
-    std::this_thread::sleep_for(std::chrono::seconds(3));
 }
 
 // /* ============================================================ *
