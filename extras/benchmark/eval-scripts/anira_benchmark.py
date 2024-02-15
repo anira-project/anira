@@ -1,6 +1,7 @@
 import os
 import re
 import csv
+import numpy as np
 
 def create_folder(folder_name: str) -> None:
     try:
@@ -11,13 +12,14 @@ def create_folder(folder_name: str) -> None:
 def get_list_from_log(file_path: str, list: list=None) -> list:
 
     if list is None:
+        operating_system = []
         model = []
         backend = []
         buffer_size = []
         iteration_count = []
         repetition_count = []
         runtime = []
-        log_list = [model, backend, buffer_size, iteration_count, repetition_count, runtime]
+        log_list = [operating_system, model, backend, buffer_size, iteration_count, repetition_count, runtime]
     else:
         log_list = list
 
@@ -25,22 +27,126 @@ def get_list_from_log(file_path: str, list: list=None) -> list:
         for line in file:
             if "SingleIteration" in line:
                 match = re.search(r"SingleIteration\/ProcessBlockFixture\/[^\/]*\/([^.]*.[a-zA-Z]*)\/([a-z]*)\/([0-9]*)\/iteration:([0-9]*)\/repetition:([0-9])\s*([0-9]*.[0-9]*)\sms", line)
-                log_list[0].append(match.group(1))
-                log_list[1].append(match.group(2))
-                log_list[2].append(match.group(3))
-                log_list[3].append(match.group(4))
-                log_list[4].append(match.group(5))
-                log_list[5].append(match.group(6))
+                log_list[0].append(os.path.splitext(os.path.basename(file_path))[0])
+                log_list[1].append(match.group(1))
+                log_list[2].append(match.group(2))
+                log_list[3].append(int(match.group(3)))
+                log_list[4].append(int(match.group(5)))
+                log_list[5].append(int(match.group(4)))
+                log_list[6].append(float(match.group(6)))
     
     return log_list
 
-def write_list_to_csv(file_path: str, list: list) -> None:
-    with open(file_path, 'w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["Model", "Backend", "Buffer Size", "Iteration Count", "Repetition Count", "Runtime"])
-        writer.writerows(zip(list[0], list[1], list[2], list[3], list[4], list[5]))
+def get_sequence_statistics_from_list(list: list, measure: str, lenght_slices: int=10) -> list:
+    stat_list = []
+    for l in list:
+        stat_list.append([])
+    for i in range(0, len(list[0]), lenght_slices):
+        stat_list[0].append(list[0][i])
+        stat_list[1].append(list[1][i])
+        stat_list[2].append(list[2][i])
+        stat_list[3].append(list[3][i])
+        stat_list[4].append(list[4][i])
+        stat_list[5].append(f"{list[5][i]/lenght_slices}")
+        if measure == "sequence_mean":
+            stat_list[6].append(np.mean(list[6][i:i+lenght_slices]))
+        elif measure == "sequence_median":
+            stat_list[6].append(np.median(list[6][i:i+lenght_slices]))
+        elif measure == "sequence_max":
+            stat_list[6].append(np.max(list[6][i:i+lenght_slices]))
+        elif measure == "sequence_min":
+            stat_list[6].append(np.min(list[6][i:i+lenght_slices]))
+        elif measure == "sequence_iqr":
+            stat_list[6].append(np.abs(np.percentile(list[6][i:i+lenght_slices], 75) - np.percentile(list[6][i:i+lenght_slices], 25)))
+        elif measure == "sequence_std":
+            stat_list[6].append(np.std(list[6][i:i+lenght_slices]))
+        else:
+            raise ValueError("Invalid measure")    
+          
+    return stat_list
+
+def moving_average(list: list, window: int=3) -> list:
+    moving_average_list = []
+    for l in list:
+        moving_average_list.append([])
+    
+    max_iteration = max(list[5])
+    for index in range(0, len(list[0]), max_iteration+1):
+        for i in range(0, max_iteration-window+2):
+            moving_average_list[0].append(list[0][index])
+            moving_average_list[1].append(list[1][index])
+            moving_average_list[2].append(list[2][index])
+            moving_average_list[3].append(list[3][index])
+            moving_average_list[4].append(list[4][index])
+            moving_average_list[5].append(f"{i} - {i+window-1}")
+            moving_average_list[6].append(np.mean(list[6][index+i:index+i+window]))
+
+    return moving_average_list
+
+def cummulativ_average(list: list) -> list:
+    cummulativ_average_list = []
+    for l in list:
+        cummulativ_average_list.append([])
+    
+    max_iteration = max(list[5])
+    for index in range(0, len(list[0]), max_iteration+1):
+        for i in range(0, max_iteration+2):
+            if i != 0:
+                cummulativ_average_list[0].append(list[0][index])
+                cummulativ_average_list[1].append(list[1][index])
+                cummulativ_average_list[2].append(list[2][index])
+                cummulativ_average_list[3].append(list[3][index])
+                cummulativ_average_list[4].append(list[4][index])
+                cummulativ_average_list[5].append(f"0 - {i-1}")
+                cummulativ_average_list[6].append(np.mean(list[6][index:index+i]))
+
+    return cummulativ_average_list
+
+def write_list_to_csv(file_path: str, list: list, append: bool=False, top_row_argument: list="single_iteration") -> None:
+    if not append:
+        with open(file_path, 'w', newline='') as file:
+            writer = csv.writer(file)
+            top_row = ["Operating System", "Model", "Backend", "Buffer Size", "Repetition Count", "Iteration Count", "Runtime"]
+            if top_row_argument == "sequence_mean":
+                top_row[5:] = ["Sequence Count", "Mean"]
+            elif top_row_argument == "sequence_median":
+                top_row[5:] = ["Sequence Count", "Median"]
+            elif top_row_argument == "sequence_max":
+                top_row[5:] = ["Sequence Count", "Max"]
+            elif top_row_argument == "sequence_min":
+                top_row[5:] = ["Sequence Count", "Min"]
+            elif top_row_argument == "sequence_iqr":
+                top_row[5:] = ["Sequence Count", "IQR"]
+            elif top_row_argument == "sequence_std":
+                top_row[5:] = ["Sequence Count", "STD"]
+            elif top_row_argument == "moving_average":
+                top_row[6] = "Moving Average"
+            elif top_row_argument == "cummulativ_average":
+                top_row[6] = "Cummulativ Average"
+            writer.writerow(top_row)
+            writer.writerows(zip(list[0], list[1], list[2], list[3], list[4], list[5], list[6]))
+    else:
+        with open(file_path, 'a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerows(zip(list[0], list[1], list[2], list[3], list[4], list[5], list[6]))
 
 if __name__ == "__main__":
     create_folder("results")
-    listed_results = get_list_from_log(os.path.join(os.path.dirname(__file__), "./../logs/steerable-nafx-linux-Intel_i9-9980HK.log"))
-    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/steerable-nafx-linux-Intel_i9-9980HK.csv"), listed_results)
+    listed_results = get_list_from_log(os.path.join(os.path.dirname(__file__), "./../logs/Linux.log"))
+    listed_results = get_list_from_log(os.path.join(os.path.dirname(__file__), "./../logs/macOS.log"), listed_results)
+    listed_results = get_list_from_log(os.path.join(os.path.dirname(__file__), "./../logs/Windows.log"), listed_results)
+    sequence_mean_results = get_sequence_statistics_from_list(listed_results, "sequence_mean")
+    sequence_max_results = get_sequence_statistics_from_list(listed_results, "sequence_max")
+    sequence_min_results = get_sequence_statistics_from_list(listed_results, "sequence_min")
+    sequence_iqr_results = get_sequence_statistics_from_list(listed_results, "sequence_iqr")
+    sequence_std_results = get_sequence_statistics_from_list(listed_results, "sequence_std")
+    moving_average_results = moving_average(listed_results, 3)
+    cummulativ_average_results = cummulativ_average(listed_results)
+    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_single_interation.csv"), listed_results)
+    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_mean.csv"), sequence_mean_results, False, "sequence_mean")
+    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_max.csv"), sequence_max_results, False, "sequence_max")
+    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_min.csv"), sequence_min_results, False, "sequence_min")
+    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_iqr.csv"), sequence_iqr_results, False, "sequence_iqr")
+    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_std.csv"), sequence_std_results, False, "sequence_std")
+    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_moving_average.csv"), moving_average_results, False, "moving_average")
+    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_cummulativ_average.csv"), cummulativ_average_results, False, "cummulativ_average")

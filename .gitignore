@@ -7,6 +7,7 @@ cmake-build*
 install/
 logs/
 results/
+venv/
 extras/models/stateful-rnn/stateful-lstm/
 extras/models/hybrid-nn/GuitarLSTM/
 extras/models/cnn/steerable-nafx/
