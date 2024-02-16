@@ -24,10 +24,6 @@
 std::vector<int> bufferSizes = {2048, 4096, 8192};
 std::vector<anira::InferenceBackend> inferenceBackends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE};
 std::vector<anira::InferenceConfig> inferenceConfigs = {cnnConfig, hybridNNConfig, statefulRNNConfig};
-anira::InferenceConfig bypass_inference(anira::InferenceConfig config) {
-    config.m_bypass_inference = true;
-    return config;
-}
 
 // define the buffer sizes to be used in the benchmark and the backends to be used
 static void Arguments(::benchmark::internal::Benchmark* b) {
@@ -43,9 +39,10 @@ static void Arguments(::benchmark::internal::Benchmark* b) {
 typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) {
+
     // The buffer size return in getBufferSize() is populated by state.range(0) param of the google benchmark
     anira::HostAudioConfig hostAudioConfig = {1, (size_t) getBufferSize(), SAMPLE_RATE};
-    anira::InferenceBackend inferenceBackend = anira::LIBTORCH;
+    anira::InferenceBackend inferenceBackend = anira::NONE;
 
     // TODO: Why is this necessary?
     anira::PrePostProcessor *myPrePostProcessor;
@@ -57,17 +54,13 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
         myPrePostProcessor = new StatefulRNNPrePostProcessor();
     }
 
-    anira::InferenceConfig inferenceConfig = bypass_inference(inferenceConfigs[state.range(1)]); // still some bugs here...
-    std::cout << "state.range(1): " << state.range(1) << std::endl;
-    std::cout << "&inferenceConfigs[state.range(1)]: " << &inferenceConfig << std::endl; // gives the same pointer for all the benchmarks therefore same model name is printed
-
-    m_inferenceHandler = std::make_unique<anira::InferenceHandler>(*myPrePostProcessor, inferenceConfig);
+    m_inferenceHandler = std::make_unique<anira::InferenceHandler>(*myPrePostProcessor, inferenceConfigs[state.range(1)]);
     m_inferenceHandler->prepare(hostAudioConfig);
     m_inferenceHandler->setInferenceBackend(inferenceBackend);
 
     m_buffer = std::make_unique<anira::AudioBuffer<float>>(hostAudioConfig.hostChannels, hostAudioConfig.hostBufferSize);
 
-    initializeRepetition(inferenceConfig, hostAudioConfig, inferenceBackend);
+    initializeRepetition(inferenceConfigs[state.range(1)], hostAudioConfig, inferenceBackend);
 
     for (auto _ : state) {
         pushRandomSamplesInBuffer(hostAudioConfig);

@@ -34,6 +34,8 @@ void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceC
                 path = m_inferenceConfig->m_model_path_onnx;
             } else if (m_inferenceBackend == anira::TFLITE) {
                 path = m_inferenceConfig->m_model_path_tflite;
+            } else if (m_inferenceBackend == anira::NONE) {
+                path = m_inferenceConfig->m_model_path_torch; // TODO: make this more generic
             } else {
                 path = "unknown_model_path";
             }
@@ -52,6 +54,9 @@ void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceC
             } else if (m_inferenceBackend == anira::TFLITE) {
                 m_inference_backend_name = "tflite";
                 path = m_inferenceConfig->m_model_path_tflite;
+            } else if (m_inferenceBackend == anira::NONE) {
+                m_inference_backend_name = "none";
+                path = m_inferenceConfig->m_model_path_torch; // TODO: make this more generic
             } else {
                 m_inference_backend_name = "unknown_backend";
                 path = "unknown_model_path";
