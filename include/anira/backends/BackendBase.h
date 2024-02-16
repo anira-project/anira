@@ -9,11 +9,8 @@ namespace anira {
 class ANIRA_API BackendBase {
 public:
     BackendBase(InferenceConfig& config);
-    virtual void prepareToPlay() = 0;
-    virtual void processBlock(AudioBufferF& input, AudioBufferF& output) = 0;
-
-protected:
-    static void returnAudio(AudioBufferF& input, AudioBufferF& output);
+    virtual void prepareToPlay();
+    virtual void processBlock(AudioBufferF& input, AudioBufferF& output);
 
 protected:
     InferenceConfig& inferenceConfig;

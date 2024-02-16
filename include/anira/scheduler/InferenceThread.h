@@ -56,6 +56,7 @@ private:
 #ifdef USE_TFLITE
     TFLiteProcessor tfliteProcessor;
 #endif
+    BackendBase noneProcessor;
 
  };
 

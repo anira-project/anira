@@ -47,11 +47,6 @@ void TFLiteProcessor::prepareToPlay() {
 }
 
 void TFLiteProcessor::processBlock(AudioBufferF& input, AudioBufferF& output) {
-    if (inferenceConfig.m_bypass_inference) {
-        returnAudio(input, output);
-        return;
-    }
-
     TfLiteTensorCopyFromBuffer(inputTensor, input.getRawData(), input.getNumSamples() * sizeof(float)); //TODO: Multichannel support
     TfLiteInterpreterInvoke(interpreter);
     TfLiteTensorCopyToBuffer(outputTensor, output.getRawData(), output.getNumSamples() * sizeof(float)); //TODO: Multichannel support

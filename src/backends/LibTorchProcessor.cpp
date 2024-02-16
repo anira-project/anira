@@ -36,12 +36,7 @@ void LibtorchProcessor::prepareToPlay() {
     }
 }
 
-void LibtorchProcessor::processBlock(AudioBufferF& input, AudioBufferF& output) {
-    if (inferenceConfig.m_bypass_inference) {
-        returnAudio(input, output);
-        return;
-    }
-
+void LibtorchProcessor::processBlock(AudioBufferF& input, AudioBufferF& output) { 
     // Create input tensor object from input data values and shape
     inputTensor = torch::from_blob(input.getRawData(), (const long long) input.getNumSamples()).reshape(inferenceConfig.m_model_input_shape_torch); // TODO: Multichannel support
 

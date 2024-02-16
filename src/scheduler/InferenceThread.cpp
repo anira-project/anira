@@ -12,6 +12,7 @@ InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, InferenceConf
 #ifdef USE_TFLITE
     tfliteProcessor(config),
 #endif
+    noneProcessor(config),
     shouldExit(false),
     globalSemaphore(s),
     sessions(ses)
@@ -104,6 +105,9 @@ void InferenceThread::inference(InferenceBackend backend, AudioBufferF& input, A
         tfliteProcessor.processBlock(input, output);
     }
 #endif
+    if (backend == NONE) {
+        noneProcessor.processBlock(input, output);
+    }
 }
 
 

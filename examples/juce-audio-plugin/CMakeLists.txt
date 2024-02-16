@@ -72,7 +72,7 @@ if(NOT BACKEND_LIBTORCH AND NOT BACKEND_ONNXRUNTIME AND NOT BACKEND_TFLITE)
 endif()
 
 # add_compile_definitions(MODEL_TO_USE=1) # steerable-nafx
-#add_compile_definitions(MODEL_TO_USE=2) # GuitarLSTM
+# add_compile_definitions(MODEL_TO_USE=2) # GuitarLSTM
 add_compile_definitions(MODEL_TO_USE=3) # stateful-LSTM
 
 set (TARGET_NAME NN_Inference_Template)
