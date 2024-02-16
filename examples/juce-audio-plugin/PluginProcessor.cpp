@@ -11,13 +11,7 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                      #endif
                        ),
         parameters (*this, nullptr, juce::Identifier (getName()), PluginParameters::createParameterLayout()),
-#if MODEL_TO_USE == 1
-        inferenceHandler(prePostProcessor, cnnConfig)
-#elif MODEL_TO_USE == 2
-        inferenceHandler(prePostProcessor, hybridNNConfig)
-#elif MODEL_TO_USE == 3
-        inferenceHandler(prePostProcessor, statefulRNNConfig)
-#endif
+        inferenceHandler(prePostProcessor, inferenceConfig)
 {
     for (auto & parameterID : PluginParameters::getPluginParameterList()) {
         parameters.addParameterListener(parameterID, this);
@@ -214,6 +208,7 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID
 #ifdef USE_LIBTORCH
         if (paramString == "LIBTORCH") inferenceHandler.setInferenceBackend(anira::LIBTORCH);
 #endif
+        if (paramString == "NONE") inferenceHandler.setInferenceBackend(anira::NONE);
     }
 }
 //==============================================================================

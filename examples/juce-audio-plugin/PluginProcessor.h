@@ -65,10 +65,13 @@ private:
 
 #if MODEL_TO_USE == 1
     CNNPrePostProcessor prePostProcessor;
+    anira::InferenceConfig inferenceConfig = ccnConfig;
 #elif MODEL_TO_USE == 2
     HybridNNPrePostProcessor prePostProcessor;
+    anira::InferenceConfig inferenceConfig = hybridNNConfig;
 #elif MODEL_TO_USE == 3
     StatefulRNNPrePostProcessor prePostProcessor;
+    anira::InferenceConfig inferenceConfig = statefulRNNConfig;
 #endif
     anira::InferenceHandler inferenceHandler;
 
