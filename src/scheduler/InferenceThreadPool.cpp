@@ -67,6 +67,10 @@ void InferenceThreadPool::releaseSession(SessionElement& session, InferenceConfi
 
     if (activeSessions == 0) {
         releaseThreadPool();
+    } else {
+        for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
+            threadPool[i]->stop();
+        }
     }
 
     for (size_t i = 0; i < sessions.size(); ++i) {
@@ -77,15 +81,38 @@ void InferenceThreadPool::releaseSession(SessionElement& session, InferenceConfi
     }
     
     if (activeSessions == 0) {
-        releaseInstance();
+       releaseInstance();
+    } else {
+        for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
+            threadPool[i]->start();
+        }
+    
+    }
+}
+
+void InferenceThreadPool::prepare(SessionElement& session, HostAudioConfig newConfig) {
+    for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
+        threadPool[i]->stop();
+    }
+
+    session.clear();
+    session.prepare(newConfig);
+
+    for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
+        threadPool[i]->start();
     }
 }
 
 void InferenceThreadPool::newDataSubmitted(SessionElement& session) {
     while (session.sendBuffer.getAvailableSamples(0) >= (session.inferenceConfig.m_batch_size * session.inferenceConfig.m_model_input_size)) {
-        preProcess(session);
-        session.sendSemaphore.release();
-        globalSemaphore.release();
+        bool success = preProcess(session);
+        // !success means that there is no free inferenceQueue
+        if (!success) {
+            for (size_t i = 0; i < session.inferenceConfig.m_batch_size * session.inferenceConfig.m_model_input_size; ++i) {
+                session.sendBuffer.popSample(0);
+                session.receiveBuffer.pushSample(0, 0.f);
+            }
+        }
     }
 }
 
@@ -109,7 +136,7 @@ std::vector<std::shared_ptr<SessionElement>>& InferenceThreadPool::getSessions()
     return sessions;
 }
 
-void InferenceThreadPool::preProcess(SessionElement& session) {
+bool InferenceThreadPool::preProcess(SessionElement& session) {
     for (size_t i = 0; i < session.inferenceQueue.size(); ++i) {
         if (session.inferenceQueue[i]->free.try_acquire()) {
             session.prePostProcessor.preProcess(session.sendBuffer, session.inferenceQueue[i]->processedModelInput, session.currentBackend.load());
@@ -118,7 +145,14 @@ void InferenceThreadPool::preProcess(SessionElement& session) {
             session.timeStamps.push(now);
             session.inferenceQueue[i]->time = now;
             session.inferenceQueue[i]->ready.release();
-            break;
+            session.sendSemaphore.release();
+            globalSemaphore.release();
+            return true;
+        } else {
+            if (i == session.inferenceQueue.size() - 1) {
+                std::cout << "##### No free inferenceQueue found!" << std::endl;
+                return false;
+            }
         }
     }
 }

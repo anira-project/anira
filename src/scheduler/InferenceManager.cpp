@@ -24,8 +24,8 @@ InferenceBackend InferenceManager::getBackend() {
 void InferenceManager::prepare(HostAudioConfig newConfig) {
     spec = newConfig;
 
-    session.sendBuffer.initializeWithPositions(1, (size_t) spec.hostSampleRate * 6); // TODO find appropriate size dynamically
-    session.receiveBuffer.initializeWithPositions(1, (size_t) spec.hostSampleRate * 6); // TODO find appropriate size dynamically
+    inferenceThreadPool->prepare(session, spec);
+
     inferenceCounter = 0;
 
     init = true;
@@ -43,6 +43,11 @@ void InferenceManager::prepare(HostAudioConfig newConfig) {
 
 void InferenceManager::process(float ** inputBuffer, size_t inputSamples) {
     processInput(inputBuffer, inputSamples);
+
+    inferenceThreadPool->newDataSubmitted(session);
+    double timeInSec = static_cast<double>(inputSamples) / spec.hostSampleRate;
+    inferenceThreadPool->newDataRequest(session, timeInSec);
+
     if (init) {
         bufferCount += inputSamples;
         clearBuffer(inputBuffer, inputSamples);
@@ -58,14 +63,9 @@ void InferenceManager::processInput(float ** inputBuffer, size_t inputSamples) {
             session.sendBuffer.pushSample(0, inputBuffer[channel][sample]);
         }
     }
-
-    inferenceThreadPool->newDataSubmitted(session);
 }
 
-void InferenceManager::processOutput(float ** inputBuffer, size_t inputSamples) {
-    double timeInSec = static_cast<double>(inputSamples) / spec.hostSampleRate;
-    inferenceThreadPool->newDataRequest(session, timeInSec);
-    
+void InferenceManager::processOutput(float ** inputBuffer, size_t inputSamples) {    
     while (inferenceCounter > 0) {
         if (session.receiveBuffer.getAvailableSamples(0) >= 2 * (size_t) inputSamples) {
             for (size_t channel = 0; channel < spec.hostChannels; ++channel) {

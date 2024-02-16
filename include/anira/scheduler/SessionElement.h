@@ -8,6 +8,7 @@
 #include "../utils/AudioBuffer.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/InferenceBackend.h"
+#include "../utils/HostAudioConfig.h"
 #include "../PrePostProcessor.h"
 #include "../InferenceConfig.h"
 
@@ -41,6 +42,9 @@ struct ANIRA_API SessionElement {
 
     PrePostProcessor& prePostProcessor;
     InferenceConfig& inferenceConfig;
+
+    void clear();
+    void prepare(HostAudioConfig newConfig);
 };
 
 } // namespace anira
