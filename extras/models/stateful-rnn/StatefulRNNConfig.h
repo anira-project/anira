@@ -6,7 +6,7 @@
 #if WIN32
 #define STATEFULRNN_MAX_INFERENCE_TIME 16384
 #else
-#define STATEFULRNN_MAX_INFERENCE_TIME 15380
+#define STATEFULRNN_MAX_INFERENCE_TIME 2048
 #endif
 
 static anira::InferenceConfig statefulRNNConfig(

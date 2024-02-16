@@ -6,7 +6,7 @@
 #if WIN32
 #define CNN_MAX_INFERENCE_TIME 16384
 #else
-#define CNN_MAX_INFERENCE_TIME 15380
+#define CNN_MAX_INFERENCE_TIME 2048
 #endif
 
 static anira::InferenceConfig cnnConfig(
