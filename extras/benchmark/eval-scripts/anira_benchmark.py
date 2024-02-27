@@ -56,7 +56,7 @@ def get_sequence_statistics_from_list(list: list, measure: str, lenght_slices: i
         stat_list[3].append(list[3][i])
         stat_list[4].append(list[4][i])
         stat_list[5].append(list[5][i])
-        stat_list[6].append(f"{list[6][i]/lenght_slices}")
+        stat_list[6].append(f"{list[6][i]//lenght_slices}")
         if measure == "sequence_mean":
             stat_list[7].append(np.mean(list[7][i:i+lenght_slices]))
         elif measure == "sequence_median":
@@ -79,7 +79,7 @@ def moving_average(list: list, window: int=3) -> list:
     for l in list:
         moving_average_list.append([])
     
-    max_iteration = max(list[5])
+    max_iteration = max(list[6])
     for index in range(0, len(list[0]), max_iteration+1):
         for i in range(0, max_iteration-window+2):
             moving_average_list[0].append(list[0][index])
@@ -98,7 +98,7 @@ def cummulativ_average(list: list) -> list:
     for l in list:
         cummulativ_average_list.append([])
     
-    max_iteration = max(list[5])
+    max_iteration = max(list[6])
     for index in range(0, len(list[0]), max_iteration+1):
         for i in range(0, max_iteration+2):
             if i != 0:

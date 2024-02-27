@@ -155,6 +155,9 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
             }
         }
     }
+    
+    std::cout << "##### No free inferenceQueue found!" << std::endl;
+    return false;
 }
 
 void InferenceThreadPool::postProcess(SessionElement& session, SessionElement::ThreadSafeStruct& nextBuffer) {

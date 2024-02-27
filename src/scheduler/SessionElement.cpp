@@ -40,7 +40,6 @@ SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, Inferenc
 
         // factor 4 to encounter the case where we have missing samples because the max_inference_time was calculated not correctly
         n_structs *= 1; // TODO: before deployment we have to change this to 4
-        std::cout << "n_structs: " << n_structs << std::endl;
 
         for (int i = 0; i < n_structs; ++i) {
             inferenceQueue.emplace_back(std::make_unique<ThreadSafeStruct>(inferenceConfig.m_batch_size, inferenceConfig.m_model_input_size_backend, inferenceConfig.m_model_output_size_backend));
