@@ -9,6 +9,26 @@ if (APPLE)
 endif ()
 
 # ==============================================================================
+# Define the options for the anira library
+# ==============================================================================
+
+# Shall the library be built as a shared library?
+option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
+
+option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" ON)
+
+option(ANIRA_WITH_EXTRAS "Build with extras (clone example model repos)" ON)
+
+option(ANIRA_BUILD_EXAMPLES "Add Example Targets (juce plugin, benchmark options, minimal inference examples)" ON)
+
+# Define options for backends
+option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" OFF)
+option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" OFF)
+option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" OFF)
+
+option(ANIRA_BACKEND_ALL "Build with BACKEND_ALL" ON)
+
+# ==============================================================================
 # Setup the project
 # ==============================================================================
 
@@ -24,21 +44,6 @@ include(GNUInstallDirs)
 # Sets the cpp language minimum
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-
-# Shall the library be built as a shared library?
-option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
-
-option(ANIRA_WITH_BENCHMARK "Build with benchmark" ON)
-
-option(ANIRA_WITH_EXTRAS "Build with extras" ON)
-
-# Define options for backends
-option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" OFF)
-option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" OFF)
-option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" OFF)
-option(ANIRA_WITH_ALL "Build with all backends" OFF)
-
-option(ANIRA_BACKEND_ALL "Build with BACKEND_ALL" ON)
 
 if(ANIRA_WITH_LIBTORCH)
     set(BACKEND_LIBTORCH ON)
@@ -134,10 +139,6 @@ if(ANIRA_WITH_BENCHMARK)
             src/benchmark/ProcessBlockFixture.cpp
     )
 endif()
-
-if(ANIRA_WITH_EXTRAS)
-    add_subdirectory(extras)
-endif ()
 
 # add the include directories for the backends to the build interface as well as the install interface
 foreach(HEADER_DIR ${BACKEND_BUILD_HEADER_DIR})
@@ -255,8 +256,6 @@ if(ANIRA_WITH_BENCHMARK)
     include(GoogleTest)
 endif()
 
-option(ANIRA_BUILD_EXAMPLES "Add Example Targets" ON)
-
 # ==============================================================================
 # Install the library
 # ==============================================================================
@@ -266,17 +265,14 @@ option(ANIRA_BUILD_EXAMPLES "Add Example Targets" ON)
 if(DEFINED CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     message(
         STATUS
-        "CMAKE_INSTALL_PREFIX is not set\n"
-        "Default value: ${CMAKE_INSTALL_PREFIX}\n"
-        "Will set it to ${CMAKE_SOURCE_DIR}/install"
+        "CMAKE_INSTALL_PREFIX will be set to ${CMAKE_SOURCE_DIR}/install"
     )
     set(CMAKE_INSTALL_PREFIX
         "${CMAKE_SOURCE_DIR}/install"
         CACHE PATH "Where the library will be installed to" FORCE
     )
 else()
-    message(STATUS "CMAKE_INSTALL_PREFIX was already set")
-    message(STATUS "Current value: ${CMAKE_INSTALL_PREFIX}")
+    message(STATUS "CMAKE_INSTALL_PREFIX was already set to ${CMAKE_INSTALL_PREFIX}")
 endif()
 
 # at install the rpath is cleared by default so we have to set it again for the installed shared library to find the other libraries
@@ -329,7 +325,6 @@ if(BACKEND_TFLITE)
     )
 endif()
 
-
 # set a debug postfix for the library
 set_target_properties(${PROJECT_NAME} PROPERTIES DEBUG_POSTFIX "d")
 
@@ -366,6 +361,10 @@ install(FILES
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/${PROJECT_NAME}/cmake
 )
 
+# ==============================================================================
+# Add all necessary DLLs to a list for later copying (only for MSVC)
+# ==============================================================================
+
 if (MSVC)
     file(GLOB_RECURSE INFERENCE_ENGINE_DLLS_ONNX "${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH}/*.dll")
     file(GLOB_RECURSE INFERENCE_ENGINE_DLLS_TFLITE "${ANIRA_TENSORFLOWLITE_SHARED_LIB_PATH}/*.dll")
@@ -385,6 +384,16 @@ if (MSVC)
             ${ANIRA_DLL}
     )
 endif (MSVC)
+
+# ==============================================================================
+# Build example targets and add extras (clone example model repos)
+# ==============================================================================
+
+# First we import the extras folder since we need the compile definitions (model paths) for the examples
+
+if(ANIRA_WITH_EXTRAS)
+    add_subdirectory(extras)
+endif ()
 
 if(ANIRA_BUILD_EXAMPLES)
     add_subdirectory(examples)

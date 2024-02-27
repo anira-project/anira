@@ -28,11 +28,11 @@ foreach(repo IN LISTS MODEL_REPOSITORIES)
     endif()
 endforeach()
 
-set(GUITARLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_SOURCE_DIR}/extras/models/hybrid-nn/GuitarLSTM/tensorflow-version/models/" PARENT_SCOPE)
-set(GUITARLSTM_MODELS_PATH_PYTORCH "${CMAKE_SOURCE_DIR}/extras/models/hybrid-nn/GuitarLSTM/pytorch-version/models/" PARENT_SCOPE)
+set(GUITARLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_CURRENT_LIST_DIR}/models/hybrid-nn/GuitarLSTM/tensorflow-version/models/" PARENT_SCOPE)
+set(GUITARLSTM_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/hybrid-nn/GuitarLSTM/pytorch-version/models/" PARENT_SCOPE)
 
-set(STEERABLENAFX_MODELS_PATH_TENSORFLOW "${CMAKE_SOURCE_DIR}/extras/models/cnn/steerable-nafx/models/" PARENT_SCOPE)
-set(STEERABLENAFX_MODELS_PATH_PYTORCH "${CMAKE_SOURCE_DIR}/extras/models/cnn/steerable-nafx/models/" PARENT_SCOPE)
+set(STEERABLENAFX_MODELS_PATH_TENSORFLOW "${CMAKE_CURRENT_LIST_DIR}/models/cnn/steerable-nafx/models/" PARENT_SCOPE)
+set(STEERABLENAFX_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/cnn/steerable-nafx/models/" PARENT_SCOPE)
 
-set(STATEFULLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_SOURCE_DIR}/extras/models/stateful-rnn/stateful-lstm/models/" PARENT_SCOPE)
-set(STATEFULLSTM_MODELS_PATH_PYTORCH "${CMAKE_SOURCE_DIR}/extras/models/stateful-rnn/stateful-lstm/models/" PARENT_SCOPE)
+set(STATEFULLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_CURRENT_LIST_DIR}/models/stateful-rnn/stateful-lstm/models/" PARENT_SCOPE)
+set(STATEFULLSTM_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/stateful-rnn/stateful-lstm/models/" PARENT_SCOPE)
