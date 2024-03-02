@@ -13,6 +13,7 @@
     #include "../backends/TFLiteProcessor.h"
 #endif
 
+#include "../backends/BackendBase.h"
 #include "SessionElement.h"
 #include "../utils/AudioBuffer.h"
 

@@ -34,7 +34,7 @@ struct ANIRA_API SessionElement {
     // which would otherwise prevent the generation of copy constructors.
     std::vector<std::unique_ptr<ThreadSafeStruct>> inferenceQueue;
 
-    std::atomic<InferenceBackend> currentBackend {ONNX};
+    std::atomic<InferenceBackend> currentBackend {NONE};
     std::queue<std::chrono::time_point<std::chrono::system_clock>> timeStamps;
     std::counting_semaphore<1000> sendSemaphore{0};
     

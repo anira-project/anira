@@ -1,4 +1,5 @@
 #include <anira/InferenceHandler.h>
+#include <cassert>
 
 namespace anira {
 
