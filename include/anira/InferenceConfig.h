@@ -11,17 +11,17 @@ namespace anira {
 
 struct ANIRA_API InferenceConfig {
     InferenceConfig(
-#ifdef USE_LIBTORCH
+#if defined(USE_LIBTORCH) || defined(MODEL_CONFIG_DEBUG)
             const std::string model_path_torch,
             const std::vector<int64_t> model_input_shape_torch,
             const std::vector<int64_t> model_output_shape_torch,
 #endif
-#ifdef USE_ONNXRUNTIME
+#if defined(USE_ONNXRUNTIME) || defined(MODEL_CONFIG_DEBUG)
             const std::string model_path_onnx,
             const std::vector<int64_t> model_input_shape_onnx,
             const std::vector<int64_t> model_output_shape_onnx,
 #endif
-#ifdef USE_TFLITE
+#if defined(USE_TFLITE) || defined(MODEL_CONFIG_DEBUG)
             const std::string model_path_tflite,
             const std::vector<int64_t> model_input_shape_tflite,
             const std::vector<int64_t> model_output_shape_tflite,
@@ -36,17 +36,17 @@ struct ANIRA_API InferenceConfig {
             float wait_in_process_block = 0.5f,
             bool bind_session_to_thread = false,
             int numberOfThreads = ((int) std::thread::hardware_concurrency() - 1 > 0) ? (int) std::thread::hardware_concurrency() - 1 : 1) :
-#ifdef USE_LIBTORCH
+#if defined(USE_LIBTORCH) || defined(MODEL_CONFIG_DEBUG)
             m_model_path_torch(model_path_torch),
             m_model_input_shape_torch(model_input_shape_torch),
             m_model_output_shape_torch(model_output_shape_torch),
 #endif
-#ifdef USE_ONNXRUNTIME
+#if defined(USE_ONNXRUNTIME) || defined(MODEL_CONFIG_DEBUG)
             m_model_path_onnx(model_path_onnx),
             m_model_input_shape_onnx(model_input_shape_onnx),
             m_model_output_shape_onnx(model_output_shape_onnx),
 #endif
-#ifdef USE_TFLITE
+#if defined(USE_TFLITE) || defined(MODEL_CONFIG_DEBUG)
             m_model_path_tflite(model_path_tflite),
             m_model_input_shape_tflite(model_input_shape_tflite),
             m_model_output_shape_tflite(model_output_shape_tflite),
@@ -63,19 +63,19 @@ struct ANIRA_API InferenceConfig {
             m_number_of_threads(numberOfThreads)
     {}
 
-#ifdef USE_LIBTORCH
+#if defined(USE_LIBTORCH) || defined(MODEL_CONFIG_DEBUG)
     const std::string m_model_path_torch;
     const std::vector<int64_t> m_model_input_shape_torch;
     const std::vector<int64_t> m_model_output_shape_torch;
 #endif
 
-#ifdef USE_ONNXRUNTIME
+#if defined(USE_ONNXRUNTIME) || defined(MODEL_CONFIG_DEBUG)
     const std::string m_model_path_onnx;
     const std::vector<int64_t> m_model_input_shape_onnx;
     const std::vector<int64_t> m_model_output_shape_onnx;
 #endif
 
-#ifdef USE_TFLITE
+#if defined(USE_TFLITE) || defined(MODEL_CONFIG_DEBUG)
     const std::string m_model_path_tflite;
     const std::vector<int64_t> m_model_input_shape_tflite;
     const std::vector<int64_t> m_model_output_shape_tflite;
