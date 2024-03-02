@@ -4,13 +4,13 @@
 namespace anira {
 
 enum InferenceBackend {
-#if defined(USE_TFLITE) || defined(MODEL_CONFIG_DEBUG)
+#ifdef USE_TFLITE
     LIBTORCH,
 #endif
-#if defined(USE_ONNXRUNTIME) || defined(MODEL_CONFIG_DEBUG)
+#ifdef USE_ONNXRUNTIME
     ONNX,
 #endif
-#if defined(USE_TFLITE) || defined(MODEL_CONFIG_DEBUG)
+#ifdef USE_TFLITE
     TFLITE,
 #endif
     NONE

@@ -10,17 +10,17 @@
 #endif
 
 static anira::InferenceConfig cnnConfig(
-#if defined(USE_LIBTORCH) || defined(MODEL_CONFIG_DEBUG)
+#ifdef USE_LIBTORCH
         STEERABLENAFX_MODELS_PATH_PYTORCH + std::string("model_0/steerable-nafx-2048.pt"),
         {1, 1, 15380},
         {1, 1, 2048},
 #endif
-#if defined(USE_ONNXRUNTIME) || defined(MODEL_CONFIG_DEBUG)
+#ifdef USE_ONNXRUNTIME
         STEERABLENAFX_MODELS_PATH_PYTORCH + std::string("model_0/steerable-nafx-libtorch-2048.onnx"),
         {1, 1, 15380},
         {1, 1, 2048},
 #endif
-#if defined(USE_TFLITE) || defined(MODEL_CONFIG_DEBUG)
+#ifdef USE_TFLITE
         STEERABLENAFX_MODELS_PATH_TENSORFLOW + std::string("model_0/steerable-nafx-2048.tflite"),
         {1, 15380, 1},
         {1, 2048, 1},

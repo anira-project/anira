@@ -10,17 +10,17 @@
 #endif
 
 static anira::InferenceConfig statefulRNNConfig(
-#if defined(USE_LIBTORCH) || defined(MODEL_CONFIG_DEBUG)
+#ifdef USE_LIBTORCH
         STATEFULLSTM_MODELS_PATH_PYTORCH + std::string("model_0/stateful-lstm.pt"),
         {2048, 1, 1},
         {2048, 1, 1},
 #endif
-#if defined(USE_ONNXRUNTIME) || defined(MODEL_CONFIG_DEBUG)
+#ifdef USE_ONNXRUNTIME
         STATEFULLSTM_MODELS_PATH_PYTORCH + std::string("model_0/stateful-lstm-libtorch.onnx"),
         {2048, 1, 1},
         {2048, 1, 1},
 #endif
-#if defined(USE_TFLITE) || defined(MODEL_CONFIG_DEBUG)
+#ifdef USE_TFLITE
         STATEFULLSTM_MODELS_PATH_TENSORFLOW + std::string("model_0/stateful-lstm.tflite"),
         {1, 2048, 1},
         {1, 2048, 1},

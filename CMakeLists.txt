@@ -17,7 +17,6 @@ option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
 option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" ON)
 option(ANIRA_WITH_EXTRAS "Build with extras (clone example model repos)" ON)
 option(ANIRA_BUILD_EXAMPLES "Add Example Targets (juce plugin, benchmark options, minimal inference examples)" ON)
-option(ANIRA_DEBUG_MODEL_EVALUATION "Enables the complete anira::InferenceConfig even if some inference are not included" OFF)
 
 # Define options for backends
 option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" OFF)
@@ -177,7 +176,6 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${BACKEND_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${BACKEND_ONNXRUNTIME}>:USE_ONNXRUNTIME>
     $<$<BOOL:${BACKEND_TFLITE}>:USE_TFLITE>
-    $<$<BOOL:${ANIRA_DEBUG_MODEL_EVALUATION}>:MODEL_CONFIG_DEBUG>
 )
 
 if (MSVC)
