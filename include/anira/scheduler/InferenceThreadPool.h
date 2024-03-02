@@ -2,6 +2,8 @@
 #define ANIRA_INFERENCETHREADPOOL_H
 
 #include <semaphore>
+#include <memory>
+#include <vector>
 
 #include "SessionElement.h"
 #include "InferenceThread.h"

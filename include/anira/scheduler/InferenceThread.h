@@ -2,6 +2,8 @@
 #define ANIRA_INFERENCETHREAD_H
 
 #include <semaphore>
+#include <memory>
+#include <vector>
 
 #ifdef USE_LIBTORCH
     #include "../backends/LibTorchProcessor.h"
