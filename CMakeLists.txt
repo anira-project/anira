@@ -14,11 +14,8 @@ endif ()
 
 # Shall the library be built as a shared library?
 option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
-
 option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" ON)
-
 option(ANIRA_WITH_EXTRAS "Build with extras (clone example model repos)" ON)
-
 option(ANIRA_BUILD_EXAMPLES "Add Example Targets (juce plugin, benchmark options, minimal inference examples)" ON)
 
 # Define options for backends
@@ -93,7 +90,7 @@ if(BACKEND_TFLITE)
 endif()
 
 if(NOT BACKEND_LIBTORCH AND NOT BACKEND_ONNXRUNTIME AND NOT BACKEND_TFLITE)
-    message(FATAL_ERROR "No backend selected. Please select at least one backend by setting one of the following options to ON: BACKEND_LIBTORCH, BACKEND_ONNXRUNTIME, or BACKEND_TFLITE. For example, add '-DBACKEND_LIBTORCH=ON' to your CMake command line")
+    message(STATUS "No backend selected. Please select at least one backend by setting one of the following options to ON: BACKEND_LIBTORCH, BACKEND_ONNXRUNTIME, or BACKEND_TFLITE. For example, add '-DBACKEND_LIBTORCH=ON' to your CMake command line")
 endif()
 
 # ==============================================================================

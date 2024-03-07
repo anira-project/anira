@@ -7,6 +7,11 @@ add_compile_definitions(
         STATEFULLSTM_MODELS_PATH_PYTORCH="${STATEFULLSTM_MODELS_PATH_PYTORCH}"
 )
 
-add_subdirectory(benchmark)
+
+if(ANIRA_WITH_BENCHMARK)
+    add_subdirectory(benchmark)
+endif()
+
+
 add_subdirectory(minimal-inference)
 add_subdirectory(juce-audio-plugin)

@@ -4,7 +4,7 @@
 namespace anira {
 
 enum InferenceBackend {
-#ifdef USE_LIBTORCH
+#ifdef USE_TFLITE
     LIBTORCH,
 #endif
 #ifdef USE_ONNXRUNTIME

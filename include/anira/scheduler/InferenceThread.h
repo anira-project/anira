@@ -2,6 +2,8 @@
 #define ANIRA_INFERENCETHREAD_H
 
 #include <semaphore>
+#include <memory>
+#include <vector>
 
 #ifdef USE_LIBTORCH
     #include "../backends/LibTorchProcessor.h"
@@ -13,6 +15,7 @@
     #include "../backends/TFLiteProcessor.h"
 #endif
 
+#include "../backends/BackendBase.h"
 #include "SessionElement.h"
 #include "../utils/AudioBuffer.h"
 
