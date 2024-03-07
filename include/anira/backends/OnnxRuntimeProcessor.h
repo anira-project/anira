@@ -25,12 +25,18 @@ private:
     Ort::SessionOptions session_options;
     std::unique_ptr<Ort::Session> session;
 
-    std::vector<int64_t> inputShape;
-    std::array<const char *, 1> inputNames;
+    size_t inputSize;
+    size_t outputSize;
 
+    std::vector<float> inputData;
+    std::vector<Ort::Value> inputTensor;
+    std::vector<Ort::Value> outputTensor;
+
+    std::unique_ptr<Ort::AllocatedStringPtr> inputName;
+    std::unique_ptr<Ort::AllocatedStringPtr> outputName;
+
+    std::array<const char *, 1> inputNames;
     std::array<const char *, 1> outputNames;
-    // Define output tensor vector
-    std::vector<Ort::Value> outputTensors;
 };
 
 } // namespace anira
