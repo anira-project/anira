@@ -7,6 +7,7 @@
 #include "../utils/AudioBuffer.h"
 #include "BackendBase.h"
 #include <torch/script.h>
+#include <torch/torch.h>
 #include <stdlib.h>
 
 namespace anira {

@@ -3,16 +3,8 @@
 namespace anira {
 
 LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : BackendBase(config) {
-#if WIN32
-    _putenv("OMP_NUM_THREADS=1");
-    _putenv("MKL_NUM_THREADS=1");
-#else
-    const char* ompNumThreads = "OMP_NUM_THREADS=1";
-    const char* mklNumThreads = "MKL_NUM_THREADS=1";
-    putenv(const_cast<char*>(ompNumThreads));
-    putenv(const_cast<char*>(mklNumThreads));
-#endif
-
+    torch::set_num_threads(1);
+    
     try {
         module = torch::jit::load(inferenceConfig.m_model_path_torch);
     }
