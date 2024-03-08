@@ -4,6 +4,7 @@
 #include <anira/benchmark.h>
 
 #include "../../../extras/models/cnn/advanced-configs/CNNAdvancedConfigs.h"
+#include "../../../extras/models/cnn/medium-cnn-advanced-config/Medium_CNNAdvancedConfigs.h"
 #include "../../../extras/models/cnn/small-cnn-advanced-config/Small_CNNAdvancedConfigs.h"
 #include "../../../extras/models/cnn/CNNPrePostProcessor.h"
 
@@ -18,10 +19,8 @@
 #define SAMPLE_RATE 44100
 
 std::vector<int> bufferSizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
-// std::vector<anira::InferenceBackend> inferenceBackends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE, anira::NONE};
-std::vector<anira::InferenceBackend> inferenceBackends = {anira::LIBTORCH, anira::TFLITE};
-// std::vector<AdvancedInferenceConfigs> advancedInferenceConfigs = {cnnAdvancedConfigs, small_cnnAdvancedConfigs};
-std::vector<AdvancedInferenceConfigs> advancedInferenceConfigs = {small_cnnAdvancedConfigs};
+std::vector<anira::InferenceBackend> inferenceBackends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE, anira::NONE};
+std::vector<AdvancedInferenceConfigs> advancedInferenceConfigs = {cnnAdvancedConfigs, medium_cnnAdvancedConfigs, small_cnnAdvancedConfigs};
 
 // define the buffer sizes, backends and model configs to be used in the benchmark and the backends to be used
 static void Arguments(::benchmark::internal::Benchmark* b) {
