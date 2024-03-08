@@ -11,7 +11,6 @@ public:
         popSamplesFromBuffer(input, output, config.m_model_input_size, config.m_model_input_size_backend-config.m_model_input_size);
     };
 
-private:
     anira::InferenceConfig config = cnnConfig;
 };
 
