@@ -7,7 +7,7 @@
 #include "../../../extras/models/cnn/CNNPrePostProcessor.h"
 #include "../../../extras/models/hybrid-nn/advanced-configs/HybridNNAdvancedConfigs.h"
 #include "../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../extras/models/stateful-rnn/advanced-configs/StatefulRNNAdvancedConfigs.h"
 #include "../../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
 
 // TODO Make sure that benchmarks also work when HOST_BUFFER_SIZE % MODEL_INPUT_SIZE != 0
@@ -23,8 +23,7 @@
 
 std::vector<int> bufferSizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
 std::vector<anira::InferenceBackend> inferenceBackends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE};
-// std::vector<anira::InferenceConfig> inferenceConfigs = {cnnConfig, hybridNNConfig, statefulRNNConfig};
-std::vector<AdvancedInferenceConfigs> advancedInferenceConfigs = {cnnAdvancedConfigs, hybridNNAdvancedConfigs};
+std::vector<AdvancedInferenceConfigs> advancedInferenceConfigs = {cnnAdvancedConfigs, hybridNNAdvancedConfigs, statefulRNNAdvancedConfigs};
 
 // define the buffer sizes to be used in the benchmark and the backends to be used
 static void Arguments(::benchmark::internal::Benchmark* b) {
