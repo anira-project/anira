@@ -43,7 +43,7 @@ private:
     std::string m_model_name;
     std::string m_inference_backend_name = "libtorch";
     InferenceBackend m_inferenceBackend = anira::LIBTORCH;
-    const InferenceConfig* m_inferenceConfig = nullptr;
+    InferenceConfig m_inferenceConfig;
     HostAudioConfig m_hostAudioConfig;
 
     void SetUp(const ::benchmark::State& state);

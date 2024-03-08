@@ -12,26 +12,26 @@ namespace anira {
 struct ANIRA_API InferenceConfig {
     InferenceConfig(
 #ifdef USE_LIBTORCH
-            const std::string model_path_torch,
-            const std::vector<int64_t> model_input_shape_torch,
-            const std::vector<int64_t> model_output_shape_torch,
+            std::string model_path_torch = "",
+            std::vector<int64_t> model_input_shape_torch = {},
+            std::vector<int64_t> model_output_shape_torch = {},
 #endif
 #ifdef USE_ONNXRUNTIME
-            const std::string model_path_onnx,
-            const std::vector<int64_t> model_input_shape_onnx,
-            const std::vector<int64_t> model_output_shape_onnx,
+            std::string model_path_onnx = "",
+            std::vector<int64_t> model_input_shape_onnx = {},
+            std::vector<int64_t> model_output_shape_onnx = {},
 #endif
 #ifdef USE_TFLITE
-            const std::string model_path_tflite,
-            const std::vector<int64_t> model_input_shape_tflite,
-            const std::vector<int64_t> model_output_shape_tflite,
+            std::string model_path_tflite = "",
+            std::vector<int> model_input_shape_tflite = {},
+            std::vector<int> model_output_shape_tflite = {},
 #endif
-            size_t batch_size,
-            size_t model_input_size,
-            size_t model_input_size_backend,
-            size_t model_output_size_backend,
-            size_t max_inference_time,
-            int model_latency,
+            size_t batch_size = 0,
+            size_t model_input_size = 0,
+            size_t model_input_size_backend = 0,
+            size_t model_output_size_backend = 0,
+            size_t max_inference_time = 0,
+            int model_latency = 0,
             bool warm_up = false,
             float wait_in_process_block = 0.5f,
             bool bind_session_to_thread = false,
@@ -77,8 +77,8 @@ struct ANIRA_API InferenceConfig {
 
 #ifdef USE_TFLITE
     std::string m_model_path_tflite;
-    std::vector<int64_t> m_model_input_shape_tflite;
-    std::vector<int64_t> m_model_output_shape_tflite;
+    std::vector<int> m_model_input_shape_tflite;
+    std::vector<int> m_model_output_shape_tflite;
 #endif
 
     size_t m_batch_size;
@@ -92,7 +92,35 @@ struct ANIRA_API InferenceConfig {
     float m_wait_in_process_block;
     bool m_bind_session_to_thread;
     int m_number_of_threads;
+
+    bool operator==(const InferenceConfig& other) const {
+        return m_model_path_torch == other.m_model_path_torch &&
+               m_model_input_shape_torch == other.m_model_input_shape_torch &&
+               m_model_output_shape_torch == other.m_model_output_shape_torch &&
+               m_model_path_onnx == other.m_model_path_onnx &&
+               m_model_input_shape_onnx == other.m_model_input_shape_onnx &&
+               m_model_output_shape_onnx == other.m_model_output_shape_onnx &&
+               m_model_path_tflite == other.m_model_path_tflite &&
+               m_model_input_shape_tflite == other.m_model_input_shape_tflite &&
+               m_model_output_shape_tflite == other.m_model_output_shape_tflite &&
+               m_batch_size == other.m_batch_size &&
+               m_model_input_size == other.m_model_input_size &&
+               m_model_input_size_backend == other.m_model_input_size_backend &&
+               m_model_output_size_backend == other.m_model_output_size_backend &&
+               m_max_inference_time == other.m_max_inference_time &&
+               m_model_latency == other.m_model_latency &&
+               m_warm_up == other.m_warm_up &&
+               m_wait_in_process_block == other.m_wait_in_process_block &&
+               m_bind_session_to_thread == other.m_bind_session_to_thread &&
+               m_number_of_threads == other.m_number_of_threads;
+    }
+
+    bool operator!=(const InferenceConfig& other) const {
+        return !(*this == other);
+    }
+
 };
+
 
 } // namespace anira
 

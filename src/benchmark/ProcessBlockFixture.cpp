@@ -23,19 +23,19 @@ void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceC
         m_runtime_last_repetition = std::chrono::duration<double, std::milli>(0);
     }
     m_iteration = 0;
-    if (m_inferenceBackend != inferenceBackend || m_inferenceConfig != &inferenceConfig || m_hostAudioConfig != hostAudioConfig) {
+    if (m_inferenceBackend != inferenceBackend || m_inferenceConfig != inferenceConfig || m_hostAudioConfig != hostAudioConfig) {
         m_repetition = 0;
-        if (m_inferenceConfig != &inferenceConfig) {
-            m_inferenceConfig = &inferenceConfig;
+        if (m_inferenceConfig != inferenceConfig) {
+            m_inferenceConfig = inferenceConfig;
             std::string path;
             if (m_inferenceBackend == anira::LIBTORCH) {
-                path = m_inferenceConfig->m_model_path_torch;
+                path = m_inferenceConfig.m_model_path_torch;
             } else if (m_inferenceBackend == anira::ONNX) {
-                path = m_inferenceConfig->m_model_path_onnx;
+                path = m_inferenceConfig.m_model_path_onnx;
             } else if (m_inferenceBackend == anira::TFLITE) {
-                path = m_inferenceConfig->m_model_path_tflite;
+                path = m_inferenceConfig.m_model_path_tflite;
             } else if (m_inferenceBackend == anira::NONE) {
-                path = m_inferenceConfig->m_model_path_torch; // TODO: make this more generic
+                path = m_inferenceConfig.m_model_path_torch; // TODO: make this more generic
             } else {
                 path = "unknown_model_path";
             }
@@ -47,16 +47,16 @@ void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceC
             std::string path;
             if (m_inferenceBackend == anira::LIBTORCH) {
                 m_inference_backend_name = "libtorch";
-                path = m_inferenceConfig->m_model_path_torch;
+                path = m_inferenceConfig.m_model_path_torch;
             } else if (m_inferenceBackend == anira::ONNX) {
                 m_inference_backend_name = "onnx";
-                path = m_inferenceConfig->m_model_path_onnx;
+                path = m_inferenceConfig.m_model_path_onnx;
             } else if (m_inferenceBackend == anira::TFLITE) {
                 m_inference_backend_name = "tflite";
-                path = m_inferenceConfig->m_model_path_tflite;
+                path = m_inferenceConfig.m_model_path_tflite;
             } else if (m_inferenceBackend == anira::NONE) {
                 m_inference_backend_name = "none";
-                path = m_inferenceConfig->m_model_path_torch; // TODO: make this more generic
+                path = m_inferenceConfig.m_model_path_torch; // TODO: make this more generic
             } else {
                 m_inference_backend_name = "unknown_backend";
                 path = "unknown_model_path";
