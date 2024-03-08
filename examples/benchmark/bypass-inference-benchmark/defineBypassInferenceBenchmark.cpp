@@ -10,7 +10,6 @@
 #include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
 
-// TODO Make sure that benchmarks also work when HOST_BUFFER_SIZE % MODEL_INPUT_SIZE != 0
 
 /* ============================================================ *
  * ========================= Configs ========================== *
@@ -22,7 +21,6 @@
 #define SAMPLE_RATE 44100
 
 std::vector<int> bufferSizes = {2048, 4096, 8192};
-std::vector<anira::InferenceBackend> inferenceBackends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE};
 std::vector<anira::InferenceConfig> inferenceConfigs = {cnnConfig, hybridNNConfig, statefulRNNConfig};
 
 // define the buffer sizes to be used in the benchmark and the backends to be used

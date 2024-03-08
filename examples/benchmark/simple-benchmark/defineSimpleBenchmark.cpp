@@ -10,7 +10,6 @@
 #include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
 
-// TODO Make sure that benchmarks also work when HOST_BUFFER_SIZE % MODEL_INPUT_SIZE != 0
 
 /* ============================================================ *
  * ========================= Configs ========================== *
