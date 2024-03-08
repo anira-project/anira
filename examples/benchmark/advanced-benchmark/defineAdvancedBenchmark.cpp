@@ -3,9 +3,9 @@
 #include <anira/anira.h>
 #include <anira/benchmark.h>
 
-#include "../../../extras/models/cnn/CNNConfig.h"
+#include "../../../extras/models/cnn/advanced-configs/CNNAdvancedConfigs.h"
 #include "../../../extras/models/cnn/CNNPrePostProcessor.h"
-#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../extras/models/hybrid-nn/advanced-configs/HybridNNAdvancedConfigs.h"
 #include "../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
@@ -21,17 +21,18 @@
 #define PERCENTILE 0.999
 #define SAMPLE_RATE 44100
 
-std::vector<int> bufferSizes = {2048, 4096, 8192};
+std::vector<int> bufferSizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
 std::vector<anira::InferenceBackend> inferenceBackends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE};
-std::vector<anira::InferenceConfig> inferenceConfigs = {cnnConfig, hybridNNConfig, statefulRNNConfig};
+// std::vector<anira::InferenceConfig> inferenceConfigs = {cnnConfig, hybridNNConfig, statefulRNNConfig};
+std::vector<AdvancedInferenceConfigs> advancedInferenceConfigs = {cnnAdvancedConfigs, hybridNNAdvancedConfigs};
 
 // define the buffer sizes to be used in the benchmark and the backends to be used
 static void Arguments(::benchmark::internal::Benchmark* b) {
     for (int i = 0; i < bufferSizes.size(); ++i)
-        for (int j = 0; j < inferenceBackends.size(); ++j)
-            for (int k = 0; k < inferenceConfigs.size(); ++k)
+        for (int j = 0; j < advancedInferenceConfigs.size(); ++j)
+            for (int k = 0; k < inferenceBackends.size(); ++k)
                 // ONNX backend does not support stateful RNN
-                if (!(j == 1 && k == 2))
+                if (!(j == 2 && k == 1))
                     b->Args({bufferSizes[i], j, k});
 }
 
@@ -46,23 +47,34 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     // The buffer size return in getBufferSize() is populated by state.range(0) param of the google benchmark
     anira::HostAudioConfig hostAudioConfig = {1, (size_t) getBufferSize(), SAMPLE_RATE};
 
-    // TODO: Why is this necessary?
+    AdvancedInferenceConfigs currentAdvancedInferenceConfigs = advancedInferenceConfigs[state.range(1)];
+    anira::InferenceConfig inferenceConfig;
+
+    for (auto advancedConfig : currentAdvancedInferenceConfigs) {
+        if (advancedConfig.bufferSize == getBufferSize()) {
+            inferenceConfig = advancedConfig.config;
+        }
+    }
+
     anira::PrePostProcessor *myPrePostProcessor;
-    if (state.range(2) == 0) {
+
+    if (state.range(1) == 0) {
         myPrePostProcessor = new CNNPrePostProcessor();
-    } else if (state.range(2) == 1) {
+        static_cast<CNNPrePostProcessor*>(myPrePostProcessor)->config = inferenceConfig;
+    } else if (state.range(1) == 1) {
         myPrePostProcessor = new HybridNNPrePostProcessor();
-    } else if (state.range(2) == 2) {
+        static_cast<HybridNNPrePostProcessor*>(myPrePostProcessor)->config = inferenceConfig;
+    } else if (state.range(1) == 2) {
         myPrePostProcessor = new StatefulRNNPrePostProcessor();
     }
 
-    m_inferenceHandler = std::make_unique<anira::InferenceHandler>(*myPrePostProcessor, inferenceConfigs[state.range(2)]);
+    m_inferenceHandler = std::make_unique<anira::InferenceHandler>(*myPrePostProcessor, inferenceConfig);
     m_inferenceHandler->prepare(hostAudioConfig);
-    m_inferenceHandler->setInferenceBackend(inferenceBackends[state.range(1)]);
+    m_inferenceHandler->setInferenceBackend(inferenceBackends[state.range(2)]);
 
     m_buffer = std::make_unique<anira::AudioBuffer<float>>(hostAudioConfig.hostChannels, hostAudioConfig.hostBufferSize);
 
-    initializeRepetition(inferenceConfigs[state.range(2)], hostAudioConfig, inferenceBackends[state.range(1)]);
+    initializeRepetition(inferenceConfig, hostAudioConfig, inferenceBackends[state.range(2)]);
 
     for (auto _ : state) {
         pushRandomSamplesInBuffer(hostAudioConfig);
