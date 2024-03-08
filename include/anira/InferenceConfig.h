@@ -94,25 +94,32 @@ struct ANIRA_API InferenceConfig {
     int m_number_of_threads;
 
     bool operator==(const InferenceConfig& other) const {
-        return m_model_path_torch == other.m_model_path_torch &&
-               m_model_input_shape_torch == other.m_model_input_shape_torch &&
-               m_model_output_shape_torch == other.m_model_output_shape_torch &&
-               m_model_path_onnx == other.m_model_path_onnx &&
-               m_model_input_shape_onnx == other.m_model_input_shape_onnx &&
-               m_model_output_shape_onnx == other.m_model_output_shape_onnx &&
-               m_model_path_tflite == other.m_model_path_tflite &&
-               m_model_input_shape_tflite == other.m_model_input_shape_tflite &&
-               m_model_output_shape_tflite == other.m_model_output_shape_tflite &&
-               m_batch_size == other.m_batch_size &&
-               m_model_input_size == other.m_model_input_size &&
-               m_model_input_size_backend == other.m_model_input_size_backend &&
-               m_model_output_size_backend == other.m_model_output_size_backend &&
-               m_max_inference_time == other.m_max_inference_time &&
-               m_model_latency == other.m_model_latency &&
-               m_warm_up == other.m_warm_up &&
-               m_wait_in_process_block == other.m_wait_in_process_block &&
-               m_bind_session_to_thread == other.m_bind_session_to_thread &&
-               m_number_of_threads == other.m_number_of_threads;
+        return
+#ifdef USE_LIBTORCH
+            m_model_path_torch == other.m_model_path_torch &&
+            m_model_input_shape_torch == other.m_model_input_shape_torch &&
+            m_model_output_shape_torch == other.m_model_output_shape_torch &&
+#endif
+#ifdef USE_ONNXRUNTIME
+            m_model_path_onnx == other.m_model_path_onnx &&
+            m_model_input_shape_onnx == other.m_model_input_shape_onnx &&
+            m_model_output_shape_onnx == other.m_model_output_shape_onnx &&
+#endif
+#ifdef USE_TFLITE
+            m_model_path_tflite == other.m_model_path_tflite &&
+            m_model_input_shape_tflite == other.m_model_input_shape_tflite &&
+            m_model_output_shape_tflite == other.m_model_output_shape_tflite &&
+#endif
+            m_batch_size == other.m_batch_size &&
+            m_model_input_size == other.m_model_input_size &&
+            m_model_input_size_backend == other.m_model_input_size_backend &&
+            m_model_output_size_backend == other.m_model_output_size_backend &&
+            m_max_inference_time == other.m_max_inference_time &&
+            m_model_latency == other.m_model_latency &&
+            m_warm_up == other.m_warm_up &&
+            m_wait_in_process_block == other.m_wait_in_process_block &&
+            m_bind_session_to_thread == other.m_bind_session_to_thread &&
+            m_number_of_threads == other.m_number_of_threads;
     }
 
     bool operator!=(const InferenceConfig& other) const {
