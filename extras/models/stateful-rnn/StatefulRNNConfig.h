@@ -3,11 +3,7 @@
 
 #include <anira/anira.h>
 
-#if WIN32
-#define STATEFULRNN_MAX_INFERENCE_TIME 16384
-#else
 #define STATEFULRNN_MAX_INFERENCE_TIME 2048
-#endif
 
 static anira::InferenceConfig statefulRNNConfig(
 #ifdef USE_LIBTORCH
