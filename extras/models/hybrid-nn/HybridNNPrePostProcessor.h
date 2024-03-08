@@ -14,7 +14,6 @@ public:
         }
     };
     
-private:
     anira::InferenceConfig config = hybridNNConfig;
 };
 
