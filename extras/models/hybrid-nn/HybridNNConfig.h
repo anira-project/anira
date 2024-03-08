@@ -12,7 +12,7 @@ static anira::InferenceConfig hybridNNConfig(
         {2048, 1},
 #endif
 #ifdef USE_ONNXRUNTIME
-        GUITARLSTM_MODELS_PATH_TENSORFLOW + std::string("model_0/GuitarLSTM-libtorch-dynamic.onnx"),
+        GUITARLSTM_MODELS_PATH_PYTORCH + std::string("model_0/GuitarLSTM-libtorch-dynamic.onnx"),
         {2048, 1, 150},
         {2048, 1},
 #endif

@@ -72,9 +72,9 @@ if(NOT BACKEND_LIBTORCH AND NOT BACKEND_ONNXRUNTIME AND NOT BACKEND_TFLITE)
     message(FATAL_ERROR "No backend selected. Please select at least one backend by setting one of the following options to ON: BACKEND_LIBTORCH, BACKEND_ONNXRUNTIME, or BACKEND_TFLITE. For example, add '-DBACKEND_LIBTORCH=ON' to your CMake command line")
 endif()
 
-# add_compile_definitions(MODEL_TO_USE=1) # steerable-nafx
+add_compile_definitions(MODEL_TO_USE=1) # steerable-nafx
 # add_compile_definitions(MODEL_TO_USE=2) # GuitarLSTM
-add_compile_definitions(MODEL_TO_USE=3) # stateful-LSTM
+# add_compile_definitions(MODEL_TO_USE=3) # stateful-LSTM
 
 set (TARGET_NAME NN_Inference_Template)
 
@@ -90,7 +90,7 @@ juce_add_plugin(${TARGET_NAME}
 		# EDITOR_WANTS_KEYBOARD_FOCUS TRUE/FALSE    # Does the editor need keyboard focus?
 		# COPY_PLUGIN_AFTER_BUILD TRUE/FALSE        # Should the plugin be installed to a default location after building?
 		PLUGIN_MANUFACTURER_CODE AcSc              # A four-character manufacturer id with at least one upper-case character
-		PLUGIN_CODE Nnit                            # A unique four-character plugin id with exactly one upper-case character
+		PLUGIN_CODE Anir                            # A unique four-character plugin id with exactly one upper-case character
 		# GarageBand 10.3 requires the first letter to be upper-case, and the remaining letters to be lower-case
 
         VST3_AUTO_MANIFEST FALSE

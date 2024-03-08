@@ -1,5 +1,5 @@
-#ifndef CNN_ADVANCED_CONFIGS_H
-#define CNN_ADVANCED_CONFIGS_H
+#ifndef ANIRA_CNN_ADVANCED_CONFIGS_H
+#define ANIRA_CNN_ADVANCED_CONFIGS_H
 
 #include <anira/anira.h>
 
@@ -35,4 +35,4 @@ static AdvancedInferenceConfigs cnnAdvancedConfigs = {
     {cnnConfig_8192, 8192}
 };
 
-#endif // CNN_ADVANCED_CONFIGS_H
+#endif // ANIRA_CNN_ADVANCED_CONFIGS_H

@@ -1,5 +1,5 @@
-#ifndef HYBRID_NN_ADVANCED_CONFIGS_H
-#define HYBRID_NN_ADVANCED_CONFIGS_H
+#ifndef ANIRA_HYBRID_NN_ADVANCED_CONFIGS_H
+#define ANIRA_HYBRID_NN_ADVANCED_CONFIGS_H
 
 #include <anira/anira.h>
 
@@ -35,4 +35,4 @@ static AdvancedInferenceConfigs hybridNNAdvancedConfigs = {
     {hybridNNConfig_8192, 8192}
 };
 
-#endif // HYBRID_NN_ADVANCED_CONFIGS_H
+#endif // ANIRA_HYBRID_NN_ADVANCED_CONFIGS_H

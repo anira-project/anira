@@ -65,7 +65,7 @@ private:
 
 #if MODEL_TO_USE == 1
     CNNPrePostProcessor prePostProcessor;
-    anira::InferenceConfig inferenceConfig = ccnConfig;
+    anira::InferenceConfig inferenceConfig = cnnConfig;
 #elif MODEL_TO_USE == 2
     HybridNNPrePostProcessor prePostProcessor;
     anira::InferenceConfig inferenceConfig = hybridNNConfig;
