@@ -14,7 +14,7 @@ public:
     ~PrePostProcessor() = default;
 
     virtual void preProcess(RingBuffer& input, AudioBufferF& output, [[maybe_unused]] InferenceBackend currentInferenceBackend);
-    virtual void postProcess(AudioBufferF input, RingBuffer& output, [[maybe_unused]] InferenceBackend currentInferenceBackend);
+    virtual void postProcess(AudioBufferF& input, RingBuffer& output, [[maybe_unused]] InferenceBackend currentInferenceBackend);
 
 protected:
     void popSamplesFromBuffer(RingBuffer& input, AudioBufferF& output);

@@ -5,7 +5,7 @@ namespace anira {
 void PrePostProcessor::preProcess(RingBuffer& input, AudioBufferF& output, [[maybe_unused]] InferenceBackend currentInferenceBackend) {
     popSamplesFromBuffer(input, output);
 };
-void PrePostProcessor::postProcess(AudioBufferF input, RingBuffer& output, [[maybe_unused]] InferenceBackend currentInferenceBackend) {
+void PrePostProcessor::postProcess(AudioBufferF& input, RingBuffer& output, [[maybe_unused]] InferenceBackend currentInferenceBackend) {
     pushSamplesToBuffer(input, output);
 }
 
