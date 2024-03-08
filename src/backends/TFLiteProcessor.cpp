@@ -25,6 +25,8 @@ TFLiteProcessor::TFLiteProcessor(InferenceConfig& config) : BackendBase(config)
     options = TfLiteInterpreterOptionsCreate();
     TfLiteInterpreterOptionsSetNumThreads(options, 1);
     interpreter = TfLiteInterpreterCreate(model, options);
+    // This is necessary when we have dynamic input shapes, it should be done before allocating tensors obviously
+    TfLiteInterpreterResizeInputTensor(interpreter, 0, inferenceConfig.m_model_input_shape_tflite.data(), inferenceConfig.m_model_input_shape_tflite.size());
 }
 
 TFLiteProcessor::~TFLiteProcessor()
