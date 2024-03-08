@@ -10,8 +10,6 @@
 #include "../../../extras/models/stateful-rnn/advanced-configs/StatefulRNNAdvancedConfigs.h"
 #include "../../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
 
-// TODO Make sure that benchmarks also work when HOST_BUFFER_SIZE % MODEL_INPUT_SIZE != 0
-
 /* ============================================================ *
  * ========================= Configs ========================== *
  * ============================================================ */
@@ -22,10 +20,10 @@
 #define SAMPLE_RATE 44100
 
 std::vector<int> bufferSizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
-std::vector<anira::InferenceBackend> inferenceBackends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE};
+std::vector<anira::InferenceBackend> inferenceBackends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE, anira::NONE};
 std::vector<AdvancedInferenceConfigs> advancedInferenceConfigs = {cnnAdvancedConfigs, hybridNNAdvancedConfigs, statefulRNNAdvancedConfigs};
 
-// define the buffer sizes to be used in the benchmark and the backends to be used
+// define the buffer sizes, backends and model configs to be used in the benchmark and the backends to be used
 static void Arguments(::benchmark::internal::Benchmark* b) {
     for (int i = 0; i < bufferSizes.size(); ++i)
         for (int j = 0; j < advancedInferenceConfigs.size(); ++j)
