@@ -12,7 +12,8 @@ class ANIRA_API InferenceHandler {
 public:
     InferenceHandler() = delete;
     InferenceHandler(PrePostProcessor &prePostProcessor, InferenceConfig& config);
-    ~InferenceHandler() = default;
+    InferenceHandler(PrePostProcessor &prePostProcessor, InferenceConfig& config, BackendBase& noneProcessor);
+    ~InferenceHandler();
 
     void setInferenceBackend(InferenceBackend inferenceBackend);
     InferenceBackend getInferenceBackend();
@@ -24,7 +25,10 @@ public:
     InferenceManager &getInferenceManager(); // TODO remove
 
 private:
+    BackendBase* noneProcessor;
     InferenceManager inferenceManager;
+
+    bool useCustomNoneProcessor = false;
 };
 
 } // namespace anira

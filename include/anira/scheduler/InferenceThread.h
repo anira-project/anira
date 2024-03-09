@@ -41,7 +41,7 @@ public:
     void setRealTimeOrLowerPriority();
 
 private:
-    void inference(InferenceBackend backend, AudioBufferF& input, AudioBufferF& output);
+    void inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output);
 
 private:
     std::thread thread;
@@ -59,8 +59,6 @@ private:
 #ifdef USE_TFLITE
     TFLiteProcessor tfliteProcessor;
 #endif
-    BackendBase noneProcessor;
-
  };
 
 } // namespace anira

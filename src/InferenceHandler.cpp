@@ -3,7 +3,15 @@
 
 namespace anira {
 
-InferenceHandler::InferenceHandler(PrePostProcessor &ppP, InferenceConfig& config) : inferenceManager(ppP, config) {
+InferenceHandler::InferenceHandler(PrePostProcessor& ppP, InferenceConfig& config) : noneProcessor(new BackendBase(config)), inferenceManager(ppP, config, *noneProcessor) {
+}
+
+InferenceHandler::InferenceHandler(PrePostProcessor& ppP, InferenceConfig& config, BackendBase& nP) : noneProcessor(&nP), inferenceManager(ppP, config, *noneProcessor) {
+    useCustomNoneProcessor = true;
+}
+
+InferenceHandler::~InferenceHandler() {
+    if (useCustomNoneProcessor == false) delete noneProcessor;
 }
 
 void InferenceHandler::prepare(HostAudioConfig newAudioConfig) {

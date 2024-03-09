@@ -11,7 +11,13 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                      #endif
                        ),
         parameters (*this, nullptr, juce::Identifier (getName()), PluginParameters::createParameterLayout()),
+#if MODEL_TO_USE == 1// || MODEL_TO_USE == 2
+        // The noneProcessor is not needed for inference, but for the round trip test to output audio when selecting the NONE backend it is required when a none default prePostProcessor is used
+        noneProcessor(inferenceConfig),
+        inferenceHandler(prePostProcessor, inferenceConfig, noneProcessor),
+#else
         inferenceHandler(prePostProcessor, inferenceConfig),
+#endif
         dryWetMixer(32768) // 32768 samples of max latency compensation for the dry-wet mixer
 {
     for (auto & parameterID : PluginParameters::getPluginParameterList()) {

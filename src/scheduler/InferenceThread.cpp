@@ -12,7 +12,6 @@ InferenceThread::InferenceThread(std::counting_semaphore<1000>& s, InferenceConf
 #ifdef USE_TFLITE
     tfliteProcessor(config),
 #endif
-    noneProcessor(config),
     shouldExit(false),
     globalSemaphore(s),
     sessions(ses)
@@ -62,7 +61,7 @@ void InferenceThread::run() {
                 if (session->sendSemaphore.try_acquire()) {
                     for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
                         if (session->inferenceQueue[i]->ready.try_acquire()) {
-                            inference(session->currentBackend, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
+                            inference(session, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
                             session->inferenceQueue[i]->done.release();
                             break;
                         }
@@ -76,7 +75,7 @@ void InferenceThread::run() {
                     if (session->sendSemaphore.try_acquire()) {
                         for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
                             if (session->inferenceQueue[i]->ready.try_acquire()) {
-                                inference(session->currentBackend, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
+                                inference(session, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
                                 session->inferenceQueue[i]->done.release();
                                 break;
                             }
@@ -89,24 +88,24 @@ void InferenceThread::run() {
     }
 }
 
-void InferenceThread::inference(InferenceBackend backend, AudioBufferF& input, AudioBufferF& output) {
+void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output) {
 #ifdef USE_LIBTORCH
-    if (backend == LIBTORCH) {
+    if (session->currentBackend == LIBTORCH) {
         torchProcessor.processBlock(input, output);
     }
 #endif
 #ifdef USE_ONNXRUNTIME
-    if (backend == ONNX) {
+    if (session->currentBackend == ONNX) {
         onnxProcessor.processBlock(input, output);
     }
 #endif
 #ifdef USE_TFLITE
-    if (backend == TFLITE) {
+    if (session->currentBackend == TFLITE) {
         tfliteProcessor.processBlock(input, output);
     }
 #endif
-    if (backend == NONE) {
-        noneProcessor.processBlock(input, output);
+    if (session->currentBackend == NONE) {
+        session->noneProcessor.processBlock(input, output);
     }
 }
 

@@ -2,10 +2,11 @@
 
 namespace anira {
 
-SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, InferenceConfig& config) :
+SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, InferenceConfig& config, BackendBase& noneProcessor) :
     sessionID(newSessionID),
     prePostProcessor(ppP),
-    inferenceConfig(config)
+    inferenceConfig(config),
+    noneProcessor(noneProcessor)
 {
 }
 

@@ -2,7 +2,7 @@
 
 namespace anira {
 
-InferenceThreadPool::InferenceThreadPool(InferenceConfig& config) : inferenceConfig(config) {
+InferenceThreadPool::InferenceThreadPool(InferenceConfig& config) {
     if (! config.m_bind_session_to_thread) {
         for (int i = 0; i < config.m_number_of_threads; ++i) {
             threadPool.emplace_back(std::make_unique<InferenceThread>(globalSemaphore, config, sessions));
@@ -29,13 +29,13 @@ void InferenceThreadPool::releaseInstance() {
     inferenceThreadPool.reset();
 }
 
-SessionElement& InferenceThreadPool::createSession(PrePostProcessor& prePostProcessor, InferenceConfig& config) {
+SessionElement& InferenceThreadPool::createSession(PrePostProcessor& prePostProcessor, InferenceConfig& config, BackendBase& noneProcessor) {
     for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
         threadPool[i]->stop();
     }
 
     int sessionID = getAvailableSessionID();
-    sessions.emplace_back(std::make_shared<SessionElement>(sessionID, prePostProcessor, config));
+    sessions.emplace_back(std::make_shared<SessionElement>(sessionID, prePostProcessor, config, noneProcessor));
 
     if (config.m_bind_session_to_thread) {
         threadPool.emplace_back(std::make_unique<InferenceThread>(globalSemaphore, config, sessions, sessionID));
@@ -117,7 +117,7 @@ void InferenceThreadPool::newDataSubmitted(SessionElement& session) {
 }
 
 void InferenceThreadPool::newDataRequest(SessionElement& session, double bufferSizeInSec) {
-    auto timeToProcess = std::chrono::microseconds(static_cast<long>(bufferSizeInSec * 1e6 * inferenceConfig.m_wait_in_process_block));
+    auto timeToProcess = std::chrono::microseconds(static_cast<long>(bufferSizeInSec * 1e6 * session.inferenceConfig.m_wait_in_process_block));
     auto currentTime = std::chrono::system_clock::now();
     auto waitUntil = currentTime + timeToProcess;
 

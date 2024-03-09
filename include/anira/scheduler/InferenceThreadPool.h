@@ -17,7 +17,7 @@ public:
     InferenceThreadPool(InferenceConfig& config);
     ~InferenceThreadPool();
     static std::shared_ptr<InferenceThreadPool> getInstance(InferenceConfig& config);
-    static SessionElement& createSession(PrePostProcessor& prePostProcessor, InferenceConfig& config);
+    static SessionElement& createSession(PrePostProcessor& prePostProcessor, InferenceConfig& config, BackendBase& noneProcessor);
     static void releaseSession(SessionElement& session, InferenceConfig& config);
     static void releaseInstance();
     static void releaseThreadPool();
@@ -40,7 +40,6 @@ private:
     static void postProcess(SessionElement& session, SessionElement::ThreadSafeStruct& nextBuffer);
 
 private:
-    InferenceConfig& inferenceConfig;
 
     inline static std::vector<std::shared_ptr<SessionElement>> sessions;
     inline static std::atomic<int> nextId = 0;

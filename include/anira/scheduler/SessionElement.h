@@ -9,13 +9,14 @@
 #include "../utils/RingBuffer.h"
 #include "../utils/InferenceBackend.h"
 #include "../utils/HostAudioConfig.h"
+#include "../backends/BackendBase.h"
 #include "../PrePostProcessor.h"
 #include "../InferenceConfig.h"
 
 namespace anira {
 
 struct ANIRA_API SessionElement {
-    SessionElement(int newSessionID, PrePostProcessor& prePostProcessor, InferenceConfig& config);
+    SessionElement(int newSessionID, PrePostProcessor& prePostProcessor, InferenceConfig& config, BackendBase& noneProcessor);
 
     RingBuffer sendBuffer;
     RingBuffer receiveBuffer;
@@ -42,6 +43,7 @@ struct ANIRA_API SessionElement {
 
     PrePostProcessor& prePostProcessor;
     InferenceConfig& inferenceConfig;
+    BackendBase& noneProcessor;
 
     void clear();
     void prepare(HostAudioConfig newConfig);

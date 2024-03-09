@@ -2,9 +2,9 @@
 
 namespace anira {
 
-InferenceManager::InferenceManager(PrePostProcessor& ppP, InferenceConfig& config) :
+InferenceManager::InferenceManager(PrePostProcessor& ppP, InferenceConfig& config, BackendBase& noneProcessor) :
     inferenceThreadPool(InferenceThreadPool::getInstance(config)),
-    session(inferenceThreadPool->createSession(ppP, config)),
+    session(inferenceThreadPool->createSession(ppP, config, noneProcessor)),
     inferenceConfig(config)
 {
 }

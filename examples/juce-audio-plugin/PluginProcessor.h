@@ -4,12 +4,13 @@
 #include <anira/anira.h>
 
 #include "PluginParameters.h"
-#include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
-#include "../../extras/models/hybrid-nn/HybridNNConfig.h"
-#include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "../../extras/models/cnn/CNNConfig.h"
 #include "../../extras/models/cnn/CNNPrePostProcessor.h"
+#include "../../extras/models/cnn/advanced-configs/CNNNoneProcessor.h" // This one is only needed for the round trip test, when selecting the None backend
+#include "../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
 
 //==============================================================================
 class AudioPluginAudioProcessor  : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener
@@ -64,14 +65,15 @@ private:
     juce::AudioBuffer<float> monoBuffer;
 
 #if MODEL_TO_USE == 1
-    CNNPrePostProcessor prePostProcessor;
     anira::InferenceConfig inferenceConfig = cnnConfig;
+    CNNPrePostProcessor prePostProcessor;
+    CNNNoneProcessor noneProcessor; // This one is only needed for the round trip test, when selecting the None backend
 #elif MODEL_TO_USE == 2
-    HybridNNPrePostProcessor prePostProcessor;
     anira::InferenceConfig inferenceConfig = hybridNNConfig;
+    HybridNNPrePostProcessor prePostProcessor;
 #elif MODEL_TO_USE == 3
-    StatefulRNNPrePostProcessor prePostProcessor;
     anira::InferenceConfig inferenceConfig = statefulRNNConfig;
+    StatefulRNNPrePostProcessor prePostProcessor;
 #endif
     anira::InferenceHandler inferenceHandler;
 
