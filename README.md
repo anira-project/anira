@@ -4,8 +4,7 @@
 
 > **Note: This project is still a work in progress. We are actively developing and refining its features and documentation.**
 
-**anira** is a high-performance library designed to enable the real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends—[LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/)—anira bridges the gap between advanced neural network architectures and real-time audio processing.
-
+**anira** is a high-performance library designed to enable the real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing.
 
 ## Features
 
@@ -17,11 +16,11 @@
 
 ### General
 
-| Class                    | Description                                                           |
-|--------------------------|-----------------------------------------------------------------------|
-| InferenceHandler         | Handles audio processing                                              |
-| PrePostProcessor         | Configure a custom pre- and post-processing based on your model needs |
-| InferenceConfig          | Define your model config                                              |
+| Class             | Description                                                                                                                   |
+|-------------------|-------------------------------------------------------------------------------------------------------------------------------|
+| `InferenceHandler` | Manages audio processing within real-time threads by routing audio input to inference threads and updating the buffer with processed audio. |
+| `PrePostProcessor` | Facilitates model-specific pre- and post-processing. Implement this class to customize processing steps before and after inference. |
+| `InferenceConfig`  | A configuration struct for defining model specifics, such as input/output sample counts, model details, batch size, and more. |
 
 ### Install
 Build anira as shared library
