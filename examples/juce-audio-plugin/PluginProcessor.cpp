@@ -119,6 +119,10 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     setLatencySamples(newLatency);
 
     dryWetMixer.setWetLatency(newLatency);
+
+    for (auto & parameterID : PluginParameters::getPluginParameterList()) {
+        parameterChanged(parameterID, (float) parameters.getParameterAsValue(parameterID).getValue());
+    }
 }
 
 void AudioPluginAudioProcessor::releaseResources()
@@ -171,6 +175,9 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     dryWetMixer.mixWetSamples(monoBuffer);
     monoToStereo(buffer, monoBuffer);
+
+
+    std::cout << "getNumberOfSessions: " << inferenceHandler.getNumberOfSessions() << std::endl;
 }
 
 //==============================================================================

@@ -10,7 +10,7 @@ endif ()
 
 cmake_minimum_required(VERSION 3.15)
 
-set (PROJECT_NAME nn-inference-template)
+set (PROJECT_NAME anira-juce-plugin-example)
 
 project (${PROJECT_NAME} VERSION 0.0.1)
 
@@ -76,7 +76,7 @@ endif()
 add_compile_definitions(MODEL_TO_USE=2) # GuitarLSTM
 # add_compile_definitions(MODEL_TO_USE=3) # stateful-LSTM
 
-set (TARGET_NAME NN_Inference_Template)
+set (TARGET_NAME anira-juce-plugin-example)
 
 juce_add_plugin(${TARGET_NAME}
 		# VERSION ...                               # Set this if the plugin version is different to the project version
@@ -103,7 +103,7 @@ juce_add_plugin(${TARGET_NAME}
 		endif()
 
 		FORMATS ${FORMATS_TO_BUILD}                     # The formats to build. Other valid formats are: AAX Unity VST AU AUv3
-		PRODUCT_NAME "NN Inference Template"			            # The name of the final executable, which can differ from the target name
+		PRODUCT_NAME "anira-juce-plugin-example"			            # The name of the final executable, which can differ from the target name
 		)
 
 juce_generate_juce_header(${TARGET_NAME})
