@@ -14,13 +14,15 @@
 - **Flexible Neural Network Integration**: Supports a variety of neural network models, including stateful and stateless models
 - **Built-in Benchmarking**: Includes tools for evaluating the real-time performance of neural networks
 
-### General
+### General usage
 
 | Class             | Description                                                                                                                   |
 |-------------------|-------------------------------------------------------------------------------------------------------------------------------|
 | `InferenceHandler` | Manages audio processing within real-time threads by routing audio input to inference threads and updating the buffer with processed audio. |
 | `PrePostProcessor` | Facilitates model-specific pre- and post-processing. Implement this class to customize processing steps before and after inference. |
 | `InferenceConfig`  | A configuration struct for defining model specifics, such as input/output sample counts, model details, batch size, and more. |
+
+For more details checkout: [anira usage](docs/img/anira-usage.md)
 
 ### Install
 Build anira as shared library
