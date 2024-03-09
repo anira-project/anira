@@ -44,6 +44,9 @@ SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, Inferenc
         for (int i = 0; i < n_structs; ++i) {
             inferenceQueue.emplace_back(std::make_unique<ThreadSafeStruct>(inferenceConfig.m_batch_size, inferenceConfig.m_model_input_size_backend, inferenceConfig.m_model_output_size_backend));
         }
+
+        timeStamps.reserve(n_structs);
+
     }
 
 } // namespace anira

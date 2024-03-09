@@ -35,7 +35,7 @@ struct ANIRA_API SessionElement {
     std::vector<std::unique_ptr<ThreadSafeStruct>> inferenceQueue;
 
     std::atomic<InferenceBackend> currentBackend {NONE};
-    std::queue<std::chrono::time_point<std::chrono::system_clock>> timeStamps;
+    std::vector<std::chrono::time_point<std::chrono::system_clock>> timeStamps;
     std::counting_semaphore<1000> sendSemaphore{0};
     
     const int sessionID;
