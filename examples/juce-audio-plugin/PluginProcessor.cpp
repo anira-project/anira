@@ -11,7 +11,8 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                      #endif
                        ),
         parameters (*this, nullptr, juce::Identifier (getName()), PluginParameters::createParameterLayout()),
-        inferenceHandler(prePostProcessor, inferenceConfig)
+        inferenceHandler(prePostProcessor, inferenceConfig),
+        dryWetMixer(32768) // 32768 samples of max latency compensation for the dry-wet mixer
 {
     for (auto & parameterID : PluginParameters::getPluginParameterList()) {
         parameters.addParameterListener(parameterID, this);
@@ -109,9 +110,9 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     inferenceHandler.prepare(monoConfig);
 
     auto newLatency = inferenceHandler.getLatency();
-    // dryWetMixer.setWetLatency(newLatency);
     setLatencySamples(newLatency);
 
+    dryWetMixer.setWetLatency(newLatency);
 }
 
 void AudioPluginAudioProcessor::releaseResources()
