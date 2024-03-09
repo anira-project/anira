@@ -35,8 +35,8 @@ cmake --build cmake-build-release --config Release --target anira
 **Note:** The CMake build automatically installs all dependencies for the following targets:
  - Benchmarks (disable with ```-DANIRA_WITH_BENCHMARK=OFF```)
  - Example neural models (disable with ```-DANIRA_WITH_EXTRAS=OFF```)
- - JUCE plugin example (disable with ```-DCANIRA_WITH_EXTRAS=OFF```)
- - Minimum inference example (disable with ```-DCANIRA_WITH_EXTRAS=OFF```)
+ - JUCE plugin example (disable with ```-DANIRA_BUILD_EXAMPLES=OFF```)
+ - Minimum inference example (disable with ```-DANIRA_BUILD_EXAMPLES=OFF```)
 
 **Moreover** by default, all three inference engines are installed. You can:
 - Disable this automatism with ```-DANIRA_BACKEND_ALL=OFF```
