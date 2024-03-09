@@ -22,7 +22,7 @@
 | `PrePostProcessor` | Facilitates model-specific pre- and post-processing. Implement this class to customize processing steps before and after inference. |
 | `InferenceConfig`  | A configuration struct for defining model specifics, such as input/output sample counts, model details, batch size, and more. |
 
-For more details checkout: [anira usage](docs/img/anira-usage.md)
+For more details checkout: [anira usage](docs/anira-usage.md)
 
 ### Install
 Build anira as shared library
