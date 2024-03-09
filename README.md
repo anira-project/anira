@@ -12,6 +12,7 @@
 - **Thread Pool Management**: Utilizes a static thread pool to avoid oversubscription and enables efficient parallel inference
 - **Cross-Platform Compatibility**: Works seamlessly on MacOS, Linux, and Windows
 - **Flexible Neural Network Integration**: Supports a variety of neural network models, including stateful and stateless models
+- **Comprehensive Inference Engine Support**: Integrates common inference engines, LibTorch, ONNXRuntime, and TensorFlow Lite
 - **Built-in Benchmarking**: Includes tools for evaluating the real-time performance of neural networks
 
 ### General usage
