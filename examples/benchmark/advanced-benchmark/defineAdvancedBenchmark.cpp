@@ -9,6 +9,7 @@
 #include "../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "../../../extras/models/stateful-rnn/advanced-configs/StatefulRNNAdvancedConfigs.h"
 #include "../../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
+#include "ClearNoneProcessor.h"
 
 
 /* ============================================================ *
@@ -66,7 +67,9 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
         myPrePostProcessor = new StatefulRNNPrePostProcessor();
     }
 
-    m_inferenceHandler = std::make_unique<anira::InferenceHandler>(*myPrePostProcessor, inferenceConfig);
+    ClearNoneProcessor clearNoneProcessor(inferenceConfig);
+
+    m_inferenceHandler = std::make_unique<anira::InferenceHandler>(*myPrePostProcessor, inferenceConfig, clearNoneProcessor);
     m_inferenceHandler->prepare(hostAudioConfig);
     m_inferenceHandler->setInferenceBackend(inferenceBackends[state.range(2)]);
 
