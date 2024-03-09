@@ -30,7 +30,7 @@ anira::InferenceConfig hybridNNConfig(
 ```
 
 # Step 2: Implement custom pre- and post-processing
-Implement your model-specific pre- and post-processing by extending ```anira::PrePostProcessor```. This is crucial for preparing the input and handling the output correctly.
+Implement your model-specific pre- and post-processing by inheriting from the ```anira::PrePostProcessor``` class. This is crucial for preparing the input and handling the output correctly. Default pre- and post-processing functions are implemented in the ```anira::PrePostProcessor``` class, so when you have the same amount of input and output samples in your model and need no specific pre- or post-processing you don't need to inherit from the class. 
 ```cpp
 class HybridNNPrePostProcessor : public anira::PrePostProcessor {
 public:
