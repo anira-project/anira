@@ -15,10 +15,10 @@ void BackendBase::processBlock(AudioBufferF &input, AudioBufferF &output) {
 
     if (equalChannels && sampleDiff == 0) {
         for (int channel = 0; channel < input.getNumChannels(); ++channel) {
-            auto writePtr = output.getWritePointer(0);
-            auto readPtr = input.getReadPointer(0);
+            auto writePtr = output.getWritePointer(channel);
+            auto readPtr = input.getReadPointer(channel);
 
-            for (int i = 0; i < output.getNumSamples(); ++i) {
+            for (size_t i = 0; i < output.getNumSamples(); ++i) {
                 writePtr[i] = readPtr[i];
             }
         }

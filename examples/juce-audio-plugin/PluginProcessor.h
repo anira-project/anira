@@ -9,6 +9,7 @@
 #include "../../extras/models/cnn/advanced-configs/CNNNoneProcessor.h" // This one is only needed for the round trip test, when selecting the None backend
 #include "../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../extras/models/hybrid-nn/advanced-configs/HybridNNNoneProcessor.h" // Only needed for round trip test
 #include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
 
@@ -71,6 +72,7 @@ private:
 #elif MODEL_TO_USE == 2
     anira::InferenceConfig inferenceConfig = hybridNNConfig;
     HybridNNPrePostProcessor prePostProcessor;
+    HybridNNNoneProcessor noneProcessor; // This one is only needed for the round trip test, when selecting the None backend
 #elif MODEL_TO_USE == 3
     anira::InferenceConfig inferenceConfig = statefulRNNConfig;
     StatefulRNNPrePostProcessor prePostProcessor;

@@ -1,11 +1,11 @@
-#ifndef ANIRA_CNN_NONE_PROCESSOR_H
-#define ANIRA_CNN_NONE_PROCESSOR_H
+#ifndef ANIRA_HYBRID_NN_NONE_PROCESSOR_H
+#define ANIRA_HYBRID_NN_NONE_PROCESSOR_H
 
 #include <anira/anira.h>
 
-class CNNNoneProcessor : public anira::BackendBase {
+class HybridNNNoneProcessor : public anira::BackendBase {
 public:
-    CNNNoneProcessor(anira::InferenceConfig& config) : anira::BackendBase(config) {}
+    HybridNNNoneProcessor(anira::InferenceConfig& config) : anira::BackendBase(config) {}
 
     void processBlock(anira::AudioBufferF &input, anira::AudioBufferF &output) override {
         auto equalChannels = input.getNumChannels() == output.getNumChannels();
@@ -16,12 +16,13 @@ public:
                 auto writePtr = output.getWritePointer(channel);
                 auto readPtr = input.getReadPointer(channel);
 
-                for (size_t i = 0; i < output.getNumSamples(); ++i) {
-                    writePtr[i] = readPtr[i+sampleDiff];
+                for (size_t batch = 0; batch < inferenceConfig.m_batch_size; ++batch) {
+                    size_t baseIdx = batch * inferenceConfig.m_model_input_size_backend;
+                    writePtr[batch] = readPtr[inferenceConfig.m_model_input_size_backend - 1 + baseIdx];
                 }
             }
         }
     }
 };
 
-#endif // ANIRA_CNN_NONE_PROCESSOR_H
+#endif // ANIRA_HYBRID_NN_NONE_PROCESSOR_H
