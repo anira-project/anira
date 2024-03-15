@@ -37,6 +37,8 @@ void minimal_inference(anira::InferenceConfig config) {
     // Limit inference to one thread
     TfLiteInterpreterOptionsSetNumThreads(options, 1);
 
+    TfLiteInterpreterResizeInputTensor(interpreter, 0, config.m_model_input_shape_tflite.data(), config.m_model_input_shape_tflite.size());
+
     // Allocate memory for all tensors
     TfLiteInterpreterAllocateTensors(interpreter);
 
@@ -44,7 +46,7 @@ void minimal_inference(anira::InferenceConfig config) {
     TfLiteTensor* inputTensor = TfLiteInterpreterGetInputTensor(interpreter, 0);
 
     for (int i = 0; i < TfLiteTensorNumDims(inputTensor); ++i) {
-        std::cout << "Input shape 0: " << TfLiteTensorDim(inputTensor, i) << '\n';
+        std::cout << "Input shape " << i <<": " << TfLiteTensorDim(inputTensor, i) << '\n';
     }
 
     // Fill input tensor with data
@@ -69,7 +71,7 @@ void minimal_inference(anira::InferenceConfig config) {
     TfLiteTensorCopyToBuffer(outputTensor, outputData.data(), outputSize * sizeof(float));
 
     for (int i = 0; i < TfLiteTensorNumDims(outputTensor); ++i) {
-        std::cout << "Input shape 0: " << TfLiteTensorDim(outputTensor, i) << '\n';
+        std::cout << "Output shape " << i << ": " << TfLiteTensorDim(outputTensor, i) << '\n';
     }
 
     for (int i = 0; i < outputSize; i++) {
