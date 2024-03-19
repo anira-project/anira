@@ -34,13 +34,6 @@ FetchContent_Declare(JUCE
 )
 FetchContent_MakeAvailable(JUCE)
 
-# Compilation options
-if(NOT CMAKE_BUILD_TYPE)
-	message(FATAL_ERROR "No build type selected, please specify Debug or Release with -DCMAKE_BUILD_TYPE=<type>")
-else()
-	message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-endif()
-
 if(APPLE)
 	set(FORMATS_TO_BUILD AU VST3 Standalone)
 else()
