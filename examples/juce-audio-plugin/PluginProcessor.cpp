@@ -164,9 +164,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
-
     stereoToMono(monoBuffer, buffer);
     dryWetMixer.pushDrySamples(monoBuffer);
 
@@ -175,9 +172,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     dryWetMixer.mixWetSamples(monoBuffer);
     monoToStereo(buffer, monoBuffer);
-
-
-    std::cout << "getNumberOfSessions: " << inferenceHandler.getNumberOfSessions() << std::endl;
 }
 
 //==============================================================================
