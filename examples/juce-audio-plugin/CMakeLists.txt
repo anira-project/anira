@@ -14,24 +14,9 @@ set (PROJECT_NAME anira-juce-plugin-example)
 
 project (${PROJECT_NAME} VERSION 0.0.1)
 
-option(BUILD_ARCHITECTURE "Architecture to build for")
-
 # Sets the cpp language minimum
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-
-# Define options for backends
-option(WITH_LIBTORCH "Build with LibTorch backend" OFF)
-option(WITH_ONNXRUNTIME "Build with ONNX Runtime backend" OFF)
-option(WITH_TFLITE "Build with TensorFlow Lite backend" OFF)
-
-option(BACKEND_ALL "Build with BACKEND_ALL" ON)
-
-if(BACKEND_ALL)
-    set(BACKEND_LIBTORCH ON)
-    set(BACKEND_ONNXRUNTIME ON)
-    set(BACKEND_TFLITE ON)
-endif()
 
 # ==============================================================================
 
@@ -56,20 +41,10 @@ else()
 	message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 endif()
 
-if(APPLE AND (BUILD_ARCHITECTURE STREQUAL CMAKE_HOST_SYSTEM_PROCESSOR OR BUILD_ARCHITECTURE STREQUAL OFF))
+if(APPLE)
 	set(FORMATS_TO_BUILD AU VST3 Standalone)
-elseif(APPLE AND NOT BUILD_ARCHITECTURE STREQUAL CMAKE_HOST_SYSTEM_PROCESSOR)
-    set(FORMATS_TO_BUILD AU Standalone)
 else()
 	set(FORMATS_TO_BUILD VST3 Standalone)
-endif()
-
-if (MSVC)
-    set(ANIRA_BUILD_DYNAMIC_LIBRARY OFF)
-endif ()
-
-if(NOT BACKEND_LIBTORCH AND NOT BACKEND_ONNXRUNTIME AND NOT BACKEND_TFLITE)
-    message(FATAL_ERROR "No backend selected. Please select at least one backend by setting one of the following options to ON: BACKEND_LIBTORCH, BACKEND_ONNXRUNTIME, or BACKEND_TFLITE. For example, add '-DBACKEND_LIBTORCH=ON' to your CMake command line")
 endif()
 
 # add_compile_definitions(MODEL_TO_USE=1) # steerable-nafx
