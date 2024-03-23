@@ -23,6 +23,8 @@ env:
     CMAKE_BUILD_PARALLEL_LEVEL: 4 
     # Name of the build directory
     BUILD_DIR: build
+    # Needed for mozilla sccache action
+    SCCACHE_GHA_ENABLED: "true"
 
 jobs:
 
@@ -33,12 +35,14 @@ jobs:
             matrix:
                 os: [macos-latest, ubuntu-latest, windows-latest]
                 include:
-                    -   os: macOS-latest
-                        name: macOS
-                    -   os: ubuntu-latest
-                        name: Linux
-                    -   os: windows-latest
-                        name: Windows
+                    -   name: Linux
+                        os: ubuntu-latest
+                    -   name: macOS-x86_64
+                        os: macOS-latest
+                    -   name: macOS-arm64
+                        os: macOS-latest
+                    -   name: Windows
+                        os: windows-latest
 
         runs-on: ${{ matrix.os }}
         steps:
@@ -56,13 +60,16 @@ jobs:
             -   name: install deps
                 shell: bash
                 run: |
-                    if [ "${{ matrix.name }}" == "macOS" ]; then
+                    if [ "${{ matrix.name }}" == "Linux" ]; then
+                        sudo apt-get update && sudo apt install ninja-build
+                    elif [ "${{ matrix.name }}" == "macOS-x86_64" ]; then
                         brew install osxutils ninja
                         echo "brew prefix: $(brew --prefix)"
-                    elif [ "${{ matrix.name }}" == "Linux" ]; then
-                        sudo apt-get update && sudo apt install ninja-build
-                    # elif [ "${{ matrix.name }}" == "Windows" ]; then
-                    #     choco install ninja
+                    elif [ "${{ matrix.name }}" == "macOS-arm64" ]; then
+                        brew install osxutils ninja
+                        echo "brew prefix: $(brew --prefix)"
+                    elif [ "${{ matrix.name }}" == "Windows" ]; then
+                        choco install ninja
                     else
                         echo "Unknown OS";
                     fi;
@@ -83,12 +90,14 @@ jobs:
             -   name: cmake configure
                 shell: bash
                 run: |
-                    if [ "${{ matrix.name }}" == "macOS" ]; then
-                        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=${{ matrix.ccache }} -DCMAKE_CXX_COMPILER_LAUNCHER=${{ matrix.ccache }} -DBUILD_SHARED_LIBS=ON
-                    elif [ "${{ matrix.name }}" == "Linux" ]; then
-                        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=${{ matrix.ccache }} -DCMAKE_CXX_COMPILER_LAUNCHER=${{ matrix.ccache }} -DBUILD_SHARED_LIBS=ON
+                    if [ "${{ matrix.name }}" == "Linux" ]; then
+                        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DBUILD_SHARED_LIBS=ON
+                    elif [ "${{ matrix.name }}" == "macOS-x86_64" ]; then
+                        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_OSX_ARCHITECTURES=x86_64 -DBUILD_SHARED_LIBS=ON
+                    elif [ "${{ matrix.name }}" == "macOS-arm64" ]; then
+                        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_OSX_ARCHITECTURES=arm64 -DBUILD_SHARED_LIBS=ON
                     elif [ "${{ matrix.name }}" == "Windows" ]; then
-                            cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=${{ matrix.ccache }} -DCMAKE_CXX_COMPILER_LAUNCHER=${{ matrix.ccache }} -DBUILD_SHARED_LIBS=ON
+                        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DBUILD_SHARED_LIBS=ON
                     else
                         echo "Unknown OS";
                     fi;
@@ -123,6 +132,10 @@ jobs:
                 with:
                     name: ${{ env.PRODUCT_NAME }}
                     path: ${{ env.PACKAGE_DIR }}
+
+            -   name: Run sccache stat for check
+                shell: bash
+                run: ${SCCACHE_PATH} --show-stats
 
     release:
         if: startsWith(github.ref, 'refs/tags/')
