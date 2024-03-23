@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.15)
 
 # Shall the library be built as a shared library?
 option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
-option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" ON)
+option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
 option(ANIRA_WITH_EXTRAS "Build with extras (clone example model repos)" OFF)
 option(ANIRA_WITH_EXAMPLES "Add Example Targets (juce plugin, benchmarks, minimal inference examples)" OFF)
 option(ANIRA_WITH_INSTALL "Add install targets" ON)
