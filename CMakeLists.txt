@@ -13,10 +13,10 @@ endif ()
 # ==============================================================================
 
 # Shall the library be built as a shared library?
-option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
-option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" ON)
-option(ANIRA_WITH_EXTRAS "Build with extras (clone example model repos)" ON)
-option(ANIRA_BUILD_EXAMPLES "Add Example Targets (juce plugin, benchmark options, minimal inference examples)" ON)
+option(BUILD_SHARED_LIBS "Build the library as a shared library" OFF)
+option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
+option(ANIRA_WITH_EXTRAS "Build with extras (clone example model repos)" OFF)
+option(ANIRA_WITH_EXAMPLES "Add Example Targets (juce plugin, benchmark options, minimal inference examples)" OFF)
 
 # Define options for backends
 option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" OFF)
@@ -32,8 +32,6 @@ option(ANIRA_BACKEND_ALL "Build with BACKEND_ALL" ON)
 set (PROJECT_NAME anira)
 
 project (${PROJECT_NAME} VERSION 0.0.1)
-
-option(BUILD_ARCHITECTURE "Architecture to build for")
 
 # for CMAKE_INSTALL_INCLUDEDIR definition
 include(GNUInstallDirs)
@@ -70,6 +68,10 @@ endif()
 # Download and install the selected inference engines
 # ==============================================================================
 
+if(NOT BACKEND_LIBTORCH AND NOT BACKEND_ONNXRUNTIME AND NOT BACKEND_TFLITE)
+    message(FATAL_ERROR "No backend selected. Please select at least one backend by setting one of the following options to ON: ANIRA_WITH_LIBTORCH, ANIRA_WITH_ONNXRUNTIME, or ANIRA_WITH_TFLITE. For example, add '-DANIRA_WITH_LIBTORCH=ON' to your CMake command line.")
+endif()
+
 set(BACKEND_SOURCES)
 set(BACKEND_BUILD_HEADER_DIR)
 set(BACKEND_BUILD_LIBRARY_DIRS)
@@ -87,10 +89,6 @@ endif()
 if(BACKEND_TFLITE)
     include(cmake/SetupTensorflowLite.cmake)
     list(APPEND BACKEND_SOURCES src/backends/TFLiteProcessor.cpp)
-endif()
-
-if(NOT BACKEND_LIBTORCH AND NOT BACKEND_ONNXRUNTIME AND NOT BACKEND_TFLITE)
-    message(STATUS "No backend selected. Please select at least one backend by setting one of the following options to ON: BACKEND_LIBTORCH, BACKEND_ONNXRUNTIME, or BACKEND_TFLITE. For example, add '-DBACKEND_LIBTORCH=ON' to your CMake command line")
 endif()
 
 # ==============================================================================
@@ -231,7 +229,7 @@ if(ANIRA_WITH_BENCHMARK)
         set(BENCHMARK_ENABLE_TESTING OFF)
         set(BENCHMARK_ENABLE_GTEST_TESTS OFF)
 
-        if (APPLE AND (BUILD_ARCHITECTURE STREQUAL "arm64" OR CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64"))
+        if (APPLE AND (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64"))
         set(HAVE_STD_REGEX ON)
         set(RUN_HAVE_STD_REGEX 1)
         endif()
@@ -392,6 +390,6 @@ if(ANIRA_WITH_EXTRAS)
     add_subdirectory(extras)
 endif ()
 
-if(ANIRA_BUILD_EXAMPLES)
+if(ANIRA_WITH_EXAMPLES)
     add_subdirectory(examples)
 endif()

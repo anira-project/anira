@@ -16,8 +16,6 @@ set (PROJECT_NAME advanced-benchmark)
 
 project (${PROJECT_NAME} VERSION 0.0.1)
 
-option(BUILD_ARCHITECTURE "Architecture to build for")
-
 # Sets the cpp language minimum
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
