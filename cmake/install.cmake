@@ -5,54 +5,31 @@
 # for CMAKE_INSTALL_INCLUDEDIR and others definition
 include(GNUInstallDirs)
 
-# add the include directories for the backends to the install interface
-foreach(HEADER_DIR ${BACKEND_BUILD_HEADER_DIR})
-    file(RELATIVE_PATH HEADER_PATH_RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/modules" "${HEADER_DIR}")
-    get_filename_component(HEADER_DIRECTORY_NAME "${HEADER_PATH_RELATIVE}" DIRECTORY)
-    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/${HEADER_DIRECTORY_NAME}>
-    )
-endforeach()
-
-# include the public headers of the anira library
+# include the public headers of the anira library for the install target
 target_include_directories(${PROJECT_NAME}
     PUBLIC
-    # where external projects will look for the library's public headers
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
-# include the link directories for all the backends to the install interface
-# foreach(LIBRARY_DIR ${BACKEND_BUILD_LIBRARY_DIRS})
-#     file(RELATIVE_PATH LIBRARY_PATH_RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/modules" "${LIBRARY_DIR}")
-#     get_filename_component(LIBRARY_DIRECTORY_PATH "${LIBRARY_PATH_RELATIVE}" DIRECTORY)
-    target_link_directories(${PROJECT_NAME} PUBLIC
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_LIBDIR}>
-    )
-# endforeach()
+target_link_directories(${PROJECT_NAME} PUBLIC
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_LIBDIR}>
+)
 
 # define the dircetory where the library will be installed CMAKE_INSTALL_PREFIX
-# note that it is not CMAKE_INSTALL_PREFIX we are checking here
 if(DEFINED CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-    message(
-        STATUS
-        "CMAKE_INSTALL_PREFIX will be set to ${CMAKE_SOURCE_DIR}/install"
-    )
-    set(CMAKE_INSTALL_PREFIX
-        "${CMAKE_SOURCE_DIR}/install"
-        CACHE PATH "Where the library will be installed to" FORCE
-    )
+    message( STATUS "CMAKE_INSTALL_PREFIX will be set to ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-${PROJECT_VERSION}" )
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-${PROJECT_VERSION}" CACHE PATH "Where the library will be installed to" FORCE)
 else()
     message(STATUS "CMAKE_INSTALL_PREFIX was already set to ${CMAKE_INSTALL_PREFIX}")
 endif()
 
 # at install the rpath is cleared by default so we have to set it again for the installed shared library to find the other libraries
 # in this case we set the rpath to the directories where the other libraries are installed
-# $ORIGIN is a special token that gets replaced by the directory of the library at runtime
-# from that point we can navigate to the other libraries
+# $ORIGIN is a special token that gets replaced by the directory of the library at runtime from that point we could navigate to the other libraries
 # it is a little strange but the onnxruntime library and libtorch work without this setting in the JUCE example... but tensorflowlite does not
 set_target_properties(${PROJECT_NAME}
     PROPERTIES
-        INSTALL_RPATH "$ORIGIN;$ORIGIN/../../modules/${LIBTORCH_DIR_NAME}/lib"
+        INSTALL_RPATH "$ORIGIN"
 )
 
 # This is necessary for the gtest_main library to find the gtest library at runtime
@@ -79,27 +56,36 @@ install(TARGETS ${PROJECT_NAME}
 # libtorch has cmake config files that we can use to install the library later with find_package and then just link to it
 # if we would implement the install manually we would have to include the include and lib directories to our install interface
 if(ANIRA_WITH_LIBTORCH)
-    install(DIRECTORY "${LIBTORCH_ROOTDIR}/"
-        DESTINATION "${CMAKE_INSTALL_PREFIX}/modules/${LIBTORCH_DIR_NAME}"
+    # install(DIRECTORY "${LIBTORCH_ROOTDIR}/"
+    #     DESTINATION "${CMAKE_INSTALL_PREFIX}/modules/${LIBTORCH_DIR_NAME}"
+    # )
+    install(DIRECTORY "${LIBTORCH_ROOTDIR}/include/"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    )
+    install(DIRECTORY "${LIBTORCH_ROOTDIR}/lib/"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    )
+    install(DIRECTORY "${LIBTORCH_ROOTDIR}/share/cmake/"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake"
     )
 endif()
 
 # the other ones don't have cmake config files so we have to install them manually
 if(ANIRA_WITH_ONNXRUNTIME)
     install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/include/"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${ONNXRUNTIME_DIR_NAME}"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     )
     install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/lib/"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}/"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     )
 endif()
 
 if(ANIRA_WITH_TFLITE)
     install(DIRECTORY "${TENSORFLOWLITE_ROOTDIR}/include/"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${TENSORFLOWLITE_DIR_NAME}"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     )
     install(DIRECTORY "${TENSORFLOWLITE_ROOTDIR}/lib/"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}/"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     )
 endif()
 
@@ -107,7 +93,7 @@ endif()
 set_target_properties(${PROJECT_NAME} PROPERTIES DEBUG_POSTFIX "d")
 
 # ==============================================================================
-# Generate config files
+# Generate cmake config files
 # ==============================================================================
 
 # generate and install export file in the folder cmake with the name of the project and namespace

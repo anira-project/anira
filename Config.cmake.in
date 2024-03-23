@@ -2,11 +2,18 @@
 
 message(STATUS "Configuring anira")
 
+set(ANIRA_WITH_LIBTORCH @ANIRA_WITH_LIBTORCH@)
+set(ANIRA_WITH_BENCHMARK @ANIRA_WITH_BENCHMARK@)
+
 # Find the dependencies
-set(Torch_DIR "${PACKAGE_PREFIX_DIR}/modules/@LIBTORCH_DIR_NAME@/share/cmake/Torch")
-find_package(Torch REQUIRED)
-find_package(benchmark REQUIRED)
-find_package(GTest REQUIRED)
+if (ANIRA_WITH_LIBTORCH)
+    find_package(Torch REQUIRED)
+endif()
+    
+if (ANIRA_WITH_BENCHMARK)
+    find_package(benchmark REQUIRED)
+    find_package(GTest REQUIRED)
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/aniraTargets.cmake")
 
