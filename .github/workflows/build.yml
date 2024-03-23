@@ -60,7 +60,7 @@ jobs:
                         brew install osxutils ninja
                         echo "brew prefix: $(brew --prefix)"
                     elif [ "${{ matrix.name }}" == "Linux" ]; then
-                        sudo apt-get update && sudo apt install ninja
+                        sudo apt-get update && sudo apt install ninja-build
                     # elif [ "${{ matrix.name }}" == "Windows" ]; then
                     #     choco install ninja
                     else
