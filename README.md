@@ -1,5 +1,6 @@
 ![anira Logo](/docs/img/anira-logo.png)
 
+![Build Status](https://github.com/tu-studio/anira/actions/workflows/build.yml/badge.svg)
 --------------------------------------------------------------------------------
 
 > **Note: This project is still a work in progress. We are actively developing and refining its features and documentation.**
