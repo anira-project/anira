@@ -2,10 +2,12 @@
 
 message(STATUS "Configuring anira")
 
-include("${CMAKE_CURRENT_LIST_DIR}/aniraTargets.cmake")
-
-# Import the packages
+# Find the dependencies
 set(Torch_DIR "${PACKAGE_PREFIX_DIR}/modules/@LIBTORCH_DIR_NAME@/share/cmake/Torch")
 find_package(Torch REQUIRED)
+find_package(benchmark REQUIRED)
+find_package(GTest REQUIRED)
+
+include("${CMAKE_CURRENT_LIST_DIR}/aniraTargets.cmake")
 
 check_required_components(anira)
