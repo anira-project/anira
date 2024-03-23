@@ -1,0 +1,140 @@
+name: Build Anira
+
+on:
+    workflow_dispatch: # lets you run a build from github.com
+    # Runs the workflow on push events but only for the main branch
+    push:
+        branches:
+            - main
+        # This is needed otherwise the github.ref is not set with ref/tags/v...
+        tags:
+            - 'v*.*.*'
+
+# When pushing new commits, cancel any running builds on that branch
+concurrency:
+    group: ${{ github.ref }}
+    cancel-in-progress: true
+
+env:
+    PROJECT_NAME: anira
+    # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+    BUILD_TYPE: Release
+    # Use up to 4 cpus to build
+    CMAKE_BUILD_PARALLEL_LEVEL: 4 
+    # Name of the build directory
+    BUILD_DIR: build
+
+jobs:
+
+    build-anira:
+        name: ${{ matrix.name }}
+        strategy:
+            fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
+            matrix:
+                os: [macos-latest, ubuntu-latest, windows-latest]
+                include:
+                    -   os: macOS-latest
+                        name: macOS
+                    -   os: ubuntu-latest
+                        name: Linux
+                    -   os: windows-latest
+                        name: Windows
+
+        runs-on: ${{ matrix.os }}
+        steps:
+
+            #A simple printout of the matrix
+            -   name: printout
+                shell: bash
+                run: |
+                    echo ${{ github.ref }}
+                    echo "matrix.name=${{ matrix.name }}";
+                    echo "matrix.os=${{ matrix.os }}";
+
+            # We need the osxutils to get the codesign and notorization tools
+            # We need to install ccache here for Windows to grab the right version
+            -   name: install deps
+                shell: bash
+                run: |
+                    if [ "${{ matrix.name }}" == "macOS" ]; then
+                        brew install osxutils ninja
+                        echo "brew prefix: $(brew --prefix)"
+                    elif [ "${{ matrix.name }}" == "Linux" ]; then
+                        sudo apt-get update && sudo apt install ninja
+                    # elif [ "${{ matrix.name }}" == "Windows" ]; then
+                    #     choco install ninja
+                    else
+                        echo "Unknown OS";
+                    fi;
+
+            # With this we checkout to our repo
+            -   name: get repo and submodules
+                uses: actions/checkout@v4
+                # Here we get the submodules like juce
+                with:
+                    submodules: true
+
+            # We cache the build to speed up the build process
+            -   name: Cache the build
+                uses: mozilla-actions/sccache-action@v0.0.3
+
+            # Typical cmake configuration with default generator
+            # With DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" we can build universal binaries for apple computers
+            -   name: cmake configure
+                shell: bash
+                run: |
+                    if [ "${{ matrix.name }}" == "macOS" ]; then
+                        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=${{ matrix.ccache }} -DCMAKE_CXX_COMPILER_LAUNCHER=${{ matrix.ccache }} -DBUILD_SHARED_LIBS=ON
+                    elif [ "${{ matrix.name }}" == "Linux" ]; then
+                        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=${{ matrix.ccache }} -DCMAKE_CXX_COMPILER_LAUNCHER=${{ matrix.ccache }} -DBUILD_SHARED_LIBS=ON
+                    elif [ "${{ matrix.name }}" == "Windows" ]; then
+                            cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=${{ matrix.ccache }} -DCMAKE_CXX_COMPILER_LAUNCHER=${{ matrix.ccache }} -DBUILD_SHARED_LIBS=ON
+                    else
+                        echo "Unknown OS";
+                    fi;
+
+            # Build the project
+            -   name: cmake build
+                shell: bash
+                run: cmake --build build --config ${{ env.BUILD_TYPE }} --parallel ${{ env.CMAKE_BUILD_PARALLEL_LEVEL }}
+            
+            # Build the install target
+            -   name: install target
+                run: cmake --install build --config ${{ env.BUILD_TYPE }}
+
+            # Declaring the product name and the packaging directory
+            -   name: declare artefact variables
+                shell: bash
+                run: |
+                    version=$(grep 'CMAKE_PROJECT_VERSION:STATIC' build/CMakeCache.txt | cut -d'=' -f2)
+                    echo "ANIRA_VERSION=${version}" >> $GITHUB_ENV
+                    echo "PACKAGE_DIR=artefacts/${{ env.PROJECT_NAME }}-${{ env.ANIRA_VERSION }}-${{ matrix.name }}" >> $GITHUB_ENV
+                    echo "PRODUCT_NAME=${{ env.PROJECT_NAME }}-${{ env.ANIRA_VERSION }}-${{ matrix.name }}" >> $GITHUB_ENV
+            
+            # Moving the artefacts to a packaging directory
+            -   name: move artefacts
+                shell: bash
+                run: |
+                    mkdir -p artefacts;
+                    mv "${{ env.BUILD_DIR }}/${{ env.PROJECT_NAME }}-${{ env.ANIRA_VERSION }}" ${{ env.PACKAGE_DIR }};
+                
+            -   name: upload artifact
+                uses: actions/upload-artifact@v4
+                with:
+                    name: ${{ env.PRODUCT_NAME }}
+                    path: ${{ env.PACKAGE_DIR }}
+
+    release:
+        if: startsWith(github.ref, 'refs/tags/')
+        runs-on: ubuntu-latest
+        needs: build-anira
+
+        steps:
+        -   name: Get Artifacts
+            uses: actions/download-artifact@v4
+
+        -   name: Create Release
+            uses: softprops/action-gh-release@v2
+            with:
+                files: |
+                    */*.zip
