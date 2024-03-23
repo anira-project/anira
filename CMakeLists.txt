@@ -45,7 +45,7 @@ if(NOT ANIRA_WITH_LIBTORCH AND NOT ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_WITH_TFL
 endif()
 
 set(BACKEND_SOURCES)
-set(BACKEND_BUILD_HEADER_DIR)
+set(BACKEND_BUILD_HEADER_DIRS)
 set(BACKEND_BUILD_LIBRARY_DIRS)
 
 if(ANIRA_WITH_LIBTORCH)
@@ -98,7 +98,7 @@ target_sources(${PROJECT_NAME}
 )
 
 # add the include directories for the backends to the build interface
-foreach(HEADER_DIR ${BACKEND_BUILD_HEADER_DIR})
+foreach(HEADER_DIR ${BACKEND_BUILD_HEADER_DIRS})
     target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
         $<BUILD_INTERFACE:${HEADER_DIR}>
     )
