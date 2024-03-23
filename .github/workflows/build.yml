@@ -33,7 +33,6 @@ jobs:
         strategy:
             fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
             matrix:
-                os: [macos-latest, ubuntu-latest, windows-latest]
                 include:
                     -   name: Linux
                         os: ubuntu-latest
@@ -117,6 +116,7 @@ jobs:
                 run: |
                     version=$(grep 'CMAKE_PROJECT_VERSION:STATIC' build/CMakeCache.txt | cut -d'=' -f2)
                     echo "ANIRA_VERSION=${version}" >> $GITHUB_ENV
+                    echo "current anira version: ${{ env.ANIRA_VERSION }}"
                     echo "PACKAGE_DIR=artefacts/${{ env.PROJECT_NAME }}-${{ env.ANIRA_VERSION }}-${{ matrix.name }}" >> $GITHUB_ENV
                     echo "PRODUCT_NAME=${{ env.PROJECT_NAME }}-${{ env.ANIRA_VERSION }}-${{ matrix.name }}" >> $GITHUB_ENV
             
