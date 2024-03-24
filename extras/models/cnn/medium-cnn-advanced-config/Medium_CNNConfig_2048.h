@@ -22,7 +22,7 @@ static anira::InferenceConfig medium_cnnConfig_2048(
         1,
         3380,
         2048,
-        2048,
+        42.66f,
         0,
         false,
         0.5f,

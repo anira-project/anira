@@ -3,8 +3,6 @@
 
 #include <anira/anira.h>
 
-#define CNN_MAX_INFERENCE_TIME 2048
-
 static anira::InferenceConfig cnnConfig(
 #ifdef USE_LIBTORCH
         STEERABLENAFX_MODELS_PATH_PYTORCH + std::string("model_0/steerable-nafx-dynamic.pt"),
@@ -24,7 +22,7 @@ static anira::InferenceConfig cnnConfig(
         1,
         15380,
         2048,
-        CNN_MAX_INFERENCE_TIME,
+        42.66f,
         0,
         false,
         0.5f,
