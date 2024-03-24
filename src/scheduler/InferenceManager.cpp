@@ -28,16 +28,25 @@ void InferenceManager::prepare(HostAudioConfig newConfig) {
 
     inferenceCounter = 0;
 
-    init = true;
     bufferCount = 0;
 
-    size_t result = spec.hostBufferSize % (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size);
-    if (result == 0) {
-        initSamples = inferenceConfig.m_max_inference_time + inferenceConfig.m_batch_size * inferenceConfig.m_model_latency;
-    } else if (result > 0 && result < spec.hostBufferSize) {
-        initSamples = inferenceConfig.m_max_inference_time + spec.hostBufferSize + inferenceConfig.m_batch_size * inferenceConfig.m_model_latency; //TODO not minimum possible
+    size_t max_inference_time_in_samples = (size_t) std::ceil(inferenceConfig.m_max_inference_time * spec.hostSampleRate / 1000);
+
+    float divisor = (float) spec.hostBufferSize / (float) inferenceConfig.m_batch_size * (float) inferenceConfig.m_model_output_size;
+    size_t remainder = spec.hostBufferSize % (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size);
+
+    if (remainder == 0) {
+        initSamples = (size_t) divisor * max_inference_time_in_samples + (size_t) divisor * inferenceConfig.m_model_latency;
+    } else if (remainder > 0 && remainder < spec.hostBufferSize) {
+        initSamples = ((size_t) divisor + 1) * max_inference_time_in_samples + ((size_t) divisor + 1) * inferenceConfig.m_model_latency + spec.hostBufferSize; //TODO not minimum possible
     } else {
-        initSamples = inferenceConfig.m_max_inference_time + (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size) + inferenceConfig.m_batch_size * inferenceConfig.m_model_latency;
+        initSamples = max_inference_time_in_samples + (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size) + inferenceConfig.m_model_latency; //TODO not minimum possible
+    }
+
+    if ((float) initSamples < inferenceConfig.m_wait_in_process_block * (float) spec.hostBufferSize) {
+        init = false;
+    } else {
+        init = true;
     }
 }
 

@@ -29,8 +29,8 @@ struct ANIRA_API InferenceConfig {
             size_t batch_size = 0,
             size_t model_input_size = 0,
             size_t model_output_size = 0,
-            size_t max_inference_time = 0,
-            int model_latency = 0,
+            float max_inference_time = 0, // in ms per input of batch_size
+            int model_latency = 0, // in samples per input of batch_size
             bool warm_up = false,
             float wait_in_process_block = 0.5f,
             bool bind_session_to_thread = false,
@@ -82,10 +82,9 @@ struct ANIRA_API InferenceConfig {
     size_t m_batch_size;
     size_t m_model_input_size;
     size_t m_model_output_size;
-    size_t m_max_inference_time;
+    float m_max_inference_time;
     int m_model_latency;
     bool m_warm_up;
-
     float m_wait_in_process_block;
     bool m_bind_session_to_thread;
     int m_number_of_threads;

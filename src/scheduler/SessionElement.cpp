@@ -27,13 +27,15 @@ SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, Inferenc
         sendBuffer.initializeWithPositions(1, (size_t) newConfig.hostSampleRate * 6); // TODO find appropriate size dynamically
         receiveBuffer.initializeWithPositions(1, (size_t) newConfig.hostSampleRate * 6); // TODO find appropriate size dynamically
 
+        size_t max_inference_time_in_samples = (size_t) std::ceil(inferenceConfig.m_max_inference_time * newConfig.hostSampleRate / 1000);
+
         // We assume that the model_output_size gives us the amount of new samples we can write into the buffer for each bath.
         float structs_per_buffer = std::ceil((float) newConfig.hostBufferSize / (float) (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size));
-        float structs_per_max_inference_time = std::ceil((float) inferenceConfig.m_max_inference_time / (float) (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size));
+        float structs_per_max_inference_time = std::ceil((float) max_inference_time_in_samples / (float) (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size));
         // ceil to full buffers
         structs_per_max_inference_time = std::ceil(structs_per_max_inference_time/structs_per_buffer) * structs_per_buffer;
         // we can have multiple max_inference_times per buffer
-        float max_inference_times_per_buffer = std::max(std::floor((float) newConfig.hostBufferSize / (float) (inferenceConfig.m_max_inference_time)), 1.f);
+        float max_inference_times_per_buffer = std::max(std::floor((float) newConfig.hostBufferSize / (float) (max_inference_time_in_samples)), 1.f);
         // minimum number of structs necessary to keep available inference queues where the ringbuffer can push to if we have n_free_threads > structs_per_buffer
         // int n_structs = (int) (structs_per_buffer + structs_per_max_inference_time);
         // but because we can have multiple instances (sessions) that use the same threadpool, we have to multiply structs_per_max_inference_time with the struct_per_buffer
@@ -48,7 +50,6 @@ SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, Inferenc
         }
 
         timeStamps.reserve(n_structs);
-
     }
 
 } // namespace anira

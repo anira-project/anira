@@ -22,9 +22,12 @@ anira::InferenceConfig hybridNNConfig(
     {2048, 150, 1}, // Input shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
     {2048, 1}, // Output shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
 #endif
-    2048, // Batch size
-    150, // Model input size
-    1, // Model output size
+    2048, // Batch size (required)
+    150, // Model input size (required)
+    1, // Model output size (required)
+
+    42.66f, // Maximum inference time in ms when processing all batches (required)
+    0, // Internal model latency in samples shen processing all batches (optional: default = 0)
     false, // Warm-up flag (optional: default = false)
     0.5f, // Wait for inference in process block to reduce latency, 0.f is no waiting and 0.5f is wait for half a buffertime. Example buffer size 512 and sample rate 48000 Hz, a value of 0.5f = 5.33 ms (optional: default = 0.5f)
     false, // Bind one instance (plugin or jack client) to one thread (optional: default = false), this needs to be set to true if you use a stateful model 
