@@ -27,8 +27,9 @@ SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, Inferenc
         sendBuffer.initializeWithPositions(1, (size_t) newConfig.hostSampleRate * 6); // TODO find appropriate size dynamically
         receiveBuffer.initializeWithPositions(1, (size_t) newConfig.hostSampleRate * 6); // TODO find appropriate size dynamically
 
-        float structs_per_buffer = std::ceil((float) newConfig.hostBufferSize / (float) (inferenceConfig.m_batch_size * inferenceConfig.m_model_input_size));
-        float structs_per_max_inference_time = std::ceil((float) inferenceConfig.m_max_inference_time / (float) (inferenceConfig.m_batch_size * inferenceConfig.m_model_input_size));
+        // We assume that the model_output_size gives us the amount of new samples we can write into the buffer for each bath.
+        float structs_per_buffer = std::ceil((float) newConfig.hostBufferSize / (float) (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size));
+        float structs_per_max_inference_time = std::ceil((float) inferenceConfig.m_max_inference_time / (float) (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size));
         // ceil to full buffers
         structs_per_max_inference_time = std::ceil(structs_per_max_inference_time/structs_per_buffer) * structs_per_buffer;
         // we can have multiple max_inference_times per buffer
@@ -43,7 +44,7 @@ SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, Inferenc
         n_structs *= 1; // TODO: before deployment we have to change this to 4
 
         for (int i = 0; i < n_structs; ++i) {
-            inferenceQueue.emplace_back(std::make_unique<ThreadSafeStruct>(inferenceConfig.m_batch_size, inferenceConfig.m_model_input_size_backend, inferenceConfig.m_model_output_size_backend));
+            inferenceQueue.emplace_back(std::make_unique<ThreadSafeStruct>(inferenceConfig.m_batch_size, inferenceConfig.m_model_input_size, inferenceConfig.m_model_output_size));
         }
 
         timeStamps.reserve(n_structs);

@@ -22,8 +22,8 @@ void LibtorchProcessor::prepareToPlay() {
     inputs.push_back(torch::zeros(inferenceConfig.m_model_input_shape_torch));
 
     if (inferenceConfig.m_warm_up) {
-        AudioBufferF input(1, inferenceConfig.m_batch_size * inferenceConfig.m_model_input_size_backend);
-        AudioBufferF output(1, inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size_backend);
+        AudioBufferF input(1, inferenceConfig.m_batch_size * inferenceConfig.m_model_input_size);
+        AudioBufferF output(1, inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size);
         processBlock(input, output);
     }
 }
@@ -41,7 +41,7 @@ void LibtorchProcessor::processBlock(AudioBufferF& input, AudioBufferF& output) 
     outputTensor = outputTensor.view({-1});
 
     // Extract the output tensor data
-    for (size_t i = 0; i < inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size_backend; i++) {
+    for (size_t i = 0; i < inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size; i++) {
         output.setSample(0, i, outputTensor[(int64_t) i].item<float>());
     }
 }

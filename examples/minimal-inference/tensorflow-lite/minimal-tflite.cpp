@@ -50,7 +50,7 @@ void minimal_inference(anira::InferenceConfig config) {
     }
 
     // Fill input tensor with data
-    const int inputSize = config.m_batch_size * config.m_model_input_size_backend;
+    const int inputSize = config.m_batch_size * config.m_model_input_size;
     std::vector<float> inputData;
     for (int i = 0; i < inputSize; i++) {
         inputData.push_back(i * 0.000001f);
@@ -64,7 +64,7 @@ void minimal_inference(anira::InferenceConfig config) {
     const TfLiteTensor* outputTensor = TfLiteInterpreterGetOutputTensor(interpreter, 0);
 
     // Extract the output tensor data
-    const int outputSize = config.m_batch_size * config.m_model_output_size_backend;
+    const int outputSize = config.m_batch_size * config.m_model_output_size;
     std::vector<float> outputData;
     outputData.reserve(outputSize);
 

@@ -28,8 +28,7 @@ struct ANIRA_API InferenceConfig {
 #endif
             size_t batch_size = 0,
             size_t model_input_size = 0,
-            size_t model_input_size_backend = 0,
-            size_t model_output_size_backend = 0,
+            size_t model_output_size = 0,
             size_t max_inference_time = 0,
             int model_latency = 0,
             bool warm_up = false,
@@ -53,8 +52,7 @@ struct ANIRA_API InferenceConfig {
 #endif
             m_batch_size(batch_size),
             m_model_input_size(model_input_size),
-            m_model_input_size_backend(model_input_size_backend),
-            m_model_output_size_backend(model_output_size_backend),
+            m_model_output_size(model_output_size),
             m_max_inference_time(max_inference_time),
             m_model_latency(model_latency),
             m_warm_up(warm_up),
@@ -83,8 +81,7 @@ struct ANIRA_API InferenceConfig {
 
     size_t m_batch_size;
     size_t m_model_input_size;
-    size_t m_model_input_size_backend;
-    size_t m_model_output_size_backend;
+    size_t m_model_output_size;
     size_t m_max_inference_time;
     int m_model_latency;
     bool m_warm_up;
@@ -112,8 +109,7 @@ struct ANIRA_API InferenceConfig {
 #endif
             m_batch_size == other.m_batch_size &&
             m_model_input_size == other.m_model_input_size &&
-            m_model_input_size_backend == other.m_model_input_size_backend &&
-            m_model_output_size_backend == other.m_model_output_size_backend &&
+            m_model_output_size == other.m_model_output_size &&
             m_max_inference_time == other.m_max_inference_time &&
             m_model_latency == other.m_model_latency &&
             m_warm_up == other.m_warm_up &&

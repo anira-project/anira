@@ -21,8 +21,8 @@ OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& config) :
     inputNames = {(char*) inputName->get()};
     outputNames = {(char*) outputName->get()};
 
-    inputSize = config.m_batch_size * config.m_model_input_size_backend;
-    outputSize = config.m_batch_size * config.m_model_output_size_backend;
+    inputSize = config.m_batch_size * config.m_model_input_size;
+    outputSize = config.m_batch_size * config.m_model_output_size;
 
     std::vector<int64_t> inputShape = config.m_model_input_shape_onnx;
     inputData.resize(inputSize, 0.0f);

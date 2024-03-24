@@ -104,11 +104,12 @@ void InferenceThreadPool::prepare(SessionElement& session, HostAudioConfig newCo
 }
 
 void InferenceThreadPool::newDataSubmitted(SessionElement& session) {
-    while (session.sendBuffer.getAvailableSamples(0) >= (session.inferenceConfig.m_batch_size * session.inferenceConfig.m_model_input_size)) {
+    // We assume that the model_output_size gives us the amount of new samples that we need to process. This can differ from the model_input_size because we might need to add some padding or past samples.
+    while (session.sendBuffer.getAvailableSamples(0) >= (session.inferenceConfig.m_batch_size * session.inferenceConfig.m_model_output_size)) {
         bool success = preProcess(session);
         // !success means that there is no free inferenceQueue
         if (!success) {
-            for (size_t i = 0; i < session.inferenceConfig.m_batch_size * session.inferenceConfig.m_model_input_size; ++i) {
+            for (size_t i = 0; i < session.inferenceConfig.m_batch_size * session.inferenceConfig.m_model_output_size; ++i) {
                 session.sendBuffer.popSample(0);
                 session.receiveBuffer.pushSample(0, 0.f);
             }

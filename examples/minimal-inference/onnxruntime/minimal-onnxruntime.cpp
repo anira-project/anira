@@ -40,7 +40,7 @@ void minimal_inference(anira::InferenceConfig config) {
 #endif
 
     // Define input data
-    const int inputSize = config.m_batch_size * config.m_model_input_size_backend;
+    const int inputSize = config.m_batch_size * config.m_model_input_size;
     std::vector<float> inputData;
     for (int i = 0; i < inputSize; i++) {
         inputData.push_back(i * 0.000001f);
@@ -82,7 +82,7 @@ void minimal_inference(anira::InferenceConfig config) {
     }
 
     // Define output vector
-    int outputSize = config.m_batch_size * config.m_model_output_size_backend;
+    int outputSize = config.m_batch_size * config.m_model_output_size;
     const float* outputData = outputTensors[0].GetTensorData<float>();
 
     // Extract the output tensor data

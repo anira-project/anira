@@ -42,8 +42,8 @@ void TFLiteProcessor::prepareToPlay() {
     outputTensor = TfLiteInterpreterGetOutputTensor(interpreter, 0);
 
     if (inferenceConfig.m_warm_up) {
-        AudioBufferF input(1, inferenceConfig.m_batch_size * inferenceConfig.m_model_input_size_backend);
-        AudioBufferF output(1, inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size_backend);
+        AudioBufferF input(1, inferenceConfig.m_batch_size * inferenceConfig.m_model_input_size);
+        AudioBufferF output(1, inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size);
         processBlock(input, output);
     }
 }

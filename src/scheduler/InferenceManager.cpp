@@ -31,13 +31,13 @@ void InferenceManager::prepare(HostAudioConfig newConfig) {
     init = true;
     bufferCount = 0;
 
-    size_t result = spec.hostBufferSize % (inferenceConfig.m_batch_size * inferenceConfig.m_model_input_size);
+    size_t result = spec.hostBufferSize % (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size);
     if (result == 0) {
         initSamples = inferenceConfig.m_max_inference_time + inferenceConfig.m_batch_size * inferenceConfig.m_model_latency;
     } else if (result > 0 && result < spec.hostBufferSize) {
         initSamples = inferenceConfig.m_max_inference_time + spec.hostBufferSize + inferenceConfig.m_batch_size * inferenceConfig.m_model_latency; //TODO not minimum possible
     } else {
-        initSamples = inferenceConfig.m_max_inference_time + (inferenceConfig.m_batch_size * inferenceConfig.m_model_input_size) + inferenceConfig.m_batch_size * inferenceConfig.m_model_latency;
+        initSamples = inferenceConfig.m_max_inference_time + (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size) + inferenceConfig.m_batch_size * inferenceConfig.m_model_latency;
     }
 }
 
