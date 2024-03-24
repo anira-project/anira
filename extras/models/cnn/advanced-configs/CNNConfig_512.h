@@ -20,7 +20,6 @@ static anira::InferenceConfig cnnConfig_512(
         {1, 512, 1},
 #endif
         1,
-        512,
         13844,
         512,
         512,

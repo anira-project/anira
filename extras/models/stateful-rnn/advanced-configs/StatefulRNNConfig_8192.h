@@ -23,7 +23,6 @@ static anira::InferenceConfig statefulRNNConfig_8192(
         8192,
         8192,
         8192,
-        8192,
         0,
         false,
         0.5f,

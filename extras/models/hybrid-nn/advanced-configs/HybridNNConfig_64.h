@@ -20,7 +20,6 @@ static anira::InferenceConfig hybridNNConfig_64(
         {64, 1},
 #endif
         64,
-        1,
         150,
         1,
         64,

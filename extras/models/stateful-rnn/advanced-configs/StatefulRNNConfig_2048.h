@@ -23,7 +23,6 @@ static anira::InferenceConfig statefulRNNConfig_2048(
         2048,
         2048,
         2048,
-        2048,
         0,
         false,
         0.5f,

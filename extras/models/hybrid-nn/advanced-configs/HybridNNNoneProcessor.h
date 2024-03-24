@@ -17,8 +17,8 @@ public:
                 auto readPtr = input.getReadPointer(channel);
 
                 for (size_t batch = 0; batch < inferenceConfig.m_batch_size; ++batch) {
-                    size_t baseIdx = batch * inferenceConfig.m_model_input_size_backend;
-                    writePtr[batch] = readPtr[inferenceConfig.m_model_input_size_backend - 1 + baseIdx];
+                    size_t baseIdx = batch * inferenceConfig.m_model_input_size;
+                    writePtr[batch] = readPtr[inferenceConfig.m_model_input_size - 1 + baseIdx];
                 }
             }
         }

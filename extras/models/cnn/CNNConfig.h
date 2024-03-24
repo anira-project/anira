@@ -22,7 +22,6 @@ static anira::InferenceConfig cnnConfig(
         {1, 2048, 1},
 #endif
         1,
-        2048,
         15380,
         2048,
         CNN_MAX_INFERENCE_TIME,

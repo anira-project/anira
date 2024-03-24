@@ -20,7 +20,6 @@ static anira::InferenceConfig small_cnnConfig_128(
         {1, 128, 1},
 #endif
         1,
-        128,
         260,
         128,
         128,

@@ -22,7 +22,6 @@ static anira::InferenceConfig hybridNNConfig(
         {2048, 1},
 #endif
         2048,
-        1,
         150,
         1,
         HYBRIDNN_MAX_INFERENCE_TIME,

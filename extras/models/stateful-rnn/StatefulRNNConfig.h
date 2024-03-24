@@ -24,7 +24,6 @@ static anira::InferenceConfig statefulRNNConfig(
         1,
         2048,
         2048,
-        2048,
         STATEFULRNN_MAX_INFERENCE_TIME,
         0,
         false,
