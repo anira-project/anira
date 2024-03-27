@@ -9,7 +9,7 @@ option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
 option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
 option(ANIRA_WITH_EXTRAS "Build with extras (clone example model repos)" OFF)
 option(ANIRA_WITH_EXAMPLES "Add Example Targets (juce plugin, benchmarks, minimal inference examples)" OFF)
-option(ANIRA_WITH_INSTALL "Add install targets" ON)
+option(ANIRA_WITH_INSTALL "Add install targets" OFF)
 
 # Select the backends for the inference engine, multiple backends can be selected
 option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
@@ -22,7 +22,7 @@ option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 
 set (PROJECT_NAME anira)
 
-project (${PROJECT_NAME} VERSION 0.0.1)
+project (${PROJECT_NAME} VERSION 0.0.2)
 
 # Sets the minimum macOS version, c++20 is only available from macOS 11.0
 if (APPLE)
