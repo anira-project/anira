@@ -3,8 +3,6 @@
 ![Build Status](https://github.com/tu-studio/anira/actions/workflows/build.yml/badge.svg)
 --------------------------------------------------------------------------------
 
-> **Note: This project is still a work in progress. We are actively developing and refining its features and documentation.**
-
 **anira** is a high-performance library designed to enable the real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing.
 
 ## Features
@@ -16,56 +14,159 @@
 - **Comprehensive Inference Engine Support**: Integrates common inference engines, LibTorch, ONNXRuntime, and TensorFlow Lite
 - **Built-in Benchmarking**: Includes tools for evaluating the real-time performance of neural networks
 
-### General usage
+## Usage
 
-| Class             | Description                                                                                                                   |
-|-------------------|-------------------------------------------------------------------------------------------------------------------------------|
-| `InferenceHandler` | Manages audio processing within real-time threads by routing audio input to inference threads and updating the buffer with processed audio. |
-| `PrePostProcessor` | Facilitates model-specific pre- and post-processing. Implement this class to customize processing steps before and after inference. |
-| `InferenceConfig`  | A configuration struct for defining model specifics, such as input/output sample counts, model details, batch size, and more. |
+An extensive anira usage guide can be found [here](docs/anira-usage.md).
 
-For more details checkout: [anira usage](docs/anira-usage.md)
+The basic usage of anira is as follows:
 
-### Install
-Build anira as shared library
+```cpp
+#include <anira/anira>
+
+// Create a model configuration struct for your neural network
+anira::InferenceConfig myNNConfig(
+    "path/to/your/model.onnx (or *.pt, *.tflite)", // Model path
+    {2048, 1, 150}, // Input shape
+    {2048, 1}, // Output shape
+    2048, // Batch size
+    150, // Model input size
+    1, // Model output size
+    42.66f // Maximum inference time in ms
+);
+
+// Create a pre- and post-processor instance
+anira::PrePostProcessor myPrePostProcessor;
+
+// Create an InferenceHandler instance
+anira::InferenceHandler inferenceHandler(myPostProcessor, myNNConfig);
+
+// Prepare audio data for inference
+anira::HostAudioConfig audioConfig {
+    1, // currently only mono is supported
+    bufferSize,
+    sampleRate
+};
+
+// Allocate memory for audio processing
+inferenceHandler.prepare(audioConfig);
+
+// Real-time safe audio processing in process callback of your application
+processBlock(float** audioData, int numSamples) {
+    inferenceHandler.process(audioData, numSamples);
+}
+// audioData now contains the processed audio samples
+```
+
+## Install
+
+### CMake
+
+anira can be easily integrated into your CMake project. Either add anira as a submodule or download the pre-built binaries from the [releases page](https://github.com/tu-studio/anira/releases/latest).
+
+#### Add as a git submodule
+
+```bash
+# Add anira repo as a submodule
+git submodule add https://github.com/tu-studio/anira.git modules/anira
+```
+
+In your CMakeLists.txt, add anira as a subdirectory and link your target to the anira library:
+
+```cmake
+# Setup your project and target
+project(your_project)
+add_executable(your_target main.cpp ...)
+
+# Add anira as a subdirectory
+add_subdirectory(modules/anira)
+
+#Link your target to the anira library
+target_link_libraries(your_target anira::anira)
+```
+
+#### With pre-built binaries
+
+Download the pre-built binaries from your operating system and architecture from the [releases page](https://github.com/tu-studio/anira/releases/latest).
+
+```cmake
+# Setup your project and target
+project(your_project)
+add_executable(your_target main.cpp ...)
+
+# Add the path to the anira library as cmake prefix path and find the package
+list(APPEND CMAKE_PREFIX_PATH "path/to/anira")
+find_package(anira REQUIRED)
+
+# Link your target to the anira library
+target_link_libraries(your_target anira::anira)
+```
+
+### Build from source
+
+You can also build anira from source using CMake. All dependencies are automatically installed during the build process.
+
 ```bash
 git clone https://github.com/tu-studio/anira
-cmake . -B cmake-build-release -DCMAKE_BUILD_TYPE=Release
-cmake --build cmake-build-release --config Release --target anira
+cmake . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release --target anira
 ```
-**Note:** The CMake build automatically installs all dependencies for the following targets:
- - Benchmarks (disable with ```-DANIRA_WITH_BENCHMARK=OFF```)
- - Example neural models (disable with ```-DANIRA_WITH_EXTRAS=OFF```)
- - JUCE plugin example (disable with ```-DANIRA_BUILD_EXAMPLES=OFF```)
- - Minimum inference example (disable with ```-DANIRA_BUILD_EXAMPLES=OFF```)
 
-**Moreover** by default, all three inference engines are installed. You can:
-- Disable this automatism with ```-DANIRA_BACKEND_ALL=OFF```
-- Enable specific backends as needed:
-  - LibTorch: ```-DANIRA_WITH_LIBTORCH=ON```
-  - OnnxRuntime: ```-DANIRA_WITH_ONNXRUNTIME=ON```
-  - Tensrflow Lite. ```-DANIRA_WITH_TFLITE=ON```
+#### Build options
+
+By default, all three inference engines are installed. You can disable specific backends as needed:
+
+- LibTorch: ```-DANIRA_WITH_LIBTORCH=OFF```
+- OnnxRuntime: ```-DANIRA_WITH_ONNXRUNTIME=OFF```
+- Tensrflow Lite. ```-DANIRA_WITH_TFLITE=OFF```
+
+Moreover the following options are available:
+
+- Build anira with benchmark capabilities: ```-DANIRA_WITH_BENCHMARK=ON```
+- Populate example neural models: ```-DANIRA_WITH_EXTRAS=ON```
+- Build example applications: ```-DANIRA_BUILD_EXAMPLES=ON```
+
+**Note**: The example applications require the example neural models to be populated and therefore the ```-DANIRA_WITH_EXTRAS=ON``` option.
 
 ### Documentation
-Detailed documentation on **anira**'s API and how to integrate custom neural networks will be available soon in our upcoming wiki. In the meantime, check out the examples below.
+
+Detailed documentation on anira's API and will be available soon in our upcoming wiki. For using anira with your custom models, check out the [extensive usage guide](docs/anira-usage.md).
+
+### Benchmark capabilities
+
+anira allows users to benchmark and compare the inference performance of different neural network models, backends, and audio configurations. The benchmarking capabilities can be enabled during the build process by setting the ```-DANIRA_WITH_BENCHMARK=ON`` flag. The benchmarks are implemented using the [Google Benchmark](https://github.com/google/benchmark) and [Google Test](https://github.com/google/googletest) libraries. Both libraries are automatically linked with the anira library in the build process when benchmarking is enabled. To provide a reproducible and easy-to-use benchmarking environment, anira provides a custom Google benchmark fixture `anira::benchmark::ProcessBlockFixture` that is used to define benchmarks. This fixture offers many useful functions for setting up and running benchmarks. For more information on how to use the benchmarking capabilities, check out the [benchmarking guide](docs/anira-benchmark.md).
 
 ### Examples
-- [juce-plugin-example](https://github.com/tu-studio/anira/tree/main/examples/juce-audio-plugin): Demonstrates how to use **anira** with three different neural models in a real-time audio application.
-- [anira-rt-principle-check](https://github.com/tu-studio/anira-rt-principle-check): Shows how to integrate **anira** as a submodule with CMake.
-  
+
+#### Build in examples
+
+- [Simple JUCE Audio Plugin](examples/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
+- [Benchmark](examples/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
+- [Minimal Inference](examples/minimal-inference/): Demonstrates how minimal inference applications can be implemented in all three backends.
+
+#### Other examples
+
+- [nn-inference-template](https://github.com/Torsion-Audio/nn-inference-template): Another more JUCE / VST3-Plugin that uses anira for real-time safe neural network inference. This plugin is more complex than the simple JUCE Audio Plugin example and has a more appealing GUI.
+
+### Real-time safety
+
+anira's real-time safety is checked in [this](https://github.com/tu-studio/anira-rt-principle-check) repository with the [radsan](https://github.com/realtime-sanitizer/radsan) sanitizer.
+
 ### Citation
-If you use Anira in your research or project, please cite our software: 
-```
+
+If you use Anira in your research or project, please cite our software:
+
+```cite
 @software{anira2024ackvaschulz,
-  author = {Fares Schulz and Valentin Ackva},
+  author = {Valentin Ackva and Fares Schulz},
   title = {anira: an architecture for neural network inference in real-time audio application},
   url = {https://github.com/tu-studio/anira},
-  version = {0.0.1-alpha},
+  version = {x.x.x},
   year = {2024},
 }
 ```
 
 ## Contributors
+
 - [Valentin Ackva](https://github.com/vackva)
 - [Fares Schulz](https://github.com/faressc)
 
