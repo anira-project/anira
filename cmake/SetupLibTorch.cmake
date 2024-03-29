@@ -56,7 +56,7 @@ else()
         set(LIBTORCH_URL https://download.pytorch.org/libtorch/cpu/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}.${LIB_LIBTORCH_PRE_BUILD_LIB_TYPE})
     endif()
 
-    message(STATUS "LibTorchURL: ${LIBTORCH_URL}")
+    message(STATUS "Downloading: ${LIBTORCH_URL}")
 
     set(LIBTORCH_PATH ${CMAKE_BINARY_DIR}/import/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}.${LIB_LIBTORCH_PRE_BUILD_LIB_TYPE})
 
