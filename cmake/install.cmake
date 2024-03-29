@@ -49,8 +49,9 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/anira
 install(TARGETS ${PROJECT_NAME}
     EXPORT "aniraTargets"
     # these get default values from GNUInstallDirs
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} # lib
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} # lib
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} # .dll files
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} # .so or .dylib files
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} # .lib files
 )
 
 # libtorch has cmake config files that we can use to install the library later with find_package and then just link to it

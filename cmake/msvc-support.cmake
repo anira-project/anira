@@ -9,7 +9,12 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE ANIRA_EXPORTS)
 file(GLOB_RECURSE ANIRA_DLL "${anira_BINARY_DIR}/*anira.dll")
 
 # Make a list of all necessary DLLs for the project
-set(NECESSARY_DLLS ${ANIRA_DLL} PARENT_SCOPE)
+get_directory_property(hasParent PARENT_DIRECTORY)
+if(hasParent)
+    set(NECESSARY_DLLS ${ANIRA_DLL} PARENT_SCOPE)
+else ()
+    set(NECESSARY_DLLS ${ANIRA_DLL})
+endif()
 
 # get_directory_property(hasParent PARENT_DIRECTORY)
 # if(hasParent)
