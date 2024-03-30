@@ -139,7 +139,7 @@ jobs:
                     elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
                         zip -vr ${{ env.PRODUCT_NAME }}.zip ${{ env.PRODUCT_NAME }}/ -x "*.DS_Store"
                     elif [ "${{ matrix.name }}" == "Windows-x86_64" ]; then
-                        tar -a -c -f ${{ env.PRODUCT_NAME }}.zip ${{ env.PRODUCT_NAME }}/
+                        zip -r ${{ env.PRODUCT_NAME }}.zip ${{ env.PRODUCT_NAME }}/
                     else
                         echo "Unknown OS";
                     fi;
