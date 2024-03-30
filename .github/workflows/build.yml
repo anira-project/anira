@@ -139,7 +139,7 @@ jobs:
                     elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
                         zip -vr ${{ env.PRODUCT_NAME }}.zip ${{ env.PRODUCT_NAME }}/ -x "*.DS_Store"
                     elif [ "${{ matrix.name }}" == "Windows-x86_64" ]; then
-                        zip -r ${{ env.PRODUCT_NAME }}.zip ${{ env.PRODUCT_NAME }}/
+                        pwsh -command "Compress-Archive -Path '${{ env.PRODUCT_NAME }}/*' -DestinationPath '${{ env.PRODUCT_NAME }}.zip'"
                     else
                         echo "Unknown OS";
                     fi;
