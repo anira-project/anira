@@ -128,6 +128,22 @@ jobs:
                 run: |
                     mkdir -p artefacts;
                     mv "${{ env.BUILD_DIR }}/${{ env.PROJECT_NAME }}-${{ env.ANIRA_VERSION }}" ${{ env.PACKAGE_DIR }};
+
+            # We need to import the apple developer certificate so that we can codesign our binaries
+            -   name: import certificates (macOS)
+                uses: apple-actions/import-codesign-certs@v2
+                if: ${{ matrix.os == 'macOS-latest' }}
+                with:
+                    # GitHub encrypted secrets
+                    p12-file-base64: ${{ secrets.DEV_ID_APP_CERT }}
+                    p12-password: ${{ secrets.DEV_ID_APP_PWD }}
+            
+            # Codesigning all the libraries
+            -   name: codesign (macOS)
+                if: ${{ matrix.os == 'macOS-latest' }}
+                run: |
+                    # codesign all libs
+                    codesign --force -s "${{ secrets.DEV_ID_APP }}" -v ${{ env.PACKAGE_DIR }}/lib/*.dylib --deep --strict --options=runtime --timestamp;
             
             # Zip the artefact
             -   name: zip artefacts
@@ -139,7 +155,7 @@ jobs:
                     elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
                         zip -vr ${{ env.PRODUCT_NAME }}.zip ${{ env.PRODUCT_NAME }}/ -x "*.DS_Store"
                     elif [ "${{ matrix.name }}" == "Windows-x86_64" ]; then
-                        pwsh -command "Compress-Archive -Path '${{ env.PRODUCT_NAME }}/*' -DestinationPath '${{ env.PRODUCT_NAME }}.zip'"
+                        pwsh -command "Compress-Archive -Path '${{ env.PRODUCT_NAME }}/' -DestinationPath '${{ env.PRODUCT_NAME }}.zip'"
                     else
                         echo "Unknown OS";
                     fi;
