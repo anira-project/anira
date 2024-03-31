@@ -62,7 +62,7 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/anira
 install(TARGETS ${PROJECT_NAME}
     EXPORT "aniraTargets"
     # these get default values from GNUInstallDirs
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} # .dll files
+    RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR} # .dll files
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} # .so or .dylib files
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} # .lib files
 )
