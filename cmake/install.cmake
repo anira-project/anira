@@ -25,20 +25,33 @@ endif()
 
 # at install the rpath is cleared by default so we have to set it again for the installed shared library to find the other libraries
 # in this case we set the rpath to the directories where the other libraries are installed
-# $ORIGIN is a special token that gets replaced by the directory of the library at runtime from that point we could navigate to the other libraries
-# it is a little strange but the onnxruntime library and libtorch work without this setting in the JUCE example... but tensorflowlite does not
-set_target_properties(${PROJECT_NAME}
-    PROPERTIES
-        INSTALL_RPATH "$ORIGIN"
-)
-
-# This is necessary for the gtest_main library to find the gtest library at runtime
-if (ANIRA_WITH_BENCHMARK)
+# $ORIGIN in Linux is a special token that gets replaced by the directory of the library at runtime from that point we could navigate to the other libraries
+# The same token for macOS is @loader_path
+if(LINUX)
+    set_target_properties(${PROJECT_NAME}
+        PROPERTIES
+            INSTALL_RPATH "$ORIGIN"
+    )
+    # This is necessary for the gtest_main library to find the gtest library at runtime
+    if (ANIRA_WITH_BENCHMARK)
     set_target_properties(gtest_main
         PROPERTIES
             INSTALL_RPATH "$ORIGIN"
     )
+    endif()
+elseif(APPLE)
+    set_target_properties(${PROJECT_NAME}
+    PROPERTIES
+        INSTALL_RPATH "@loader_path;/opt/intel/oneapi/mkl/2023.0.0/lib;/opt/intel/oneapi/mkl/2023.0.0/lib/intel64;/opt/intel/oneapi/mkl/2023.0.0/lib/intel64_win;/opt/intel/oneapi/mkl/2023.0.0/lib/win-x64"
+    )
+    if (ANIRA_WITH_BENCHMARK)
+    set_target_properties(gtest_main
+        PROPERTIES
+            INSTALL_RPATH "@loader_path"
+    )
+    endif()
 endif()
+
 
 # the variant with PUBLIC_HEADER property unfortunately does not preserve the folder structure therefore we use the simple install directory command
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/anira
@@ -55,11 +68,7 @@ install(TARGETS ${PROJECT_NAME}
 )
 
 # libtorch has cmake config files that we can use to install the library later with find_package and then just link to it
-# if we would implement the install manually we would have to include the include and lib directories to our install interface
 if(ANIRA_WITH_LIBTORCH)
-    # install(DIRECTORY "${LIBTORCH_ROOTDIR}/"
-    #     DESTINATION "${CMAKE_INSTALL_PREFIX}/modules/${LIBTORCH_DIR_NAME}"
-    # )
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/include/"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     )
