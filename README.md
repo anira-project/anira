@@ -111,7 +111,7 @@ cmake . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --target anira
 ```
 
-#### Build options
+### Build options
 
 By default, all three inference engines are installed. You can disable specific backends as needed:
 
@@ -127,31 +127,31 @@ Moreover the following options are available:
 
 **Note**: The example applications require the example neural models to be populated and therefore the ```-DANIRA_WITH_EXTRAS=ON``` option.
 
-### Documentation
+## Documentation
 
 Detailed documentation on anira's API and will be available soon in our upcoming wiki. For using anira with your custom models, check out the [extensive usage guide](docs/anira-usage.md).
 
-### Benchmark capabilities
+## Benchmark capabilities
 
 anira allows users to benchmark and compare the inference performance of different neural network models, backends, and audio configurations. The benchmarking capabilities can be enabled during the build process by setting the ```-DANIRA_WITH_BENCHMARK=ON`` flag. The benchmarks are implemented using the [Google Benchmark](https://github.com/google/benchmark) and [Google Test](https://github.com/google/googletest) libraries. Both libraries are automatically linked with the anira library in the build process when benchmarking is enabled. To provide a reproducible and easy-to-use benchmarking environment, anira provides a custom Google benchmark fixture `anira::benchmark::ProcessBlockFixture` that is used to define benchmarks. This fixture offers many useful functions for setting up and running benchmarks. For more information on how to use the benchmarking capabilities, check out the [benchmarking guide](docs/benchmark-usage.md).
 
-### Examples
+## Examples
 
-#### Build in examples
+### Build in examples
 
 - [Simple JUCE Audio Plugin](examples/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
 - [Benchmark](examples/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
 - [Minimal Inference](examples/minimal-inference/): Demonstrates how minimal inference applications can be implemented in all three backends.
 
-#### Other examples
+### Other examples
 
 - [nn-inference-template](https://github.com/Torsion-Audio/nn-inference-template): Another more JUCE / VST3-Plugin that uses anira for real-time safe neural network inference. This plugin is more complex than the simple JUCE Audio Plugin example and has a more appealing GUI.
 
-### Real-time safety
+## Real-time safety
 
 anira's real-time safety is checked in [this](https://github.com/tu-studio/anira-rt-principle-check) repository with the [radsan](https://github.com/realtime-sanitizer/radsan) sanitizer.
 
-### Citation
+## Citation
 
 If you use Anira in your research or project, please cite our software:
 
