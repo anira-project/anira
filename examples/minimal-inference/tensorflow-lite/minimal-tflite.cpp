@@ -20,8 +20,6 @@ Licence: Apache 2.0
         exit(1);                                                 \
     }
 
-#define MODEL_TO_USE 3
-
 void minimal_inference(anira::InferenceConfig config) {
     std::cout << "Minimal TensorFlow-Lite example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
