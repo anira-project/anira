@@ -3,16 +3,16 @@
 ![Build Status](https://github.com/tu-studio/anira/actions/workflows/build.yml/badge.svg)
 --------------------------------------------------------------------------------
 
-**anira** is a high-performance library designed to enable the real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing.
+**anira** is a high-performance library designed to enable easy real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing.
 
 ## Features
 
 - **Real-time Safe Execution**: Ensures deterministic runtimes suitable for real-time audio applications
 - **Thread Pool Management**: Utilizes a static thread pool to avoid oversubscription and enables efficient parallel inference
-- **Cross-Platform Compatibility**: Works seamlessly on MacOS, Linux, and Windows
-- **Flexible Neural Network Integration**: Supports a variety of neural network models, including stateful and stateless models
-- **Comprehensive Inference Engine Support**: Integrates common inference engines, LibTorch, ONNXRuntime, and TensorFlow Lite
 - **Built-in Benchmarking**: Includes tools for evaluating the real-time performance of neural networks
+- **Comprehensive Inference Engine Support**: Integrates common inference engines, LibTorch, ONNXRuntime, and TensorFlow Lite
+- **Flexible Neural Network Integration**: Supports a variety of neural network models, including stateful and stateless models
+- **Cross-Platform Compatibility**: Works seamlessly on macOS, Linux, and Windows
 
 ## Usage
 
@@ -123,17 +123,18 @@ Moreover the following options are available:
 
 - Build anira with benchmark capabilities: ```-DANIRA_WITH_BENCHMARK=ON```
 - Populate example neural models: ```-DANIRA_WITH_EXTRAS=ON```
-- Build example applications: ```-DANIRA_BUILD_EXAMPLES=ON```
+- Build example applications: ```-DANIRA_WITH_EXAMPLES=ON```
 
 **Note**: The example applications require the example neural models to be populated and therefore the ```-DANIRA_WITH_EXTRAS=ON``` option.
 
 ## Documentation
 
-Detailed documentation on anira's API and will be available soon in our upcoming wiki. For using anira with your custom models, check out the [extensive usage guide](docs/anira-usage.md).
+For using anira with your custom models, check out the [extensive usage guide](docs/anira-usage.md).
+Detailed documentation on anira's API and will be available soon in our upcoming wiki.
 
 ## Benchmark capabilities
 
-anira allows users to benchmark and compare the inference performance of different neural network models, backends, and audio configurations. The benchmarking capabilities can be enabled during the build process by setting the ```-DANIRA_WITH_BENCHMARK=ON`` flag. The benchmarks are implemented using the [Google Benchmark](https://github.com/google/benchmark) and [Google Test](https://github.com/google/googletest) libraries. Both libraries are automatically linked with the anira library in the build process when benchmarking is enabled. To provide a reproducible and easy-to-use benchmarking environment, anira provides a custom Google benchmark fixture `anira::benchmark::ProcessBlockFixture` that is used to define benchmarks. This fixture offers many useful functions for setting up and running benchmarks. For more information on how to use the benchmarking capabilities, check out the [benchmarking guide](docs/benchmark-usage.md).
+anira allows users to benchmark and compare the inference performance of different neural network models, backends, and audio configurations. The benchmarking capabilities can be enabled during the build process by setting the ```-DANIRA_WITH_BENCHMARK=ON``` flag. The benchmarks are implemented using the [Google Benchmark](https://github.com/google/benchmark) and [Google Test](https://github.com/google/googletest) libraries. Both libraries are automatically linked with the anira library in the build process when benchmarking is enabled. To provide a reproducible and easy-to-use benchmarking environment, anira provides a custom Google benchmark fixture `anira::benchmark::ProcessBlockFixture` that is used to define benchmarks. This fixture offers many useful functions for setting up and running benchmarks. For more information on how to use the benchmarking capabilities, check out the [benchmarking guide](docs/benchmark-usage.md).
 
 ## Examples
 
@@ -153,7 +154,7 @@ anira's real-time safety is checked in [this](https://github.com/tu-studio/anira
 
 ## Citation
 
-If you use Anira in your research or project, please cite our software:
+If you use anira in your research or project, please cite our work:
 
 ```cite
 @software{anira2024ackvaschulz,
