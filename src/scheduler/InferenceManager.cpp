@@ -32,7 +32,7 @@ void InferenceManager::prepare(HostAudioConfig newConfig) {
 
     size_t max_inference_time_in_samples = (size_t) std::ceil(inferenceConfig.m_max_inference_time * spec.hostSampleRate / 1000);
 
-    float divisor = (float) spec.hostBufferSize / (float) inferenceConfig.m_batch_size * (float) inferenceConfig.m_model_output_size;
+    float divisor = (float) spec.hostBufferSize / ((float) inferenceConfig.m_batch_size * (float) inferenceConfig.m_model_output_size);
     size_t remainder = spec.hostBufferSize % (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size);
 
     if (remainder == 0) {
