@@ -22,7 +22,7 @@ option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 
 set (PROJECT_NAME anira)
 
-project (${PROJECT_NAME} VERSION 0.0.5)
+project (${PROJECT_NAME} VERSION 0.0.6)
 
 # Sets the minimum macOS version, c++20 is only available from macOS 11.0
 if (APPLE)
