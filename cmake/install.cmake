@@ -54,10 +54,10 @@ elseif(APPLE)
             message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES and CMAKE_HOST_SYSTEM_PROCESSOR not defined.")
         endif()
     endif()
-    # set_target_properties(${PROJECT_NAME}
-    #     PROPERTIES
-    #         INSTALL_RPATH "${OSX_RPATHS}"
-    # )
+    set_target_properties(${PROJECT_NAME}
+        PROPERTIES
+            INSTALL_RPATH "${OSX_RPATHS}"
+    )
     if (ANIRA_WITH_BENCHMARK)
     set_target_properties(gtest_main
         PROPERTIES
