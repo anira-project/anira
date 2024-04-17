@@ -7,7 +7,10 @@ add_executable(minimal-libtorch
   minimal-libtorch.cpp
 )
 
-target_link_libraries(minimal-libtorch anira)
+target_link_libraries(minimal-libtorch
+  anira::anira
+  "${TORCH_LIBRARIES}"
+)
 
 if (MSVC)
     foreach(DLL ${NECESSARY_DLLS})

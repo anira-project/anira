@@ -7,7 +7,10 @@ add_executable(minimal-onnxruntime
   minimal-onnxruntime.cpp
 )
 
-target_link_libraries(minimal-onnxruntime anira)
+target_link_libraries(minimal-onnxruntime
+  anira::anira
+  onnxruntime
+)
 
 if (MSVC)
     foreach(DLL ${NECESSARY_DLLS})

@@ -7,7 +7,10 @@ add_executable(minimal-tflite
   minimal-tflite.cpp
 )
 
-target_link_libraries(minimal-tflite anira)
+target_link_libraries(minimal-tflite
+  anira::anira
+  tensorflowlite_c
+)
 
 if (MSVC)
     foreach(DLL ${NECESSARY_DLLS})

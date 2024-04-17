@@ -128,10 +128,9 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
 )
 
-# link the libraries for the backends to the anira library, private because the backends only need to be linked to the anira library source files
-
-# If we try to link the torch libraries publicly on macOS arm and link the anira library to another project, we get the following error:
+# If we try to link the torch libraries publicly on Apple Silicon Systems and link the anira library to another project, we get the following error:
 # Target "torch_cpu" not found. This should not happen, because the torch_cpu library is an internal target of the torch library and should not be linked to other projects: https://stackoverflow.com/questions/64084656/cmake-cant-find-the-external-libraries-when-subdirectory-is-used-to-build-depend
+# But we do not need to link the inference engines publicly, because the anira library is the only library that uses them (except for the minimal inference examples, where we link the inference engines directly to the executable).
 if(ANIRA_WITH_LIBTORCH)
     target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
 endif()
