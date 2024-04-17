@@ -132,7 +132,11 @@ target_compile_definitions(${PROJECT_NAME}
 # Target "torch_cpu" not found. This should not happen, because the torch_cpu library is an internal target of the torch library and should not be linked to other projects: https://stackoverflow.com/questions/64084656/cmake-cant-find-the-external-libraries-when-subdirectory-is-used-to-build-depend
 # But we do not need to link the inference engines publicly, because the anira library is the only library that uses them (except for the minimal inference examples, where we link the inference engines directly to the executable).
 if(ANIRA_WITH_LIBTORCH)
-    target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
+    if (MSVC)
+        target_link_libraries(${PROJECT_NAME} PUBLIC ${TORCH_LIBRARIES})
+    else()
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
+    endif()
 endif()
 
 # The onnxruntime library requires PUBLIC linking because otherwise "_OrtGetApiBase" symbol is not found
