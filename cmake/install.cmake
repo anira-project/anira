@@ -40,9 +40,23 @@ if(LINUX)
     )
     endif()
 elseif(APPLE)
+    set(OSX_RPATHS "@loader_path")
+    if (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+        list(APPEND OSX_RPATHS "/opt/intel/oneapi/mkl/2023.0.0/lib;/opt/intel/oneapi/mkl/2023.0.0/lib/intel64;/opt/intel/oneapi/mkl/2023.0.0/lib/intel64_win;/opt/intel/oneapi/mkl/2023.0.0/lib/win-x64")
+    elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+        list(APPEND OSX_RPATHS "/opt/homebrew/opt/libomp/lib")
+    else()
+        if (CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64")
+            list(APPEND OSX_RPATHS "/opt/intel/oneapi/mkl/2023.0.0/lib;/opt/intel/oneapi/mkl/2023.0.0/lib/intel64;/opt/intel/oneapi/mkl/2023.0.0/lib/intel64_win;/opt/intel/oneapi/mkl/2023.0.0/lib/win-x64")
+        elseif(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
+            list(APPEND OSX_RPATHS "/opt/homebrew/opt/libomp/lib")
+        else()
+            message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES and CMAKE_HOST_SYSTEM_PROCESSOR not defined.")
+        endif()
+    endif()
     set_target_properties(${PROJECT_NAME}
-    PROPERTIES
-        INSTALL_RPATH "@loader_path;/opt/intel/oneapi/mkl/2023.0.0/lib;/opt/intel/oneapi/mkl/2023.0.0/lib/intel64;/opt/intel/oneapi/mkl/2023.0.0/lib/intel64_win;/opt/intel/oneapi/mkl/2023.0.0/lib/win-x64"
+        PROPERTIES
+            INSTALL_RPATH "${OSX_RPATHS}"
     )
     if (ANIRA_WITH_BENCHMARK)
     set_target_properties(gtest_main

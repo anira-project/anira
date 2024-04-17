@@ -30,6 +30,9 @@ if (APPLE)
 	if(CMAKE_OSX_DEPLOYMENT_TARGET)
 		message("The minimum macOS version is set to " $CACHE{CMAKE_OSX_DEPLOYMENT_TARGET}.)
 	endif()
+    if (NOT (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_OSX_ARCHITECTURES STREQUAL ""))
+        message(FATAL_ERROR "The macOS architectures must be set to either 'arm64', 'x86_64', or an empty string. Universal binaries are not supported, because the inference engines do not support them. Please set the CMAKE_OSX_ARCHITECTURES variable to either 'arm64', 'x86_64', or leave it empty.")
+    endif()
 endif ()
 
 # Sets the cpp language minimum, 20 because of new semaphore types
@@ -97,7 +100,7 @@ target_sources(${PROJECT_NAME}
         src/PrePostProcessor.cpp
 )
 
-# add the include directories for the backends to the build interface
+# add the include directories for the backends to the build interface, public because the anira headers include the backend headers
 foreach(HEADER_DIR ${BACKEND_BUILD_HEADER_DIRS})
     target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
         $<BUILD_INTERFACE:${HEADER_DIR}>
@@ -125,18 +128,21 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
 )
 
-# Link backend-specific libraries conditionally
-# We use the PUBLIC keyword here to make sure that we don't get the DSO missing from command line error
+# link the libraries for the backends to the anira library, private because the backends only need to be linked to the anira library source files
+
+# If we try to link the torch libraries publicly on macOS arm and link the anira library to another project, we get the following error:
+# Target "torch_cpu" not found. This should not happen, because the torch_cpu library is an internal target of the torch library and should not be linked to other projects: https://stackoverflow.com/questions/64084656/cmake-cant-find-the-external-libraries-when-subdirectory-is-used-to-build-depend
 if(ANIRA_WITH_LIBTORCH)
-    target_link_libraries(${PROJECT_NAME} PUBLIC torch)
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
 endif()
 
+# The onnxruntime library requires PUBLIC linking because otherwise "_OrtGetApiBase" symbol is not found
 if(ANIRA_WITH_ONNXRUNTIME)
     target_link_libraries(${PROJECT_NAME} PUBLIC onnxruntime)
 endif()
 
 if(ANIRA_WITH_TFLITE)
-    target_link_libraries(${PROJECT_NAME} PUBLIC tensorflowlite_c)
+    target_link_libraries(${PROJECT_NAME} PRIVATE tensorflowlite_c)
 endif()
 
 if(ANIRA_WITH_BENCHMARK)
