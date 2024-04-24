@@ -3,6 +3,12 @@ import re
 import csv
 import numpy as np
 
+# Define log file paths
+log_file_paths = []
+log_file_paths.append(os.path.join(os.path.dirname(__file__), "./../logs/Linux_advanced.log"))
+log_file_paths.append(os.path.join(os.path.dirname(__file__), "./../logs/MacOS_advanced.log"))
+log_file_paths.append(os.path.join(os.path.dirname(__file__), "./../logs/Windows_advanced.log"))
+
 def create_folder(folder_name: str) -> None:
     try:
         os.mkdir(os.path.join(os.path.dirname(__file__), "./../" + folder_name))
@@ -143,9 +149,11 @@ def write_list_to_csv(file_path: str, list: list, append: bool=False, top_row_ar
 
 if __name__ == "__main__":
     create_folder("results")
-    listed_results = get_list_from_log(os.path.join(os.path.dirname(__file__), "./../logs/Linux.log"))
-    listed_results = get_list_from_log(os.path.join(os.path.dirname(__file__), "./../logs/macOS.log"), listed_results)
-    listed_results = get_list_from_log(os.path.join(os.path.dirname(__file__), "./../logs/Windows.log"), listed_results)
+    for i, log_file_path in enumerate(log_file_paths):
+        if i == 0:
+            listed_results = get_list_from_log(log_file_path)
+        else:
+            listed_results = get_list_from_log(log_file_path, listed_results)
     sequence_mean_results = get_sequence_statistics_from_list(listed_results, "sequence_mean")
     sequence_max_results = get_sequence_statistics_from_list(listed_results, "sequence_max")
     sequence_min_results = get_sequence_statistics_from_list(listed_results, "sequence_min")
