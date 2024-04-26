@@ -3,8 +3,9 @@
 
 #if WIN32
     #include <windows.h>
-#else
+#elif __linux__
     #include <pthread.h>
+    #include <sys/resource.h>
 #endif
 #include <thread>
 #include <iostream>
@@ -24,7 +25,7 @@ public:
 
     virtual void run() = 0;
 
-    static void elevateToRealTimePriority(std::thread::native_handle_type thread_native_handle);
+    static void elevateToRealTimePriority(std::thread::native_handle_type thread_native_handle, bool is_main_process = false);
     bool shouldExit();
 
 private:
