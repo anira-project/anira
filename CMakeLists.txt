@@ -98,6 +98,9 @@ target_sources(${PROJECT_NAME}
         # Interface
         src/InferenceHandler.cpp
         src/PrePostProcessor.cpp
+
+        # System
+        src/system/RealtimeThread.cpp
 )
 
 # add the include directories for the backends to the build interface, public because the anira headers include the backend headers
@@ -134,7 +137,7 @@ target_compile_definitions(${PROJECT_NAME}
 if(ANIRA_WITH_LIBTORCH)
     # On Windows, we need to link the torch libraries publicly, because otherwise we get errors like LNK2001: unresolved external symbol "__declspec(dllimport) unsigned short const caffe2::detail::detail_guard_long_unique_std_vector_long_metadata_index"
     # TODO: Check if this has to do with dllimport/dllexport settings in the anira API
-    if (MSVC)
+    if (MSVC OR LINUX)
         target_link_libraries(${PROJECT_NAME} PUBLIC ${TORCH_LIBRARIES})
     else()
         target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})

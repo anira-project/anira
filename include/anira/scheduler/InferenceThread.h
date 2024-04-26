@@ -5,6 +5,8 @@
 #include <memory>
 #include <vector>
 
+#include "../system/RealtimeThread.h"
+
 #ifdef USE_LIBTORCH
     #include "../backends/LibTorchProcessor.h"
 #endif
@@ -19,33 +21,21 @@
 #include "SessionElement.h"
 #include "../utils/AudioBuffer.h"
 
-#if WIN32
-    #include <windows.h>
-#else
-    #include <pthread.h>
-#endif
-
 namespace anira {
     
-class ANIRA_API InferenceThread {
+class ANIRA_API InferenceThread : public system::RealtimeThread {
 public:
     InferenceThread(std::counting_semaphore<1000>& globalSemaphore, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& sessions);
     InferenceThread(std::counting_semaphore<1000>& globalSemaphore, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID);
-    ~InferenceThread();
+    ~InferenceThread() = default;
 
-    void start();
-    void run();
-    void stop();
+    void run() override;
     int getSessionID() const { return sessionID; }
-
-    void setRealTimeOrLowerPriority();
 
 private:
     void inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output);
 
 private:
-    std::thread thread;
-    std::atomic<bool> shouldExit;
     std::counting_semaphore<1000>& globalSemaphore;
     std::vector<std::shared_ptr<SessionElement>>& sessions;
     int sessionID = -1;
