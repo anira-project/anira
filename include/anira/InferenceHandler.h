@@ -4,7 +4,7 @@
 #include "scheduler/InferenceManager.h"
 #include "PrePostProcessor.h"
 #include "InferenceConfig.h"
-#include "anira/system/AnriaConfig.h"
+#include "anira/system/AniraConfig.h"
 
 namespace anira {
 
