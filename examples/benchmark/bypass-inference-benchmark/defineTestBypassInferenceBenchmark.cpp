@@ -3,7 +3,7 @@
 #include <anira/anira.h>
 
 TEST(Benchmark, BypassInference){
-#if __linux__
+#if __linux__ || __APPLE__
     pthread_t self = pthread_self();
 #elif WIN32
     HANDLE self = GetCurrentThread();

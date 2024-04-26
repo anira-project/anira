@@ -6,6 +6,9 @@
 #elif __linux__
     #include <pthread.h>
     #include <sys/resource.h>
+#elif __APPLE__
+    #include <pthread.h>
+    #include <sys/qos.h>
 #endif
 #include <thread>
 #include <iostream>

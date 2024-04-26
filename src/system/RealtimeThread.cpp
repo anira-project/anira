@@ -89,6 +89,24 @@ void RealtimeThread::elevateToRealTimePriority(std::thread::native_handle_type t
         std::cout << "Using default nice value: " << getpriority(PRIO_PROCESS, 0) << std::endl;
     }
     return;
+#elif __APPLE__
+    int ret;
+
+    ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    if (ret != 0) {
+        std::cerr << "Failed to set Thread QOS class to QOS_CLASS_USER_INTERACTIVE. Error : " << ret << std::endl;
+    } else {
+        return;
+    }
+
+    std::cout << "Failed to set Thread QOS class and relative priority. Error: " << ret << std::endl;
+
+    qos_class_t qos_class;
+    int relative_priority;
+    pthread_get_qos_class_np(pthread_self(), &qos_class, &relative_priority);
+
+    std::cout << "Fallback to default QOS class and relative priority: " << qos_class << " " << relative_priority << std::endl; 
+    return;
 #endif
 }
 
