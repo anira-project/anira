@@ -6,6 +6,7 @@ on:
     push:
         branches:
             - main
+            - develop
         # This is needed otherwise the github.ref is not set with ref/tags/v...
         tags:
             - 'v*.*.*'
@@ -53,6 +54,11 @@ jobs:
                     echo ${{ github.ref }}
                     echo "matrix.name=${{ matrix.name }}";
                     echo "matrix.os=${{ matrix.os }}";
+                    if [ "${{ matrix.name }}" == "Linux-x86_64" ]; then
+                        echo "$(uname -a)"
+                    elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
+                        echo "$(uname -a)"
+                    fi;
 
             # We need the osxutils to get the codesign and notorization tools
             -   name: install deps
@@ -64,6 +70,9 @@ jobs:
                         brew install osxutils ninja
                         echo "brew prefix: $(brew --prefix)"
                     elif [ "${{ matrix.name }}" == "macOS-arm64" ]; then
+                        if [ "$(uname -m)" == "arm64" ]; then
+                            brew install libomp
+                        fi;
                         brew install osxutils ninja
                         echo "brew prefix: $(brew --prefix)"
                     elif [ "${{ matrix.name }}" == "Windows-x86_64" ]; then
