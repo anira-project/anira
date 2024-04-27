@@ -5,8 +5,6 @@
 #include <memory>
 #include <vector>
 
-#include "../system/RealtimeThread.h"
-
 #ifdef USE_LIBTORCH
     #include "../backends/LibTorchProcessor.h"
 #endif
@@ -17,13 +15,14 @@
     #include "../backends/TFLiteProcessor.h"
 #endif
 
+#include "../system/RealtimeThread.h"
 #include "../backends/BackendBase.h"
 #include "SessionElement.h"
 #include "../utils/AudioBuffer.h"
 
 namespace anira {
     
-class ANIRA_API InferenceThread : public system::RealtimeThread {
+class ANIRA_API InferenceThread : public RealtimeThread {
 public:
     InferenceThread(std::counting_semaphore<1000>& globalSemaphore, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& sessions);
     InferenceThread(std::counting_semaphore<1000>& globalSemaphore, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID);

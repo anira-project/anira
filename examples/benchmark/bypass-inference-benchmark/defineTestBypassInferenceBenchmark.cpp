@@ -8,7 +8,7 @@ TEST(Benchmark, BypassInference){
 #elif WIN32
     HANDLE self = GetCurrentThread();
 #endif
-    anira::system::RealtimeThread::elevateToRealTimePriority(self, true);
+    anira::RealtimeThread::elevateToRealTimePriority(self, true);
 
     benchmark::RunSpecifiedBenchmarks();
 }

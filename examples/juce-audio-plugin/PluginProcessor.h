@@ -1,9 +1,11 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include <anira/anira.h>
 
 #include "PluginParameters.h"
+
+#include <anira/anira.h>
+
 #include "../../extras/models/cnn/CNNConfig.h"
 #include "../../extras/models/cnn/CNNPrePostProcessor.h"
 #include "../../extras/models/cnn/advanced-configs/CNNNoneProcessor.h" // This one is only needed for the round trip test, when selecting the None backend

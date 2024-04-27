@@ -16,7 +16,6 @@
 #include "AniraConfig.h"
 
 namespace anira {
-namespace system {
 
 class ANIRA_API RealtimeThread {
 public:
@@ -36,7 +35,6 @@ private:
     std::atomic<bool> m_should_exit;
 };
 
-} // namespace system
 } // namespace anira
 
 #endif // ANIRA_SYSTEM_REALTIMETHREAD_H

@@ -1,7 +1,6 @@
 #include <anira/system/RealtimeThread.h>
 
 namespace anira {
-namespace system {
 
 RealtimeThread::RealtimeThread() : m_should_exit(false){
 }
@@ -18,11 +17,14 @@ void RealtimeThread::start() {
         pthread_attr_setinheritsched(&thread_attr, PTHREAD_EXPLICIT_SCHED);
         pthread_setattr_default_np(&thread_attr);
     #endif
-        thread = std::thread(&RealtimeThread::run, this);
+
+    thread = std::thread(&RealtimeThread::run, this);
+
     #if __linux__
         pthread_attr_destroy(&thread_attr);
     #endif
-        elevateToRealTimePriority(thread.native_handle());
+
+    elevateToRealTimePriority(thread.native_handle());
     }
 
 void RealtimeThread::stop() {
@@ -114,5 +116,4 @@ bool RealtimeThread::shouldExit() {
     return m_should_exit;
 }
 
-} // namespace system
 } // namespace anira
