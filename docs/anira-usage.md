@@ -16,6 +16,8 @@ To use anira in your real-time audio application, you need to create instances f
 Start by specifying your model configuration using ``anira::InferenceConfig``. This includes the model path, input/output forms, batch size, and other critical settings that match the requirements of your model. When using a single backend, you define the model path and input/output shapes only once.
 
 ```cpp
+#include <anira/anira.h>
+
 anira::InferenceConfig hybridNNConfig(
     // Model path and shapes for different backends
 #ifdef USE_LIBTORCH
@@ -66,7 +68,7 @@ If your model requires costum pre- or post-processing, you can inherit from the 
 When your pre- and post-processing requires to access values from the ```anira::InferenceConfig``` struct, you can store the config as a member in your custom pre- and post-processor class.  Here is an example of a custom pre- and post-processor. The config myConfig is provided in the "MyConfig.h" file.
 
 ```cpp
-#include <anira/anira>
+#include <anira/anira.h>
 #include "MyConfig.h"
 
 class MyPrePostProcessor : public anira::PrePostProcessor {

@@ -21,7 +21,7 @@ An extensive anira usage guide can be found [here](docs/anira-usage.md).
 The basic usage of anira is as follows:
 
 ```cpp
-#include <anira/anira>
+#include <anira/anira.h>
 
 // Create a model configuration struct for your neural network
 anira::InferenceConfig myNNConfig(
