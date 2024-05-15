@@ -13,7 +13,6 @@ ProcessBlockFixture::~ProcessBlockFixture() {
 }
 
 void ProcessBlockFixture::initializeIteration() {
-    m_init = m_inferenceHandler->getInferenceManager().isInitializing();
     m_prev_num_received_samples = m_inferenceHandler->getInferenceManager().getNumReceivedSamples();
 }
 
@@ -75,18 +74,7 @@ void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceC
 }
 
 bool ProcessBlockFixture::bufferHasBeenProcessed() {
-    if (m_init) {
-        // if we have init the process output does not get called so, we never pop samples out
-        // when asking for the number of received samples, we dont wait since the time bufferInSec time we give to the request is zero 
-        return m_inferenceHandler->getInferenceManager().getNumReceivedSamples() >= m_prev_num_received_samples + m_bufferSize;
-    }
-    else {
-        // when init is finished we allready anticipate that we take out samples from the buffer and just wait for the buffer to be filled again
-        // therefore it makes no difference if the buffer gets filled while waiting for the semaphore or in this while loop
-        // TODO: A problem could occur is when init is set to false at start and the wait_for_semaphore time is too short so no samples are returned 
-        // At the moment this is not possible since init is allways set to true at the start, but this shall be changed in the future, so we can do realreal time processing
-        return m_inferenceHandler->getInferenceManager().getNumReceivedSamples() >= m_prev_num_received_samples;
-    }
+    return m_inferenceHandler->getInferenceManager().getNumReceivedSamples() >= m_prev_num_received_samples;
 }
 
 void ProcessBlockFixture::pushRandomSamplesInBuffer(anira::HostAudioConfig hostAudioConfig) {

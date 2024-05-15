@@ -28,25 +28,11 @@ void InferenceManager::prepare(HostAudioConfig newConfig) {
 
     inferenceCounter = 0;
 
-    bufferCount = 0;
-
-    size_t max_inference_time_in_samples = (size_t) std::ceil(inferenceConfig.m_max_inference_time * spec.hostSampleRate / 1000);
-
-    float divisor = (float) spec.hostBufferSize / ((float) inferenceConfig.m_batch_size * (float) inferenceConfig.m_model_output_size);
-    size_t remainder = spec.hostBufferSize % (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size);
-
-    if (remainder == 0) {
-        initSamples = (size_t) divisor * max_inference_time_in_samples + (size_t) divisor * inferenceConfig.m_model_latency;
-    } else if (remainder > 0 && remainder < spec.hostBufferSize) {
-        initSamples = ((size_t) divisor + 1) * max_inference_time_in_samples + ((size_t) divisor + 1) * inferenceConfig.m_model_latency + spec.hostBufferSize; //TODO not minimum possible
-    } else {
-        initSamples = max_inference_time_in_samples + (inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size) + inferenceConfig.m_model_latency; //TODO not minimum possible
-    }
-
-    if ((float) initSamples < inferenceConfig.m_wait_in_process_block * (float) spec.hostBufferSize) {
-        init = false;
-    } else {
-        init = true;
+    initSamples = calculateLatency();
+    for (size_t i = 0; i < spec.hostChannels; ++i) {
+        for (size_t j = 0; j < initSamples; ++j) {
+            session.receiveBuffer.pushSample(i, 0.f);
+        }
     }
 }
 
@@ -57,13 +43,7 @@ void InferenceManager::process(float ** inputBuffer, size_t inputSamples) {
     double timeInSec = static_cast<double>(inputSamples) / spec.hostSampleRate;
     inferenceThreadPool->newDataRequest(session, timeInSec);
 
-    if (init) {
-        bufferCount += inputSamples;
-        clearBuffer(inputBuffer, inputSamples);
-        if (bufferCount >= initSamples) init = false;
-    } else {
-        processOutput(inputBuffer, inputSamples);
-    }
+    processOutput(inputBuffer, inputSamples);
 }
 
 void InferenceManager::processInput(float ** inputBuffer, size_t inputSamples) {
@@ -112,8 +92,7 @@ void InferenceManager::clearBuffer(float ** inputBuffer, size_t inputSamples) {
 }
 
 int InferenceManager::getLatency() const {
-    if ((int) initSamples % (int) spec.hostBufferSize == 0) return initSamples;
-    else return ((int) ((float) initSamples / (float) spec.hostBufferSize) + 1) * (int) spec.hostBufferSize;
+    return initSamples;
 }
 
 InferenceThreadPool& InferenceManager::getInferenceThreadPool() {
@@ -125,16 +104,65 @@ size_t InferenceManager::getNumReceivedSamples() {
     return session.receiveBuffer.getAvailableSamples(0);
 }
 
-bool InferenceManager::isInitializing() const {
-    return init;
-}
-
 int InferenceManager::getMissingBlocks() {
     return inferenceCounter.load();
 }
 
 int InferenceManager::getSessionID() const {
     return session.sessionID;
+}
+
+int InferenceManager::calculateLatency() {
+    // First calculate some universal values
+    int modelOutputSize = inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size;
+    float hostBufferTime = (float) spec.hostBufferSize * 1000.f / (float) spec.hostSampleRate;
+    float waitTime = inferenceConfig.m_wait_in_process_block * hostBufferTime;
+
+    // Then caclulate the different parts of the latency
+    int bufferAdaptation = calculateBufferAdaptation(spec.hostBufferSize, modelOutputSize);
+
+    int maxPossibleInferences = maxNumberOfInferences(spec.hostBufferSize, modelOutputSize);
+    float totalInferenceTimeAfterWait = (maxPossibleInferences * inferenceConfig.m_max_inference_time) - waitTime;
+    int numBuffersForMaxInferences = std::ceil(totalInferenceTimeAfterWait / hostBufferTime);
+    int inferenceCausedLatency = numBuffersForMaxInferences * spec.hostBufferSize;
+
+    int modelCausedLatency = inferenceConfig.m_model_latency;
+
+    // Add it all together
+    return bufferAdaptation + inferenceCausedLatency + modelCausedLatency;
+}
+
+
+int InferenceManager::calculateBufferAdaptation(int hostBufferSize, int modelOutputSize) {
+    int res = 0;
+    for (int i = hostBufferSize; i < leatCommonMultiple(hostBufferSize, modelOutputSize) ; i+=hostBufferSize) {
+        res = std::max<int>(res, i%modelOutputSize);
+    }
+    return res;
+}
+
+int InferenceManager::maxNumberOfInferences(int hostBufferSize, int modelOutputSize) {
+    float samplesInBuffer = hostBufferSize;
+    int res = (int) (samplesInBuffer / (float) modelOutputSize);
+    int numberOfInferences = 0;
+    for (int i = hostBufferSize; i < leatCommonMultiple(hostBufferSize, modelOutputSize) ; i+=hostBufferSize) {
+        numberOfInferences = (int) (samplesInBuffer / (float) modelOutputSize);
+        res = std::max<int>(res, numberOfInferences);
+        samplesInBuffer += hostBufferSize - numberOfInferences * modelOutputSize;
+    }
+    return res;
+}
+
+int InferenceManager::greatestCommonDivisor(int a, int b) {
+    if (b == 0) {
+        return a;
+    } else {
+        return greatestCommonDivisor(b, a % b);
+    }
+}
+
+int InferenceManager::leatCommonMultiple(int a, int b) {
+    return a * b / greatestCommonDivisor(a, b);
 }
 
 } // namespace anira

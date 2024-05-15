@@ -5,9 +5,9 @@ import numpy as np
 
 # Define log file paths
 log_file_paths = []
-log_file_paths.append(os.path.join(os.path.dirname(__file__), "./../logs/Linux_advanced.log"))
-log_file_paths.append(os.path.join(os.path.dirname(__file__), "./../logs/MacOS_advanced.log"))
-log_file_paths.append(os.path.join(os.path.dirname(__file__), "./../logs/Windows_advanced.log"))
+log_file_paths.append(os.path.join(os.path.dirname(__file__), "./../logs/Linux_advanced_0.0.8.log"))
+log_file_paths.append(os.path.join(os.path.dirname(__file__), "./../logs/MacOS_advanced_0.0.8.log"))
+log_file_paths.append(os.path.join(os.path.dirname(__file__), "./../logs/Windows_advanced_0.0.8.log"))
 
 def create_folder(folder_name: str) -> None:
     try:
@@ -161,11 +161,11 @@ if __name__ == "__main__":
     sequence_std_results = get_sequence_statistics_from_list(listed_results, "sequence_std")
     moving_average_results = moving_average(listed_results, 3)
     cummulativ_average_results = cummulativ_average(listed_results)
-    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_single_interation.csv"), listed_results)
-    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_mean.csv"), sequence_mean_results, False, "sequence_mean")
-    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_max.csv"), sequence_max_results, False, "sequence_max")
-    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_min.csv"), sequence_min_results, False, "sequence_min")
-    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_iqr.csv"), sequence_iqr_results, False, "sequence_iqr")
-    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_std.csv"), sequence_std_results, False, "sequence_std")
-    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_moving_average.csv"), moving_average_results, False, "moving_average")
-    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_cummulativ_average.csv"), cummulativ_average_results, False, "cummulativ_average")
+    write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_advanced_0.0.8.csv"), listed_results)
+    # write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_mean.csv"), sequence_mean_results, False, "sequence_mean")
+    # write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_max.csv"), sequence_max_results, False, "sequence_max")
+    # write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_min.csv"), sequence_min_results, False, "sequence_min")
+    # write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_iqr.csv"), sequence_iqr_results, False, "sequence_iqr")
+    # write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_sequence_std.csv"), sequence_std_results, False, "sequence_std")
+    # write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_moving_average.csv"), moving_average_results, False, "moving_average")
+    # write_list_to_csv(os.path.join(os.path.dirname(__file__), "./../results/benchmark_cummulativ_average.csv"), cummulativ_average_results, False, "cummulativ_average")

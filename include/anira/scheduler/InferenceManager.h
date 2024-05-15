@@ -25,7 +25,6 @@ public:
 
     // Required for unit test
     size_t getNumReceivedSamples();
-    bool isInitializing() const;
     InferenceThreadPool& getInferenceThreadPool();
 
     int getMissingBlocks();
@@ -35,6 +34,11 @@ private:
     void processInput(float ** inputBuffer, const size_t inputSamples);
     void processOutput(float ** inputBuffer, const size_t inputSamples);
     void clearBuffer(float ** inputBuffer, const size_t inputSamples);
+    int calculateLatency();
+    int calculateBufferAdaptation(int hostBufferSize, int modelOutputSize);
+    int maxNumberOfInferences(int hostBufferSize, int modelOutputSize);
+    int greatestCommonDivisor(int a, int b);
+    int leatCommonMultiple(int a, int b);
 
 private:
     std::shared_ptr<InferenceThreadPool> inferenceThreadPool;
@@ -43,8 +47,6 @@ private:
     SessionElement& session;
     HostAudioConfig spec;
 
-    bool init = true;
-    size_t bufferCount = 0;
     size_t initSamples = 0;
     std::atomic<int> inferenceCounter {0};
 };

@@ -38,7 +38,6 @@ private:
     bool m_sleep_after_repetition = true;
     int m_iteration = 0;
     std::chrono::duration<double, std::milli> m_runtime_last_repetition = std::chrono::duration<double, std::milli>(0);
-    bool m_init = false;
     int m_prev_num_received_samples = 0;
     std::string m_model_name;
     std::string m_inference_backend_name = "libtorch";
