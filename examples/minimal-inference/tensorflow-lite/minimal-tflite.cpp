@@ -35,7 +35,8 @@ void minimal_inference(anira::InferenceConfig config) {
     // Limit inference to one thread
     TfLiteInterpreterOptionsSetNumThreads(options, 1);
 
-    TfLiteInterpreterResizeInputTensor(interpreter, 0, config.m_model_input_shape_tflite.data(), config.m_model_input_shape_tflite.size());
+    std::vector<int> inputShape(config.m_model_input_shape_tflite.begin(), config.m_model_input_shape_tflite.end());
+    TfLiteInterpreterResizeInputTensor(interpreter, 0, inputShape.data(), inputShape.size());
 
     // Allocate memory for all tensors
     TfLiteInterpreterAllocateTensors(interpreter);
@@ -48,12 +49,11 @@ void minimal_inference(anira::InferenceConfig config) {
     }
 
     // Fill input tensor with data
-    const int inputSize = config.m_batch_size * config.m_model_input_size;
     std::vector<float> inputData;
-    for (int i = 0; i < inputSize; i++) {
+    for (int i = 0; i < config.m_new_model_input_size; i++) {
         inputData.push_back(i * 0.000001f);
     }
-    TfLiteTensorCopyFromBuffer(inputTensor, inputData.data(), inputSize * sizeof(float));
+    TfLiteTensorCopyFromBuffer(inputTensor, inputData.data(), config.m_new_model_input_size * sizeof(float));
 
     // Execute inference.
     TfLiteInterpreterInvoke(interpreter);
@@ -62,17 +62,16 @@ void minimal_inference(anira::InferenceConfig config) {
     const TfLiteTensor* outputTensor = TfLiteInterpreterGetOutputTensor(interpreter, 0);
 
     // Extract the output tensor data
-    const int outputSize = config.m_batch_size * config.m_model_output_size;
     std::vector<float> outputData;
-    outputData.reserve(outputSize);
+    outputData.reserve(config.m_new_model_output_size);
 
-    TfLiteTensorCopyToBuffer(outputTensor, outputData.data(), outputSize * sizeof(float));
+    TfLiteTensorCopyToBuffer(outputTensor, outputData.data(), config.m_new_model_output_size * sizeof(float));
 
     for (int i = 0; i < TfLiteTensorNumDims(outputTensor); ++i) {
         std::cout << "Output shape " << i << ": " << TfLiteTensorDim(outputTensor, i) << '\n';
     }
 
-    for (int i = 0; i < outputSize; i++) {
+    for (int i = 0; i < config.m_new_model_output_size; i++) {
         std::cout << "Output data [" << i << "]: " << outputData[i] << std::endl;
     }
 

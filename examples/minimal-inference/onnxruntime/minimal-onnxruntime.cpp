@@ -40,9 +40,8 @@ void minimal_inference(anira::InferenceConfig config) {
 #endif
 
     // Define input data
-    const int inputSize = config.m_batch_size * config.m_model_input_size;
     std::vector<float> inputData;
-    for (int i = 0; i < inputSize; i++) {
+    for (int i = 0; i < config.m_new_model_input_size; i++) {
         inputData.push_back(i * 0.000001f);
     }
 
@@ -52,7 +51,7 @@ void minimal_inference(anira::InferenceConfig config) {
     // Create input tensor object from input data values and shape
     const Ort::Value inputTensor = Ort::Value::CreateTensor<float>  (memory_info,
                                                                     inputData.data(),
-                                                                    inputSize,
+                                                                    config.m_new_model_input_size,
                                                                     inputShape.data(),
                                                                     inputShape.size());
 
@@ -82,11 +81,10 @@ void minimal_inference(anira::InferenceConfig config) {
     }
 
     // Define output vector
-    int outputSize = config.m_batch_size * config.m_model_output_size;
     const float* outputData = outputTensors[0].GetTensorData<float>();
 
     // Extract the output tensor data
-    for (int i = 0; i < outputSize; i++) {
+    for (int i = 0; i < config.m_new_model_output_size; i++) {
         std::cout << "Output data [" << i << "]: " << outputData[i] << std::endl;
     }
 }
