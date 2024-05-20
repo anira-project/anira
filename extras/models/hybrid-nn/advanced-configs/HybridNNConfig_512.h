@@ -19,9 +19,7 @@ static anira::InferenceConfig hybridNNConfig_512(
         {512, 150, 1},
         {512, 1},
 #endif
-        512,
-        150,
-        1,
+
         10.66f,
         0,
         false,

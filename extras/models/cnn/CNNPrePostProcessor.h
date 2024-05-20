@@ -8,7 +8,7 @@ class CNNPrePostProcessor : public anira::PrePostProcessor
 {
 public:
     virtual void preProcess(anira::RingBuffer& input, anira::AudioBufferF& output, [[maybe_unused]] anira::InferenceBackend currentInferenceBackend) override {
-        popSamplesFromBuffer(input, output, config.m_model_output_size, config.m_model_input_size-config.m_model_output_size);
+        popSamplesFromBuffer(input, output, config.m_new_model_output_size, config.m_new_model_input_size-config.m_new_model_output_size);
     };
 
     anira::InferenceConfig config = cnnConfig;
