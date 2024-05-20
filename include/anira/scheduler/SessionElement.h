@@ -22,7 +22,7 @@ struct ANIRA_API SessionElement {
     RingBuffer receiveBuffer;
 
     struct ThreadSafeStruct {
-        ThreadSafeStruct(size_t batch_size, size_t model_input_size, size_t model_output_size);
+        ThreadSafeStruct(size_t model_input_size, size_t model_output_size);
         std::binary_semaphore free{true};
         std::binary_semaphore ready{false};
         std::binary_semaphore done{false};

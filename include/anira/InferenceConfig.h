@@ -23,12 +23,9 @@ struct ANIRA_API InferenceConfig {
 #endif
 #ifdef USE_TFLITE
             std::string model_path_tflite = "",
-            std::vector<int> model_input_shape_tflite = {},
-            std::vector<int> model_output_shape_tflite = {},
+            std::vector<int64_t> model_input_shape_tflite = {},
+            std::vector<int64_t> model_output_shape_tflite = {},
 #endif
-            size_t batch_size = 0,
-            size_t model_input_size = 0,
-            size_t model_output_size = 0,
             float max_inference_time = 0, // in ms per input of batch_size
             int model_latency = 0, // in samples per input of batch_size
             bool warm_up = false,
@@ -50,16 +47,54 @@ struct ANIRA_API InferenceConfig {
             m_model_input_shape_tflite(model_input_shape_tflite),
             m_model_output_shape_tflite(model_output_shape_tflite),
 #endif
-            m_batch_size(batch_size),
-            m_model_input_size(model_input_size),
-            m_model_output_size(model_output_size),
             m_max_inference_time(max_inference_time),
             m_model_latency(model_latency),
             m_warm_up(warm_up),
             m_wait_in_process_block(wait_in_process_block),
             m_bind_session_to_thread(bind_session_to_thread),
             m_number_of_threads(numberOfThreads)
-    {}
+    {
+#ifdef USE_LIBTORCH
+        if (m_model_input_shape_torch.size() > 0) {
+            m_new_model_input_size = 1;
+            for (int i = 0; i < m_model_input_shape_torch.size(); ++i) {
+                m_new_model_input_size *= m_model_input_shape_torch[i];
+            }
+        }
+        if (m_model_output_shape_torch.size() > 0) {
+            m_new_model_output_size = 1;
+            for (int i = 0; i < m_model_output_shape_torch.size(); ++i) {
+                m_new_model_output_size *= m_model_output_shape_torch[i];
+            }
+        }
+#elif USE_ONNXRUNTIME
+        if (m_model_input_shape_onnx.size() > 0) {
+            m_new_model_input_size = 1;
+            for (int i = 0; i < m_model_input_shape_onnx.size(); ++i) {
+                m_new_model_input_size *= m_model_input_shape_onnx[i];
+            }
+        }
+        if (m_model_output_shape_onnx.size() > 0) {
+            m_new_model_output_size = 1;
+            for (int i = 0; i < m_model_output_shape_onnx.size(); ++i) {
+                m_new_model_output_size *= m_model_output_shape_onnx[i];
+            }
+        }
+#elif USE_TFLITE
+        if (m_model_input_shape_tflite.size() > 0) {
+            m_new_model_input_size = 1;
+            for (int i = 0; i < m_model_input_shape_tflite.size(); ++i) {
+                m_new_model_input_size *= m_model_input_shape_tflite[i];
+            }
+        }
+        if (m_model_output_shape_tflite.size() > 0) {
+            m_new_model_output_size = 1;
+            for (int i = 0; i < m_model_output_shape_tflite.size(); ++i) {
+                m_new_model_output_size *= m_model_output_shape_tflite[i];
+            }
+        }
+#endif
+    }
 
 #ifdef USE_LIBTORCH
     std::string m_model_path_torch;
@@ -75,19 +110,19 @@ struct ANIRA_API InferenceConfig {
 
 #ifdef USE_TFLITE
     std::string m_model_path_tflite;
-    std::vector<int> m_model_input_shape_tflite;
-    std::vector<int> m_model_output_shape_tflite;
+    std::vector<int64_t> m_model_input_shape_tflite; // tflite requires int but for compatibility with other backends we use int64_t
+    std::vector<int64_t> m_model_output_shape_tflite;
 #endif
 
-    size_t m_batch_size;
-    size_t m_model_input_size;
-    size_t m_model_output_size;
     float m_max_inference_time;
     int m_model_latency;
     bool m_warm_up;
     float m_wait_in_process_block;
     bool m_bind_session_to_thread;
     int m_number_of_threads;
+    
+    int m_new_model_input_size;
+    int m_new_model_output_size;
 
     bool operator==(const InferenceConfig& other) const {
         return
@@ -106,15 +141,14 @@ struct ANIRA_API InferenceConfig {
             m_model_input_shape_tflite == other.m_model_input_shape_tflite &&
             m_model_output_shape_tflite == other.m_model_output_shape_tflite &&
 #endif
-            m_batch_size == other.m_batch_size &&
-            m_model_input_size == other.m_model_input_size &&
-            m_model_output_size == other.m_model_output_size &&
             m_max_inference_time == other.m_max_inference_time &&
             m_model_latency == other.m_model_latency &&
             m_warm_up == other.m_warm_up &&
             m_wait_in_process_block == other.m_wait_in_process_block &&
             m_bind_session_to_thread == other.m_bind_session_to_thread &&
-            m_number_of_threads == other.m_number_of_threads;
+            m_number_of_threads == other.m_number_of_threads &&
+            m_new_model_input_size == other.m_new_model_input_size &&
+            m_new_model_output_size == other.m_new_model_output_size;
     }
 
     bool operator!=(const InferenceConfig& other) const {

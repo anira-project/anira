@@ -114,7 +114,7 @@ int InferenceManager::getSessionID() const {
 
 int InferenceManager::calculateLatency() {
     // First calculate some universal values
-    int modelOutputSize = inferenceConfig.m_batch_size * inferenceConfig.m_model_output_size;
+    int modelOutputSize = inferenceConfig.m_new_model_output_size;
     float hostBufferTime = (float) spec.hostBufferSize * 1000.f / (float) spec.hostSampleRate;
     float waitTime = inferenceConfig.m_wait_in_process_block * hostBufferTime;
 
