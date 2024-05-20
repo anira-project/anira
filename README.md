@@ -28,9 +28,6 @@ anira::InferenceConfig myNNConfig(
     "path/to/your/model.onnx (or *.pt, *.tflite)", // Model path
     {2048, 1, 150}, // Input shape
     {2048, 1}, // Output shape
-    2048, // Batch size
-    150, // Model input size
-    1, // Model output size
     42.66f // Maximum inference time in ms
 );
 

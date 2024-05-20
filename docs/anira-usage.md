@@ -35,9 +35,6 @@ anira::InferenceConfig hybridNNConfig(
     {2048, 150, 1}, // Input shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
     {2048, 1}, // Output shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
 #endif
-    2048, // Batch size (required)
-    150, // Model input size (required)
-    1, // Model output size (required)
     42.66f, // Maximum inference time in ms for processing of all batches (required)
 
     0, // Internal model latency in samples for processing of all batches (optional: default = 0)
@@ -73,15 +70,30 @@ When your pre- and post-processing requires to access values from the ```anira::
 
 class MyPrePostProcessor : public anira::PrePostProcessor {
 public:
-    void preProcess(anira::RingBuffer& input, anira::AudioBufferF& output, [[maybe_unused]] anira::InferenceBackend currentInferenceBackend) override {
-        for (size_t batch = 0; batch < config.m_batch_size; ++batch) {
-            size_t baseIdx = batch * config.m_model_input_size;
-            popSamplesFromBuffer(input, output, config.m_model_output_size, config.m_model_input_size-config.m_model_output_size, baseIdx);
+    virtual void preProcess(anira::RingBuffer& input, anira::AudioBufferF& output, [[maybe_unused]] anira::InferenceBackend currentInferenceBackend) override {
+        int64_t num_batches;
+        int64_t num_input_samples;
+        int64_t num_output_samples;
+        if (currentInferenceBackend == anira::LIBTORCH) {
+            num_batches = config.m_model_input_shape_torch[0];
+            num_input_samples = config.m_model_input_shape_torch[2];
+            num_output_samples = config.m_model_output_shape_torch[1];
+        } else if (currentInferenceBackend == anira::ONNX) {
+            num_batches = config.m_model_input_shape_onnx[0];
+            num_input_samples = config.m_model_input_shape_onnx[2];
+            num_output_samples = config.m_model_output_shape_onnx[1];
+        } else if (currentInferenceBackend == anira::TFLITE) {
+            num_batches = config.m_model_input_shape_tflite[0];
+            num_input_samples = config.m_model_input_shape_tflite[1];
+            num_output_samples = config.m_model_output_shape_tflite[1];
+        } else {
+            throw std::runtime_error("Invalid inference backend");
         }
-    };
-
-    void postProcess(anira::AudioBufferF& input, anira::RingBuffer& output, [[maybe_unused]] anira::InferenceBackend currentInferenceBackend) {
-        pushSamplesToBuffer(input, output);
+            
+        for (size_t batch = 0; batch < num_batches; batch++) {
+            size_t baseIdx = batch * num_input_samples;
+            popSamplesFromBuffer(input, output, num_output_samples, num_input_samples-num_output_samples, baseIdx);
+        }
     };
     
     anira::InferenceConfig config = myConfig;
