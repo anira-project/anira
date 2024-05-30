@@ -37,7 +37,7 @@ anira::PrePostProcessor myPrePostProcessor;
 // Create an InferenceHandler instance
 anira::InferenceHandler inferenceHandler(myPostProcessor, myNNConfig);
 
-// Prepare audio data for inference
+// Create a HostAudioConfig instance containing the host config infos
 anira::HostAudioConfig audioConfig {
     1, // currently only mono is supported
     bufferSize,
