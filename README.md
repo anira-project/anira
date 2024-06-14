@@ -47,6 +47,9 @@ anira::HostAudioConfig audioConfig {
 // Allocate memory for audio processing
 inferenceHandler.prepare(audioConfig);
 
+// Optionally get the latency of the inference process in samples
+int latencyInSamples = inferenceHandler.getLatency();
+
 // Real-time safe audio processing in process callback of your application
 processBlock(float** audioData, int numSamples) {
     inferenceHandler.process(audioData, numSamples);
