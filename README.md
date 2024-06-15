@@ -131,7 +131,7 @@ Moreover the following options are available:
 
 ## Documentation
 
-For using anira with your custom models, check out the [extensive usage guide](docs/anira-usage.md).
+For using anira to inference your custom models, check out the [extensive usage guide](docs/anira-usage.md). If you want to use anira for benchmarking, check out the [benchmarking guide](docs/benchmark-usage.md) and the section below.
 Detailed documentation on anira's API and will be available soon in our upcoming wiki.
 
 ## Benchmark capabilities
