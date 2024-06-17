@@ -6,11 +6,11 @@ To use anira's benchmarking capabilities, you should first become familiar with 
 
 anira facilitates the measurement of neural network's real-time performance, by providing a custom benchmark fixture class within the [Google Benchmark](https://github.com/google/benchmark) framework - the `anira::benchmark::ProcessBlockFixture`. Within this fixture class, a static instance of the `anira::InferenceHandler` class is constructed. The fixture class is designed to measure the runtimes of several consecutive calls to the `process` method of this instance. The number of calls to the `process` method can be configured by the user and is defined as iterations, as it is done in the Google Benchmark framework. After all iterations are completed, the fixture will destroy the `anira::InferenceHandler` instance, freeing all threads and resources that have been used. This whole process can be repeated for a given number of repetitions as well as for different configurations. In this way, the user can reliably compare the first inference with the subsequent ones and find out if the chosen inference backend needs some warm-up time. In addition, the user can compare runtimes for different configurations, such as different host buffer sizes and inference backends, and get an estimate of the maximum inference time.
 
-To use the benchmarking tools within aniras, please follow the steps below. First there is a step-by-step guide on how to benchmark a single configuration and then a guide on how to extend the benchmarks to multiple configurations. Since the `anira::benchmark::ProcessBlockFixture` is a Google Benchmark fixture, you can use all the features of the Google Benchmark framework to further customize your benchmark setup. Please refer to the [Google Benchmark documentation](https://github.com/google/benchmark/blob/main/docs/user_guide.md) for more information.
+To use the benchmarking tools within anira, please follow the steps below. First, you'll find a step-by-step guide on benchmarking a single configuration, followed by instructions on extending the benchmarks to multiple configurations. Since the `anira::benchmark::ProcessBlockFixture` is a Google Benchmark fixture, you can use all the features of the Google Benchmark framework to further customize your benchmark setup. Please refer to the [Google Benchmark documentation](https://github.com/google/benchmark/blob/main/docs/user_guide.md) for more information.
 
 ## Single Configuration Benchmarking
-
-### Step 1: Start Defining the Benchmark by Setting Up the InferenceHandler and input Audiobuffer
+-
+### Step 1: Start Defining the Benchmark by Setting Up the InferenceHandler and Input AudioBuffer
 
 Before we can start to define the benchmark, we need to create an `anira::InferenceConfig` instance and an `anira::PrePostProcessor` instance. This is done in the same way as described in the [anira usage guide](anira-usage.md).
 
@@ -24,7 +24,7 @@ After that we can start to define the benchmark with the `BENCHMARK_DEFINE_F` ma
 #include <anira/anira.h>
 #include <anira/benchmark.h>
 
-anira::PrepostProcessor myPrePostProcessor;
+anira::PrePostProcessor myPrePostProcessor;
 anira::InferenceConfig myConfig(
     ...
 );
@@ -83,7 +83,7 @@ First we push random samples in the range of -1.f and 1.f into the `anira::Audio
         auto end = std::chrono::high_resolution_clock::now();
 
         // Update the fixture with the measured runtime
-        interationStep(start, end, state);
+        iterationStep(start, end, state);
     }
 
     // Repetition is done, reset the InferenceHandler and the AudioBuffer
