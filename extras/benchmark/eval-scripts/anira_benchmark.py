@@ -27,10 +27,11 @@ def get_list_from_log(file_path: str, list: list=None) -> list:
         repetition_count = []
         runtime = []
         log_list = [operating_system, model, backend, buffer_size, repetition_index, repetition_count, iteration_count, runtime]
+        repetition_index = 0
     else:
         log_list = list
-
-    repetition_index = 0
+        repetition_index = max(list[4]) + 1
+    
     old_repeatition_count = 0
     with open(file_path, 'r') as file:
         for line in file:
