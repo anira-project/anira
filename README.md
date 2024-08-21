@@ -124,10 +124,7 @@ By default, all three inference engines are installed. You can disable specific 
 Moreover the following options are available:
 
 - Build anira with benchmark capabilities: ```-DANIRA_WITH_BENCHMARK=ON```
-- Populate example neural models: ```-DANIRA_WITH_EXTRAS=ON```
-- Build example applications: ```-DANIRA_WITH_EXAMPLES=ON```
-
-**Note**: The example applications require the example neural models to be populated and therefore the ```-DANIRA_WITH_EXTRAS=ON``` option.
+- Build example applications and populate example neural models: ```-DANIRA_WITH_EXAMPLES=ON```
 
 ## Documentation
 

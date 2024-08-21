@@ -7,14 +7,16 @@ cmake_minimum_required(VERSION 3.15)
 # Shall the library be built as a shared library?
 option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
 option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
-option(ANIRA_WITH_EXTRAS "Build with extras (clone example model repos)" OFF)
-option(ANIRA_WITH_EXAMPLES "Add Example Targets (juce plugin, benchmarks, minimal inference examples)" OFF)
+option(ANIRA_WITH_EXAMPLES "Add Example Targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
 option(ANIRA_WITH_INSTALL "Add install targets" OFF)
 
 # Select the backends for the inference engine, multiple backends can be selected
 option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
 option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
 option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
+
+# Shall semaphores be used for synchronization instead of atomic variables?
+option(ANIRA_WITH_SEMAPHORE "Use semaphores for synchronization instead of atomic variables" ON)
 
 # ==============================================================================
 # Setup the project
@@ -129,6 +131,8 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
+    # Semaphore definitions
+    $<$<BOOL:${ANIRA_WITH_SEMAPHORE}>:USE_SEMAPHORE>
 )
 
 # If we try to link the torch libraries publicly on Apple Silicon Systems and link the anira library to another project, we get the following error:
@@ -178,10 +182,8 @@ endif()
 # ==============================================================================
 
 # First we import the extras folder since we need the compile definitions (model paths) for the examples
-if(ANIRA_WITH_EXTRAS)
-    add_subdirectory(extras)
-endif ()
 
 if(ANIRA_WITH_EXAMPLES)
+    add_subdirectory(extras)
     add_subdirectory(examples)
 endif()
