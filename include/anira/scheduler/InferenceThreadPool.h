@@ -1,7 +1,11 @@
 #ifndef ANIRA_INFERENCETHREADPOOL_H
 #define ANIRA_INFERENCETHREADPOOL_H
 
-#include <semaphore>
+#ifdef USE_SEMAPHORE
+    #include <semaphore>
+#else
+    #include <atomic>
+#endif
 #include <memory>
 #include <vector>
 
@@ -26,7 +30,11 @@ public:
 
     static int getNumberOfSessions();
 
-    inline static std::counting_semaphore<1000> globalSemaphore{0};
+#ifdef USE_SEMAPHORE
+    inline static std::counting_semaphore<1000> global_counter{0};
+#else
+    inline static std::atomic<int> global_counter{0};
+#endif
     void newDataSubmitted(SessionElement& session);
     void newDataRequest(SessionElement& session, double bufferSizeInSec);
 

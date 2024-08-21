@@ -1,9 +1,11 @@
 #ifndef ANIRA_SESSIONELEMENT_H
 #define ANIRA_SESSIONELEMENT_H
 
-#include <semaphore>
-#include <queue>
+#ifdef USE_SEMAPHORE
+    #include <semaphore>
+#endif
 #include <atomic>
+#include <queue>
 
 #include "../utils/AudioBuffer.h"
 #include "../utils/RingBuffer.h"
@@ -23,9 +25,15 @@ struct ANIRA_API SessionElement {
 
     struct ThreadSafeStruct {
         ThreadSafeStruct(size_t model_input_size, size_t model_output_size);
+#ifdef USE_SEMAPHORE
         std::binary_semaphore free{true};
         std::binary_semaphore ready{false};
         std::binary_semaphore done{false};
+#else
+        std::atomic<bool> free{true};
+        std::atomic<bool> ready{false};
+        std::atomic<bool> done{false};
+#endif
         std::chrono::time_point<std::chrono::system_clock> time;
         AudioBufferF processedModelInput = AudioBufferF();
         AudioBufferF rawModelOutput = AudioBufferF();
@@ -37,7 +45,12 @@ struct ANIRA_API SessionElement {
 
     std::atomic<InferenceBackend> currentBackend {NONE};
     std::vector<std::chrono::time_point<std::chrono::system_clock>> timeStamps;
-    std::counting_semaphore<1000> sendSemaphore{0};
+
+#ifdef USE_SEMAPHORE
+    std::counting_semaphore<1000> m_session_counter{0};
+#else
+    std::atomic<int> m_session_counter{0};
+#endif
     
     const int sessionID;
 

@@ -5,7 +5,7 @@ namespace anira {
 InferenceThreadPool::InferenceThreadPool(InferenceConfig& config) {
     if (! config.m_bind_session_to_thread) {
         for (int i = 0; i < config.m_number_of_threads; ++i) {
-            threadPool.emplace_back(std::make_unique<InferenceThread>(globalSemaphore, config, sessions));
+            threadPool.emplace_back(std::make_unique<InferenceThread>(global_counter, config, sessions));
         }
     }
 }
@@ -38,7 +38,7 @@ SessionElement& InferenceThreadPool::createSession(PrePostProcessor& prePostProc
     sessions.emplace_back(std::make_shared<SessionElement>(sessionID, prePostProcessor, config, noneProcessor));
 
     if (config.m_bind_session_to_thread) {
-        threadPool.emplace_back(std::make_unique<InferenceThread>(globalSemaphore, config, sessions, sessionID));
+        threadPool.emplace_back(std::make_unique<InferenceThread>(global_counter, config, sessions, sessionID));
     }
 
     for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
@@ -118,14 +118,19 @@ void InferenceThreadPool::newDataSubmitted(SessionElement& session) {
 }
 
 void InferenceThreadPool::newDataRequest(SessionElement& session, double bufferSizeInSec) {
+#ifdef USE_SEMAPHORE
     auto timeToProcess = std::chrono::microseconds(static_cast<long>(bufferSizeInSec * 1e6 * session.inferenceConfig.m_wait_in_process_block));
     auto currentTime = std::chrono::system_clock::now();
     auto waitUntil = currentTime + timeToProcess;
-
+#endif
     for (size_t i = 0; i < session.inferenceQueue.size(); ++i) {
         // TODO: find better way to do this fix of SEGFAULT when comparing with empty TimeStampQueue
         if (session.timeStamps.size() > 0 && session.inferenceQueue[i]->time == session.timeStamps.back()) {
+#ifdef USE_SEMAPHORE
             if (session.inferenceQueue[i]->done.try_acquire_until(waitUntil)) {
+#else
+            if (session.inferenceQueue[i]->done.exchange(false)) {
+#endif
                 session.timeStamps.pop_back();
                 postProcess(session, *session.inferenceQueue[i]);
             }
@@ -139,15 +144,25 @@ std::vector<std::shared_ptr<SessionElement>>& InferenceThreadPool::getSessions()
 
 bool InferenceThreadPool::preProcess(SessionElement& session) {
     for (size_t i = 0; i < session.inferenceQueue.size(); ++i) {
+#ifdef USE_SEMAPHORE
         if (session.inferenceQueue[i]->free.try_acquire()) {
+#else
+        if (session.inferenceQueue[i]->free.exchange(false)) {
+#endif
             session.prePostProcessor.preProcess(session.sendBuffer, session.inferenceQueue[i]->processedModelInput, session.currentBackend.load());
 
             const std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
             session.timeStamps.insert(session.timeStamps.begin(), now);
             session.inferenceQueue[i]->time = now;
+#ifdef USE_SEMAPHORE
             session.inferenceQueue[i]->ready.release();
-            session.sendSemaphore.release();
-            globalSemaphore.release();
+            session.m_session_counter.release();
+            global_counter.release();
+#else
+            session.inferenceQueue[i]->ready.exchange(true);
+            session.m_session_counter.fetch_add(1);
+            global_counter.fetch_add(1);
+#endif
             return true;
         } else {
             if (i == session.inferenceQueue.size() - 1) {
@@ -156,7 +171,6 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
             }
         }
     }
-    
     std::cout << "##### No free inferenceQueue found!" << std::endl;
     return false;
 }
@@ -164,7 +178,11 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
 void InferenceThreadPool::postProcess(SessionElement& session, SessionElement::ThreadSafeStruct& nextBuffer) {
     session.prePostProcessor.postProcess(nextBuffer.rawModelOutput, session.receiveBuffer, session.currentBackend.load());
     // TODO: shall we clear before we release?
+#ifdef USE_SEMAPHORE
     nextBuffer.free.release();
+#else
+    nextBuffer.free.exchange(true);
+#endif
 }
 
 int InferenceThreadPool::getNumberOfSessions() {
