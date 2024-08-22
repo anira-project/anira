@@ -8,6 +8,6 @@ install/
 logs/
 results/
 venv/
-extras/models/stateful-rnn/stateful-lstm/
-extras/models/hybrid-nn/GuitarLSTM/
-extras/models/cnn/steerable-nafx/
+extras/desktop/models/stateful-rnn/stateful-lstm/
+extras/desktop/models/hybrid-nn/GuitarLSTM/
+extras/desktop/models/cnn/steerable-nafx/

@@ -7,7 +7,8 @@ cmake_minimum_required(VERSION 3.15)
 # Shall the library be built as a shared library?
 option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
 option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
-option(ANIRA_WITH_EXAMPLES "Add Example Targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
+option(ANIRA_WITH_EXAMPLES "Add Example Targets for desktop plattforms (juce plugin, benchmarks, minimal inference and model examples)" OFF)
+option(ANIRA_WITH_BELA_EXAMPLE "Add Example Targets for bela plattform (includes a model)" OFF)
 option(ANIRA_WITH_INSTALL "Add install targets" OFF)
 
 # Select the backends for the inference engine, multiple backends can be selected
@@ -141,7 +142,7 @@ target_compile_definitions(${PROJECT_NAME}
 if(ANIRA_WITH_LIBTORCH)
     # On Windows, we need to link the torch libraries publicly, because otherwise we get errors like LNK2001: unresolved external symbol "__declspec(dllimport) unsigned short const caffe2::detail::detail_guard_long_unique_std_vector_long_metadata_index"
     # TODO: Check if this has to do with dllimport/dllexport settings in the anira API
-    if (MSVC OR LINUX)
+    if (MSVC OR LINUX OR BELA)
         target_link_libraries(${PROJECT_NAME} PUBLIC ${TORCH_LIBRARIES})
     else()
         target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
@@ -183,7 +184,7 @@ endif()
 
 # First we import the extras folder since we need the compile definitions (model paths) for the examples
 
-if(ANIRA_WITH_EXAMPLES)
+if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE)
     add_subdirectory(extras)
     add_subdirectory(examples)
 endif()

@@ -27,7 +27,7 @@ endif()
 # in this case we set the rpath to the directories where the other libraries are installed
 # $ORIGIN in Linux is a special token that gets replaced by the directory of the library at runtime from that point we could navigate to the other libraries
 # The same token for macOS is @loader_path
-if(LINUX)
+if(LINUX OR BELA)
     set_target_properties(${PROJECT_NAME}
         PROPERTIES
             INSTALL_RPATH "$ORIGIN"
