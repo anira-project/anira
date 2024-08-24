@@ -47,6 +47,9 @@ anira::HostAudioConfig audioConfig {
 // Allocate memory for audio processing
 inferenceHandler.prepare(audioConfig);
 
+// Select the inference backend
+inferenceHandler.selectInferenceBackend(anira::LIBTORCH);
+
 // Optionally get the latency of the inference process in samples
 int latencyInSamples = inferenceHandler.getLatency();
 
