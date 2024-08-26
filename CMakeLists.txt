@@ -136,13 +136,13 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_SEMAPHORE}>:USE_SEMAPHORE>
 )
 
-# If we try to link the torch libraries publicly on Apple Silicon Systems and link the anira library to another project, we get the following error:
-# Target "torch_cpu" not found. This should not happen, because the torch_cpu library is an internal target of the torch library and should not be linked to other projects. Therefore, we link the torch libraries privately on Apple Silicon Systems and in the minimal examples we link the torch libraries as well as the anira library to the executable.
+
 if(ANIRA_WITH_LIBTORCH)
     # The find_package(Torch) adds the libraries libc10.so and libkineto.a as full paths to ${TORCH_LIBRARIES}. This is no problem when we add anira as a subdirectory to another project, but when we install the library, the torch libraries will be link targets of the anira library with full paths and hence not found on other systems. Therefore, we link those libs privately and only add the torch target publicly.
+    # Also until cmake 3.26, there is a bug where the torch_cpu library is not found when linking publicly, see https://gitlab.kitware.com/cmake/cmake/-/issues/24163
     # On Windows, we need to link the torch libraries publicly, because otherwise we get errors like LNK2001: unresolved external symbol "__declspec(dllimport) unsigned short const caffe2::detail::detail_guard_long_unique_std_vector_long_metadata_index"
     # TODO: Check if this has to do with dllimport/dllexport settings in the anira API
-    if (MSVC OR LINUX OR BELA)
+    if (MSVC OR LINUX)
         foreach(TORCH_LIB ${TORCH_LIBRARIES})
             if(TORCH_LIB STREQUAL "torch" OR TORCH_LIB STREQUAL "torch_library")
                 target_link_libraries(${PROJECT_NAME} PUBLIC ${TORCH_LIB})
@@ -189,7 +189,6 @@ endif()
 # ==============================================================================
 
 # First we import the extras folder since we need the compile definitions (model paths) for the examples
-
 if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE)
     add_subdirectory(extras)
     add_subdirectory(examples)
