@@ -89,7 +89,7 @@ jobs:
 
             # We cache the build to speed up the build process
             -   name: cache the build
-                uses: mozilla-actions/sccache-action@v0.0.3
+                uses: mozilla-actions/sccache-action@v0.0.5
 
             # Typical cmake configuration with default generator
             # With DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" we can build universal binaries for apple computers
@@ -140,7 +140,7 @@ jobs:
 
             # We need to import the apple developer certificate so that we can codesign our binaries
             -   name: import certificates (macOS)
-                uses: apple-actions/import-codesign-certs@v2
+                uses: apple-actions/import-codesign-certs@v3
                 if: ${{ matrix.os == 'macOS-latest' }}
                 with:
                     # GitHub encrypted secrets
