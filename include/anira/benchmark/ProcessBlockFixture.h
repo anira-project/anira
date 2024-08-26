@@ -40,8 +40,8 @@ private:
     std::chrono::duration<double, std::milli> m_runtime_last_repetition = std::chrono::duration<double, std::milli>(0);
     int m_prev_num_received_samples = 0;
     std::string m_model_name;
-    std::string m_inference_backend_name = "libtorch";
-    InferenceBackend m_inferenceBackend = anira::LIBTORCH;
+    std::string m_inference_backend_name;
+    InferenceBackend m_inferenceBackend;
     InferenceConfig m_inferenceConfig;
     HostAudioConfig m_hostAudioConfig;
 

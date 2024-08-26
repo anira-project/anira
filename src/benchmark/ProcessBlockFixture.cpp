@@ -22,43 +22,41 @@ void ProcessBlockFixture::initializeRepetition(const InferenceConfig& inferenceC
         m_runtime_last_repetition = std::chrono::duration<double, std::milli>(0);
     }
     m_iteration = 0;
+
     if (m_inferenceBackend != inferenceBackend || m_inferenceConfig != inferenceConfig || m_hostAudioConfig != hostAudioConfig) {
         m_repetition = 0;
-        if (m_inferenceConfig != inferenceConfig) {
+        if (m_inferenceBackend != inferenceBackend || m_inferenceConfig != inferenceConfig) {
+            m_inferenceBackend = inferenceBackend;
             m_inferenceConfig = inferenceConfig;
             std::string path;
-            if (m_inferenceBackend == anira::LIBTORCH) {
-                path = m_inferenceConfig.m_model_path_torch;
-            } else if (m_inferenceBackend == anira::ONNX) {
-                path = m_inferenceConfig.m_model_path_onnx;
-            } else if (m_inferenceBackend == anira::TFLITE) {
-                path = m_inferenceConfig.m_model_path_tflite;
-            } else if (m_inferenceBackend == anira::NONE) {
-                path = m_inferenceConfig.m_model_path_torch; // TODO: make this more generic
-            } else {
-                path = "unknown_model_path";
-            }
-            // find the last of any instance of / or \ and take the substring from there to the end
-            m_model_name = path.substr(path.find_last_of("/\\") + 1);
-        }
-        if (m_inferenceBackend != inferenceBackend) {
-            m_inferenceBackend = inferenceBackend;
-            std::string path;
-            if (m_inferenceBackend == anira::LIBTORCH) {
+            switch (m_inferenceBackend)
+            {
+#ifdef USE_LIBTORCH
+            case anira::LIBTORCH:
                 m_inference_backend_name = "libtorch";
                 path = m_inferenceConfig.m_model_path_torch;
-            } else if (m_inferenceBackend == anira::ONNX) {
+                break;
+#endif
+#ifdef USE_ONNXRUNTIME
+            case anira::ONNX:
                 m_inference_backend_name = "onnx";
                 path = m_inferenceConfig.m_model_path_onnx;
-            } else if (m_inferenceBackend == anira::TFLITE) {
+                break;
+#endif
+#ifdef USE_TFLITE
+            case anira::TFLITE:
                 m_inference_backend_name = "tflite";
                 path = m_inferenceConfig.m_model_path_tflite;
-            } else if (m_inferenceBackend == anira::NONE) {
+                break;
+#endif
+            case anira::NONE:
                 m_inference_backend_name = "none";
-                path = m_inferenceConfig.m_model_path_torch; // TODO: make this more generic
-            } else {
-                m_inference_backend_name = "unknown_backend";
+                path = "no_model";
+                break;
+            default:
+                m_inference_backend_name = "unknown";
                 path = "unknown_model_path";
+                break;
             }
             // find the last of any instance of / or \ and take the substring from there to the end
             m_model_name = path.substr(path.find_last_of("/\\") + 1);

@@ -24,8 +24,8 @@ SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, Inferenc
     }
 
     void SessionElement::prepare(HostAudioConfig newConfig) {
-        sendBuffer.initializeWithPositions(1, (size_t) newConfig.hostSampleRate * 6); // TODO find appropriate size dynamically
-        receiveBuffer.initializeWithPositions(1, (size_t) newConfig.hostSampleRate * 6); // TODO find appropriate size dynamically
+        sendBuffer.initializeWithPositions(1, (size_t) newConfig.hostSampleRate * 50); // TODO find appropriate size dynamically
+        receiveBuffer.initializeWithPositions(1, (size_t) newConfig.hostSampleRate * 50); // TODO find appropriate size dynamically
 
         size_t max_inference_time_in_samples = (size_t) std::ceil(inferenceConfig.m_max_inference_time * newConfig.hostSampleRate / 1000);
 
