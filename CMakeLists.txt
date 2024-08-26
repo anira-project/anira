@@ -137,13 +137,19 @@ target_compile_definitions(${PROJECT_NAME}
 )
 
 # If we try to link the torch libraries publicly on Apple Silicon Systems and link the anira library to another project, we get the following error:
-# Target "torch_cpu" not found. This should not happen, because the torch_cpu library is an internal target of the torch library and should not be linked to other projects: https://stackoverflow.com/questions/64084656/cmake-cant-find-the-external-libraries-when-subdirectory-is-used-to-build-depend
-# But we do not need to link the inference engines publicly, because the anira library is the only library that uses them (except for the minimal inference examples, where we link the inference engines directly to the executable).
+# Target "torch_cpu" not found. This should not happen, because the torch_cpu library is an internal target of the torch library and should not be linked to other projects. Therefore, we link the torch libraries privately on Apple Silicon Systems and in the minimal examples we link the torch libraries as well as the anira library to the executable.
 if(ANIRA_WITH_LIBTORCH)
+    # The find_package(Torch) adds the libraries libc10.so and libkineto.a as full paths to ${TORCH_LIBRARIES}. This is no problem when we add anira as a subdirectory to another project, but when we install the library, the torch libraries will be link targets of the anira library with full paths and hence not found on other systems. Therefore, we link those libs privately and only add the torch target publicly.
     # On Windows, we need to link the torch libraries publicly, because otherwise we get errors like LNK2001: unresolved external symbol "__declspec(dllimport) unsigned short const caffe2::detail::detail_guard_long_unique_std_vector_long_metadata_index"
     # TODO: Check if this has to do with dllimport/dllexport settings in the anira API
     if (MSVC OR LINUX OR BELA)
-        target_link_libraries(${PROJECT_NAME} PUBLIC ${TORCH_LIBRARIES})
+        foreach(TORCH_LIB ${TORCH_LIBRARIES})
+            if(TORCH_LIB STREQUAL "torch" OR TORCH_LIB STREQUAL "torch_library")
+                target_link_libraries(${PROJECT_NAME} PUBLIC ${TORCH_LIB})
+            else()
+                target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIB})
+            endif()
+        endforeach()
     else()
         target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
     endif()
