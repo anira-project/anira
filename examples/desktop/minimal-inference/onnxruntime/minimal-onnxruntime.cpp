@@ -8,9 +8,9 @@ Licence: MIT
 #include <iostream>
 #include <onnxruntime_cxx_api.h>
 
-#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
-#include "../../../extras/models/cnn/CNNConfig.h"
+#include "../../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../../extras/desktop/models/cnn/CNNConfig.h"
 
 void minimal_inference(anira::InferenceConfig config) {
 

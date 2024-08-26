@@ -6,14 +6,14 @@
 
 #include <anira/anira.h>
 
-#include "../../extras/models/cnn/CNNConfig.h"
-#include "../../extras/models/cnn/CNNPrePostProcessor.h"
-#include "../../extras/models/cnn/advanced-configs/CNNNoneProcessor.h" // This one is only needed for the round trip test, when selecting the None backend
-#include "../../extras/models/hybrid-nn/HybridNNConfig.h"
-#include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../extras/models/hybrid-nn/advanced-configs/HybridNNNoneProcessor.h" // Only needed for round trip test
-#include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
+#include "../../../extras/desktop/models/cnn/CNNConfig.h"
+#include "../../../extras/desktop/models/cnn/CNNPrePostProcessor.h"
+#include "../../../extras/desktop/models/cnn/advanced-configs/CNNNoneProcessor.h" // This one is only needed for the round trip test, when selecting the None backend
+#include "../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNNoneProcessor.h" // Only needed for round trip test
+#include "../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../extras/desktop/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
 
 //==============================================================================
 class AudioPluginAudioProcessor  : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener
