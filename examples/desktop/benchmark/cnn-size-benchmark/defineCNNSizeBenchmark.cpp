@@ -3,10 +3,10 @@
 #include <anira/anira.h>
 #include <anira/benchmark.h>
 
-#include "../../../extras/models/cnn/advanced-configs/CNNAdvancedConfigs.h"
-#include "../../../extras/models/cnn/medium-cnn-advanced-config/Medium_CNNAdvancedConfigs.h"
-#include "../../../extras/models/cnn/small-cnn-advanced-config/Small_CNNAdvancedConfigs.h"
-#include "../../../extras/models/cnn/CNNPrePostProcessor.h"
+#include "../../../../extras/desktop/models/cnn/advanced-configs/CNNAdvancedConfigs.h"
+#include "../../../../extras/desktop/models/cnn/medium-cnn-advanced-config/Medium_CNNAdvancedConfigs.h"
+#include "../../../../extras/desktop/models/cnn/small-cnn-advanced-config/Small_CNNAdvancedConfigs.h"
+#include "../../../../extras/desktop/models/cnn/CNNPrePostProcessor.h"
 
 
 /* ============================================================ *

@@ -3,12 +3,12 @@
 #include <anira/anira.h>
 #include <anira/benchmark.h>
 
-#include "../../../extras/models/cnn/advanced-configs/CNNAdvancedConfigs.h"
-#include "../../../extras/models/cnn/CNNPrePostProcessor.h"
-#include "../../../extras/models/hybrid-nn/advanced-configs/HybridNNAdvancedConfigs.h"
-#include "../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../extras/models/stateful-rnn/advanced-configs/StatefulRNNAdvancedConfigs.h"
-#include "../../../extras/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
+#include "../../../../extras/desktop/models/cnn/advanced-configs/CNNAdvancedConfigs.h"
+#include "../../../../extras/desktop/models/cnn/CNNPrePostProcessor.h"
+#include "../../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNAdvancedConfigs.h"
+#include "../../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../../../extras/desktop/models/stateful-rnn/advanced-configs/StatefulRNNAdvancedConfigs.h"
+#include "../../../../extras/desktop/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
 #include "ClearNoneProcessor.h"
 
 
