@@ -11,6 +11,15 @@ target_include_directories(${PROJECT_NAME}
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
+# This will be problematic anyway since symbols are not found when linking the torch libraries privately
+# Therefore, the install target will not work properly
+if (TORCH_LIBRARIES_ALL_PRIVATE)
+    target_include_directories(${PROJECT_NAME}
+        PUBLIC
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/torch/csrc/api/include>
+    )
+endif()
+
 target_link_directories(${PROJECT_NAME} PUBLIC
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_LIBDIR}>
 )

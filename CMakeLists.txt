@@ -139,10 +139,12 @@ target_compile_definitions(${PROJECT_NAME}
 
 if(ANIRA_WITH_LIBTORCH)
     # The find_package(Torch) adds the libraries libc10.so and libkineto.a as full paths to ${TORCH_LIBRARIES}. This is no problem when we add anira as a subdirectory to another project, but when we install the library, the torch libraries will be link targets of the anira library with full paths and hence not found on other systems. Therefore, we link those libs privately and only add the torch target publicly.
-    # Also until cmake 3.26, there is a bug where the torch_cpu library is not found when linking publicly, see https://gitlab.kitware.com/cmake/cmake/-/issues/24163
-    # On Windows, we need to link the torch libraries publicly, because otherwise we get errors like LNK2001: unresolved external symbol "__declspec(dllimport) unsigned short const caffe2::detail::detail_guard_long_unique_std_vector_long_metadata_index"
-    # TODO: Check if this has to do with dllimport/dllexport settings in the anira API
-    if (MSVC OR LINUX)
+    # Also until cmake 3.26, there is a bug where the torch_cpu library is not found when linking publicly https://gitlab.kitware.com/cmake/cmake/-/issues/24163 and anira is added as a subdirectory to another project, see
+    # But this is necessary for when we install the library since otherwise symbols are not found
+    if (CMAKE_VERSION VERSION_LESS "3.26.0" AND NOT (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR))
+        target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
+        set(TORCH_LIBRARIES_ALL_PRIVATE TRUE)
+    else()
         foreach(TORCH_LIB ${TORCH_LIBRARIES})
             if(TORCH_LIB STREQUAL "torch" OR TORCH_LIB STREQUAL "torch_library")
                 target_link_libraries(${PROJECT_NAME} PUBLIC ${TORCH_LIB})
@@ -150,8 +152,6 @@ if(ANIRA_WITH_LIBTORCH)
                 target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIB})
             endif()
         endforeach()
-    else()
-        target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
     endif()
 endif()
 
