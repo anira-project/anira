@@ -50,8 +50,8 @@ private:
 private:
 
     inline static std::vector<std::shared_ptr<SessionElement>> sessions;
-    inline static std::atomic<int> nextId = 0;
-    inline static std::atomic<int> activeSessions = 0;
+    inline static std::atomic<int> nextId{0};
+    inline static std::atomic<int> activeSessions{0};
     inline static bool threadPoolShouldExit = false;
 
     inline static std::vector<std::unique_ptr<InferenceThread>> threadPool;
