@@ -5,17 +5,17 @@
 
 static anira::InferenceConfig hybridNNConfig_128(
 #ifdef USE_LIBTORCH
-        GUITARLSTM_MODELS_PATH_PYTORCH + std::string("model_0/GuitarLSTM-dynamic.pt"),
+        GUITARLSTM_MODELS_PATH_PYTORCH + std::string("/model_0/GuitarLSTM-dynamic.pt"),
         {128, 1, 150},
         {128, 1},
 #endif
 #ifdef USE_ONNXRUNTIME
-        GUITARLSTM_MODELS_PATH_PYTORCH + std::string("model_0/GuitarLSTM-libtorch-dynamic.onnx"),
+        GUITARLSTM_MODELS_PATH_PYTORCH + std::string("/model_0/GuitarLSTM-libtorch-dynamic.onnx"),
         {128, 1, 150},
         {128, 1},
 #endif
 #ifdef USE_TFLITE
-        GUITARLSTM_MODELS_PATH_TENSORFLOW + std::string("model_0/GuitarLSTM-128.tflite"),
+        GUITARLSTM_MODELS_PATH_TENSORFLOW + std::string("/model_0/GuitarLSTM-128.tflite"),
         {128, 150, 1},
         {128, 1},
 #endif

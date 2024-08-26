@@ -1,5 +1,5 @@
 if(ANIRA_WITH_EXAMPLES)
     add_subdirectory(desktop)
 elseif(ANIRA_WITH_BELA_EXAMPLE)
-    add_subdirectory(bela)
+    add_subdirectory(embedded/bela)
 endif()

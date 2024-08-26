@@ -28,11 +28,12 @@ foreach(repo IN LISTS MODEL_REPOSITORIES)
     endif()
 endforeach()
 
-set(GUITARLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_CURRENT_LIST_DIR}/models/hybrid-nn/GuitarLSTM/tensorflow-version/models/" PARENT_SCOPE)
-set(GUITARLSTM_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/hybrid-nn/GuitarLSTM/pytorch-version/models/" PARENT_SCOPE)
+# Using CACHE PATH to set the default path for the models, since PARENT_SCOPE is only propagated one level up. Cache variables are global.
+set(GUITARLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_CURRENT_LIST_DIR}/models/hybrid-nn/GuitarLSTM/tensorflow-version/models/" CACHE PATH "Path to the GuitarLSTM TensorFlow models")
+set(GUITARLSTM_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/hybrid-nn/GuitarLSTM/pytorch-version/models/" CACHE PATH "Path to the GuitarLSTM PyTorch models")
 
-set(STEERABLENAFX_MODELS_PATH_TENSORFLOW "${CMAKE_CURRENT_LIST_DIR}/models/cnn/steerable-nafx/models/" PARENT_SCOPE)
-set(STEERABLENAFX_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/cnn/steerable-nafx/models/" PARENT_SCOPE)
+set(STEERABLENAFX_MODELS_PATH_TENSORFLOW "${CMAKE_CURRENT_LIST_DIR}/models/cnn/steerable-nafx/models/" CACHE PATH "Path to the SteerableNAFX TensorFlow models")
+set(STEERABLENAFX_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/cnn/steerable-nafx/models/" CACHE PATH "Path to the SteerableNAFX PyTorch models")
 
-set(STATEFULLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_CURRENT_LIST_DIR}/models/stateful-rnn/stateful-lstm/models/" PARENT_SCOPE)
-set(STATEFULLSTM_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/stateful-rnn/stateful-lstm/models/" PARENT_SCOPE)
+set(STATEFULLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_CURRENT_LIST_DIR}/models/stateful-rnn/stateful-lstm/models/" CACHE PATH "Path to the StatefulLSTM TensorFlow models")
+set(STATEFULLSTM_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/stateful-rnn/stateful-lstm/models/" CACHE PATH "Path to the StatefulLSTM PyTorch models")
