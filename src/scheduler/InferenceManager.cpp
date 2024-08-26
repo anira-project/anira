@@ -63,7 +63,11 @@ void InferenceManager::processOutput(float ** inputBuffer, size_t inputSamples) 
                 }
             }
             inferenceCounter--;
-            std::cout << "##### catch up samples" << std::endl;
+#ifndef BELA
+            std::cout << "[WARNING] Catch up samples!" << std::endl;
+#else
+            printf("[WARNING] Catch up samples!");
+#endif
         }
         else {
             break;
@@ -79,7 +83,11 @@ void InferenceManager::processOutput(float ** inputBuffer, size_t inputSamples) 
     else {
         clearBuffer(inputBuffer, inputSamples);
         inferenceCounter++;
-        std::cout << "##### missing samples" << std::endl;
+#ifndef BELA
+            std::cout << "[WARNING] Missing samples!" << std::endl;
+#else
+            printf("[WARNING] Missing samples!\n");
+#endif
     }
 }
 
@@ -150,6 +158,7 @@ int InferenceManager::calculateBufferAdaptation(int hostBufferSize, int modelOut
 int InferenceManager::maxNumberOfInferences(int hostBufferSize, int modelOutputSize) {
     float samplesInBuffer = hostBufferSize;
     int res = (int) (samplesInBuffer / (float) modelOutputSize);
+    res = std::max<int>(res, 1);
     int numberOfInferences = 0;
     for (int i = hostBufferSize; i < leatCommonMultiple(hostBufferSize, modelOutputSize) ; i+=hostBufferSize) {
         numberOfInferences = (int) (samplesInBuffer / (float) modelOutputSize);

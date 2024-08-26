@@ -166,12 +166,20 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
             return true;
         } else {
             if (i == session.inferenceQueue.size() - 1) {
-                std::cout << "##### No free inferenceQueue found!" << std::endl;
+#ifndef BELA
+                std::cout << "[WARNING] No free inferenceQueue found!" << std::endl;
+#else
+                printf("[WARNING] No free inferenceQueue found!\n");
+#endif
                 return false;
             }
         }
     }
-    std::cout << "##### No free inferenceQueue found!" << std::endl;
+#ifndef BELA
+    std::cout << "[WARNING] No free inferenceQueue found!" << std::endl;
+#else
+    printf("[WARNING] No free inferenceQueue found!\n");
+#endif
     return false;
 }
 
