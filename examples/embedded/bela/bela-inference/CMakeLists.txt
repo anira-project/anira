@@ -65,6 +65,10 @@ find_library(MATHNEON_LIB REQUIRED
 # list(APPEND CMAKE_PREFIX_PATH "anira-0.1.0-bela") # Use this if you use the precompiled version of anira
 # find_package(anira REQUIRED)
 
+################################################################
+# Adding the executable
+################################################################
+
 set(EXE_NAME ${PROJECT_NAME})
 
 file(GLOB SRC_FILES *.cpp)
