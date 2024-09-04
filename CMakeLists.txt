@@ -25,7 +25,7 @@ option(ANIRA_WITH_SEMAPHORE "Use semaphores for synchronization instead of atomi
 
 set (PROJECT_NAME anira)
 
-project (${PROJECT_NAME} VERSION 0.1.1)
+project (${PROJECT_NAME} VERSION 0.1.2)
 
 # Sets the minimum macOS version, c++20 is only available from macOS 11.0
 if (APPLE)
