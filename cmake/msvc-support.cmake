@@ -5,8 +5,11 @@
 # Define the export symbol for MSVC builds (shared library)
 target_compile_definitions(${PROJECT_NAME} PRIVATE ANIRA_EXPORTS)
 
-# Anira DLL
-file(GLOB_RECURSE ANIRA_DLL "${anira_BINARY_DIR}/*anira.dll")
+if(CMAKE_GENERATOR MATCHES "Visual Studio")
+    set(ANIRA_DLL "${anira_BINARY_DIR}/${CMAKE_BUILD_TYPE}/anira.dll")
+else()
+    set(ANIRA_DLL "${anira_BINARY_DIR}/anira.dll")
+endif()
 
 # Make a list of all necessary DLLs for the project
 get_directory_property(hasParent PARENT_DIRECTORY)
@@ -40,8 +43,13 @@ endif(ANIRA_WITH_LIBTORCH)
 
 # Google Benchmark and Google Test DLLs
 if (ANIRA_WITH_BENCHMARK)
-    file(GLOB_RECURSE GOOGLE_BENCHMARK_DLL "${benchmark_BINARY_DIR}/*.dll")
-    file(GLOB_RECURSE GOOGLE_TEST_DLL "${CMAKE_BINARY_DIR}/bin/*.dll")
-    list(APPEND NECESSARY_DLLS ${GOOGLE_BENCHMARK_DLL})
-    list(APPEND NECESSARY_DLLS ${GOOGLE_TEST_DLL})
+    if(CMAKE_GENERATOR MATCHES "Visual Studio")
+        list(APPEND NECESSARY_DLLS "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}/gtest.dll")
+        list(APPEND NECESSARY_DLLS "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}/gtest_main.dll")
+        list(APPEND NECESSARY_DLLS "${CMAKE_BINARY_DIR}/_deps/benchmark-build/src/${CMAKE_BUILD_TYPE}/benchmark.dll")
+    else()
+        list(APPEND NECESSARY_DLLS "${CMAKE_BINARY_DIR}/bin/gtest.dll")
+        list(APPEND NECESSARY_DLLS "${CMAKE_BINARY_DIR}/bin/gtest_main.dll")
+        list(APPEND NECESSARY_DLLS "${CMAKE_BINARY_DIR}/_deps/benchmark-build/src/benchmark.dll")
+    endif()
 endif(ANIRA_WITH_BENCHMARK)
