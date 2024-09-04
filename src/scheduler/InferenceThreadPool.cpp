@@ -125,7 +125,7 @@ void InferenceThreadPool::newDataRequest(SessionElement& session, double bufferS
 #endif
     for (size_t i = 0; i < session.inferenceQueue.size(); ++i) {
         // TODO: find better way to do this fix of SEGFAULT when comparing with empty TimeStampQueue
-        if (session.timeStamps.size() > 0 && session.inferenceQueue[i]->time == session.timeStamps.back()) {
+        if (session.timeStamps.size() > 0 && session.inferenceQueue[i]->timeStamp == session.timeStamps.back()) {
 #ifdef USE_SEMAPHORE
             if (session.inferenceQueue[i]->done.try_acquire_until(waitUntil)) {
 #else
@@ -151,9 +151,8 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
 #endif
             session.prePostProcessor.preProcess(session.sendBuffer, session.inferenceQueue[i]->processedModelInput, session.currentBackend.load());
 
-            const std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
-            session.timeStamps.insert(session.timeStamps.begin(), now);
-            session.inferenceQueue[i]->time = now;
+            session.timeStamps.insert(session.timeStamps.begin(), session.m_current_sample);
+            session.inferenceQueue[i]->timeStamp = session.m_current_sample;
 #ifdef USE_SEMAPHORE
             session.inferenceQueue[i]->ready.release();
             session.m_session_counter.release();

@@ -34,7 +34,7 @@ struct ANIRA_API SessionElement {
         std::atomic<bool> ready{false};
         std::atomic<bool> done{false};
 #endif
-        std::chrono::time_point<std::chrono::system_clock> time;
+        unsigned long timeStamp;
         AudioBufferF processedModelInput = AudioBufferF();
         AudioBufferF rawModelOutput = AudioBufferF();
     };
@@ -44,7 +44,8 @@ struct ANIRA_API SessionElement {
     std::vector<std::unique_ptr<ThreadSafeStruct>> inferenceQueue;
 
     std::atomic<InferenceBackend> currentBackend {NONE};
-    std::vector<std::chrono::time_point<std::chrono::system_clock>> timeStamps;
+    unsigned long m_current_sample = 0;
+    std::vector<unsigned long> timeStamps;
 
 #ifdef USE_SEMAPHORE
     std::counting_semaphore<1000> m_session_counter{0};
