@@ -98,6 +98,14 @@ void InferenceThreadPool::prepare(SessionElement& session, HostAudioConfig newCo
     session.clear();
     session.prepare(newConfig);
 
+#ifdef USE_SEMAPHORE
+    while (global_counter.try_acquire()) {
+        // Nothing to do here, just reducing count
+    }
+#else
+    global_counter.store(0);
+#endif
+
     for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
         threadPool[i]->start();
     }

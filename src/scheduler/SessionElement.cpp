@@ -17,9 +17,18 @@ SessionElement::SessionElement(int newSessionID, PrePostProcessor& ppP, Inferenc
     }
 
     void SessionElement::clear() {
-        sendBuffer.clear();
-        receiveBuffer.clear();
+        sendBuffer.clearWithPositions();
+        receiveBuffer.clearWithPositions();
 
+#ifdef USE_SEMAPHORE
+        while (m_session_counter.try_acquire()) {
+            // Nothing to do here, just reducing count
+        }
+#else
+        m_session_counter.store(0);
+#endif
+
+        timeStamps.clear();
         inferenceQueue.clear();
     }
 
