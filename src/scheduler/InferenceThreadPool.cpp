@@ -174,7 +174,7 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
             session.m_session_counter.fetch_add(1);
             global_counter.fetch_add(1);
 #endif
-            if (session.m_current_queue >= UINT32_MAX) {
+            if (session.m_current_queue >= UINT16_MAX) {
                 session.m_current_queue = 0;
             } else {
                 session.m_current_queue++;

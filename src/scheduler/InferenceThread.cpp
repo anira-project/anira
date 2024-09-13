@@ -3,7 +3,7 @@
 namespace anira {
 
 #ifdef USE_SEMAPHORE
-InferenceThread::InferenceThread(std::counting_semaphore<UINT32_MAX>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses) :
+InferenceThread::InferenceThread(std::counting_semaphore<UINT16_MAX>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses) :
 #else
 InferenceThread::InferenceThread(std::atomic<int>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses) :
 #endif
@@ -30,7 +30,7 @@ InferenceThread::InferenceThread(std::atomic<int>& g, InferenceConfig& config, s
 #endif
 }
 #ifdef USE_SEMAPHORE
-InferenceThread::InferenceThread(std::counting_semaphore<UINT32_MAX>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID) :
+InferenceThread::InferenceThread(std::counting_semaphore<UINT16_MAX>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID) :
 #else
 InferenceThread::InferenceThread(std::atomic<int>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID) :
 #endif
