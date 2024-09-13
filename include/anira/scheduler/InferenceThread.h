@@ -41,7 +41,7 @@ public:
     int getSessionID() const { return sessionID; }
 
 private:
-    void tryInference(std::shared_ptr<SessionElement> session);
+    bool tryInference(std::shared_ptr<SessionElement> session);
     void inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output);
 
 private:

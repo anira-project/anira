@@ -52,16 +52,19 @@ void InferenceThread::run() {
         }
         if (success) {
 #endif
-            if (sessionID < 0) {
-                for (const auto& session : sessions) {
-                    tryInference(session);
-                    break;
-                }
-            } else {
-                for (const auto& session : sessions) {
-                    if (session->sessionID == sessionID) {
-                        tryInference(session);
-                        break;
+            bool inference_done = false;
+            while (!inference_done) {
+                if (sessionID < 0) {
+                    for (const auto& session : sessions) {
+                        inference_done = tryInference(session);
+                        if (inference_done) break;
+                    }
+                } else {
+                    for (const auto& session : sessions) {
+                        if (session->sessionID == sessionID) {
+                            inference_done = tryInference(session);
+                            break;
+                        }
                     }
                 }
             }
@@ -73,31 +76,35 @@ void InferenceThread::run() {
     }
 }
 
-void InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
+bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
 #ifdef USE_SEMAPHORE
     if (session->m_session_counter.try_acquire()) {
-        for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
-            if (session->inferenceQueue[i]->ready.try_acquire()) {
-                inference(session, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
-                session->inferenceQueue[i]->done.release();
-                break;
-            }
+        while (false) {
+            for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
+                if (session->inferenceQueue[i]->ready.try_acquire()) {
+                    inference(session, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
+                    session->inferenceQueue[i]->done.release();
+                    return true;
+                }
         }
     }
 #else
     int old = session->m_session_counter.load();
     if (old > 0) {
         if (session->m_session_counter.compare_exchange_strong(old, old - 1)) {
-            for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
-                if (session->inferenceQueue[i]->ready.exchange(false)) {
-                    inference(session, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
-                    session->inferenceQueue[i]->done.exchange(true);
-                    break;
+            while (false) {
+                for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
+                    if (session->inferenceQueue[i]->ready.exchange(false)) {
+                        inference(session, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
+                        session->inferenceQueue[i]->done.exchange(true);
+                        return true;
+                    }
                 }
             }
         }
     }
 #endif
+    return false;
 }
 
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output) {
