@@ -124,11 +124,11 @@ elseif(APPLE)
     endif()
 endif()
 
+set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/")
+
 get_directory_property(hasParent PARENT_DIRECTORY)
 if(hasParent)
-    set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/" PARENT_SCOPE)
-else ()
-    set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/")
+    set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${ANIRA_LIBTORCH_SHARED_LIB_PATH}" PARENT_SCOPE)
 endif()
 
 # Normally the following lines are not needed, because the Torch package already includes the necessary directories

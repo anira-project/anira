@@ -38,7 +38,7 @@ target_link_libraries(${PROJECT_NAME} anira::anira)
 gtest_discover_tests(${PROJECT_NAME} DISCOVERY_TIMEOUT 90)
 
 if (MSVC)
-	foreach(DLL ${NECESSARY_DLLS})
+	foreach(DLL ${ANIRA_SHARED_LIBS_WIN})
 		add_custom_command(TARGET ${PROJECT_NAME}
 				PRE_BUILD
 				COMMAND ${CMAKE_COMMAND} -E copy_if_different
