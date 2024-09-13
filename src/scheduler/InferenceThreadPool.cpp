@@ -164,8 +164,8 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
 #endif
             session.prePostProcessor.preProcess(session.sendBuffer, session.inferenceQueue[i]->processedModelInput, session.currentBackend.load());
 
-            session.timeStamps.insert(session.timeStamps.begin(), session.m_current_sample);
-            session.inferenceQueue[i]->timeStamp = session.m_current_sample;
+            session.timeStamps.insert(session.timeStamps.begin(), session.m_current_queue);
+            session.inferenceQueue[i]->timeStamp = session.m_current_queue;
 #ifdef USE_SEMAPHORE
             session.inferenceQueue[i]->ready.release();
             session.m_session_counter.release();
@@ -175,6 +175,11 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
             session.m_session_counter.fetch_add(1);
             global_counter.fetch_add(1);
 #endif
+            if (session.m_current_queue >= UINT32_MAX) {
+                session.m_current_queue = 0;
+            } else {
+                session.m_current_queue++;
+            }
             return true;
         }
     }
