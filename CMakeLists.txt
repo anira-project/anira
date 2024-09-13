@@ -96,6 +96,7 @@ target_sources(${PROJECT_NAME}
         src/scheduler/SessionElement.cpp
 
         # Utils
+        src/utils/AudioBuffer.cpp
         src/utils/RingBuffer.cpp
 
         # Interface
