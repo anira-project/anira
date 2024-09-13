@@ -23,7 +23,7 @@ static anira::InferenceConfig medium_cnnConfig_256(
         5.33f,
         0,
         false,
-        0.5f,
+        0.f,
         false
 );
 

@@ -23,7 +23,7 @@ static anira::InferenceConfig cnnConfig_2048(
         42.66f,
         0,
         false,
-        0.5f,
+        0.f,
         false
 );
 

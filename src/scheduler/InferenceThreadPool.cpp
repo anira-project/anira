@@ -131,16 +131,20 @@ void InferenceThreadPool::newDataRequest(SessionElement& session, double bufferS
     auto currentTime = std::chrono::system_clock::now();
     auto waitUntil = currentTime + timeToProcess;
 #endif
-    for (size_t i = 0; i < session.inferenceQueue.size(); ++i) {
-        // TODO: find better way to do this fix of SEGFAULT when comparing with empty TimeStampQueue
-        if (session.timeStamps.size() > 0 && session.inferenceQueue[i]->timeStamp == session.timeStamps.back()) {
+    while (session.timeStamps.size() > 0) {
+        for (size_t i = 0; i < session.inferenceQueue.size(); ++i) {
+            if (session.inferenceQueue[i]->timeStamp == session.timeStamps.back()) {
 #ifdef USE_SEMAPHORE
-            if (session.inferenceQueue[i]->done.try_acquire_until(waitUntil)) {
+                if (session.inferenceQueue[i]->done.try_acquire_until(waitUntil)) {
 #else
-            if (session.inferenceQueue[i]->done.exchange(false)) {
+                if (session.inferenceQueue[i]->done.exchange(false)) {
 #endif
-                session.timeStamps.pop_back();
-                postProcess(session, *session.inferenceQueue[i]);
+                    session.timeStamps.pop_back();
+                    postProcess(session, *session.inferenceQueue[i]);
+                } else {
+                    return;
+                }
+                break;
             }
         }
     }
@@ -159,8 +163,8 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
 #endif
             session.prePostProcessor.preProcess(session.sendBuffer, session.inferenceQueue[i]->processedModelInput, session.currentBackend.load());
 
-            session.timeStamps.insert(session.timeStamps.begin(), session.m_current_sample);
-            session.inferenceQueue[i]->timeStamp = session.m_current_sample;
+            session.timeStamps.insert(session.timeStamps.begin(), session.m_current_queue);
+            session.inferenceQueue[i]->timeStamp = session.m_current_queue;
 #ifdef USE_SEMAPHORE
             session.inferenceQueue[i]->ready.release();
             session.m_session_counter.release();
@@ -170,16 +174,12 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
             session.m_session_counter.fetch_add(1);
             global_counter.fetch_add(1);
 #endif
-            return true;
-        } else {
-            if (i == session.inferenceQueue.size() - 1) {
-#ifndef BELA
-                std::cout << "[WARNING] No free inferenceQueue found!" << std::endl;
-#else
-                printf("[WARNING] No free inferenceQueue found!\n");
-#endif
-                return false;
+            if (session.m_current_queue >= UINT16_MAX) {
+                session.m_current_queue = 0;
+            } else {
+                session.m_current_queue++;
             }
+            return true;
         }
     }
 #ifndef BELA
@@ -192,7 +192,6 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
 
 void InferenceThreadPool::postProcess(SessionElement& session, SessionElement::ThreadSafeStruct& nextBuffer) {
     session.prePostProcessor.postProcess(nextBuffer.rawModelOutput, session.receiveBuffer, session.currentBackend.load());
-    // TODO: shall we clear before we release?
 #ifdef USE_SEMAPHORE
     nextBuffer.free.release();
 #else

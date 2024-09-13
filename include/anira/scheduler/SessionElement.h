@@ -44,11 +44,11 @@ struct ANIRA_API SessionElement {
     std::vector<std::unique_ptr<ThreadSafeStruct>> inferenceQueue;
 
     std::atomic<InferenceBackend> currentBackend {NONE};
-    unsigned long m_current_sample = 0;
+    unsigned long m_current_queue = 0;
     std::vector<unsigned long> timeStamps;
 
 #ifdef USE_SEMAPHORE
-    std::counting_semaphore<1000> m_session_counter{0};
+    std::counting_semaphore<UINT16_MAX> m_session_counter{0};
 #else
     std::atomic<int> m_session_counter{0};
 #endif

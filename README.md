@@ -124,6 +124,10 @@ By default, all three inference engines are installed. You can disable specific 
 - OnnxRuntime: ```-DANIRA_WITH_ONNXRUNTIME=OFF```
 - Tensrflow Lite. ```-DANIRA_WITH_TFLITE=OFF```
 
+The method of thread synchronization can be chosen between hard real-time safe raw atomic operations and an option with semaphores. The option with semaphores allows the use of `wait_in_process_block` in the `InferenceConfig` class. The default is the raw atomic operations. To enable the semaphore option, use the following flag:
+
+- Use semaphores for thread synchronization: ```-DANIRA_WITH_SEMAPHORES=ON```
+
 Moreover the following options are available:
 
 - Build anira with benchmark capabilities: ```-DANIRA_WITH_BENCHMARK=ON```

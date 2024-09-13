@@ -59,7 +59,7 @@ void OnnxRuntimeProcessor::processBlock(AudioBufferF& input, AudioBufferF& outpu
         outputTensor = session->Run(Ort::RunOptions{nullptr}, inputNames.data(), inputTensor.data(), inputNames.size(), outputNames.data(), outputNames.size());
     }
     catch (Ort::Exception &e) {
-        std::cout << e.what() << std::endl;
+        std::cerr << e.what() << std::endl;
     }
 
     auto outputWritePtr = output.getWritePointer(0);

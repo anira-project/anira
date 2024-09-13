@@ -44,11 +44,6 @@ void InferenceManager::process(float ** inputBuffer, size_t inputSamples) {
     inferenceThreadPool->newDataRequest(session, timeInSec);
 
     processOutput(inputBuffer, inputSamples);
-
-    session.m_current_sample += inputSamples;
-    if (session.m_current_sample >= UINT32_MAX) {
-        session.m_current_sample = 0;
-    }
 }
 
 void InferenceManager::processInput(float ** inputBuffer, size_t inputSamples) {

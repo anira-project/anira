@@ -31,7 +31,7 @@ public:
     static int getNumberOfSessions();
 
 #ifdef USE_SEMAPHORE
-    inline static std::counting_semaphore<1000> global_counter{0};
+    inline static std::counting_semaphore<UINT16_MAX> global_counter{0};
 #else
     inline static std::atomic<int> global_counter{0};
 #endif

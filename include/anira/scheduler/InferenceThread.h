@@ -29,8 +29,8 @@ namespace anira {
 class ANIRA_API InferenceThread : public RealtimeThread {
 public:
 #ifdef USE_SEMAPHORE
-    InferenceThread(std::counting_semaphore<1000>& m_global_counter, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& sessions);
-    InferenceThread(std::counting_semaphore<1000>& m_global_counter, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID);
+    InferenceThread(std::counting_semaphore<UINT16_MAX>& m_global_counter, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& sessions);
+    InferenceThread(std::counting_semaphore<UINT16_MAX>& m_global_counter, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID);
 #else
     InferenceThread(std::atomic<int>& m_global_counter, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& sessions);
     InferenceThread(std::atomic<int>& m_global_counter, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID);
@@ -41,12 +41,12 @@ public:
     int getSessionID() const { return sessionID; }
 
 private:
-    void tryInference(std::shared_ptr<SessionElement> session);
+    bool tryInference(std::shared_ptr<SessionElement> session);
     void inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output);
 
 private:
 #ifdef USE_SEMAPHORE
-    std::counting_semaphore<1000>& m_global_counter;
+    std::counting_semaphore<UINT16_MAX>& m_global_counter;
 #else
     std::atomic<int>& m_global_counter;
 #endif

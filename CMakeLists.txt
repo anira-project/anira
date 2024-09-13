@@ -17,7 +17,7 @@ option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
 option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 
 # Shall semaphores be used for synchronization instead of atomic variables?
-option(ANIRA_WITH_SEMAPHORE "Use semaphores for synchronization instead of atomic variables" ON)
+option(ANIRA_WITH_SEMAPHORE "Use semaphores for synchronization instead of atomic variables" OFF)
 
 # ==============================================================================
 # Setup the project
