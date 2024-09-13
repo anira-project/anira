@@ -79,7 +79,7 @@ void InferenceThread::run() {
 bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
 #ifdef USE_SEMAPHORE
     if (session->m_session_counter.try_acquire()) {
-        while (false) {
+        while (true) {
             for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
                 if (session->inferenceQueue[i]->ready.try_acquire()) {
                     inference(session, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
@@ -92,7 +92,7 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
     int old = session->m_session_counter.load();
     if (old > 0) {
         if (session->m_session_counter.compare_exchange_strong(old, old - 1)) {
-            while (false) {
+            while (true) {
                 for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
                     if (session->inferenceQueue[i]->ready.exchange(false)) {
                         inference(session, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
