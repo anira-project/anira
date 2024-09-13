@@ -171,15 +171,6 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
             global_counter.fetch_add(1);
 #endif
             return true;
-        } else {
-            if (i == session.inferenceQueue.size() - 1) {
-#ifndef BELA
-                std::cout << "[WARNING] No free inferenceQueue found!" << std::endl;
-#else
-                printf("[WARNING] No free inferenceQueue found!\n");
-#endif
-                return false;
-            }
         }
     }
 #ifndef BELA
