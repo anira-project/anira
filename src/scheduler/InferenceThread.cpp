@@ -86,6 +86,7 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
                     session->inferenceQueue[i]->done.release();
                     return true;
                 }
+            }
         }
     }
 #else
