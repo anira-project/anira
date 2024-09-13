@@ -9,8 +9,8 @@ LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : BackendBase(conf
         module = torch::jit::load(inferenceConfig.m_model_path_torch);
     }
     catch (const c10::Error& e) {
-        std::cerr << "error loading the model\n";
-        std::cout << e.what() << std::endl;
+        std::cerr << "[ERROR] error loading the model\n";
+        std::cerr << e.what() << std::endl;
     }
 }
 
