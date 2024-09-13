@@ -41,10 +41,11 @@ anira::InferenceConfig hybridNNConfig(
 
     0, // Internal model latency in samples for processing of all batches (optional: default = 0)
     false, // Warm-up the inference engine with a null inference run in prepare method (optional: default = false)
-    0.5f, // Wait for the next processed buffer from the thread pool in the real-time thread's process block
+    0.f,  // ONLY AVAILABlE WHEN USING SEMAPHORES FOR THREAD SYNCHRONIZATION!
+          // Wait for the next processed buffer from the thread pool in the real-time thread's process block
           // method to reduce latency. 0.f is no waiting and 0.5f is wait for half a buffertime. Example
           // buffer size 512 and sample rate 48000 Hz, a value of 0.5f = 5.33 ms of maximum waiting time
-          // (optional: default = 0.5f)
+          // (optional: default = 0.f)
     false, // Bind one instance of the InferenceHandler to one thread (optional: default = false), this needs
            // to be set to true if you use a stateful model 
     8 // Number of threads for parallel inference
