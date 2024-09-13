@@ -48,7 +48,7 @@ struct ANIRA_API SessionElement {
     std::vector<unsigned long> timeStamps;
 
 #ifdef USE_SEMAPHORE
-    std::counting_semaphore<1000> m_session_counter{0};
+    std::counting_semaphore<UINT32_MAX> m_session_counter{0};
 #else
     std::atomic<int> m_session_counter{0};
 #endif
