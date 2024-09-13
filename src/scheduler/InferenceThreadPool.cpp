@@ -193,7 +193,6 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
 
 void InferenceThreadPool::postProcess(SessionElement& session, SessionElement::ThreadSafeStruct& nextBuffer) {
     session.prePostProcessor.postProcess(nextBuffer.rawModelOutput, session.receiveBuffer, session.currentBackend.load());
-    // TODO: shall we clear before we release?
 #ifdef USE_SEMAPHORE
     nextBuffer.free.release();
 #else
