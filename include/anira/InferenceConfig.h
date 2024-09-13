@@ -29,9 +29,9 @@ struct ANIRA_API InferenceConfig {
             float max_inference_time = 0, // in ms per input of batch_size
             int model_latency = 0, // in samples per input of batch_size
             bool warm_up = false,
-            float wait_in_process_block = 0.5f,
+            float wait_in_process_block = 0.f,
             bool bind_session_to_thread = false,
-            int numberOfThreads = ((int) std::thread::hardware_concurrency() - 1 > 0) ? (int) std::thread::hardware_concurrency() - 1 : 1) :
+            int numberOfThreads = ((int) std::thread::hardware_concurrency() / 2 > 0) ? (int) std::thread::hardware_concurrency() / 2 : 1) :
 #ifdef USE_LIBTORCH
             m_model_path_torch(model_path_torch),
             m_model_input_shape_torch(model_input_shape_torch),
