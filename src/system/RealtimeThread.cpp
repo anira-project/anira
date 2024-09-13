@@ -73,7 +73,8 @@ void RealtimeThread::elevateToRealTimePriority(std::thread::native_handle_type t
         std::cerr << "[ERROR] Failed to get Thread scheduling policy and params : " << errno << std::endl;
     }
 
-    sch_params.sched_priority = 85;
+    // Pipewire uses SCHED_FIFO 60 and juce plugin host uses SCHED_FIFO 55 better stay below
+    sch_params.sched_priority = 50;
 
     ret = pthread_setschedparam(thread_native_handle, SCHED_FIFO, &sch_params); 
     if(ret != 0) {

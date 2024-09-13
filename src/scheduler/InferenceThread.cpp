@@ -40,10 +40,10 @@ InferenceThread::InferenceThread(std::atomic<int>& g, InferenceConfig& config, s
 }
 
 void InferenceThread::run() {
-    std::chrono::microseconds timeForExit(500);
+    std::chrono::microseconds timeForExit(50);
     while (!shouldExit()) {
 #ifdef USE_SEMAPHORE
-        if (m_global_counter.try_acquire_for(timeForExit)) {
+        if (m_global_counter.try_acquire()) {
 #else
         int old = m_global_counter.load();
         bool success = false;
@@ -66,11 +66,10 @@ void InferenceThread::run() {
                 }
             }
         }
-#ifndef USE_SEMAPHORE
         else {
+            std::this_thread::yield();
             std::this_thread::sleep_for(timeForExit);
         }
-#endif
     }
 }
 
