@@ -131,9 +131,8 @@ void InferenceThreadPool::newDataRequest(SessionElement& session, double bufferS
     auto currentTime = std::chrono::system_clock::now();
     auto waitUntil = currentTime + timeToProcess;
 #endif
-    for (size_t i = 0; i < session.timeStamps.size(); ++i) {
+    while (session.timeStamps.size() > 0) {
         for (size_t i = 0; i < session.inferenceQueue.size(); ++i) {
-            // TODO: find better way to do this fix of SEGFAULT when comparing with empty TimeStampQueue
             if (session.inferenceQueue[i]->timeStamp == session.timeStamps.back()) {
 #ifdef USE_SEMAPHORE
                 if (session.inferenceQueue[i]->done.try_acquire_until(waitUntil)) {
