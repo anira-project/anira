@@ -125,7 +125,7 @@ if (MSVC)
 		add_custom_command(TARGET ${CONCATENATED_TARGET}
 				POST_BUILD
 				COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				${NECESSARY_DLLS}
+				${ANIRA_SHARED_LIBS_WIN}
 				$<TARGET_FILE_DIR:${TARGET_NAME}>/${FORMAT})
 	endforeach()
 endif (MSVC)

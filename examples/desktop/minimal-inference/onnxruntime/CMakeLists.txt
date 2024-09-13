@@ -13,7 +13,7 @@ target_link_libraries(minimal-onnxruntime
 )
 
 if (MSVC)
-    foreach(DLL ${NECESSARY_DLLS})
+    foreach(DLL ${ANIRA_SHARED_LIBS_WIN})
         add_custom_command(TARGET minimal-onnxruntime
                 PRE_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different

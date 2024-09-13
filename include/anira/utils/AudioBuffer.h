@@ -171,7 +171,7 @@ public:
     // Returns an array of read pointers to the data in all channels
     const T** getArrayOfReadPointers() const
     {
-        return m_p_channels;
+        return const_cast<const T**>(m_p_channels);
     }
 
     // Returns an array of write pointers to the data in all channels
