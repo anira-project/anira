@@ -66,13 +66,13 @@ On **Apple Silicon Macs** you need to install the OpenMP library via Homebrew (`
 
 ### CMake
 
-anira can be easily integrated into your CMake project. Either add anira as a submodule or download the pre-built binaries from the [releases page](https://github.com/tu-studio/anira/releases/latest).
+anira can be easily integrated into your CMake project. Either add anira as a submodule or download the pre-built binaries from the [releases page](https://github.com/anira-project/anira/releases/latest).
 
 #### Add as a git submodule
 
 ```bash
 # Add anira repo as a submodule
-git submodule add https://github.com/tu-studio/anira.git modules/anira
+git submodule add https://github.com/anira-project/anira.git modules/anira
 ```
 
 In your CMakeLists.txt, add anira as a subdirectory and link your target to the anira library:
@@ -91,7 +91,7 @@ target_link_libraries(your_target anira::anira)
 
 #### With pre-built binaries
 
-Download the pre-built binaries from your operating system and architecture from the [releases page](https://github.com/tu-studio/anira/releases/latest).
+Download the pre-built binaries from your operating system and architecture from the [releases page](https://github.com/anira-project/anira/releases/latest).
 
 ```cmake
 # Setup your project and target
@@ -111,7 +111,7 @@ target_link_libraries(your_target anira::anira)
 You can also build anira from source using CMake. All dependencies are automatically installed during the build process.
 
 ```bash
-git clone https://github.com/tu-studio/anira
+git clone https://github.com/anira-project/anira
 cmake . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --target anira
 ```
@@ -156,7 +156,7 @@ anira allows users to benchmark and compare the inference performance of differe
 
 ## Real-time safety
 
-anira's real-time safety is checked in [this](https://github.com/tu-studio/anira-rt-principle-check) repository with the [radsan](https://github.com/realtime-sanitizer/radsan) sanitizer.
+anira's real-time safety is checked in [this](https://github.com/anira-project/anira-rt-principle-check) repository with the [radsan](https://github.com/realtime-sanitizer/radsan) sanitizer.
 
 ## Citation
 
@@ -166,7 +166,7 @@ If you use anira in your research or project, please cite our work:
 @software{anira2024ackvaschulz,
   author = {Valentin Ackva and Fares Schulz},
   title = {anira: an architecture for neural network inference in real-time audio application},
-  url = {https://github.com/tu-studio/anira},
+  url = {https://github.com/anira-project/anira},
   version = {x.x.x},
   year = {2024},
 }
