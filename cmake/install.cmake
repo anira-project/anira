@@ -122,9 +122,6 @@ if(ANIRA_WITH_TFLITE)
     )
 endif()
 
-# set a debug postfix for the library
-set_target_properties(${PROJECT_NAME} PROPERTIES DEBUG_POSTFIX "d")
-
 # ==============================================================================
 # Generate cmake config files
 # ==============================================================================
