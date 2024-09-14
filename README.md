@@ -1,6 +1,6 @@
 ![anira Logo](/docs/img/anira-logo.png)
 
-![Build Status](https://github.com/tu-studio/anira/actions/workflows/build.yml/badge.svg)
+![Build Status](https://github.com/anira-project/anira/actions/workflows/build.yml/badge.svg)
 --------------------------------------------------------------------------------
 
 **anira** is a high-performance library designed to enable easy real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing.
