@@ -50,6 +50,8 @@ if(NOT ANIRA_WITH_LIBTORCH AND NOT ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_WITH_TFL
     message(FATAL_ERROR "No backend selected. Please select at least one backend by setting one of the following options to ON: ANIRA_WITH_LIBTORCH, ANIRA_WITH_ONNXRUNTIME, or ANIRA_WITH_TFLITE. For example, add '-DANIRA_WITH_LIBTORCH=ON' to your CMake command line.")
 endif()
 
+message(STATUS "Selected backends:")
+
 set(BACKEND_SOURCES)
 set(BACKEND_BUILD_HEADER_DIRS)
 set(BACKEND_BUILD_LIBRARY_DIRS)
@@ -67,6 +69,12 @@ endif()
 if(ANIRA_WITH_TFLITE)
     include(cmake/SetupTensorflowLite.cmake)
     list(APPEND BACKEND_SOURCES src/backends/TFLiteProcessor.cpp)
+endif()
+
+if(ANIRA_WITH_SEMAPHORE)
+    message(STATUS "Using semaphores for thread synchronization.")
+else()
+    message(STATUS "Using atomic variables for thread synchronization.")
 endif()
 
 # ==============================================================================
