@@ -62,8 +62,6 @@ processBlock(float** audioData, int numSamples) {
 
 ## Install
 
-On **Apple Silicon Macs** you need to install the OpenMP library via Homebrew (``` brew install libomp ```).
-
 ### CMake
 
 anira can be easily integrated into your CMake project. Either add anira as a submodule or download the pre-built binaries from the [releases page](https://github.com/anira-project/anira/releases/latest).
