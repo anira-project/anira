@@ -70,9 +70,6 @@ jobs:
                         brew install osxutils ninja
                         echo "brew prefix: $(brew --prefix)"
                     elif [ "${{ matrix.name }}" == "macOS-arm64" ]; then
-                        if [ "$(uname -m)" == "arm64" ]; then
-                            brew install libomp
-                        fi;
                         brew install osxutils ninja
                         echo "brew prefix: $(brew --prefix)"
                     elif [ "${{ matrix.name }}" == "Windows-x86_64" ]; then
