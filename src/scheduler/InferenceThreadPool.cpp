@@ -161,8 +161,7 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
 #else
         if (session.inferenceQueue[i]->free.exchange(false)) {
 #endif
-            session.prePostProcessor.preProcess(session.sendBuffer, session.inferenceQueue[i]->processedModelInput, session.currentBackend.load());
-
+            session.prePostProcessor.preProcess(session.sendBuffer, session.inferenceQueue[i]->processedModelInput, session.currentBackend.load(std::memory_order_relaxed));
             session.timeStamps.insert(session.timeStamps.begin(), session.m_current_queue);
             session.inferenceQueue[i]->timeStamp = session.m_current_queue;
 #ifdef USE_SEMAPHORE
@@ -191,7 +190,7 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
 }
 
 void InferenceThreadPool::postProcess(SessionElement& session, SessionElement::ThreadSafeStruct& nextBuffer) {
-    session.prePostProcessor.postProcess(nextBuffer.rawModelOutput, session.receiveBuffer, session.currentBackend.load());
+    session.prePostProcessor.postProcess(nextBuffer.rawModelOutput, session.receiveBuffer, session.currentBackend.load(std::memory_order_relaxed));
 #ifdef USE_SEMAPHORE
     nextBuffer.free.release();
 #else

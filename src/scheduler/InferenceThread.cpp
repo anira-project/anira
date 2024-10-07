@@ -110,21 +110,21 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
 
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output) {
 #ifdef USE_LIBTORCH
-    if (session->currentBackend == LIBTORCH) {
+    if (session->currentBackend.load(std::memory_order_relaxed) == LIBTORCH) {
         torchProcessor.processBlock(input, output);
     }
 #endif
 #ifdef USE_ONNXRUNTIME
-    if (session->currentBackend == ONNX) {
+    if (session->currentBackend.load(std::memory_order_relaxed) == ONNX) {
         onnxProcessor.processBlock(input, output);
     }
 #endif
 #ifdef USE_TFLITE
-    if (session->currentBackend == TFLITE) {
+    if (session->currentBackend.load(std::memory_order_relaxed) == TFLITE) {
         tfliteProcessor.processBlock(input, output);
     }
 #endif
-    if (session->currentBackend == NONE) {
+    if (session->currentBackend.load(std::memory_order_relaxed) == NONE) {
         session->noneProcessor.processBlock(input, output);
     }
 }

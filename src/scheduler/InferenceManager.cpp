@@ -14,11 +14,11 @@ InferenceManager::~InferenceManager() {
 }
 
 void InferenceManager::setBackend(InferenceBackend newInferenceBackend) {
-    session.currentBackend = newInferenceBackend;
+    session.currentBackend.store(newInferenceBackend, std::memory_order_relaxed);
 }
 
 InferenceBackend InferenceManager::getBackend() {
-    return session.currentBackend;
+    return session.currentBackend.load(std::memory_order_relaxed);
 }
 
 void InferenceManager::prepare(HostAudioConfig newConfig) {
