@@ -27,15 +27,25 @@ set (PROJECT_NAME anira)
 
 project (${PROJECT_NAME} VERSION 0.1.3)
 
+if(APPLE)
+    if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+        set(CMAKE_SYSTEM_PROCESSOR "arm64")
+    elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+        set(CMAKE_SYSTEM_PROCESSOR "x86_64")
+    else()
+        message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES not set to arm64 or x86_64. Please select one of the architectures as universal binaries are not supported by the backends.")
+    endif()
+endif()
+
+# Print the processor architecture selected for build. Defaults to CMAKE_HOST_SYSTEM_PROCESSOR when no crosscompile tolchain is defined. CMAKE_HOST_SYSTEM_PROCESSOR is only defined after the project() call. For OSX this value can be overwritten by the CMAKE_OSX_ARCHITECTURES.
+message(STATUS "Selected processor architecture: ${CMAKE_SYSTEM_PROCESSOR}")
+
 # Sets the minimum macOS version, c++20 is only available from macOS 11.0
 if (APPLE)
 	set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum version of the target platform" FORCE) 
 	if(CMAKE_OSX_DEPLOYMENT_TARGET)
 		message("The minimum macOS version is set to " $CACHE{CMAKE_OSX_DEPLOYMENT_TARGET}.)
 	endif()
-    if (NOT (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_OSX_ARCHITECTURES STREQUAL ""))
-        message(FATAL_ERROR "The macOS architectures must be set to either 'arm64', 'x86_64', or an empty string. Universal binaries are not supported, because the inference engines do not support them. Please set the CMAKE_OSX_ARCHITECTURES variable to either 'arm64', 'x86_64', or leave it empty.")
-    endif()
 endif ()
 
 # Sets the cpp language minimum, 20 because of new semaphore types
@@ -170,7 +180,7 @@ if(ANIRA_WITH_ONNXRUNTIME)
 endif()
 
 if(ANIRA_WITH_TFLITE)
-    target_link_libraries(${PROJECT_NAME} PRIVATE tensorflowlite_c)
+    target_link_libraries(${PROJECT_NAME} PUBLIC tensorflowlite_c)
 endif()
 
 if(ANIRA_WITH_BENCHMARK)

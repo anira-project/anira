@@ -88,8 +88,7 @@ jobs:
             -   name: cache the build
                 uses: mozilla-actions/sccache-action@v0.0.5
 
-            # Typical cmake configuration with default generator
-            # With DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" we can build universal binaries for apple computers
+            # With DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" we can build universal binaries for apple computers, but this is not supported by the inference engines
             -   name: cmake configure
                 shell: bash
                 run: |
