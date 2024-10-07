@@ -11,19 +11,28 @@ public:
         int64_t num_batches;
         int64_t num_input_samples;
         int64_t num_output_samples;
+#ifdef USE_LIBTORCH
         if (currentInferenceBackend == anira::LIBTORCH) {
             num_batches = config.m_model_input_shape_torch[0];
             num_input_samples = config.m_model_input_shape_torch[2];
             num_output_samples = config.m_model_output_shape_torch[1];
-        } else if (currentInferenceBackend == anira::ONNX) {
+        }
+#endif
+#ifdef USE_ONNXRUNTIME
+        if (currentInferenceBackend == anira::ONNX) {
             num_batches = config.m_model_input_shape_onnx[0];
             num_input_samples = config.m_model_input_shape_onnx[2];
             num_output_samples = config.m_model_output_shape_onnx[1];
-        } else if (currentInferenceBackend == anira::TFLITE) {
+        }
+#endif
+#ifdef USE_TFLITE
+        if (currentInferenceBackend == anira::TFLITE) {
             num_batches = config.m_model_input_shape_tflite[0];
             num_input_samples = config.m_model_input_shape_tflite[1];
             num_output_samples = config.m_model_output_shape_tflite[1];
-        } else if (currentInferenceBackend == anira::NONE) {
+        }
+#endif 
+        else if (currentInferenceBackend == anira::NONE) {
 #if USE_LIBTORCH
             num_batches = config.m_model_input_shape_torch[0];
             num_input_samples = config.m_model_input_shape_torch[2];
@@ -37,7 +46,9 @@ public:
             num_input_samples = config.m_model_input_shape_tflite[1];
             num_output_samples = config.m_model_output_shape_tflite[1];
 #endif
-        } else {
+        }
+        
+        if (currentInferenceBackend != anira::LIBTORCH && currentInferenceBackend != anira::ONNX && currentInferenceBackend != anira::TFLITE && currentInferenceBackend != anira::NONE) {
             throw std::runtime_error("Invalid inference backend");
         }
             
