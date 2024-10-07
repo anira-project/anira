@@ -121,7 +121,7 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     dryWetMixer.setWetLatency(newLatency);
 
     for (auto & parameterID : PluginParameters::getPluginParameterList()) {
-        parameterChanged(parameterID, (float) parameters.getParameterAsValue(parameterID).getValue());
+        parameterChanged(parameterID, parameters.getParameterAsValue(parameterID).getValue());
     }
 }
 
@@ -205,13 +205,13 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID
     if (parameterID == PluginParameters::DRY_WET_ID.getParamID()) {
         dryWetMixer.setWetMixProportion(newValue);
     } else if (parameterID == PluginParameters::BACKEND_TYPE_ID.getParamID()) {
-        const auto paramInt = static_cast<int>(newValue);
-        auto paramString = PluginParameters::backendTypes.getReference(paramInt);
+        int paramInt = (int) newValue;
+        auto paramString = PluginParameters::backendTypes[paramInt];
 #ifdef USE_TFLITE
         if (paramString == "TFLITE") inferenceHandler.setInferenceBackend(anira::TFLITE);
 #endif
 #ifdef USE_ONNXRUNTIME
-        if (paramString == "ONNXRUNTIME") inferenceHandler.setInferenceBackend(anira::ONNX);
+        if (paramString == "ONNX") inferenceHandler.setInferenceBackend(anira::ONNX);
 #endif
 #ifdef USE_LIBTORCH
         if (paramString == "LIBTORCH") inferenceHandler.setInferenceBackend(anira::LIBTORCH);
