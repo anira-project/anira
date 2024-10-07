@@ -2,6 +2,7 @@
 #define ANIRA_BENCHMARK_PROCESSBLOCKFIXTURE_H
 
 #include <benchmark/benchmark.h>
+#include <iomanip>
 #include "../anira.h"
 #include "helperFunctions.h"
 
