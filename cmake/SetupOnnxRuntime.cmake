@@ -1,4 +1,4 @@
-set(LIBONNXRUNTIME_VERSION 1.17.1)
+set(LIBONNXRUNTIME_VERSION 1.19.2)
 
 option(ONNXRUNTIME_ROOTDIR "onnxruntime root dir")
 set(ONNXRUNTIME_DIR_NAME "onnxruntime-${LIBONNXRUNTIME_VERSION}")
@@ -16,7 +16,11 @@ else()
     endif()
 
     if(UNIX AND NOT APPLE)
-        set(LIB_ONNXRUNTIME_PRE_BUILD_LIB_NAME "onnxruntime-linux-x64-${LIBONNXRUNTIME_VERSION}")
+        if (CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+            set(LIB_ONNXRUNTIME_PRE_BUILD_LIB_NAME "onnxruntime-linux-aarch64-${LIBONNXRUNTIME_VERSION}")
+        elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+            set(LIB_ONNXRUNTIME_PRE_BUILD_LIB_NAME "onnxruntime-linux-x64-${LIBONNXRUNTIME_VERSION}")
+        endif()
         set(LIB_ONNXRUNTIME_PRE_BUILD_LIB_TYPE "tgz")
     endif()
 

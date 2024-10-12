@@ -33,7 +33,7 @@ if(APPLE)
     elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
         set(CMAKE_SYSTEM_PROCESSOR "x86_64")
     else()
-        message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES not set to arm64 or x86_64. Please select one of the architectures as universal binaries are not supported by the backends.")
+        message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES not set to arm64 or x86_64. Please select one of the architectures as universal binaries are not supported by all backends.")
     endif()
 endif()
 
