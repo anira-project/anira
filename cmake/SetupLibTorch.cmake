@@ -1,13 +1,5 @@
-if(APPLE)
-    if (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
-        set(LIBTORCH_VERSION 2.2.2)
-        # torch stopped uploading the binaries for x86_64, so we use an older version
-    elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-        set(LIBTORCH_VERSION 2.4.1)
-    endif()
-else()
-    set(LIBTORCH_VERSION 2.4.1)
-endif()
+# torch stopped uploading the binaries for macOS x86_64, but we use self-built binaries
+set(LIBTORCH_VERSION 2.4.1)
 
 if (NOT WIN32)
     set(TORCH_BUILD_TYPE "")
