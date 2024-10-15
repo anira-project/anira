@@ -144,9 +144,9 @@ anira allows users to benchmark and compare the inference performance of differe
 
 ### Build in examples
 
-- [Simple JUCE Audio Plugin](examples/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
-- [Benchmark](examples/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
-- [Minimal Inference](examples/minimal-inference/): Demonstrates how minimal inference applications can be implemented in all three backends.
+- [Simple JUCE Audio Plugin](examples/desktop/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
+- [Benchmark](examples/desktop/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
+- [Minimal Inference](examples/desktop/minimal-inference/): Demonstrates how minimal inference applications can be implemented in all three backends.
 
 ### Other examples
 
