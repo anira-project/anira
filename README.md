@@ -3,7 +3,7 @@
 ![Build Status](https://github.com/anira-project/anira/actions/workflows/build.yml/badge.svg)
 --------------------------------------------------------------------------------
 
-**anira** is a high-performance library designed to enable easy real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing.
+**anira** is a high-performance library designed to enable easy real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing. In the [paper](https://doi.org/10.1109/IS262782.2024.10704099) you can find more information about the architecture and the design decisions of **anira**, as well as extensive performance evaluations with the built-in benchmarking capabilities.
 
 ## Features
 
@@ -144,9 +144,9 @@ anira allows users to benchmark and compare the inference performance of differe
 
 ### Build in examples
 
-- [Simple JUCE Audio Plugin](examples/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
-- [Benchmark](examples/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
-- [Minimal Inference](examples/minimal-inference/): Demonstrates how minimal inference applications can be implemented in all three backends.
+- [Simple JUCE Audio Plugin](examples/desktop/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
+- [Benchmark](examples/desktop/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
+- [Minimal Inference](examples/desktop/minimal-inference/): Demonstrates how minimal inference applications can be implemented in all three backends.
 
 ### Other examples
 
@@ -154,19 +154,31 @@ anira allows users to benchmark and compare the inference performance of differe
 
 ## Real-time safety
 
-anira's real-time safety is checked in [this](https://github.com/anira-project/anira-rt-principle-check) repository with the [radsan](https://github.com/realtime-sanitizer/radsan) sanitizer.
+anira's real-time safety is checked in [this](https://github.com/anira-project/anira-rt-principle-check) repository with the [rtsan](https://github.com/realtime-sanitizer/rtsan) sanitizer.
 
 ## Citation
 
-If you use anira in your research or project, please cite our work:
+If you use anira in your research or project, please cite either the [paper](https://doi.org/10.1109/IS262782.2024.10704099) our the software itself:
 
 ```cite
-@software{anira2024ackvaschulz,
-  author = {Valentin Ackva and Fares Schulz},
-  title = {anira: an architecture for neural network inference in real-time audio application},
-  url = {https://github.com/anira-project/anira},
-  version = {x.x.x},
-  year = {2024},
+@inproceedings{ackvaschulz2024anira,
+    author={Ackva, Valentin and Schulz, Fares},
+    booktitle={2024 IEEE 5th International Symposium on the Internet of Sounds (IS2)},
+    title={ANIRA: An Architecture for Neural Network Inference in Real-Time Audio Applications}, 
+    year={2024},
+    volume={},
+    number={},
+    pages={1-10},
+    publisher={IEEE},
+    doi={10.1109/IS262782.2024.10704099}
+}
+
+@software{ackvaschulz2024anira,
+    author = {Valentin Ackva and Fares Schulz},
+    title = {anira: an architecture for neural network inference in real-time audio application},
+    url = {https://github.com/anira-project/anira},
+    version = {x.x.x},
+    year = {2024},
 }
 ```
 
