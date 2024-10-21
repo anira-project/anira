@@ -1,0 +1,33 @@
+cmake_minimum_required(VERSION 3.15)
+
+# Sets the minimum macOS version
+if (APPLE)
+	set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum version of the target platform" FORCE) 
+	if(CMAKE_OSX_DEPLOYMENT_TARGET)
+		message("The minimum macOS version is set to " $CACHE{CMAKE_OSX_DEPLOYMENT_TARGET}.)
+	endif()
+endif ()
+
+# ==============================================================================
+# Setup the project
+# ==============================================================================
+
+
+set(PROJECT_NAME tests)
+project (${PROJECT_NAME} VERSION 0.0.1)
+
+
+# Sets the cpp language minimum
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED True)
+
+add_executable(${PROJECT_NAME})
+
+target_sources(${PROJECT_NAME} PRIVATE
+    test_audiobuffer.cpp
+)
+
+target_link_libraries(${PROJECT_NAME} anira::anira)
+
+# gtest_discover_tests will register a CTest test for each gtest and run them all in parallel with the rest of the Test.
+gtest_discover_tests(${PROJECT_NAME} DISCOVERY_TIMEOUT 90)
