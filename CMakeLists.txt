@@ -10,6 +10,7 @@ option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" O
 option(ANIRA_WITH_EXAMPLES "Add Example Targets for desktop plattforms (juce plugin, benchmarks, minimal inference and model examples)" OFF)
 option(ANIRA_WITH_BELA_EXAMPLE "Add Example Targets for bela plattform (includes a model)" OFF)
 option(ANIRA_WITH_INSTALL "Add install targets" OFF)
+option(ANIRA_WITH_TESTS "Add Build Tests" OFF)
 
 # Select the backends for the inference engine, multiple backends can be selected
 option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
@@ -183,6 +184,10 @@ if(ANIRA_WITH_TFLITE)
     target_link_libraries(${PROJECT_NAME} PUBLIC tensorflowlite_c)
 endif()
 
+if(ANIRA_WITH_BENCHMARK OR ANIRA_WITH_TESTS)
+    include(cmake/test-deps.cmake)
+endif()
+
 if(ANIRA_WITH_BENCHMARK)
     include(cmake/benchmark-src.cmake)
 endif()
@@ -211,4 +216,8 @@ endif()
 if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE)
     add_subdirectory(extras)
     add_subdirectory(examples)
+endif()
+
+if (ANIRA_WITH_TESTS)
+    add_subdirectory(test)
 endif()
