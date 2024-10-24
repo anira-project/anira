@@ -14,7 +14,9 @@ namespace anira::clap_plugin_example
 
 AniraClapPluginExample::AniraClapPluginExample(const clap_host *host)
     : clap::helpers::Plugin<clap::helpers::MisbehaviourHandler::Terminate,
-                            clap::helpers::CheckingLevel::Maximal>(&m_desc, host)
+                            clap::helpers::CheckingLevel::Maximal>(&m_desc, host),
+      none_processor(inference_config),
+      inference_handler(pp_processor, inference_config, none_processor)
 {
     m_param_to_value[pmDryWet] = &m_param_dry_wet;
     m_param_to_value[pmBackend] = &m_param_backend;
@@ -129,7 +131,7 @@ bool AniraClapPluginExample::audioPortsInfo(uint32_t index, bool isInput,
         return false;
     info->id = 0;
     snprintf(info->name, sizeof(info->name), "%s", "My Port Name");
-    info->channel_count = 2;
+    info->channel_count = 1;
     info->flags = CLAP_AUDIO_PORT_IS_MAIN;
     info->port_type = CLAP_PORT_STEREO;
     info->in_place_pair = CLAP_INVALID_ID;
@@ -142,6 +144,23 @@ bool AniraClapPluginExample::activate(double sampleRate, uint32_t minFrameCount,
     m_clap_thread_pool = (clap_host_thread_pool const*)_host.host()->get_extension(_host.host(), CLAP_EXT_THREAD_POOL);
     m_clap_thread_pool_available = (m_clap_thread_pool && m_clap_thread_pool->request_exec);
 
+    anira::HostAudioConfig config (1, (size_t) maxFrameCount, sampleRate);
+
+    if (m_clap_thread_pool_available) {
+        config.hostThreadSubmitTaskCallback = [this](int x) -> bool {
+            if (m_clap_thread_pool->request_exec(_host.host(), 1)) {
+                return true;
+            } else {
+                return false;
+            }
+        };
+    }
+
+    inference_handler.prepare(config);
+
+    auto new_latency = inference_handler.get_latency();
+    //TODO setLatencySamples(new_latency);
+
     return true;
 }
 
@@ -151,19 +170,13 @@ clap_process_status AniraClapPluginExample::process(const clap_process *process)
 
     float **in = process->audio_inputs[0].data32;
     float **out = process->audio_outputs[0].data32;
-    uint32_t channelCount = std::min(process->audio_inputs[0].channel_count, process->audio_outputs[0].channel_count);
 
-    for (int channel = 0; channel < channelCount; ++channel) {
+    inference_handler.process(in, (size_t) process->frames_count);
+
+    for (int channel = 0; channel < 1; ++channel) {
         for (int sample = 0; sample < process->frames_count; ++sample) {
             out[channel][sample] = in[channel][sample];
         }
-    }
-
-    uint32_t num_tasks = 10;
-    if (m_clap_thread_pool->request_exec(_host.host(), num_tasks)) {
-        std::cout << "Tasks successfully submitted to the thread pool." << std::endl;
-    } else {
-        std::cout << "Tasks not successfully submitted to the thread pool." << std::endl;
     }
 
     return CLAP_PROCESS_SLEEP;
@@ -199,6 +212,23 @@ void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t *evt)
     if (evt->type == CLAP_EVENT_PARAM_VALUE) {
         auto v = reinterpret_cast<const clap_event_param_value *>(evt);
         *m_param_to_value[v->param_id] = v->value;
+
+        if (m_param_to_value[v->param_id] == &m_param_backend) {
+            switch ((Backend) m_param_backend) {
+                case OnnxRuntime:
+                    inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
+                    break;
+                case LibTorch:
+                    inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
+                    break;
+                case TensorFlowLite:
+                    inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
+                    break;
+                default:
+                    inference_handler.set_inference_backend(anira::InferenceBackend::NONE);
+                    break;
+            }
+        }
     }
 }
 
@@ -228,9 +258,14 @@ bool AniraClapPluginExample::implementsThreadPool() const noexcept {
 }
 
 void AniraClapPluginExample::threadPoolExec(uint32_t taskIndex) noexcept {
-    std::cout << "threadPoolExec: " << taskIndex << std::endl;
+    inference_handler.exec_inference();
 }
 
-uint32_t AniraClapPluginExample::paramsCount() const noexcept { return m_number_params; }
+uint32_t AniraClapPluginExample::paramsCount() const noexcept {
+    return m_number_params; }
+
+uint32_t AniraClapPluginExample::audioPortsCount(bool isInput) const noexcept {
+    return 1;
+}
 
 } // namespace anira::clap_plugin_example

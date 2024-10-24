@@ -11,6 +11,12 @@
 #include <unordered_map>
 #include <memory>
 
+#include <anira/anira.h>
+
+#include "../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNNoneProcessor.h"
+
 namespace anira::clap_plugin_example
 {
 
@@ -48,7 +54,7 @@ protected:
 
 public:
     bool implementsAudioPorts() const noexcept override { return true; }
-    uint32_t audioPortsCount(bool isInput) const noexcept override { return 1; }
+    uint32_t audioPortsCount(bool isInput) const noexcept override;
     bool audioPortsInfo(uint32_t index, bool isInput,
                         clap_audio_port_info *info) const noexcept override;
 
@@ -63,6 +69,12 @@ public:
     std::unordered_map<clap_id, double *> m_param_to_value;
     const clap_host_thread_pool* m_clap_thread_pool{nullptr};
     bool m_clap_thread_pool_available;
+
+    anira::InferenceConfig inference_config = hybridnn_config;
+    HybridNNPrePostProcessor pp_processor;
+    HybridNNNoneProcessor none_processor;
+
+    anira::InferenceHandler inference_handler;
 
     enum Backend {
         OnnxRuntime,

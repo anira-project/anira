@@ -30,7 +30,7 @@ add_library(${PROJECT_NAME} MODULE
         anira-clap-demo.cpp
         anira-clap-demo-pluginentry.cpp
 )
-target_link_libraries(${PROJECT_NAME} clap-core clap-helpers)
+target_link_libraries(${PROJECT_NAME} clap-core clap-helpers anira)
 
 if(APPLE)
     set_target_properties(${PROJECT_NAME} PROPERTIES
