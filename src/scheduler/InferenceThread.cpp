@@ -8,40 +8,40 @@ InferenceThread::InferenceThread(std::counting_semaphore<UINT16_MAX>& g, Inferen
 InferenceThread::InferenceThread(std::atomic<int>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses) :
 #endif
 #ifdef USE_LIBTORCH
-    torchProcessor(config),
+    m_torch_processor(config),
 #endif
 #ifdef USE_ONNXRUNTIME
-    onnxProcessor(config),
+    m_onnx_processor(config),
 #endif
 #ifdef USE_TFLITE
-    tfliteProcessor(config),
+    m_tflite_processor(config),
 #endif
     m_global_counter(g),
-    sessions(ses)
+    m_sessions(ses)
 {
 #ifdef USE_LIBTORCH
-    torchProcessor.prepareToPlay();
+    m_torch_processor.prepare();
 #endif
 #ifdef USE_ONNXRUNTIME
-    onnxProcessor.prepareToPlay();
+    m_onnx_processor.prepare();
 #endif
 #ifdef USE_TFLITE
-    tfliteProcessor.prepareToPlay();
+    m_tflite_processor.prepare();
 #endif
 }
 #ifdef USE_SEMAPHORE
-InferenceThread::InferenceThread(std::counting_semaphore<UINT16_MAX>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID) :
+InferenceThread::InferenceThread(std::counting_semaphore<UINT16_MAX>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int ses_id) :
 #else
-InferenceThread::InferenceThread(std::atomic<int>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int sesID) :
+InferenceThread::InferenceThread(std::atomic<int>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int ses_id) :
 #endif
     InferenceThread(g, config, ses)
 {
-    sessionID = sesID;
+    m_session_id = ses_id;
 }
 
 void InferenceThread::run() {
     std::chrono::microseconds timeForExit(50);
-    while (!shouldExit()) {
+    while (!should_exit()) {
 #ifdef USE_SEMAPHORE
         if (m_global_counter.try_acquire()) {
 #else
@@ -54,14 +54,14 @@ void InferenceThread::run() {
 #endif
             bool inference_done = false;
             while (!inference_done) {
-                if (sessionID < 0) {
-                    for (const auto& session : sessions) {
+                if (m_session_id < 0) {
+                    for (const auto& session : m_sessions) {
                         inference_done = tryInference(session);
                         if (inference_done) break;
                     }
                 } else {
-                    for (const auto& session : sessions) {
-                        if (session->sessionID == sessionID) {
+                    for (const auto& session : m_sessions) {
+                        if (session->m_session_id == m_session_id) {
                             inference_done = tryInference(session);
                             break;
                         }
@@ -80,10 +80,10 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
 #ifdef USE_SEMAPHORE
     if (session->m_session_counter.try_acquire()) {
         while (true) {
-            for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
-                if (session->inferenceQueue[i]->ready.try_acquire()) {
-                    inference(session, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
-                    session->inferenceQueue[i]->done.release();
+            for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
+                if (session->m_inference_queue[i]->m_ready.try_acquire()) {
+                    inference(session, session->m_inference_queue[i]->m_processed_model_input, session->m_inference_queue[i]->m_raw_model_output);
+                    session->m_inference_queue[i]->m_done.release();
                     return true;
                 }
             }
@@ -94,10 +94,10 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
     if (old > 0) {
         if (session->m_session_counter.compare_exchange_strong(old, old - 1)) {
             while (true) {
-                for (size_t i = 0; i < session->inferenceQueue.size(); ++i) {
-                    if (session->inferenceQueue[i]->ready.exchange(false)) {
-                        inference(session, session->inferenceQueue[i]->processedModelInput, session->inferenceQueue[i]->rawModelOutput);
-                        session->inferenceQueue[i]->done.exchange(true);
+                for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
+                    if (session->m_inference_queue[i]->m_ready.exchange(false)) {
+                        inference(session, session->m_inference_queue[i]->m_processed_model_input, session->m_inference_queue[i]->m_raw_model_output);
+                        session->m_inference_queue[i]->m_done.exchange(true);
                         return true;
                     }
                 }
@@ -110,22 +110,22 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
 
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output) {
 #ifdef USE_LIBTORCH
-    if (session->currentBackend.load(std::memory_order_relaxed) == LIBTORCH) {
-        torchProcessor.processBlock(input, output);
+    if (session->m_currentBackend.load(std::memory_order_relaxed) == LIBTORCH) {
+        m_torch_processor.process(input, output);
     }
 #endif
 #ifdef USE_ONNXRUNTIME
-    if (session->currentBackend.load(std::memory_order_relaxed) == ONNX) {
-        onnxProcessor.processBlock(input, output);
+    if (session->m_currentBackend.load(std::memory_order_relaxed) == ONNX) {
+        m_onnx_processor.process(input, output);
     }
 #endif
 #ifdef USE_TFLITE
-    if (session->currentBackend.load(std::memory_order_relaxed) == TFLITE) {
-        tfliteProcessor.processBlock(input, output);
+    if (session->m_currentBackend.load(std::memory_order_relaxed) == TFLITE) {
+        m_tflite_processor.process(input, output);
     }
 #endif
-    if (session->currentBackend.load(std::memory_order_relaxed) == NONE) {
-        session->noneProcessor.processBlock(input, output);
+    if (session->m_currentBackend.load(std::memory_order_relaxed) == NONE) {
+        session->m_none_processor.process(input, output);
     }
 }
 

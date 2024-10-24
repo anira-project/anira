@@ -122,7 +122,7 @@ target_sources(${PROJECT_NAME}
         src/PrePostProcessor.cpp
 
         # System
-        src/system/RealtimeThread.cpp
+        src/system/HighPriorityThread.cpp
 )
 
 # add the include directories for the backends to the build interface, public because the anira headers include the backend headers

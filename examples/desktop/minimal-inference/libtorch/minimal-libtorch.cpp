@@ -41,48 +41,48 @@ void minimal_inference(anira::InferenceConfig config) {
     }
 
     // Fill input tensor with data
-    std::vector<float> inputData;
+    std::vector<float> input_data;
     for (int i = 0; i < config.m_new_model_input_size; i++) {
-        inputData.push_back(i * 0.000001f);
+        input_data.push_back(i * 0.000001f);
     }
 
     // Create input tensor object from input data values and reshape
     std::vector<int64_t> shape = config.m_model_input_shape_torch;
-    torch::Tensor inputTensor = torch::from_blob(inputData.data(), shape);
+    torch::Tensor input_tensor = torch::from_blob(input_data.data(), shape);
 
-    for (int i = 0; i < inputTensor.sizes().size(); ++i) {
-        std::cout << "Input shape " << i << ": " << inputTensor.sizes()[i] << '\n';
+    for (int i = 0; i < input_tensor.sizes().size(); ++i) {
+        std::cout << "Input shape " << i << ": " << input_tensor.sizes()[i] << '\n';
     }
 
     // Create IValue vector for input of interpreter
     std::vector<torch::jit::IValue> inputs;
-    inputs.push_back(inputTensor);
+    inputs.push_back(input_tensor);
 
     // Execute inference
-    torch::Tensor outputTensor = module.forward(inputs).toTensor();
+    torch::Tensor output_tensor = module.forward(inputs).toTensor();
 
-    for (int i = 0; i < outputTensor.sizes().size(); ++i) {
-        std::cout << "Output shape " << i << ": " << outputTensor.sizes()[i] << '\n';
+    for (int i = 0; i < output_tensor.sizes().size(); ++i) {
+        std::cout << "Output shape " << i << ": " << output_tensor.sizes()[i] << '\n';
     }
 
     // Flatten the output tensor
-    outputTensor = outputTensor.view({-1});
+    output_tensor = output_tensor.view({-1});
 
-    std::vector<float> outputData;
+    std::vector<float> output_data;
 
-    // Copy the data to the outputData vector
+    // Copy the data to the output_data vector
     for (int i = 0; i < config.m_new_model_output_size; ++i) {
-        outputData.push_back(outputTensor[i].item().toFloat());
-        std::cout << "Output data [" << i << "]: " << outputData[i] << std::endl;
+        output_data.push_back(output_tensor[i].item().toFloat());
+        std::cout << "Output data [" << i << "]: " << output_data[i] << std::endl;
     }
 }
 
 int main(int argc, const char* argv[]) {
 
-    std::vector<anira::InferenceConfig> modelsToInference = {hybridNNConfig, cnnConfig, statefulRNNConfig};
+    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config};
 
-    for (int i = 0; i < modelsToInference.size(); ++i) {
-        minimal_inference(modelsToInference[i]);
+    for (int i = 0; i < models_to_inference.size(); ++i) {
+        minimal_inference(models_to_inference[i]);
     }
 
     return 0;

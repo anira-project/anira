@@ -24,7 +24,7 @@ The basic usage of anira is as follows:
 #include <anira/anira.h>
 
 // Create a model configuration struct for your neural network
-anira::InferenceConfig myNNConfig(
+anira::InferenceConfig my_nn_config(
     "path/to/your/model.onnx (or *.pt, *.tflite)", // Model path
     {2048, 1, 150}, // Input shape
     {2048, 1}, // Output shape
@@ -32,32 +32,32 @@ anira::InferenceConfig myNNConfig(
 );
 
 // Create a pre- and post-processor instance
-anira::PrePostProcessor myPrePostProcessor;
+anira::PrePostProcessor my_pp_processor;
 
 // Create an InferenceHandler instance
-anira::InferenceHandler inferenceHandler(myPostProcessor, myNNConfig);
+anira::InferenceHandler inference_handler(my_pp_processor, my_nn_config);
 
 // Create a HostAudioConfig instance containing the host config infos
-anira::HostAudioConfig audioConfig {
+anira::HostAudioConfig host_config {
     1, // currently only mono is supported
-    bufferSize,
-    sampleRate
+    buffer_size,
+    sample_rate
 };
 
 // Allocate memory for audio processing
-inferenceHandler.prepare(audioConfig);
+inference_handler.prepare(host_config);
 
 // Select the inference backend
-inferenceHandler.selectInferenceBackend(anira::LIBTORCH);
+inference_handler.set_inference_backend(anira::LIBTORCH);
 
 // Optionally get the latency of the inference process in samples
-int latencyInSamples = inferenceHandler.getLatency();
+int latency_in_samples = inference_handler.get_latency();
 
 // Real-time safe audio processing in process callback of your application
-processBlock(float** audioData, int numSamples) {
-    inferenceHandler.process(audioData, numSamples);
+process(float** audio_data, int num_samples) {
+    inference_handler.process(audio_data, num_samples);
 }
-// audioData now contains the processed audio samples
+// audio_data now contains the processed audio samples
 ```
 
 ## Install

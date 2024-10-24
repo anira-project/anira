@@ -8,7 +8,7 @@ TEST(Benchmark, CNNSize){
 #elif WIN32
     HANDLE self = GetCurrentThread();
 #endif
-    anira::RealtimeThread::elevateToRealTimePriority(self, true);
+    anira::HighPriorityThread::elevate_priority(self, true);
 
     benchmark::RunSpecifiedBenchmarks();
 }

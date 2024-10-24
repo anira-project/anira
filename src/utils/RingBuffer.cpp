@@ -4,65 +4,65 @@ namespace anira {
 
 RingBuffer::RingBuffer() = default;
 
-void RingBuffer::initializeWithPositions(size_t numChannels, size_t numSamples) {
-    initialize(numChannels, numSamples);
-    readPos.resize(getNumChannels());
-    writePos.resize(getNumChannels());
+void RingBuffer::initialize_with_positions(size_t num_channels, size_t num_samples) {
+    initialize(num_channels, num_samples);
+    m_read_pos.resize(get_num_channels());
+    m_write_pos.resize(get_num_channels());
 
-    for (size_t i = 0; i < readPos.size(); i++) {
-        readPos[i] = 0;
-        writePos[i] = 0;
+    for (size_t i = 0; i < m_read_pos.size(); i++) {
+        m_read_pos[i] = 0;
+        m_write_pos[i] = 0;
     }
 }
 
-void RingBuffer::clearWithPositions() {
+void RingBuffer::clear_with_positions() {
     clear();
-    for (size_t i = 0; i < readPos.size(); i++) {
-        readPos[i] = 0;
-        writePos[i] = 0;
+    for (size_t i = 0; i < m_read_pos.size(); i++) {
+        m_read_pos[i] = 0;
+        m_write_pos[i] = 0;
     }
 }
 
-void RingBuffer::pushSample(size_t channel, float sample) {
-    setSample(channel, writePos[channel], sample);
+void RingBuffer::push_sample(size_t channel, float sample) {
+    set_sample(channel, m_write_pos[channel], sample);
 
-    ++writePos[channel];
+    ++m_write_pos[channel];
 
-    if (writePos[channel] >= getNumSamples()) {
-        writePos[channel] = 0;
+    if (m_write_pos[channel] >= get_num_samples()) {
+        m_write_pos[channel] = 0;
     }
 }
 
-float RingBuffer::popSample(size_t channel) {
-    auto sample = getSample(channel, readPos[channel]);
+float RingBuffer::pop_sample(size_t channel) {
+    auto sample = get_sample(channel, m_read_pos[channel]);
 
-    ++readPos[channel];
+    ++m_read_pos[channel];
 
-    if (readPos[channel] >= getNumSamples()) {
-        readPos[channel] = 0;
+    if (m_read_pos[channel] >= get_num_samples()) {
+        m_read_pos[channel] = 0;
     }
 
     return sample;
 }
 
-float RingBuffer::getSampleFromTail (size_t channel, size_t offset) {
-    if ((int) readPos[channel] - (int) offset < 0) {
-        return getSample(channel, getNumSamples() + readPos[channel] - offset);
+float RingBuffer::get_sample_from_tail (size_t channel, size_t offset) {
+    if ((int) m_read_pos[channel] - (int) offset < 0) {
+        return get_sample(channel, get_num_samples() + m_read_pos[channel] - offset);
     } else {
-        return getSample(channel, readPos[channel] - offset);
+        return get_sample(channel, m_read_pos[channel] - offset);
     }
 }
 
-size_t RingBuffer::getAvailableSamples(size_t channel) {
-    size_t returnValue;
+size_t RingBuffer::get_available_samples(size_t channel) {
+    size_t return_value;
 
-    if (readPos[channel] <= writePos[channel]) {
-        returnValue = writePos[channel] - readPos[channel];
+    if (m_read_pos[channel] <= m_write_pos[channel]) {
+        return_value = m_write_pos[channel] - m_read_pos[channel];
     } else {
-        returnValue = writePos[channel] + getNumSamples() - readPos[channel];
+        return_value = m_write_pos[channel] + get_num_samples() - m_read_pos[channel];
     }
 
-    return returnValue;
+    return return_value;
 }
 
 } // namespace anira

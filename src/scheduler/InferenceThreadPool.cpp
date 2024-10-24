@@ -4,99 +4,99 @@ namespace anira {
 
 InferenceThreadPool::InferenceThreadPool(InferenceConfig& config) {
     if (! config.m_bind_session_to_thread) {
-        for (int i = 0; i < config.m_number_of_threads; ++i) {
-            threadPool.emplace_back(std::make_unique<InferenceThread>(global_counter, config, sessions));
+        for (int i = 0; i < config.m_num_threads; ++i) {
+            m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, config, m_sessions));
         }
     }
 }
 
 InferenceThreadPool::~InferenceThreadPool() {}
 
-int InferenceThreadPool::getAvailableSessionID() {
-    nextId++;
-    activeSessions++;
-    return nextId.load();
+int InferenceThreadPool::get_available_session_id() {
+    m_next_id.fetch_add(1);
+    m_active_sessions.fetch_add(1);
+    return m_next_id.load();
 }
 
-std::shared_ptr<InferenceThreadPool> InferenceThreadPool::getInstance(InferenceConfig& config) {
-    if (inferenceThreadPool == nullptr) {
-        inferenceThreadPool = std::make_shared<InferenceThreadPool>(config);
+std::shared_ptr<InferenceThreadPool> InferenceThreadPool::get_instance(InferenceConfig& config) {
+    if (m_inference_thread_pool == nullptr) {
+        m_inference_thread_pool = std::make_shared<InferenceThreadPool>(config);
     }
-    return inferenceThreadPool;
+    return m_inference_thread_pool;
 }
 
-void InferenceThreadPool::releaseInstance() {
-    inferenceThreadPool.reset();
+void InferenceThreadPool::release_instance() {
+    m_inference_thread_pool.reset();
 }
 
-SessionElement& InferenceThreadPool::createSession(PrePostProcessor& prePostProcessor, InferenceConfig& config, BackendBase& noneProcessor) {
-    for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
-        threadPool[i]->stop();
+SessionElement& InferenceThreadPool::create_session(PrePostProcessor& pp_processor, InferenceConfig& config, BackendBase& none_processor) {
+    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+        m_thread_pool[i]->stop();
     }
 
-    int sessionID = getAvailableSessionID();
-    sessions.emplace_back(std::make_shared<SessionElement>(sessionID, prePostProcessor, config, noneProcessor));
+    int session_id = get_available_session_id();
+    m_sessions.emplace_back(std::make_shared<SessionElement>(session_id, pp_processor, config, none_processor));
 
     if (config.m_bind_session_to_thread) {
-        threadPool.emplace_back(std::make_unique<InferenceThread>(global_counter, config, sessions, sessionID));
+        m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, config, m_sessions, session_id));
     }
 
-    for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
-        threadPool[i]->start();
+    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+        m_thread_pool[i]->start();
     } 
 
-    return *sessions.back();
+    return *m_sessions.back();
 }
 
-void InferenceThreadPool::releaseThreadPool() {
-    threadPool.clear();
+void InferenceThreadPool::release_thread_pool() {
+    m_thread_pool.clear();
 }
 
-void InferenceThreadPool::releaseSession(SessionElement& session, InferenceConfig& config) {
-    activeSessions--;
+void InferenceThreadPool::release_session(SessionElement& session, InferenceConfig& config) {
+    m_active_sessions.fetch_sub(1);
 
     if (config.m_bind_session_to_thread) {
-        for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
-            if (threadPool[i]->getSessionID() == session.sessionID) { // überlegen
-                threadPool[i]->stop();
-                threadPool.erase(threadPool.begin() + (ptrdiff_t) i);
+        for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+            if (m_thread_pool[i]->get_session_id() == session.m_session_id) { // überlegen
+                m_thread_pool[i]->stop();
+                m_thread_pool.erase(m_thread_pool.begin() + (ptrdiff_t) i);
                 break;
             }
         }
     }
 
-    if (activeSessions == 0) {
-        releaseThreadPool();
+    if (m_active_sessions == 0) {
+        release_thread_pool();
     } else {
-        for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
-            threadPool[i]->stop();
+        for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+            m_thread_pool[i]->stop();
         }
     }
 
-    for (size_t i = 0; i < sessions.size(); ++i) {
-        if (sessions[i].get() == &session) {
-            sessions.erase(sessions.begin() + (ptrdiff_t) i);
+    for (size_t i = 0; i < m_sessions.size(); ++i) {
+        if (m_sessions[i].get() == &session) {
+            m_sessions.erase(m_sessions.begin() + (ptrdiff_t) i);
             break;
         }
     }
     
-    if (activeSessions == 0) {
-       releaseInstance();
+    if (m_active_sessions == 0) {
+       release_instance();
     } else {
-        for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
-            threadPool[i]->start();
+        for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+            m_thread_pool[i]->start();
         }
     
     }
 }
 
-void InferenceThreadPool::prepare(SessionElement& session, HostAudioConfig newConfig) {
-    for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
-        threadPool[i]->stop();
+void InferenceThreadPool::prepare(SessionElement& session, HostAudioConfig new_config) {
+    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+        m_thread_pool[i]->stop();
     }
 
     session.clear();
-    session.prepare(newConfig);
+    session.prepare(new_config);
 
 #ifdef USE_SEMAPHORE
     while (global_counter.try_acquire()) {
@@ -106,41 +106,41 @@ void InferenceThreadPool::prepare(SessionElement& session, HostAudioConfig newCo
     global_counter.store(0);
 #endif
 
-    for (size_t i = 0; i < (size_t) threadPool.size(); ++i) {
-        threadPool[i]->start();
+    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+        m_thread_pool[i]->start();
     }
 }
 
-void InferenceThreadPool::newDataSubmitted(SessionElement& session) {
+void InferenceThreadPool::new_data_submitted(SessionElement& session) {
     // We assume that the model_output_size gives us the amount of new samples that we need to process. This can differ from the model_input_size because we might need to add some padding or past samples.
-    while (session.sendBuffer.getAvailableSamples(0) >= (session.inferenceConfig.m_new_model_output_size)) {
-        bool success = preProcess(session);
-        // !success means that there is no free inferenceQueue
+    while (session.m_send_buffer.get_available_samples(0) >= (session.m_inference_config.m_new_model_output_size)) {
+        bool success = pre_process(session);
+        // !success means that there is no free m_inference_queue
         if (!success) {
-            for (size_t i = 0; i < session.inferenceConfig.m_new_model_output_size; ++i) {
-                session.sendBuffer.popSample(0);
-                session.receiveBuffer.pushSample(0, 0.f);
+            for (size_t i = 0; i < session.m_inference_config.m_new_model_output_size; ++i) {
+                session.m_send_buffer.pop_sample(0);
+                session.m_receive_buffer.push_sample(0, 0.f);
             }
         }
     }
 }
 
-void InferenceThreadPool::newDataRequest(SessionElement& session, double bufferSizeInSec) {
+void InferenceThreadPool::new_data_request(SessionElement& session, double buffer_size_in_sec) {
 #ifdef USE_SEMAPHORE
-    auto timeToProcess = std::chrono::microseconds(static_cast<long>(bufferSizeInSec * 1e6 * session.inferenceConfig.m_wait_in_process_block));
+    auto timeToProcess = std::chrono::microseconds(static_cast<long>(buffer_size_in_sec * 1e6 * session.m_inference_config.m_wait_in_process_block));
     auto currentTime = std::chrono::system_clock::now();
     auto waitUntil = currentTime + timeToProcess;
 #endif
-    while (session.timeStamps.size() > 0) {
-        for (size_t i = 0; i < session.inferenceQueue.size(); ++i) {
-            if (session.inferenceQueue[i]->timeStamp == session.timeStamps.back()) {
+    while (session.m_time_stamps.size() > 0) {
+        for (size_t i = 0; i < session.m_inference_queue.size(); ++i) {
+            if (session.m_inference_queue[i]->m_time_stamp == session.m_time_stamps.back()) {
 #ifdef USE_SEMAPHORE
-                if (session.inferenceQueue[i]->done.try_acquire_until(waitUntil)) {
+                if (session.m_inference_queue[i]->m_done.try_acquire_until(waitUntil)) {
 #else
-                if (session.inferenceQueue[i]->done.exchange(false)) {
+                if (session.m_inference_queue[i]->m_done.exchange(false)) {
 #endif
-                    session.timeStamps.pop_back();
-                    postProcess(session, *session.inferenceQueue[i]);
+                    session.m_time_stamps.pop_back();
+                    post_process(session, *session.m_inference_queue[i]);
                 } else {
                     return;
                 }
@@ -150,26 +150,26 @@ void InferenceThreadPool::newDataRequest(SessionElement& session, double bufferS
     }
 }
 
-std::vector<std::shared_ptr<SessionElement>>& InferenceThreadPool::getSessions() {
-    return sessions;
+std::vector<std::shared_ptr<SessionElement>>& InferenceThreadPool::get_sessions() {
+    return m_sessions;
 }
 
-bool InferenceThreadPool::preProcess(SessionElement& session) {
-    for (size_t i = 0; i < session.inferenceQueue.size(); ++i) {
+bool InferenceThreadPool::pre_process(SessionElement& session) {
+    for (size_t i = 0; i < session.m_inference_queue.size(); ++i) {
 #ifdef USE_SEMAPHORE
-        if (session.inferenceQueue[i]->free.try_acquire()) {
+        if (session.m_inference_queue[i]->m_free.try_acquire()) {
 #else
-        if (session.inferenceQueue[i]->free.exchange(false)) {
+        if (session.m_inference_queue[i]->m_free.exchange(false)) {
 #endif
-            session.prePostProcessor.preProcess(session.sendBuffer, session.inferenceQueue[i]->processedModelInput, session.currentBackend.load(std::memory_order_relaxed));
-            session.timeStamps.insert(session.timeStamps.begin(), session.m_current_queue);
-            session.inferenceQueue[i]->timeStamp = session.m_current_queue;
+            session.m_pp_processor.pre_process(session.m_send_buffer, session.m_inference_queue[i]->m_processed_model_input, session.m_currentBackend.load(std::memory_order_relaxed));
+            session.m_time_stamps.insert(session.m_time_stamps.begin(), session.m_current_queue);
+            session.m_inference_queue[i]->m_time_stamp = session.m_current_queue;
 #ifdef USE_SEMAPHORE
-            session.inferenceQueue[i]->ready.release();
+            session.m_inference_queue[i]->m_ready.release();
             session.m_session_counter.release();
             global_counter.release();
 #else
-            session.inferenceQueue[i]->ready.exchange(true);
+            session.m_inference_queue[i]->m_ready.exchange(true);
             session.m_session_counter.fetch_add(1);
             global_counter.fetch_add(1);
 #endif
@@ -182,24 +182,24 @@ bool InferenceThreadPool::preProcess(SessionElement& session) {
         }
     }
 #ifndef BELA
-    std::cout << "[WARNING] No free inferenceQueue found!" << std::endl;
+    std::cout << "[WARNING] No free inference queue found!" << std::endl;
 #else
-    printf("[WARNING] No free inferenceQueue found!\n");
+    printf("[WARNING] No free inference queue found!\n");
 #endif
     return false;
 }
 
-void InferenceThreadPool::postProcess(SessionElement& session, SessionElement::ThreadSafeStruct& nextBuffer) {
-    session.prePostProcessor.postProcess(nextBuffer.rawModelOutput, session.receiveBuffer, session.currentBackend.load(std::memory_order_relaxed));
+void InferenceThreadPool::post_process(SessionElement& session, SessionElement::ThreadSafeStruct& next_buffer) {
+    session.m_pp_processor.post_process(next_buffer.m_raw_model_output, session.m_receive_buffer, session.m_currentBackend.load(std::memory_order_relaxed));
 #ifdef USE_SEMAPHORE
-    nextBuffer.free.release();
+    next_buffer.m_free.release();
 #else
-    nextBuffer.free.exchange(true);
+    next_buffer.m_free.exchange(true);
 #endif
 }
 
-int InferenceThreadPool::getNumberOfSessions() {
-    return activeSessions.load();
+int InferenceThreadPool::get_num_sessions() {
+    return m_active_sessions.load();
 }
 
 } // namespace anira

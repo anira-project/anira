@@ -1,5 +1,5 @@
-#ifndef ANIRA_SYSTEM_REALTIMETHREAD_H
-#define ANIRA_SYSTEM_REALTIMETHREAD_H
+#ifndef ANIRA_SYSTEM_HIGHPRIORITYTHREAD_H
+#define ANIRA_SYSTEM_HIGHPRIORITYTHREAD_H
 
 #if WIN32
     #include <windows.h>
@@ -17,24 +17,24 @@
 
 namespace anira {
 
-class ANIRA_API RealtimeThread {
+class ANIRA_API HighPriorityThread {
 public:
-    RealtimeThread();
-    ~RealtimeThread();
+    HighPriorityThread();
+    ~HighPriorityThread();
     
     void start();
     void stop();
 
     virtual void run() = 0;
 
-    static void elevateToRealTimePriority(std::thread::native_handle_type thread_native_handle, bool is_main_process = false);
-    bool shouldExit();
+    static void elevate_priority(std::thread::native_handle_type thread_native_handle, bool is_main_process = false);
+    bool should_exit();
 
 private:
-    std::thread thread;
+    std::thread m_thread;
     std::atomic<bool> m_should_exit;
 };
 
 } // namespace anira
 
-#endif // ANIRA_SYSTEM_REALTIMETHREAD_H
+#endif // ANIRA_SYSTEM_HIGHPRIORITYTHREAD_H

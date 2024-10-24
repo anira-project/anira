@@ -11,24 +11,24 @@ namespace anira {
 class ANIRA_API InferenceHandler {
 public:
     InferenceHandler() = delete;
-    InferenceHandler(PrePostProcessor &prePostProcessor, InferenceConfig& config);
-    InferenceHandler(PrePostProcessor &prePostProcessor, InferenceConfig& config, BackendBase& noneProcessor);
+    InferenceHandler(PrePostProcessor &pp_processor, InferenceConfig& config);
+    InferenceHandler(PrePostProcessor &pp_processor, InferenceConfig& config, BackendBase& none_processor);
     ~InferenceHandler();
 
-    void setInferenceBackend(InferenceBackend inferenceBackend);
-    InferenceBackend getInferenceBackend();
+    void set_inference_backend(InferenceBackend inference_backend);
+    InferenceBackend get_inference_backend();
 
-    void prepare(HostAudioConfig newAudioConfig);
-    void process(float ** inputBuffer, const size_t inputSamples); // buffer[channel][index]
+    void prepare(HostAudioConfig new_audio_config);
+    void process(float ** input_buffer, const size_t input_samples); // buffer[channel][index]
 
-    int getLatency();
-    InferenceManager &getInferenceManager(); // TODO remove
+    int get_latency();
+    InferenceManager &get_inference_manager(); // TODO remove
 
 private:
-    BackendBase* noneProcessor;
-    InferenceManager inferenceManager;
+    BackendBase* m_none_processor;
+    InferenceManager m_inference_manager;
 
-    bool useCustomNoneProcessor = false;
+    bool m_use_custom_none_processor = false;
 };
 
 } // namespace anira

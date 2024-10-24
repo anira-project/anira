@@ -12,43 +12,43 @@ namespace anira {
 class ANIRA_API InferenceManager {
 public:
     InferenceManager() = delete;
-    InferenceManager(PrePostProcessor &prePostProcessor, InferenceConfig& config, BackendBase& noneProcessor);
+    InferenceManager(PrePostProcessor &pp_processor, InferenceConfig& config, BackendBase& none_processor);
     ~InferenceManager();
 
     void prepare(HostAudioConfig config);
-    void process(float ** inputBuffer, size_t inputSamples);
+    void process(float ** input_buffer, size_t input_samples);
 
-    void setBackend(InferenceBackend newInferenceBackend);
-    InferenceBackend getBackend();
+    void set_backend(InferenceBackend new_inference_backend);
+    InferenceBackend get_backend();
 
-    int getLatency() const;
+    int get_latency() const;
 
     // Required for unit test
-    size_t getNumReceivedSamples();
-    InferenceThreadPool& getInferenceThreadPool();
+    size_t get_num_received_samples();
+    InferenceThreadPool& get_inference_thread_pool();
 
-    int getMissingBlocks();
-    int getSessionID() const;
-
-private:
-    void processInput(float ** inputBuffer, const size_t inputSamples);
-    void processOutput(float ** inputBuffer, const size_t inputSamples);
-    void clearBuffer(float ** inputBuffer, const size_t inputSamples);
-    int calculateLatency();
-    int calculateBufferAdaptation(int hostBufferSize, int modelOutputSize);
-    int maxNumberOfInferences(int hostBufferSize, int modelOutputSize);
-    int greatestCommonDivisor(int a, int b);
-    int leatCommonMultiple(int a, int b);
+    int get_missing_blocks();
+    int get_session_id() const;
 
 private:
-    std::shared_ptr<InferenceThreadPool> inferenceThreadPool;
+    void process_input(float ** input_buffer, const size_t input_samples);
+    void process_output(float ** input_buffer, const size_t input_samples);
+    void clear_buffer(float ** input_buffer, const size_t input_samples);
+    int calculate_latency();
+    int calculate_buffer_adaptation(int m_host_buffer_size, int model_output_size);
+    int max_num_inferences(int m_host_buffer_size, int model_output_size);
+    int greatest_common_divisor(int a, int b);
+    int leat_common_multiple(int a, int b);
 
-    InferenceConfig& inferenceConfig;
-    SessionElement& session;
-    HostAudioConfig spec;
+private:
+    std::shared_ptr<InferenceThreadPool> m_inference_thread_pool;
 
-    size_t initSamples = 0;
-    std::atomic<int> inferenceCounter {0};
+    InferenceConfig& m_inference_config;
+    SessionElement& m_session;
+    HostAudioConfig m_spec;
+
+    size_t m_init_samples = 0;
+    std::atomic<int> m_inference_counter {0};
 };
 
 } // namespace anira

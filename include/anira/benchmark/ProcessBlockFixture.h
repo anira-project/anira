@@ -15,26 +15,26 @@ public:
     ProcessBlockFixture();
     ~ProcessBlockFixture();
 
-    void initializeIteration();
-    void initializeRepetition(const InferenceConfig& inferenceConfig, const HostAudioConfig& hostAudioConfig, const InferenceBackend& inferenceBackend, bool sleep_after_repetition = true);
-    bool bufferHasBeenProcessed();
-    void pushRandomSamplesInBuffer(anira::HostAudioConfig hostAudioConfig);
-    int getBufferSize();
-    int getRepetition();
+    void initialize_iteration();
+    void initialize_repetition(const InferenceConfig& inference_config, const HostAudioConfig& host_config, const InferenceBackend& inference_backend, bool sleep_after_repetition = true);
+    bool buffer_processed();
+    void push_random_samples_in_buffer(anira::HostAudioConfig host_config);
+    int get_buffer_size();
+    int get_repetition();
 
 #if defined(_WIN32) || defined(__APPLE__)
-        void interationStep(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end, ::benchmark::State& state);
+        void interation_step(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end, ::benchmark::State& state);
 #else
-        void interationStep(const std::chrono::system_clock::time_point& start, const std::chrono::system_clock::time_point& end, ::benchmark::State& state);
+        void interation_step(const std::chrono::system_clock::time_point& start, const std::chrono::system_clock::time_point& end, ::benchmark::State& state);
 #endif
 
-    void repetitionStep();
+    void repetition_step();
 
-    inline static std::unique_ptr<anira::InferenceHandler> m_inferenceHandler = nullptr;
+    inline static std::unique_ptr<anira::InferenceHandler> m_inference_handler = nullptr;
     inline static std::unique_ptr<anira::AudioBuffer<float>> m_buffer = nullptr;
 
 private:
-    int m_bufferSize = 0;
+    int m_buffer_size = 0;
     int m_repetition = 0;
     bool m_sleep_after_repetition = true;
     int m_iteration = 0;
@@ -42,9 +42,9 @@ private:
     int m_prev_num_received_samples = 0;
     std::string m_model_name;
     std::string m_inference_backend_name;
-    InferenceBackend m_inferenceBackend;
-    InferenceConfig m_inferenceConfig;
-    HostAudioConfig m_hostAudioConfig;
+    InferenceBackend m_inference_backend;
+    InferenceConfig m_inference_config;
+    HostAudioConfig m_host_config;
 
     void SetUp(const ::benchmark::State& state);
     void TearDown(const ::benchmark::State& state);
