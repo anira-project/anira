@@ -17,16 +17,16 @@ public:
     LibtorchProcessor(InferenceConfig& config);
     ~LibtorchProcessor();
 
-    void prepareToPlay() override;
-    void processBlock(AudioBufferF& input, AudioBufferF& output) override;
+    void prepare() override;
+    void process(AudioBufferF& input, AudioBufferF& output) override;
 
 private:
-    torch::jit::script::Module module;
+    torch::jit::script::Module m_module;
 
-    torch::Tensor inputTensor;
-    torch::Tensor outputTensor;
+    torch::Tensor m_input_tensor;
+    torch::Tensor m_output_tensor;
 
-    std::vector<torch::jit::IValue> inputs;
+    std::vector<torch::jit::IValue> m_inputs;
 
 };
 

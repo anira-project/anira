@@ -26,46 +26,46 @@
 
 typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
-CNNPrePostProcessor myPrePostProcessor;
-// HybridNNPrePostProcessor myPrePostProcessor;
-// StatefulRNNPrePostProcessor myPrePostProcessor;
+CNNPrePostProcessor my_pp_processor;
+// HybridNNPrePostProcessor my_pp_processor;
+// StatefulRNNPrePostProcessor my_pp_processor;
 
-anira::InferenceConfig myConfig = cnnConfig;
-// anira::InferenceConfig myConfig = hybridNNConfig;
-// anira::InferenceConfig myConfig = statefulRNNConfig;
+anira::InferenceConfig my_inference_config = cnn_config;
+// anira::InferenceConfig my_inference_config = hybridnn_config;
+// anira::InferenceConfig my_inference_config = rnn_config;
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
 
-    // The buffer size return in getBufferSize() is populated by state.range(0) param of the google benchmark
-    anira::HostAudioConfig hostAudioConfig = {1, (size_t) getBufferSize(), SAMPLE_RATE};
-    anira::InferenceBackend inferenceBackend = anira::LIBTORCH;
+    // The buffer size return in get_buffer_size() is populated by state.range(0) param of the google benchmark
+    anira::HostAudioConfig host_config = {1, (size_t) get_buffer_size(), SAMPLE_RATE};
+    anira::InferenceBackend inference_backend = anira::LIBTORCH;
 
-    m_inferenceHandler = std::make_unique<anira::InferenceHandler>(myPrePostProcessor, myConfig);
-    m_inferenceHandler->prepare(hostAudioConfig);
-    m_inferenceHandler->setInferenceBackend(inferenceBackend);
+    m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
+    m_inference_handler->prepare(host_config);
+    m_inference_handler->set_inference_backend(inference_backend);
 
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(hostAudioConfig.hostChannels, hostAudioConfig.hostBufferSize);
+    m_buffer = std::make_unique<anira::AudioBuffer<float>>(host_config.m_host_channels, host_config.m_host_buffer_size);
 
-    initializeRepetition(myConfig, hostAudioConfig, inferenceBackend);
+    initialize_repetition(my_inference_config, host_config, inference_backend);
 
     for (auto _ : state) {
-        pushRandomSamplesInBuffer(hostAudioConfig);
+        push_random_samples_in_buffer(host_config);
 
-        initializeIteration();
+        initialize_iteration();
 
         auto start = std::chrono::high_resolution_clock::now();
         
-        m_inferenceHandler->process(m_buffer->getArrayOfWritePointers(), getBufferSize());
+        m_inference_handler->process(m_buffer->get_array_of_write_pointers(), get_buffer_size());
 
-        while (!bufferHasBeenProcessed()) {
+        while (!buffer_processed()) {
             std::this_thread::sleep_for(std::chrono::nanoseconds (10));
         }
         
         auto end = std::chrono::high_resolution_clock::now();
 
-        interationStep(start, end, state);
+        interation_step(start, end, state);
     }
-    repetitionStep();
+    repetition_step();
 }
 
 // /* ============================================================ *

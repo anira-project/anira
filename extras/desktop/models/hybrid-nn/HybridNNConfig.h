@@ -3,7 +3,7 @@
 
 #include <anira/anira.h>
 
-static anira::InferenceConfig hybridNNConfig(
+static anira::InferenceConfig hybridnn_config(
 #ifdef USE_LIBTORCH
         GUITARLSTM_MODELS_PATH_PYTORCH + std::string("/model_0/GuitarLSTM-dynamic.pt"),
         {256, 1, 150},

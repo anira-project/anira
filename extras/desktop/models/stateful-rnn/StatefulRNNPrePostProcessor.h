@@ -7,7 +7,7 @@
 class StatefulRNNPrePostProcessor : public anira::PrePostProcessor
 {
 public:
-    // This model uses the default preProcess method from PrePostProcessor
+    // This model uses the default pre_process method from PrePostProcessor
 };
 
 #endif //ANIRA_STATEFULLRNNPREPOSTPROCESSOR_H

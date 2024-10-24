@@ -15,6 +15,6 @@
 #include "utils/HostAudioConfig.h"
 #include "utils/InferenceBackend.h"
 #include "utils/RingBuffer.h"
-#include "system/RealtimeThread.h"
+#include "system/HighPriorityThread.h"
 
 #endif // ANIRA_H

@@ -3,40 +3,40 @@
 
 namespace anira {
 
-InferenceHandler::InferenceHandler(PrePostProcessor& ppP, InferenceConfig& config) : noneProcessor(new BackendBase(config)), inferenceManager(ppP, config, *noneProcessor) {
+InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& config) : m_none_processor(new BackendBase(config)), m_inference_manager(pp_processor, config, *m_none_processor) {
 }
 
-InferenceHandler::InferenceHandler(PrePostProcessor& ppP, InferenceConfig& config, BackendBase& nP) : noneProcessor(&nP), inferenceManager(ppP, config, *noneProcessor) {
-    useCustomNoneProcessor = true;
+InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& config, BackendBase& nP) : m_none_processor(&nP), m_inference_manager(pp_processor, config, *m_none_processor) {
+    m_use_custom_none_processor = true;
 }
 
 InferenceHandler::~InferenceHandler() {
-    if (useCustomNoneProcessor == false) delete noneProcessor;
+    if (m_use_custom_none_processor == false) delete m_none_processor;
 }
 
-void InferenceHandler::prepare(HostAudioConfig newAudioConfig) {
-    assert(newAudioConfig.hostChannels == 1 && "Stereo processing is not fully implemented yet");
-    inferenceManager.prepare(newAudioConfig);
+void InferenceHandler::prepare(HostAudioConfig new_audio_config) {
+    assert(new_audio_config.m_host_channels == 1 && "Stereo processing is not fully implemented yet");
+    m_inference_manager.prepare(new_audio_config);
 }
 
-void InferenceHandler::process(float **inputBuffer, const size_t inputSamples) {
-    inferenceManager.process(inputBuffer, inputSamples);
+void InferenceHandler::process(float **input_buffer, const size_t input_samples) {
+    m_inference_manager.process(input_buffer, input_samples);
 }
 
-void InferenceHandler::setInferenceBackend(InferenceBackend inferenceBackend) {
-    inferenceManager.setBackend(inferenceBackend);
+void InferenceHandler::set_inference_backend(InferenceBackend inference_backend) {
+    m_inference_manager.set_backend(inference_backend);
 }
 
-InferenceBackend InferenceHandler::getInferenceBackend() {
-    return inferenceManager.getBackend();
+InferenceBackend InferenceHandler::get_inference_backend() {
+    return m_inference_manager.get_backend();
 }
 
-int InferenceHandler::getLatency() {
-    return inferenceManager.getLatency();
+int InferenceHandler::get_latency() {
+    return m_inference_manager.get_latency();
 }
 
-InferenceManager &InferenceHandler::getInferenceManager() {
-    return inferenceManager;
+InferenceManager &InferenceHandler::get_inference_manager() {
+    return m_inference_manager;
 }
 
 } // namespace anira

@@ -15,16 +15,16 @@ public:
     TFLiteProcessor(InferenceConfig& config);
     ~TFLiteProcessor();
 
-    void prepareToPlay() override;
-    void processBlock(AudioBufferF& input, AudioBufferF& output) override;
+    void prepare() override;
+    void process(AudioBufferF& input, AudioBufferF& output) override;
 
 private:
-    TfLiteModel* model;
-    TfLiteInterpreterOptions* options;
-    TfLiteInterpreter* interpreter;
+    TfLiteModel* m_model;
+    TfLiteInterpreterOptions* m_options;
+    TfLiteInterpreter* m_interpreter;
 
-    TfLiteTensor* inputTensor;
-    const TfLiteTensor* outputTensor;
+    TfLiteTensor* m_input_tensor;
+    const TfLiteTensor* m_output_tensor;
 };
 
 } // namespace anira

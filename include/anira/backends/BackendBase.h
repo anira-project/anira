@@ -9,11 +9,11 @@ namespace anira {
 class ANIRA_API BackendBase {
 public:
     BackendBase(InferenceConfig& config);
-    virtual void prepareToPlay();
-    virtual void processBlock(AudioBufferF& input, AudioBufferF& output);
+    virtual void prepare();
+    virtual void process(AudioBufferF& input, AudioBufferF& output);
 
 protected:
-    InferenceConfig& inferenceConfig;
+    InferenceConfig& m_inference_config;
 };
 
 } // namespace anira

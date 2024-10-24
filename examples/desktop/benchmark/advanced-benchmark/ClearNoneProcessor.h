@@ -7,7 +7,7 @@ class ClearNoneProcessor : public anira::BackendBase {
 public:
     ClearNoneProcessor(anira::InferenceConfig& config) : anira::BackendBase(config) {}
 
-    void processBlock(anira::AudioBufferF &input, anira::AudioBufferF &output) override {
+    void process(anira::AudioBufferF &input, anira::AudioBufferF &output) override {
     }
 };
 

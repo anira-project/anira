@@ -1,15 +1,15 @@
-#include <anira/system/RealtimeThread.h>
+#include <anira/system/HighPriorityThread.h>
 
 namespace anira {
 
-RealtimeThread::RealtimeThread() : m_should_exit(false){
+HighPriorityThread::HighPriorityThread() : m_should_exit(false){
 }
 
-RealtimeThread::~RealtimeThread() {
+HighPriorityThread::~HighPriorityThread() {
     stop();
 }
 
-void RealtimeThread::start() {
+void HighPriorityThread::start() {
     m_should_exit = false;
     #if __linux__
         pthread_attr_t thread_attr;
@@ -18,21 +18,21 @@ void RealtimeThread::start() {
         pthread_setattr_default_np(&thread_attr);
     #endif
 
-    thread = std::thread(&RealtimeThread::run, this);
+    m_thread = std::thread(&HighPriorityThread::run, this);
 
     #if __linux__
         pthread_attr_destroy(&thread_attr);
     #endif
 
-    elevateToRealTimePriority(thread.native_handle());
-    }
+    elevate_priority(m_thread.native_handle());
+}
 
-void RealtimeThread::stop() {
+void HighPriorityThread::stop() {
     m_should_exit = true;
-    if (thread.joinable()) thread.join();
+    if (m_thread.joinable()) m_thread.join();
 }   
 
-void RealtimeThread::elevateToRealTimePriority(std::thread::native_handle_type thread_native_handle, bool is_main_process) {
+void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread_native_handle, bool is_main_process) {
 #if WIN32
     if (is_main_process) {
         if (!SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS)) {
@@ -112,7 +112,7 @@ void RealtimeThread::elevateToRealTimePriority(std::thread::native_handle_type t
 #endif
 }
 
-bool RealtimeThread::shouldExit() {
+bool HighPriorityThread::should_exit() {
     return m_should_exit;
 }
 

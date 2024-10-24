@@ -15,28 +15,28 @@ public:
     OnnxRuntimeProcessor(InferenceConfig& config);
     ~OnnxRuntimeProcessor();
 
-    void prepareToPlay() override;
-    void processBlock(AudioBufferF& input, AudioBufferF& output) override;
+    void prepare() override;
+    void process(AudioBufferF& input, AudioBufferF& output) override;
 
 private:
-    Ort::Env env;
-    Ort::MemoryInfo memory_info;
-    Ort::AllocatorWithDefaultOptions ort_alloc;
-    Ort::SessionOptions session_options;
-    std::unique_ptr<Ort::Session> session;
+    Ort::Env m_env;
+    Ort::MemoryInfo m_memory_info;
+    Ort::AllocatorWithDefaultOptions m_ort_alloc;
+    Ort::SessionOptions m_session_options;
+    std::unique_ptr<Ort::Session> m_session;
 
-    size_t inputSize;
-    size_t outputSize;
+    size_t m_input_size;
+    size_t m_output_size;
 
-    std::vector<float> inputData;
-    std::vector<Ort::Value> inputTensor;
-    std::vector<Ort::Value> outputTensor;
+    std::vector<float> m_input_data;
+    std::vector<Ort::Value> m_inputs;
+    std::vector<Ort::Value> m_outputs;
 
-    std::unique_ptr<Ort::AllocatedStringPtr> inputName;
-    std::unique_ptr<Ort::AllocatedStringPtr> outputName;
+    std::unique_ptr<Ort::AllocatedStringPtr> m_input_name;
+    std::unique_ptr<Ort::AllocatedStringPtr> m_output_name;
 
-    std::array<const char *, 1> inputNames;
-    std::array<const char *, 1> outputNames;
+    std::array<const char *, 1> m_input_names;
+    std::array<const char *, 1> m_output_names;
 };
 
 } // namespace anira
