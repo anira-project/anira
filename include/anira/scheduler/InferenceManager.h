@@ -19,15 +19,15 @@ public:
     void process(float ** input_buffer, size_t input_samples);
 
     void set_backend(InferenceBackend new_inference_backend);
-    InferenceBackend get_backend();
+    InferenceBackend get_backend() const;
 
     int get_latency() const;
 
     // Required for unit test
-    size_t get_num_received_samples();
-    InferenceThreadPool& get_inference_thread_pool();
+    size_t get_num_received_samples() const;
+    const AniraContext& get_anira_context() const;
 
-    int get_missing_blocks();
+    int get_missing_blocks() const;
     int get_session_id() const;
 
 private:

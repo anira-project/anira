@@ -17,7 +17,7 @@ void InferenceManager::set_backend(InferenceBackend new_inference_backend) {
     m_session.m_currentBackend.store(new_inference_backend, std::memory_order_relaxed);
 }
 
-InferenceBackend InferenceManager::get_backend() {
+InferenceBackend InferenceManager::get_backend() const {
     return m_session.m_currentBackend.load(std::memory_order_relaxed);
 }
 

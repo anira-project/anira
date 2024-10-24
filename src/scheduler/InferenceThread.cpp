@@ -71,7 +71,7 @@ void InferenceThread::run() {
         }
         else {
             std::this_thread::yield();
-            std::this_thread::sleep_for(timeForExit);
+            std::this_thread::sleep_for(time_for_exit);
         }
     }
 }

@@ -1,8 +1,8 @@
 #include <anira/backends/BackendBase.h>
 
 namespace anira {
-BackendBase::BackendBase(InferenceConfig &config) : m_inference_config(config) {
 
+BackendBase::BackendBase(InferenceConfig &config) : m_inference_config(config) {
 }
 
 void BackendBase::prepare() {
