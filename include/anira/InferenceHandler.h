@@ -24,6 +24,8 @@ public:
     int get_latency();
     InferenceManager &get_inference_manager(); // TODO remove
 
+    void exec_inference();
+
 private:
     BackendBase* m_none_processor;
     InferenceManager m_inference_manager;

@@ -180,4 +180,8 @@ int InferenceManager::leat_common_multiple(int a, int b) {
     return a * b / greatest_common_divisor(a, b);
 }
 
+void InferenceManager::exec_inference() {
+    m_inference_thread_pool->exec_inference();
+}
+
 } // namespace anira

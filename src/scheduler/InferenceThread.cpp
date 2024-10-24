@@ -17,7 +17,8 @@ InferenceThread::InferenceThread(std::atomic<int>& g, InferenceConfig& config, s
     m_tflite_processor(config),
 #endif
     m_global_counter(g),
-    m_sessions(ses)
+    m_sessions(ses),
+    timeForExit(50)
 {
 #ifdef USE_LIBTORCH
     m_torch_processor.prepare();
@@ -40,39 +41,46 @@ InferenceThread::InferenceThread(std::atomic<int>& g, InferenceConfig& config, s
 }
 
 void InferenceThread::run() {
-    std::chrono::microseconds timeForExit(50);
     while (!should_exit()) {
-#ifdef USE_SEMAPHORE
-        if (m_global_counter.try_acquire()) {
-#else
-        int old = m_global_counter.load();
-        bool success = false;
-        if (old > 0) {
-            success = m_global_counter.compare_exchange_strong(old, old - 1);
+        auto success = execute();
+
+        if (!success) {
+            std::this_thread::yield();
+            std::this_thread::sleep_for(timeForExit);
         }
-        if (success) {
+    }
+}
+
+bool InferenceThread::execute() {
+#ifdef USE_SEMAPHORE
+    if (m_global_counter.try_acquire()) {
+#else
+    int old = m_global_counter.load();
+    bool success = false;
+    if (old > 0) {
+        success = m_global_counter.compare_exchange_strong(old, old - 1);
+    }
+    if (success) {
 #endif
-            bool inference_done = false;
-            while (!inference_done) {
-                if (m_session_id < 0) {
-                    for (const auto& session : m_sessions) {
+        bool inference_done = false;
+        while (!inference_done) {
+            if (m_session_id < 0) {
+                for (const auto& session : m_sessions) {
+                    inference_done = tryInference(session);
+                    if (inference_done) break;
+                }
+            } else {
+                for (const auto& session : m_sessions) {
+                    if (session->m_session_id == m_session_id) {
                         inference_done = tryInference(session);
-                        if (inference_done) break;
-                    }
-                } else {
-                    for (const auto& session : m_sessions) {
-                        if (session->m_session_id == m_session_id) {
-                            inference_done = tryInference(session);
-                            break;
-                        }
+                        break;
                     }
                 }
             }
         }
-        else {
-            std::this_thread::yield();
-            std::this_thread::sleep_for(timeForExit);
-        }
+        return true;
+    } else {
+        return false;
     }
 }
 

@@ -41,9 +41,11 @@ SessionElement& InferenceThreadPool::create_session(PrePostProcessor& pp_process
         m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, config, m_sessions, session_id));
     }
 
-    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        m_thread_pool[i]->start();
-    } 
+    if (!m_host_provided_threads) {
+        for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+            m_thread_pool[i]->start();
+        }
+    }
 
     return *m_sessions.back();
 }
@@ -83,10 +85,11 @@ void InferenceThreadPool::release_session(SessionElement& session, InferenceConf
     if (m_active_sessions == 0) {
        release_instance();
     } else {
-        for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-            m_thread_pool[i]->start();
+        if (!m_host_provided_threads) {
+            for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+                m_thread_pool[i]->start();
+            }
         }
-    
     }
 }
 
@@ -106,8 +109,13 @@ void InferenceThreadPool::prepare(SessionElement& session, HostAudioConfig new_c
     global_counter.store(0);
 #endif
 
-    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        m_thread_pool[i]->start();
+    if (!new_config.hostThreadSubmitTaskCallback) {
+        m_host_provided_threads = false;
+        for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+            m_thread_pool[i]->start();
+        }
+    } else {
+        m_host_provided_threads = true;
     }
 }
 
@@ -115,6 +123,11 @@ void InferenceThreadPool::new_data_submitted(SessionElement& session) {
     // We assume that the model_output_size gives us the amount of new samples that we need to process. This can differ from the model_input_size because we might need to add some padding or past samples.
     while (session.m_send_buffer.get_available_samples(0) >= (session.m_inference_config.m_new_model_output_size)) {
         bool success = pre_process(session);
+
+        if (success && session.m_current_config.hostThreadSubmitTaskCallback) {
+            success = session.m_current_config.hostThreadSubmitTaskCallback(1);
+        }
+
         // !success means that there is no free m_inference_queue
         if (!success) {
             for (size_t i = 0; i < session.m_inference_config.m_new_model_output_size; ++i) {
@@ -200,6 +213,23 @@ void InferenceThreadPool::post_process(SessionElement& session, SessionElement::
 
 int InferenceThreadPool::get_num_sessions() {
     return m_active_sessions.load();
+}
+
+void InferenceThreadPool::exec_inference() {
+    bool inference_done = false;
+
+    while (!inference_done) {
+        for (int i = 0; i < m_thread_pool.size(); ++i) {
+            if (!m_thread_pool[i]->m_processing_on_external_thread_pool.load()) {
+                m_thread_pool[i]->m_processing_on_external_thread_pool.store(true);
+                inference_done = m_thread_pool[i]->execute();
+                m_thread_pool[i]->m_processing_on_external_thread_pool.store(false);
+                if (inference_done) {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 } // namespace anira

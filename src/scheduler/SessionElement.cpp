@@ -33,6 +33,8 @@ SessionElement::SessionElement(int newSessionID, PrePostProcessor& pp_processor,
     }
 
     void SessionElement::prepare(HostAudioConfig new_config) {
+        m_current_config = new_config;
+
         m_send_buffer.initialize_with_positions(1, (size_t) new_config.m_host_sample_rate * 50); // TODO find appropriate size dynamically
         m_receive_buffer.initialize_with_positions(1, (size_t) new_config.m_host_sample_rate * 50); // TODO find appropriate size dynamically
 

@@ -40,6 +40,8 @@ public:
 
     static std::vector<std::shared_ptr<SessionElement>>& get_sessions();
 
+    static void exec_inference();
+
 private:
     inline static std::shared_ptr<InferenceThreadPool> m_inference_thread_pool = nullptr; 
     static int get_available_session_id();
@@ -48,11 +50,11 @@ private:
     static void post_process(SessionElement& session, SessionElement::ThreadSafeStruct& next_buffer);
 
 private:
-
     inline static std::vector<std::shared_ptr<SessionElement>> m_sessions;
     inline static std::atomic<int> m_next_id{0};
     inline static std::atomic<int> m_active_sessions{0};
     inline static bool m_thread_pool_should_exit = false;
+    inline static bool m_host_provided_threads = false;
 
     inline static std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;
 };

@@ -39,4 +39,8 @@ InferenceManager &InferenceHandler::get_inference_manager() {
     return m_inference_manager;
 }
 
+void InferenceHandler::exec_inference() {
+    m_inference_manager.exec_inference();
+}
+
 } // namespace anira

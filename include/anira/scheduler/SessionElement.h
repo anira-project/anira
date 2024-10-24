@@ -57,6 +57,7 @@ struct ANIRA_API SessionElement {
 #endif
     
     const int m_session_id;
+    HostAudioConfig m_current_config;
 
     PrePostProcessor& m_pp_processor;
     InferenceConfig& m_inference_config;

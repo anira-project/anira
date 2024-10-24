@@ -38,7 +38,11 @@ public:
     ~InferenceThread() = default;
 
     void run() override;
+    bool execute();
+
     int get_session_id() const { return m_session_id; }
+
+    std::atomic<bool> m_processing_on_external_thread_pool {false};
 
 private:
     bool tryInference(std::shared_ptr<SessionElement> session);
@@ -62,7 +66,9 @@ private:
 #ifdef USE_TFLITE
     TFLiteProcessor m_tflite_processor;
 #endif
- };
+    std::chrono::microseconds timeForExit;
+
+};
 
 } // namespace anira
 

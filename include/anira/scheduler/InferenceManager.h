@@ -30,6 +30,8 @@ public:
     int get_missing_blocks();
     int get_session_id() const;
 
+    void exec_inference();
+
 private:
     void process_input(float ** input_buffer, const size_t input_samples);
     void process_output(float ** input_buffer, const size_t input_samples);
