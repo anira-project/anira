@@ -14,3 +14,4 @@ endif()
 
 add_subdirectory(minimal-inference)
 add_subdirectory(juce-audio-plugin)
+add_subdirectory(clap-audio-plugin)
