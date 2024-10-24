@@ -12,7 +12,6 @@ public:
     virtual void prepare();
     virtual void process(AudioBufferF& input, AudioBufferF& output);
 
-protected:
     InferenceConfig& m_inference_config;
 };
 

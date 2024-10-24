@@ -15,13 +15,26 @@
 #include "../PrePostProcessor.h"
 #include "../InferenceConfig.h"
 
+#ifdef USE_LIBTORCH
+    #include "../backends/LibTorchProcessor.h"
+#endif
+#ifdef USE_ONNXRUNTIME
+    #include "../backends/OnnxRuntimeProcessor.h"
+#endif
+#ifdef USE_TFLITE
+    #include "../backends/TFLiteProcessor.h"
+#endif
+
 namespace anira {
 
-struct ANIRA_API SessionElement {
-    SessionElement(int newSessionID, PrePostProcessor& pp_processor, InferenceConfig& config, BackendBase& none_processor);
+class ANIRA_API SessionElement {
+public:
+    SessionElement(int newSessionID, PrePostProcessor& pp_processor, InferenceConfig& config);
 
     void clear();
     void prepare(HostAudioConfig new_config);
+
+    template <typename T> void set_processor(std::shared_ptr<T>& processor);
 
     RingBuffer m_send_buffer;
     RingBuffer m_receive_buffer;
@@ -60,7 +73,20 @@ struct ANIRA_API SessionElement {
 
     PrePostProcessor& m_pp_processor;
     InferenceConfig& m_inference_config;
-    BackendBase& m_none_processor;
+
+    BackendBase m_default_processor;
+    BackendBase* m_custom_processor;
+    
+#ifdef USE_LIBTORCH
+    std::shared_ptr<LibtorchProcessor> m_libtorch_processor = nullptr;
+#endif
+#ifdef USE_ONNXRUNTIME
+    std::shared_ptr<OnnxRuntimeProcessor> m_onnx_processor = nullptr;
+#endif
+#ifdef USE_TFLITE
+    std::shared_ptr<TFLiteProcessor> m_tflite_processor = nullptr;
+#endif
+
 };
 
 } // namespace anira

@@ -8,6 +8,34 @@ namespace anira {
 
 TFLiteProcessor::TFLiteProcessor(InferenceConfig& config) : BackendBase(config)
 {
+    for (size_t i = 0; i < m_inference_config.m_num_threads; ++i) {
+        m_instances.emplace_back(std::make_unique<Instance>(m_inference_config));
+    }
+}
+
+TFLiteProcessor::~TFLiteProcessor() {
+}
+
+void TFLiteProcessor::prepare() {
+    for(auto& instance : m_instances) {
+        instance->prepare();
+    }
+}
+
+void TFLiteProcessor::process(AudioBufferF& input, AudioBufferF& output) {
+    while (true) {
+        for(auto& instance : m_instances) {
+            if (!(instance->m_processing.exchange(true))) {
+                instance->process(input, output);
+                instance->m_processing.exchange(false);
+                return;
+            }
+        }
+    }
+}
+
+TFLiteProcessor::Instance::Instance(InferenceConfig& config) : m_inference_config(config)
+{
 #ifdef _WIN32
     std::string modelpath_str = m_inference_config.m_model_path_tflite;
     std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
@@ -30,14 +58,13 @@ TFLiteProcessor::TFLiteProcessor(InferenceConfig& config) : BackendBase(config)
     TfLiteInterpreterResizeInputTensor(m_interpreter, 0, input_shape.data(), input_shape.size());
 }
 
-TFLiteProcessor::~TFLiteProcessor()
-{
+TFLiteProcessor::Instance::~Instance() {
     TfLiteInterpreterDelete(m_interpreter);
     TfLiteInterpreterOptionsDelete(m_options);
     TfLiteModelDelete(m_model);
 }
 
-void TFLiteProcessor::prepare() {
+void TFLiteProcessor::Instance::prepare() {
     TfLiteInterpreterAllocateTensors(m_interpreter);
     m_input_tensor = TfLiteInterpreterGetInputTensor(m_interpreter, 0);
     m_output_tensor = TfLiteInterpreterGetOutputTensor(m_interpreter, 0);
@@ -49,7 +76,7 @@ void TFLiteProcessor::prepare() {
     }
 }
 
-void TFLiteProcessor::process(AudioBufferF& input, AudioBufferF& output) {
+void TFLiteProcessor::Instance::process(AudioBufferF& input, AudioBufferF& output) {
     TfLiteTensorCopyFromBuffer(m_input_tensor, input.get_raw_data(), input.get_num_samples() * sizeof(float)); //TODO: Multichannel support
     TfLiteInterpreterInvoke(m_interpreter);
     TfLiteTensorCopyToBuffer(m_output_tensor, output.get_raw_data(), output.get_num_samples() * sizeof(float)); //TODO: Multichannel support

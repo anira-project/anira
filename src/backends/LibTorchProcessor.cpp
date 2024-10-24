@@ -4,7 +4,34 @@ namespace anira {
 
 LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : BackendBase(config) {
     torch::set_num_threads(1);
-    
+
+    for (size_t i = 0; i < m_inference_config.m_num_threads; ++i) {
+        m_instances.emplace_back(std::make_unique<Instance>(m_inference_config));
+    }
+}
+
+LibtorchProcessor::~LibtorchProcessor() {
+}
+
+void LibtorchProcessor::prepare() {
+    for(auto& instance : m_instances) {
+        instance->prepare();
+    }
+}
+
+void LibtorchProcessor::process(AudioBufferF& input, AudioBufferF& output) { 
+    while (true) {
+        for(auto& instance : m_instances) {
+            if (!(instance->m_processing.exchange(true))) {
+                instance->process(input, output);
+                instance->m_processing.exchange(false);
+                return;
+            }
+        }
+    }
+}
+
+LibtorchProcessor::Instance::Instance(InferenceConfig& config) : m_inference_config(config) {
     try {
         m_module = torch::jit::load(m_inference_config.m_model_path_torch);
     }
@@ -14,10 +41,7 @@ LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : BackendBase(conf
     }
 }
 
-LibtorchProcessor::~LibtorchProcessor() {
-}
-
-void LibtorchProcessor::prepare() {
+void LibtorchProcessor::Instance::prepare() {
     m_inputs.clear();
     m_inputs.push_back(torch::zeros(m_inference_config.m_model_input_shape_torch));
 
@@ -28,7 +52,7 @@ void LibtorchProcessor::prepare() {
     }
 }
 
-void LibtorchProcessor::process(AudioBufferF& input, AudioBufferF& output) { 
+void LibtorchProcessor::Instance::process(AudioBufferF& input, AudioBufferF& output) {
     // Create input tensor object from input data values and shape
     m_input_tensor = torch::from_blob(input.get_raw_data(), (const long long) input.get_num_samples()).reshape(m_inference_config.m_model_input_shape_torch); // TODO: Multichannel support
 

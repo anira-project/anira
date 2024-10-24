@@ -10,7 +10,7 @@
 
 namespace anira {
 
-class ANIRA_API TFLiteProcessor : private BackendBase {
+class ANIRA_API TFLiteProcessor : public BackendBase {
 public:
     TFLiteProcessor(InferenceConfig& config);
     ~TFLiteProcessor();
@@ -19,12 +19,25 @@ public:
     void process(AudioBufferF& input, AudioBufferF& output) override;
 
 private:
-    TfLiteModel* m_model;
-    TfLiteInterpreterOptions* m_options;
-    TfLiteInterpreter* m_interpreter;
+    struct Instance {
+        Instance(InferenceConfig& config);
+        ~Instance();
+        
+        void prepare();
+        void process(AudioBufferF& input, AudioBufferF& output);
 
-    TfLiteTensor* m_input_tensor;
-    const TfLiteTensor* m_output_tensor;
+        TfLiteModel* m_model;
+        TfLiteInterpreterOptions* m_options;
+        TfLiteInterpreter* m_interpreter;
+
+        TfLiteTensor* m_input_tensor;
+        const TfLiteTensor* m_output_tensor;
+
+        InferenceConfig& m_inference_config;
+        std::atomic<bool> m_processing {false};
+    };
+
+    std::vector<std::unique_ptr<Instance>> m_instances;
 };
 
 } // namespace anira

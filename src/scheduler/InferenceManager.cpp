@@ -2,15 +2,15 @@
 
 namespace anira {
 
-InferenceManager::InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& config, BackendBase& none_processor) :
-    m_inference_thread_pool(InferenceThreadPool::get_instance(config)),
-    m_session(m_inference_thread_pool->create_session(pp_processor, config, none_processor)),
+InferenceManager::InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& config, BackendBase* custom_processor) :
+    m_anira_context(AniraContext::get_instance(config)),
+    m_session(m_anira_context->create_session(pp_processor, config, custom_processor)),
     m_inference_config(config)
 {
 }
 
 InferenceManager::~InferenceManager() {
-    m_inference_thread_pool->release_session(m_session, m_inference_config);
+    m_anira_context->release_session(m_session);
 }
 
 void InferenceManager::set_backend(InferenceBackend new_inference_backend) {
@@ -24,7 +24,7 @@ InferenceBackend InferenceManager::get_backend() const {
 void InferenceManager::prepare(HostAudioConfig new_config) {
     m_spec = new_config;
 
-    m_inference_thread_pool->prepare(m_session, m_spec);
+    m_anira_context->prepare(m_session, m_spec);
 
     m_inference_counter = 0;
 
@@ -39,9 +39,9 @@ void InferenceManager::prepare(HostAudioConfig new_config) {
 void InferenceManager::process(float ** input_buffer, size_t input_samples) {
     process_input(input_buffer, input_samples);
 
-    m_inference_thread_pool->new_data_submitted(m_session);
+    m_anira_context->new_data_submitted(m_session);
     double time_in_sec = static_cast<double>(input_samples) / m_spec.m_host_sample_rate;
-    m_inference_thread_pool->new_data_request(m_session, time_in_sec);
+    m_anira_context->new_data_request(m_session, time_in_sec);
 
     process_output(input_buffer, input_samples);
 }
@@ -103,16 +103,16 @@ int InferenceManager::get_latency() const {
     return m_init_samples;
 }
 
-InferenceThreadPool& InferenceManager::get_inference_thread_pool() {
-    return *m_inference_thread_pool;
+const AniraContext& InferenceManager::get_anira_context() const {
+    return *m_anira_context;
 }
 
-size_t InferenceManager::get_num_received_samples() {
-    m_inference_thread_pool->new_data_request(m_session, 0); // TODO: Check if process_output call is better here
+size_t InferenceManager::get_num_received_samples() const {
+    m_anira_context->new_data_request(m_session, 0); // TODO: Check if process_output call is better here
     return m_session.m_receive_buffer.get_available_samples(0);
 }
 
-int InferenceManager::get_missing_blocks() {
+int InferenceManager::get_missing_blocks() const {
     return m_inference_counter.load();
 }
 

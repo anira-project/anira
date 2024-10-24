@@ -12,7 +12,7 @@
 
 namespace anira {
 
-class ANIRA_API LibtorchProcessor : private BackendBase {
+class ANIRA_API LibtorchProcessor : public BackendBase {
 public:
     LibtorchProcessor(InferenceConfig& config);
     ~LibtorchProcessor();
@@ -21,13 +21,23 @@ public:
     void process(AudioBufferF& input, AudioBufferF& output) override;
 
 private:
-    torch::jit::script::Module m_module;
+    struct Instance {
+        Instance(InferenceConfig& config);
+        void prepare();
+        void process(AudioBufferF& input, AudioBufferF& output);
 
-    torch::Tensor m_input_tensor;
-    torch::Tensor m_output_tensor;
+        torch::jit::script::Module m_module;
 
-    std::vector<torch::jit::IValue> m_inputs;
+        torch::Tensor m_input_tensor;
+        torch::Tensor m_output_tensor;
 
+        std::vector<torch::jit::IValue> m_inputs;
+
+        InferenceConfig& m_inference_config;
+        std::atomic<bool> m_processing {false};
+    };
+    
+    std::vector<std::unique_ptr<Instance>> m_instances;
 };
 
 } // namespace anira

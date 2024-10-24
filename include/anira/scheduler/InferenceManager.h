@@ -2,7 +2,7 @@
 #define ANIRA_INFERENCEMANAGER_H
 
 #include "InferenceThread.h"
-#include "InferenceThreadPool.h"
+#include "AniraContext.h"
 #include "../utils/HostAudioConfig.h"
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
@@ -12,7 +12,7 @@ namespace anira {
 class ANIRA_API InferenceManager {
 public:
     InferenceManager() = delete;
-    InferenceManager(PrePostProcessor &pp_processor, InferenceConfig& config, BackendBase& none_processor);
+    InferenceManager(PrePostProcessor &pp_processor, InferenceConfig& config, BackendBase* custom_processor);
     ~InferenceManager();
 
     void prepare(HostAudioConfig config);
@@ -41,7 +41,7 @@ private:
     int leat_common_multiple(int a, int b);
 
 private:
-    std::shared_ptr<InferenceThreadPool> m_inference_thread_pool;
+    std::shared_ptr<AniraContext> m_anira_context;
 
     InferenceConfig& m_inference_config;
     SessionElement& m_session;
