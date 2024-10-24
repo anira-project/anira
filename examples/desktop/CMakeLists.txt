@@ -12,5 +12,9 @@ if(ANIRA_WITH_BENCHMARK)
     add_subdirectory(benchmark)
 endif()
 
+if(ANIRA_WITH_JACK_EXAMPLE)
+    add_subdirectory(jack-client)
+endif()
+
 add_subdirectory(minimal-inference)
 add_subdirectory(juce-audio-plugin)
