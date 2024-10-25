@@ -3,6 +3,17 @@
 
 #ifdef USE_LIBTORCH
 
+// Avoid min/max macro conflicts on Windows for LibTorch compatibility
+#ifdef _WIN32
+#ifdef min
+#undef min
+#endif
+
+#ifdef max
+#undef max
+#endif
+#endif
+
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
 #include "BackendBase.h"
