@@ -28,7 +28,7 @@ public:
                 auto write_ptr = output.get_write_pointer(channel);
                 auto read_ptr = input.get_read_pointer(channel);
 
-                for (size_t batch = 0; batch < num_batches; ++batch) {
+                for (size_t batch = 0; batch < (size_t) num_batches; ++batch) {
                     size_t base_index = batch * num_input_samples;
                     write_ptr[batch] = read_ptr[num_input_samples - 1 + base_index];
                 }

@@ -118,7 +118,7 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     auto new_latency = inference_handler.get_latency();
     setLatencySamples(new_latency);
 
-    dry_wet_mixer.setWetLatency(new_latency);
+    dry_wet_mixer.setWetLatency((float) new_latency);
 
     for (auto & parameterID : PluginParameters::getPluginParameterList()) {
         parameterChanged(parameterID, parameters.getParameterAsValue(parameterID).getValue());
@@ -161,8 +161,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ignoreUnused (midiMessages);
 
     juce::ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels  = getTotalNumInputChannels();
-    auto totalNumOutputChannels = getTotalNumOutputChannels();
 
     stereoToMono(mono_buffer, buffer);
     dry_wet_mixer.pushDrySamples(mono_buffer);

@@ -58,13 +58,13 @@ struct ANIRA_API InferenceConfig {
         if (m_model_input_shape_torch.size() > 0) {
             m_new_model_input_size = 1;
             for (int i = 0; i < m_model_input_shape_torch.size(); ++i) {
-                m_new_model_input_size *= m_model_input_shape_torch[i];
+                m_new_model_input_size *= (int) m_model_input_shape_torch[i];
             }
         }
         if (m_model_output_shape_torch.size() > 0) {
             m_new_model_output_size = 1;
             for (int i = 0; i < m_model_output_shape_torch.size(); ++i) {
-                m_new_model_output_size *= m_model_output_shape_torch[i];
+                m_new_model_output_size *= (int) m_model_output_shape_torch[i];
             }
         }
 #elif USE_ONNXRUNTIME

@@ -52,9 +52,9 @@ public:
             throw std::runtime_error("Invalid inference backend");
         }
             
-        for (size_t batch = 0; batch < num_batches; batch++) {
-            size_t base_index = batch * num_input_samples;
-            pop_samples_from_buffer(input, output, num_output_samples, num_input_samples-num_output_samples, base_index);
+        for (size_t batch = 0; batch < (size_t) num_batches; batch++) {
+            int base_index = static_cast<int>(batch * num_input_samples);
+            pop_samples_from_buffer(input, output, static_cast<int>(num_output_samples), static_cast<int>(num_input_samples-num_output_samples), base_index);
         }
     };
     
