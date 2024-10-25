@@ -17,9 +17,25 @@
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
 #include "BackendBase.h"
+#include <stdlib.h>
+
+// LibTorch headers trigger many warnings; disabling for cleaner build logs
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4244 4267 4996)
+#elif defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wall"
+#endif
+
 #include <torch/script.h>
 #include <torch/torch.h>
-#include <stdlib.h>
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#elif defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 namespace anira {
 

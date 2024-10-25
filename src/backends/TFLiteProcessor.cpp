@@ -54,8 +54,12 @@ TFLiteProcessor::Instance::Instance(InferenceConfig& config) : m_inference_confi
     TfLiteInterpreterOptionsSetNumThreads(m_options, 1);
     m_interpreter = TfLiteInterpreterCreate(m_model, m_options);
     // This is necessary when we have dynamic input shapes, it should be done before allocating tensors obviously
-    std::vector<int> input_shape(m_inference_config.m_model_input_shape_tflite.begin(), m_inference_config.m_model_input_shape_tflite.end());
-    TfLiteInterpreterResizeInputTensor(m_interpreter, 0, input_shape.data(), input_shape.size());
+    std::vector<int> input_shape;
+    input_shape.reserve(m_inference_config.m_model_input_shape_tflite.size());
+    for (int64_t dim : m_inference_config.m_model_input_shape_tflite) {
+        input_shape.push_back(static_cast<int>(dim));
+    }
+    TfLiteInterpreterResizeInputTensor(m_interpreter, 0, input_shape.data(), static_cast<int32_t>(input_shape.size()));
 }
 
 TFLiteProcessor::Instance::~Instance() {
