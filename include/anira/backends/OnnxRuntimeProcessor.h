@@ -19,24 +19,38 @@ public:
     void process(AudioBufferF& input, AudioBufferF& output) override;
 
 private:
-    Ort::Env m_env;
-    Ort::MemoryInfo m_memory_info;
-    Ort::AllocatorWithDefaultOptions m_ort_alloc;
-    Ort::SessionOptions m_session_options;
-    std::unique_ptr<Ort::Session> m_session;
+    struct Instance {
+        Instance(InferenceConfig& config);
 
-    size_t m_input_size;
-    size_t m_output_size;
+        void prepare();
+        void process(AudioBufferF& input, AudioBufferF& output);
 
-    std::vector<float> m_input_data;
-    std::vector<Ort::Value> m_inputs;
-    std::vector<Ort::Value> m_outputs;
+        Ort::MemoryInfo m_memory_info;
+        Ort::Env m_env;
+        Ort::AllocatorWithDefaultOptions m_ort_alloc;
+        Ort::SessionOptions m_session_options;
 
-    std::unique_ptr<Ort::AllocatedStringPtr> m_input_name;
-    std::unique_ptr<Ort::AllocatedStringPtr> m_output_name;
+        inline static std::unique_ptr<Ort::Session> m_session;
 
-    std::array<const char *, 1> m_input_names;
-    std::array<const char *, 1> m_output_names;
+        inline static size_t m_input_size;
+        inline static size_t m_output_size;
+
+        std::vector<float> m_input_data;
+        std::vector<float> m_output_data;
+        std::vector<Ort::Value> m_inputs;
+        std::vector<Ort::Value> m_outputs;
+
+        inline static std::unique_ptr<Ort::AllocatedStringPtr> m_input_name;
+        inline static std::unique_ptr<Ort::AllocatedStringPtr> m_output_name;
+
+        inline static std::array<const char *, 1> m_input_names;
+        inline static std::array<const char *, 1> m_output_names;
+
+        InferenceConfig& m_inference_config;
+        std::atomic<bool> m_processing {false};
+    };
+
+    std::vector<std::shared_ptr<Instance>> m_instances;
 };
 
 } // namespace anira
