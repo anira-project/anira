@@ -9,7 +9,7 @@ namespace anira {
 TFLiteProcessor::TFLiteProcessor(InferenceConfig& config) : BackendBase(config)
 {
     for (size_t i = 0; i < m_inference_config.m_num_threads; ++i) {
-        m_instances.emplace_back(std::make_unique<Instance>(m_inference_config));
+        m_instances.emplace_back(std::make_shared<Instance>(m_inference_config));
     }
 }
 

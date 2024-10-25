@@ -37,7 +37,7 @@ private:
         std::atomic<bool> m_processing {false};
     };
 
-    std::vector<std::unique_ptr<Instance>> m_instances;
+    std::vector<std::shared_ptr<Instance>> m_instances;
 };
 
 } // namespace anira
