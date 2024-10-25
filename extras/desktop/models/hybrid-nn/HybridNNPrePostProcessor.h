@@ -47,8 +47,18 @@ public:
             num_output_samples = config.m_model_output_shape_tflite[1];
 #endif
         }
-        
-        if (current_inference_backend != anira::LIBTORCH && current_inference_backend != anira::ONNX && current_inference_backend != anira::TFLITE && current_inference_backend != anira::NONE) {
+
+        if (
+#ifdef USE_LIBTORCH
+            current_inference_backend != anira::LIBTORCH &&
+#endif
+#ifdef USE_ONNXRUNTIME
+            current_inference_backend != anira::ONNX &&
+#endif
+#ifdef USE_TFLITE
+            current_inference_backend != anira::TFLITE &&
+#endif
+            current_inference_backend != anira::NONE) {
             throw std::runtime_error("Invalid inference backend");
         }
             
