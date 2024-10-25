@@ -18,6 +18,7 @@
 #include "../utils/AudioBuffer.h"
 #include "BackendBase.h"
 #include <stdlib.h>
+#include <memory>
 
 // LibTorch headers trigger many warnings; disabling for cleaner build logs
 #ifdef _MSC_VER

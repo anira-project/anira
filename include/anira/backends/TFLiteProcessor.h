@@ -7,6 +7,7 @@
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
 #include <tensorflow/lite/c_api.h>
+#include <memory>
 
 namespace anira {
 
