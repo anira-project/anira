@@ -109,7 +109,7 @@ void InferenceThreadPool::prepare(SessionElement& session, HostAudioConfig new_c
     global_counter.store(0);
 #endif
 
-    if (!new_config.hostThreadSubmitTaskCallback) {
+    if (!new_config.submit_task_to_host_thread) {
         m_host_provided_threads = false;
         for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
             m_thread_pool[i]->start();
@@ -124,8 +124,8 @@ void InferenceThreadPool::new_data_submitted(SessionElement& session) {
     while (session.m_send_buffer.get_available_samples(0) >= (session.m_inference_config.m_new_model_output_size)) {
         bool success = pre_process(session);
 
-        if (success && session.m_current_config.hostThreadSubmitTaskCallback) {
-            success = session.m_current_config.hostThreadSubmitTaskCallback(1);
+        if (success && session.m_current_config.submit_task_to_host_thread) {
+            success = session.m_current_config.submit_task_to_host_thread(1);
         }
 
         // !success means that there is no free m_inference_queue

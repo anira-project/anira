@@ -15,16 +15,16 @@ namespace anira::clap_plugin_example
 AniraClapPluginExample::AniraClapPluginExample(const clap_host *host)
     : clap::helpers::Plugin<clap::helpers::MisbehaviourHandler::Terminate,
                             clap::helpers::CheckingLevel::Maximal>(&m_desc, host),
-      none_processor(inference_config),
-      inference_handler(pp_processor, inference_config, none_processor)
+      m_none_processor(m_inference_config),
+      m_inference_handler(m_pp_processor, m_inference_config, m_none_processor),
+      m_clap_thread_pool_available(false),
+      m_plugin_latency(0)
 {
     m_param_to_value[pmDryWet] = &m_param_dry_wet;
     m_param_to_value[pmBackend] = &m_param_backend;
 }
 
-AniraClapPluginExample::~AniraClapPluginExample() {
-
-}
+AniraClapPluginExample::~AniraClapPluginExample() = default;
 
 const char *features[] = {CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, nullptr};
 clap_plugin_descriptor AniraClapPluginExample::m_desc = {CLAP_VERSION,
@@ -118,8 +118,21 @@ bool AniraClapPluginExample::paramsTextToValue(clap_id paramId, const char *disp
         case pmDryWet:
             *value = std::clamp(std::atof(display), 0., 100.);
             return true;
+        case pmBackend:
+            if (strcmp(display, "OnnxRuntime") == 0) {
+                *value = static_cast<double>(OnnxRuntime);
+                return true;
+            } else if (strcmp(display, "LibTorch") == 0) {
+                *value = static_cast<double>(LibTorch);
+                return true;
+            } else if (strcmp(display, "TensorFlowLite") == 0) {
+                *value = static_cast<double>(TensorFlowLite);
+                return true;
+            } else if (strcmp(display, "Bypassed") == 0) {
+                *value = static_cast<double>(Bypassed);
+                return true;
+            }
         default:
-            // TODO pmBackend
             return false;
     }
 }
@@ -147,8 +160,8 @@ bool AniraClapPluginExample::activate(double sampleRate, uint32_t minFrameCount,
     anira::HostAudioConfig config (1, (size_t) maxFrameCount, sampleRate);
 
     if (m_clap_thread_pool_available) {
-        config.hostThreadSubmitTaskCallback = [this](int x) -> bool {
-            if (m_clap_thread_pool->request_exec(_host.host(), 1)) {
+        config.submit_task_to_host_thread = [this](int number_of_tasks) -> bool {
+            if (m_clap_thread_pool->request_exec(_host.host(), number_of_tasks)) {
                 return true;
             } else {
                 return false;
@@ -156,10 +169,10 @@ bool AniraClapPluginExample::activate(double sampleRate, uint32_t minFrameCount,
         };
     }
 
-    inference_handler.prepare(config);
+    m_inference_handler.prepare(config);
 
-    auto new_latency = inference_handler.get_latency();
-    //TODO setLatencySamples(new_latency);
+    m_plugin_latency = (uint32_t) m_inference_handler.get_latency();
+    m_dry_wet_mixer.prepare(sampleRate, maxFrameCount, (size_t) m_plugin_latency);
 
     return true;
 }
@@ -171,11 +184,17 @@ clap_process_status AniraClapPluginExample::process(const clap_process *process)
     float **in = process->audio_inputs[0].data32;
     float **out = process->audio_outputs[0].data32;
 
-    inference_handler.process(in, (size_t) process->frames_count);
+    for (int channel = 0; channel < 1; ++channel) {
+        for (int sample = 0; sample < process->frames_count; ++sample) {
+            m_dry_wet_mixer.push_dry_sample(in[channel][sample]);
+        }
+    }
+
+    m_inference_handler.process(in, (size_t) process->frames_count);
 
     for (int channel = 0; channel < 1; ++channel) {
         for (int sample = 0; sample < process->frames_count; ++sample) {
-            out[channel][sample] = in[channel][sample];
+            out[channel][sample] = m_dry_wet_mixer.mix_wet_sample(in[channel][sample]);
         }
     }
 
@@ -216,18 +235,21 @@ void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t *evt)
         if (m_param_to_value[v->param_id] == &m_param_backend) {
             switch ((Backend) m_param_backend) {
                 case OnnxRuntime:
-                    inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
                     break;
                 case LibTorch:
-                    inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
                     break;
                 case TensorFlowLite:
-                    inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
                     break;
                 default:
-                    inference_handler.set_inference_backend(anira::InferenceBackend::NONE);
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::NONE);
                     break;
             }
+        } else if (m_param_to_value[v->param_id] == &m_param_dry_wet) {
+            auto new_mix = static_cast<float> (m_param_dry_wet / 100.0);
+            m_dry_wet_mixer.set_mix(new_mix);
         }
     }
 }
@@ -258,14 +280,23 @@ bool AniraClapPluginExample::implementsThreadPool() const noexcept {
 }
 
 void AniraClapPluginExample::threadPoolExec(uint32_t taskIndex) noexcept {
-    inference_handler.exec_inference();
+    m_inference_handler.exec_inference();
 }
 
 uint32_t AniraClapPluginExample::paramsCount() const noexcept {
-    return m_number_params; }
+    return m_number_params;
+}
 
 uint32_t AniraClapPluginExample::audioPortsCount(bool isInput) const noexcept {
     return 1;
+}
+
+bool AniraClapPluginExample::implementsLatency() const noexcept {
+    return true;
+}
+
+uint32_t AniraClapPluginExample::latencyGet() const noexcept {
+    return m_plugin_latency;
 }
 
 } // namespace anira::clap_plugin_example

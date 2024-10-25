@@ -12,7 +12,7 @@ project(anira-clap-plugin-example VERSION 0.0.1 LANGUAGES C CXX)
 
 FetchContent_Declare(clap
         GIT_REPOSITORY https://github.com/free-audio/clap.git
-        GIT_TAG 1.2.2
+        GIT_TAG main
         GIT_PROGRESS TRUE
         EXCLUDE_FROM_ALL
 )
@@ -29,6 +29,7 @@ FetchContent_MakeAvailable(clap-helpers)
 add_library(${PROJECT_NAME} MODULE
         anira-clap-demo.cpp
         anira-clap-demo-pluginentry.cpp
+        utils/DryWetMixer.cpp
 )
 target_link_libraries(${PROJECT_NAME} clap-core clap-helpers anira)
 
@@ -40,7 +41,7 @@ if(APPLE)
             MACOSX_BUNDLE_BUNDLE_NAME ${PROJECT_NAME}
             MACOSX_BUNDLE_BUNDLE_VERSION "0.1"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
-            # MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/cmake/${PROJECT_NAME}.plist.in # TODO needed?
+            MACOSX_BUNDLE_INFO_PLIST cmake/anira-clap-demo.plist.in
             target_link_libraries(${PROJECT_NAME} "-framework CoreFoundation" "-framework AppKit" "-framework CoreGraphics")
             target_compile_definitions(${PROJECT_NAME} PRIVATE IS_MAC=1)
     )

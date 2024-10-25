@@ -17,6 +17,8 @@
 #include "../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNNoneProcessor.h"
 
+#include "utils/DryWetMixer.h"
+
 namespace anira::clap_plugin_example
 {
 
@@ -64,17 +66,23 @@ public:
 
     void paramsFlush(const clap_input_events *in, const clap_output_events *out) noexcept override;
 
+    bool implementsLatency() const noexcept override;
+    uint32_t latencyGet() const noexcept override;
+
   private:
     double m_param_dry_wet{100.0}, m_param_backend{3};
     std::unordered_map<clap_id, double *> m_param_to_value;
     const clap_host_thread_pool* m_clap_thread_pool{nullptr};
     bool m_clap_thread_pool_available;
+    uint32_t m_plugin_latency;
 
-    anira::InferenceConfig inference_config = hybridnn_config;
-    HybridNNPrePostProcessor pp_processor;
-    HybridNNNoneProcessor none_processor;
+    InferenceConfig m_inference_config = hybridnn_config;
+    HybridNNPrePostProcessor m_pp_processor;
+    HybridNNNoneProcessor m_none_processor;
 
-    anira::InferenceHandler inference_handler;
+    InferenceHandler m_inference_handler;
+
+    utils::DryWetMixer m_dry_wet_mixer;
 
     enum Backend {
         OnnxRuntime,
@@ -83,6 +91,7 @@ public:
         Bypassed
     };
 };
+
 } // namespace anira::clap_plugin_example
 
 #endif //ANIRA_CLAP_PLUGIN_EXAMPLE_H
