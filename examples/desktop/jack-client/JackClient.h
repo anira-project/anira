@@ -62,6 +62,8 @@ private:
 
 
     anira::InferenceHandler inferenceHandler;
-    
+
+    // TODO select default inference backend
+    anira::InferenceBackend m_inference_backend = anira::ONNX;
     std::binary_semaphore m_host_audio_semaphore;
 };

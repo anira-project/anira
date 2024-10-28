@@ -16,6 +16,7 @@ JackClient::JackClient([[ maybe_unused ]] int argc, char *argv[]):
 
     parse_args(argc, argv);
 
+    // setup jack client name
     if (m_client_name == nullptr) {
         m_client_name = strrchr ( argv[0], '/' );
         if ( m_client_name == nullptr ) {
@@ -26,7 +27,7 @@ JackClient::JackClient([[ maybe_unused ]] int argc, char *argv[]):
         }
     }
 
-    /* open a client connection to the JACK server */
+    // open a client connection to the JACK server
     m_client = jack_client_open ( m_client_name, (jack_options_t) options, &m_status, server_name );
     if ( m_client == NULL ) {
         fprintf ( stderr, "[error] jack_client_open() failed, status = 0x%2.0x\n", m_status );
@@ -50,8 +51,8 @@ JackClient::JackClient([[ maybe_unused ]] int argc, char *argv[]):
     #endif
 
     // create input and output ports
-    m_n_input_channels = 1;
-    m_n_output_channels = m_n_input_channels; 
+    m_n_input_channels = 1; // until multichannel processing is implemented, this should always be 1
+    m_n_output_channels = m_n_input_channels; // for now these should always be the same
 
     input_ports = ( jack_port_t** ) calloc ( m_n_input_channels, sizeof ( jack_port_t* ) );
     output_ports = ( jack_port_t** ) calloc ( m_n_output_channels, sizeof ( jack_port_t* ) );
@@ -75,6 +76,8 @@ JackClient::JackClient([[ maybe_unused ]] int argc, char *argv[]):
         }
     }
 
+    // TODO set default connections
+
     // tell the JACK server to call `process()' whenever there is work to be done.
     // before setting the process callback, we need to allocate the input and output ports. Why? this is not exactly clear to me. Is the method `process' called immediately after setting the process callback?
     jack_set_process_callback (m_client, process, this);
@@ -83,7 +86,7 @@ JackClient::JackClient([[ maybe_unused ]] int argc, char *argv[]):
     jack_on_shutdown (m_client, shutdown, this);
 
     // TODO do this somewhere proper
-    inferenceHandler.setInferenceBackend(anira::NONE);
+    inferenceHandler.setInferenceBackend(m_inference_backend);
 
     m_nframes = jack_get_buffer_size(m_client);
     m_samplerate = jack_get_sample_rate(m_client);
@@ -105,7 +108,7 @@ JackClient::~JackClient() {
     // jack_deactivate(m_client);
     
     int close_ret = jack_client_close(m_client);
-    // ports need to be freed after the client is closed, otherwise we can run into setfaults
+    // ports need to be freed after the client is closed, otherwise we can run into segfaults
     // std::cout << "[debug] JackClient close return val: " << close_ret << std::endl;
 
     free (input_ports);
@@ -122,24 +125,48 @@ void JackClient::parse_args(int argc, char* argv[]) {
     while (true) {
         int option_index                    = 0;
         static struct option long_options[] = {
-            {"configfile", required_argument, nullptr, 'c'},
-            {"jackclientname", required_argument, nullptr, 'n'},
+            {"backend", required_argument, nullptr, 'b'},
+            {"jackclientname", required_argument, nullptr, 'j'},
             {"verbose", no_argument, nullptr, 'v'},
             {"help", no_argument, nullptr, 'h'},
+            {"version", no_argument, nullptr, 1},
             {nullptr, 0, nullptr, 0}};
 
-        c = getopt_long(argc, argv, "c:j:vh", long_options, &option_index);
+        c = getopt_long(argc, argv, "b:j:vh", long_options, &option_index);
 
         if (c == -1) { break; }
 
         switch (c) {
-            case 'n':
+            case 1:
+                #ifdef VERSION
+                    std::cout << "anira-jack version " << VERSION << std::endl;
+                #else
+                    std::cout << "anira-jack version unknown" << std::endl;
+                #endif
+                exit(EXIT_SUCCESS);
+                break;
+            case 'j':
                 m_client_name = optarg;
+                break;
+            
+            case 'b':
+                if (strcmp("onnx", optarg) == 0){
+                    m_inference_backend = anira::ONNX;
+                } else if (strcmp("tflite", optarg) == 0){
+                    m_inference_backend = anira::TFLITE;
+                } else if (strcmp("libtorch", optarg) == 0){
+                    m_inference_backend = anira::LIBTORCH;
+                } else if (strcmp("none", optarg) == 0){
+                    m_inference_backend = anira::NONE;
+                } else {
+                    printf("[WARNING] invalid inference backend, choosing default onnx");
+                }
                 break;
 
             case 'h':
                 printf(
                     "commandline arguments for audio-matix:\n"
+                    "--backend              -b (name of backend, one of: [onnx, tflite, libtorch, none])\n"
                     "--jackclientname,      -j (name of the jack client)\n"
                     "--verbose,             -v (be more verbose)\n"
                     "--help,                -h \n");
@@ -154,7 +181,8 @@ void JackClient::parse_args(int argc, char* argv[]) {
                 break;
 
             default:
-                abort();
+                printf("[ERROR] while parsing arguments: getopt returned character code 0%o\n", c);
+                exit(EXIT_FAILURE);
         }
     }
 
@@ -211,15 +239,15 @@ void JackClient::prepare(anira::HostAudioConfig config) {
 int JackClient::process(jack_nframes_t nframes, void *arg) {
     JackClient* jack_client = static_cast<JackClient*>(arg);
 
+    // get pointers to ports
     for (int i = 0; i < jack_client->m_n_input_channels; i++ ) {
         jack_client->in[i] = (jack_default_audio_sample_t *) jack_port_get_buffer(jack_client->input_ports[i], nframes);
     }
     for (int i = 0; i < jack_client->m_n_output_channels; i++ ) {
         jack_client->out[i] = (jack_default_audio_sample_t *) jack_port_get_buffer (jack_client->output_ports[i], nframes);
     }
-    jack_client->inferenceHandler.process((float**) jack_client->in, (size_t) nframes);
 
-
+    // copy input data to output
     for (size_t channel = 0; channel < jack_client->m_n_input_channels; channel++)
     {
         if (channel >= jack_client->m_n_output_channels){
@@ -231,7 +259,12 @@ int JackClient::process(jack_nframes_t nframes, void *arg) {
 
 	    }
     }
-    std::cout << jack_client->out[0][0] << std::endl;
+
+    // process directly on the output buffer
+    jack_client->inferenceHandler.process((float**) jack_client->out, (size_t) nframes);
+
+
+    
     
     return 0;
 }
