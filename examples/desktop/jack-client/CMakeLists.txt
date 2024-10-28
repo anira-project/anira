@@ -16,5 +16,11 @@ project (${PROJECT_NAME} VERSION 0.0.1)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+# add_compile_definitions(MODEL_TO_USE=1) # steerable-nafx
+add_compile_definitions(MODEL_TO_USE=2) # GuitarLSTM
+# add_compile_definitions(MODEL_TO_USE=3) # stateful-LSTM
+
+add_compile_definitions(VERSION="${PROJECT_VERSION}")
+
 add_executable(${PROJECT_NAME} main.cpp JackClient.cpp)
 target_link_libraries(${PROJECT_NAME} anira::anira jack)

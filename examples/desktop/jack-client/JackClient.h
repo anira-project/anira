@@ -14,9 +14,6 @@
 #include "../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../extras/desktop/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
 
-//TODO define this somewhere else, see juce-audio-plugin
-#define MODEL_TO_USE 1
-
 class JackClient {
 
 public:
