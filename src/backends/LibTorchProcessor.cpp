@@ -2,7 +2,7 @@
 
 namespace anira {
 
-LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : BackendBase(config) {
+LibtorchProcessor::LibtorchProcessor(InferenceConfig& inference_config) : BackendBase(inference_config) {
     torch::set_num_threads(1);
 
     for (size_t i = 0; i < m_inference_config.m_num_threads; ++i) {
@@ -31,7 +31,7 @@ void LibtorchProcessor::process(AudioBufferF& input, AudioBufferF& output) {
     }
 }
 
-LibtorchProcessor::Instance::Instance(InferenceConfig& config) : m_inference_config(config) {
+LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config) {
     try {
         m_module = torch::jit::load(m_inference_config.m_model_path_torch);
     }

@@ -29,7 +29,7 @@ namespace anira {
 
 class ANIRA_API SessionElement {
 public:
-    SessionElement(int newSessionID, PrePostProcessor& pp_processor, InferenceConfig& config);
+    SessionElement(int newSessionID, PrePostProcessor& pp_processor, InferenceConfig& inference_config);
 
     void clear();
     void prepare(HostAudioConfig new_config);

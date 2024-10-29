@@ -172,8 +172,8 @@ To use the `anira::NONE` backend and get a continuous audio signal, you may need
 #include <anira/anira.h>
 
 class MyNoneProcessor : public anira::BackendBase {
-public:
-    MyNoneProcessor(anira::InferenceConfig& config) : anira::BackendBase(config) {}
+inference_configpublic:
+    MyNoneProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
 
     void process(anira::AudioBufferF &input, anira::AudioBufferF &output) override {
         auto equal_channels = input.get_num_channels() == output.get_num_channels();

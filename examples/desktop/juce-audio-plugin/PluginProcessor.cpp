@@ -11,10 +11,15 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                      #endif
                        ),
         parameters (*this, nullptr, juce::Identifier (getName()), PluginParameters::createParameterLayout()),
+        // Optional anira_context_config
+        anira_context_config(
+            std::thread::hardware_concurrency() / 2 > 0 ? std::thread::hardware_concurrency() / 2 : 1, // Total number of threads
+            false // Use host threads (VST3 plugins do not support using external threads)
+        ),
 #if MODEL_TO_USE == 1 || MODEL_TO_USE == 2
         // The none_processor is not needed for inference, but for the round trip test to output audio when selecting the NONE backend. It must be customized when default pp_processor is replaced by a custom one.
         none_processor(inference_config),
-        inference_handler(pp_processor, inference_config, none_processor),
+        inference_handler(pp_processor, inference_config, none_processor, anira_context_config),
 #elif MODEL_TO_USE == 3
         inference_handler(pp_processor, inference_config),
 #endif

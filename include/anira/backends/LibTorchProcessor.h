@@ -42,7 +42,7 @@ namespace anira {
 
 class ANIRA_API LibtorchProcessor : public BackendBase {
 public:
-    LibtorchProcessor(InferenceConfig& config);
+    LibtorchProcessor(InferenceConfig& inference_config);
     ~LibtorchProcessor();
 
     void prepare() override;
@@ -50,7 +50,7 @@ public:
 
 private:
     struct Instance {
-        Instance(InferenceConfig& config);
+        Instance(InferenceConfig& inference_config);
         void prepare();
         void process(AudioBufferF& input, AudioBufferF& output);
 

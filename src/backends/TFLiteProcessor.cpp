@@ -6,7 +6,7 @@
 
 namespace anira {
 
-TFLiteProcessor::TFLiteProcessor(InferenceConfig& config) : BackendBase(config)
+TFLiteProcessor::TFLiteProcessor(InferenceConfig& inference_config) : BackendBase(inference_config)
 {
     for (size_t i = 0; i < m_inference_config.m_num_threads; ++i) {
         m_instances.emplace_back(std::make_shared<Instance>(m_inference_config));
@@ -34,7 +34,7 @@ void TFLiteProcessor::process(AudioBufferF& input, AudioBufferF& output) {
     }
 }
 
-TFLiteProcessor::Instance::Instance(InferenceConfig& config) : m_inference_config(config)
+TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config)
 {
 #ifdef _WIN32
     std::string modelpath_str = m_inference_config.m_model_path_tflite;

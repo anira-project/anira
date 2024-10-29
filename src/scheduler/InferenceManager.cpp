@@ -2,10 +2,10 @@
 
 namespace anira {
 
-InferenceManager::InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& config, BackendBase* custom_processor) :
-    m_anira_context(AniraContext::get_instance(config)),
-    m_session(m_anira_context->create_session(pp_processor, config, custom_processor)),
-    m_inference_config(config)
+InferenceManager::InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor, const AniraContextConfig& context_config) :
+    m_anira_context(AniraContext::get_instance(context_config)),
+    m_session(m_anira_context->create_session(pp_processor, inference_config, custom_processor)),
+    m_inference_config(inference_config)
 {
 }
 

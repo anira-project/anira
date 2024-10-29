@@ -9,6 +9,7 @@
 #include <memory>
 #include <vector>
 
+#include "../AniraContextConfig.h"
 #include "SessionElement.h"
 #include "InferenceThread.h"
 #include "../PrePostProcessor.h"
@@ -28,10 +29,10 @@ namespace anira {
 
 class ANIRA_API AniraContext{
 public:
-    AniraContext(InferenceConfig& config);
+    AniraContext(const AniraContextConfig& context_config);
     ~AniraContext();
-    static std::shared_ptr<AniraContext> get_instance(InferenceConfig& config);
-    static SessionElement& create_session(PrePostProcessor& pp_processor, InferenceConfig& config, BackendBase* none_processor);
+    static std::shared_ptr<AniraContext> get_instance(const AniraContextConfig& context_config);
+    static SessionElement& create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* none_processor);
     static void release_session(SessionElement& session);
     static void release_instance();
     static void release_thread_pool();
@@ -52,7 +53,10 @@ public:
 
 private:
     inline static std::shared_ptr<AniraContext> m_anira_context = nullptr; 
+    inline static AniraContextConfig m_context_config;
+
     static int get_available_session_id();
+    static void new_num_threads(int new_num_threads);
 
     static bool pre_process(SessionElement& session);
     static void post_process(SessionElement& session, SessionElement::ThreadSafeStruct& next_buffer);
@@ -64,8 +68,8 @@ private:
 
     inline static std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;
 
-    template <typename T> static void set_processor(SessionElement& session, InferenceConfig& config, std::vector<std::shared_ptr<T>>& processors);
-    template <typename T> static void release_processor(InferenceConfig& config, std::vector<std::shared_ptr<T>>& processors);
+    template <typename T> static void set_processor(SessionElement& session, InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors);
+    template <typename T> static void release_processor(InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors);
 
 #ifdef USE_LIBTORCH
     inline static std::vector<std::shared_ptr<LibtorchProcessor>> m_libtorch_processors;

@@ -3,7 +3,7 @@
 
 #include <iostream>
 #include <cstring>
-#include "anira/system/AniraConfig.h"
+#include "anira/system/AniraWinExports.h"
 
 namespace anira {
 

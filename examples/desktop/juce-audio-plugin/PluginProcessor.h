@@ -67,6 +67,9 @@ private:
     juce::AudioProcessorValueTreeState parameters;
     juce::AudioBuffer<float> mono_buffer;
 
+    // Optional AniraContextConfig
+    anira::AniraContextConfig anira_context_config;
+
 #if MODEL_TO_USE == 1
     anira::InferenceConfig inference_config = cnn_config;
     CNNPrePostProcessor pp_processor;

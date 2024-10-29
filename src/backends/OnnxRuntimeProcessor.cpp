@@ -2,7 +2,7 @@
 
 namespace anira {
 
-OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& config) : BackendBase(config)
+OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& inference_config) : BackendBase(inference_config)
 {
     for (size_t i = 0; i < m_inference_config.m_num_threads; ++i) {
         m_instances.emplace_back(std::make_shared<Instance>(m_inference_config));
@@ -30,7 +30,7 @@ void OnnxRuntimeProcessor::process(AudioBufferF& input, AudioBufferF& output) {
     }
 }
 
-OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& config) : m_inference_config(config),
+OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config),
                                                                     m_memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU))
 {
     m_session_options.SetIntraOpNumThreads(1);
@@ -49,14 +49,14 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& config) : m_inference_
         m_input_names = {(char*) m_input_name->get()};
         m_output_names = {(char*) m_output_name->get()};
 
-        m_input_size = config.m_new_model_input_size;
-        m_output_size = config.m_new_model_output_size;
+        m_input_size = m_inference_config.m_new_model_input_size;
+        m_output_size = m_inference_config.m_new_model_output_size;
     }
 
-    std::vector<int64_t> input_shape = config.m_model_input_shape_onnx;
+    std::vector<int64_t> input_shape = m_inference_config.m_model_input_shape_onnx;
     m_input_data.resize(m_input_size, 0.0f);
 
-    std::vector<int64_t> output_shape = config.m_model_output_shape_onnx;
+    std::vector<int64_t> output_shape = m_inference_config.m_model_output_shape_onnx;
     m_output_data.resize(m_output_size, 0.0f);
 
     m_inputs.emplace_back(Ort::Value::CreateTensor<float>(

@@ -5,7 +5,7 @@
 
 class CNNNoneProcessor : public anira::BackendBase {
 public:
-    CNNNoneProcessor(anira::InferenceConfig& config) : anira::BackendBase(config) {}
+    CNNNoneProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
 
     void process(anira::AudioBufferF &input, anira::AudioBufferF &output) override {
         auto equal_channels = input.get_num_channels() == output.get_num_channels();

@@ -3,10 +3,10 @@
 
 namespace anira {
 
-InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& config) : m_inference_manager(pp_processor, config, nullptr) {
+InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, const AniraContextConfig& context_config) : m_inference_manager(pp_processor, inference_config, nullptr, context_config) {
 }
 
-InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& config, BackendBase& custom_processor) : m_inference_manager(pp_processor, config, &custom_processor) {
+InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase& custom_processor, const AniraContextConfig& context_config) : m_inference_manager(pp_processor, inference_config, &custom_processor, context_config) {
 }
 
 InferenceHandler::~InferenceHandler() {

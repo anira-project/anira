@@ -1,5 +1,5 @@
-#ifndef ANIRA_CONFIG_H
-#define ANIRA_CONFIG_H
+#ifndef ANIRA_ANIRAWINEXPORTS_H
+#define ANIRA_ANIRAWINEXPORTS_H
 
 #if defined(_WIN32)
 #ifdef ANIRA_EXPORTS
@@ -13,4 +13,4 @@
 #define ANIRA_API
 #endif
 
-#endif // ANIRA_CONFIG_H
+#endif // ANIRA_ANIRAWINEXPORTS_H

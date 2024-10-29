@@ -2,10 +2,10 @@
 
 namespace anira {
 
-SessionElement::SessionElement(int newSessionID, PrePostProcessor& pp_processor, InferenceConfig& config) :
+SessionElement::SessionElement(int newSessionID, PrePostProcessor& pp_processor, InferenceConfig& inference_config) :
     m_session_id(newSessionID),
     m_pp_processor(pp_processor),
-    m_inference_config(config),
+    m_inference_config(inference_config),
     m_default_processor(m_inference_config),
     m_custom_processor(&m_default_processor)
 {

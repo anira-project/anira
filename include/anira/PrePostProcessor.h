@@ -3,7 +3,7 @@
 
 #include "utils/RingBuffer.h"
 #include "utils/InferenceBackend.h"
-#include "anira/system/AniraConfig.h"
+#include "anira/system/AniraWinExports.h"
 
 namespace anira {
 

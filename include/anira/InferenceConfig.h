@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 #include <thread>
-#include "anira/system/AniraConfig.h"
+#include "anira/system/AniraWinExports.h"
 
 namespace anira {
 

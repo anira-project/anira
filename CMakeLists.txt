@@ -153,6 +153,8 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
     # Semaphore definitions
     $<$<BOOL:${ANIRA_WITH_SEMAPHORE}>:USE_SEMAPHORE>
+    # Version number
+    -DANIRA_VERSION="${PROJECT_VERSION}"
 )
 
 

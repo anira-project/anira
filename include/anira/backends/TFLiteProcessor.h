@@ -13,7 +13,7 @@ namespace anira {
 
 class ANIRA_API TFLiteProcessor : public BackendBase {
 public:
-    TFLiteProcessor(InferenceConfig& config);
+    TFLiteProcessor(InferenceConfig& inference_config);
     ~TFLiteProcessor();
 
     void prepare() override;
@@ -21,7 +21,7 @@ public:
 
 private:
     struct Instance {
-        Instance(InferenceConfig& config);
+        Instance(InferenceConfig& inference_config);
         ~Instance();
         
         void prepare();

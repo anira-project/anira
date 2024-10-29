@@ -4,15 +4,15 @@
 #include "scheduler/InferenceManager.h"
 #include "PrePostProcessor.h"
 #include "InferenceConfig.h"
-#include "anira/system/AniraConfig.h"
+#include "anira/system/AniraWinExports.h"
 
 namespace anira {
 
 class ANIRA_API InferenceHandler {
 public:
     InferenceHandler() = delete;
-    InferenceHandler(PrePostProcessor &pp_processor, InferenceConfig& config);
-    InferenceHandler(PrePostProcessor &pp_processor, InferenceConfig& config, BackendBase& custom_processor);
+    InferenceHandler(PrePostProcessor &pp_processor, InferenceConfig& inference_config, const AniraContextConfig& context_config = AniraContextConfig());
+    InferenceHandler(PrePostProcessor &pp_processor, InferenceConfig& inference_config, BackendBase& custom_processor, const AniraContextConfig& context_config = AniraContextConfig());
     ~InferenceHandler();
 
     void set_inference_backend(InferenceBackend inference_backend);

@@ -12,7 +12,7 @@ namespace anira {
 
 class ANIRA_API OnnxRuntimeProcessor : public BackendBase {
 public:
-    OnnxRuntimeProcessor(InferenceConfig& config);
+    OnnxRuntimeProcessor(InferenceConfig& inference_config);
     ~OnnxRuntimeProcessor();
 
     void prepare() override;
@@ -20,7 +20,7 @@ public:
 
 private:
     struct Instance {
-        Instance(InferenceConfig& config);
+        Instance(InferenceConfig& inference_config);
 
         void prepare();
         void process(AudioBufferF& input, AudioBufferF& output);
