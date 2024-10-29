@@ -20,15 +20,12 @@ class ANIRA_API InferenceThread : public HighPriorityThread {
 public:
 #ifdef USE_SEMAPHORE
     InferenceThread(std::counting_semaphore<UINT16_MAX>& global_counter, std::vector<std::shared_ptr<SessionElement>>& sessions);
-    InferenceThread(std::counting_semaphore<UINT16_MAX>& global_counter, std::vector<std::shared_ptr<SessionElement>>& ses, int ses_id);
 #else
     InferenceThread(std::atomic<int>& global_counter, std::vector<std::shared_ptr<SessionElement>>& sessions);
-    InferenceThread(std::atomic<int>& global_counter, std::vector<std::shared_ptr<SessionElement>>& ses, int ses_id);
 #endif
     ~InferenceThread() = default;
 
     void run() override;
-    int get_session_id() const { return m_session_id; }
 
 private:
     bool tryInference(std::shared_ptr<SessionElement> session);
@@ -41,7 +38,6 @@ private:
     std::atomic<int>& m_global_counter;
 #endif
     std::vector<std::shared_ptr<SessionElement>>& m_sessions;
-    int m_session_id = -1;
  };
 
 } // namespace anira

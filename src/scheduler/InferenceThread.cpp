@@ -11,15 +11,6 @@ InferenceThread::InferenceThread(std::atomic<int>& g, std::vector<std::shared_pt
     m_sessions(ses)
 {
 }
-#ifdef USE_SEMAPHORE
-InferenceThread::InferenceThread(std::counting_semaphore<UINT16_MAX>& g, std::vector<std::shared_ptr<SessionElement>>& ses, int ses_id) :
-#else
-InferenceThread::InferenceThread(std::atomic<int>& g, std::vector<std::shared_ptr<SessionElement>>& ses, int ses_id) :
-#endif
-    InferenceThread(g, ses)
-{
-    m_session_id = ses_id;
-}
 
 void InferenceThread::run() {
     std::chrono::microseconds time_for_exit(50);
@@ -36,18 +27,9 @@ void InferenceThread::run() {
 #endif
             bool inference_done = false;
             while (!inference_done) {
-                if (m_session_id < 0) {
-                    for (const auto& session : m_sessions) {
-                        inference_done = tryInference(session);
-                        if (inference_done) break;
-                    }
-                } else {
-                    for (const auto& session : m_sessions) {
-                        if (session->m_session_id == m_session_id) {
-                            inference_done = tryInference(session);
-                            break;
-                        }
-                    }
+                for (const auto& session : m_sessions) {
+                    inference_done = tryInference(session);
+                    if (inference_done) break;
                 }
             }
         }

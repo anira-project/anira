@@ -3,12 +3,7 @@
 namespace anira {
 
 AniraContext::AniraContext(const AniraContextConfig& context_config) {
-    if (! context_config.m_use_host_threads) {
-        for (int i = 0; i < context_config.m_total_num_threads; ++i) {
-            m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, m_sessions));
-        }
-    } else {
-        // TODO: Change accordingly for clap
+    for (int i = 0; i < context_config.m_num_threads; ++i) {
         m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, m_sessions));
     }
     m_context_config = context_config;
@@ -30,8 +25,8 @@ std::shared_ptr<AniraContext> AniraContext::get_instance(const AniraContextConfi
         if (m_anira_context->m_context_config.m_synchronization_type != context_config.m_synchronization_type) {
             std::cerr << "[ERROR] AniraContext already initialized with different syncronization type!" << std::endl;
         }
-        if (m_anira_context->m_context_config.m_total_num_threads > context_config.m_total_num_threads) {
-            m_anira_context->new_num_threads(context_config.m_total_num_threads);
+        if (m_anira_context->m_context_config.m_num_threads > context_config.m_num_threads) {
+            m_anira_context->new_num_threads(context_config.m_num_threads);
             m_anira_context->m_context_config = context_config;
         }
     }
@@ -68,9 +63,9 @@ SessionElement& AniraContext::create_session(PrePostProcessor& pp_processor, Inf
     }
 
     int session_id = get_available_session_id();
-    if (inference_config.m_num_threads > m_context_config.m_total_num_threads) {
-        std::cout << "[WARNING] Session " << session_id << " requested more threads than available in AniraContext. Using maximum available threads." << std::endl;
-        inference_config.m_num_threads = m_context_config.m_total_num_threads;
+    if (inference_config.m_num_parallel_processors > m_context_config.m_num_threads) {
+        std::cout << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in AniraContext. Using number of threads as number of parallel processors." << std::endl;
+        inference_config.m_num_parallel_processors = m_context_config.m_num_threads;
     }
     m_sessions.emplace_back(std::make_shared<SessionElement>(session_id, pp_processor, inference_config));
 
@@ -89,10 +84,6 @@ SessionElement& AniraContext::create_session(PrePostProcessor& pp_processor, Inf
     set_processor(*m_sessions.back(), inference_config, m_tflite_processors);
 #endif
 
-    if (inference_config.m_bind_session_to_thread) {
-        m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, m_sessions, session_id));
-    }
-
     for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
         m_thread_pool[i]->start();
     } 
@@ -105,39 +96,28 @@ void AniraContext::release_thread_pool() {
 }
 
 void AniraContext::release_session(SessionElement& session) {
-    m_active_sessions.fetch_sub(1);
-
-    InferenceConfig inference_config = session.m_inference_config;
-
-    if (session.m_inference_config.m_bind_session_to_thread) {
-        for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-            if (m_thread_pool[i]->get_session_id() == session.m_session_id) {
-                m_thread_pool[i]->stop();
-                m_thread_pool.erase(m_thread_pool.begin() + (ptrdiff_t) i);
-                break;
-            }
-        }
-    } else {
-        for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-            m_thread_pool[i]->stop();
-        }
-        for (size_t i = 0; i < m_sessions.size(); ++i) {
-            if (m_sessions[i].get() == &session) {
-                m_sessions.erase(m_sessions.begin() + (ptrdiff_t) i);
-                break;
-            }
-        }
+    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+        m_thread_pool[i]->stop();
     }
 
 #ifdef USE_LIBTORCH
-    release_processor(inference_config, m_libtorch_processors);
+    release_processor(session.m_inference_config, m_libtorch_processors, session.m_libtorch_processor);
 #endif
 #ifdef USE_ONNXRUNTIME
-    release_processor(inference_config, m_onnx_processors);
+    release_processor(session.m_inference_config, m_onnx_processors, session.m_onnx_processor);
 #endif
 #ifdef USE_TFLITE
-    release_processor(inference_config, m_tflite_processors);
+    release_processor(session.m_inference_config, m_tflite_processors, session.m_tflite_processor);
 #endif
+
+    for (size_t i = 0; i < m_sessions.size(); ++i) {
+        if (m_sessions[i].get() == &session) {
+            m_sessions.erase(m_sessions.begin() + (ptrdiff_t) i);
+            break;
+        }
+    }
+
+    m_active_sessions.fetch_sub(1);
 
     if (m_active_sessions == 0) {
         release_thread_pool();
@@ -262,10 +242,12 @@ int AniraContext::get_num_sessions() {
 }
 
 template <typename T> void AniraContext::set_processor(SessionElement& session, InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors) {
-    for (auto processor : processors) {
-        if (processor->m_inference_config == inference_config) {
-            session.set_processor(processor);
-            return;
+    if (!inference_config.m_bind_session_to_processor) {
+        for (auto processor : processors) {
+            if (processor->m_inference_config == inference_config) {
+                session.set_processor(processor);
+                return;
+            }
         }
     }
     processors.emplace_back(std::make_shared<T>(inference_config));
@@ -273,14 +255,16 @@ template <typename T> void AniraContext::set_processor(SessionElement& session, 
     session.set_processor(processors.back());
 }
 
-template <typename T> void AniraContext::release_processor(InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors) {
-    for (auto session : m_sessions) {
-        if (session->m_inference_config == inference_config) {
-            return;
+template <typename T> void AniraContext::release_processor(InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors, std::shared_ptr<T>& processor) {
+    if (!inference_config.m_bind_session_to_processor) {
+        for (auto session : m_sessions) {
+            if (session->m_inference_config == inference_config) {
+                return;
+            }
         }
     }
     for (size_t i = 0; i < processors.size(); ++i) {
-        if (processors[i]->m_inference_config == inference_config) {
+        if (processors[i] == processor) {
             processors.erase(processors.begin() + (ptrdiff_t) i);
             return;
         }
@@ -289,14 +273,14 @@ template <typename T> void AniraContext::release_processor(InferenceConfig& infe
 
 #ifdef USE_LIBTORCH
 template void AniraContext::set_processor<LibtorchProcessor>(SessionElement& session, InferenceConfig& inference_config, std::vector<std::shared_ptr<LibtorchProcessor>>& processors);
-template void AniraContext::release_processor<LibtorchProcessor>(InferenceConfig& inference_config, std::vector<std::shared_ptr<LibtorchProcessor>>& processors);
+template void AniraContext::release_processor<LibtorchProcessor>(InferenceConfig& inference_config, std::vector<std::shared_ptr<LibtorchProcessor>>& processors, std::shared_ptr<LibtorchProcessor>& processor);
 #endif
 #ifdef USE_ONNXRUNTIME
 template void AniraContext::set_processor<OnnxRuntimeProcessor>(SessionElement& session, InferenceConfig& inference_config, std::vector<std::shared_ptr<OnnxRuntimeProcessor>>& processors);
-template void AniraContext::release_processor<OnnxRuntimeProcessor>(InferenceConfig& inference_config, std::vector<std::shared_ptr<OnnxRuntimeProcessor>>& processors);
+template void AniraContext::release_processor<OnnxRuntimeProcessor>(InferenceConfig& inference_config, std::vector<std::shared_ptr<OnnxRuntimeProcessor>>& processors, std::shared_ptr<OnnxRuntimeProcessor>& processor);
 #endif
 #ifdef USE_TFLITE
 template void AniraContext::set_processor<TFLiteProcessor>(SessionElement& session, InferenceConfig& inference_config, std::vector<std::shared_ptr<TFLiteProcessor>>& processors);
-template void AniraContext::release_processor<TFLiteProcessor>(InferenceConfig& inference_config, std::vector<std::shared_ptr<TFLiteProcessor>>& processors);
+template void AniraContext::release_processor<TFLiteProcessor>(InferenceConfig& inference_config, std::vector<std::shared_ptr<TFLiteProcessor>>& processors, std::shared_ptr<TFLiteProcessor>& processor);
 #endif
 } // namespace anira

@@ -124,13 +124,11 @@ int InferenceManager::calculate_latency() {
     // First calculate some universal values
     int model_output_size = m_inference_config.m_new_model_output_size;
     float host_buffer_time = (float) m_spec.m_host_buffer_size * 1000.f / (float) m_spec.m_host_sample_rate;
-#ifndef USE_SEMAPHORE
-    if (m_inference_config.m_wait_in_process_block != 0.f) {
-        std::cout << "[WARNING] Using a wait time in process block of 0 ms. Wait time is not supported without semaphores." << std::endl;
-        m_inference_config.m_wait_in_process_block = 0.f;
-    }
-#endif
+#ifdef USE_SEMAPHORE
     float wait_time = m_inference_config.m_wait_in_process_block * host_buffer_time;
+#else
+    float wait_time = 0.f;
+#endif
 
     // Then caclulate the different parts of the latency
     int buffer_adaptation = calculate_buffer_adaptation(m_spec.m_host_buffer_size, model_output_size);

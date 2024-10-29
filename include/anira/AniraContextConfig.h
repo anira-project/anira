@@ -18,8 +18,8 @@ enum SynchronizationType {
 
 struct ANIRA_API AniraContextConfig {
     AniraContextConfig(
-            int total_num_threads = ((int) std::thread::hardware_concurrency() / 2 > 0) ? (int) std::thread::hardware_concurrency() / 2 : 1, bool use_host_threads = false) :
-            m_total_num_threads(total_num_threads),
+            int num_threads = ((int) std::thread::hardware_concurrency() / 2 > 0) ? (int) std::thread::hardware_concurrency() / 2 : 1, bool use_host_threads = false) :
+            m_num_threads(num_threads),
             m_use_host_threads(use_host_threads)
     {
 #ifdef USE_LIBTORCH
@@ -38,7 +38,7 @@ struct ANIRA_API AniraContextConfig {
 #endif
     }
 
-    int m_total_num_threads;
+    int m_num_threads;
     bool m_use_host_threads;
     std::string m_anira_version = ANIRA_VERSION;
     std::vector<InferenceBackend> m_enabled_backends;
@@ -47,7 +47,7 @@ struct ANIRA_API AniraContextConfig {
 
     bool operator==(const AniraContextConfig& other) const {
         return
-            m_total_num_threads == other.m_total_num_threads &&
+            m_num_threads == other.m_num_threads &&
             m_use_host_threads == other.m_use_host_threads &&
             m_anira_version == other.m_anira_version &&
             m_enabled_backends == other.m_enabled_backends &&

@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <thread>
+#include <iostream>
 #include "anira/system/AniraWinExports.h"
 
 namespace anira {
@@ -29,9 +30,13 @@ struct ANIRA_API InferenceConfig {
             float max_inference_time = 0, // in ms per input of batch_size
             int model_latency = 0, // in samples per input of batch_size
             bool warm_up = false,
-            float wait_in_process_block = 0.f,
-            bool bind_session_to_thread = false,
-            int num_threads = ((int) std::thread::hardware_concurrency() / 2 > 0) ? (int) std::thread::hardware_concurrency() / 2 : 1) :
+            bool bind_session_to_processor = false,
+            int num_parallel_processors = ((int) std::thread::hardware_concurrency() / 2 > 0) ? (int) std::thread::hardware_concurrency() / 2 : 1
+#ifdef USE_SEMAPHORE
+            , float wait_in_process_block = 0.f
+#endif
+            )
+ :
 #ifdef USE_LIBTORCH
             m_model_path_torch(model_path_torch),
             m_model_input_shape_torch(model_input_shape_torch),
@@ -50,9 +55,11 @@ struct ANIRA_API InferenceConfig {
             m_max_inference_time(max_inference_time),
             m_model_latency(model_latency),
             m_warm_up(warm_up),
-            m_wait_in_process_block(wait_in_process_block),
-            m_bind_session_to_thread(bind_session_to_thread),
-            m_num_threads(num_threads)
+            m_bind_session_to_processor(bind_session_to_processor),
+            m_num_parallel_processors(num_parallel_processors)
+#ifdef USE_SEMAPHORE
+            , m_wait_in_process_block(wait_in_process_block)
+#endif
     {
 #ifdef USE_LIBTORCH
         if (m_model_input_shape_torch.size() > 0) {
@@ -94,6 +101,13 @@ struct ANIRA_API InferenceConfig {
             }
         }
 #endif
+        if (m_bind_session_to_processor) {
+            m_num_parallel_processors = 1;
+        }
+        if (m_num_parallel_processors < 1) {
+            m_num_parallel_processors = 1;
+            std::cout << "[WARNING] Number of parellel processors must be at least 1. Setting to 1." << std::endl;
+        }
     }
 
 #ifdef USE_LIBTORCH
@@ -117,9 +131,12 @@ struct ANIRA_API InferenceConfig {
     float m_max_inference_time;
     int m_model_latency;
     bool m_warm_up;
+    bool m_bind_session_to_processor;
+    int m_num_parallel_processors;
+
+#ifdef USE_SEMAPHORE
     float m_wait_in_process_block;
-    bool m_bind_session_to_thread;
-    int m_num_threads;
+#endif
     
     int m_new_model_input_size;
     int m_new_model_output_size;
@@ -144,9 +161,11 @@ struct ANIRA_API InferenceConfig {
             m_max_inference_time == other.m_max_inference_time &&
             m_model_latency == other.m_model_latency &&
             m_warm_up == other.m_warm_up &&
+            m_bind_session_to_processor == other.m_bind_session_to_processor &&
+            m_num_parallel_processors == other.m_num_parallel_processors &&
+#ifdef USE_SEMAPHORE
             m_wait_in_process_block == other.m_wait_in_process_block &&
-            m_bind_session_to_thread == other.m_bind_session_to_thread &&
-            m_num_threads == other.m_num_threads &&
+#endif
             m_new_model_input_size == other.m_new_model_input_size &&
             m_new_model_output_size == other.m_new_model_output_size;
     }
