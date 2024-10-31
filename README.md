@@ -35,7 +35,7 @@ anira::InferenceConfig myNNConfig(
 anira::PrePostProcessor myPrePostProcessor;
 
 // Create an InferenceHandler instance
-anira::InferenceHandler inferenceHandler(myPostProcessor, myNNConfig);
+anira::InferenceHandler inferenceHandler(myPrePostProcessor, myNNConfig);
 
 // Create a HostAudioConfig instance containing the host config infos
 anira::HostAudioConfig audioConfig {
@@ -48,7 +48,7 @@ anira::HostAudioConfig audioConfig {
 inferenceHandler.prepare(audioConfig);
 
 // Select the inference backend
-inferenceHandler.selectInferenceBackend(anira::LIBTORCH);
+inferenceHandler.setInferenceBackend(anira::LIBTORCH);
 
 // Optionally get the latency of the inference process in samples
 int latencyInSamples = inferenceHandler.getLatency();
