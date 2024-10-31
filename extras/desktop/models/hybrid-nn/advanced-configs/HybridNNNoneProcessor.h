@@ -7,7 +7,7 @@ class HybridNNNoneProcessor : public anira::BackendBase {
 public:
     HybridNNNoneProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
 
-    void process(anira::AudioBufferF &input, anira::AudioBufferF &output) override {
+    void process(anira::AudioBufferF &input, anira::AudioBufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
         auto equal_channels = input.get_num_channels() == output.get_num_channels();
         auto sample_diff = input.get_num_samples() - output.get_num_samples();
         int64_t num_batches;

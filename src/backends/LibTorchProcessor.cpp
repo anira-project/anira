@@ -19,11 +19,11 @@ void LibtorchProcessor::prepare() {
     }
 }
 
-void LibtorchProcessor::process(AudioBufferF& input, AudioBufferF& output) { 
+void LibtorchProcessor::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) { 
     while (true) {
         for(auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
-                instance->process(input, output);
+                instance->process(input, output, session);
                 instance->m_processing.exchange(false);
                 return;
             }

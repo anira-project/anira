@@ -27,6 +27,18 @@
 
 namespace anira {
 
+// Forward declarations as we have a circular dependency
+class BackendBase;
+#ifdef USE_LIBTORCH
+class LibtorchProcessor;
+#endif
+#ifdef USE_ONNXRUNTIME
+class OnnxRuntimeProcessor;
+#endif
+#ifdef USE_TFLITE
+class TFLiteProcessor;
+#endif
+
 class ANIRA_API SessionElement {
 public:
     SessionElement(int newSessionID, PrePostProcessor& pp_processor, InferenceConfig& inference_config);
