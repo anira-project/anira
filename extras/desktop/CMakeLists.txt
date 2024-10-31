@@ -2,6 +2,7 @@ set(MODEL_REPOSITORIES
         "https://github.com/faressc/GuitarLSTM.git hybrid-nn/GuitarLSTM"
         "https://github.com/faressc/steerable-nafx.git cnn/steerable-nafx"
         "https://github.com/vackva/stateful-lstm.git stateful-rnn/stateful-lstm"
+        "https://github.com/anira-project/example-models.git model-pool/example-models"
 )
 
 find_package(Git QUIET)
@@ -37,3 +38,5 @@ set(STEERABLENAFX_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/cnn/stee
 
 set(STATEFULLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_CURRENT_LIST_DIR}/models/stateful-rnn/stateful-lstm/models/" CACHE PATH "Path to the StatefulLSTM TensorFlow models")
 set(STATEFULLSTM_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/stateful-rnn/stateful-lstm/models/" CACHE PATH "Path to the StatefulLSTM PyTorch models")
+
+set(SIMPLEGAIN_MODEL_PATH "${CMAKE_CURRENT_LIST_DIR}/models/model-pool/example-models/SimpleGainNetwork/models/" CACHE PATH "Path to the SimpleGainNetwork models")

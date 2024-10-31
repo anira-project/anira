@@ -11,3 +11,4 @@ venv/
 extras/desktop/models/stateful-rnn/stateful-lstm/
 extras/desktop/models/hybrid-nn/GuitarLSTM/
 extras/desktop/models/cnn/steerable-nafx/
+extras/desktop/models/model-pool/example-models/
