@@ -2,6 +2,30 @@
 
 namespace anira {
 
+PrePostProcessor::PrePostProcessor() {
+}
+
+PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config) {
+    m_inference_config = inference_config;
+
+    m_inputs.resize(m_inference_config.m_input_sizes.size());
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); ++i) {
+        if(i != m_inference_config.m_index_audio_data[0]) {
+            m_inputs[i].resize(m_inference_config.m_input_sizes[i]);
+        } else {
+            m_inputs[i].resize(0);
+        }
+    }
+    m_outputs.resize(m_inference_config.m_output_sizes.size());
+    for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); ++i) {
+        if(i != m_inference_config.m_index_audio_data[1]) {
+            m_outputs[i].resize(m_inference_config.m_output_sizes[i]);
+        } else {
+            m_outputs[i].resize(0);
+        }
+    }
+}
+
 void PrePostProcessor::pre_process(RingBuffer& input, AudioBufferF& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
     pop_samples_from_buffer(input, output);
 }
