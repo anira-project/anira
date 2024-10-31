@@ -2,11 +2,10 @@
 
 namespace anira {
 
-AniraContext::AniraContext(const AniraContextConfig& context_config) {
-    for (int i = 0; i < context_config.m_num_threads; ++i) {
+AniraContext::AniraContext(const AniraContextConfig& context_config) : m_context_config(context_config) {
+    for (int i = 0; i < m_context_config.m_num_threads; ++i) {
         m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, m_sessions));
     }
-    m_context_config = context_config;
 }
 
 AniraContext::~AniraContext() {}
@@ -25,9 +24,8 @@ std::shared_ptr<AniraContext> AniraContext::get_instance(const AniraContextConfi
         if (m_anira_context->m_context_config.m_synchronization_type != context_config.m_synchronization_type) {
             std::cerr << "[ERROR] AniraContext already initialized with different syncronization type!" << std::endl;
         }
-        if (m_anira_context->m_context_config.m_num_threads > context_config.m_num_threads) {
+        if (m_anira_context->m_thread_pool.size() > context_config.m_num_threads) {
             m_anira_context->new_num_threads(context_config.m_num_threads);
-            m_anira_context->m_context_config = context_config;
         }
     }
     std::cout << "Anira Version " << m_anira_context->m_context_config.m_anira_version << std::endl;
@@ -63,9 +61,9 @@ SessionElement& AniraContext::create_session(PrePostProcessor& pp_processor, Inf
     }
 
     int session_id = get_available_session_id();
-    if (inference_config.m_num_parallel_processors > m_context_config.m_num_threads) {
+    if (inference_config.m_num_parallel_processors > m_thread_pool.size()) {
         std::cout << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in AniraContext. Using number of threads as number of parallel processors." << std::endl;
-        inference_config.m_num_parallel_processors = m_context_config.m_num_threads;
+        inference_config.m_num_parallel_processors = m_thread_pool.size();
     }
     m_sessions.emplace_back(std::make_shared<SessionElement>(session_id, pp_processor, inference_config));
 
@@ -151,12 +149,12 @@ void AniraContext::prepare(SessionElement& session, HostAudioConfig new_config) 
 }
 
 void AniraContext::new_data_submitted(SessionElement& session) {
-    // We assume that the model_output_size gives us the amount of new samples that we need to process. This can differ from the model_input_size because we might need to add some padding or past samples.
-    while (session.m_send_buffer.get_available_samples(0) >= (session.m_inference_config.m_new_model_output_size)) {
+    // TODO: We assume that the model_output_size gives us the amount of new samples that we need to process. This can differ from the model_input_size because we might need to add some padding or past samples. Find a better way to determine the amount of new samples.
+    while (session.m_send_buffer.get_available_samples(0) >= (session.m_inference_config.m_output_sizes[session.m_inference_config.m_index_audio_data[1]])) {
         bool success = pre_process(session);
         // !success means that there is no free m_inference_queue
         if (!success) {
-            for (size_t i = 0; i < session.m_inference_config.m_new_model_output_size; ++i) {
+            for (size_t i = 0; i < session.m_inference_config.m_output_sizes[session.m_inference_config.m_index_audio_data[1]]; ++i) {
                 session.m_send_buffer.pop_sample(0);
                 session.m_receive_buffer.push_sample(0, 0.f);
             }
@@ -242,7 +240,7 @@ int AniraContext::get_num_sessions() {
 }
 
 template <typename T> void AniraContext::set_processor(SessionElement& session, InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors) {
-    if (!inference_config.m_bind_session_to_processor) {
+    if (!inference_config.m_session_exclusive_processor) {
         for (auto processor : processors) {
             if (processor->m_inference_config == inference_config) {
                 session.set_processor(processor);
@@ -256,7 +254,7 @@ template <typename T> void AniraContext::set_processor(SessionElement& session, 
 }
 
 template <typename T> void AniraContext::release_processor(InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors, std::shared_ptr<T>& processor) {
-    if (!inference_config.m_bind_session_to_processor) {
+    if (!inference_config.m_session_exclusive_processor) {
         for (auto session : m_sessions) {
             if (session->m_inference_config == inference_config) {
                 return;
