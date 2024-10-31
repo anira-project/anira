@@ -52,7 +52,7 @@ private:
     CNNPrePostProcessor prePostProcessor;
     CNNNoneProcessor noneProcessor; // This one is only needed for the round trip test, when selecting the None backend
 #elif MODEL_TO_USE == 2
-    anira::InferenceConfig inferenceConfig = hybridNNConfig;
+    anira::InferenceConfig inferenceConfig = hybridnn_config;
     HybridNNPrePostProcessor prePostProcessor;
     HybridNNNoneProcessor noneProcessor; // This one is only needed for the round trip test, when selecting the None backend
 #elif MODEL_TO_USE == 3

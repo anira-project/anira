@@ -86,7 +86,7 @@ JackClient::JackClient([[ maybe_unused ]] int argc, char *argv[]):
     jack_on_shutdown (m_client, shutdown, this);
 
     // TODO do this somewhere proper
-    inferenceHandler.setInferenceBackend(m_inference_backend);
+    inferenceHandler.set_inference_backend(m_inference_backend);
 
     m_nframes = jack_get_buffer_size(m_client);
     m_samplerate = jack_get_sample_rate(m_client);
@@ -204,7 +204,7 @@ void JackClient::prepare() {
 void JackClient::prepare(anira::HostAudioConfig config) {
     // TODO: shall the client be deactivated before preparing?
     if(verbose)
-        std::cout << "[debug] entering prepare with HostAudioConfig buffer_size="  << config.hostBufferSize << ", sr=" << config.hostSampleRate << std::endl;
+        std::cout << "[debug] entering prepare with HostAudioConfig buffer_size="  << config.m_host_buffer_size << ", sr=" << config.m_host_sample_rate << std::endl;
 
     inferenceHandler.prepare(config);
 
@@ -218,10 +218,10 @@ void JackClient::prepare(anira::HostAudioConfig config) {
     in = new jack_default_audio_sample_t*[m_n_input_channels];
     out = new jack_default_audio_sample_t*[m_n_output_channels];
     for (int i = 0; i < m_n_input_channels; i++ ) {
-        in[i] = new jack_default_audio_sample_t[config.hostBufferSize];
+        in[i] = new jack_default_audio_sample_t[config.m_host_buffer_size];
     }
     for (int i = 0; i < m_n_output_channels; i++ ) {
-        out[i] = new jack_default_audio_sample_t[config.hostBufferSize];
+        out[i] = new jack_default_audio_sample_t[config.m_host_buffer_size];
     }
 
     std::cout << "[info] activating client..." << std::endl;
