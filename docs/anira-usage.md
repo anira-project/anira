@@ -24,18 +24,18 @@ anira::InferenceConfig hybridnn_config(
     // Model path and shapes for different backends
 #ifdef USE_LIBTORCH
     "path/to/your/model.pt", // LibTorch model path (required, when -DANIRA_WITH_LIBTORCH=ON)
-    {2048, 1, 150}, // Input shape for LibTorch (required, when -DANIRA_WITH_LIBTORCH=ON)
-    {2048, 1}, // Output shape for LibTorch (required, when -DANIRA_WITH_LIBTORCH=ON)
+    {{2048, 1, 150}}, // Input shape for LibTorch (required, when -DANIRA_WITH_LIBTORCH=ON)
+    {{2048, 1}}, // Output shape for LibTorch (required, when -DANIRA_WITH_LIBTORCH=ON)
 #endif
 #ifdef USE_ONNXRUNTIME
     "path/to/your/model.onnx", // ONNX model path (required, when -DANIRA_WITH_ONNX=ON)
-    {2048, 1, 150}, // Input shape for ONNX (required, when -DANIRA_WITH_ONNX=ON)
-    {2048, 1}, // Output shape for ONNX (required, when -DANIRA_WITH_ONNX=ON)
+    {{2048, 1, 150}}, // Input shape for ONNX (required, when -DANIRA_WITH_ONNX=ON)
+    {{2048, 1}}, // Output shape for ONNX (required, when -DANIRA_WITH_ONNX=ON)
 #endif
 #ifdef USE_TFLITE
     "path/to/your/model.tflite", // TensorFlow Lite model path (required, when -DANIRA_WITH_TFLITE=ON)
-    {2048, 150, 1}, // Input shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
-    {2048, 1}, // Output shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
+    {{2048, 150, 1}}, // Input shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
+    {{2048, 1}}, // Output shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
 #endif
     42.66f, // Maximum inference time in ms for processing of all batches (required)
 
@@ -48,7 +48,7 @@ anira::InferenceConfig hybridnn_config(
     false, // Shall this session have an exclusive inference processor (optional: default = false) 
     8, // Number of processors for parallel inference
       // (optional: default = ((int) std::thread::hardware_concurrency() - 1 > 0) ?
-      // (int) std::thread::hardware_concurrency() - 1 : 1)), when m_bind_session_to_processor is true this value
+      // (int) std::thread::hardware_concurrency() - 1 : 1)), when m_session_exclusive_processor is true this value
       // is set to 1
     0.f  // ONLY AVAILABlE WHEN USING SEMAPHORES FOR THREAD SYNCHRONIZATION!
 );
@@ -77,17 +77,17 @@ public:
         int64_t num_input_samples;
         int64_t num_output_samples;
         if (current_inference_backend == anira::LIBTORCH) {
-            num_batches = config.m_model_input_shape_torch[0];
-            num_input_samples = config.m_model_input_shape_torch[2];
-            num_output_samples = config.m_model_output_shape_torch[1];
+            num_batches = config.m_model_input_shape_torch[config.m_index_audio_data[0]][0];
+            num_input_samples = config.m_model_input_shape_torch[config.m_index_audio_data[0]][2];
+            num_output_samples = config.m_model_output_shape_torch[config.m_index_audio_data[1]][1];
         } else if (current_inference_backend == anira::ONNX) {
-            num_batches = config.m_model_input_shape_onnx[0];
-            num_input_samples = config.m_model_input_shape_onnx[2];
-            num_output_samples = config.m_model_output_shape_onnx[1];
+            num_batches = config.m_model_input_shape_onnx[config.m_index_audio_data[0]][0];
+            num_input_samples = config.m_model_input_shape_onnx[config.m_index_audio_data[0]][2];
+            num_output_samples = config.m_model_output_shape_onnx[config.m_index_audio_data[1]][1];
         } else if (current_inference_backend == anira::TFLITE) {
-            num_batches = config.m_model_input_shape_tflite[0];
-            num_input_samples = config.m_model_input_shape_tflite[1];
-            num_output_samples = config.m_model_output_shape_tflite[1];
+            num_batches = config.m_model_input_shape_tflite[config.m_index_audio_data[0]][0];
+            num_input_samples = config.m_model_input_shape_tflite[config.m_index_audio_data[0]][1];
+            num_output_samples = config.m_model_output_shape_tflite[config.m_index_audio_data[1]][1];
         } else {
             throw std::runtime_error("Invalid inference backend");
         }
@@ -180,14 +180,14 @@ inference_configpublic:
         int64_t num_batches;
         int64_t num_input_samples;
 #if USE_LIBTORCH
-        num_batches = m_inference_config.m_model_input_shape_torch[0];
-        num_input_samples = m_inference_config.m_model_input_shape_torch[2];
+        num_batches = m_inference_config.m_model_input_shape_torch[m_inference_config.m_index_audio_data[0]][0];
+        num_input_samples = m_inference_config.m_model_input_shape_torch[m_inference_config.m_index_audio_data[0]][2];
 #elif USE_ONNXRUNTIME
-        num_batches = m_inference_config.m_model_input_shape_onnx[0];
-        num_input_samples = m_inference_config.m_model_input_shape_onnx[2];
+        num_batches = m_inference_config.m_model_input_shape_onnx[m_inference_config.m_index_audio_data[0]][0];
+        num_input_samples = m_inference_config.m_model_input_shape_onnx[m_inference_config.m_index_audio_data[0]][2];
 #elif USE_TFLITE
-        num_batches = m_inference_config.m_model_input_shape_tflite[0];
-        num_input_samples = m_inference_config.m_model_input_shape_tflite[1];
+        num_batches = m_inference_config.m_model_input_shape_tflite[m_inference_config.m_index_audio_data[0]][0];
+        num_input_samples = m_inference_config.m_model_input_shape_tflite[m_inference_config.m_index_audio_data[0]][1];
 #endif
 
         if (equal_channels && sample_diff >= 0) {

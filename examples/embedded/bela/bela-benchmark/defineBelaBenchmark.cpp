@@ -21,8 +21,8 @@ typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 anira::PrePostProcessor my_pp_processor;
 anira::InferenceConfig my_inference_config(
 	"model.pt",
-	{1, 1, 2048},
-	{1, 1, 2048},
+	{{1, 1, 2048}},
+	{{1, 1, 2048}},
 	21.53f,
 	0,
 	true,
