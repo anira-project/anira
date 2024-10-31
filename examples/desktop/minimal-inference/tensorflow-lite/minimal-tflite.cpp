@@ -13,6 +13,10 @@ Licence: Apache 2.0
 #include "../../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../../extras/desktop/models/cnn/CNNConfig.h"
+#include "../../../../extras/desktop/models/model-pool/SimpleGainConfig.h"
+
+#include "../../../../include/anira/utils/MemoryBlock.h"
+#include "../../../../include/anira/utils/AudioBuffer.h"
 
 #define TFLITE_MINIMAL_CHECK(x)                              \
     if (!(x)) {                                                \
@@ -134,7 +138,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
 int main(int argc, const char* argv[]) {
 
-    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config};
+    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config, gain_config};
 
     for (int i = 0; i < models_to_inference.size(); ++i) {
         minimal_inference(models_to_inference[i]);
