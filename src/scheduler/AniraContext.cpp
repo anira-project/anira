@@ -97,15 +97,16 @@ void AniraContext::release_session(SessionElement& session) {
     for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
         m_thread_pool[i]->stop();
     }
-
+    
+    InferenceConfig inference_config = session.m_inference_config;
 #ifdef USE_LIBTORCH
-    release_processor(session.m_inference_config, m_libtorch_processors, session.m_libtorch_processor);
+    std::shared_ptr<LibtorchProcessor> libtorch_processor = session.m_libtorch_processor;
 #endif
 #ifdef USE_ONNXRUNTIME
-    release_processor(session.m_inference_config, m_onnx_processors, session.m_onnx_processor);
+    std::shared_ptr<OnnxRuntimeProcessor> onnx_processor = session.m_onnx_processor;
 #endif
 #ifdef USE_TFLITE
-    release_processor(session.m_inference_config, m_tflite_processors, session.m_tflite_processor);
+    std::shared_ptr<TFLiteProcessor> tflite_processor = session.m_tflite_processor;
 #endif
 
     for (size_t i = 0; i < m_sessions.size(); ++i) {
@@ -114,6 +115,16 @@ void AniraContext::release_session(SessionElement& session) {
             break;
         }
     }
+
+#ifdef USE_LIBTORCH
+    release_processor(inference_config, m_libtorch_processors, libtorch_processor);
+#endif
+#ifdef USE_ONNXRUNTIME
+    release_processor(inference_config, m_onnx_processors, onnx_processor);
+#endif
+#ifdef USE_TFLITE
+    release_processor(inference_config, m_tflite_processors, tflite_processor);
+#endif
 
     m_active_sessions.fetch_sub(1);
 
