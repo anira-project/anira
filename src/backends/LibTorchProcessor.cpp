@@ -39,12 +39,7 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inf
         std::cerr << "[ERROR] error loading the model\n";
         std::cerr << e.what() << std::endl;
     }
-}
-
-void LibtorchProcessor::Instance::prepare() {
-    m_inputs.clear();
     m_inputs.resize(m_inference_config.m_input_sizes.size());
-    m_input_data.clear();
     m_input_data.resize(m_inference_config.m_input_sizes.size());
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
         m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
@@ -53,6 +48,12 @@ void LibtorchProcessor::Instance::prepare() {
 
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
         m_outputs = m_module.forward(m_inputs);
+    }
+}
+
+void LibtorchProcessor::Instance::prepare() {
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+        m_input_data[i].clear();
     }
 }
 
