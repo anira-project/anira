@@ -93,7 +93,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
         }
     }
 
-    // Copy the data to the output_data vector
+    // Print output data
     for (int i = 0; i < m_output_data.size(); i++) {
         for (int j = 0; j < m_output_data[i].size(); j++) {
             std::cout << "Output data [" << i << "][" << j << "]: " << m_output_data[i][j] << std::endl;
