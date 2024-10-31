@@ -57,10 +57,10 @@ private:
 
         torch::jit::script::Module m_module;
 
-        torch::Tensor m_input_tensor;
-        torch::Tensor m_output_tensor;
+        std::vector<MemoryBlock<float>> m_input_data;
 
-        std::vector<torch::jit::IValue> m_inputs;
+        std::vector<c10::IValue> m_inputs;
+        c10::IValue m_outputs;
 
         InferenceConfig& m_inference_config;
         std::atomic<bool> m_processing {false};
