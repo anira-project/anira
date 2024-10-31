@@ -11,6 +11,8 @@ Licence: MIT
 #include "../../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../../extras/desktop/models/cnn/CNNConfig.h"
+#include "../../../../extras/desktop/models/model-pool/SimpleGainConfig.h"
+
 #include "../../../../include/anira/utils/MemoryBlock.h"
 #include "../../../../include/anira/utils/AudioBuffer.h"
 
@@ -80,10 +82,22 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     }
 
     // Get input and output names from model
-    Ort::AllocatedStringPtr m_input_name = m_session.GetInputNameAllocated(0, m_ort_alloc);
-    Ort::AllocatedStringPtr m_output_name = m_session.GetOutputNameAllocated(0, m_ort_alloc);
-    const std::array<const char *, 1> m_input_names = {(char*) m_input_name.get()};
-    const std::array<const char *, 1> m_output_names = {(char*) m_output_name.get()};
+    std::vector<Ort::AllocatedStringPtr> m_input_name;
+    std::vector<Ort::AllocatedStringPtr> m_output_name;
+    std::vector<const char *> m_input_names;
+    std::vector<const char *> m_output_names;
+
+    m_input_names.resize(m_session.GetInputCount());
+    m_output_names.resize(m_session.GetOutputCount());
+
+    for (size_t i = 0; i < m_session.GetInputCount(); ++i) {
+        m_input_name.emplace_back(m_session.GetInputNameAllocated(i, m_ort_alloc));
+        m_input_names[i] = m_input_name[i].get();
+    }
+    for (size_t i = 0; i < m_session.GetOutputCount(); ++i) {
+        m_output_name.emplace_back(m_session.GetOutputNameAllocated(i, m_ort_alloc));
+        m_output_names[i] = m_output_name[i].get();
+    }
 
     try {
         m_outputs = m_session.Run(Ort::RunOptions{nullptr}, m_input_names.data(), m_inputs.data(), m_input_names.size(), m_output_names.data(), m_output_names.size());
@@ -118,7 +132,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
 int main(int argc, const char* argv[]) {
 
-    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config};
+    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config, gain_config};
 
     for (int i = 0; i < models_to_inference.size(); ++i) {
         minimal_inference(models_to_inference[i]);
