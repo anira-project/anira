@@ -14,11 +14,11 @@ Anira x Bela Example
 #include <libraries/AudioFile/AudioFile.h>
 #include <anira/anira.h>
 
-std::string gFilename = "ts9_test1_out_FP32.wav";	// Name of the sound file (in project folder)
-std::vector<float> gSampleBuffer;				// Buffer that holds the sound file
-int gReadPointer = 0;							// Position of the last frame we played
+std::string g_filename = "ts9_test1_out_FP32.wav";	// Name of the sound file (in project folder)
+std::vector<float> g_sample_buffer;				// Buffer that holds the sound file
+int g_read_pointer = 0;							// Position of the last frame we played
 
-anira::InferenceConfig gInferenceConfig(
+anira::InferenceConfig g_inference_config(
 	"model.pt",
 	{1, 1, 2048},
 	{1, 1, 2048},
@@ -30,40 +30,40 @@ anira::InferenceConfig gInferenceConfig(
 	1
 );
 
-anira::PrePostProcessor gPrePostProcessor;
-anira::InferenceHandler gInferenceHandler(gPrePostProcessor, gInferenceConfig);
+anira::PrePostProcessor g_pp_processor;
+anira::InferenceHandler g_inference_handler(g_pp_processor, g_inference_config);
 
-float** gAudioData;
+float** audio_data;
 int gPrintCounter = 0;
 
 bool setup(BelaContext *context, void *userData)
 {
 	// Load the sample from storage into a buffer	
-	gSampleBuffer = AudioFileUtilities::loadMono(gFilename);
+	g_sample_buffer = AudioFileUtilities::loadMono(g_filename);
 	
 	// Check if the load succeeded
-	if(gSampleBuffer.size() == 0) {
-    	rt_printf("Error loading audio file '%s'\n", gFilename.c_str());
+	if(g_sample_buffer.size() == 0) {
+    	rt_printf("Error loading audio file '%s'\n", g_filename.c_str());
     	return false;
 	}
 
     rt_printf("Loaded the audio file '%s' with %d frames (%.1f seconds)\n", 
-    			gFilename.c_str(), gSampleBuffer.size(),
-    			gSampleBuffer.size() / context->audioSampleRate);
+    			g_filename.c_str(), g_sample_buffer.size(),
+    			g_sample_buffer.size() / context->audioSampleRate);
 
-	anira::HostAudioConfig hostAudioConfig{
+	anira::HostAudioConfig host_config{
 		1,
 		context->audioFrames,
 		context->audioSampleRate
 	};
 
-	gInferenceHandler.prepare(hostAudioConfig);
-	gInferenceHandler.setInferenceBackend(anira::NONE);
-	int latency = gInferenceHandler.getLatency();
+	g_inference_handler.prepare(host_config);
+	g_inference_handler.set_inference_backend(anira::NONE);
+	int latency = g_inference_handler.get_latency();
 	rt_printf("Inference latency: %d samples\n", latency);
 
-	gAudioData = new float*;
-	gAudioData[0] = new float[context->audioFrames];
+	audio_data = new float*;
+	audio_data[0] = new float[context->audioFrames];
 
 	return true;
 }
@@ -74,15 +74,15 @@ void render(BelaContext *context, void *userData)
 		rt_printf("Processing audio\n");
 	}
 	for(unsigned int n = 0; n < context->audioFrames; n++) {
-		gAudioData[0][n] = gSampleBuffer[gReadPointer];
+		audio_data[0][n] = g_sample_buffer[g_read_pointer];
 
 		// Increment and wrap the read pointer
-		gReadPointer++;
-		if(gReadPointer >= gSampleBuffer.size()) {
-			gReadPointer = 0;
+		g_read_pointer++;
+		if(g_read_pointer >= g_sample_buffer.size()) {
+			g_read_pointer = 0;
 		}
 	}
-	gInferenceHandler.process(gAudioData, context->audioFrames);
+	g_inference_handler.process(audio_data, context->audioFrames);
 
 	if(gPrintCounter % 1000 == 0) {
 		rt_printf("Finished processing audio\n");
@@ -95,13 +95,13 @@ void render(BelaContext *context, void *userData)
 	for(unsigned int channel = 0; channel < context->audioInChannels; channel++) {
 		for(unsigned int n = 0; n < context->audioFrames; n++) {
 			// Write the sample to every audio output channel
-			audioWrite(context, n, channel, gAudioData[0][n]);
+			audioWrite(context, n, channel, audio_data[0][n]);
 		}
 	}
 }
 
 void cleanup(BelaContext *context, void *userData)
 {
-	delete[] gAudioData[0];
-	delete[] gAudioData;
+	delete[] audio_data[0];
+	delete[] audio_data;
 }

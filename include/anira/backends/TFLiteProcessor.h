@@ -7,24 +7,38 @@
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
 #include <tensorflow/lite/c_api.h>
+#include <memory>
 
 namespace anira {
 
-class ANIRA_API TFLiteProcessor : private BackendBase {
+class ANIRA_API TFLiteProcessor : public BackendBase {
 public:
-    TFLiteProcessor(InferenceConfig& config);
+    TFLiteProcessor(InferenceConfig& inference_config);
     ~TFLiteProcessor();
 
-    void prepareToPlay() override;
-    void processBlock(AudioBufferF& input, AudioBufferF& output) override;
+    void prepare() override;
+    void process(AudioBufferF& input, AudioBufferF& output) override;
 
 private:
-    TfLiteModel* model;
-    TfLiteInterpreterOptions* options;
-    TfLiteInterpreter* interpreter;
+    struct Instance {
+        Instance(InferenceConfig& inference_config);
+        ~Instance();
+        
+        void prepare();
+        void process(AudioBufferF& input, AudioBufferF& output);
 
-    TfLiteTensor* inputTensor;
-    const TfLiteTensor* outputTensor;
+        TfLiteModel* m_model;
+        TfLiteInterpreterOptions* m_options;
+        TfLiteInterpreter* m_interpreter;
+
+        TfLiteTensor* m_input_tensor;
+        const TfLiteTensor* m_output_tensor;
+
+        InferenceConfig& m_inference_config;
+        std::atomic<bool> m_processing {false};
+    };
+
+    std::vector<std::shared_ptr<Instance>> m_instances;
 };
 
 } // namespace anira

@@ -111,7 +111,7 @@ target_sources(${PROJECT_NAME}
         # Scheduler
         src/scheduler/InferenceManager.cpp
         src/scheduler/InferenceThread.cpp
-        src/scheduler/InferenceThreadPool.cpp
+        src/scheduler/AniraContext.cpp
         src/scheduler/SessionElement.cpp
 
         # Utils
@@ -123,7 +123,7 @@ target_sources(${PROJECT_NAME}
         src/PrePostProcessor.cpp
 
         # System
-        src/system/RealtimeThread.cpp
+        src/system/HighPriorityThread.cpp
 )
 
 # add the include directories for the backends to the build interface, public because the anira headers include the backend headers
@@ -154,6 +154,8 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
     # Semaphore definitions
     $<$<BOOL:${ANIRA_WITH_SEMAPHORE}>:USE_SEMAPHORE>
+    # Version number
+    -DANIRA_VERSION="${PROJECT_VERSION}"
 )
 
 

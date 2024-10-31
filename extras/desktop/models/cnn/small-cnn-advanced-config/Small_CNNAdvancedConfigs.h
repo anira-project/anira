@@ -17,14 +17,14 @@
 
 struct InferenceConfigBufferPair {
     anira::InferenceConfig config;
-    int bufferSize;
+    int buffer_size;
 };
 
 typedef std::vector<InferenceConfigBufferPair> AdvancedInferenceConfigs;
 
 #endif // ADVANCED_CONFIGS
 
-static AdvancedInferenceConfigs small_cnnAdvancedConfigs = {
+static AdvancedInferenceConfigs small_cnn_advanced_configs = {
     {small_cnnConfig_64, 64},
     {small_cnnConfig_128, 128},
     {small_cnnConfig_256, 256},

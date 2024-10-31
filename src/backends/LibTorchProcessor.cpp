@@ -2,11 +2,38 @@
 
 namespace anira {
 
-LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : BackendBase(config) {
+LibtorchProcessor::LibtorchProcessor(InferenceConfig& inference_config) : BackendBase(inference_config) {
     torch::set_num_threads(1);
-    
+
+    for (size_t i = 0; i < m_inference_config.m_num_parallel_processors; ++i) {
+        m_instances.emplace_back(std::make_shared<Instance>(m_inference_config));
+    }
+}
+
+LibtorchProcessor::~LibtorchProcessor() {
+}
+
+void LibtorchProcessor::prepare() {
+    for(auto& instance : m_instances) {
+        instance->prepare();
+    }
+}
+
+void LibtorchProcessor::process(AudioBufferF& input, AudioBufferF& output) { 
+    while (true) {
+        for(auto& instance : m_instances) {
+            if (!(instance->m_processing.exchange(true))) {
+                instance->process(input, output);
+                instance->m_processing.exchange(false);
+                return;
+            }
+        }
+    }
+}
+
+LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config) {
     try {
-        module = torch::jit::load(inferenceConfig.m_model_path_torch);
+        m_module = torch::jit::load(m_inference_config.m_model_path_torch);
     }
     catch (const c10::Error& e) {
         std::cerr << "[ERROR] error loading the model\n";
@@ -14,35 +41,32 @@ LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : BackendBase(conf
     }
 }
 
-LibtorchProcessor::~LibtorchProcessor() {
-}
+void LibtorchProcessor::Instance::prepare() {
+    m_inputs.clear();
+    m_inputs.push_back(torch::zeros(m_inference_config.m_model_input_shape_torch));
 
-void LibtorchProcessor::prepareToPlay() {
-    inputs.clear();
-    inputs.push_back(torch::zeros(inferenceConfig.m_model_input_shape_torch));
-
-    if (inferenceConfig.m_warm_up) {
-        AudioBufferF input(1, inferenceConfig.m_new_model_input_size);
-        AudioBufferF output(1, inferenceConfig.m_new_model_output_size);
-        processBlock(input, output);
+    if (m_inference_config.m_warm_up) {
+        AudioBufferF input(1, m_inference_config.m_new_model_input_size);
+        AudioBufferF output(1, m_inference_config.m_new_model_output_size);
+        process(input, output);
     }
 }
 
-void LibtorchProcessor::processBlock(AudioBufferF& input, AudioBufferF& output) { 
+void LibtorchProcessor::Instance::process(AudioBufferF& input, AudioBufferF& output) {
     // Create input tensor object from input data values and shape
-    inputTensor = torch::from_blob(input.getRawData(), (const long long) input.getNumSamples()).reshape(inferenceConfig.m_model_input_shape_torch); // TODO: Multichannel support
+    m_input_tensor = torch::from_blob(input.get_raw_data(), (const long long) input.get_num_samples()).reshape(m_inference_config.m_model_input_shape_torch); // TODO: Multichannel support
 
-    inputs[0] = inputTensor;
+    m_inputs[0] = m_input_tensor;
 
     // Run inference
-    outputTensor = module.forward(inputs).toTensor();
+    m_output_tensor = m_module.forward(m_inputs).toTensor();
 
     // Flatten the output tensor
-    outputTensor = outputTensor.view({-1});
+    m_output_tensor = m_output_tensor.view({-1});
 
     // Extract the output tensor data
-    for (size_t i = 0; i < inferenceConfig.m_new_model_output_size; i++) {
-        output.setSample(0, i, outputTensor[(int64_t) i].item<float>());
+    for (size_t i = 0; i < m_inference_config.m_new_model_output_size; i++) {
+        output.set_sample(0, i, m_output_tensor[(int64_t) i].item<float>());
     }
 }
 

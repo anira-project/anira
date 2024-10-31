@@ -15,37 +15,53 @@
 #include "../PrePostProcessor.h"
 #include "../InferenceConfig.h"
 
+#ifdef USE_LIBTORCH
+    #include "../backends/LibTorchProcessor.h"
+#endif
+#ifdef USE_ONNXRUNTIME
+    #include "../backends/OnnxRuntimeProcessor.h"
+#endif
+#ifdef USE_TFLITE
+    #include "../backends/TFLiteProcessor.h"
+#endif
+
 namespace anira {
 
-struct ANIRA_API SessionElement {
-    SessionElement(int newSessionID, PrePostProcessor& prePostProcessor, InferenceConfig& config, BackendBase& noneProcessor);
+class ANIRA_API SessionElement {
+public:
+    SessionElement(int newSessionID, PrePostProcessor& pp_processor, InferenceConfig& inference_config);
 
-    RingBuffer sendBuffer;
-    RingBuffer receiveBuffer;
+    void clear();
+    void prepare(HostAudioConfig new_config);
+
+    template <typename T> void set_processor(std::shared_ptr<T>& processor);
+
+    RingBuffer m_send_buffer;
+    RingBuffer m_receive_buffer;
 
     struct ThreadSafeStruct {
         ThreadSafeStruct(size_t model_input_size, size_t model_output_size);
 #ifdef USE_SEMAPHORE
-        std::binary_semaphore free{true};
-        std::binary_semaphore ready{false};
-        std::binary_semaphore done{false};
+        std::binary_semaphore m_free{true};
+        std::binary_semaphore m_ready{false};
+        std::binary_semaphore m_done{false};
 #else
-        std::atomic<bool> free{true};
-        std::atomic<bool> ready{false};
-        std::atomic<bool> done{false};
+        std::atomic<bool> m_free{true};
+        std::atomic<bool> m_ready{false};
+        std::atomic<bool> m_done{false};
 #endif
-        unsigned long timeStamp;
-        AudioBufferF processedModelInput = AudioBufferF();
-        AudioBufferF rawModelOutput = AudioBufferF();
+        unsigned long m_time_stamp;
+        AudioBufferF m_processed_model_input = AudioBufferF();
+        AudioBufferF m_raw_model_output = AudioBufferF();
     };
     // Using std::unique_ptr to manage ownership of ThreadSafeStruct objects
     // avoids issues with copying or moving objects containing std::binary_semaphore members,
     // which would otherwise prevent the generation of copy constructors.
-    std::vector<std::unique_ptr<ThreadSafeStruct>> inferenceQueue;
+    std::vector<std::unique_ptr<ThreadSafeStruct>> m_inference_queue;
 
-    std::atomic<InferenceBackend> currentBackend {NONE};
+    std::atomic<InferenceBackend> m_currentBackend {NONE};
     unsigned long m_current_queue = 0;
-    std::vector<unsigned long> timeStamps;
+    std::vector<unsigned long> m_time_stamps;
 
 #ifdef USE_SEMAPHORE
     std::counting_semaphore<UINT16_MAX> m_session_counter{0};
@@ -53,14 +69,24 @@ struct ANIRA_API SessionElement {
     std::atomic<int> m_session_counter{0};
 #endif
     
-    const int sessionID;
+    const int m_session_id;
 
-    PrePostProcessor& prePostProcessor;
-    InferenceConfig& inferenceConfig;
-    BackendBase& noneProcessor;
+    PrePostProcessor& m_pp_processor;
+    InferenceConfig& m_inference_config;
 
-    void clear();
-    void prepare(HostAudioConfig newConfig);
+    BackendBase m_default_processor;
+    BackendBase* m_custom_processor;
+    
+#ifdef USE_LIBTORCH
+    std::shared_ptr<LibtorchProcessor> m_libtorch_processor = nullptr;
+#endif
+#ifdef USE_ONNXRUNTIME
+    std::shared_ptr<OnnxRuntimeProcessor> m_onnx_processor = nullptr;
+#endif
+#ifdef USE_TFLITE
+    std::shared_ptr<TFLiteProcessor> m_tflite_processor = nullptr;
+#endif
+
 };
 
 } // namespace anira

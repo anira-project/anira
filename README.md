@@ -1,7 +1,6 @@
 ![anira Logo](/docs/img/anira-logo.png)
 
-![Build Status](https://github.com/anira-project/anira/actions/workflows/build.yml/badge.svg)
---------------------------------------------------------------------------------
+## ![Build Status](https://github.com/anira-project/anira/actions/workflows/build.yml/badge.svg)
 
 **anira** is a high-performance library designed to enable easy real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing. In the [paper](https://doi.org/10.1109/IS262782.2024.10704099) you can find more information about the architecture and the design decisions of **anira**, as well as extensive performance evaluations with the built-in benchmarking capabilities.
 
@@ -24,7 +23,7 @@ The basic usage of anira is as follows:
 #include <anira/anira.h>
 
 // Create a model configuration struct for your neural network
-anira::InferenceConfig myNNConfig(
+anira::InferenceConfig my_nn_config(
     "path/to/your/model.onnx (or *.pt, *.tflite)", // Model path
     {2048, 1, 150}, // Input shape
     {2048, 1}, // Output shape
@@ -32,32 +31,32 @@ anira::InferenceConfig myNNConfig(
 );
 
 // Create a pre- and post-processor instance
-anira::PrePostProcessor myPrePostProcessor;
+anira::PrePostProcessor my_pp_processor;
 
 // Create an InferenceHandler instance
-anira::InferenceHandler inferenceHandler(myPrePostProcessor, myNNConfig);
+anira::InferenceHandler inference_handler(my_pp_processor, my_nn_config);
 
 // Create a HostAudioConfig instance containing the host config infos
-anira::HostAudioConfig audioConfig {
+anira::HostAudioConfig host_config {
     1, // currently only mono is supported
-    bufferSize,
-    sampleRate
+    buffer_size,
+    sample_rate
 };
 
 // Allocate memory for audio processing
-inferenceHandler.prepare(audioConfig);
+inference_handler.prepare(host_config);
 
 // Select the inference backend
-inferenceHandler.setInferenceBackend(anira::LIBTORCH);
+inference_handler.set_inference_backend(anira::LIBTORCH);
 
 // Optionally get the latency of the inference process in samples
-int latencyInSamples = inferenceHandler.getLatency();
+int latency_in_samples = inference_handler.get_latency();
 
 // Real-time safe audio processing in process callback of your application
-processBlock(float** audioData, int numSamples) {
-    inferenceHandler.process(audioData, numSamples);
+process(float** audio_data, int num_samples) {
+    inference_handler.process(audio_data, num_samples);
 }
-// audioData now contains the processed audio samples
+// audio_data now contains the processed audio samples
 ```
 
 ## Install
@@ -118,18 +117,18 @@ cmake --build build --config Release --target anira
 
 By default, all three inference engines are installed. You can disable specific backends as needed:
 
-- LibTorch: ```-DANIRA_WITH_LIBTORCH=OFF```
-- OnnxRuntime: ```-DANIRA_WITH_ONNXRUNTIME=OFF```
-- Tensrflow Lite. ```-DANIRA_WITH_TFLITE=OFF```
+- LibTorch: `-DANIRA_WITH_LIBTORCH=OFF`
+- OnnxRuntime: `-DANIRA_WITH_ONNXRUNTIME=OFF`
+- Tensrflow Lite. `-DANIRA_WITH_TFLITE=OFF`
 
 The method of thread synchronization can be chosen between hard real-time safe raw atomic operations and an option with semaphores. The option with semaphores allows the use of `wait_in_process_block` in the `InferenceConfig` class. The default is the raw atomic operations. To enable the semaphore option, use the following flag:
 
-- Use semaphores for thread synchronization: ```-DANIRA_WITH_SEMAPHORES=ON```
+- Use semaphores for thread synchronization: `-DANIRA_WITH_SEMAPHORES=ON`
 
 Moreover the following options are available:
 
-- Build anira with benchmark capabilities: ```-DANIRA_WITH_BENCHMARK=ON```
-- Build example applications and populate example neural models: ```-DANIRA_WITH_EXAMPLES=ON```
+- Build anira with benchmark capabilities: `-DANIRA_WITH_BENCHMARK=ON`
+- Build example applications and populate example neural models: `-DANIRA_WITH_EXAMPLES=ON`
 
 ## Documentation
 
@@ -138,7 +137,7 @@ Detailed documentation on anira's API and will be available soon in our upcoming
 
 ## Benchmark capabilities
 
-anira allows users to benchmark and compare the inference performance of different neural network models, backends, and audio configurations. The benchmarking capabilities can be enabled during the build process by setting the ```-DANIRA_WITH_BENCHMARK=ON``` flag. The benchmarks are implemented using the [Google Benchmark](https://github.com/google/benchmark) and [Google Test](https://github.com/google/googletest) libraries. Both libraries are automatically linked with the anira library in the build process when benchmarking is enabled. To provide a reproducible and easy-to-use benchmarking environment, anira provides a custom Google benchmark fixture `anira::benchmark::ProcessBlockFixture` that is used to define benchmarks. This fixture offers many useful functions for setting up and running benchmarks. For more information on how to use the benchmarking capabilities, check out the [benchmarking guide](docs/benchmark-usage.md).
+anira allows users to benchmark and compare the inference performance of different neural network models, backends, and audio configurations. The benchmarking capabilities can be enabled during the build process by setting the `-DANIRA_WITH_BENCHMARK=ON` flag. The benchmarks are implemented using the [Google Benchmark](https://github.com/google/benchmark) and [Google Test](https://github.com/google/googletest) libraries. Both libraries are automatically linked with the anira library in the build process when benchmarking is enabled. To provide a reproducible and easy-to-use benchmarking environment, anira provides a custom Google benchmark fixture `anira::benchmark::ProcessBlockFixture` that is used to define benchmarks. This fixture offers many useful functions for setting up and running benchmarks. For more information on how to use the benchmarking capabilities, check out the [benchmarking guide](docs/benchmark-usage.md).
 
 ## Examples
 
@@ -164,7 +163,7 @@ If you use anira in your research or project, please cite either the [paper](htt
 @inproceedings{ackvaschulz2024anira,
     author={Ackva, Valentin and Schulz, Fares},
     booktitle={2024 IEEE 5th International Symposium on the Internet of Sounds (IS2)},
-    title={ANIRA: An Architecture for Neural Network Inference in Real-Time Audio Applications}, 
+    title={ANIRA: An Architecture for Neural Network Inference in Real-Time Audio Applications},
     year={2024},
     volume={},
     number={},
@@ -188,4 +187,5 @@ If you use anira in your research or project, please cite either the [paper](htt
 - [Fares Schulz](https://github.com/faressc)
 
 ## License
+
 This project is licensed under [Apache-2.0](LICENSE).

@@ -7,7 +7,7 @@ int main(int argc, char** argv) {
 
     pthread_t self = pthread_self();
 
-    anira::RealtimeThread::elevateToRealTimePriority(self, true);
+    anira::HighPriorityThread::elevate_priority(self, true);
 
     // Run benchmark
     benchmark::RunSpecifiedBenchmarks();

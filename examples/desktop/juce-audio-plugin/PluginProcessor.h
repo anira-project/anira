@@ -55,8 +55,8 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    anira::InferenceManager &getInferenceManager();
     juce::AudioProcessorValueTreeState& getValueTreeState() { return parameters; }
+    anira::InferenceManager &get_inference_manager();
 
 private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
@@ -65,23 +65,26 @@ private:
 
 private:
     juce::AudioProcessorValueTreeState parameters;
-    juce::AudioBuffer<float> monoBuffer;
+    juce::AudioBuffer<float> mono_buffer;
+
+    // Optional AniraContextConfig
+    anira::AniraContextConfig anira_context_config;
 
 #if MODEL_TO_USE == 1
-    anira::InferenceConfig inferenceConfig = cnnConfig;
-    CNNPrePostProcessor prePostProcessor;
-    CNNNoneProcessor noneProcessor; // This one is only needed for the round trip test, when selecting the None backend
+    anira::InferenceConfig inference_config = cnn_config;
+    CNNPrePostProcessor pp_processor;
+    CNNNoneProcessor none_processor; // This one is only needed for the round trip test, when selecting the None backend
 #elif MODEL_TO_USE == 2
-    anira::InferenceConfig inferenceConfig = hybridNNConfig;
-    HybridNNPrePostProcessor prePostProcessor;
-    HybridNNNoneProcessor noneProcessor; // This one is only needed for the round trip test, when selecting the None backend
+    anira::InferenceConfig inference_config = hybridnn_config;
+    HybridNNPrePostProcessor pp_processor;
+    HybridNNNoneProcessor none_processor; // This one is only needed for the round trip test, when selecting the None backend
 #elif MODEL_TO_USE == 3
-    anira::InferenceConfig inferenceConfig = statefulRNNConfig;
-    StatefulRNNPrePostProcessor prePostProcessor;
+    anira::InferenceConfig inference_config = rnn_config;
+    StatefulRNNPrePostProcessor pp_processor;
 #endif
-    anira::InferenceHandler inferenceHandler;
+    anira::InferenceHandler inference_handler;
 
-    juce::dsp::DryWetMixer<float> dryWetMixer;
+    juce::dsp::DryWetMixer<float> dry_wet_mixer;
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)

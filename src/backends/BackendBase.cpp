@@ -1,25 +1,25 @@
 #include <anira/backends/BackendBase.h>
 
 namespace anira {
-BackendBase::BackendBase(InferenceConfig &config) : inferenceConfig(config) {
+
+BackendBase::BackendBase(InferenceConfig &config) : m_inference_config(config) {
+}
+
+void BackendBase::prepare() {
 
 }
 
-void BackendBase::prepareToPlay() {
+void BackendBase::process(AudioBufferF &input, AudioBufferF &output) {
+    auto equal_channels = input.get_num_channels() == output.get_num_channels();
+    auto sample_diff = input.get_num_samples() - output.get_num_samples();
 
-}
+    if (equal_channels && sample_diff == 0) {
+        for (int channel = 0; channel < input.get_num_channels(); ++channel) {
+            auto write_ptr = output.get_write_pointer(channel);
+            auto read_ptr = input.get_read_pointer(channel);
 
-void BackendBase::processBlock(AudioBufferF &input, AudioBufferF &output) {
-    auto equalChannels = input.getNumChannels() == output.getNumChannels();
-    auto sampleDiff = input.getNumSamples() - output.getNumSamples();
-
-    if (equalChannels && sampleDiff == 0) {
-        for (int channel = 0; channel < input.getNumChannels(); ++channel) {
-            auto writePtr = output.getWritePointer(channel);
-            auto readPtr = input.getReadPointer(channel);
-
-            for (size_t i = 0; i < output.getNumSamples(); ++i) {
-                writePtr[i] = readPtr[i];
+            for (size_t i = 0; i < output.get_num_samples(); ++i) {
+                write_ptr[i] = read_ptr[i];
             }
         }
     }

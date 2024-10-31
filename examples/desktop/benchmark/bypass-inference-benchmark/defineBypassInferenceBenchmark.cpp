@@ -20,14 +20,14 @@
 #define PERCENTILE 0.999
 #define SAMPLE_RATE 44100
 
-std::vector<int> bufferSizes = {2048, 4096, 8192};
-std::vector<anira::InferenceConfig> inferenceConfigs = {cnnConfig, hybridNNConfig, statefulRNNConfig};
+std::vector<int> buffer_sizes = {2048, 4096, 8192};
+std::vector<anira::InferenceConfig> inference_configs = {cnn_config, hybridnn_config, rnn_config};
 
 // define the buffer sizes to be used in the benchmark and the backends to be used
 static void Arguments(::benchmark::internal::Benchmark* b) {
-    for (int i = 0; i < bufferSizes.size(); ++i)
-        for (int j = 0; j < inferenceConfigs.size(); ++j)
-            b->Args({bufferSizes[i], j});
+    for (int i = 0; i < buffer_sizes.size(); ++i)
+        for (int j = 0; j < inference_configs.size(); ++j)
+            b->Args({buffer_sizes[i], j});
 }
 
 /* ============================================================ *
@@ -38,48 +38,48 @@ typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) {
 
-    // The buffer size return in getBufferSize() is populated by state.range(0) param of the google benchmark
-    anira::HostAudioConfig hostAudioConfig = {1, (size_t) getBufferSize(), SAMPLE_RATE};
-    anira::InferenceBackend inferenceBackend = anira::NONE;
+    // The buffer size return in get_buffer_size() is populated by state.range(0) param of the google benchmark
+    anira::HostAudioConfig host_config = {1, (size_t) get_buffer_size(), SAMPLE_RATE};
+    anira::InferenceBackend inference_backend = anira::NONE;
 
     // TODO: Why is this necessary?
-    anira::PrePostProcessor *myPrePostProcessor;
+    anira::PrePostProcessor *my_pp_processor;
     if (state.range(1) == 0) {
-        myPrePostProcessor = new CNNPrePostProcessor();
+        my_pp_processor = new CNNPrePostProcessor();
     } else if (state.range(1) == 1) {
-        myPrePostProcessor = new HybridNNPrePostProcessor();
+        my_pp_processor = new HybridNNPrePostProcessor();
     } else if (state.range(1) == 2) {
-        myPrePostProcessor = new StatefulRNNPrePostProcessor();
+        my_pp_processor = new StatefulRNNPrePostProcessor();
     }
 
-    m_inferenceHandler = std::make_unique<anira::InferenceHandler>(*myPrePostProcessor, inferenceConfigs[state.range(1)]);
-    m_inferenceHandler->prepare(hostAudioConfig);
-    m_inferenceHandler->setInferenceBackend(inferenceBackend);
+    m_inference_handler = std::make_unique<anira::InferenceHandler>(*my_pp_processor, inference_configs[state.range(1)]);
+    m_inference_handler->prepare(host_config);
+    m_inference_handler->set_inference_backend(inference_backend);
 
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(hostAudioConfig.hostChannels, hostAudioConfig.hostBufferSize);
+    m_buffer = std::make_unique<anira::AudioBuffer<float>>(host_config.m_host_channels, host_config.m_host_buffer_size);
 
-    initializeRepetition(inferenceConfigs[state.range(1)], hostAudioConfig, inferenceBackend);
+    initialize_repetition(inference_configs[state.range(1)], host_config, inference_backend);
 
     for (auto _ : state) {
-        pushRandomSamplesInBuffer(hostAudioConfig);
+        push_random_samples_in_buffer(host_config);
 
-        initializeIteration();
+        initialize_iteration();
 
         auto start = std::chrono::high_resolution_clock::now();
         
-        m_inferenceHandler->process(m_buffer->getArrayOfWritePointers(), getBufferSize());
+        m_inference_handler->process(m_buffer->get_array_of_write_pointers(), get_buffer_size());
 
-        while (!bufferHasBeenProcessed()) {
+        while (!buffer_processed()) {
             std::this_thread::sleep_for(std::chrono::nanoseconds (10));
         }
         
         auto end = std::chrono::high_resolution_clock::now();
 
-        interationStep(start, end, state);
+        interation_step(start, end, state);
     }
-    repetitionStep();
+    repetition_step();
 
-    delete myPrePostProcessor;
+    delete my_pp_processor;
 }
 
 // /* ============================================================ *
@@ -90,10 +90,10 @@ BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_ADVANCED)
 ->Unit(benchmark::kMillisecond)
 ->Iterations(NUM_ITERATIONS)->Repetitions(NUM_REPETITIONS)
 ->Apply(Arguments)
-->ComputeStatistics("min", anira::benchmark::calculateMin)
-->ComputeStatistics("max", anira::benchmark::calculateMax)
+->ComputeStatistics("min", anira::benchmark::calculate_min)
+->ComputeStatistics("max", anira::benchmark::calculate_max)
 ->ComputeStatistics("percentile", [](const std::vector<double>& v) -> double {
-    return anira::benchmark::calculatePercentile(v, PERCENTILE);
+    return anira::benchmark::calculate_percentile(v, PERCENTILE);
   })
 ->DisplayAggregatesOnly(false)
 ->UseManualTime();

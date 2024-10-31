@@ -10,33 +10,47 @@
 
 namespace anira {
 
-class ANIRA_API OnnxRuntimeProcessor : private BackendBase {
+class ANIRA_API OnnxRuntimeProcessor : public BackendBase {
 public:
-    OnnxRuntimeProcessor(InferenceConfig& config);
+    OnnxRuntimeProcessor(InferenceConfig& inference_config);
     ~OnnxRuntimeProcessor();
 
-    void prepareToPlay() override;
-    void processBlock(AudioBufferF& input, AudioBufferF& output) override;
+    void prepare() override;
+    void process(AudioBufferF& input, AudioBufferF& output) override;
 
 private:
-    Ort::Env env;
-    Ort::MemoryInfo memory_info;
-    Ort::AllocatorWithDefaultOptions ort_alloc;
-    Ort::SessionOptions session_options;
-    std::unique_ptr<Ort::Session> session;
+    struct Instance {
+        Instance(InferenceConfig& inference_config);
 
-    size_t inputSize;
-    size_t outputSize;
+        void prepare();
+        void process(AudioBufferF& input, AudioBufferF& output);
 
-    std::vector<float> inputData;
-    std::vector<Ort::Value> inputTensor;
-    std::vector<Ort::Value> outputTensor;
+        Ort::MemoryInfo m_memory_info;
+        Ort::Env m_env;
+        Ort::AllocatorWithDefaultOptions m_ort_alloc;
+        Ort::SessionOptions m_session_options;
 
-    std::unique_ptr<Ort::AllocatedStringPtr> inputName;
-    std::unique_ptr<Ort::AllocatedStringPtr> outputName;
+        inline static std::unique_ptr<Ort::Session> m_session;
 
-    std::array<const char *, 1> inputNames;
-    std::array<const char *, 1> outputNames;
+        inline static size_t m_input_size;
+        inline static size_t m_output_size;
+
+        std::vector<float> m_input_data;
+        std::vector<float> m_output_data;
+        std::vector<Ort::Value> m_inputs;
+        std::vector<Ort::Value> m_outputs;
+
+        inline static std::unique_ptr<Ort::AllocatedStringPtr> m_input_name;
+        inline static std::unique_ptr<Ort::AllocatedStringPtr> m_output_name;
+
+        inline static std::array<const char *, 1> m_input_names;
+        inline static std::array<const char *, 1> m_output_names;
+
+        InferenceConfig& m_inference_config;
+        std::atomic<bool> m_processing {false};
+    };
+
+    std::vector<std::shared_ptr<Instance>> m_instances;
 };
 
 } // namespace anira

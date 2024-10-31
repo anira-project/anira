@@ -23,7 +23,6 @@ static anira::InferenceConfig small_cnnConfig_512(
         10.66f,
         0,
         false,
-        0.f,
         false
 );
 

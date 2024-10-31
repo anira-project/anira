@@ -3,7 +3,7 @@
 
 #include <anira/anira.h>
 
-static anira::InferenceConfig statefulRNNConfig(
+static anira::InferenceConfig rnn_config(
 #ifdef USE_LIBTORCH
         STATEFULLSTM_MODELS_PATH_PYTORCH + std::string("/model_0/stateful-lstm-dynamic.pt"),
         {2048, 1, 1},
@@ -23,7 +23,6 @@ static anira::InferenceConfig statefulRNNConfig(
         42.66f,
         0,
         false,
-        0.f,
         true
 );
 
