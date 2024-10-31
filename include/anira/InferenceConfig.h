@@ -149,7 +149,7 @@ struct ANIRA_API InferenceConfig {
 
     float m_max_inference_time;
     unsigned int m_model_latency;
-    bool m_warm_up;
+    unsigned int m_warm_up;
     bool m_session_exclusive_processor;
     std::array<size_t, 2> m_index_audio_data;
     size_t m_num_parallel_processors;
