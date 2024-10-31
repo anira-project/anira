@@ -18,11 +18,11 @@ void OnnxRuntimeProcessor::prepare() {
     }
 }
 
-void OnnxRuntimeProcessor::process(AudioBufferF& input, AudioBufferF& output) {
+void OnnxRuntimeProcessor::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) {
     while (true) {
         for(auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
-                instance->process(input, output);
+                instance->process(input, output, session);
                 instance->m_processing.exchange(false);
                 return;
             }
@@ -30,8 +30,8 @@ void OnnxRuntimeProcessor::process(AudioBufferF& input, AudioBufferF& output) {
     }
 }
 
-OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config),
-                                                                    m_memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU))
+OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU)),
+                                                                    m_inference_config(inference_config)
 {
     m_session_options.SetIntraOpNumThreads(1);
 
@@ -48,47 +48,59 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_
         m_output_name = std::make_unique<Ort::AllocatedStringPtr>(m_session->GetOutputNameAllocated(0, m_ort_alloc));
         m_input_names = {(char*) m_input_name->get()};
         m_output_names = {(char*) m_output_name->get()};
-
-        m_input_size = m_inference_config.m_new_model_input_size;
-        m_output_size = m_inference_config.m_new_model_output_size;
     }
 
-    std::vector<int64_t> input_shape = m_inference_config.m_model_input_shape_onnx;
-    m_input_data.resize(m_input_size, 0.0f);
+    m_input_data.resize(m_inference_config.m_input_sizes.size());
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+        m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
+        m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
+                m_memory_info,
+                m_input_data[i].data(),
+                m_input_data[i].size(),
+                m_inference_config.m_model_input_shape_onnx[i].data(),
+                m_inference_config.m_model_input_shape_onnx[i].size()
+        ));
+    }
 
-    std::vector<int64_t> output_shape = m_inference_config.m_model_output_shape_onnx;
-    m_output_data.resize(m_output_size, 0.0f);
+    m_output_data.resize(m_inference_config.m_output_sizes.size());
+    for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+        m_output_data[i].resize(m_inference_config.m_output_sizes[i]);
+        m_outputs.emplace_back(Ort::Value::CreateTensor<float>(
+                m_memory_info,
+                m_output_data[i].data(),
+                m_output_data[i].size(),
+                m_inference_config.m_model_output_shape_onnx[i].data(),
+                m_inference_config.m_model_output_shape_onnx[i].size()
+        ));
+    }
 
-    m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
-            m_memory_info,
-            m_input_data.data(),
-            m_input_size,
-            input_shape.data(),
-            input_shape.size()
-    ));
-
-    m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
-            m_memory_info,
-            m_output_data.data(),
-            m_output_size,
-            output_shape.data(),
-            output_shape.size()
-    ));
 }
 
 void OnnxRuntimeProcessor::Instance::prepare() {
-    if (m_inference_config.m_warm_up) {
-        AudioBufferF input(1, m_input_size);
-        AudioBufferF output(1, m_output_size);
-        process(input, output);
+    for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
+        try {
+            m_outputs = m_session->Run(Ort::RunOptions{nullptr}, m_input_names.data(), m_inputs.data(), m_input_names.size(), m_output_names.data(), m_output_names.size());
+        }
+        catch (Ort::Exception &e) {
+            std::cerr << e.what() << std::endl;
+        }
     }
 }
 
-void OnnxRuntimeProcessor::Instance::process(AudioBufferF& input, AudioBufferF& output) {
-    auto input_write_ptr = m_inputs[0].GetTensorMutableData<float>();
-    auto input_read_ptr = input.get_read_pointer(0);
-    for (size_t i = 0; i < m_input_size; i++) {
-        input_write_ptr[i] = input_read_ptr[i];
+void OnnxRuntimeProcessor::Instance::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) {
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+        if (i != m_inference_config.m_index_audio_data[0]) {
+            for (size_t j = 0; j < m_input_data[i].size(); j++) {
+                m_input_data[i][j] = session->m_pp_processor.m_inputs[i][j].load();
+            }
+        } else {
+            for (size_t j = 0; j < m_input_data[i].size(); j++) {
+                m_input_data[i][j] = input.get_sample(0, j);
+            }
+            // TODO avoid copy operation, but swapping does not work
+            // m_input_data[i].swap_data(input.get_memory_block());
+            // input.reset_channel_ptr();
+        }
     }
 
     try {
@@ -98,10 +110,20 @@ void OnnxRuntimeProcessor::Instance::process(AudioBufferF& input, AudioBufferF& 
         std::cerr << e.what() << std::endl;
     }
 
-    auto output_write_ptr = output.get_write_pointer(0);
-    auto output_read_ptr = m_outputs[0].GetTensorMutableData<float>();
-    for (size_t i = 0; i < m_output_size; ++i) {
-        output_write_ptr[i] = output_read_ptr[i];
+    for (size_t i = 0; i < m_outputs.size(); i++) {
+        // TODO check why m_output_data cant be used
+        //auto output_read_ptr = m_output_data[i].data();
+        auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();
+
+        if (i != m_inference_config.m_index_audio_data[1]) {
+            for (size_t j = 0; j < m_output_data[i].size(); j++) {
+                session->m_pp_processor.m_outputs[i][j].store(output_read_ptr[j]);
+            }
+        } else {
+            for (size_t j = 0; j < m_output_data[i].size(); j++) {
+                output.get_memory_block()[j] = output_read_ptr[j];
+            }
+        }
     }
 }
 
