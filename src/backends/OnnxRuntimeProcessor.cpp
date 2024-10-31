@@ -89,7 +89,7 @@ void OnnxRuntimeProcessor::Instance::prepare() {
 
 void OnnxRuntimeProcessor::Instance::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
-        if (i != m_inference_config.m_index_audio_data[0]) {
+        if (i != m_inference_config.m_index_audio_data[Input]) {
             for (size_t j = 0; j < m_input_data[i].size(); j++) {
                 m_input_data[i][j] = session->m_pp_processor.m_inputs[i][j].load();
             }
@@ -115,7 +115,7 @@ void OnnxRuntimeProcessor::Instance::process(AudioBufferF& input, AudioBufferF& 
         //auto output_read_ptr = m_output_data[i].data();
         auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();
 
-        if (i != m_inference_config.m_index_audio_data[1]) {
+        if (i != m_inference_config.m_index_audio_data[Output]) {
             for (size_t j = 0; j < m_output_data[i].size(); j++) {
                 session->m_pp_processor.m_outputs[i][j].store(output_read_ptr[j]);
             }

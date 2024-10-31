@@ -10,6 +10,11 @@
 
 namespace anira {
 
+enum IndexAudioData : size_t {
+    Input = 0,
+    Output = 1
+};
+
 struct ANIRA_API InferenceConfig {
     InferenceConfig() = default;
 

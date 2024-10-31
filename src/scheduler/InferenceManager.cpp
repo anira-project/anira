@@ -122,7 +122,7 @@ int InferenceManager::get_session_id() const {
 
 int InferenceManager::calculate_latency() {
     // First calculate some universal values
-    int model_output_size = m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[1]];
+    int model_output_size = m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[Output]];
     float host_buffer_time = (float) m_spec.m_host_buffer_size * 1000.f / (float) m_spec.m_host_sample_rate;
 #ifdef USE_SEMAPHORE
     float wait_time = m_inference_config.m_wait_in_process_block * host_buffer_time;

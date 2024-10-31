@@ -161,11 +161,11 @@ void AniraContext::prepare(SessionElement& session, HostAudioConfig new_config) 
 
 void AniraContext::new_data_submitted(SessionElement& session) {
     // TODO: We assume that the model_output_size gives us the amount of new samples that we need to process. This can differ from the model_input_size because we might need to add some padding or past samples. Find a better way to determine the amount of new samples.
-    while (session.m_send_buffer.get_available_samples(0) >= (session.m_inference_config.m_output_sizes[session.m_inference_config.m_index_audio_data[1]])) {
+    while (session.m_send_buffer.get_available_samples(0) >= (session.m_inference_config.m_output_sizes[session.m_inference_config.m_index_audio_data[Output]])) {
         bool success = pre_process(session);
         // !success means that there is no free m_inference_queue
         if (!success) {
-            for (size_t i = 0; i < session.m_inference_config.m_output_sizes[session.m_inference_config.m_index_audio_data[1]]; ++i) {
+            for (size_t i = 0; i < session.m_inference_config.m_output_sizes[session.m_inference_config.m_index_audio_data[Output]]; ++i) {
                 session.m_send_buffer.pop_sample(0);
                 session.m_receive_buffer.push_sample(0, 0.f);
             }

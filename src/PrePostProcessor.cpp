@@ -10,7 +10,7 @@ PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config) {
 
     m_inputs.resize(m_inference_config.m_input_sizes.size());
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); ++i) {
-        if(i != m_inference_config.m_index_audio_data[0]) {
+        if(i != m_inference_config.m_index_audio_data[Input]) {
             m_inputs[i].resize(m_inference_config.m_input_sizes[i]);
         } else {
             m_inputs[i].resize(0);
@@ -18,7 +18,7 @@ PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config) {
     }
     m_outputs.resize(m_inference_config.m_output_sizes.size());
     for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); ++i) {
-        if(i != m_inference_config.m_index_audio_data[1]) {
+        if(i != m_inference_config.m_index_audio_data[Output]) {
             m_outputs[i].resize(m_inference_config.m_output_sizes[i]);
         } else {
             m_outputs[i].resize(0);

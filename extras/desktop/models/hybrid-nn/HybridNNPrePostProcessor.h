@@ -13,38 +13,38 @@ public:
         int64_t num_output_samples;
 #ifdef USE_LIBTORCH
         if (current_inference_backend == anira::LIBTORCH) {
-            num_batches = config.m_model_input_shape_torch[config.m_index_audio_data[0]][0];
-            num_input_samples = config.m_model_input_shape_torch[config.m_index_audio_data[0]][2];
-            num_output_samples = config.m_model_output_shape_torch[config.m_index_audio_data[1]][1];
+            num_batches = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+            num_output_samples = config.m_model_output_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
         }
 #endif
 #ifdef USE_ONNXRUNTIME
         if (current_inference_backend == anira::ONNX) {
-            num_batches = config.m_model_input_shape_onnx[config.m_index_audio_data[0]][0];
-            num_input_samples = config.m_model_input_shape_onnx[config.m_index_audio_data[0]][2];
-            num_output_samples = config.m_model_output_shape_onnx[config.m_index_audio_data[1]][1];
+            num_batches = config.m_model_input_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+            num_output_samples = config.m_model_output_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
         }
 #endif
 #ifdef USE_TFLITE
         if (current_inference_backend == anira::TFLITE) {
-            num_batches = config.m_model_input_shape_tflite[config.m_index_audio_data[0]][0];
-            num_input_samples = config.m_model_input_shape_tflite[config.m_index_audio_data[0]][1];
-            num_output_samples = config.m_model_output_shape_tflite[config.m_index_audio_data[1]][1];
+            num_batches = config.m_model_input_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Input]][1];
+            num_output_samples = config.m_model_output_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
         }
 #endif 
         else if (current_inference_backend == anira::NONE) {
 #if USE_LIBTORCH
-            num_batches = config.m_model_input_shape_torch[config.m_index_audio_data[0]][0];
-            num_input_samples = config.m_model_input_shape_torch[config.m_index_audio_data[0]][2];
-            num_output_samples = config.m_model_output_shape_torch[config.m_index_audio_data[1]][1];
+            num_batches = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+            num_output_samples = config.m_model_output_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
 #elif USE_ONNXRUNTIME
-            num_batches = config.m_model_input_shape_onnx[config.m_index_audio_data[0]][0];
-            num_input_samples = config.m_model_input_shape_onnx[config.m_index_audio_data[0]][2];
-            num_output_samples = config.m_model_output_shape_onnx[config.m_index_audio_data[1]][1];
+            num_batches = config.m_model_input_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+            num_output_samples = config.m_model_output_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
 #elif USE_TFLITE
-            num_batches = config.m_model_input_shape_tflite[config.m_index_audio_data[0]][0];
-            num_input_samples = config.m_model_input_shape_tflite[config.m_index_audio_data[0]][1];
-            num_output_samples = config.m_model_output_shape_tflite[config.m_index_audio_data[1]][1];
+            num_batches = config.m_model_input_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Input]][1];
+            num_output_samples = config.m_model_output_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
 #endif
         }
 
