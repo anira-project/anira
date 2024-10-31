@@ -13,67 +13,91 @@ Licence: modified BSD
 #include "../../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../../extras/desktop/models/cnn/CNNConfig.h"
+#include "../../../../include/anira/utils/MemoryBlock.h"
+#include "../../../../include/anira/utils/AudioBuffer.h"
 
-void minimal_inference(anira::InferenceConfig config) {
+// m_ prefix is not used to indicate member variables it is used to be compatible with code in the LibTorchProcessor class
+
+void minimal_inference(anira::InferenceConfig m_inference_config) {
     std::cout << "Minimal LibTorch example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Using model: " << config.m_model_path_torch << std::endl;
+    std::cout << "Using model: " << m_inference_config.m_model_path_torch << std::endl;
 
-    std::string omp_num_threads = "OMP_NUM_THREADS=1";
-    std::string mkl_num_threads = "MKL_NUM_THREADS=1";
-
-#if WIN32
-    _putenv(omp_num_threads.data());
-    _putenv(mkl_num_threads.data());
-#else
-    putenv(omp_num_threads.data());
-    putenv(mkl_num_threads.data());
-#endif
+    torch::set_num_threads(1);
 
     // Load model
-    torch::jit::Module module;
+    torch::jit::script::Module m_module;
     try {
-        module = torch::jit::load(config.m_model_path_torch);
+        m_module = torch::jit::load(m_inference_config.m_model_path_torch);
     }
     catch (const c10::Error& e) {
-        std::cerr << "error loading the model\n";
-        std::cout << e.what() << std::endl;
+        std::cerr << "[ERROR] error loading the model\n";
+        std::cerr << e.what() << std::endl;
     }
 
-    // Fill input tensor with data
-    std::vector<float> input_data;
-    for (int i = 0; i < config.m_new_model_input_size; i++) {
-        input_data.push_back(i * 0.000001f);
-    }
-
-    // Create input tensor object from input data values and reshape
-    std::vector<int64_t> shape = config.m_model_input_shape_torch;
-    torch::Tensor input_tensor = torch::from_blob(input_data.data(), shape);
-
-    for (int i = 0; i < input_tensor.sizes().size(); ++i) {
-        std::cout << "Input shape " << i << ": " << input_tensor.sizes()[i] << '\n';
+    // Fill an AudioBuffer with some data
+    anira::AudioBufferF input(1, m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]);
+    for(int i = 0; i < m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]; ++i) {
+        input.set_sample(0, i, i * 0.000001f);
     }
 
     // Create IValue vector for input of interpreter
-    std::vector<torch::jit::IValue> inputs;
-    inputs.push_back(input_tensor);
+    std::vector<c10::IValue> m_inputs;
+    std::vector<anira::MemoryBlock<float>> m_input_data;
 
-    // Execute inference
-    torch::Tensor output_tensor = module.forward(inputs).toTensor();
-
-    for (int i = 0; i < output_tensor.sizes().size(); ++i) {
-        std::cout << "Output shape " << i << ": " << output_tensor.sizes()[i] << '\n';
+    // Create input tensors
+    m_inputs.resize(m_inference_config.m_input_sizes.size());
+    m_input_data.resize(m_inference_config.m_input_sizes.size());
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+        m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
+        if (i != m_inference_config.m_index_audio_data[anira::Input]) {
+            m_input_data[i].clear();
+        } else {
+            m_input_data[i].swap_data(input.get_memory_block());
+            input.reset_channel_ptr();
+        }
+        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.m_model_input_shape_torch[i]);
     }
 
-    // Flatten the output tensor
-    output_tensor = output_tensor.view({-1});
 
-    std::vector<float> output_data;
+    // Get the shapes of the input tensors
+    for (int i = 0; i < m_inputs.size(); ++i) {
+        std::cout << "Input shape " << i << ": " << m_inputs[i].toTensor().sizes() << '\n';
+    }
+
+    // Execute inference
+    c10::IValue m_outputs = m_module.forward(m_inputs);
+
+    std::vector<anira::MemoryBlock<float>> m_output_data;
+
+    // We need to copy the data because we cannot access the data pointer ref of the tensor directly
+    if(m_outputs.isTensorList()) {
+        std::cout << "Output is a tensor list" << std::endl;
+        for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+            std::cout << "Output size " << i << ": " << m_outputs.toTensorList().get(i).sizes() << '\n';
+        }
+        m_output_data.resize(m_inference_config.m_output_sizes.size());
+        for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+            m_output_data[i].resize(m_inference_config.m_output_sizes[i]);
+            for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                m_output_data[i][j] = m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j];
+            }
+        }
+    } else if (m_outputs.isTensor()) {
+        std::cout << "Output is a tensor" << std::endl;
+        std::cout << "Output size: " << m_outputs.toTensor().sizes() << '\n';
+        m_output_data.resize(1);
+        m_output_data[0].resize(m_inference_config.m_output_sizes[0]);
+        for (size_t i = 0; i < m_inference_config.m_output_sizes[0]; i++) {
+            m_output_data[0][i] = m_outputs.toTensor().view({-1}).data_ptr<float>()[i];
+        }
+    }
 
     // Copy the data to the output_data vector
-    for (int i = 0; i < config.m_new_model_output_size; ++i) {
-        output_data.push_back(output_tensor[i].item().toFloat());
-        std::cout << "Output data [" << i << "]: " << output_data[i] << std::endl;
+    for (int i = 0; i < m_output_data.size(); i++) {
+        for (int j = 0; j < m_output_data[i].size(); j++) {
+            std::cout << "Output data [" << i << "][" << j << "]: " << m_output_data[i][j] << std::endl;
+        }
     }
 }
 

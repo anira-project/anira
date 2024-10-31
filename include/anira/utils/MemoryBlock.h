@@ -4,6 +4,8 @@
 #include <iostream>
 #include <type_traits>
 
+namespace anira {
+
 template <typename T>
 class MemoryBlock {
 public:
@@ -117,5 +119,7 @@ private:
     T* m_data = nullptr;
     size_t m_size;
 };
+
+} // namespace anira
 
 #endif // ANIRA_MEMORYBLOCK_H
