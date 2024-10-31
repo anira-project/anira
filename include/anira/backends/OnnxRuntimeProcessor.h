@@ -35,7 +35,6 @@ private:
         inline static std::unique_ptr<Ort::Session> m_session;
 
         std::vector<MemoryBlock<float>> m_input_data;
-        std::vector<MemoryBlock<float>> m_output_data;
         std::vector<Ort::Value> m_inputs;
         std::vector<Ort::Value> m_outputs;
 

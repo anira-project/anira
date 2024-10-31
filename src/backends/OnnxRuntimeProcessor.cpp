@@ -51,6 +51,7 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_
     }
 
     m_input_data.resize(m_inference_config.m_input_sizes.size());
+    m_inputs.clear();
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
         m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
         m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
@@ -62,28 +63,18 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_
         ));
     }
 
-    m_output_data.resize(m_inference_config.m_output_sizes.size());
-    for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
-        m_output_data[i].resize(m_inference_config.m_output_sizes[i]);
-        m_outputs.emplace_back(Ort::Value::CreateTensor<float>(
-                m_memory_info,
-                m_output_data[i].data(),
-                m_output_data[i].size(),
-                m_inference_config.m_model_output_shape_onnx[i].data(),
-                m_inference_config.m_model_output_shape_onnx[i].size()
-        ));
-    }
-
-}
-
-void OnnxRuntimeProcessor::Instance::prepare() {
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
         try {
             m_outputs = m_session->Run(Ort::RunOptions{nullptr}, m_input_names.data(), m_inputs.data(), m_input_names.size(), m_output_names.data(), m_output_names.size());
-        }
-        catch (Ort::Exception &e) {
+        } catch (Ort::Exception &e) {
             std::cerr << e.what() << std::endl;
         }
+    }
+}
+
+void OnnxRuntimeProcessor::Instance::prepare() {
+    for (auto & i : m_input_data) {
+        i.clear();
     }
 }
 
@@ -94,33 +85,30 @@ void OnnxRuntimeProcessor::Instance::process(AudioBufferF& input, AudioBufferF& 
                 m_input_data[i][j] = session->m_pp_processor.m_inputs[i][j].load();
             }
         } else {
-            for (size_t j = 0; j < m_input_data[i].size(); j++) {
-                m_input_data[i][j] = input.get_sample(0, j);
-            }
-            // TODO avoid copy operation, but swapping does not work
-            // m_input_data[i].swap_data(input.get_memory_block());
-            // input.reset_channel_ptr();
+            m_inputs[i] = Ort::Value::CreateTensor<float>(
+                    m_memory_info,
+                    input.data(),
+                    input.get_num_samples(),
+                    m_inference_config.m_model_input_shape_onnx[i].data(),
+                    m_inference_config.m_model_input_shape_onnx[i].size()
+            );
         }
     }
 
     try {
         m_outputs = m_session->Run(Ort::RunOptions{nullptr}, m_input_names.data(), m_inputs.data(), m_input_names.size(), m_output_names.data(), m_output_names.size());
-    }
-    catch (Ort::Exception &e) {
+    } catch (Ort::Exception &e) {
         std::cerr << e.what() << std::endl;
     }
 
     for (size_t i = 0; i < m_outputs.size(); i++) {
-        // TODO check why m_output_data cant be used
-        //auto output_read_ptr = m_output_data[i].data();
-        auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();
-
+        const auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();
         if (i != m_inference_config.m_index_audio_data[Output]) {
-            for (size_t j = 0; j < m_output_data[i].size(); j++) {
+            for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
                 session->m_pp_processor.m_outputs[i][j].store(output_read_ptr[j]);
             }
         } else {
-            for (size_t j = 0; j < m_output_data[i].size(); j++) {
+            for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
                 output.get_memory_block()[j] = output_read_ptr[j];
             }
         }
