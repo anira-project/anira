@@ -2,7 +2,7 @@
 
 namespace anira {
 
-BackendBase::BackendBase(InferenceConfig &config) : m_inference_config(config) {
+BackendBase::BackendBase(InferenceConfig& inference_config) : m_inference_config(inference_config) {
 }
 
 void BackendBase::prepare() {

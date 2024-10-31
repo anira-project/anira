@@ -10,9 +10,8 @@
 #include <vector>
 
 #include "../system/HighPriorityThread.h"
-#include "../backends/BackendBase.h"
-#include "SessionElement.h"
 #include "../utils/AudioBuffer.h"
+#include "SessionElement.h"
 
 namespace anira {
     
