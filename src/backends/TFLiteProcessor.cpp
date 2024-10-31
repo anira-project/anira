@@ -36,19 +36,8 @@ void TFLiteProcessor::process(AudioBufferF& input, AudioBufferF& output, std::sh
 
 TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config)
 {
-#ifdef _WIN32
-    std::string modelpath_str = m_inference_config.m_model_path_tflite;
-    std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
-#else
     std::string modelpath = m_inference_config.m_model_path_tflite;
-#endif
-
-#ifdef _WIN32
-    _bstr_t modelPathChar (modelpath.c_str());
-    m_model = TfLiteModelCreateFromFile(modelPathChar);
-#else
     m_model = TfLiteModelCreateFromFile(modelpath.c_str());
-#endif
 
     m_options = TfLiteInterpreterOptionsCreate();
     TfLiteInterpreterOptionsSetNumThreads(m_options, 1);
