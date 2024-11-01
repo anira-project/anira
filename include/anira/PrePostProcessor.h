@@ -5,25 +5,26 @@
 #include "utils/InferenceBackend.h"
 #include "anira/system/AniraWinExports.h"
 #include "InferenceConfig.h"
+#include <atomic>
+#include <vector>
+#include <cassert>
 
 namespace anira {
 
 class ANIRA_API PrePostProcessor
 {
 public:
-    PrePostProcessor();
+    PrePostProcessor(); 
     PrePostProcessor(InferenceConfig& inference_config);
     ~PrePostProcessor() = default;
 
     virtual void pre_process(RingBuffer& input, AudioBufferF& output, [[maybe_unused]] InferenceBackend current_inference_backend);
     virtual void post_process(AudioBufferF& input, RingBuffer& output, [[maybe_unused]] InferenceBackend current_inference_backend);
 
-    // TODO: implement these functions
-    // bool set_input(const std::vector<float>& input, size_t index);
-    // bool set_output(const std::vector<float>& output, size_t index);
-
-    // std::vector<float> get_input(size_t index);
-    // std::vector<float> get_output(size_t index);
+    void set_input(const float& input, size_t i, size_t j);
+    void set_output(const float& output, size_t i, size_t j);
+    float get_input(size_t i, size_t j);
+    float get_output(size_t i, size_t j);
 
 protected:
     void pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output);
@@ -34,12 +35,11 @@ protected:
 
     void push_samples_to_buffer(const AudioBufferF& input, RingBuffer& output);
 
-public:
+private:
     std::vector<MemoryBlock<std::atomic<float>>> m_inputs;
     std::vector<MemoryBlock<std::atomic<float>>> m_outputs;
 
-private:
-    InferenceConfig m_inference_config;
+    std::array<size_t, 2> m_index_audio_data;
 };
 
 } // namespace anira

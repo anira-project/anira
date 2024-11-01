@@ -61,7 +61,7 @@ void LibtorchProcessor::Instance::process(AudioBufferF& input, AudioBufferF& out
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
         if (i != m_inference_config.m_index_audio_data[Input]) {
             for (size_t j = 0; j < m_input_data[i].size(); j++) {
-                m_input_data[i][j] = session->m_pp_processor.m_inputs[i][j].load();
+                m_input_data[i][j] = session->m_pp_processor.get_input(i, j);
             }
         } else {
             m_input_data[i].swap_data(input.get_memory_block());
@@ -79,7 +79,7 @@ void LibtorchProcessor::Instance::process(AudioBufferF& input, AudioBufferF& out
         for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
             if (i != m_inference_config.m_index_audio_data[Output]) {
                 for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
-                    session->m_pp_processor.m_outputs[i][j].store(m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j]);
+                    session->m_pp_processor.set_output(m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j], i, j);
                 }
             } else {
                 for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
@@ -91,7 +91,7 @@ void LibtorchProcessor::Instance::process(AudioBufferF& input, AudioBufferF& out
         for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
             if (i != m_inference_config.m_index_audio_data[Output]) {
                 for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
-                    session->m_pp_processor.m_outputs[i][j].store(m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j]);
+                    session->m_pp_processor.set_output(m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j], i, j);
                 }
             } else {
                 for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {

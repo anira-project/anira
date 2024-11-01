@@ -87,7 +87,7 @@ void TFLiteProcessor::Instance::process(AudioBufferF& input, AudioBufferF& outpu
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
         if (i != m_inference_config.m_index_audio_data[Input]) {
             for (size_t j = 0; j < m_input_data[i].size(); j++) {
-                m_input_data[i][j] = session->m_pp_processor.m_inputs[i][j].load();
+                m_input_data[i][j] = session->m_pp_processor.get_input(i, j);
             }
         } else {
             m_input_data[i].swap_data(input.get_memory_block());
@@ -102,14 +102,14 @@ void TFLiteProcessor::Instance::process(AudioBufferF& input, AudioBufferF& outpu
 
     // We need to copy the data because we cannot access the data pointer ref of the tensor directly
     for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
-        float* output_data = (float*) TfLiteTensorData(m_outputs[i]);
+        float* output_read_ptr = (float*) TfLiteTensorData(m_outputs[i]);
         if (i != m_inference_config.m_index_audio_data[Output]) {
             for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
-                session->m_pp_processor.m_outputs[i][j].store(output_data[j]);
+                session->m_pp_processor.set_output(output_read_ptr[j], i, j);
             }
         } else {
             for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
-                output.get_memory_block()[j] = output_data[j];
+                output.get_memory_block()[j] = output_read_ptr[j];
             }
         }
     }

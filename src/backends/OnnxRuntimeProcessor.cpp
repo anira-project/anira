@@ -82,7 +82,7 @@ void OnnxRuntimeProcessor::Instance::process(AudioBufferF& input, AudioBufferF& 
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
         if (i != m_inference_config.m_index_audio_data[Input]) {
             for (size_t j = 0; j < m_input_data[i].size(); j++) {
-                m_input_data[i][j] = session->m_pp_processor.m_inputs[i][j].load();
+                m_input_data[i][j] = session->m_pp_processor.get_input(i, j);
             }
         } else {
             m_inputs[i] = Ort::Value::CreateTensor<float>(
@@ -105,7 +105,7 @@ void OnnxRuntimeProcessor::Instance::process(AudioBufferF& input, AudioBufferF& 
         const auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();
         if (i != m_inference_config.m_index_audio_data[Output]) {
             for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
-                session->m_pp_processor.m_outputs[i][j].store(output_read_ptr[j]);
+                session->m_pp_processor.set_output(output_read_ptr[j], i, j);
             }
         } else {
             for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
