@@ -11,11 +11,17 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                      #endif
                        ),
         parameters (*this, nullptr, juce::Identifier (getName()), PluginParameters::createParameterLayout()),
+        // Optional anira_context_config
+        anira_context_config(
+            std::thread::hardware_concurrency() / 2 > 0 ? std::thread::hardware_concurrency() / 2 : 1, // Total number of threads
+            false // Use host threads (VST3 plugins do not support using external threads)
+        ),
 #if MODEL_TO_USE == 1 || MODEL_TO_USE == 2
         // The none_processor is not needed for inference, but for the round trip test to output audio when selecting the NONE backend. It must be customized when default pp_processor is replaced by a custom one.
         none_processor(inference_config),
-        inference_handler(pp_processor, inference_config, none_processor),
-#elif MODEL_TO_USE == 3
+        inference_handler(pp_processor, inference_config, none_processor, anira_context_config),
+#elif MODEL_TO_USE == 3 || MODEL_TO_USE == 4
+        pp_processor(inference_config),
         inference_handler(pp_processor, inference_config),
 #endif
         dry_wet_mixer(32768) // 32768 samples of max latency compensation for the dry-wet mixer
@@ -118,7 +124,7 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     auto new_latency = inference_handler.get_latency();
     setLatencySamples(new_latency);
 
-    dry_wet_mixer.setWetLatency(new_latency);
+    dry_wet_mixer.setWetLatency((float) new_latency);
 
     for (auto & parameterID : PluginParameters::getPluginParameterList()) {
         parameterChanged(parameterID, parameters.getParameterAsValue(parameterID).getValue());
@@ -161,8 +167,6 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ignoreUnused (midiMessages);
 
     juce::ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels  = getTotalNumInputChannels();
-    auto totalNumOutputChannels = getTotalNumOutputChannels();
 
     stereoToMono(mono_buffer, buffer);
     dry_wet_mixer.pushDrySamples(mono_buffer);
@@ -172,6 +176,11 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     dry_wet_mixer.mixWetSamples(mono_buffer);
     monoToStereo(buffer, mono_buffer);
+
+#if MODEL_TO_USE == 4
+    float peak_gain = pp_processor.get_output(1, 0);
+    // std::cout << "peak_gain: " << peak_gain << std::endl;
+#endif
 }
 
 //==============================================================================
@@ -217,6 +226,8 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID
         if (paramString == "LIBTORCH") inference_handler.set_inference_backend(anira::LIBTORCH);
 #endif
         if (paramString == "NONE") inference_handler.set_inference_backend(anira::NONE);
+    } else if (parameterID == PluginParameters::GAIN_ID.getParamID()) {
+        pp_processor.set_input(newValue, 1, 0);
     }
 }
 //==============================================================================

@@ -3,16 +3,19 @@
 
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
+#include "../system/AniraWinExports.h"
+#include <memory>
 
 namespace anira {
 
+class SessionElement; // Forward declaration as we have a circular dependency
+
 class ANIRA_API BackendBase {
 public:
-    BackendBase(InferenceConfig& config);
+    BackendBase(InferenceConfig& inference_config);
     virtual void prepare();
-    virtual void process(AudioBufferF& input, AudioBufferF& output);
+    virtual void process(AudioBufferF& input, AudioBufferF& output, [[maybe_unused]] std::shared_ptr<SessionElement> session);
 
-protected:
     InferenceConfig& m_inference_config;
 };
 

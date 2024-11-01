@@ -6,25 +6,42 @@
 #include "BackendBase.h"
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
+#include "../scheduler/SessionElement.h"
 #include <tensorflow/lite/c_api.h>
+#include <memory>
 
 namespace anira {
 
-class ANIRA_API TFLiteProcessor : private BackendBase {
+class ANIRA_API TFLiteProcessor : public BackendBase {
 public:
-    TFLiteProcessor(InferenceConfig& config);
+    TFLiteProcessor(InferenceConfig& inference_config);
     ~TFLiteProcessor();
 
     void prepare() override;
-    void process(AudioBufferF& input, AudioBufferF& output) override;
+    void process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) override;
 
 private:
-    TfLiteModel* m_model;
-    TfLiteInterpreterOptions* m_options;
-    TfLiteInterpreter* m_interpreter;
+    struct Instance {
+        Instance(InferenceConfig& inference_config);
+        ~Instance();
+        
+        void prepare();
+        void process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session);
 
-    TfLiteTensor* m_input_tensor;
-    const TfLiteTensor* m_output_tensor;
+        TfLiteModel* m_model;
+        TfLiteInterpreterOptions* m_options;
+        TfLiteInterpreter* m_interpreter;
+
+        std::vector<MemoryBlock<float>> m_input_data;
+
+        std::vector<TfLiteTensor*> m_inputs;
+        std::vector<const TfLiteTensor*> m_outputs;
+
+        InferenceConfig& m_inference_config;
+        std::atomic<bool> m_processing {false};
+    };
+
+    std::vector<std::shared_ptr<Instance>> m_instances;
 };
 
 } // namespace anira

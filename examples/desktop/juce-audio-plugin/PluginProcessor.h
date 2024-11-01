@@ -14,6 +14,7 @@
 #include "../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNNoneProcessor.h" // Only needed for round trip test
 #include "../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../extras/desktop/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
+#include "../../../extras/desktop/models/model-pool/SimpleGainConfig.h"
 
 //==============================================================================
 class AudioPluginAudioProcessor  : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener
@@ -67,6 +68,9 @@ private:
     juce::AudioProcessorValueTreeState parameters;
     juce::AudioBuffer<float> mono_buffer;
 
+    // Optional AniraContextConfig
+    anira::AniraContextConfig anira_context_config;
+
 #if MODEL_TO_USE == 1
     anira::InferenceConfig inference_config = cnn_config;
     CNNPrePostProcessor pp_processor;
@@ -78,9 +82,12 @@ private:
 #elif MODEL_TO_USE == 3
     anira::InferenceConfig inference_config = rnn_config;
     StatefulRNNPrePostProcessor pp_processor;
+#elif MODEL_TO_USE == 4
+    anira::InferenceConfig inference_config = gain_config;
+    anira::PrePostProcessor pp_processor;
 #endif
-    anira::InferenceHandler inference_handler;
 
+    anira::InferenceHandler inference_handler;
     juce::dsp::DryWetMixer<float> dry_wet_mixer;
 
     //==============================================================================

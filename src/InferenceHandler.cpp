@@ -3,15 +3,13 @@
 
 namespace anira {
 
-InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& config) : m_none_processor(new BackendBase(config)), m_inference_manager(pp_processor, config, *m_none_processor) {
+InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, const AniraContextConfig& context_config) : m_inference_manager(pp_processor, inference_config, nullptr, context_config) {
 }
 
-InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& config, BackendBase& nP) : m_none_processor(&nP), m_inference_manager(pp_processor, config, *m_none_processor) {
-    m_use_custom_none_processor = true;
+InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase& custom_processor, const AniraContextConfig& context_config) : m_inference_manager(pp_processor, inference_config, &custom_processor, context_config) {
 }
 
 InferenceHandler::~InferenceHandler() {
-    if (m_use_custom_none_processor == false) delete m_none_processor;
 }
 
 void InferenceHandler::prepare(HostAudioConfig new_audio_config) {
@@ -37,10 +35,6 @@ int InferenceHandler::get_latency() {
 
 InferenceManager &InferenceHandler::get_inference_manager() {
     return m_inference_manager;
-}
-
-void InferenceHandler::exec_inference() {
-    m_inference_manager.exec_inference();
 }
 
 } // namespace anira

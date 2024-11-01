@@ -87,6 +87,10 @@ int ProcessBlockFixture::get_buffer_size() {
     return m_buffer_size;
 }
 
+int ProcessBlockFixture::get_repetition() {
+    return m_repetition;
+}
+
 #if defined(_WIN32) || defined(__APPLE__)
 void ProcessBlockFixture::interation_step(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end, ::benchmark::State& state) {
 #else

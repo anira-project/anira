@@ -3,84 +3,40 @@
 namespace anira {
 
 #ifdef USE_SEMAPHORE
-InferenceThread::InferenceThread(std::counting_semaphore<UINT16_MAX>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses) :
+InferenceThread::InferenceThread(std::counting_semaphore<UINT16_MAX>& g, std::vector<std::shared_ptr<SessionElement>>& ses) :
 #else
-InferenceThread::InferenceThread(std::atomic<int>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses) :
-#endif
-#ifdef USE_LIBTORCH
-    m_torch_processor(config),
-#endif
-#ifdef USE_ONNXRUNTIME
-    m_onnx_processor(config),
-#endif
-#ifdef USE_TFLITE
-    m_tflite_processor(config),
+InferenceThread::InferenceThread(std::atomic<int>& g, std::vector<std::shared_ptr<SessionElement>>& ses) :
 #endif
     m_global_counter(g),
-    m_sessions(ses),
-    timeForExit(50)
+    m_sessions(ses)
 {
-#ifdef USE_LIBTORCH
-    m_torch_processor.prepare();
-#endif
-#ifdef USE_ONNXRUNTIME
-    m_onnx_processor.prepare();
-#endif
-#ifdef USE_TFLITE
-    m_tflite_processor.prepare();
-#endif
-}
-#ifdef USE_SEMAPHORE
-InferenceThread::InferenceThread(std::counting_semaphore<UINT16_MAX>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int ses_id) :
-#else
-InferenceThread::InferenceThread(std::atomic<int>& g, InferenceConfig& config, std::vector<std::shared_ptr<SessionElement>>& ses, int ses_id) :
-#endif
-    InferenceThread(g, config, ses)
-{
-    m_session_id = ses_id;
 }
 
 void InferenceThread::run() {
+    std::chrono::microseconds time_for_exit(50);
     while (!should_exit()) {
-        auto success = execute();
-
-        if (!success) {
-            std::this_thread::yield();
-            std::this_thread::sleep_for(timeForExit);
-        }
-    }
-}
-
-bool InferenceThread::execute() {
 #ifdef USE_SEMAPHORE
-    if (m_global_counter.try_acquire()) {
+        if (m_global_counter.try_acquire()) {
 #else
-    int old = m_global_counter.load();
-    bool success = false;
-    if (old > 0) {
-        success = m_global_counter.compare_exchange_strong(old, old - 1);
-    }
-    if (success) {
+        int old = m_global_counter.load();
+        bool success = false;
+        if (old > 0) {
+            success = m_global_counter.compare_exchange_strong(old, old - 1);
+        }
+        if (success) {
 #endif
-        bool inference_done = false;
-        while (!inference_done) {
-            if (m_session_id < 0) {
+            bool inference_done = false;
+            while (!inference_done) {
                 for (const auto& session : m_sessions) {
                     inference_done = tryInference(session);
                     if (inference_done) break;
                 }
-            } else {
-                for (const auto& session : m_sessions) {
-                    if (session->m_session_id == m_session_id) {
-                        inference_done = tryInference(session);
-                        break;
-                    }
-                }
             }
         }
-        return true;
-    } else {
-        return false;
+        else {
+            std::this_thread::yield();
+            std::this_thread::sleep_for(time_for_exit);
+        }
     }
 }
 
@@ -119,21 +75,21 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output) {
 #ifdef USE_LIBTORCH
     if (session->m_currentBackend.load(std::memory_order_relaxed) == LIBTORCH) {
-        m_torch_processor.process(input, output);
+        session->m_libtorch_processor->process(input, output, session);
     }
 #endif
 #ifdef USE_ONNXRUNTIME
     if (session->m_currentBackend.load(std::memory_order_relaxed) == ONNX) {
-        m_onnx_processor.process(input, output);
+        session->m_onnx_processor->process(input, output, session);
     }
 #endif
 #ifdef USE_TFLITE
     if (session->m_currentBackend.load(std::memory_order_relaxed) == TFLITE) {
-        m_tflite_processor.process(input, output);
+        session->m_tflite_processor->process(input, output, session);
     }
 #endif
     if (session->m_currentBackend.load(std::memory_order_relaxed) == NONE) {
-        session->m_none_processor.process(input, output);
+        session->m_custom_processor->process(input, output, session);
     }
 }
 

@@ -5,6 +5,7 @@ add_compile_definitions(
         STEERABLENAFX_MODELS_PATH_PYTORCH="${STEERABLENAFX_MODELS_PATH_PYTORCH}"
         STATEFULLSTM_MODELS_PATH_TENSORFLOW="${STATEFULLSTM_MODELS_PATH_TENSORFLOW}"
         STATEFULLSTM_MODELS_PATH_PYTORCH="${STATEFULLSTM_MODELS_PATH_PYTORCH}"
+        SIMPLEGAIN_MODEL_PATH="${SIMPLEGAIN_MODEL_PATH}"
 )
 
 
@@ -14,4 +15,3 @@ endif()
 
 add_subdirectory(minimal-inference)
 add_subdirectory(juce-audio-plugin)
-add_subdirectory(clap-audio-plugin)

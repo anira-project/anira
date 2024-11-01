@@ -22,7 +22,17 @@
 #define SAMPLE_RATE 44100
 
 std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
-std::vector<anira::InferenceBackend> inference_backends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE, anira::NONE};
+std::vector<anira::InferenceBackend> inference_backends = {
+#ifdef USE_LIBTORCH    
+    anira::LIBTORCH,
+#endif
+#ifdef USE_ONNXRUNTIME
+    anira::ONNX,
+#endif
+#ifdef USE_TFLITE
+    anira::TFLITE,
+#endif    
+    anira::NONE};
 std::vector<AdvancedInferenceConfigs> advanced_inference_configs = {cnn_advanced_configs, hybridnn_advanced_configs, rnn_advanced_configs};
 
 // define the buffer sizes, backends and model configs to be used in the benchmark and the backends to be used

@@ -280,7 +280,7 @@ bool AniraClapPluginExample::implementsThreadPool() const noexcept {
 }
 
 void AniraClapPluginExample::threadPoolExec(uint32_t taskIndex) noexcept {
-    m_inference_handler.exec_inference();
+    //m_inference_handler.exec_inference();
 }
 
 uint32_t AniraClapPluginExample::paramsCount() const noexcept {

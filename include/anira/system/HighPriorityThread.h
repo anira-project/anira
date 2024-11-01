@@ -13,7 +13,7 @@
 #include <thread>
 #include <iostream>
 
-#include "AniraConfig.h"
+#include "AniraWinExports.h"
 
 namespace anira {
 

@@ -2,29 +2,29 @@
 
 namespace anira {
 
-InferenceManager::InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& config, BackendBase& none_processor) :
-    m_inference_thread_pool(InferenceThreadPool::get_instance(config)),
-    m_session(m_inference_thread_pool->create_session(pp_processor, config, none_processor)),
-    m_inference_config(config)
+InferenceManager::InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor, const AniraContextConfig& context_config) :
+    m_anira_context(AniraContext::get_instance(context_config)),
+    m_session(m_anira_context->create_session(pp_processor, inference_config, custom_processor)),
+    m_inference_config(inference_config)
 {
 }
 
 InferenceManager::~InferenceManager() {
-    m_inference_thread_pool->release_session(m_session, m_inference_config);
+    m_anira_context->release_session(m_session);
 }
 
 void InferenceManager::set_backend(InferenceBackend new_inference_backend) {
     m_session.m_currentBackend.store(new_inference_backend, std::memory_order_relaxed);
 }
 
-InferenceBackend InferenceManager::get_backend() {
+InferenceBackend InferenceManager::get_backend() const {
     return m_session.m_currentBackend.load(std::memory_order_relaxed);
 }
 
 void InferenceManager::prepare(HostAudioConfig new_config) {
     m_spec = new_config;
 
-    m_inference_thread_pool->prepare(m_session, m_spec);
+    m_anira_context->prepare(m_session, m_spec);
 
     m_inference_counter = 0;
 
@@ -39,9 +39,9 @@ void InferenceManager::prepare(HostAudioConfig new_config) {
 void InferenceManager::process(float ** input_buffer, size_t input_samples) {
     process_input(input_buffer, input_samples);
 
-    m_inference_thread_pool->new_data_submitted(m_session);
+    m_anira_context->new_data_submitted(m_session);
     double time_in_sec = static_cast<double>(input_samples) / m_spec.m_host_sample_rate;
-    m_inference_thread_pool->new_data_request(m_session, time_in_sec);
+    m_anira_context->new_data_request(m_session, time_in_sec);
 
     process_output(input_buffer, input_samples);
 }
@@ -103,16 +103,16 @@ int InferenceManager::get_latency() const {
     return m_init_samples;
 }
 
-InferenceThreadPool& InferenceManager::get_inference_thread_pool() {
-    return *m_inference_thread_pool;
+const AniraContext& InferenceManager::get_anira_context() const {
+    return *m_anira_context;
 }
 
-size_t InferenceManager::get_num_received_samples() {
-    m_inference_thread_pool->new_data_request(m_session, 0); // TODO: Check if process_output call is better here
+size_t InferenceManager::get_num_received_samples() const {
+    m_anira_context->new_data_request(m_session, 0); // TODO: Check if process_output call is better here
     return m_session.m_receive_buffer.get_available_samples(0);
 }
 
-int InferenceManager::get_missing_blocks() {
+int InferenceManager::get_missing_blocks() const {
     return m_inference_counter.load();
 }
 
@@ -122,15 +122,13 @@ int InferenceManager::get_session_id() const {
 
 int InferenceManager::calculate_latency() {
     // First calculate some universal values
-    int model_output_size = m_inference_config.m_new_model_output_size;
+    int model_output_size = m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[Output]];
     float host_buffer_time = (float) m_spec.m_host_buffer_size * 1000.f / (float) m_spec.m_host_sample_rate;
-#ifndef USE_SEMAPHORE
-    if (m_inference_config.m_wait_in_process_block != 0.f) {
-        std::cout << "[WARNING] Using a wait time in process block of 0 ms. Wait time is not supported without semaphores." << std::endl;
-        m_inference_config.m_wait_in_process_block = 0.f;
-    }
-#endif
+#ifdef USE_SEMAPHORE
     float wait_time = m_inference_config.m_wait_in_process_block * host_buffer_time;
+#else
+    float wait_time = 0.f;
+#endif
 
     // Then caclulate the different parts of the latency
     int buffer_adaptation = calculate_buffer_adaptation(m_spec.m_host_buffer_size, model_output_size);
@@ -178,10 +176,6 @@ int InferenceManager::greatest_common_divisor(int a, int b) {
 
 int InferenceManager::leat_common_multiple(int a, int b) {
     return a * b / greatest_common_divisor(a, b);
-}
-
-void InferenceManager::exec_inference() {
-    m_inference_thread_pool->exec_inference();
 }
 
 } // namespace anira

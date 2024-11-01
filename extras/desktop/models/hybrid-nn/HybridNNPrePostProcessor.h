@@ -13,48 +13,58 @@ public:
         int64_t num_output_samples;
 #ifdef USE_LIBTORCH
         if (current_inference_backend == anira::LIBTORCH) {
-            num_batches = config.m_model_input_shape_torch[0];
-            num_input_samples = config.m_model_input_shape_torch[2];
-            num_output_samples = config.m_model_output_shape_torch[1];
+            num_batches = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+            num_output_samples = config.m_model_output_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
         }
 #endif
 #ifdef USE_ONNXRUNTIME
         if (current_inference_backend == anira::ONNX) {
-            num_batches = config.m_model_input_shape_onnx[0];
-            num_input_samples = config.m_model_input_shape_onnx[2];
-            num_output_samples = config.m_model_output_shape_onnx[1];
+            num_batches = config.m_model_input_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+            num_output_samples = config.m_model_output_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
         }
 #endif
 #ifdef USE_TFLITE
         if (current_inference_backend == anira::TFLITE) {
-            num_batches = config.m_model_input_shape_tflite[0];
-            num_input_samples = config.m_model_input_shape_tflite[1];
-            num_output_samples = config.m_model_output_shape_tflite[1];
+            num_batches = config.m_model_input_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Input]][1];
+            num_output_samples = config.m_model_output_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
         }
 #endif 
         else if (current_inference_backend == anira::NONE) {
 #if USE_LIBTORCH
-            num_batches = config.m_model_input_shape_torch[0];
-            num_input_samples = config.m_model_input_shape_torch[2];
-            num_output_samples = config.m_model_output_shape_torch[1];
+            num_batches = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+            num_output_samples = config.m_model_output_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
 #elif USE_ONNXRUNTIME
-            num_batches = config.m_model_input_shape_onnx[0];
-            num_input_samples = config.m_model_input_shape_onnx[2];
-            num_output_samples = config.m_model_output_shape_onnx[1];
+            num_batches = config.m_model_input_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+            num_output_samples = config.m_model_output_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
 #elif USE_TFLITE
-            num_batches = config.m_model_input_shape_tflite[0];
-            num_input_samples = config.m_model_input_shape_tflite[1];
-            num_output_samples = config.m_model_output_shape_tflite[1];
+            num_batches = config.m_model_input_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Input]][1];
+            num_output_samples = config.m_model_output_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
 #endif
         }
-        
-        if (current_inference_backend != anira::LIBTORCH && current_inference_backend != anira::ONNX && current_inference_backend != anira::TFLITE && current_inference_backend != anira::NONE) {
+
+        if (
+#ifdef USE_LIBTORCH
+            current_inference_backend != anira::LIBTORCH &&
+#endif
+#ifdef USE_ONNXRUNTIME
+            current_inference_backend != anira::ONNX &&
+#endif
+#ifdef USE_TFLITE
+            current_inference_backend != anira::TFLITE &&
+#endif
+            current_inference_backend != anira::NONE) {
             throw std::runtime_error("Invalid inference backend");
         }
             
-        for (size_t batch = 0; batch < num_batches; batch++) {
-            size_t base_index = batch * num_input_samples;
-            pop_samples_from_buffer(input, output, num_output_samples, num_input_samples-num_output_samples, base_index);
+        for (size_t batch = 0; batch < (size_t) num_batches; batch++) {
+            int base_index = static_cast<int>(batch * num_input_samples);
+            pop_samples_from_buffer(input, output, static_cast<int>(num_output_samples), static_cast<int>(num_input_samples-num_output_samples), base_index);
         }
     };
     

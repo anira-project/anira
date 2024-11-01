@@ -2,15 +2,11 @@
 
 namespace anira {
 
-LibtorchProcessor::LibtorchProcessor(InferenceConfig& config) : BackendBase(config) {
+LibtorchProcessor::LibtorchProcessor(InferenceConfig& inference_config) : BackendBase(inference_config) {
     torch::set_num_threads(1);
-    
-    try {
-        m_module = torch::jit::load(m_inference_config.m_model_path_torch);
-    }
-    catch (const c10::Error& e) {
-        std::cerr << "[ERROR] error loading the model\n";
-        std::cerr << e.what() << std::endl;
+
+    for (size_t i = 0; i < m_inference_config.m_num_parallel_processors; ++i) {
+        m_instances.emplace_back(std::make_shared<Instance>(m_inference_config));
     }
 }
 
@@ -18,31 +14,95 @@ LibtorchProcessor::~LibtorchProcessor() {
 }
 
 void LibtorchProcessor::prepare() {
-    m_inputs.clear();
-    m_inputs.push_back(torch::zeros(m_inference_config.m_model_input_shape_torch));
-
-    if (m_inference_config.m_warm_up) {
-        AudioBufferF input(1, m_inference_config.m_new_model_input_size);
-        AudioBufferF output(1, m_inference_config.m_new_model_output_size);
-        process(input, output);
+    for(auto& instance : m_instances) {
+        instance->prepare();
     }
 }
 
-void LibtorchProcessor::process(AudioBufferF& input, AudioBufferF& output) { 
-    // Create input tensor object from input data values and shape
-    m_input_tensor = torch::from_blob(input.get_raw_data(), (const long long) input.get_num_samples()).reshape(m_inference_config.m_model_input_shape_torch); // TODO: Multichannel support
+void LibtorchProcessor::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) { 
+    while (true) {
+        for(auto& instance : m_instances) {
+            if (!(instance->m_processing.exchange(true))) {
+                instance->process(input, output, session);
+                instance->m_processing.exchange(false);
+                return;
+            }
+        }
+    }
+}
 
-    m_inputs[0] = m_input_tensor;
+LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config) {
+    try {
+        m_module = torch::jit::load(m_inference_config.m_model_path_torch);
+    }
+    catch (const c10::Error& e) {
+        std::cerr << "[ERROR] error loading the model\n";
+        std::cerr << e.what() << std::endl;
+    }
+    m_inputs.resize(m_inference_config.m_input_sizes.size());
+    m_input_data.resize(m_inference_config.m_input_sizes.size());
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+        m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
+        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.m_model_input_shape_torch[i]);
+    }
+
+    for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
+        m_outputs = m_module.forward(m_inputs);
+    }
+}
+
+void LibtorchProcessor::Instance::prepare() {
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+        m_input_data[i].clear();
+    }
+}
+
+void LibtorchProcessor::Instance::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) {
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+        if (i != m_inference_config.m_index_audio_data[Input]) {
+            for (size_t j = 0; j < m_input_data[i].size(); j++) {
+                m_input_data[i][j] = session->m_pp_processor.get_input(i, j);
+            }
+        } else {
+            m_input_data[i].swap_data(input.get_memory_block());
+            input.reset_channel_ptr();
+        }
+        // This is necessary because the tensor data pointers seem to change from inference to inference
+        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.m_model_input_shape_torch[i]);
+    }
 
     // Run inference
-    m_output_tensor = m_module.forward(m_inputs).toTensor();
+    m_outputs = m_module.forward(m_inputs);
 
-    // Flatten the output tensor
-    m_output_tensor = m_output_tensor.view({-1});
-
-    // Extract the output tensor data
-    for (size_t i = 0; i < m_inference_config.m_new_model_output_size; i++) {
-        output.set_sample(0, i, m_output_tensor[(int64_t) i].item<float>());
+    // We need to copy the data because we cannot access the data pointer ref of the tensor directly
+    if(m_outputs.isTuple()) {
+        for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+            if (i != m_inference_config.m_index_audio_data[Output]) {
+                for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                    session->m_pp_processor.set_output(m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j], i, j);
+                }
+            } else {
+                for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                    output.get_memory_block()[j] = m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j];
+                }
+            }
+        }
+    } else if(m_outputs.isTensorList()) {
+        for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+            if (i != m_inference_config.m_index_audio_data[Output]) {
+                for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                    session->m_pp_processor.set_output(m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j], i, j);
+                }
+            } else {
+                for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                    output.get_memory_block()[j] = m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j];
+                }
+            }
+        }
+    } else if (m_outputs.isTensor()) {
+        for (size_t i = 0; i < m_inference_config.m_output_sizes[0]; i++) {
+            output.get_memory_block()[i] = m_outputs.toTensor().view({-1}).data_ptr<float>()[i];
+        }
     }
 }
 

@@ -24,34 +24,33 @@ anira::InferenceConfig hybridnn_config(
     // Model path and shapes for different backends
 #ifdef USE_LIBTORCH
     "path/to/your/model.pt", // LibTorch model path (required, when -DANIRA_WITH_LIBTORCH=ON)
-    {2048, 1, 150}, // Input shape for LibTorch (required, when -DANIRA_WITH_LIBTORCH=ON)
-    {2048, 1}, // Output shape for LibTorch (required, when -DANIRA_WITH_LIBTORCH=ON)
+    {{2048, 1, 150}}, // Input shape for LibTorch (required, when -DANIRA_WITH_LIBTORCH=ON)
+    {{2048, 1}}, // Output shape for LibTorch (required, when -DANIRA_WITH_LIBTORCH=ON)
 #endif
 #ifdef USE_ONNXRUNTIME
     "path/to/your/model.onnx", // ONNX model path (required, when -DANIRA_WITH_ONNX=ON)
-    {2048, 1, 150}, // Input shape for ONNX (required, when -DANIRA_WITH_ONNX=ON)
-    {2048, 1}, // Output shape for ONNX (required, when -DANIRA_WITH_ONNX=ON)
+    {{2048, 1, 150}}, // Input shape for ONNX (required, when -DANIRA_WITH_ONNX=ON)
+    {{2048, 1}}, // Output shape for ONNX (required, when -DANIRA_WITH_ONNX=ON)
 #endif
 #ifdef USE_TFLITE
     "path/to/your/model.tflite", // TensorFlow Lite model path (required, when -DANIRA_WITH_TFLITE=ON)
-    {2048, 150, 1}, // Input shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
-    {2048, 1}, // Output shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
+    {{2048, 150, 1}}, // Input shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
+    {{2048, 1}}, // Output shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
 #endif
     42.66f, // Maximum inference time in ms for processing of all batches (required)
 
     0, // Internal model latency in samples for processing of all batches (optional: default = 0)
     false, // Warm-up the inference engine with a null inference run in prepare method (optional: default = false)
-    0.f,  // ONLY AVAILABlE WHEN USING SEMAPHORES FOR THREAD SYNCHRONIZATION!
           // Wait for the next processed buffer from the thread pool in the real-time thread's process block
           // method to reduce latency. 0.f is no waiting and 0.5f is wait for half a buffertime. Example
           // buffer size 512 and sample rate 48000 Hz, a value of 0.5f = 5.33 ms of maximum waiting time
           // (optional: default = 0.f)
-    false, // Bind one instance of the InferenceHandler to one thread (optional: default = false), this needs
-           // to be set to true if you use a stateful model 
-    8 // Number of threads for parallel inference
+    false, // Shall this session have an exclusive inference processor (optional: default = false) 
+    8, // Number of processors for parallel inference
       // (optional: default = ((int) std::thread::hardware_concurrency() - 1 > 0) ?
-      // (int) std::thread::hardware_concurrency() - 1 : 1)), when bind_session_to_thread is true,
-      // this value is ignored and for every new instance a new thread is created
+      // (int) std::thread::hardware_concurrency() - 1 : 1)), when m_session_exclusive_processor is true this value
+      // is set to 1
+    0.f  // ONLY AVAILABlE WHEN USING SEMAPHORES FOR THREAD SYNCHRONIZATION!
 );
 ```
 
@@ -63,7 +62,7 @@ If your model does not require any specific pre- or post-processing, you can use
 anira::PrePostProcessor my_pp_processor;
 ```
 
-If your model requires costum pre- or post-processing, you can inherit from the ```anira::PrePostProcessor``` class and overwrite the ```pre_process``` and ```post_process``` methods so that they match your model's requirements. In the ```pre_process``` method, we get the input samples from the audio application through an ``anira::RingBuffer`` and push them into the output buffer, which is an ``anira::AudioBufferF``. This output buffer is then used for inference. In the ```post_process``` method we get the input samples through an ``anira::AudioBufferF`` and push them into the output buffer, which is an ``anira::RingBuffer``. The samples from this output buffer are then returned to the audio application by the ``anira::InferenceHandler``.
+If your model requires custom pre- or post-processing, you can inherit from the ```anira::PrePostProcessor``` class and overwrite the ```pre_process``` and ```post_process``` methods so that they match your model's requirements. In the ```pre_process``` method, we get the input samples from the audio application through an ``anira::RingBuffer`` and push them into the output buffer, which is an ``anira::AudioBufferF``. This output buffer is then used for inference. In the ```post_process``` method we get the input samples through an ``anira::AudioBufferF`` and push them into the output buffer, which is an ``anira::RingBuffer``. The samples from this output buffer are then returned to the audio application by the ``anira::InferenceHandler``.
 
 When your pre- and post-processing requires to access values from the ```anira::InferenceConfig``` struct, you can store the config as a member in your custom pre- and post-processor class.  Here is an example of a custom pre- and post-processor. The ```anira::InferenceConfig``` my_inference_config is supposed to be provided in the "MyConfig.h" file.
 
@@ -78,17 +77,17 @@ public:
         int64_t num_input_samples;
         int64_t num_output_samples;
         if (current_inference_backend == anira::LIBTORCH) {
-            num_batches = config.m_model_input_shape_torch[0];
-            num_input_samples = config.m_model_input_shape_torch[2];
-            num_output_samples = config.m_model_output_shape_torch[1];
+            num_batches = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+            num_output_samples = config.m_model_output_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
         } else if (current_inference_backend == anira::ONNX) {
-            num_batches = config.m_model_input_shape_onnx[0];
-            num_input_samples = config.m_model_input_shape_onnx[2];
-            num_output_samples = config.m_model_output_shape_onnx[1];
+            num_batches = config.m_model_input_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+            num_output_samples = config.m_model_output_shape_onnx[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
         } else if (current_inference_backend == anira::TFLITE) {
-            num_batches = config.m_model_input_shape_tflite[0];
-            num_input_samples = config.m_model_input_shape_tflite[1];
-            num_output_samples = config.m_model_output_shape_tflite[1];
+            num_batches = config.m_model_input_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+            num_input_samples = config.m_model_input_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Input]][1];
+            num_output_samples = config.m_model_output_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
         } else {
             throw std::runtime_error("Invalid inference backend");
         }
@@ -172,23 +171,23 @@ To use the `anira::NONE` backend and get a continuous audio signal, you may need
 #include <anira/anira.h>
 
 class MyNoneProcessor : public anira::BackendBase {
-public:
-    MyNoneProcessor(anira::InferenceConfig& config) : anira::BackendBase(config) {}
+inference_configpublic:
+    MyNoneProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
 
-    void process(anira::AudioBufferF &input, anira::AudioBufferF &output) override {
+    void process(anira::AudioBufferF &input, anira::AudioBufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) {
         auto equal_channels = input.get_num_channels() == output.get_num_channels();
         auto sample_diff = input.get_num_samples() - output.get_num_samples();
         int64_t num_batches;
         int64_t num_input_samples;
 #if USE_LIBTORCH
-        num_batches = m_inference_config.m_model_input_shape_torch[0];
-        num_input_samples = m_inference_config.m_model_input_shape_torch[2];
+        num_batches = m_inference_config.m_model_input_shape_torch[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+        num_input_samples = m_inference_config.m_model_input_shape_torch[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][2];
 #elif USE_ONNXRUNTIME
-        num_batches = m_inference_config.m_model_input_shape_onnx[0];
-        num_input_samples = m_inference_config.m_model_input_shape_onnx[2];
+        num_batches = m_inference_config.m_model_input_shape_onnx[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+        num_input_samples = m_inference_config.m_model_input_shape_onnx[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][2];
 #elif USE_TFLITE
-        num_batches = m_inference_config.m_model_input_shape_tflite[0];
-        num_input_samples = m_inference_config.m_model_input_shape_tflite[1];
+        num_batches = m_inference_config.m_model_input_shape_tflite[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+        num_input_samples = m_inference_config.m_model_input_shape_tflite[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][1];
 #endif
 
         if (equal_channels && sample_diff >= 0) {
