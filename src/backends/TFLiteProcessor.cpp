@@ -36,7 +36,7 @@ void TFLiteProcessor::process(AudioBufferF& input, AudioBufferF& output, std::sh
 
 TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config)
 {
-    std::string modelpath = m_inference_config.m_model_path_tflite;
+    std::string modelpath = m_inference_config.m_model_data_tflite;
     m_model = TfLiteModelCreateFromFile(modelpath.c_str());
 
     m_options = TfLiteInterpreterOptionsCreate();
@@ -46,7 +46,7 @@ TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config) : m_infer
     // This is necessary when we have dynamic input shapes, it should be done before allocating tensors obviously
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
         std::vector<int> input_shape;
-        for (int64_t dim : m_inference_config.m_model_input_shape_tflite[i]) {
+        for (int64_t dim : m_inference_config.m_input_shape_tflite[i]) {
             input_shape.push_back(static_cast<int>(dim));
         }
         TfLiteInterpreterResizeInputTensor(m_interpreter, i, input_shape.data(), static_cast<int32_t>(input_shape.size()));
