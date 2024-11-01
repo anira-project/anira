@@ -71,7 +71,7 @@ public:
     }
 
     // Resizes the buffer to the given number of channels and samples   
-    void initialize(size_t num_channels, size_t size) {
+    void resize(size_t num_channels, size_t size) {
         m_num_channels = num_channels;
         m_size = size;
         m_data.resize(num_channels * size);
@@ -90,32 +90,32 @@ public:
     }
 
     // Returns a read pointer to the data in the given channel, the pointer points to a const T since the data is not supposed to be modified
-    const T* get_read_pointer(size_t channelNumber) const {
-        return m_channels[channelNumber];
+    const T* get_read_pointer(size_t channel) const {
+        return m_channels[channel];
     }
 
     // Returns a read pointer to the data in the given channel at the given sample index
-    const T* get_read_pointer(size_t channelNumber, size_t sampleIndex) const {
-        return m_channels[channelNumber] + sampleIndex;
+    const T* get_read_pointer(size_t channel, size_t sample_index) const {
+        return m_channels[channel] + sample_index;
     }
 
     // Returns a write pointer to the data in the given channel
-    T* get_write_pointer(size_t channelNumber) {
-        return m_channels[channelNumber];
+    T* get_write_pointer(size_t channel) {
+        return m_channels[channel];
     }
 
     // Returns a write pointer to the data in the given channel at the given sample index
-    T* get_write_pointer(size_t channelNumber, size_t sampleIndex) {
-        return m_channels[channelNumber] + sampleIndex;
+    T* get_write_pointer(size_t channel, size_t sample_index) {
+        return m_channels[channel] + sample_index;
     }
 
     // Returns an array of read pointers to the data in all channels
-    const T** get_array_of_read_pointers() const {
+    const T* const* get_array_of_read_pointers() const {
         return const_cast<const T**>(m_channels);
     }
 
     // Returns an array of write pointers to the data in all channels
-    T** get_array_of_write_pointers() {
+    T* const* get_array_of_write_pointers() {
         return m_channels;
     }
 
@@ -166,13 +166,13 @@ public:
     }
 
     // Returns a sample from the given channel at the given sample index
-    T get_sample(size_t channelNumber, size_t sampleIndex) const {
-        return m_channels[channelNumber][sampleIndex];
+    T get_sample(size_t channel, size_t sample_index) const {
+        return m_channels[channel][sample_index];
     }
 
     // Sets a sample in the given channel at the given sample index to the given value
-    void set_sample(size_t channelNumber, size_t sampleIndex, T value) {
-        m_channels[channelNumber][sampleIndex] = value;
+    void set_sample(size_t channel, size_t sample_index, T value) {
+        m_channels[channel][sample_index] = value;
     }
 
     // Clears the buffer by setting all samples to 0

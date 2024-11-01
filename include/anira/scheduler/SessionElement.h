@@ -52,7 +52,7 @@ public:
     RingBuffer m_receive_buffer;
 
     struct ThreadSafeStruct {
-        ThreadSafeStruct(size_t model_input_size, size_t model_output_size);
+        ThreadSafeStruct(size_t num_input_samples, size_t num_output_samples, size_t num_input_channels, size_t num_output_channels);
 #ifdef USE_SEMAPHORE
         std::binary_semaphore m_free{true};
         std::binary_semaphore m_ready{false};

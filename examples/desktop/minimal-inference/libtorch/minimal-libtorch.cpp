@@ -14,6 +14,7 @@ Licence: modified BSD
 #include "../../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../../extras/desktop/models/cnn/CNNConfig.h"
 #include "../../../../extras/desktop/models/model-pool/SimpleGainConfig.h"
+#include "../../../../extras/desktop/models/model-pool/SimpleStereoGainConfig.h"
 
 #include "../../../../include/anira/utils/MemoryBlock.h"
 #include "../../../../include/anira/utils/AudioBuffer.h"
@@ -23,14 +24,14 @@ Licence: modified BSD
 void minimal_inference(anira::InferenceConfig m_inference_config) {
     std::cout << "Minimal LibTorch example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Using model: " << m_inference_config.m_model_path_torch << std::endl;
+    std::cout << "Using model: " << m_inference_config.m_model_data_torch << std::endl;
 
     torch::set_num_threads(1);
 
     // Load model
     torch::jit::script::Module m_module;
     try {
-        m_module = torch::jit::load(m_inference_config.m_model_path_torch);
+        m_module = torch::jit::load(m_inference_config.m_model_data_torch);
     }
     catch (const c10::Error& e) {
         std::cerr << "[ERROR] error loading the model\n";
@@ -58,7 +59,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
             m_input_data[i].swap_data(input.get_memory_block());
             input.reset_channel_ptr();
         }
-        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.m_model_input_shape_torch[i]);
+        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.m_input_shape_torch[i]);
     }
 
 
@@ -117,7 +118,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
 int main(int argc, const char* argv[]) {
 
-    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config, gain_config};
+    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config, gain_config, stereo_gain_config};
 
     for (int i = 0; i < models_to_inference.size(); ++i) {
         minimal_inference(models_to_inference[i]);

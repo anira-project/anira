@@ -20,10 +20,7 @@ static anira::InferenceConfig cnn_config(
         {{1, 2048, 1}},
 #endif
 
-        42.66f,
-        0,
-        false,
-        false
+        42.66f
 );
 
 

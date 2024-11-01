@@ -36,14 +36,14 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
     // Create a static InferenceHandler instance
     m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
     // Define the host audio configuration that shall be used / simulated for the benchmark
-    anira::HostAudioConfig host_config(1, 512, 48000);
+    anira::HostAudioConfig host_config(512, 48000);
     // Prepare the InferenceHandler instance
     m_inference_handler->prepare(host_config);
     // Select the inference backend
     m_inference_handler->set_inference_backend(anira::LIBTORCH);
 
     // Create a static AudioBuffer instance
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(host_config.m_host_channels, host_config.m_host_buffer_size);
+    m_buffer = std::make_unique<anira::AudioBuffer<float>>(my_inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
 
     // Initialize the repetition and define with a bool whether to sleep after a repetition
     initialize_repetition(my_inference_config, host_config, inference_backend, true);
@@ -242,7 +242,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)(::benchmark:
     // Use state.range(2) to select the inference backend
     m_inference_handler->set_inference_backend(inference_backends[state.range(2)]);
 
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(host_config.m_host_channels, host_config.m_host_buffer_size);
+    m_buffer = std::make_unique<anira::AudioBuffer<float>>(inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
 
     // And initialize the repetition
     initialize_repetition(inference_config, host_config, inference_backends[state.range(2)]);

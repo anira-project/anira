@@ -56,7 +56,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backend);
 
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(host_config.m_host_channels, host_config.m_host_buffer_size);
+    m_buffer = std::make_unique<anira::AudioBuffer<float>>(inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
 
     initialize_repetition(inference_configs[state.range(1)], host_config, inference_backend);
 

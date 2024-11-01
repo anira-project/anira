@@ -20,10 +20,7 @@ static anira::InferenceConfig hybridNNConfig_128(
         {{128, 1}},
 #endif
 
-        2.66f,
-        0,
-        false,
-        false
+        2.66f
 );
 
 #endif //ANIRA_HYBRIDNNCONFIG_128_H

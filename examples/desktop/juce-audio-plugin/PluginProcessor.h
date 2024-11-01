@@ -14,6 +14,7 @@
 #include "../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNBypassProcessor.h" // Only needed for round trip test
 #include "../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../extras/desktop/models/model-pool/SimpleGainConfig.h"
+#include "../../../extras/desktop/models/model-pool/SimpleStereoGainConfig.h"
 
 //==============================================================================
 class AudioPluginAudioProcessor  : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener
@@ -60,12 +61,9 @@ public:
 
 private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
-    void stereoToMono(juce::AudioBuffer<float> &targetMonoBlock, juce::AudioBuffer<float> &sourceBlock);
-    void monoToStereo(juce::AudioBuffer<float> &targetStereoBlock, juce::AudioBuffer<float> &sourceBlock);
 
 private:
     juce::AudioProcessorValueTreeState parameters;
-    juce::AudioBuffer<float> mono_buffer;
 
     // Optional AniraContextConfig
     anira::AniraContextConfig anira_context_config;
@@ -83,6 +81,9 @@ private:
     anira::PrePostProcessor pp_processor;
 #elif MODEL_TO_USE == 4
     anira::InferenceConfig inference_config = gain_config;
+    anira::PrePostProcessor pp_processor;
+#elif MODEL_TO_USE == 5
+    anira::InferenceConfig inference_config = stereo_gain_config;
     anira::PrePostProcessor pp_processor;
 #endif
 
