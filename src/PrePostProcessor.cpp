@@ -45,7 +45,8 @@ void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, AudioBufferF& 
 void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output, int num_new_samples, int num_old_samples, int offset) {
     int num_total_samples = num_new_samples + num_old_samples;
     for (size_t i = 0; i < output.get_num_channels(); i++) {
-        for (size_t j = num_total_samples - 1; j >= 0; j--) {
+        // int j is important to be signed, because it is used in the condition j >= num_old_samples
+        for (int j = num_total_samples - 1; j >= 0; j--) {
             if (j >= num_old_samples) {
                 output.set_sample(i, (size_t) (num_total_samples - j + num_old_samples - 1 + offset), input.pop_sample(i));
             } else {
