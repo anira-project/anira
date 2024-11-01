@@ -75,7 +75,19 @@ void LibtorchProcessor::Instance::process(AudioBufferF& input, AudioBufferF& out
     m_outputs = m_module.forward(m_inputs);
 
     // We need to copy the data because we cannot access the data pointer ref of the tensor directly
-    if(m_outputs.isTensorList()) {
+    if(m_outputs.isTuple()) {
+        for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+            if (i != m_inference_config.m_index_audio_data[Output]) {
+                for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                    session->m_pp_processor.m_outputs[i][j].store(m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j]);
+                }
+            } else {
+                for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                    output.get_memory_block()[j] = m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j];
+                }
+            }
+        }
+    } else if(m_outputs.isTensorList()) {
         for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
             if (i != m_inference_config.m_index_audio_data[Output]) {
                 for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
