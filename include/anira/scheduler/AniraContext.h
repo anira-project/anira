@@ -53,7 +53,7 @@ public:
 
 private:
     inline static std::shared_ptr<AniraContext> m_anira_context = nullptr; 
-    inline static AniraContextConfig m_context_config;
+    const AniraContextConfig& m_context_config;
 
     static int get_available_session_id();
     static void new_num_threads(int new_num_threads);

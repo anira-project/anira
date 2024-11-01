@@ -75,21 +75,21 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output) {
 #ifdef USE_LIBTORCH
     if (session->m_currentBackend.load(std::memory_order_relaxed) == LIBTORCH) {
-        session->m_libtorch_processor->process(input, output);
+        session->m_libtorch_processor->process(input, output, session);
     }
 #endif
 #ifdef USE_ONNXRUNTIME
     if (session->m_currentBackend.load(std::memory_order_relaxed) == ONNX) {
-        session->m_onnx_processor->process(input, output);
+        session->m_onnx_processor->process(input, output, session);
     }
 #endif
 #ifdef USE_TFLITE
     if (session->m_currentBackend.load(std::memory_order_relaxed) == TFLITE) {
-        session->m_tflite_processor->process(input, output);
+        session->m_tflite_processor->process(input, output, session);
     }
 #endif
     if (session->m_currentBackend.load(std::memory_order_relaxed) == NONE) {
-        session->m_custom_processor->process(input, output);
+        session->m_custom_processor->process(input, output, session);
     }
 }
 

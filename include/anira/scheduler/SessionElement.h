@@ -27,6 +27,18 @@
 
 namespace anira {
 
+// Forward declarations as we have a circular dependency
+class BackendBase;
+#ifdef USE_LIBTORCH
+class LibtorchProcessor;
+#endif
+#ifdef USE_ONNXRUNTIME
+class OnnxRuntimeProcessor;
+#endif
+#ifdef USE_TFLITE
+class TFLiteProcessor;
+#endif
+
 class ANIRA_API SessionElement {
 public:
     SessionElement(int newSessionID, PrePostProcessor& pp_processor, InferenceConfig& inference_config);
@@ -54,9 +66,7 @@ public:
         AudioBufferF m_processed_model_input = AudioBufferF();
         AudioBufferF m_raw_model_output = AudioBufferF();
     };
-    // Using std::unique_ptr to manage ownership of ThreadSafeStruct objects
-    // avoids issues with copying or moving objects containing std::binary_semaphore members,
-    // which would otherwise prevent the generation of copy constructors.
+
     std::vector<std::unique_ptr<ThreadSafeStruct>> m_inference_queue;
 
     std::atomic<InferenceBackend> m_currentBackend {NONE};

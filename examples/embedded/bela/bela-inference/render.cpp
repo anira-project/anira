@@ -20,8 +20,8 @@ int g_read_pointer = 0;							// Position of the last frame we played
 
 anira::InferenceConfig g_inference_config(
 	"model.pt",
-	{1, 1, 2048},
-	{1, 1, 2048},
+	{{1, 1, 2048}},
+	{{1, 1, 2048}},
 	21.53f,
 	0,
 	true,

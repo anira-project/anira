@@ -22,11 +22,11 @@ void TFLiteProcessor::prepare() {
     }
 }
 
-void TFLiteProcessor::process(AudioBufferF& input, AudioBufferF& output) {
+void TFLiteProcessor::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) {
     while (true) {
         for(auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
-                instance->process(input, output);
+                instance->process(input, output, session);
                 instance->m_processing.exchange(false);
                 return;
             }
@@ -36,30 +36,39 @@ void TFLiteProcessor::process(AudioBufferF& input, AudioBufferF& output) {
 
 TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config)
 {
-#ifdef _WIN32
-    std::string modelpath_str = m_inference_config.m_model_path_tflite;
-    std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
-#else
     std::string modelpath = m_inference_config.m_model_path_tflite;
-#endif
-
-#ifdef _WIN32
-    _bstr_t modelPathChar (modelpath.c_str());
-    m_model = TfLiteModelCreateFromFile(modelPathChar);
-#else
     m_model = TfLiteModelCreateFromFile(modelpath.c_str());
-#endif
 
     m_options = TfLiteInterpreterOptionsCreate();
     TfLiteInterpreterOptionsSetNumThreads(m_options, 1);
     m_interpreter = TfLiteInterpreterCreate(m_model, m_options);
+
     // This is necessary when we have dynamic input shapes, it should be done before allocating tensors obviously
-    std::vector<int> input_shape;
-    input_shape.reserve(m_inference_config.m_model_input_shape_tflite.size());
-    for (int64_t dim : m_inference_config.m_model_input_shape_tflite) {
-        input_shape.push_back(static_cast<int>(dim));
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+        std::vector<int> input_shape;
+        for (int64_t dim : m_inference_config.m_model_input_shape_tflite[i]) {
+            input_shape.push_back(static_cast<int>(dim));
+        }
+        TfLiteInterpreterResizeInputTensor(m_interpreter, i, input_shape.data(), static_cast<int32_t>(input_shape.size()));
     }
-    TfLiteInterpreterResizeInputTensor(m_interpreter, 0, input_shape.data(), static_cast<int32_t>(input_shape.size()));
+
+    TfLiteInterpreterAllocateTensors(m_interpreter);
+
+    m_inputs.resize(m_inference_config.m_input_sizes.size());
+    m_input_data.resize(m_inference_config.m_input_sizes.size());
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+        m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
+        m_inputs[i] = TfLiteInterpreterGetInputTensor(m_interpreter, i);
+    }
+
+    m_outputs.resize(m_inference_config.m_output_sizes.size());
+    for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+        m_outputs[i] = TfLiteInterpreterGetOutputTensor(m_interpreter, i);
+    }
+
+    for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
+        TfLiteInterpreterInvoke(m_interpreter);
+    }
 }
 
 TFLiteProcessor::Instance::~Instance() {
@@ -69,21 +78,41 @@ TFLiteProcessor::Instance::~Instance() {
 }
 
 void TFLiteProcessor::Instance::prepare() {
-    TfLiteInterpreterAllocateTensors(m_interpreter);
-    m_input_tensor = TfLiteInterpreterGetInputTensor(m_interpreter, 0);
-    m_output_tensor = TfLiteInterpreterGetOutputTensor(m_interpreter, 0);
-
-    if (m_inference_config.m_warm_up) {
-        AudioBufferF input(1, m_inference_config.m_new_model_input_size);
-        AudioBufferF output(1, m_inference_config.m_new_model_output_size);
-        process(input, output);
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+        m_input_data[i].clear();
     }
 }
 
-void TFLiteProcessor::Instance::process(AudioBufferF& input, AudioBufferF& output) {
-    TfLiteTensorCopyFromBuffer(m_input_tensor, input.get_raw_data(), input.get_num_samples() * sizeof(float)); //TODO: Multichannel support
+void TFLiteProcessor::Instance::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) {
+    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+        if (i != m_inference_config.m_index_audio_data[Input]) {
+            for (size_t j = 0; j < m_input_data[i].size(); j++) {
+                m_input_data[i][j] = session->m_pp_processor.get_input(i, j);
+            }
+        } else {
+            m_input_data[i].swap_data(input.get_memory_block());
+            input.reset_channel_ptr();
+        }
+        // TODO: Check if we can find a solution to avoid copying the data
+        TfLiteTensorCopyFromBuffer(m_inputs[i], m_input_data[i].data(), m_inference_config.m_input_sizes[i] * sizeof(float));
+    }
+
+    // Run inference
     TfLiteInterpreterInvoke(m_interpreter);
-    TfLiteTensorCopyToBuffer(m_output_tensor, output.get_raw_data(), output.get_num_samples() * sizeof(float)); //TODO: Multichannel support
+
+    // We need to copy the data because we cannot access the data pointer ref of the tensor directly
+    for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+        float* output_read_ptr = (float*) TfLiteTensorData(m_outputs[i]);
+        if (i != m_inference_config.m_index_audio_data[Output]) {
+            for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                session->m_pp_processor.set_output(output_read_ptr[j], i, j);
+            }
+        } else {
+            for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                output.get_memory_block()[j] = output_read_ptr[j];
+            }
+        }
+    }
 }
 
 } // namespace anira

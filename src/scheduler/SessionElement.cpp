@@ -39,9 +39,9 @@ void SessionElement::prepare(HostAudioConfig new_config) {
 
     size_t max_inference_time_in_samples = (size_t) std::ceil(m_inference_config.m_max_inference_time * new_config.m_host_sample_rate / 1000);
 
-    // We assume that the model_output_size gives us the amount of new samples we can write into the buffer for each bath.
-    float structs_per_buffer = std::ceil((float) new_config.m_host_buffer_size / (float) m_inference_config.m_new_model_output_size);
-    float structs_per_max_inference_time = std::ceil((float) max_inference_time_in_samples / (float) m_inference_config.m_new_model_output_size);
+    // We assume that the num_output_audio_samples gives us the amount of new samples we can write into the buffer for each bath. TODO: Find a better way to determine how many samples are necessary for one inference
+    float structs_per_buffer = std::ceil((float) new_config.m_host_buffer_size / (float) m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[Output]]);
+    float structs_per_max_inference_time = std::ceil((float) max_inference_time_in_samples / (float) m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[Output]]);
     // ceil to full buffers
     structs_per_max_inference_time = std::ceil(structs_per_max_inference_time/structs_per_buffer) * structs_per_buffer;
     // we can have multiple max_inference_times per buffer
@@ -56,7 +56,7 @@ void SessionElement::prepare(HostAudioConfig new_config) {
     n_structs *= 1; // TODO: before deployment we have to change this to 4
 
     for (int i = 0; i < n_structs; ++i) {
-        m_inference_queue.emplace_back(std::make_unique<ThreadSafeStruct>(m_inference_config.m_new_model_input_size, m_inference_config.m_new_model_output_size));
+        m_inference_queue.emplace_back(std::make_unique<ThreadSafeStruct>(m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[Input]], m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[Output]]));
     }
 
     m_time_stamps.reserve(n_structs);

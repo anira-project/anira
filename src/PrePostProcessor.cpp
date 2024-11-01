@@ -2,6 +2,26 @@
 
 namespace anira {
 
+PrePostProcessor::PrePostProcessor() {
+}
+
+PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config) {
+    m_index_audio_data = inference_config.m_index_audio_data;
+
+    m_inputs.resize(inference_config.m_input_sizes.size());
+    for (size_t i = 0; i < inference_config.m_input_sizes.size(); ++i) {
+        if(i != inference_config.m_index_audio_data[Input]) {
+            m_inputs[i].resize(inference_config.m_input_sizes[i]);
+        }
+    }
+    m_outputs.resize(inference_config.m_output_sizes.size());
+    for (size_t i = 0; i < inference_config.m_output_sizes.size(); ++i) {
+        if(i != inference_config.m_index_audio_data[Output]) {
+            m_outputs[i].resize(inference_config.m_output_sizes[i]);
+        }
+    }
+}
+
 void PrePostProcessor::pre_process(RingBuffer& input, AudioBufferF& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
     pop_samples_from_buffer(input, output);
 }
@@ -35,6 +55,34 @@ void PrePostProcessor::push_samples_to_buffer(const AudioBufferF& input, RingBuf
     for (size_t j = 0; j < input.get_num_samples(); j++) {
         output.push_sample(0, input.get_sample(0, j));
     }
+}
+
+void PrePostProcessor::set_input(const float& input, size_t i, size_t j) {
+    assert(("Index i out of bounds", i < m_inputs.size()));
+    assert(("Index j out of bounds", j < m_inputs[i].size()));
+    assert(("Index contains audio data, which should be passed in the processBlock method.", i != m_index_audio_data[Input]));
+    m_inputs[i][j].store(input);
+}
+
+void PrePostProcessor::set_output(const float& output, size_t i, size_t j) {
+    assert(("Index i out of bounds", i < m_outputs.size()));
+    assert(("Index j out of bounds", j < m_outputs[i].size()));
+    assert(("Index contains audio data, which should be returned in the processBlock method.", i != m_index_audio_data[Output]));
+    m_outputs[i][j].store(output);
+}
+
+float PrePostProcessor::get_input(size_t i, size_t j) {
+    assert(("Index i out of bounds", i < m_inputs.size()));
+    assert(("Index j out of bounds", j < m_inputs[i].size()));
+    assert(("Index contains audio data, which should be passed in the processBlock method.", i != m_index_audio_data[Input]));
+    return m_inputs[i][j].load();
+}
+
+float PrePostProcessor::get_output(size_t i, size_t j) {
+    assert(("Index i out of bounds", i < m_outputs.size()));
+    assert(("Index j out of bounds", j < m_outputs[i].size()));
+    assert(("Index contains audio data, which should be returned in the processBlock method.", i != m_index_audio_data[Output]));
+    return m_outputs[i][j].load();
 }
 
 } // namespace anira

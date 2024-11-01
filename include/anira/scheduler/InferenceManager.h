@@ -13,7 +13,7 @@ namespace anira {
 class ANIRA_API InferenceManager {
 public:
     InferenceManager() = delete;
-    InferenceManager(PrePostProcessor &pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor, const AniraContextConfig& context_config);
+    InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor, const AniraContextConfig& context_config);
     ~InferenceManager();
 
     void prepare(HostAudioConfig config);
