@@ -9,7 +9,7 @@
 #include "../../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "../../../../extras/desktop/models/stateful-rnn/advanced-configs/StatefulRNNAdvancedConfigs.h"
 #include "../../../../extras/desktop/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
-#include "ClearNoneProcessor.h"
+#include "ClearCustomProcessor.h"
 
 
 /* ============================================================ *
@@ -32,7 +32,8 @@ std::vector<anira::InferenceBackend> inference_backends = {
 #ifdef USE_TFLITE
     anira::TFLITE,
 #endif    
-    anira::NONE};
+    anira::CUSTOM
+};
 std::vector<AdvancedInferenceConfigs> advanced_inference_configs = {cnn_advanced_configs, hybridnn_advanced_configs, rnn_advanced_configs};
 
 // define the buffer sizes, backends and model configs to be used in the benchmark and the backends to be used
@@ -77,9 +78,9 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
         my_pp_processor = new StatefulRNNPrePostProcessor();
     }
 
-    ClearNoneProcessor clear_none_processor(inference_config);
+    ClearCustomProcessor clear_custom_processor(inference_config);
 
-    m_inference_handler = std::make_unique<anira::InferenceHandler>(*my_pp_processor, inference_config, clear_none_processor);
+    m_inference_handler = std::make_unique<anira::InferenceHandler>(*my_pp_processor, inference_config, clear_custom_processor);
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backends[state.range(2)]);
 

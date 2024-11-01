@@ -15,7 +15,7 @@
 
 #include "../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNNoneProcessor.h"
+#include "../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNBypassProcessor.h"
 
 #include "utils/DryWetMixer.h"
 
@@ -81,7 +81,7 @@ public:
 
     InferenceConfig m_inference_config = hybridnn_config;
     HybridNNPrePostProcessor m_pp_processor;
-    HybridNNNoneProcessor m_none_processor;
+    HybridNNBypassProcessor m_bypass_processor;
 
     InferenceHandler m_inference_handler;
 

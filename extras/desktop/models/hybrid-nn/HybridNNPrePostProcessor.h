@@ -32,7 +32,7 @@ public:
             num_output_samples = config.m_model_output_shape_tflite[config.m_index_audio_data[anira::IndexAudioData::Output]][1];
         }
 #endif 
-        else if (current_inference_backend == anira::NONE) {
+        else if (current_inference_backend == anira::CUSTOM) {
 #if USE_LIBTORCH
             num_batches = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][0];
             num_input_samples = config.m_model_input_shape_torch[config.m_index_audio_data[anira::IndexAudioData::Input]][2];
@@ -58,7 +58,7 @@ public:
 #ifdef USE_TFLITE
             current_inference_backend != anira::TFLITE &&
 #endif
-            current_inference_backend != anira::NONE) {
+            current_inference_backend != anira::CUSTOM) {
             throw std::runtime_error("Invalid inference backend");
         }
             

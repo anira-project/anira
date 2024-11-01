@@ -17,9 +17,9 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
             false // Use host threads (VST3 plugins do not support using external threads)
         ),
 #if MODEL_TO_USE == 1 || MODEL_TO_USE == 2
-        // The none_processor is not needed for inference, but for the round trip test to output audio when selecting the NONE backend. It must be customized when default pp_processor is replaced by a custom one.
-        none_processor(inference_config),
-        inference_handler(pp_processor, inference_config, none_processor, anira_context_config),
+        // The bypass_processor is not needed for inference, but for the round trip test to output audio when selecting the CUSTOM backend. It must be customized when default pp_processor is replaced by a custom one.
+        bypass_processor(inference_config),
+        inference_handler(pp_processor, inference_config, bypass_processor, anira_context_config),
 #elif MODEL_TO_USE == 3 || MODEL_TO_USE == 4
         pp_processor(inference_config),
         inference_handler(pp_processor, inference_config),
@@ -225,7 +225,7 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID
 #ifdef USE_LIBTORCH
         if (paramString == "LIBTORCH") inference_handler.set_inference_backend(anira::LIBTORCH);
 #endif
-        if (paramString == "NONE") inference_handler.set_inference_backend(anira::NONE);
+        if (paramString == "BYPASS") inference_handler.set_inference_backend(anira::CUSTOM);
     } else if (parameterID == PluginParameters::GAIN_ID.getParamID()) {
         pp_processor.set_input(newValue, 1, 0);
     }

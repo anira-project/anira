@@ -32,7 +32,7 @@ public:
     AniraContext(const AniraContextConfig& context_config);
     ~AniraContext();
     static std::shared_ptr<AniraContext> get_instance(const AniraContextConfig& context_config);
-    static SessionElement& create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* none_processor);
+    static SessionElement& create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor);
     static void release_session(SessionElement& session);
     static void release_instance();
     static void release_thread_pool();

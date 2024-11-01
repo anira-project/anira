@@ -15,9 +15,9 @@ namespace anira::clap_plugin_example
 AniraClapPluginExample::AniraClapPluginExample(const clap_host *host)
     : clap::helpers::Plugin<clap::helpers::MisbehaviourHandler::Terminate,
                             clap::helpers::CheckingLevel::Maximal>(&m_desc, host),
-      m_none_processor(m_inference_config),
+      m_bypass_processor(m_inference_config),
       m_anira_context(static_cast<int>(std::thread::hardware_concurrency() / 2), true),
-      m_inference_handler(m_pp_processor, m_inference_config, m_none_processor, m_anira_context),
+      m_inference_handler(m_pp_processor, m_inference_config, m_bypass_processor, m_anira_context),
       m_plugin_latency(0)
 {
     m_param_to_value[pmDryWet] = &m_param_dry_wet;
@@ -249,7 +249,7 @@ void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t *evt)
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
                     break;
                 default:
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::NONE);
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
                     break;
             }
         } else if (m_param_to_value[v->param_id] == &m_param_dry_wet) {

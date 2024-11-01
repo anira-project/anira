@@ -58,7 +58,7 @@ bool setup(BelaContext *context, void *userData)
 	};
 
 	g_inference_handler.prepare(host_config);
-	g_inference_handler.set_inference_backend(anira::NONE);
+	g_inference_handler.set_inference_backend(anira::CUSTOM);
 	int latency = g_inference_handler.get_latency();
 	rt_printf("Inference latency: %d samples\n", latency);
 

@@ -49,8 +49,8 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
                 path = m_inference_config.m_model_path_tflite;
                 break;
 #endif
-            case anira::NONE:
-                m_inference_backend_name = "none";
+            case anira::CUSTOM:
+                m_inference_backend_name = "custom";
                 path = "no_model";
                 break;
             default:

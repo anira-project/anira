@@ -69,7 +69,7 @@ public:
 
     std::vector<std::unique_ptr<ThreadSafeStruct>> m_inference_queue;
 
-    std::atomic<InferenceBackend> m_currentBackend {NONE};
+    std::atomic<InferenceBackend> m_currentBackend {CUSTOM};
     unsigned long m_current_queue = 0;
     std::vector<unsigned long> m_time_stamps;
 

@@ -40,7 +40,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
 
     // The buffer size return in get_buffer_size() is populated by state.range(0) param of the google benchmark
     anira::HostAudioConfig host_config = {1, (size_t) get_buffer_size(), SAMPLE_RATE};
-    anira::InferenceBackend inference_backend = anira::NONE;
+    anira::InferenceBackend inference_backend = anira::CUSTOM;
 
     // TODO: Why is this necessary?
     anira::PrePostProcessor *my_pp_processor;

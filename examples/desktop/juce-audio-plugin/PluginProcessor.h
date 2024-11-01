@@ -8,12 +8,11 @@
 
 #include "../../../extras/desktop/models/cnn/CNNConfig.h"
 #include "../../../extras/desktop/models/cnn/CNNPrePostProcessor.h"
-#include "../../../extras/desktop/models/cnn/advanced-configs/CNNNoneProcessor.h" // This one is only needed for the round trip test, when selecting the None backend
+#include "../../../extras/desktop/models/cnn/advanced-configs/CNNBypassProcessor.h" // This one is only needed for the round trip test, when selecting the Custom backend
 #include "../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNNoneProcessor.h" // Only needed for round trip test
+#include "../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNBypassProcessor.h" // Only needed for round trip test
 #include "../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../../../extras/desktop/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
 #include "../../../extras/desktop/models/model-pool/SimpleGainConfig.h"
 
 //==============================================================================
@@ -74,14 +73,14 @@ private:
 #if MODEL_TO_USE == 1
     anira::InferenceConfig inference_config = cnn_config;
     CNNPrePostProcessor pp_processor;
-    CNNNoneProcessor none_processor; // This one is only needed for the round trip test, when selecting the None backend
+    CNNBypassProcessor bypass_processor; // This one is only needed for the round trip test, when selecting the Custom backend
 #elif MODEL_TO_USE == 2
     anira::InferenceConfig inference_config = hybridnn_config;
     HybridNNPrePostProcessor pp_processor;
-    HybridNNNoneProcessor none_processor; // This one is only needed for the round trip test, when selecting the None backend
+    HybridNNBypassProcessor bypass_processor; // This one is only needed for the round trip test, when selecting the Custom backend
 #elif MODEL_TO_USE == 3
     anira::InferenceConfig inference_config = rnn_config;
-    StatefulRNNPrePostProcessor pp_processor;
+    anira::PrePostProcessor pp_processor;
 #elif MODEL_TO_USE == 4
     anira::InferenceConfig inference_config = gain_config;
     anira::PrePostProcessor pp_processor;

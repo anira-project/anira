@@ -213,7 +213,7 @@ Another way to pass multiple arguments is to define the arguments in a separate 
 
 // Define the arguments as vectors
 std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
-std::vector<anira::InferenceBackend> inference_backends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE, anira::NONE};
+std::vector<anira::InferenceBackend> inference_backends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE, anira::CUSTOM};
 std::vector<anira::InferenceConfigs> inference_configs = {cnn_config, hybridnn_config, rnn_config};
 std::vector<anira::PrePostProcessor> pp_processors = {cnnPrePostProcessor, hybridNNPrePostProcessor, statefulRNNPrePostProcessor};
 
@@ -260,4 +260,4 @@ BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)
 
 ## Benchmarking anira Without Inference
 
-If you want to benchmark anira without inference, just measuring the runtime of the pre- and post-processing stages and the runtime of the `process` method, you can use the `anira::benchmark::ProcessBlockFixture` in the same way as described above. The only difference is that you have to set the inference backend to `anira::NONE`.If you want to control how anira handles the roundtrip in the inference threads, you can pass the optional `NoneProcessor` to the `anira::InferenceHandler` constructor as described in the [anira usage guide](anira-usage.md).
+If you want to benchmark anira without inference, just measuring the runtime of the pre- and post-processing stages and the runtime of the `process` method, you can use the `anira::benchmark::ProcessBlockFixture` in the same way as described above. The only difference is that you have to set the inference backend to `anira::CUSTOM`.If you want to control how anira handles the roundtrip in the inference threads, you can pass the optional `CustomProcessor` to the `anira::InferenceHandler` constructor as described in the [anira usage guide](anira-usage.md).

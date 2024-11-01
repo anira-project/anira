@@ -96,7 +96,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBu
         session->m_tflite_processor->process(input, output, session);
     }
 #endif
-    if (session->m_currentBackend.load(std::memory_order_relaxed) == NONE) {
+    if (session->m_currentBackend.load(std::memory_order_relaxed) == CUSTOM) {
         session->m_custom_processor->process(input, output, session);
     }
 }

@@ -17,8 +17,8 @@ public:
             DRY_WET_NAME = "Dry/Wet"
     ;
 
-    inline static juce::StringArray backendTypes {"TFLITE", "LIBTORCH", "ONNX", "NONE"};
-    inline static juce::String defaultBackend = "NONE";
+    inline static juce::StringArray backendTypes {"TFLITE", "LIBTORCH", "ONNX", "BYPASS"};
+    inline static juce::String defaultBackend = "BYPASS";
 
     static juce::StringArray getPluginParameterList();
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();

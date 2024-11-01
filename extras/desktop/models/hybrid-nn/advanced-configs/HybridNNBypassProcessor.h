@@ -1,11 +1,11 @@
-#ifndef ANIRA_HYBRID_NN_NONE_PROCESSOR_H
-#define ANIRA_HYBRID_NN_NONE_PROCESSOR_H
+#ifndef ANIRA_HYBRID_NN_BYPASS_PROCESSOR_H
+#define ANIRA_HYBRID_NN_BYPASS_PROCESSOR_H
 
 #include <anira/anira.h>
 
-class HybridNNNoneProcessor : public anira::BackendBase {
+class HybridNNBypassProcessor : public anira::BackendBase {
 public:
-    HybridNNNoneProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
+    HybridNNBypassProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
 
     void process(anira::AudioBufferF &input, anira::AudioBufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
         auto equal_channels = input.get_num_channels() == output.get_num_channels();
@@ -37,4 +37,4 @@ public:
     }
 };
 
-#endif // ANIRA_HYBRID_NN_NONE_PROCESSOR_H
+#endif // ANIRA_HYBRID_NN_BYPASS_PROCESSOR_H
