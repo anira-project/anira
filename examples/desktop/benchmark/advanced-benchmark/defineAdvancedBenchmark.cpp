@@ -3,12 +3,11 @@
 #include <anira/anira.h>
 #include <anira/benchmark.h>
 
-#include "../../../../extras/desktop/models/cnn/advanced-configs/CNNAdvancedConfigs.h"
+#include "../../../../extras/desktop/models/cnn/CNNConfig.h"
 #include "../../../../extras/desktop/models/cnn/CNNPrePostProcessor.h"
-#include "../../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNAdvancedConfigs.h"
+#include "../../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../../extras/desktop/models/stateful-rnn/advanced-configs/StatefulRNNAdvancedConfigs.h"
-#include "../../../../extras/desktop/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
+#include "../../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
 #include "ClearCustomProcessor.h"
 
 
@@ -16,8 +15,8 @@
  * ========================= Configs ========================== *
  * ============================================================ */
 
-#define NUM_ITERATIONS 50
-#define NUM_REPETITIONS 10
+#define NUM_ITERATIONS 5
+#define NUM_REPETITIONS 2
 #define PERCENTILE 0.999
 #define SAMPLE_RATE 44100
 
@@ -34,12 +33,15 @@ std::vector<anira::InferenceBackend> inference_backends = {
 #endif    
     anira::CUSTOM
 };
-std::vector<AdvancedInferenceConfigs> advanced_inference_configs = {cnn_advanced_configs, hybridnn_advanced_configs, rnn_advanced_configs};
+std::vector<anira::InferenceConfig> inference_configs = {cnn_config, hybridnn_config, rnn_config};
+anira::InferenceConfig inference_config;
+
+void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int model);
 
 // define the buffer sizes, backends and model configs to be used in the benchmark and the backends to be used
 static void Arguments(::benchmark::internal::Benchmark* b) {
     for (int i = 0; i < buffer_sizes.size(); ++i)
-        for (int j = 0; j < advanced_inference_configs.size(); ++j)
+        for (int j = 0; j < inference_configs.size(); ++j)
             for (int k = 0; k < inference_backends.size(); ++k)
                 // ONNX backend does not support stateful RNN
                 if (!(j == 2 && k == 1))
@@ -55,16 +57,11 @@ typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) {
 
     // The buffer size return in get_buffer_size() is populated by state.range(0) param of the google benchmark
-    anira::HostAudioConfig host_config = {1, (size_t) get_buffer_size(), SAMPLE_RATE};
+    anira::HostAudioConfig host_config = {(size_t) get_buffer_size(), SAMPLE_RATE};
 
-    AdvancedInferenceConfigs current_advanced_inference_configs = advanced_inference_configs[state.range(1)];
-    anira::InferenceConfig inference_config;
+    inference_config = inference_configs[state.range(1)];
 
-    for (auto advanced_config : current_advanced_inference_configs) {
-        if (advanced_config.buffer_size == get_buffer_size()) {
-            inference_config = advanced_config.config;
-        }
-    }
+    adapt_config(inference_config, get_buffer_size(), state.range(1));
 
     anira::PrePostProcessor *my_pp_processor;
 
@@ -75,7 +72,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
         my_pp_processor = new HybridNNPrePostProcessor();
         static_cast<HybridNNPrePostProcessor*>(my_pp_processor)->config = inference_config;
     } else if (state.range(1) == 2) {
-        my_pp_processor = new StatefulRNNPrePostProcessor();
+        my_pp_processor = new anira::PrePostProcessor();
     }
 
     ClearCustomProcessor clear_custom_processor(inference_config);
@@ -125,3 +122,63 @@ BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_ADVANCED)
   })
 ->DisplayAggregatesOnly(false)
 ->UseManualTime();
+
+void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int model) {
+
+    if (model == 0) {
+        int receptive_field = 13332;
+        int input_size = buffer_size + receptive_field;
+        int output_size = buffer_size;
+
+#ifdef USE_LIBTORCH
+        inference_config.m_input_shape_torch[0] = {1, 1, input_size};
+        inference_config.m_output_shape_torch[0] = {1, 1, output_size};
+#endif
+#ifdef USE_ONNXRUNTIME
+        inference_config.m_input_shape_onnx[0] = {1, 1, input_size};
+        inference_config.m_output_shape_onnx[0] = {1, 1, output_size};
+#endif
+#ifdef USE_TFLITE
+        inference_config.m_input_shape_tflite[0] = {1, input_size, 1};
+        inference_config.m_output_shape_tflite[0] = {1, output_size, 1};
+#endif
+        inference_config.m_input_sizes[0] = input_size;
+        inference_config.m_output_sizes[0] = output_size;
+    } else if (model == 1) {
+#ifdef USE_LIBTORCH
+        inference_config.m_input_shape_torch[0] = {buffer_size, 1, 150};
+        inference_config.m_output_shape_torch[0] = {buffer_size, 1};
+#endif
+#ifdef USE_ONNXRUNTIME
+        inference_config.m_input_shape_onnx[0] = {buffer_size, 1, 150};
+        inference_config.m_output_shape_onnx[0] = {buffer_size, 1};
+#endif
+#ifdef USE_TFLITE
+        std::string model_data = inference_config.m_model_data_tflite;
+        size_t pos = model_data.find("256");
+        if (pos != std::string::npos) {
+            model_data.replace(pos, 3, std::to_string(buffer_size));
+        }
+        inference_config.m_model_data_tflite = model_data;
+        inference_config.m_input_shape_tflite[0] = {buffer_size, 150, 1};
+        inference_config.m_output_shape_tflite[0] = {buffer_size, 1};
+#endif
+        inference_config.m_input_sizes[0] = buffer_size * 150;
+        inference_config.m_output_sizes[0] = buffer_size;
+    } else if (model == 2) {
+#ifdef USE_LIBTORCH
+        inference_config.m_input_shape_torch[0] = {buffer_size, 1, 1};
+        inference_config.m_output_shape_torch[0] = {buffer_size, 1, 1};
+#endif
+#ifdef USE_ONNXRUNTIME
+        inference_config.m_input_shape_onnx[0] = {buffer_size, 1, 1};
+        inference_config.m_output_shape_onnx[0] = {buffer_size, 1, 1};
+#endif
+#ifdef USE_TFLITE
+        inference_config.m_input_shape_tflite[0] = {1, buffer_size, 1};
+        inference_config.m_output_shape_tflite[0] = {1, buffer_size, 1};
+#endif
+        inference_config.m_input_sizes[0] = buffer_size;
+        inference_config.m_output_sizes[0] = buffer_size;
+    }
+}

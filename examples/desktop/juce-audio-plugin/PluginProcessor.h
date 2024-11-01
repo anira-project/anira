@@ -8,10 +8,10 @@
 
 #include "../../../extras/desktop/models/cnn/CNNConfig.h"
 #include "../../../extras/desktop/models/cnn/CNNPrePostProcessor.h"
-#include "../../../extras/desktop/models/cnn/advanced-configs/CNNBypassProcessor.h" // This one is only needed for the round trip test, when selecting the Custom backend
+#include "../../../extras/desktop/models/cnn/CNNBypassProcessor.h" // This one is only needed for the round trip test, when selecting the Custom backend
 #include "../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNBypassProcessor.h" // Only needed for round trip test
+#include "../../../extras/desktop/models/hybrid-nn/HybridNNBypassProcessor.h" // Only needed for round trip test
 #include "../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../extras/desktop/models/model-pool/SimpleGainConfig.h"
 #include "../../../extras/desktop/models/model-pool/SimpleStereoGainConfig.h"

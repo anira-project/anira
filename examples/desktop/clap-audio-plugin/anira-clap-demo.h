@@ -15,7 +15,7 @@
 
 #include "../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNBypassProcessor.h"
+#include "../../../extras/desktop/models/hybrid-nn/HybridNNBypassProcessor.h"
 
 #include "utils/DryWetMixer.h"
 

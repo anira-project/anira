@@ -3,7 +3,7 @@
 
 #include <anira/anira.h>
 
-static anira::InferenceConfig medium_cnnConfig_2048(
+static anira::InferenceConfig medium_cnn_config(
 #ifdef USE_LIBTORCH
         STEERABLENAFX_MODELS_PATH_PYTORCH + std::string("/model_0/steerable-nafx-3_blocks-dynamic.pt"),
         {{1, 1, 3380}},
@@ -19,7 +19,6 @@ static anira::InferenceConfig medium_cnnConfig_2048(
         {{1, 3380, 1}},
         {{1, 2048, 1}},
 #endif
-
         42.66f
 );
 
