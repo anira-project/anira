@@ -30,6 +30,8 @@ struct AniraClapPluginExample : public clap::helpers::Plugin<clap::helpers::Misb
 
     static clap_plugin_descriptor m_desc;
 
+    bool init() noexcept override;
+
     bool activate(double sampleRate, uint32_t minFrameCount,
                   uint32_t maxFrameCount) noexcept override;
 
@@ -73,8 +75,9 @@ public:
     double m_param_dry_wet{100.0}, m_param_backend{3};
     std::unordered_map<clap_id, double *> m_param_to_value;
     const clap_host_thread_pool* m_clap_thread_pool{nullptr};
-    bool m_clap_thread_pool_available;
     uint32_t m_plugin_latency;
+
+    AniraContextConfig m_anira_context;
 
     InferenceConfig m_inference_config = hybridnn_config;
     HybridNNPrePostProcessor m_pp_processor;

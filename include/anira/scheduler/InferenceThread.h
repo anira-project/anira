@@ -24,9 +24,11 @@ public:
 #endif
     ~InferenceThread() = default;
 
-    void run() override;
+    bool execute();
 
 private:
+    void run() override;
+
     bool tryInference(std::shared_ptr<SessionElement> session);
     void inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output);
 

@@ -13,6 +13,7 @@ AniraContext::~AniraContext() {}
 std::shared_ptr<AniraContext> AniraContext::get_instance(const AniraContextConfig& context_config) {
     if (m_anira_context == nullptr) {
         m_anira_context = std::make_shared<AniraContext>(context_config);
+        m_host_provided_threads = context_config.m_use_host_threads;
     } else {
         // TODO: Better error handling
         if (m_anira_context->m_context_config.m_anira_version != context_config.m_anira_version) {
@@ -51,7 +52,7 @@ void AniraContext::new_num_threads(int new_num_threads) {
         m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, m_sessions));
     }
     for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        m_thread_pool[i]->start();
+        if (!m_host_provided_threads) m_thread_pool[i]->start();
     }
 }
 
@@ -83,7 +84,7 @@ SessionElement& AniraContext::create_session(PrePostProcessor& pp_processor, Inf
 #endif
 
     for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        m_thread_pool[i]->start();
+        if (!m_host_provided_threads) m_thread_pool[i]->start();
     } 
 
     return *m_sessions.back();
@@ -133,7 +134,7 @@ void AniraContext::release_session(SessionElement& session) {
         release_instance();
     } else {
         for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-            m_thread_pool[i]->start();
+            if (!m_host_provided_threads) m_thread_pool[i]->start();
         }
     }
 }
@@ -146,6 +147,12 @@ void AniraContext::prepare(SessionElement& session, HostAudioConfig new_config) 
     session.clear();
     session.prepare(new_config);
 
+    if (new_config.submit_task_to_host_thread && m_context_config.m_use_host_threads) {
+        m_host_provided_threads = true;
+    } else {
+        m_host_provided_threads = false;
+    }
+
 #ifdef USE_SEMAPHORE
     while (global_counter.try_acquire()) {
         // Nothing to do here, just reducing count
@@ -155,7 +162,7 @@ void AniraContext::prepare(SessionElement& session, HostAudioConfig new_config) 
 #endif
 
     for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        m_thread_pool[i]->start();
+        if (!m_host_provided_threads) m_thread_pool[i]->start();
     }
 }
 
@@ -163,6 +170,21 @@ void AniraContext::new_data_submitted(SessionElement& session) {
     // TODO: We assume that the model_output_size gives us the amount of new samples that we need to process. This can differ from the model_input_size because we might need to add some padding or past samples. Find a better way to determine the amount of new samples.
     while (session.m_send_buffer.get_available_samples(0) >= (session.m_inference_config.m_output_sizes[session.m_inference_config.m_index_audio_data[Output]])) {
         bool success = pre_process(session);
+
+        if (success && session.m_host_config.submit_task_to_host_thread && m_host_provided_threads) {
+            bool host_exec_success = session.m_host_config.submit_task_to_host_thread(1);
+
+            // !host_exec_success means that the host provided thread pool does not work anymore
+            // Since we cannot rely on it anymore we use as fallback our own thread pool
+            if (!host_exec_success) {
+                m_host_provided_threads = false;
+
+                for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
+                    m_thread_pool[i]->start();
+                }
+            }
+        }
+
         // !success means that there is no free m_inference_queue
         if (!success) {
             for (size_t i = 0; i < session.m_inference_config.m_output_sizes[session.m_inference_config.m_index_audio_data[Output]]; ++i) {
@@ -194,6 +216,16 @@ void AniraContext::new_data_request(SessionElement& session, double buffer_size_
                 }
                 break;
             }
+        }
+    }
+}
+
+void AniraContext::exec_inference() {
+    assert(m_host_provided_threads && "exec_inference is only supported when providing a host thread pool");
+
+    if (m_host_provided_threads){
+        while (!m_thread_pool[0]->execute()) {
+            // We do not need to iterate over m_thread_pool, since we ensure internally thread safety
         }
     }
 }

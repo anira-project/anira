@@ -16,8 +16,8 @@ AniraClapPluginExample::AniraClapPluginExample(const clap_host *host)
     : clap::helpers::Plugin<clap::helpers::MisbehaviourHandler::Terminate,
                             clap::helpers::CheckingLevel::Maximal>(&m_desc, host),
       m_none_processor(m_inference_config),
-      m_inference_handler(m_pp_processor, m_inference_config, m_none_processor),
-      m_clap_thread_pool_available(false),
+      m_anira_context(static_cast<int>(std::thread::hardware_concurrency() / 2), true),
+      m_inference_handler(m_pp_processor, m_inference_config, m_none_processor, m_anira_context),
       m_plugin_latency(0)
 {
     m_param_to_value[pmDryWet] = &m_param_dry_wet;
@@ -151,15 +151,20 @@ bool AniraClapPluginExample::audioPortsInfo(uint32_t index, bool isInput,
     return true;
 }
 
+// Clap extensions should be available from the .init() call
+// https://github.com/free-audio/clap/blob/main/include/clap/plugin.h#L49-L51
+bool AniraClapPluginExample::init() noexcept {
+    m_clap_thread_pool = static_cast<clap_host_thread_pool const*>(_host.host()->get_extension(_host.host(), CLAP_EXT_THREAD_POOL));
+
+    return true;
+}
+
 bool AniraClapPluginExample::activate(double sampleRate, uint32_t minFrameCount,
                              uint32_t maxFrameCount) noexcept
 {
-    m_clap_thread_pool = (clap_host_thread_pool const*)_host.host()->get_extension(_host.host(), CLAP_EXT_THREAD_POOL);
-    m_clap_thread_pool_available = (m_clap_thread_pool && m_clap_thread_pool->request_exec);
-
     anira::HostAudioConfig config (1, (size_t) maxFrameCount, sampleRate);
 
-    if (m_clap_thread_pool_available) {
+    if (m_clap_thread_pool && m_clap_thread_pool->request_exec) {
         config.submit_task_to_host_thread = [this](int number_of_tasks) -> bool {
             if (m_clap_thread_pool->request_exec(_host.host(), number_of_tasks)) {
                 return true;
@@ -280,7 +285,7 @@ bool AniraClapPluginExample::implementsThreadPool() const noexcept {
 }
 
 void AniraClapPluginExample::threadPoolExec(uint32_t taskIndex) noexcept {
-    //m_inference_handler.exec_inference();
+    m_inference_handler.exec_inference();
 }
 
 uint32_t AniraClapPluginExample::paramsCount() const noexcept {

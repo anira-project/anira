@@ -86,7 +86,9 @@ public:
 
     BackendBase m_default_processor;
     BackendBase* m_custom_processor;
-    
+
+    HostAudioConfig m_host_config;
+
 #ifdef USE_LIBTORCH
     std::shared_ptr<LibtorchProcessor> m_libtorch_processor = nullptr;
 #endif

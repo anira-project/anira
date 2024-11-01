@@ -15,29 +15,37 @@ InferenceThread::InferenceThread(std::atomic<int>& g, std::vector<std::shared_pt
 void InferenceThread::run() {
     std::chrono::microseconds time_for_exit(50);
     while (!should_exit()) {
-#ifdef USE_SEMAPHORE
-        if (m_global_counter.try_acquire()) {
-#else
-        int old = m_global_counter.load();
-        bool success = false;
-        if (old > 0) {
-            success = m_global_counter.compare_exchange_strong(old, old - 1);
-        }
-        if (success) {
-#endif
-            bool inference_done = false;
-            while (!inference_done) {
-                for (const auto& session : m_sessions) {
-                    inference_done = tryInference(session);
-                    if (inference_done) break;
-                }
-            }
-        }
-        else {
+        auto success = execute();
+
+        if (!success) {
             std::this_thread::yield();
             std::this_thread::sleep_for(time_for_exit);
         }
     }
+}
+
+bool InferenceThread::execute() {
+#ifdef USE_SEMAPHORE
+    if (m_global_counter.try_acquire()) {
+#else
+    int old = m_global_counter.load();
+    bool success = false;
+    if (old > 0) {
+        success = m_global_counter.compare_exchange_strong(old, old - 1);
+    }
+    if (success) {
+#endif
+        bool inference_done = false;
+        while (!inference_done) {
+            for (const auto& session : m_sessions) {
+                inference_done = tryInference(session);
+                if (inference_done) break;
+            }
+        }
+        return true;
+    }
+
+    return false;
 }
 
 bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {

@@ -33,6 +33,10 @@ int InferenceHandler::get_latency() {
     return m_inference_manager.get_latency();
 }
 
+void InferenceHandler::exec_inference() {
+    m_inference_manager.exec_inference();
+}
+
 InferenceManager &InferenceHandler::get_inference_manager() {
     return m_inference_manager;
 }

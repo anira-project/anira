@@ -120,6 +120,10 @@ int InferenceManager::get_session_id() const {
     return m_session.m_session_id;
 }
 
+void InferenceManager::exec_inference() const {
+    m_anira_context->exec_inference();
+}
+
 int InferenceManager::calculate_latency() {
     // First calculate some universal values
     int model_output_size = m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[Output]];

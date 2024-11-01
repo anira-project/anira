@@ -22,6 +22,9 @@ public:
     void process(float ** input_buffer, const size_t input_samples); // buffer[channel][index]
 
     int get_latency();
+
+    void exec_inference();
+
     InferenceManager &get_inference_manager(); // TODO remove
 
 private:

@@ -49,6 +49,8 @@ public:
     void new_data_submitted(SessionElement& session);
     void new_data_request(SessionElement& session, double buffer_size_in_sec);
 
+    static void exec_inference();
+
     static std::vector<std::shared_ptr<SessionElement>>& get_sessions();
 
 private:
@@ -80,6 +82,8 @@ private:
 #ifdef USE_TFLITE
     inline static std::vector<std::shared_ptr<TFLiteProcessor>> m_tflite_processors;
 #endif
+
+    inline static bool m_host_provided_threads = false;
 };
 
 } // namespace anira

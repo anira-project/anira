@@ -34,18 +34,20 @@ void SessionElement::clear() {
 }
 
 void SessionElement::prepare(HostAudioConfig new_config) {
-    m_send_buffer.initialize_with_positions(1, (size_t) new_config.m_host_sample_rate * 50); // TODO find appropriate size dynamically
-    m_receive_buffer.initialize_with_positions(1, (size_t) new_config.m_host_sample_rate * 50); // TODO find appropriate size dynamically
+    m_host_config = new_config;
 
-    size_t max_inference_time_in_samples = (size_t) std::ceil(m_inference_config.m_max_inference_time * new_config.m_host_sample_rate / 1000);
+    m_send_buffer.initialize_with_positions(1, (size_t) m_host_config.m_host_sample_rate * 50); // TODO find appropriate size dynamically
+    m_receive_buffer.initialize_with_positions(1, (size_t) m_host_config.m_host_sample_rate * 50); // TODO find appropriate size dynamically
+
+    size_t max_inference_time_in_samples = (size_t) std::ceil(m_inference_config.m_max_inference_time * m_host_config.m_host_sample_rate / 1000);
 
     // We assume that the num_output_audio_samples gives us the amount of new samples we can write into the buffer for each bath. TODO: Find a better way to determine how many samples are necessary for one inference
-    float structs_per_buffer = std::ceil((float) new_config.m_host_buffer_size / (float) m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[Output]]);
+    float structs_per_buffer = std::ceil((float) m_host_config.m_host_buffer_size / (float) m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[Output]]);
     float structs_per_max_inference_time = std::ceil((float) max_inference_time_in_samples / (float) m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[Output]]);
     // ceil to full buffers
     structs_per_max_inference_time = std::ceil(structs_per_max_inference_time/structs_per_buffer) * structs_per_buffer;
     // we can have multiple max_inference_times per buffer
-    float max_inference_times_per_buffer = std::max(std::floor((float) new_config.m_host_buffer_size / (float) (max_inference_time_in_samples)), 1.f);
+    float max_inference_times_per_buffer = std::max(std::floor((float) m_host_config.m_host_buffer_size / (float) (max_inference_time_in_samples)), 1.f);
     // minimum number of structs necessary to keep available inference queues where the ringbuffer can push to if we have n_free_threads > structs_per_buffer
     // int n_structs = (int) (structs_per_buffer + structs_per_max_inference_time);
     // but because we can have multiple instances (sessions) that use the same threadpool, we have to multiply structs_per_max_inference_time with the struct_per_buffer
