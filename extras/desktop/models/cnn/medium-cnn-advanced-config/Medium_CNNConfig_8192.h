@@ -20,10 +20,7 @@ static anira::InferenceConfig medium_cnnConfig_8192(
         {{1, 8192, 1}},
 #endif
 
-        170.66f,
-        0,
-        false,
-        false
+        170.66f
 );
 
 

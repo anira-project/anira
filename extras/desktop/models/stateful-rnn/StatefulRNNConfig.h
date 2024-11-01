@@ -22,7 +22,9 @@ static anira::InferenceConfig rnn_config(
 
         42.66f,
         0,
-        false,
+        0,
+        {0, 0},
+        {1, 1},
         true
 );
 
