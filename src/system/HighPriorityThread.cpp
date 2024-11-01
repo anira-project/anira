@@ -81,15 +81,14 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
         std::cerr << "[ERROR] Failed to set Thread scheduling policy to SCHED_FIFO and increase the sched_priority to " << sch_params.sched_priority << ". Error : " << errno << std::endl;
         std::cout << "[WARNING] Give rtprio privileges to the user by adding the user to the realtime/audio group. Or run the application as root." << std::endl;
         std::cout << "[WARNING] Instead, trying to set increased nice value for SCHED_OTHER..." << std::endl;
+
+        ret = setpriority(PRIO_PROCESS, 0, -10);
+        if(ret != 0) {
+            std::cerr << "[ERROR] Failed to set increased nice value. Error : " << errno << std::endl;
+            std::cout << "[WARNING] Using default nice value: " << getpriority(PRIO_PROCESS, 0) << std::endl;
+        }
     }
 
-    // TODO Check if PRIO_PROCESS is the right who to set the nice value, since it should only affect the current process id, still it works
-    ret = setpriority(PRIO_PROCESS, 0, -10);
-
-    if(ret != 0) {
-        std::cerr << "[ERROR] Failed to set increased nice value. Error : " << errno << std::endl;
-        std::cout << "[WARNING] Using default nice value: " << getpriority(PRIO_PROCESS, 0) << std::endl;
-    }
     return;
 #elif __APPLE__
     int ret;
