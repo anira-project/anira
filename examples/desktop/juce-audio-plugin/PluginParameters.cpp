@@ -3,7 +3,7 @@
 juce::AudioProcessorValueTreeState::ParameterLayout PluginParameters::createParameterLayout() {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-#if MODEL_TO_USE == 4
+#if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
     params.push_back (std::make_unique<juce::AudioParameterFloat> (GAIN_ID,
                                                                    GAIN_NAME,
                                                                    gainRange,

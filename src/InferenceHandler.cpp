@@ -13,12 +13,15 @@ InferenceHandler::~InferenceHandler() {
 }
 
 void InferenceHandler::prepare(HostAudioConfig new_audio_config) {
-    assert(new_audio_config.m_host_channels == 1 && "Stereo processing is not fully implemented yet");
     m_inference_manager.prepare(new_audio_config);
 }
 
-void InferenceHandler::process(float **input_buffer, const size_t input_samples) {
-    m_inference_manager.process(input_buffer, input_samples);
+void InferenceHandler::process(float* const* data, size_t num_samples) {
+    m_inference_manager.process(data, data, num_samples);
+}
+
+void InferenceHandler::process(const float* const* input_data, float* const* output_data, size_t num_samples) {
+    m_inference_manager.process(input_data, output_data, num_samples);
 }
 
 void InferenceHandler::set_inference_backend(InferenceBackend inference_backend) {

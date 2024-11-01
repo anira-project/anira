@@ -3,12 +3,13 @@
 //==============================================================================
 AudioPluginAudioProcessor::AudioPluginAudioProcessor() 
         : AudioProcessor (BusesProperties()
-                     #if ! JucePlugin_IsMidiEffect
-                      #if ! JucePlugin_IsSynth
+#if MODEL_TO_USE == 5
                        .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                      #endif
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
-                     #endif
+#else
+                       .withInput  ("Input",  juce::AudioChannelSet::mono(), true)
+                       .withOutput ("Output", juce::AudioChannelSet::mono(), true)
+#endif
                        ),
         parameters (*this, nullptr, juce::Identifier (getName()), PluginParameters::createParameterLayout()),
         // Optional anira_context_config
@@ -20,7 +21,7 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
         // The none_processor is not needed for inference, but for the round trip test to output audio when selecting the NONE backend. It must be customized when default pp_processor is replaced by a custom one.
         none_processor(inference_config),
         inference_handler(pp_processor, inference_config, none_processor, anira_context_config),
-#elif MODEL_TO_USE == 3 || MODEL_TO_USE == 4
+#elif MODEL_TO_USE == 3 || MODEL_TO_USE == 4 || MODEL_TO_USE == 5
         pp_processor(inference_config),
         inference_handler(pp_processor, inference_config),
 #endif
@@ -106,20 +107,18 @@ void AudioPluginAudioProcessor::changeProgramName (int index, const juce::String
 //==============================================================================
 void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    juce::dsp::ProcessSpec mono_spec {sampleRate,
+    juce::dsp::ProcessSpec spec {sampleRate,
                                  static_cast<juce::uint32>(samplesPerBlock),
-                                 static_cast<juce::uint32>(1)};
+                                 static_cast<juce::uint32>(getTotalNumInputChannels())};
 
-    anira::HostAudioConfig mono_config {
-        1,
+    anira::HostAudioConfig host_config {
         (size_t) samplesPerBlock,
         sampleRate
     };
 
-    dry_wet_mixer.prepare(mono_spec);
+    dry_wet_mixer.prepare(spec);
 
-    mono_buffer.setSize(1, samplesPerBlock);
-    inference_handler.prepare(mono_config);
+    inference_handler.prepare(host_config);
 
     auto new_latency = inference_handler.get_latency();
     setLatencySamples(new_latency);
@@ -139,26 +138,17 @@ void AudioPluginAudioProcessor::releaseResources()
 
 bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-  #if JucePlugin_IsMidiEffect
-    juce::ignoreUnused (layouts);
-    return true;
-  #else
-    // This is the place where you check if the layout is supported.
-    // In this template code we only support mono or stereo.
-    // Some plugin hosts, such as certain GarageBand versions, will only
-    // load plugins that support stereo bus layouts.
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
-     && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+#if MODEL_TO_USE == 5
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
-
-    // This checks if the input layout matches the output layout
-   #if ! JucePlugin_IsSynth
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
+    else
+        return true;
+#else
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono())
         return false;
-   #endif
-
-    return true;
-  #endif
+    else
+        return true;
+#endif
 }
 
 void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
@@ -168,14 +158,11 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     juce::ScopedNoDenormals noDenormals;
 
-    stereoToMono(mono_buffer, buffer);
-    dry_wet_mixer.pushDrySamples(mono_buffer);
+    dry_wet_mixer.pushDrySamples(buffer);
 
-    auto inferenceBuffer = const_cast<float **>(mono_buffer.getArrayOfWritePointers());
-    inference_handler.process(inferenceBuffer, (size_t) buffer.getNumSamples());
+    inference_handler.process(buffer.getArrayOfWritePointers(), (size_t) buffer.getNumSamples());
 
-    dry_wet_mixer.mixWetSamples(mono_buffer);
-    monoToStereo(buffer, mono_buffer);
+    dry_wet_mixer.mixWetSamples(buffer);
 
 #if MODEL_TO_USE == 4
     float peak_gain = pp_processor.get_output(1, 0);
@@ -239,37 +226,4 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 
 anira::InferenceManager &AudioPluginAudioProcessor::get_inference_manager() {
     return inference_handler.get_inference_manager();
-}
-
-void AudioPluginAudioProcessor::stereoToMono(juce::AudioBuffer<float> &targetMonoBlock,
-                                             juce::AudioBuffer<float> &sourceBlock) {
-    if (sourceBlock.getNumChannels() == 1) {
-        targetMonoBlock.makeCopyOf(sourceBlock);
-    } else {
-        auto nSamples = sourceBlock.getNumSamples();
-
-        auto monoWrite = targetMonoBlock.getWritePointer(0);
-        auto lRead = sourceBlock.getReadPointer(0);
-        auto rRead = sourceBlock.getReadPointer(1);
-
-        juce::FloatVectorOperations::copy(monoWrite, lRead, nSamples);
-        juce::FloatVectorOperations::add(monoWrite, rRead, nSamples);
-        juce::FloatVectorOperations::multiply(monoWrite, 0.5f, nSamples);
-    }
-}
-
-void AudioPluginAudioProcessor::monoToStereo(juce::AudioBuffer<float> &targetStereoBlock,
-                                             juce::AudioBuffer<float> &sourceBlock) {
-    if (targetStereoBlock.getNumChannels() == 1) {
-        targetStereoBlock.makeCopyOf(sourceBlock);
-    } else {
-        auto nSamples = sourceBlock.getNumSamples();
-
-        auto lWrite = targetStereoBlock.getWritePointer(0);
-        auto rWrite = targetStereoBlock.getWritePointer(1);
-        auto monoRead = sourceBlock.getReadPointer(0);
-
-        juce::FloatVectorOperations::copy(lWrite, monoRead, nSamples);
-        juce::FloatVectorOperations::copy(rWrite, monoRead, nSamples);
-    }
 }

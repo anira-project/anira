@@ -168,7 +168,8 @@ void AniraContext::prepare(SessionElement& session, HostAudioConfig new_config) 
 
 void AniraContext::new_data_submitted(SessionElement& session) {
     // TODO: We assume that the model_output_size gives us the amount of new samples that we need to process. This can differ from the model_input_size because we might need to add some padding or past samples. Find a better way to determine the amount of new samples.
-    while (session.m_send_buffer.get_available_samples(0) >= (session.m_inference_config.m_output_sizes[session.m_inference_config.m_index_audio_data[Output]])) {
+    int new_samples_needed_for_inference = session.m_inference_config.m_output_sizes[session.m_inference_config.m_index_audio_data[Output]] / session.m_inference_config.m_num_audio_channels[Output];
+    while (session.m_send_buffer.get_available_samples(0) >= (new_samples_needed_for_inference)) {
         bool success = pre_process(session);
 
         if (success && session.m_host_config.submit_task_to_host_thread && m_host_provided_threads) {
@@ -187,9 +188,15 @@ void AniraContext::new_data_submitted(SessionElement& session) {
 
         // !success means that there is no free m_inference_queue
         if (!success) {
-            for (size_t i = 0; i < session.m_inference_config.m_output_sizes[session.m_inference_config.m_index_audio_data[Output]]; ++i) {
-                session.m_send_buffer.pop_sample(0);
-                session.m_receive_buffer.push_sample(0, 0.f);
+            for (size_t channel = 0; channel < session.m_inference_config.m_num_audio_channels[Input]; channel++) {
+                for (size_t i = 0; i < new_samples_needed_for_inference; i++) {
+                    session.m_send_buffer.pop_sample(channel);
+                }
+            }
+            for (size_t channel = 0; channel < session.m_inference_config.m_num_audio_channels[Output]; channel++) {
+                for (size_t i = 0; i < new_samples_needed_for_inference; i++) {
+                    session.m_receive_buffer.push_sample(channel, 0.f);
+                }
             }
         }
     }
