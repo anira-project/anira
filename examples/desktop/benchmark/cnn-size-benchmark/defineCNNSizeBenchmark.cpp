@@ -31,7 +31,7 @@ std::vector<anira::InferenceBackend> inference_backends = {
 #endif
     anira::CUSTOM
 };
-std::vector<anira::InferenceConfig> inference_configs = {small_cnn_config, medium_cnn_config, cnn_config};
+std::vector<anira::InferenceConfig> inference_configs = {cnn_config, medium_cnn_config, small_cnn_config};
 anira::InferenceConfig inference_config;
 
 void adapt_cnn_config(anira::InferenceConfig& inference_config, int buffer_size, int model_size);
@@ -50,7 +50,7 @@ static void Arguments(::benchmark::internal::Benchmark* b) {
 
 typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
-BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) {
+BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_CNNSIZE)(::benchmark::State& state) {
 
     // The buffer size return in get_buffer_size() is populated by state.range(0) param of the google benchmark
     anira::HostAudioConfig host_config = {(size_t) get_buffer_size(), SAMPLE_RATE};
@@ -97,7 +97,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
 //  * ================== BENCHMARK REGISTRATION ================== *
 //  * ============================================================ */
 
-BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_ADVANCED)
+BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_CNNSIZE)
 ->Unit(benchmark::kMillisecond)
 ->Iterations(NUM_ITERATIONS)->Repetitions(NUM_REPETITIONS)
 ->Apply(Arguments)
@@ -111,9 +111,9 @@ BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_ADVANCED)
 
 void adapt_cnn_config(anira::InferenceConfig& inference_config, int buffer_size, int model_size) {
     int receptive_field;
-    if (model_size == 0) receptive_field = 132;
+    if (model_size == 0) receptive_field = 13332;
     else if (model_size == 1) receptive_field = 1332;
-    else if (model_size == 2) receptive_field = 13332;
+    else if (model_size == 2) receptive_field = 132;
 
     int input_size = buffer_size + receptive_field;
     int output_size = buffer_size;
