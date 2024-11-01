@@ -81,6 +81,11 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_
     }
 }
 
+OnnxRuntimeProcessor::Instance::~Instance() {
+    // Reseting the session here is very important otherwise new models might not be loaded correctly
+    m_session.reset();
+}
+
 void OnnxRuntimeProcessor::Instance::prepare() {
     for (auto & i : m_input_data) {
         i.clear();

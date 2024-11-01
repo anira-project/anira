@@ -23,6 +23,7 @@ public:
 private:
     struct Instance {
         Instance(InferenceConfig& inference_config);
+        ~Instance();
 
         void prepare();
         void process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session);
