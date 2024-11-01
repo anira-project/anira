@@ -17,7 +17,7 @@ public:
     ~InferenceManager();
 
     void prepare(HostAudioConfig config);
-    void process(float ** input_buffer, size_t input_samples);
+    void process(const float* const* input_data, float* const* output_data, size_t num_samples);
 
     void set_backend(InferenceBackend new_inference_backend);
     InferenceBackend get_backend() const;
@@ -32,9 +32,9 @@ public:
     int get_session_id() const;
 
 private:
-    void process_input(float ** input_buffer, const size_t input_samples);
-    void process_output(float ** input_buffer, const size_t input_samples);
-    void clear_buffer(float ** input_buffer, const size_t input_samples);
+    void process_input(const float* const* input_data, size_t num_samples);
+    void process_output(float* const* output_data, size_t num_samples);
+    void clear_data(float* const* data, size_t input_samples, size_t num_channels);
     int calculate_latency();
     int calculate_buffer_adaptation(int m_host_buffer_size, int model_output_size);
     int max_num_inferences(int m_host_buffer_size, int model_output_size);
