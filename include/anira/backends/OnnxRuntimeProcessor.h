@@ -38,11 +38,11 @@ private:
         std::vector<Ort::Value> m_inputs;
         std::vector<Ort::Value> m_outputs;
 
-        inline static std::unique_ptr<Ort::AllocatedStringPtr> m_input_name;
-        inline static std::unique_ptr<Ort::AllocatedStringPtr> m_output_name;
+        inline static std::vector<Ort::AllocatedStringPtr> m_input_name;
+        inline static std::vector<Ort::AllocatedStringPtr> m_output_name;
 
-        inline static std::array<const char *, 1> m_input_names;
-        inline static std::array<const char *, 1> m_output_names;
+        inline static std::vector<const char *> m_input_names;
+        inline static std::vector<const char *> m_output_names;
 
         InferenceConfig& m_inference_config;
         std::atomic<bool> m_processing {false};

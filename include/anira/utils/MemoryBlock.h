@@ -80,12 +80,19 @@ public:
     }
 
     void resize(size_t size) {
-        void* data = realloc(m_data, sizeof(T) * size);
+        m_size = size;
+        void* data;
+        if (m_size > 0) {
+            data = realloc(m_data, sizeof(T) * size);
+        } else {
+            free(m_data);
+            data = malloc(sizeof(T) * size);
+        }
+
         if (data != nullptr) {
             m_data = (T*) data;
-            m_size = size;
         } else {
-            std::cerr << "Failed to allocate memory!" << std::endl;
+            std::cerr << "Failed to reallocate memory!" << std::endl;
         }
     }
 

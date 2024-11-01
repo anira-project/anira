@@ -12,16 +12,12 @@ PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config) {
     for (size_t i = 0; i < inference_config.m_input_sizes.size(); ++i) {
         if(i != inference_config.m_index_audio_data[Input]) {
             m_inputs[i].resize(inference_config.m_input_sizes[i]);
-        } else {
-            m_inputs[i].resize(0);
         }
     }
     m_outputs.resize(inference_config.m_output_sizes.size());
     for (size_t i = 0; i < inference_config.m_output_sizes.size(); ++i) {
         if(i != inference_config.m_index_audio_data[Output]) {
             m_outputs[i].resize(inference_config.m_output_sizes[i]);
-        } else {
-            m_outputs[i].resize(0);
         }
     }
 }

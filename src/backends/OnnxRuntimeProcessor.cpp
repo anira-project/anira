@@ -44,10 +44,19 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_
 #endif
         m_session = std::make_unique<Ort::Session>(m_env, modelpath.c_str(), m_session_options);
 
-        m_input_name = std::make_unique<Ort::AllocatedStringPtr>(m_session->GetInputNameAllocated(0, m_ort_alloc));
-        m_output_name = std::make_unique<Ort::AllocatedStringPtr>(m_session->GetOutputNameAllocated(0, m_ort_alloc));
-        m_input_names = {(char*) m_input_name->get()};
-        m_output_names = {(char*) m_output_name->get()};
+        m_input_names.resize(m_session->GetInputCount());
+        m_output_names.resize(m_session->GetOutputCount());
+        m_input_name.clear();
+        m_output_name.clear();
+
+        for (size_t i = 0; i < m_session->GetInputCount(); ++i) {
+            m_input_name.emplace_back(m_session->GetInputNameAllocated(i, m_ort_alloc));
+            m_input_names[i] = m_input_name[i].get();
+        }
+        for (size_t i = 0; i < m_session->GetOutputCount(); ++i) {
+            m_output_name.emplace_back(m_session->GetOutputNameAllocated(i, m_ort_alloc));
+            m_output_names[i] = m_output_name[i].get();
+        }
     }
 
     m_input_data.resize(m_inference_config.m_input_sizes.size());
