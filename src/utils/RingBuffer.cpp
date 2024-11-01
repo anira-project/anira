@@ -5,7 +5,7 @@ namespace anira {
 RingBuffer::RingBuffer() = default;
 
 void RingBuffer::initialize_with_positions(size_t num_channels, size_t num_samples) {
-    initialize(num_channels, num_samples);
+    resize(num_channels, num_samples);
     m_read_pos.resize(get_num_channels());
     m_write_pos.resize(get_num_channels());
 
