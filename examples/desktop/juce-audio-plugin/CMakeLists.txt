@@ -44,6 +44,7 @@ endif()
 add_compile_definitions(MODEL_TO_USE=2) # GuitarLSTM
 # add_compile_definitions(MODEL_TO_USE=3) # stateful-LSTM
 # add_compile_definitions(MODEL_TO_USE=4) # simple-gain
+# add_compile_definitions(MODEL_TO_USE=5) # simple-stereo-gain
 
 set (TARGET_NAME anira-juce-plugin-example)
 

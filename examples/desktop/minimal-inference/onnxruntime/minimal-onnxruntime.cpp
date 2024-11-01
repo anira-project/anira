@@ -12,6 +12,7 @@ Licence: MIT
 #include "../../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../../extras/desktop/models/cnn/CNNConfig.h"
 #include "../../../../extras/desktop/models/model-pool/SimpleGainConfig.h"
+#include "../../../../extras/desktop/models/model-pool/SimpleStereoGainConfig.h"
 
 #include "../../../../include/anira/utils/MemoryBlock.h"
 #include "../../../../include/anira/utils/AudioBuffer.h"
@@ -20,7 +21,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     std::cout << "Minimal OnnxRuntime example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Using model: " << m_inference_config.m_model_path_onnx << std::endl;
+    std::cout << "Using model: " << m_inference_config.m_model_data_onnx << std::endl;
 
     // Define environment that holds logging state used by all other objects.
     // Note: One Env must be created before using any other OnnxRuntime functionality.
@@ -36,11 +37,11 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     // Load the model and create InferenceSession
 #ifdef _WIN32
-    std::wstring modelWideStr = std::wstring(m_inference_config.m_model_path_onnx.begin(), m_inference_config.m_model_path_onnx.end());
+    std::wstring modelWideStr = std::wstring(m_inference_config.m_model_data_onnx.begin(), m_inference_config.m_model_data_onnx.end());
     const wchar_t* modelWideCStr = modelWideStr.c_str();
     Ort::Session m_session(m_env, modelWideCStr, m_session_options);
 #else
-    Ort::Session m_session(m_env, m_inference_config.m_model_path_onnx.c_str(), Ort::SessionOptions{ nullptr });
+    Ort::Session m_session(m_env, m_inference_config.m_model_data_onnx.c_str(), Ort::SessionOptions{ nullptr });
 #endif
 
     // Fill an AudioBuffer with some data
@@ -63,16 +64,16 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
                 m_memory_info,
                 m_input_data[i].data(),
                 m_input_data[i].size(),
-                m_inference_config.m_model_input_shape_onnx[i].data(),
-                m_inference_config.m_model_input_shape_onnx[i].size()
+                m_inference_config.m_input_shape_onnx[i].data(),
+                m_inference_config.m_input_shape_onnx[i].size()
             ));
         } else {
             m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
                 m_memory_info,
                 input.data(),
                 input.get_num_samples(),
-                m_inference_config.m_model_input_shape_onnx[i].data(),
-                m_inference_config.m_model_input_shape_onnx[i].size()
+                m_inference_config.m_input_shape_onnx[i].data(),
+                m_inference_config.m_input_shape_onnx[i].size()
             ));
         }
     }
@@ -121,18 +122,11 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
             m_output_data[i][j] = output_read_ptr[j];
         }
     }
-
-    // Copy the data to the output_data vector
-    for (int i = 0; i < m_output_data.size(); i++) {
-        for (int j = 0; j < m_output_data[i].size(); j++) {
-            //std::cout << "Output data [" << i << "][" << j << "]: " << m_output_data[i][j] << std::endl;
-        }
-    }
 }
 
 int main(int argc, const char* argv[]) {
 
-    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config, gain_config};
+    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config, gain_config, stereo_gain_config};
 
     for (int i = 0; i < models_to_inference.size(); ++i) {
         minimal_inference(models_to_inference[i]);

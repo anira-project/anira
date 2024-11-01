@@ -14,6 +14,7 @@ Licence: Apache 2.0
 #include "../../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../../extras/desktop/models/cnn/CNNConfig.h"
 #include "../../../../extras/desktop/models/model-pool/SimpleGainConfig.h"
+#include "../../../../extras/desktop/models/model-pool/SimpleStereoGainConfig.h"
 
 #include "../../../../include/anira/utils/MemoryBlock.h"
 #include "../../../../include/anira/utils/AudioBuffer.h"
@@ -27,11 +28,11 @@ Licence: Apache 2.0
 void minimal_inference(anira::InferenceConfig m_inference_config) {
     std::cout << "Minimal TensorFlow-Lite example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Using model: " << m_inference_config.m_model_path_tflite << std::endl;
+    std::cout << "Using model: " << m_inference_config.m_model_data_tflite << std::endl;
 
     // Load model
     TfLiteModel* m_model;
-    m_model = TfLiteModelCreateFromFile(m_inference_config.m_model_path_tflite.c_str());
+    m_model = TfLiteModelCreateFromFile(m_inference_config.m_model_data_tflite.c_str());
 
     // Create the interpreter
     TfLiteInterpreterOptions* m_options;
@@ -43,7 +44,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     // This is necessary when we have dynamic input shapes, it should be done before allocating tensors obviously
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
         std::vector<int> input_shape;
-        for (int64_t dim : m_inference_config.m_model_input_shape_tflite[i]) {
+        for (int64_t dim : m_inference_config.m_input_shape_tflite[i]) {
             input_shape.push_back(static_cast<int>(dim));
         }
         TfLiteInterpreterResizeInputTensor(m_interpreter, i, input_shape.data(), static_cast<int32_t>(input_shape.size()));
@@ -138,7 +139,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
 int main(int argc, const char* argv[]) {
 
-    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config, gain_config};
+    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config, gain_config, stereo_gain_config};
 
     for (int i = 0; i < models_to_inference.size(); ++i) {
         minimal_inference(models_to_inference[i]);
