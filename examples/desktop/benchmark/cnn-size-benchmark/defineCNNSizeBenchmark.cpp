@@ -61,7 +61,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_CNNSIZE)(::benchmark::State& state) {
     anira::PrePostProcessor *my_pp_processor;
 
     my_pp_processor = new CNNPrePostProcessor();
-    static_cast<CNNPrePostProcessor*>(my_pp_processor)->config = inference_config;
+    static_cast<CNNPrePostProcessor*>(my_pp_processor)->m_inference_config = inference_config;
 
     m_inference_handler = std::make_unique<anira::InferenceHandler>(*my_pp_processor, inference_config);
     m_inference_handler->prepare(host_config);
@@ -119,16 +119,16 @@ void adapt_cnn_config(anira::InferenceConfig& inference_config, int buffer_size,
     int output_size = buffer_size;
 
 #ifdef USE_LIBTORCH
-    inference_config.m_input_shape_torch[0] = {1, 1, input_size};
-    inference_config.m_output_shape_torch[0] = {1, 1, output_size};
+        inference_config.set_input_shape({{1, 1, input_size}}, anira::LIBTORCH);
+        inference_config.set_output_shape({{1, 1, output_size}}, anira::LIBTORCH);
 #endif
 #ifdef USE_ONNXRUNTIME
-    inference_config.m_input_shape_onnx[0] = {1, 1, input_size};
-    inference_config.m_output_shape_onnx[0] = {1, 1, output_size};
+        inference_config.set_input_shape({{1, 1, input_size}}, anira::ONNX);
+        inference_config.set_output_shape({{1, 1, output_size}}, anira::ONNX);
 #endif
 #ifdef USE_TFLITE
-    inference_config.m_input_shape_tflite[0] = {1, input_size, 1};
-    inference_config.m_output_shape_tflite[0] = {1, output_size, 1};
+        inference_config.set_input_shape({{1, input_size, 1}}, anira::TFLITE);
+        inference_config.set_output_shape({{1, output_size, 1}}, anira::TFLITE);
 #endif
     inference_config.m_input_sizes[0] = input_size;
     inference_config.m_output_sizes[0] = output_size;

@@ -37,10 +37,10 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_
 
     if (m_session == nullptr) {
 #ifdef _WIN32
-        std::string modelpath_str = m_inference_config.m_model_data_onnx;
+        std::string modelpath_str = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
         std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
 #else
-        std::string modelpath = m_inference_config.m_model_data_onnx;
+        std::string modelpath = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
 #endif
         m_session = std::make_unique<Ort::Session>(m_env, modelpath.c_str(), m_session_options);
 
@@ -67,8 +67,8 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_
                 m_memory_info,
                 m_input_data[i].data(),
                 m_input_data[i].size(),
-                m_inference_config.m_input_shape_onnx[i].data(),
-                m_inference_config.m_input_shape_onnx[i].size()
+                m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].data(),
+                m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].size()
         ));
     }
 
@@ -103,8 +103,8 @@ void OnnxRuntimeProcessor::Instance::process(AudioBufferF& input, AudioBufferF& 
                     m_memory_info,
                     input.data(),
                     input.get_num_samples() * input.get_num_channels(),
-                    m_inference_config.m_input_shape_onnx[i].data(),
-                    m_inference_config.m_input_shape_onnx[i].size()
+                    m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].data(),
+                    m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].size()
             );
         }
     }

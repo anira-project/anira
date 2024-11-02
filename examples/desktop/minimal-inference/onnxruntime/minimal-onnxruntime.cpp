@@ -21,7 +21,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     std::cout << "Minimal OnnxRuntime example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Using model: " << m_inference_config.m_model_data_onnx << std::endl;
+    std::cout << "Using model: " << m_inference_config.get_model_path(anira::InferenceBackend::ONNX) << std::endl;
 
     // Define environment that holds logging state used by all other objects.
     // Note: One Env must be created before using any other OnnxRuntime functionality.
@@ -37,11 +37,11 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     // Load the model and create InferenceSession
 #ifdef _WIN32
-    std::wstring modelWideStr = std::wstring(m_inference_config.m_model_data_onnx.begin(), m_inference_config.m_model_data_onnx.end());
+    std::wstring modelWideStr = std::wstring(m_inference_config.get_model_path(anira::InferenceBackend::ONNX).begin(), m_inference_config.get_model_path(anira::InferenceBackend::ONNX).end());
     const wchar_t* modelWideCStr = modelWideStr.c_str();
     Ort::Session m_session(m_env, modelWideCStr, m_session_options);
 #else
-    Ort::Session m_session(m_env, m_inference_config.m_model_data_onnx.c_str(), Ort::SessionOptions{ nullptr });
+    Ort::Session m_session(m_env, m_inference_config.get_model_path(anira::InferenceBackend::ONNX).c_str(), Ort::SessionOptions{ nullptr });
 #endif
 
     // Fill an AudioBuffer with some data
@@ -64,16 +64,16 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
                 m_memory_info,
                 m_input_data[i].data(),
                 m_input_data[i].size(),
-                m_inference_config.m_input_shape_onnx[i].data(),
-                m_inference_config.m_input_shape_onnx[i].size()
+                m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].data(),
+                m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].size()
             ));
         } else {
             m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
                 m_memory_info,
                 input.data(),
                 input.get_num_samples(),
-                m_inference_config.m_input_shape_onnx[i].data(),
-                m_inference_config.m_input_shape_onnx[i].size()
+                m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].data(),
+                m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].size()
             ));
         }
     }
