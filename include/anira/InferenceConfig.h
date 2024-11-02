@@ -89,16 +89,16 @@ struct TensorShape {
         m_input_shape(input_shape),
         m_output_shape(output_shape),
         m_backend(backend) {
-        assert((m_input_shape.size() > 0, "At least one input shape must be provided."));
-        assert((m_output_shape.size() > 0, "At least one output shape must be provided."));
+        assert((m_input_shape.size() > 0 && "At least one input shape must be provided."));
+        assert((m_output_shape.size() > 0 && "At least one output shape must be provided."));
     }
 
     TensorShape(TensorShapeList input_shape, TensorShapeList output_shape) :
         m_input_shape(input_shape),
         m_output_shape(output_shape),
         m_universal(true) {
-        assert((m_input_shape.size() > 0, "At least one input shape must be provided."));
-        assert((m_output_shape.size() > 0, "At least one output shape must be provided."));
+        assert((m_input_shape.size() > 0 && "At least one input shape must be provided."));
+        assert((m_output_shape.size() > 0 && "At least one output shape must be provided."));
     }
 
     bool operator==(const TensorShape& other) const {
