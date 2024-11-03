@@ -81,6 +81,9 @@ public:
     
     const int m_session_id;
 
+    std::atomic<bool> m_initialized{false};
+    std::atomic<int> m_active_inferences{0};
+
     PrePostProcessor& m_pp_processor;
     InferenceConfig& m_inference_config;
 

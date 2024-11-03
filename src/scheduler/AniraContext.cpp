@@ -2,7 +2,8 @@
 
 namespace anira {
 
-AniraContext::AniraContext(const AniraContextConfig& context_config) : m_context_config(context_config) {
+AniraContext::AniraContext(const AniraContextConfig& context_config) {
+    m_context_config = context_config;
     for (int i = 0; i < m_context_config.m_num_threads; ++i) {
         m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, m_sessions));
     }
@@ -23,10 +24,11 @@ std::shared_ptr<AniraContext> AniraContext::get_instance(const AniraContextConfi
             std::cerr << "[ERROR] AniraContext already initialized with different backends enabled!" << std::endl;
         }
         if (m_anira_context->m_context_config.m_synchronization_type != context_config.m_synchronization_type) {
-            std::cerr << "[ERROR] AniraContext already initialized with different syncronization type!" << std::endl;
+            std::cerr << "[ERROR] AniraContext already initialized with different synchronization type!" << std::endl;
         }
         if (m_anira_context->m_thread_pool.size() > context_config.m_num_threads) {
             m_anira_context->new_num_threads(context_config.m_num_threads);
+            m_anira_context->m_context_config.m_num_threads = context_config.m_num_threads;
         }
     }
     std::cout << "Anira Version " << m_anira_context->m_context_config.m_anira_version << std::endl;
@@ -44,23 +46,27 @@ int AniraContext::get_available_session_id() {
 }
 
 void AniraContext::new_num_threads(int new_num_threads) {
-    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        m_thread_pool[i]->stop();
-    }
-    m_thread_pool.clear();
-    for (size_t i = 0; i < (size_t) new_num_threads; ++i) {
-        m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, m_sessions));
-    }
-    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        if (!m_host_provided_threads) m_thread_pool[i]->start();
+    int current_num_threads = static_cast<int>(m_thread_pool.size());
+
+    if (new_num_threads > current_num_threads) {
+        for (int i = current_num_threads; i < new_num_threads; ++i) {
+            m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, m_sessions));
+            if (!m_host_provided_threads) {
+                m_thread_pool.back()->start();
+            }
+        }
+    } else if (new_num_threads < current_num_threads) {
+        for (int i = current_num_threads - 1; i >= new_num_threads; --i) {
+            m_thread_pool[i]->stop();
+            while (m_thread_pool[i]->is_running()) {
+                std::this_thread::sleep_for(std::chrono::microseconds(50));
+            }
+            m_thread_pool.pop_back();
+        }
     }
 }
 
 SessionElement& AniraContext::create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor) {
-    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        m_thread_pool[i]->stop();
-    }
-
     int session_id = get_available_session_id();
     if (inference_config.m_num_parallel_processors > m_thread_pool.size()) {
         std::cout << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in AniraContext. Using number of threads as number of parallel processors." << std::endl;
@@ -83,9 +89,7 @@ SessionElement& AniraContext::create_session(PrePostProcessor& pp_processor, Inf
     set_processor(*m_sessions.back(), inference_config, m_tflite_processors);
 #endif
 
-    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        if (!m_host_provided_threads) m_thread_pool[i]->start();
-    } 
+    m_sessions.back()->m_initialized = true;
 
     return *m_sessions.back();
 }
@@ -95,10 +99,12 @@ void AniraContext::release_thread_pool() {
 }
 
 void AniraContext::release_session(SessionElement& session) {
-    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        m_thread_pool[i]->stop();
+    session.m_initialized.store(false);
+
+    while (session.m_active_inferences.load() != 0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
-    
+
     InferenceConfig inference_config = session.m_inference_config;
 #ifdef USE_LIBTORCH
     std::shared_ptr<LibtorchProcessor> libtorch_processor = session.m_libtorch_processor;
@@ -132,16 +138,14 @@ void AniraContext::release_session(SessionElement& session) {
     if (m_active_sessions == 0) {
         release_thread_pool();
         release_instance();
-    } else {
-        for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-            if (!m_host_provided_threads) m_thread_pool[i]->start();
-        }
     }
 }
 
 void AniraContext::prepare(SessionElement& session, HostAudioConfig new_config) {
-    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        m_thread_pool[i]->stop();
+    session.m_initialized.store(false);
+
+    while (session.m_active_inferences.load() != 0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
 
     session.clear();
@@ -161,9 +165,9 @@ void AniraContext::prepare(SessionElement& session, HostAudioConfig new_config) 
     global_counter.store(0);
 #endif
 
-    for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-        if (!m_host_provided_threads) m_thread_pool[i]->start();
-    }
+    start_thread_pool();
+
+    session.m_initialized.store(true);
 }
 
 void AniraContext::new_data_submitted(SessionElement& session) {
@@ -179,10 +183,7 @@ void AniraContext::new_data_submitted(SessionElement& session) {
             // Since we cannot rely on it anymore we use as fallback our own thread pool
             if (!host_exec_success) {
                 m_host_provided_threads = false;
-
-                for (size_t i = 0; i < (size_t) m_thread_pool.size(); ++i) {
-                    m_thread_pool[i]->start();
-                }
+                start_thread_pool();
             }
         }
 
@@ -283,6 +284,14 @@ void AniraContext::post_process(SessionElement& session, SessionElement::ThreadS
 #else
     next_buffer.m_free.exchange(true);
 #endif
+}
+
+void AniraContext::start_thread_pool() {
+    for (size_t i = 0; i < m_thread_pool.size(); ++i) {
+        if (!m_host_provided_threads) {
+            m_thread_pool[i]->start();
+        }
+    }
 }
 
 int AniraContext::get_num_sessions() {

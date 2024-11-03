@@ -33,17 +33,17 @@ private:
         Ort::AllocatorWithDefaultOptions m_ort_alloc;
         Ort::SessionOptions m_session_options;
 
-        inline static std::unique_ptr<Ort::Session> m_session;
+        std::unique_ptr<Ort::Session> m_session;
 
         std::vector<MemoryBlock<float>> m_input_data;
         std::vector<Ort::Value> m_inputs;
         std::vector<Ort::Value> m_outputs;
 
-        inline static std::vector<Ort::AllocatedStringPtr> m_input_name;
-        inline static std::vector<Ort::AllocatedStringPtr> m_output_name;
+        std::vector<Ort::AllocatedStringPtr> m_input_name;
+        std::vector<Ort::AllocatedStringPtr> m_output_name;
 
-        inline static std::vector<const char *> m_input_names;
-        inline static std::vector<const char *> m_output_names;
+        std::vector<const char *> m_output_names;
+        std::vector<const char *> m_input_names;
 
         InferenceConfig& m_inference_config;
         std::atomic<bool> m_processing {false};

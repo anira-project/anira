@@ -35,28 +35,26 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_
 {
     m_session_options.SetIntraOpNumThreads(1);
 
-    if (m_session == nullptr) {
 #ifdef _WIN32
-        std::string modelpath_str = m_inference_config.m_model_data_onnx;
-        std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
+    std::string modelpath_str = m_inference_config.m_model_data_onnx;
+    std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
 #else
-        std::string modelpath = m_inference_config.m_model_data_onnx;
+    std::string modelpath = m_inference_config.m_model_data_onnx;
 #endif
-        m_session = std::make_unique<Ort::Session>(m_env, modelpath.c_str(), m_session_options);
+    m_session = std::make_unique<Ort::Session>(m_env, modelpath.c_str(), m_session_options);
 
-        m_input_names.resize(m_session->GetInputCount());
-        m_output_names.resize(m_session->GetOutputCount());
-        m_input_name.clear();
-        m_output_name.clear();
+    m_input_names.resize(m_session->GetInputCount());
+    m_output_names.resize(m_session->GetOutputCount());
+    m_input_name.clear();
+    m_output_name.clear();
 
-        for (size_t i = 0; i < m_session->GetInputCount(); ++i) {
-            m_input_name.emplace_back(m_session->GetInputNameAllocated(i, m_ort_alloc));
-            m_input_names[i] = m_input_name[i].get();
-        }
-        for (size_t i = 0; i < m_session->GetOutputCount(); ++i) {
-            m_output_name.emplace_back(m_session->GetOutputNameAllocated(i, m_ort_alloc));
-            m_output_names[i] = m_output_name[i].get();
-        }
+    for (size_t i = 0; i < m_session->GetInputCount(); ++i) {
+        m_input_name.emplace_back(m_session->GetInputNameAllocated(i, m_ort_alloc));
+        m_input_names[i] = m_input_name[i].get();
+    }
+    for (size_t i = 0; i < m_session->GetOutputCount(); ++i) {
+        m_output_name.emplace_back(m_session->GetOutputNameAllocated(i, m_ort_alloc));
+        m_output_names[i] = m_output_name[i].get();
     }
 
     m_input_data.resize(m_inference_config.m_input_sizes.size());

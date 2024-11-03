@@ -55,13 +55,15 @@ public:
 
 private:
     inline static std::shared_ptr<AniraContext> m_anira_context = nullptr; 
-    const AniraContextConfig& m_context_config;
+    inline static AniraContextConfig m_context_config;
 
     static int get_available_session_id();
     static void new_num_threads(int new_num_threads);
 
     static bool pre_process(SessionElement& session);
     static void post_process(SessionElement& session, SessionElement::ThreadSafeStruct& next_buffer);
+
+    static void start_thread_pool();
 
     inline static std::vector<std::shared_ptr<SessionElement>> m_sessions;
     inline static std::atomic<int> m_next_id{0};

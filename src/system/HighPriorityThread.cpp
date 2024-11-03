@@ -18,7 +18,9 @@ void HighPriorityThread::start() {
         pthread_setattr_default_np(&thread_attr);
     #endif
 
-    m_thread = std::thread(&HighPriorityThread::run, this);
+    if (!m_thread.joinable()) {
+        m_thread = std::thread(&HighPriorityThread::run, this);
+    }
 
     #if __linux__
         pthread_attr_destroy(&thread_attr);
@@ -29,7 +31,9 @@ void HighPriorityThread::start() {
 
 void HighPriorityThread::stop() {
     m_should_exit = true;
-    if (m_thread.joinable()) m_thread.join();
+    if (m_thread.joinable()) {
+        m_thread.join();
+    }
 }   
 
 void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread_native_handle, bool is_main_process) {
@@ -112,7 +116,11 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
 }
 
 bool HighPriorityThread::should_exit() {
-    return m_should_exit;
+    return m_should_exit.load();
+}
+
+bool HighPriorityThread::is_running() {
+    return m_thread.joinable();
 }
 
 } // namespace anira

@@ -17,7 +17,7 @@ void InferenceThread::run() {
     while (!should_exit()) {
         auto success = execute();
 
-        if (!success) {
+        if (!success && !should_exit()) {
             std::this_thread::yield();
             std::this_thread::sleep_for(time_for_exit);
         }
@@ -38,6 +38,8 @@ bool InferenceThread::execute() {
         bool inference_done = false;
         while (!inference_done) {
             for (const auto& session : m_sessions) {
+                if (session == nullptr) continue;
+                if (!session->m_initialized) continue;
                 inference_done = tryInference(session);
                 if (inference_done) break;
             }
@@ -49,6 +51,7 @@ bool InferenceThread::execute() {
 }
 
 bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
+    session->m_active_inferences.fetch_add(1);
 #ifdef USE_SEMAPHORE
     if (session->m_session_counter.try_acquire()) {
         while (true) {
@@ -56,6 +59,7 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
                 if (session->m_inference_queue[i]->m_ready.try_acquire()) {
                     inference(session, session->m_inference_queue[i]->m_processed_model_input, session->m_inference_queue[i]->m_raw_model_output);
                     session->m_inference_queue[i]->m_done.release();
+                    session->m_active_inferences.fetch_sub(1);
                     return true;
                 }
             }
@@ -70,6 +74,7 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
                     if (session->m_inference_queue[i]->m_ready.exchange(false)) {
                         inference(session, session->m_inference_queue[i]->m_processed_model_input, session->m_inference_queue[i]->m_raw_model_output);
                         session->m_inference_queue[i]->m_done.exchange(true);
+                        session->m_active_inferences.fetch_sub(1);
                         return true;
                     }
                 }
@@ -77,6 +82,7 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
         }
     }
 #endif
+    session->m_active_inferences.fetch_sub(1);
     return false;
 }
 
