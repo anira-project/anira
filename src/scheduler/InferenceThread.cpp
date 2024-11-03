@@ -89,17 +89,35 @@ bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output) {
 #ifdef USE_LIBTORCH
     if (session->m_currentBackend.load(std::memory_order_relaxed) == LIBTORCH) {
-        session->m_libtorch_processor->process(input, output, session);
+        if (session->m_libtorch_processor != nullptr) {
+            session->m_libtorch_processor->process(input, output, session);
+        }
+        else {
+            session->m_default_processor.process(input, output, session);
+            std::cerr << "[ERROR] LibTorch model has not been provided. Using default processor." << std::endl;
+        }
     }
 #endif
 #ifdef USE_ONNXRUNTIME
     if (session->m_currentBackend.load(std::memory_order_relaxed) == ONNX) {
-        session->m_onnx_processor->process(input, output, session);
+        if (session->m_onnx_processor != nullptr) {
+            session->m_onnx_processor->process(input, output, session);
+        }
+        else {
+            session->m_default_processor.process(input, output, session);
+            std::cerr << "[ERROR] OnnxRuntime model has not been provided. Using default processor." << std::endl;
+        }
     }
 #endif
 #ifdef USE_TFLITE
     if (session->m_currentBackend.load(std::memory_order_relaxed) == TFLITE) {
-        session->m_tflite_processor->process(input, output, session);
+        if (session->m_tflite_processor != nullptr) {
+            session->m_tflite_processor->process(input, output, session);
+        }
+        else {
+            session->m_default_processor.process(input, output, session);
+            std::cerr << "[ERROR] TFLite model has not been provided. Using default processor." << std::endl;
+        }
     }
 #endif
     if (session->m_currentBackend.load(std::memory_order_relaxed) == CUSTOM) {

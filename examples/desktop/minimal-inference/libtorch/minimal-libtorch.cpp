@@ -24,14 +24,14 @@ Licence: modified BSD
 void minimal_inference(anira::InferenceConfig m_inference_config) {
     std::cout << "Minimal LibTorch example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Using model: " << m_inference_config.m_model_data_torch << std::endl;
+    std::cout << "Using model: " << m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH) << std::endl;
 
     torch::set_num_threads(1);
 
     // Load model
     torch::jit::script::Module m_module;
     try {
-        m_module = torch::jit::load(m_inference_config.m_model_data_torch);
+        m_module = torch::jit::load(m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
     }
     catch (const c10::Error& e) {
         std::cerr << "[ERROR] error loading the model\n";
@@ -59,7 +59,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
             m_input_data[i].swap_data(input.get_memory_block());
             input.reset_channel_ptr();
         }
-        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.m_input_shape_torch[i]);
+        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
     }
 
 

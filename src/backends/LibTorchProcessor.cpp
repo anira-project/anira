@@ -33,7 +33,7 @@ void LibtorchProcessor::process(AudioBufferF& input, AudioBufferF& output, std::
 
 LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config) {
     try {
-        m_module = torch::jit::load(m_inference_config.m_model_data_torch);
+        m_module = torch::jit::load(m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
     }
     catch (const c10::Error& e) {
         std::cerr << "[ERROR] error loading the model\n";
@@ -43,7 +43,7 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inf
     m_input_data.resize(m_inference_config.m_input_sizes.size());
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
         m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
-        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.m_input_shape_torch[i]);
+        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
     }
 
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
@@ -68,7 +68,7 @@ void LibtorchProcessor::Instance::process(AudioBufferF& input, AudioBufferF& out
             input.reset_channel_ptr();
         }
         // This is necessary because the tensor data pointers seem to change from inference to inference
-        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.m_input_shape_torch[i]);
+        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
     }
 
     // Run inference

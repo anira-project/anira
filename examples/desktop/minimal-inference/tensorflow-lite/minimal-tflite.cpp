@@ -28,11 +28,11 @@ Licence: Apache 2.0
 void minimal_inference(anira::InferenceConfig m_inference_config) {
     std::cout << "Minimal TensorFlow-Lite example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Using model: " << m_inference_config.m_model_data_tflite << std::endl;
+    std::cout << "Using model: " << m_inference_config.get_model_path(anira::InferenceBackend::TFLITE) << std::endl;
 
     // Load model
     TfLiteModel* m_model;
-    m_model = TfLiteModelCreateFromFile(m_inference_config.m_model_data_tflite.c_str());
+    m_model = TfLiteModelCreateFromFile(m_inference_config.get_model_path(anira::InferenceBackend::TFLITE).c_str());
 
     // Create the interpreter
     TfLiteInterpreterOptions* m_options;
@@ -44,8 +44,9 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     // This is necessary when we have dynamic input shapes, it should be done before allocating tensors obviously
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
         std::vector<int> input_shape;
-        for (int64_t dim : m_inference_config.m_input_shape_tflite[i]) {
-            input_shape.push_back(static_cast<int>(dim));
+        std::vector<int64_t> input_shape64 = m_inference_config.get_input_shape(anira::InferenceBackend::TFLITE)[i];
+        for (size_t j = 0; j < input_shape64.size(); j++) {
+            input_shape.push_back((int) input_shape64[j]);
         }
         TfLiteInterpreterResizeInputTensor(m_interpreter, i, input_shape.data(), static_cast<int32_t>(input_shape.size()));
     }
