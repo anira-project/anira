@@ -1,7 +1,11 @@
 #pragma once
+#ifndef ANIRA_WAVREADER_H
+#define ANIRA_WAVREADER_H
+// Adapted from https://stackoverflow.com/a/75704890
 #include <iostream>
 #include <cstdint>
 #include <fstream>
+#include <vector>
 #include <cstring>
 
 using namespace std;
@@ -36,7 +40,7 @@ struct DataChunk
     ~DataChunk(){delete[] data;}
 };
 
-int read_wav(string path, std::vector<float> &data){
+inline int read_wav(string path, std::vector<float>& data){
     constexpr char riff_id[4] = {'R','I','F','F'};
     constexpr char format[4] = {'W','A','V','E'};
     constexpr char fmt_id[4] = {'f','m','t',' '};
@@ -89,3 +93,5 @@ int read_wav(string path, std::vector<float> &data){
     }
     return 0;
 }
+
+#endif // ANIRA_WAVREADER_H

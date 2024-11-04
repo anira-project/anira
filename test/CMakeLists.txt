@@ -36,6 +36,7 @@ add_executable(${PROJECT_NAME})
 target_sources(${PROJECT_NAME} PRIVATE
 	test_inference.cpp
     test_audiobuffer.cpp
+	test_wav_reader.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} anira::anira)
