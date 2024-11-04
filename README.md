@@ -25,8 +25,8 @@ The basic usage of anira is as follows:
 // Create a model configuration struct for your neural network
 anira::InferenceConfig my_nn_config(
     "path/to/your/model.onnx (or *.pt, *.tflite)", // Model path
-    {2048, 1, 150}, // Input shape
-    {2048, 1}, // Output shape
+    {{2048, 1, 150}}, // Input shape
+    {{2048, 1}}, // Output shape
     42.66f // Maximum inference time in ms
 );
 

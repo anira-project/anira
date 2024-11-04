@@ -18,7 +18,9 @@ void HighPriorityThread::start() {
         pthread_setattr_default_np(&thread_attr);
     #endif
 
-    m_thread = std::thread(&HighPriorityThread::run, this);
+    if (!m_thread.joinable()) {
+        m_thread = std::thread(&HighPriorityThread::run, this);
+    }
 
     #if __linux__
         pthread_attr_destroy(&thread_attr);
@@ -29,7 +31,9 @@ void HighPriorityThread::start() {
 
 void HighPriorityThread::stop() {
     m_should_exit = true;
-    if (m_thread.joinable()) m_thread.join();
+    if (m_thread.joinable()) {
+        m_thread.join();
+    }
 }   
 
 void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread_native_handle, bool is_main_process) {
@@ -81,15 +85,14 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
         std::cerr << "[ERROR] Failed to set Thread scheduling policy to SCHED_FIFO and increase the sched_priority to " << sch_params.sched_priority << ". Error : " << errno << std::endl;
         std::cout << "[WARNING] Give rtprio privileges to the user by adding the user to the realtime/audio group. Or run the application as root." << std::endl;
         std::cout << "[WARNING] Instead, trying to set increased nice value for SCHED_OTHER..." << std::endl;
+
+        ret = setpriority(PRIO_PROCESS, 0, -10);
+        if(ret != 0) {
+            std::cerr << "[ERROR] Failed to set increased nice value. Error : " << errno << std::endl;
+            std::cout << "[WARNING] Using default nice value: " << getpriority(PRIO_PROCESS, 0) << std::endl;
+        }
     }
 
-    // TODO Check if PRIO_PROCESS is the right who to set the nice value, since it should only affect the current process id, still it works
-    ret = setpriority(PRIO_PROCESS, 0, -10);
-
-    if(ret != 0) {
-        std::cerr << "[ERROR] Failed to set increased nice value. Error : " << errno << std::endl;
-        std::cout << "[WARNING] Using default nice value: " << getpriority(PRIO_PROCESS, 0) << std::endl;
-    }
     return;
 #elif __APPLE__
     int ret;
@@ -113,7 +116,11 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
 }
 
 bool HighPriorityThread::should_exit() {
-    return m_should_exit;
+    return m_should_exit.load();
+}
+
+bool HighPriorityThread::is_running() {
+    return m_thread.joinable();
 }
 
 } // namespace anira

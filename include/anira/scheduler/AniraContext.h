@@ -32,7 +32,7 @@ public:
     AniraContext(const AniraContextConfig& context_config);
     ~AniraContext();
     static std::shared_ptr<AniraContext> get_instance(const AniraContextConfig& context_config);
-    static SessionElement& create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* none_processor);
+    static SessionElement& create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor);
     static void release_session(SessionElement& session);
     static void release_instance();
     static void release_thread_pool();
@@ -49,6 +49,8 @@ public:
     void new_data_submitted(SessionElement& session);
     void new_data_request(SessionElement& session, double buffer_size_in_sec);
 
+    static void exec_inference();
+
     static std::vector<std::shared_ptr<SessionElement>>& get_sessions();
 
 private:
@@ -61,6 +63,8 @@ private:
     static bool pre_process(SessionElement& session);
     static void post_process(SessionElement& session, SessionElement::ThreadSafeStruct& next_buffer);
 
+    static void start_thread_pool();
+
     inline static std::vector<std::shared_ptr<SessionElement>> m_sessions;
     inline static std::atomic<int> m_next_id{0};
     inline static std::atomic<int> m_active_sessions{0};
@@ -68,7 +72,7 @@ private:
 
     inline static std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;
 
-    template <typename T> static void set_processor(SessionElement& session, InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors);
+    template <typename T> static void set_processor(SessionElement& session, InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors, InferenceBackend backend);
     template <typename T> static void release_processor(InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors, std::shared_ptr<T>& processor);
 
 #ifdef USE_LIBTORCH
@@ -80,6 +84,8 @@ private:
 #ifdef USE_TFLITE
     inline static std::vector<std::shared_ptr<TFLiteProcessor>> m_tflite_processors;
 #endif
+
+    inline static bool m_host_provided_threads = false;
 };
 
 } // namespace anira

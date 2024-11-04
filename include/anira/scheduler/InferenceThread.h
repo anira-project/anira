@@ -10,9 +10,8 @@
 #include <vector>
 
 #include "../system/HighPriorityThread.h"
-#include "../backends/BackendBase.h"
-#include "SessionElement.h"
 #include "../utils/AudioBuffer.h"
+#include "SessionElement.h"
 
 namespace anira {
     
@@ -25,9 +24,11 @@ public:
 #endif
     ~InferenceThread() = default;
 
-    void run() override;
+    bool execute();
 
 private:
+    void run() override;
+
     bool tryInference(std::shared_ptr<SessionElement> session);
     void inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output);
 

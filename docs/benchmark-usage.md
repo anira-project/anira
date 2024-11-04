@@ -36,14 +36,14 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
     // Create a static InferenceHandler instance
     m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
     // Define the host audio configuration that shall be used / simulated for the benchmark
-    anira::HostAudioConfig host_config(1, 512, 48000);
+    anira::HostAudioConfig host_config(512, 48000);
     // Prepare the InferenceHandler instance
     m_inference_handler->prepare(host_config);
     // Select the inference backend
     m_inference_handler->set_inference_backend(anira::LIBTORCH);
 
     // Create a static AudioBuffer instance
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(host_config.m_host_channels, host_config.m_host_buffer_size);
+    m_buffer = std::make_unique<anira::AudioBuffer<float>>(my_inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
 
     // Initialize the repetition and define with a bool whether to sleep after a repetition
     initialize_repetition(my_inference_config, host_config, inference_backend, true);
@@ -213,7 +213,7 @@ Another way to pass multiple arguments is to define the arguments in a separate 
 
 // Define the arguments as vectors
 std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
-std::vector<anira::InferenceBackend> inference_backends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE, anira::NONE};
+std::vector<anira::InferenceBackend> inference_backends = {anira::LIBTORCH, anira::ONNX, anira::TFLITE, anira::CUSTOM};
 std::vector<anira::InferenceConfigs> inference_configs = {cnn_config, hybridnn_config, rnn_config};
 std::vector<anira::PrePostProcessor> pp_processors = {cnnPrePostProcessor, hybridNNPrePostProcessor, statefulRNNPrePostProcessor};
 
@@ -242,7 +242,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)(::benchmark:
     // Use state.range(2) to select the inference backend
     m_inference_handler->set_inference_backend(inference_backends[state.range(2)]);
 
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(host_config.m_host_channels, host_config.m_host_buffer_size);
+    m_buffer = std::make_unique<anira::AudioBuffer<float>>(inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
 
     // And initialize the repetition
     initialize_repetition(inference_config, host_config, inference_backends[state.range(2)]);
@@ -260,4 +260,4 @@ BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)
 
 ## Benchmarking anira Without Inference
 
-If you want to benchmark anira without inference, just measuring the runtime of the pre- and post-processing stages and the runtime of the `process` method, you can use the `anira::benchmark::ProcessBlockFixture` in the same way as described above. The only difference is that you have to set the inference backend to `anira::NONE`.If you want to control how anira handles the roundtrip in the inference threads, you can pass the optional `NoneProcessor` to the `anira::InferenceHandler` constructor as described in the [anira usage guide](anira-usage.md).
+If you want to benchmark anira without inference, just measuring the runtime of the pre- and post-processing stages and the runtime of the `process` method, you can use the `anira::benchmark::ProcessBlockFixture` in the same way as described above. The only difference is that you have to set the inference backend to `anira::CUSTOM`.If you want to control how anira handles the roundtrip in the inference threads, you can pass the optional `CustomProcessor` to the `anira::InferenceHandler` constructor as described in the [anira usage guide](anira-usage.md).

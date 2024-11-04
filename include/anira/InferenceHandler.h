@@ -11,17 +11,22 @@ namespace anira {
 class ANIRA_API InferenceHandler {
 public:
     InferenceHandler() = delete;
-    InferenceHandler(PrePostProcessor &pp_processor, InferenceConfig& inference_config, const AniraContextConfig& context_config = AniraContextConfig());
-    InferenceHandler(PrePostProcessor &pp_processor, InferenceConfig& inference_config, BackendBase& custom_processor, const AniraContextConfig& context_config = AniraContextConfig());
+    InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, const AniraContextConfig& context_config = AniraContextConfig());
+    InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase& custom_processor, const AniraContextConfig& context_config = AniraContextConfig());
     ~InferenceHandler();
 
     void set_inference_backend(InferenceBackend inference_backend);
     InferenceBackend get_inference_backend();
 
     void prepare(HostAudioConfig new_audio_config);
-    void process(float ** input_buffer, const size_t input_samples); // buffer[channel][index]
+
+    void process(float* const* data, size_t num_samples); // data[channel][index]
+    void process(const float* const* input_data, float* const* output_data, size_t num_samples); // data[channel][index]
 
     int get_latency();
+
+    void exec_inference();
+
     InferenceManager &get_inference_manager(); // TODO remove
 
 private:

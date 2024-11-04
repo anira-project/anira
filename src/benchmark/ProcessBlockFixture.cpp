@@ -34,23 +34,23 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
 #ifdef USE_LIBTORCH
             case anira::LIBTORCH:
                 m_inference_backend_name = "libtorch";
-                path = m_inference_config.m_model_path_torch;
+                path = m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH);
                 break;
 #endif
 #ifdef USE_ONNXRUNTIME
             case anira::ONNX:
                 m_inference_backend_name = "onnx";
-                path = m_inference_config.m_model_path_onnx;
+                path = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
                 break;
 #endif
 #ifdef USE_TFLITE
             case anira::TFLITE:
                 m_inference_backend_name = "tflite";
-                path = m_inference_config.m_model_path_tflite;
+                path = m_inference_config.get_model_path(anira::InferenceBackend::TFLITE);
                 break;
 #endif
-            case anira::NONE:
-                m_inference_backend_name = "none";
+            case anira::CUSTOM:
+                m_inference_backend_name = "custom";
                 path = "no_model";
                 break;
             default:
@@ -76,7 +76,7 @@ bool ProcessBlockFixture::buffer_processed() {
 }
 
 void ProcessBlockFixture::push_random_samples_in_buffer(anira::HostAudioConfig host_config) {
-    for (size_t channel = 0; channel < host_config.m_host_channels; channel++) {
+    for (size_t channel = 0; channel < m_inference_config.m_num_audio_channels[anira::Input]; channel++) {
         for (size_t sample = 0; sample < host_config.m_host_buffer_size; sample++) {
             m_buffer->set_sample(channel, sample, random_sample());
         }
