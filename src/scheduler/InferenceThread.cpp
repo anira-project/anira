@@ -74,9 +74,9 @@ bool InferenceThread::execute() {
         bool expected = false;
         while (!inference_done) {
             if(m_iterating_sessions.compare_exchange_weak(expected, true)) {
-                int last_session_index = m_last_session_index;
                 int num_sessions = m_sessions.size();
-                if (last_session_index >= num_sessions) last_session_index = 0;
+                if (m_last_session_index >= num_sessions) m_last_session_index = 0;
+                int last_session_index = m_last_session_index;
                 for (size_t i = last_session_index; i < num_sessions; ++i) {
                     if (!m_sessions[i]->m_initialized.load(std::memory_order::acquire)) continue;
                     inference_done = tryInference(m_sessions[i]);
