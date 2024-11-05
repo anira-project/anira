@@ -12,6 +12,9 @@
 #include "../system/HighPriorityThread.h"
 #include "../utils/AudioBuffer.h"
 #include "SessionElement.h"
+#ifdef __x86_64__
+#include <immintrin.h>
+#endif
 
 namespace anira {
     
@@ -31,6 +34,7 @@ private:
 
     bool tryInference(std::shared_ptr<SessionElement> session);
     void inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output);
+    void exponential_backoff(std::array<int, 2> iterations);
 
 private:
 #ifdef USE_SEMAPHORE

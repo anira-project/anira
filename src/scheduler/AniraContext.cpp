@@ -257,9 +257,9 @@ bool AniraContext::pre_process(SessionElement& session) {
             session.m_session_counter.release();
             global_counter.release();
 #else
-            session.m_inference_queue[i]->m_ready.exchange(true);
-            session.m_session_counter.fetch_add(1);
-            global_counter.fetch_add(1);
+            session.m_inference_queue[i]->m_ready.exchange(true, std::memory_order::release);
+            session.m_session_counter.fetch_add(1, std::memory_order::release);
+            global_counter.fetch_add(1, std::memory_order::release);
 #endif
             if (session.m_current_queue >= UINT16_MAX) {
                 session.m_current_queue = 0;
