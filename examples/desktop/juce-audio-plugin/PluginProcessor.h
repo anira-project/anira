@@ -61,6 +61,10 @@ public:
 
 private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
+    void setNonRealtime(bool non_realtime) noexcept override {
+        // TODO
+        juce::ignoreUnused(non_realtime);
+    }
 
 private:
     juce::AudioProcessorValueTreeState parameters;

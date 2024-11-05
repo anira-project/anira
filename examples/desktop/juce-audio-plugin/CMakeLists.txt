@@ -63,7 +63,7 @@ juce_add_plugin(${TARGET_NAME}
 		PLUGIN_CODE Anir                            # A unique four-character plugin id with exactly one upper-case character
 		# GarageBand 10.3 requires the first letter to be upper-case, and the remaining letters to be lower-case
 
-        VST3_AUTO_MANIFEST FALSE
+        VST3_AUTO_MANIFEST TRUE
 
         if(APPLE)
             HARDENED_RUNTIME_ENABLED TRUE
@@ -122,12 +122,22 @@ target_link_libraries(${TARGET_NAME}
 )
 
 if (MSVC)
+	set(JUCE_MANIFEST_GENERATOR_PATH "${CMAKE_BINARY_DIR}/examples/desktop/juce-audio-plugin/${CMAKE_BUILD_TYPE}")
+
 	foreach(FORMAT IN LISTS FORMATS_TO_BUILD)
 		string(CONCAT CONCATENATED_TARGET ${TARGET_NAME}_${FORMAT})
 		add_custom_command(TARGET ${CONCATENATED_TARGET}
 				POST_BUILD
 				COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				${ANIRA_SHARED_LIBS_WIN}
-				$<TARGET_FILE_DIR:${TARGET_NAME}>/${FORMAT})
+				$<TARGET_FILE_DIR:${TARGET_NAME}>/${FORMAT}
+		)
 	endforeach()
+
+	add_custom_command(TARGET ${TARGET_NAME}_VST3
+			PRE_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			${ANIRA_SHARED_LIBS_WIN}
+			${JUCE_MANIFEST_GENERATOR_PATH}
+	)
 endif (MSVC)
