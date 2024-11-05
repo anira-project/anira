@@ -28,7 +28,8 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
     for (int i = 0; i < iterations[1]; i++) {
         if (should_exit()) return;
         if (execute()) return;
-#ifdef __x86_64__
+#if defined(__x86_64__) || defined(_M_X64) || defined(_M_AMD64)
+        _mm_pause();
         _mm_pause();
 #elif __aarch64__
         // ISB instruction is better than WFE https://stackoverflow.com/questions/70810121/why-does-hintspin-loop-use-isb-on-aarch64
