@@ -28,6 +28,7 @@ public:
     ~InferenceThread() = default;
 
     bool execute();
+    std::atomic<bool> m_iterating_sessions = false;
 
 private:
     void run() override;
@@ -44,8 +45,7 @@ private:
 #endif
     std::vector<std::shared_ptr<SessionElement>>& m_sessions;
 
-
-    int lastSessionIndex = 0;
+    int m_last_session_index = 0;
  };
 
 } // namespace anira

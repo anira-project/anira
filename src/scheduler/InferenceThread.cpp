@@ -69,21 +69,33 @@ bool InferenceThread::execute() {
         success = m_global_counter.compare_exchange_strong(old, old - 1, std::memory_order::acq_rel);
     }
     if (success) {
-#endif
+#endif  
         bool inference_done = false;
+        bool expected = false;
         while (!inference_done) {
-            int start_index = (int) std::min((double) lastSessionIndex, (double) m_sessions.size() - 1);
-            for (int i = start_index; i < m_sessions.size(); ++i) {
-                if (m_sessions[i] == nullptr) continue;
-                if (!m_sessions[i]->m_initialized) continue;
-                inference_done = tryInference(m_sessions[i]);
-                if (inference_done) {
-                    lastSessionIndex = i + 1;
-                    break;
+            if(m_iterating_sessions.compare_exchange_weak(expected, true)) {
+                int last_session_index = m_last_session_index;
+                int num_sessions = m_sessions.size();
+                if (last_session_index >= num_sessions) last_session_index = 0;
+                for (size_t i = last_session_index; i < num_sessions; ++i) {
+                    if (!m_sessions[i]->m_initialized.load(std::memory_order::acquire)) continue;
+                    inference_done = tryInference(m_sessions[i]);
+                    if (inference_done) {
+                        m_last_session_index = i + 1;
+                        break;
+                    }
                 }
+                if (inference_done == true) last_session_index = 0;
+                for (size_t i = 0; i < last_session_index; ++i) {
+                    if (!m_sessions[i]->m_initialized.load(std::memory_order::acquire)) continue;
+                    inference_done = tryInference(m_sessions[i]);
+                    if (inference_done) {
+                        m_last_session_index = i + 1;
+                        break;
+                    }
+                }
+                m_iterating_sessions.store(false);
             }
-
-            if (inference_done == false) lastSessionIndex = 0;
         }
         return true;
     }

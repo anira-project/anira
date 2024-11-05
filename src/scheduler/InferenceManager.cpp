@@ -26,7 +26,7 @@ void InferenceManager::prepare(HostAudioConfig new_config) {
 
     m_anira_context->prepare(m_session, m_spec);
 
-    m_inference_counter = 0;
+    m_inference_counter.store(0);
 
     m_init_samples = calculate_latency();
     for (size_t i = 0; i < m_inference_config.m_num_audio_channels[Output]; ++i) {
@@ -55,14 +55,14 @@ void InferenceManager::process_input(const float* const* input_data, size_t num_
 }
 
 void InferenceManager::process_output(float* const* output_data, size_t num_samples) {    
-    while (m_inference_counter > 0) {
+    while (m_inference_counter.load() > 0) {
         if (m_session.m_receive_buffer.get_available_samples(0) >= 2 * (size_t) num_samples) {
             for (size_t channel = 0; channel < m_inference_config.m_num_audio_channels[Output]; ++channel) {
                 for (size_t sample = 0; sample < num_samples; ++sample) {
                     m_session.m_receive_buffer.pop_sample(channel);
                 }
             }
-            m_inference_counter--;
+            m_inference_counter.fetch_sub(1);
 #ifndef BELA
             std::cout << "[WARNING] Catch up samples!" << std::endl;
 #else
@@ -81,7 +81,7 @@ void InferenceManager::process_output(float* const* output_data, size_t num_samp
         }
     } else {
         clear_data(output_data, num_samples, m_inference_config.m_num_audio_channels[Output]);
-        m_inference_counter++;
+        m_inference_counter.fetch_add(1);
 #ifndef BELA
             std::cout << "[WARNING] Missing samples!" << std::endl;
 #else
