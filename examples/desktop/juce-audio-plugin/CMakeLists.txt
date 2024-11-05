@@ -124,6 +124,16 @@ target_link_libraries(${TARGET_NAME}
 if (MSVC)
 	set(JUCE_MANIFEST_GENERATOR_PATH "${CMAKE_BINARY_DIR}/examples/desktop/juce-audio-plugin/${CMAKE_BUILD_TYPE}")
 
+	# To make your plugin work in DAWs, you need to copy the shared libraries to the DAW's plugin folder
+	# This is just a temporary solution, a better approach would be to write a proper installer
+	# This installer could register the path to the shared libraries in the registry
+	# Depending on the DAW path you might need admin rights
+	set(DAW_PATHS
+		#"C:/ProgramData/Ableton/Live 12 Suite/Program"
+		#"C:/Program Files/REAPER (x64)/"
+		#"C:/Program Files/Bitwig Studio"
+	)
+
 	foreach(FORMAT IN LISTS FORMATS_TO_BUILD)
 		string(CONCAT CONCATENATED_TARGET ${TARGET_NAME}_${FORMAT})
 		add_custom_command(TARGET ${CONCATENATED_TARGET}
@@ -140,4 +150,13 @@ if (MSVC)
 			${ANIRA_SHARED_LIBS_WIN}
 			${JUCE_MANIFEST_GENERATOR_PATH}
 	)
+
+	foreach(DAW_PATH IN LISTS DAW_PATHS)
+		add_custom_command(TARGET ${TARGET_NAME}_VST3
+				POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				${ANIRA_SHARED_LIBS_WIN}
+				${DAW_PATH}
+		)
+	endforeach()
 endif (MSVC)
