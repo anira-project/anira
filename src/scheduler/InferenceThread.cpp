@@ -49,7 +49,7 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 #endif
     }
     while (true) {
-        // On linux the sleep_for function is very important. Without it, the thread will consume 100% of the CPU and we will get missing samples, because the thread gets suspended by the OS for a certain period once in a while?!?
+        // The sleep_for function is important - without it, the thread will consume 100% of the CPU. This also applies when we use the ISB or WFE instruction. Also on linux we will get missing samples, because the thread gets suspended by the OS for a certain period once in a while?!?
         if (should_exit()) return;
         if (execute()) return;
         std::this_thread::yield();
