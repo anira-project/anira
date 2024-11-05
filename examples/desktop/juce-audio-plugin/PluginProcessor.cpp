@@ -138,6 +138,8 @@ void AudioPluginAudioProcessor::releaseResources()
 
 bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
+    if (layouts.getMainInputChannelSet() != layouts.getMainOutputChannelSet())
+        return false;
 #if MODEL_TO_USE == 5
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
