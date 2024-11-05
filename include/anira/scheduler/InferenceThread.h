@@ -43,6 +43,9 @@ private:
     std::atomic<int>& m_global_counter;
 #endif
     std::vector<std::shared_ptr<SessionElement>>& m_sessions;
+
+
+    int lastSessionIndex = 0;
  };
 
 } // namespace anira

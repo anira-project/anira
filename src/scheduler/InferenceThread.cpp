@@ -72,12 +72,18 @@ bool InferenceThread::execute() {
 #endif
         bool inference_done = false;
         while (!inference_done) {
-            for (const auto& session : m_sessions) {
-                if (session == nullptr) continue;
-                if (!session->m_initialized) continue;
-                inference_done = tryInference(session);
-                if (inference_done) break;
+            int start_index = (int) std::min((double) lastSessionIndex, (double) m_sessions.size() - 1);
+            for (int i = start_index; i < m_sessions.size(); ++i) {
+                if (m_sessions[i] == nullptr) continue;
+                if (!m_sessions[i]->m_initialized) continue;
+                inference_done = tryInference(m_sessions[i]);
+                if (inference_done) {
+                    lastSessionIndex = i + 1;
+                    break;
+                }
             }
+
+            if (inference_done == false) lastSessionIndex = 0;
         }
         return true;
     }
