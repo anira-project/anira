@@ -72,24 +72,39 @@ SessionElement& AniraContext::create_session(PrePostProcessor& pp_processor, Inf
         std::cout << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in AniraContext. Using number of threads as number of parallel processors." << std::endl;
         inference_config.m_num_parallel_processors = m_thread_pool.size();
     }
-    m_sessions.emplace_back(std::make_shared<SessionElement>(session_id, pp_processor, inference_config));
+
+    std::shared_ptr<SessionElement> session = std::make_shared<SessionElement>(session_id, pp_processor, inference_config);
 
     if (custom_processor != nullptr) {
         custom_processor->prepare();
-        m_sessions.back()->m_custom_processor = custom_processor;
+        session->m_custom_processor = custom_processor;
     }
 
 #ifdef USE_LIBTORCH
-    set_processor(*m_sessions.back(), inference_config, m_libtorch_processors, InferenceBackend::LIBTORCH);
+    set_processor(*session, inference_config, m_libtorch_processors, InferenceBackend::LIBTORCH);
 #endif
 #ifdef USE_ONNXRUNTIME
-    set_processor(*m_sessions.back(), inference_config, m_onnx_processors, InferenceBackend::ONNX);
+    set_processor(*session, inference_config, m_onnx_processors, InferenceBackend::ONNX);
 #endif
 #ifdef USE_TFLITE
-    set_processor(*m_sessions.back(), inference_config, m_tflite_processors, InferenceBackend::TFLITE);
+    set_processor(*session, inference_config, m_tflite_processors, InferenceBackend::TFLITE);
 #endif
 
-    m_sessions.back()->m_initialized = true;
+    bool expected = false;
+    for (int i = 0; i < m_thread_pool.size(); ++i) {
+        while (!m_thread_pool[i]->m_iterating_sessions.compare_exchange_weak(expected, true)) {
+        }
+    }
+
+    m_sessions.emplace_back(session);
+
+    expected = true;
+    for (int i = 0; i < m_thread_pool.size(); ++i) {
+        while (!m_thread_pool[i]->m_iterating_sessions.compare_exchange_weak(expected, false)) {
+        }
+    }
+
+    session->m_initialized = true;
 
     return *m_sessions.back();
 }
@@ -116,10 +131,22 @@ void AniraContext::release_session(SessionElement& session) {
     std::shared_ptr<TFLiteProcessor> tflite_processor = session.m_tflite_processor;
 #endif
 
+    bool expected = false;
+    for (int i = 0; i < m_thread_pool.size(); ++i) {
+        while (!m_thread_pool[i]->m_iterating_sessions.compare_exchange_weak(expected, true)) {
+        }
+    }
+
     for (size_t i = 0; i < m_sessions.size(); ++i) {
         if (m_sessions[i].get() == &session) {
             m_sessions.erase(m_sessions.begin() + (ptrdiff_t) i);
             break;
+        }
+    }
+
+    expected = true;
+    for (int i = 0; i < m_thread_pool.size(); ++i) {
+        while (!m_thread_pool[i]->m_iterating_sessions.compare_exchange_weak(expected, false)) {
         }
     }
 
