@@ -85,7 +85,7 @@ private:
     inline static std::vector<std::shared_ptr<TFLiteProcessor>> m_tflite_processors;
 #endif
 
-    inline static bool m_host_provided_threads = false;
+    inline static std::atomic<bool> m_host_provided_threads{false};
 };
 
 } // namespace anira

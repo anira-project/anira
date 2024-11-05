@@ -14,7 +14,7 @@ AniraContext::~AniraContext() {}
 std::shared_ptr<AniraContext> AniraContext::get_instance(const AniraContextConfig& context_config) {
     if (m_anira_context == nullptr) {
         m_anira_context = std::make_shared<AniraContext>(context_config);
-        m_host_provided_threads = context_config.m_use_host_threads;
+        m_host_provided_threads.store(context_config.m_use_host_threads);
     } else {
         // TODO: Better error handling
         if (m_anira_context->m_context_config.m_anira_version != context_config.m_anira_version) {
@@ -29,6 +29,9 @@ std::shared_ptr<AniraContext> AniraContext::get_instance(const AniraContextConfi
         if (m_anira_context->m_thread_pool.size() > context_config.m_num_threads) {
             m_anira_context->new_num_threads(context_config.m_num_threads);
             m_anira_context->m_context_config.m_num_threads = context_config.m_num_threads;
+        }
+        if (!context_config.m_use_host_threads && m_anira_context->m_context_config.m_use_host_threads) {
+            m_anira_context->m_context_config.m_use_host_threads = false; // Can only be set to true again if all sessions are released
         }
     }
     std::cout << "Anira Version " << m_anira_context->m_context_config.m_anira_version << std::endl;
@@ -51,9 +54,6 @@ void AniraContext::new_num_threads(int new_num_threads) {
     if (new_num_threads > current_num_threads) {
         for (int i = current_num_threads; i < new_num_threads; ++i) {
             m_thread_pool.emplace_back(std::make_unique<InferenceThread>(global_counter, m_sessions));
-            if (!m_host_provided_threads) {
-                m_thread_pool.back()->start();
-            }
         }
     } else if (new_num_threads < current_num_threads) {
         for (int i = current_num_threads - 1; i >= new_num_threads; --i) {
@@ -152,9 +152,9 @@ void AniraContext::prepare(SessionElement& session, HostAudioConfig new_config) 
     session.prepare(new_config);
 
     if (new_config.submit_task_to_host_thread && m_context_config.m_use_host_threads) {
-        m_host_provided_threads = true;
+        m_host_provided_threads.store(true);
     } else {
-        m_host_provided_threads = false;
+        m_host_provided_threads.store(false);
     }
 
 #ifdef USE_SEMAPHORE
@@ -176,13 +176,13 @@ void AniraContext::new_data_submitted(SessionElement& session) {
     while (session.m_send_buffer.get_available_samples(0) >= (new_samples_needed_for_inference)) {
         bool success = pre_process(session);
 
-        if (success && session.m_host_config.submit_task_to_host_thread && m_host_provided_threads) {
+        if (success && session.m_host_config.submit_task_to_host_thread && m_host_provided_threads.load()) {
             bool host_exec_success = session.m_host_config.submit_task_to_host_thread(1);
 
             // !host_exec_success means that the host provided thread pool does not work anymore
             // Since we cannot rely on it anymore we use as fallback our own thread pool
             if (!host_exec_success) {
-                m_host_provided_threads = false;
+                m_host_provided_threads.store(false);
                 start_thread_pool();
             }
         }
@@ -229,9 +229,9 @@ void AniraContext::new_data_request(SessionElement& session, double buffer_size_
 }
 
 void AniraContext::exec_inference() {
-    assert(m_host_provided_threads && "exec_inference is only supported when providing a host thread pool");
+    assert(m_host_provided_threads.load() && "exec_inference is only supported when providing a host thread pool");
 
-    if (m_host_provided_threads){
+    if (m_host_provided_threads.load()) {
         while (!m_thread_pool[0]->execute()) {
             // We do not need to iterate over m_thread_pool, since we ensure internally thread safety
         }
@@ -287,9 +287,9 @@ void AniraContext::post_process(SessionElement& session, SessionElement::ThreadS
 }
 
 void AniraContext::start_thread_pool() {
-    for (size_t i = 0; i < m_thread_pool.size(); ++i) {
-        if (!m_host_provided_threads) {
-            m_thread_pool[i]->start();
+    if (!m_host_provided_threads.load()) {
+        for (size_t i = 0; i < m_thread_pool.size(); ++i) {
+                m_thread_pool[i]->start();
         }
     }
 }
