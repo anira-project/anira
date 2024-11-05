@@ -15,7 +15,7 @@ InferenceThread::InferenceThread(std::atomic<int>& g, std::vector<std::shared_pt
 void InferenceThread::run() {
     while (!should_exit()) {
         constexpr std::array<int, 2> iterations = {4, 32};
-        // The times for the exponential backoff. The first loop is insteadly trying to acquire the atomic counter. The second loop is waiting for approximately 100ns. Beyond that, the thread will yield and sleep for 500us.
+        // The times for the exponential backoff. The first loop is insteadly trying to acquire the atomic counter. The second loop is waiting for approximately 100ns. Beyond that, the thread will yield and sleep for 100us.
         exponential_backoff(iterations);
     }
 }
@@ -23,11 +23,11 @@ void InferenceThread::run() {
 void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
     for (int i = 0; i < iterations[0]; i++) {
         if (should_exit()) return;
-        if(execute()) return;
+        if (execute()) return;
     }
     for (int i = 0; i < iterations[1]; i++) {
         if (should_exit()) return;
-        if(execute()) return;
+        if (execute()) return;
 #ifdef __x86_64__
         _mm_pause();
 #elif __aarch64__
@@ -51,9 +51,9 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
     while (true) {
         // On linux the sleep_for function is very important. Without it, the thread will consume 100% of the CPU and we will get missing samples, because the thread gets suspended by the OS for a certain period once in a while?!?
         if (should_exit()) return;
-        if(execute()) return;
+        if (execute()) return;
         std::this_thread::yield();
-        std::this_thread::sleep_for(std::chrono::microseconds(500));
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
 }
 
