@@ -10,29 +10,32 @@ HighPriorityThread::~HighPriorityThread() {
 }
 
 void HighPriorityThread::start() {
-    m_should_exit = false;
-    #if __linux__
-        pthread_attr_t thread_attr;
-        pthread_attr_init(&thread_attr);
-        pthread_attr_setinheritsched(&thread_attr, PTHREAD_EXPLICIT_SCHED);
-        pthread_setattr_default_np(&thread_attr);
-    #endif
-
     if (!m_thread.joinable()) {
-        m_thread = std::thread(&HighPriorityThread::run, this);
+        m_should_exit = false;
+        #if __linux__
+            pthread_attr_t thread_attr;
+            pthread_attr_init(&thread_attr);
+            pthread_attr_setinheritsched(&thread_attr, PTHREAD_EXPLICIT_SCHED);
+            pthread_setattr_default_np(&thread_attr);
+        #endif
+
+
+            m_thread = std::thread(&HighPriorityThread::run, this);
+
+        #if __linux__
+            pthread_attr_destroy(&thread_attr);
+        #endif
+
+        elevate_priority(m_thread.native_handle());
+        m_is_running = true;
     }
-
-    #if __linux__
-        pthread_attr_destroy(&thread_attr);
-    #endif
-
-    elevate_priority(m_thread.native_handle());
 }
 
 void HighPriorityThread::stop() {
     m_should_exit = true;
     if (m_thread.joinable()) {
         m_thread.join();
+        m_is_running = false;
     }
 }   
 
@@ -120,7 +123,7 @@ bool HighPriorityThread::should_exit() {
 }
 
 bool HighPriorityThread::is_running() {
-    return m_thread.joinable();
+    return m_thread.joinable() && m_is_running.load();
 }
 
 } // namespace anira
