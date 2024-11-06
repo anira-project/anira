@@ -3,8 +3,9 @@
 
 #include "../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
 #include "../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../extras/desktop/models/hybrid-nn/advanced-configs/HybridNNNoneProcessor.h" // Only needed for round trip test
-
+#include "../../../extras/desktop/models/hybrid-nn/HybridNNBypassProcessor.h" // Only needed for round trip test
+#include <chrono>
+#include <thread>
 #include "WavReader.h"
 #ifndef RANDOMDOUBLE
 #define RANDOMDOUBLE
@@ -38,16 +39,16 @@ TEST(Test_Inference, passthrough){
     double sampleRate = 48000;
 
     InferenceConfig inferenceConfig = hybridnn_config;
+    anira::AniraContextConfig anira_context_config;
 
     // Create a pre- and post-processor instance
     HybridNNPrePostProcessor myPrePostProcessor;
-    HybridNNNoneProcessor noneProcessor(inferenceConfig);
+    HybridNNBypassProcessor bypass_processor(inferenceConfig);
     // Create an InferenceHandler instance
-    anira::InferenceHandler inferenceHandler(myPrePostProcessor, inferenceConfig, noneProcessor);
+    anira::InferenceHandler inferenceHandler(myPrePostProcessor, inferenceConfig, bypass_processor, anira_context_config);
 
     // Create a HostAudioConfig instance containing the host config infos
     anira::HostAudioConfig audioConfig {
-        1, // currently only mono is supported
         bufferSize,
         sampleRate
     };  
@@ -57,10 +58,10 @@ TEST(Test_Inference, passthrough){
     // Allocate memory for audio processing
     inferenceHandler.prepare(audioConfig);
     // Select the inference backend
-    inferenceHandler.set_inference_backend(anira::NONE);
+    inferenceHandler.set_inference_backend(anira::CUSTOM);
 
-    
-    size_t latency_offset = inferenceHandler.get_latency();
+    inferenceConfig.m_num_audio_channels;
+    int latency_offset = inferenceHandler.get_latency();
 
     RingBuffer ring_buffer;
     ring_buffer.initialize_with_positions(1, latency_offset+bufferSize);
@@ -107,16 +108,16 @@ TEST(Test_Inference, inference){
 
 
     InferenceConfig inferenceConfig = hybridnn_config;
+    anira::AniraContextConfig anira_context_config;
 
     // Create a pre- and post-processor instance
     HybridNNPrePostProcessor myPrePostProcessor;
-    HybridNNNoneProcessor noneProcessor(inferenceConfig);
+    HybridNNBypassProcessor bypass_processor(inferenceConfig);
     // Create an InferenceHandler instance
-    anira::InferenceHandler inferenceHandler(myPrePostProcessor, inferenceConfig, noneProcessor);
+    anira::InferenceHandler inferenceHandler(myPrePostProcessor, inferenceConfig, bypass_processor, anira_context_config);
 
     // Create a HostAudioConfig instance containing the host config infos
     anira::HostAudioConfig audioConfig {
-        1, // currently only mono is supported
         bufferSize,
         sampleRate
     };  
@@ -128,14 +129,15 @@ TEST(Test_Inference, inference){
     // Select the inference backend
     inferenceHandler.set_inference_backend(anira::LIBTORCH);
 
-    size_t latency_offset = inferenceHandler.get_latency();
-
+    int latency_offset = inferenceHandler.get_latency() * 4;
+    std::cout << "latency in samples: " << inferenceHandler.get_latency() << std::endl;
     auto output_file_processed = std::fstream("/home/leto/ak/random_shit/audio_file_compare/processed_output.bin", std::ios::out | std::ios::binary);
+    auto input_file = std::fstream("/home/leto/ak/random_shit/audio_file_compare/input.bin", std::ios::out | std::ios::binary);
     auto output_file_reference = std::fstream("/home/leto/ak/random_shit/audio_file_compare/reference_output.bin", std::ios::out | std::ios::binary);
 
     RingBuffer ring_buffer;
     ring_buffer.initialize_with_positions(1, latency_offset+bufferSize);
-
+    
     //fill the buffer with zeroes to compensate for the latency
     for (size_t i = 0; i < latency_offset; i++){
         ring_buffer.push_sample(0, 0);
@@ -144,16 +146,19 @@ TEST(Test_Inference, inference){
     AudioBufferF test_buffer(1, bufferSize);
 
     std::cout << "starting test" << std::endl;
-    for (size_t repeat = 0; repeat < 50; repeat++)
+    for (size_t repeat = 0; repeat < 150; repeat++)
     {
         for (size_t i = 0; i < bufferSize; i++)
         {
-            test_buffer.set_sample(0, 1, data_input.at((repeat*bufferSize)+i));
+            test_buffer.set_sample(0, i, data_input.at((repeat*bufferSize)+i));
             ring_buffer.push_sample(0, data_predicted.at((repeat*bufferSize)+i));
+            float input_value = test_buffer.get_sample(0, i);
+            input_file.write(reinterpret_cast<const char*>(&input_value), sizeof(float));
+
         }
                 
         inferenceHandler.process(test_buffer.get_array_of_write_pointers(), bufferSize);
-
+        std::this_thread::sleep_for(std::chrono::nanoseconds(static_cast<int>(1e9/sampleRate * bufferSize)));
         for (size_t i = 0; i < bufferSize; i++){
             float reference = ring_buffer.pop_sample(0);
             float processed = test_buffer.get_sample(0, i);
@@ -161,12 +166,13 @@ TEST(Test_Inference, inference){
             output_file_reference.write(reinterpret_cast<const char*>(&reference), sizeof(float));
             output_file_processed.write(reinterpret_cast<const char*>(&processed), sizeof(float));
 
-            EXPECT_FLOAT_EQ(
+            ASSERT_FLOAT_EQ(
                 reference,
                 processed
-            );
+            ) << "repeat=" << repeat << ", i=" << i << ", total sample nr: " << repeat*bufferSize + i << std::endl;
         }
     }
+    input_file.close();
     output_file_processed.close();
     output_file_reference.close();
 
