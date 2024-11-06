@@ -61,10 +61,8 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 bool InferenceThread::execute() {
     if (m_next_inference.try_dequeue(m_inference_data)) {
         // TODO: Is this enough to ensure that prepare works fine?
-        if (m_inference_data.m_session->m_initialized.load(std::memory_order::acquire) && !m_inference_data.m_thread_safe_struct->m_free.load(std::memory_order::acquire)) {
+        if (m_inference_data.m_session->m_initialized.load(std::memory_order::acquire)) {
             do_inference(m_inference_data.m_session, m_inference_data.m_thread_safe_struct);
-        } else {
-            std::cout << "[WARNING] InferenceThread: Session not initialized or thread safe struct not free!" << std::endl;
         }
         return true;
     }

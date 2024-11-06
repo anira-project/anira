@@ -164,6 +164,20 @@ void AniraContext::prepare(std::shared_ptr<SessionElement> session, HostAudioCon
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
 
+    std::vector<InferenceData> inference_stack;
+    InferenceData inference_data;
+    while (m_next_inference.try_dequeue(inference_data)) {
+        if (inference_data.m_session != session) {
+            inference_stack.emplace_back(inference_data);
+        }
+    }
+
+    for (auto& inference_data : inference_stack) {
+        if (!m_next_inference.try_enqueue(inference_data)) {
+            std::cerr << "[ERROR] Could not requeue inference data!" << std::endl;
+        }
+    }
+
     session->clear();
     session->prepare(new_config);
 
