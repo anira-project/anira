@@ -26,6 +26,9 @@
     #include "../backends/TFLiteProcessor.h"
 #endif
 
+#define MIN_CAPACITY_INFERENCE_QUEUE 10000
+#define MAX_NUM_INSTANCES 1000
+
 namespace anira {
 
 class ANIRA_API AniraContext{
@@ -83,7 +86,7 @@ private:
 
     inline static std::atomic<bool> m_host_threads_active{false};
 
-    inline static moodycamel::ConcurrentQueue<InferenceData> m_next_inference = moodycamel::ConcurrentQueue<InferenceData>(500, 0, 500);
+    inline static moodycamel::ConcurrentQueue<InferenceData> m_next_inference = moodycamel::ConcurrentQueue<InferenceData>(MIN_CAPACITY_INFERENCE_QUEUE, 0, MAX_NUM_INSTANCES);
 };
 
 } // namespace anira
