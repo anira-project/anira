@@ -145,7 +145,7 @@ TEST(Test_Audiobuffer, block_of_blocks){
     for (int i = 0; i < block_size; i++) {
         block_of_atomics[i].store(i);
     }
-    std::atomic<int>* block_ptr = block_of_atomics.data();
+    std::atomic<int> const* block_ptr = block_of_atomics.data();
 
     // TODO assert something here?
 

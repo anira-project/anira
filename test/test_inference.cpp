@@ -27,7 +27,7 @@ static void fill_buffer(AudioBufferF &buffer){
     }
 }
 
-static void push_buffer_to_ringbuffer(AudioBufferF &buffer, RingBuffer &ringbuffer){
+static void push_buffer_to_ringbuffer(AudioBufferF const &buffer, RingBuffer &ringbuffer){
     for (size_t i = 0; i < buffer.get_num_samples(); i++){
         ringbuffer.push_sample(0, buffer.get_sample(0, i));
     }
@@ -60,7 +60,6 @@ TEST(Test_Inference, passthrough){
     // Select the inference backend
     inferenceHandler.set_inference_backend(anira::CUSTOM);
 
-    inferenceConfig.m_num_audio_channels;
     int latency_offset = inferenceHandler.get_latency();
 
     RingBuffer ring_buffer;
@@ -129,8 +128,9 @@ TEST(Test_Inference, inference){
     // Select the inference backend
     inferenceHandler.set_inference_backend(anira::LIBTORCH);
 
-    int latency_offset = inferenceHandler.get_latency() * 4;
+    int latency_offset = inferenceHandler.get_latency();
     std::cout << "latency in samples: " << inferenceHandler.get_latency() << std::endl;
+
     auto output_file_processed = std::fstream("/home/leto/ak/random_shit/audio_file_compare/processed_output.bin", std::ios::out | std::ios::binary);
     auto input_file = std::fstream("/home/leto/ak/random_shit/audio_file_compare/input.bin", std::ios::out | std::ios::binary);
     auto output_file_reference = std::fstream("/home/leto/ak/random_shit/audio_file_compare/reference_output.bin", std::ios::out | std::ios::binary);
@@ -156,9 +156,16 @@ TEST(Test_Inference, inference){
             input_file.write(reinterpret_cast<const char*>(&input_value), sizeof(float));
 
         }
-                
+        
+        size_t prev_samples = inferenceHandler.get_inference_manager().get_num_received_samples();
+
         inferenceHandler.process(test_buffer.get_array_of_write_pointers(), bufferSize);
-        std::this_thread::sleep_for(std::chrono::nanoseconds(static_cast<int>(1e9/sampleRate * bufferSize)));
+        
+        // wait until the block was properly processed
+        while (!(inferenceHandler.get_inference_manager().get_num_received_samples() >= prev_samples)){
+            std::this_thread::sleep_for(std::chrono::nanoseconds (10));
+        }        
+
         for (size_t i = 0; i < bufferSize; i++){
             float reference = ring_buffer.pop_sample(0);
             float processed = test_buffer.get_sample(0, i);
