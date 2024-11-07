@@ -47,7 +47,7 @@ private:
     std::shared_ptr<AniraContext> m_anira_context;
 
     InferenceConfig& m_inference_config;
-    SessionElement& m_session;
+    std::shared_ptr<SessionElement> m_session;
     HostAudioConfig m_spec;
 
     size_t m_init_samples = 0;

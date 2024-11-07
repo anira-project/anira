@@ -62,6 +62,8 @@ public:
 private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
 
+    void processesNonRealtime(const juce::AudioBuffer<float>& buffer) const;
+
 private:
     juce::AudioProcessorValueTreeState parameters;
 
@@ -90,6 +92,7 @@ private:
     anira::InferenceHandler inference_handler;
     juce::dsp::DryWetMixer<float> dry_wet_mixer;
 
+    std::atomic<bool> non_realtime = false;
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
 };

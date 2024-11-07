@@ -3,7 +3,7 @@
 
 #include <anira/anira.h>
 
-std::vector<anira::ModelData> model_data_rnn_config = {
+static std::vector<anira::ModelData> model_data_rnn_config = {
 #ifdef USE_LIBTORCH
         {STATEFULLSTM_MODELS_PATH_PYTORCH + std::string("/model_0/stateful-lstm-dynamic.pt"), anira::InferenceBackend::LIBTORCH},
 #endif
@@ -15,7 +15,7 @@ std::vector<anira::ModelData> model_data_rnn_config = {
 #endif
 };
 
-std::vector<anira::TensorShape> tensor_shape_rnn_config = {
+static std::vector<anira::TensorShape> tensor_shape_rnn_config = {
 #ifdef USE_LIBTORCH
         {{{2048, 1, 1}}, {{2048, 1, 1}}, anira::InferenceBackend::LIBTORCH},
 #endif

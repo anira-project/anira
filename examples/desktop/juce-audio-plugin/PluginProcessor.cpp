@@ -138,6 +138,8 @@ void AudioPluginAudioProcessor::releaseResources()
 
 bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
+    if (layouts.getMainInputChannelSet() != layouts.getMainOutputChannelSet())
+        return false;
 #if MODEL_TO_USE == 5
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
@@ -168,6 +170,10 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     float peak_gain = pp_processor.get_output(1, 0);
     // std::cout << "peak_gain: " << peak_gain << std::endl;
 #endif
+
+    if (isNonRealtime()) {
+        processesNonRealtime(buffer);
+    }
 }
 
 //==============================================================================
@@ -217,6 +223,13 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID
         pp_processor.set_input(newValue, 1, 0);
     }
 }
+
+void AudioPluginAudioProcessor::processesNonRealtime(const juce::AudioBuffer<float>& buffer) const {
+    double durationInSeconds = static_cast<double>(buffer.getNumSamples()) / getSampleRate();
+    auto durationInMilliseconds = std::chrono::duration<double, std::milli>(durationInSeconds * 1000);
+    std::this_thread::sleep_for(durationInMilliseconds);
+}
+
 //==============================================================================
 // This creates new instances of the plugin..
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

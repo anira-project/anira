@@ -55,11 +55,9 @@ public:
         ThreadSafeStruct(size_t num_input_samples, size_t num_output_samples, size_t num_input_channels, size_t num_output_channels);
 #ifdef USE_SEMAPHORE
         std::binary_semaphore m_free{true};
-        std::binary_semaphore m_ready{false};
         std::binary_semaphore m_done{false};
 #else
         std::atomic<bool> m_free{true};
-        std::atomic<bool> m_ready{false};
         std::atomic<bool> m_done{false};
 #endif
         unsigned long m_time_stamp;
@@ -67,7 +65,7 @@ public:
         AudioBufferF m_raw_model_output = AudioBufferF();
     };
 
-    std::vector<std::unique_ptr<ThreadSafeStruct>> m_inference_queue;
+    std::vector<std::shared_ptr<ThreadSafeStruct>> m_inference_queue;
 
     std::atomic<InferenceBackend> m_currentBackend {CUSTOM};
     unsigned long m_current_queue = 0;
@@ -101,7 +99,11 @@ public:
 #ifdef USE_TFLITE
     std::shared_ptr<TFLiteProcessor> m_tflite_processor = nullptr;
 #endif
+};
 
+struct InferenceData {
+    std::shared_ptr<SessionElement> m_session;
+    std::shared_ptr<SessionElement::ThreadSafeStruct> m_thread_safe_struct;
 };
 
 } // namespace anira

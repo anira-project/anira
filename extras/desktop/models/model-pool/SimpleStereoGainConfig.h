@@ -3,7 +3,7 @@
 
 #include <anira/anira.h>
 
-std::vector<anira::ModelData> model_data_stereo_gain_config = {
+static std::vector<anira::ModelData> model_data_stereo_gain_config = {
 #ifdef USE_LIBTORCH
     {SIMPLEGAIN_MODEL_PATH + std::string("/simple_gain_network_stereo.pt"), anira::InferenceBackend::LIBTORCH},
 #endif
@@ -15,7 +15,7 @@ std::vector<anira::ModelData> model_data_stereo_gain_config = {
 #endif
 };
 
-std::vector<anira::TensorShape> tensor_shape_stereo_gain_config = {
+static std::vector<anira::TensorShape> tensor_shape_stereo_gain_config = {
 #if USE_LIBTORCH || USE_ONNXRUNTIME || USE_TFLITE
     {{{1, 2, 512}, {1}}, {{1, 2, 512}, {1}}}, // When no backend is specified, the tensor shape is seen as universal for all backends
 #endif

@@ -34,7 +34,13 @@ if(APPLE)
     elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
         set(CMAKE_SYSTEM_PROCESSOR "x86_64")
     else()
-        message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES not set to arm64 or x86_64. Please select one of the architectures as universal binaries are not supported by all backends.")
+        if (CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+            set(CMAKE_OSX_ARCHITECTURES "arm64")
+        elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+            set(CMAKE_OSX_ARCHITECTURES "x86_64")
+        else()
+            message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES not set to arm64 or x86_64. Please select one of the architectures as universal binaries are not supported by all backends.")
+        endif()
     endif()
 endif()
 
@@ -87,6 +93,21 @@ if(ANIRA_WITH_SEMAPHORE)
 else()
     message(STATUS "Using atomic variables for thread synchronization.")
 endif()
+
+## ==============================================================================
+# Fetch threadsafe queue
+# ==============================================================================
+
+include(FetchContent)
+
+FetchContent_Declare(
+    concurrentqueue
+    GIT_REPOSITORY https://github.com/cameron314/concurrentqueue.git
+    GIT_TAG v1.0.4
+)
+
+FetchContent_MakeAvailable(concurrentqueue)
+
 
 # ==============================================================================
 # Build the library
@@ -159,6 +180,7 @@ target_compile_definitions(${PROJECT_NAME}
     -DANIRA_VERSION="${PROJECT_VERSION}"
 )
 
+target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue)
 
 if(ANIRA_WITH_LIBTORCH)
     # The find_package(Torch) adds the libraries libc10.so and libkineto.a as full paths to ${TORCH_LIBRARIES}. This is no problem when we add anira as a subdirectory to another project, but when we install the library, the torch libraries will be link targets of the anira library with full paths and hence not found on other systems. Therefore, we link those libs privately and only add the torch target publicly.

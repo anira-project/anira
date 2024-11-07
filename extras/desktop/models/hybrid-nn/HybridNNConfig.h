@@ -3,7 +3,7 @@
 
 #include <anira/anira.h>
 
-std::vector<anira::ModelData> model_data_hybridnn_config = {
+static std::vector<anira::ModelData> model_data_hybridnn_config = {
 #ifdef USE_LIBTORCH
         {GUITARLSTM_MODELS_PATH_PYTORCH + std::string("/model_0/GuitarLSTM-dynamic.pt"), anira::InferenceBackend::LIBTORCH},
 #endif
@@ -15,7 +15,7 @@ std::vector<anira::ModelData> model_data_hybridnn_config = {
 #endif
 };
 
-std::vector<anira::TensorShape> tensor_shape_hybridnn_config = {
+static std::vector<anira::TensorShape> tensor_shape_hybridnn_config = {
 #ifdef USE_LIBTORCH
         {{{256, 1, 150}}, {{256, 1}}, anira::InferenceBackend::LIBTORCH},
 #endif

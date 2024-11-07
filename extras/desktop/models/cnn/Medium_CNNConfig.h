@@ -3,7 +3,7 @@
 
 #include <anira/anira.h>
 
-std::vector<anira::ModelData> model_data_medium_cnn_config = {
+static std::vector<anira::ModelData> model_data_medium_cnn_config = {
 #ifdef USE_LIBTORCH
         {STEERABLENAFX_MODELS_PATH_PYTORCH + std::string("/model_0/steerable-nafx-3_blocks-dynamic.pt"), anira::InferenceBackend::LIBTORCH},
 #endif
@@ -15,7 +15,7 @@ std::vector<anira::ModelData> model_data_medium_cnn_config = {
 #endif
 };
 
-std::vector<anira::TensorShape> tensor_shape_medium_cnn_config = {
+static std::vector<anira::TensorShape> tensor_shape_medium_cnn_config = {
 #ifdef USE_LIBTORCH
         {{{1, 1, 3380}}, {{1, 1, 2048}}, anira::InferenceBackend::LIBTORCH},
 #endif

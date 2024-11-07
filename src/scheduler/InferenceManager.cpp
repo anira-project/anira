@@ -14,11 +14,11 @@ InferenceManager::~InferenceManager() {
 }
 
 void InferenceManager::set_backend(InferenceBackend new_inference_backend) {
-    m_session.m_currentBackend.store(new_inference_backend, std::memory_order_relaxed);
+    m_session->m_currentBackend.store(new_inference_backend, std::memory_order_relaxed);
 }
 
 InferenceBackend InferenceManager::get_backend() const {
-    return m_session.m_currentBackend.load(std::memory_order_relaxed);
+    return m_session->m_currentBackend.load(std::memory_order_relaxed);
 }
 
 void InferenceManager::prepare(HostAudioConfig new_config) {
@@ -26,12 +26,12 @@ void InferenceManager::prepare(HostAudioConfig new_config) {
 
     m_anira_context->prepare(m_session, m_spec);
 
-    m_inference_counter = 0;
+    m_inference_counter.store(0);
 
     m_init_samples = calculate_latency();
     for (size_t i = 0; i < m_inference_config.m_num_audio_channels[Output]; ++i) {
         for (size_t j = 0; j < m_init_samples; ++j) {
-            m_session.m_receive_buffer.push_sample(i, 0.f);
+            m_session->m_receive_buffer.push_sample(i, 0.f);
         }
     }
 }
@@ -49,43 +49,43 @@ void InferenceManager::process(const float* const* input_data, float* const* out
 void InferenceManager::process_input(const float* const* input_data, size_t num_samples) {
     for (size_t channel = 0; channel < m_inference_config.m_num_audio_channels[Input]; ++channel) {
         for (size_t sample = 0; sample < num_samples; ++sample) {
-            m_session.m_send_buffer.push_sample(channel, input_data[channel][sample]);
+            m_session->m_send_buffer.push_sample(channel, input_data[channel][sample]);
         }
     }
 }
 
 void InferenceManager::process_output(float* const* output_data, size_t num_samples) {    
-    while (m_inference_counter > 0) {
-        if (m_session.m_receive_buffer.get_available_samples(0) >= 2 * (size_t) num_samples) {
+    while (m_inference_counter.load() > 0) {
+        if (m_session->m_receive_buffer.get_available_samples(0) >= 2 * (size_t) num_samples) {
             for (size_t channel = 0; channel < m_inference_config.m_num_audio_channels[Output]; ++channel) {
                 for (size_t sample = 0; sample < num_samples; ++sample) {
-                    m_session.m_receive_buffer.pop_sample(channel);
+                    m_session->m_receive_buffer.pop_sample(channel);
                 }
             }
-            m_inference_counter--;
+            m_inference_counter.fetch_sub(1);
 #ifndef BELA
-            std::cout << "[WARNING] Catch up samples!" << std::endl;
+            std::cout << "[WARNING] Catch up samples in session: " << m_session->m_session_id << "!" << std::endl;
 #else
-            printf("[WARNING] Catch up samples!");
+            printf("[WARNING] Catch up samples in session: %d!\n", m_session->m_session_id);
 #endif
         }
         else {
             break;
         }
     }
-    if (m_session.m_receive_buffer.get_available_samples(0) >= (size_t) num_samples) {
+    if (m_session->m_receive_buffer.get_available_samples(0) >= (size_t) num_samples) {
         for (size_t channel = 0; channel < m_inference_config.m_num_audio_channels[Output]; ++channel) {
             for (size_t sample = 0; sample < num_samples; ++sample) {
-                output_data[channel][sample] = m_session.m_receive_buffer.pop_sample(channel);
+                output_data[channel][sample] = m_session->m_receive_buffer.pop_sample(channel);
             }
         }
     } else {
         clear_data(output_data, num_samples, m_inference_config.m_num_audio_channels[Output]);
-        m_inference_counter++;
+        m_inference_counter.fetch_add(1);
 #ifndef BELA
-            std::cout << "[WARNING] Missing samples!" << std::endl;
+            std::cout << "[WARNING] Missing samples in session: " << m_session->m_session_id << "!" << std::endl;
 #else
-            printf("[WARNING] Missing samples!\n");
+            printf("[WARNING] Missing samples in session: %d!\n", m_session->m_session_id);
 #endif
     }
 }
@@ -108,7 +108,7 @@ const AniraContext& InferenceManager::get_anira_context() const {
 
 size_t InferenceManager::get_num_received_samples() const {
     m_anira_context->new_data_request(m_session, 0); // TODO: Check if process_output call is better here
-    return m_session.m_receive_buffer.get_available_samples(0);
+    return m_session->m_receive_buffer.get_available_samples(0);
 }
 
 int InferenceManager::get_missing_blocks() const {
@@ -116,7 +116,7 @@ int InferenceManager::get_missing_blocks() const {
 }
 
 int InferenceManager::get_session_id() const {
-    return m_session.m_session_id;
+    return m_session->m_session_id;
 }
 
 void InferenceManager::exec_inference() const {
