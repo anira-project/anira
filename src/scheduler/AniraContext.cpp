@@ -91,8 +91,6 @@ std::shared_ptr<SessionElement> AniraContext::create_session(PrePostProcessor& p
 
     m_sessions.emplace_back(session);
 
-    session->m_initialized = true;
-
     return m_sessions.back();
 }
 
@@ -208,8 +206,8 @@ void AniraContext::new_data_submitted(std::shared_ptr<SessionElement> session) {
             // !host_exec_success means that the host provided thread pool does not work anymore
             // Since we cannot rely on it anymore we use as fallback our own thread pool
             if (!host_exec_success) {
-                m_host_threads_active.store(false);
                 start_thread_pool();
+                m_host_threads_active.store(false);
             }
         }
 

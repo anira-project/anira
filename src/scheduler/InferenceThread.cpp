@@ -74,12 +74,11 @@ void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std:
 #ifdef USE_SEMAPHORE
     inference(session, thread_safe_struct->m_processed_model_input, thread_safe_struct->m_raw_model_output);
     thread_safe_struct->m_done.release();
-    session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 #else
     inference(session, thread_safe_struct->m_processed_model_input, thread_safe_struct->m_raw_model_output);
     thread_safe_struct->m_done.store(true, std::memory_order::release);
-    session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 #endif
+    session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 }
 
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output) {

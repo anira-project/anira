@@ -41,8 +41,6 @@ private:
 
     moodycamel::ConcurrentQueue<InferenceData>& m_next_inference;
     InferenceData m_inference_data;
-
-    int m_last_session_index = 0;
  };
 
 } // namespace anira
