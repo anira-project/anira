@@ -1,20 +1,26 @@
 cff-version: 1.2.0
-message: "If you use this work, please cite it as below."
-title: "ANIRA: An Architecture for Neural Network Inference in Real-Time Audio Applications"
+message: If you use this software, please cite both the article from preferred-citation and the software itself.
 authors:
-  - family-names: "Ackva"
-    given-names: "Valentin"
-  - family-names: "Schulz"
-    given-names: "Fares"
-year: 2024
-conference:
-  name: "IEEE 5th International Symposium on the Internet of Sounds (IS2)"
-  acronym: "IS2"
-  date: "2024"
-  publisher: "IEEE"
-  location: "Erlangen, Germany"
-identifiers:
-  - type: "doi"
-    value: "10.1109/IS262782.2024.10704099"
-pages: "1-10"
-type: "conference-paper"
+  - family-names: Ackva
+    given-names: Valentin
+  - family-names: Schulz
+    given-names: Fares
+title: 'ANIRA: An Architecture for Neural Network Inference in Real-Time Audio Applications'
+version: 1.0.0
+doi: 10.1109/IS262782.2024.10704099
+date-released: '2024-11-09'
+preferred-citation:
+  authors:
+    - family-names: Ackva
+      given-names: Valentin
+    - family-names: Schulz
+      given-names: Fares
+  title: 'ANIRA: An Architecture for Neural Network Inference in Real-Time Audio Applications'
+  doi: 10.1109/IS262782.2024.10704099
+  type: conference-paper
+  pages: 1-10
+  year: '2024'
+  collection-title: 2024 IEEE 5th International Symposium on the Internet of Sounds (IS2)
+  conference: {}
+  publisher:
+    name: IEEE
