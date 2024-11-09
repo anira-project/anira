@@ -4,7 +4,7 @@
 
 #include "DryWetMixer.h"
 
-namespace anira::clap_plugin_example::utils
+namespace clap_plugin_example::utils
 {
 
 DryWetMixer::DryWetMixer() : m_sample_rate(0.0), m_buffer_size(0), m_latency_samples(0), m_write_index(0), m_read_index(0),

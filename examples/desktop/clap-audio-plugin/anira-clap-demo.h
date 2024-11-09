@@ -19,7 +19,7 @@
 
 #include "utils/DryWetMixer.h"
 
-namespace anira::clap_plugin_example
+namespace clap_plugin_example
 {
 
 struct AniraClapPluginExample : public clap::helpers::Plugin<clap::helpers::MisbehaviourHandler::Terminate,
@@ -77,13 +77,13 @@ public:
     const clap_host_thread_pool* m_clap_thread_pool{nullptr};
     uint32_t m_plugin_latency;
 
-    ContextConfig m_anira_context;
+    anira::ContextConfig m_anira_context;
 
-    InferenceConfig m_inference_config = hybridnn_config;
+    anira::InferenceConfig m_inference_config = hybridnn_config;
     HybridNNPrePostProcessor m_pp_processor;
     HybridNNBypassProcessor m_bypass_processor;
 
-    InferenceHandler m_inference_handler;
+    anira::InferenceHandler m_inference_handler;
 
     utils::DryWetMixer m_dry_wet_mixer;
 
@@ -95,6 +95,6 @@ public:
     };
 };
 
-} // namespace anira::clap_plugin_example
+} // namespace clap_plugin_example
 
 #endif //ANIRA_CLAP_PLUGIN_EXAMPLE_H

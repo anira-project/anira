@@ -3,7 +3,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace anira::clap_plugin_example::pluginentry
+namespace clap_plugin_example::pluginentry
 {
 
 uint32_t clap_get_plugin_count(const clap_plugin_factory *f) { return 1; }
@@ -27,9 +27,9 @@ static const clap_plugin *clap_create_plugin(const clap_plugin_factory *f, const
 }
 
 const CLAP_EXPORT struct clap_plugin_factory clap_saw_demo_factory = {
-    anira::clap_plugin_example::pluginentry::clap_get_plugin_count,
-    anira::clap_plugin_example::pluginentry::clap_get_plugin_descriptor,
-    anira::clap_plugin_example::pluginentry::clap_create_plugin,
+    clap_plugin_example::pluginentry::clap_get_plugin_count,
+    clap_plugin_example::pluginentry::clap_get_plugin_descriptor,
+    clap_plugin_example::pluginentry::clap_create_plugin,
 };
 static const void *get_factory(const char *factory_id)
 {
@@ -39,16 +39,16 @@ static const void *get_factory(const char *factory_id)
 bool clap_init(const char *p) { return true; }
 void clap_deinit() {}
 
-} // namespace anira::clap_plugin_example::pluginentry
+} // namespace clap_plugin_example::pluginentry
 
 extern "C"
 {
     // clang-format off
     const CLAP_EXPORT struct clap_plugin_entry clap_entry = {
         CLAP_VERSION,
-        anira::clap_plugin_example::pluginentry::clap_init,
-        anira::clap_plugin_example::pluginentry::clap_deinit,
-        anira::clap_plugin_example::pluginentry::get_factory
+        clap_plugin_example::pluginentry::clap_init,
+        clap_plugin_example::pluginentry::clap_deinit,
+        clap_plugin_example::pluginentry::get_factory
     };
     // clang-format on
 }

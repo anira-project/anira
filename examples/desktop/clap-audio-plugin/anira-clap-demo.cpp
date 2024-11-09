@@ -9,7 +9,7 @@
 #include <clap/helpers/host-proxy.hxx>
 #include <iomanip>
 
-namespace anira::clap_plugin_example
+namespace clap_plugin_example
 {
 
 AniraClapPluginExample::AniraClapPluginExample(const clap_host *host)
