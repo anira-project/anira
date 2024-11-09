@@ -1,5 +1,5 @@
-#ifndef ANIRA_ANIRACONTEXT_H
-#define ANIRA_ANIRACONTEXT_H
+#ifndef ANIRA_CONTEXT_H
+#define ANIRA_CONTEXT_H
 
 #ifdef USE_SEMAPHORE
     #include <semaphore>
@@ -9,11 +9,12 @@
 #include <memory>
 #include <vector>
 
-#include "../AniraContextConfig.h"
+#include "../ContextConfig.h"
 #include "SessionElement.h"
 #include "InferenceThread.h"
 #include "../PrePostProcessor.h"
 #include "../utils/HostAudioConfig.h"
+#include "concurrentqueue.h"
 
 #ifdef USE_LIBTORCH
     #include "../backends/LibTorchProcessor.h"
@@ -25,54 +26,52 @@
     #include "../backends/TFLiteProcessor.h"
 #endif
 
+#define MIN_CAPACITY_INFERENCE_QUEUE 10000
+#define MAX_NUM_INSTANCES 1000
+
 namespace anira {
 
-class ANIRA_API AniraContext{
+class ANIRA_API Context{
 public:
-    AniraContext(const AniraContextConfig& context_config);
-    ~AniraContext();
-    static std::shared_ptr<AniraContext> get_instance(const AniraContextConfig& context_config);
-    static SessionElement& create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor);
-    static void release_session(SessionElement& session);
+    Context(const ContextConfig& context_config);
+    ~Context();
+    static std::shared_ptr<Context> get_instance(const ContextConfig& context_config);
+    static std::shared_ptr<SessionElement> create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor);
+    static void release_session(std::shared_ptr<SessionElement> session);
     static void release_instance();
     static void release_thread_pool();
 
-    void prepare(SessionElement& session, HostAudioConfig new_config);
+    void prepare(std::shared_ptr<SessionElement> session, HostAudioConfig new_config);
 
     static int get_num_sessions();
 
-#ifdef USE_SEMAPHORE
-    inline static std::counting_semaphore<UINT16_MAX> global_counter{0};
-#else
-    inline static std::atomic<int> global_counter{0};
-#endif
-    void new_data_submitted(SessionElement& session);
-    void new_data_request(SessionElement& session, double buffer_size_in_sec);
+    void new_data_submitted(std::shared_ptr<SessionElement> session);
+    void new_data_request(std::shared_ptr<SessionElement> session, double buffer_size_in_sec);
 
     static void exec_inference();
 
     static std::vector<std::shared_ptr<SessionElement>>& get_sessions();
 
 private:
-    inline static std::shared_ptr<AniraContext> m_anira_context = nullptr; 
-    inline static AniraContextConfig m_context_config;
+    inline static std::shared_ptr<Context> m_context = nullptr; 
+    inline static ContextConfig m_context_config;
 
     static int get_available_session_id();
     static void new_num_threads(int new_num_threads);
 
-    static bool pre_process(SessionElement& session);
-    static void post_process(SessionElement& session, SessionElement::ThreadSafeStruct& next_buffer);
+    static bool pre_process(std::shared_ptr<SessionElement> session);
+    static void post_process(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> next_buffer);
 
     static void start_thread_pool();
 
     inline static std::vector<std::shared_ptr<SessionElement>> m_sessions;
-    inline static std::atomic<int> m_next_id{0};
+    inline static std::atomic<int> m_next_id{-1};
     inline static std::atomic<int> m_active_sessions{0};
     inline static bool m_thread_pool_should_exit = false;
 
     inline static std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;
 
-    template <typename T> static void set_processor(SessionElement& session, InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors, InferenceBackend backend);
+    template <typename T> static void set_processor(std::shared_ptr<SessionElement> session, InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors, InferenceBackend backend);
     template <typename T> static void release_processor(InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors, std::shared_ptr<T>& processor);
 
 #ifdef USE_LIBTORCH
@@ -85,9 +84,11 @@ private:
     inline static std::vector<std::shared_ptr<TFLiteProcessor>> m_tflite_processors;
 #endif
 
-    inline static std::atomic<bool> m_host_provided_threads{false};
+    inline static std::atomic<bool> m_host_threads_active{false};
+
+    inline static moodycamel::ConcurrentQueue<InferenceData> m_next_inference = moodycamel::ConcurrentQueue<InferenceData>(MIN_CAPACITY_INFERENCE_QUEUE, 0, MAX_NUM_INSTANCES);
 };
 
 } // namespace anira
 
-#endif //ANIRA_ANIRACONTEXT_H
+#endif //ANIRA_CONTEXT_H

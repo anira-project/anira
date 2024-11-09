@@ -3,12 +3,11 @@
 namespace anira {
 
 #ifdef USE_SEMAPHORE
-InferenceThread::InferenceThread(std::counting_semaphore<UINT16_MAX>& g, std::vector<std::shared_ptr<SessionElement>>& ses) :
+InferenceThread::InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& next_inference) :
 #else
-InferenceThread::InferenceThread(std::atomic<int>& g, std::vector<std::shared_ptr<SessionElement>>& ses) :
+InferenceThread::InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& next_inference) :
 #endif
-    m_global_counter(g),
-    m_sessions(ses)
+    m_next_inference(next_inference)
 {
 }
 
@@ -60,82 +59,26 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 
 
 bool InferenceThread::execute() {
-#ifdef USE_SEMAPHORE
-    if (m_global_counter.try_acquire()) {
-#else
-    int old = m_global_counter.load(std::memory_order::acquire);
-    bool success = false;
-    if (old > 0) {
-        success = m_global_counter.compare_exchange_strong(old, old - 1, std::memory_order::acq_rel);
-    }
-    if (success) {
-#endif  
-        bool inference_done = false;
-        bool expected = false;
-        while (!inference_done) {
-            if(m_iterating_sessions.compare_exchange_weak(expected, true)) {
-                int num_sessions = m_sessions.size();
-                if (m_last_session_index >= num_sessions) m_last_session_index = 0;
-                int last_session_index = m_last_session_index;
-                for (size_t i = last_session_index; i < num_sessions; ++i) {
-                    if (!m_sessions[i]->m_initialized.load(std::memory_order::acquire)) continue;
-                    inference_done = tryInference(m_sessions[i]);
-                    if (inference_done) {
-                        m_last_session_index = i + 1;
-                        break;
-                    }
-                }
-                if (inference_done == true) last_session_index = 0;
-                for (size_t i = 0; i < last_session_index; ++i) {
-                    if (!m_sessions[i]->m_initialized.load(std::memory_order::acquire)) continue;
-                    inference_done = tryInference(m_sessions[i]);
-                    if (inference_done) {
-                        m_last_session_index = i + 1;
-                        break;
-                    }
-                }
-                m_iterating_sessions.store(false);
-            }
+    if (m_next_inference.try_dequeue(m_inference_data)) {
+        // TODO: Is this enough to ensure that prepare works fine?
+        if (m_inference_data.m_session->m_initialized.load(std::memory_order::acquire)) {
+            do_inference(m_inference_data.m_session, m_inference_data.m_thread_safe_struct);
         }
         return true;
     }
     return false;
 }
 
-bool InferenceThread::tryInference(std::shared_ptr<SessionElement> session) {
-    session->m_active_inferences.fetch_add(1);
+void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
+    session->m_active_inferences.fetch_add(1, std::memory_order::release);
 #ifdef USE_SEMAPHORE
-    if (session->m_session_counter.try_acquire()) {
-        while (true) {
-            for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
-                if (session->m_inference_queue[i]->m_ready.try_acquire()) {
-                    inference(session, session->m_inference_queue[i]->m_processed_model_input, session->m_inference_queue[i]->m_raw_model_output);
-                    session->m_inference_queue[i]->m_done.release();
-                    session->m_active_inferences.fetch_sub(1);
-                    return true;
-                }
-            }
-        }
-    }
+    inference(session, thread_safe_struct->m_processed_model_input, thread_safe_struct->m_raw_model_output);
+    thread_safe_struct->m_done.release();
 #else
-    int old = session->m_session_counter.load();
-    if (old > 0) {
-        if (session->m_session_counter.compare_exchange_strong(old, old - 1)) {
-            while (true) {
-                for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
-                    if (session->m_inference_queue[i]->m_ready.exchange(false, std::memory_order::acq_rel)) {
-                        inference(session, session->m_inference_queue[i]->m_processed_model_input, session->m_inference_queue[i]->m_raw_model_output);
-                        session->m_inference_queue[i]->m_done.exchange(true, std::memory_order::release);
-                        session->m_active_inferences.fetch_sub(1);
-                        return true;
-                    }
-                }
-            }
-        }
-    }
+    inference(session, thread_safe_struct->m_processed_model_input, thread_safe_struct->m_raw_model_output);
+    thread_safe_struct->m_done.store(true, std::memory_order::release);
 #endif
-    session->m_active_inferences.fetch_sub(1);
-    return false;
+    session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 }
 
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output) {

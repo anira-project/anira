@@ -31,6 +31,9 @@ public:
     bool should_exit();
     bool is_running();
 
+protected:
+    std::atomic<bool> m_is_running;
+    
 private:
     std::thread m_thread;
     std::atomic<bool> m_should_exit;

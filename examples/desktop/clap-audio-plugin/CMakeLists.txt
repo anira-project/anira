@@ -41,7 +41,7 @@ if(APPLE)
             MACOSX_BUNDLE_BUNDLE_NAME ${PROJECT_NAME}
             MACOSX_BUNDLE_BUNDLE_VERSION "0.1"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
-            # MACOSX_BUNDLE_INFO_PLIST cmake/anira-clap-demo.plist.in TODO add this file
+            MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_LIST_DIR}/cmake/anira-clap-demo.plist.in
     )
     target_link_libraries(${PROJECT_NAME} "-framework CoreFoundation" "-framework AppKit" "-framework CoreGraphics")
     target_compile_definitions(${PROJECT_NAME} PRIVATE IS_MAC=1)

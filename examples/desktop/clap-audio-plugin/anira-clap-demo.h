@@ -77,7 +77,7 @@ public:
     const clap_host_thread_pool* m_clap_thread_pool{nullptr};
     uint32_t m_plugin_latency;
 
-    AniraContextConfig m_anira_context;
+    ContextConfig m_anira_context;
 
     InferenceConfig m_inference_config = hybridnn_config;
     HybridNNPrePostProcessor m_pp_processor;
