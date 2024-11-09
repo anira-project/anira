@@ -2,15 +2,15 @@
 
 namespace anira {
 
-InferenceManager::InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor, const AniraContextConfig& context_config) :
-    m_anira_context(AniraContext::get_instance(context_config)),
-    m_session(m_anira_context->create_session(pp_processor, inference_config, custom_processor)),
+InferenceManager::InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor, const ContextConfig& context_config) :
+    m_context(Context::get_instance(context_config)),
+    m_session(m_context->create_session(pp_processor, inference_config, custom_processor)),
     m_inference_config(inference_config)
 {
 }
 
 InferenceManager::~InferenceManager() {
-    m_anira_context->release_session(m_session);
+    m_context->release_session(m_session);
 }
 
 void InferenceManager::set_backend(InferenceBackend new_inference_backend) {
@@ -24,7 +24,7 @@ InferenceBackend InferenceManager::get_backend() const {
 void InferenceManager::prepare(HostAudioConfig new_config) {
     m_spec = new_config;
 
-    m_anira_context->prepare(m_session, m_spec);
+    m_context->prepare(m_session, m_spec);
 
     m_inference_counter.store(0);
 
@@ -39,9 +39,9 @@ void InferenceManager::prepare(HostAudioConfig new_config) {
 void InferenceManager::process(const float* const* input_data, float* const* output_data, size_t num_samples) {
     process_input(input_data, num_samples);
 
-    m_anira_context->new_data_submitted(m_session);
+    m_context->new_data_submitted(m_session);
     double time_in_sec = static_cast<double>(num_samples) / m_spec.m_host_sample_rate;
-    m_anira_context->new_data_request(m_session, time_in_sec);
+    m_context->new_data_request(m_session, time_in_sec);
 
     process_output(output_data, num_samples);
 }
@@ -102,12 +102,12 @@ int InferenceManager::get_latency() const {
     return m_init_samples;
 }
 
-const AniraContext& InferenceManager::get_anira_context() const {
-    return *m_anira_context;
+const Context& InferenceManager::get_context() const {
+    return *m_context;
 }
 
 size_t InferenceManager::get_num_received_samples() const {
-    m_anira_context->new_data_request(m_session, 0); // TODO: Check if process_output call is better here
+    m_context->new_data_request(m_session, 0); // TODO: Check if process_output call is better here
     return m_session->m_receive_buffer.get_available_samples(0);
 }
 
@@ -120,7 +120,7 @@ int InferenceManager::get_session_id() const {
 }
 
 void InferenceManager::exec_inference() const {
-    m_anira_context->exec_inference();
+    m_context->exec_inference();
 }
 
 int InferenceManager::calculate_latency() {

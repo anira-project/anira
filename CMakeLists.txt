@@ -132,7 +132,7 @@ target_sources(${PROJECT_NAME}
         # Scheduler
         src/scheduler/InferenceManager.cpp
         src/scheduler/InferenceThread.cpp
-        src/scheduler/AniraContext.cpp
+        src/scheduler/Context.cpp
         src/scheduler/SessionElement.cpp
 
         # Utils

@@ -1,5 +1,5 @@
-#ifndef ANIRA_ANIRACONTEXTCONFIG_H
-#define ANIRA_ANIRACONTEXTCONFIG_H
+#ifndef ANIRA_CONTEXTCONFIG_H
+#define ANIRA_CONTEXTCONFIG_H
 
 #include <array>
 #include <string>
@@ -16,8 +16,8 @@ enum SynchronizationType {
     ATOMIC
 };
 
-struct ANIRA_API AniraContextConfig {
-    AniraContextConfig(
+struct ANIRA_API ContextConfig {
+    ContextConfig(
             int num_threads = ((int) std::thread::hardware_concurrency() / 2 > 0) ? (int) std::thread::hardware_concurrency() / 2 : 1, bool use_host_threads = false) :
             m_num_threads(num_threads),
             m_use_host_threads(use_host_threads)
@@ -45,7 +45,7 @@ struct ANIRA_API AniraContextConfig {
     SynchronizationType m_synchronization_type;
     
 
-    bool operator==(const AniraContextConfig& other) const {
+    bool operator==(const ContextConfig& other) const {
         return
             m_num_threads == other.m_num_threads &&
             m_use_host_threads == other.m_use_host_threads &&
@@ -55,7 +55,7 @@ struct ANIRA_API AniraContextConfig {
 
     }
 
-    bool operator!=(const AniraContextConfig& other) const {
+    bool operator!=(const ContextConfig& other) const {
         return !(*this == other);
     }
 
@@ -63,4 +63,4 @@ struct ANIRA_API AniraContextConfig {
 
 } // namespace anira
 
-#endif //ANIRA_ANIRACONTEXTCONFIG_H
+#endif //ANIRA_CONTEXTCONFIG_H
