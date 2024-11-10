@@ -16,44 +16,77 @@ Anira provides the following structures and classes to help you integrate real-t
 
 ### Step 1: Define your Model Configuration
 
-Start by specifying your model configuration using ``anira::InferenceConfig``. This includes the model path, input/output shapes, and other critical settings that match the requirements of your model. When using a single backend, you define the model path and input/output shapes only once.
+Start by specifying your model configuration using ``anira::InferenceConfig``. This includes the model path, input/output shapes, and other critical settings that match the requirements of your model.
+
+#### Step 1.1: Define the model information and the corresponding inference backend
+
+First pass the model information and the corresponding inference backend in a `std::vector<anira::ModelData>`. `anira::ModelData` offers two ways to define the model information:
+
+1. Pass the model path
+```cpp
+{std::string model_path, anira::InferenceBackend backend}
+```
+2. Pass the binary data
+```cpp
+{void* model_data, size_t model_size, anira::InferenceBackend backend}
+```
+
+Now define your model information in a `std::vector<anira::ModelData>`.
 
 ```cpp
-#include <anira/anira.h>
+std::vector<anira::ModelData> model_data = {
+    "path/to/your/model.pt", anira::InferenceBackend::LIBTORCH},
+    "path/to/your/model.onnx", anira::InferenceBackend::ONNX},
+    "path/to/your/model.tflite", anira::InferenceBackend::TFLITE}
+};
+```
 
-anira::InferenceConfig hybridnn_config(
-    // Model path and shapes for different backends
-#ifdef USE_LIBTORCH
-    "path/to/your/model.pt", // LibTorch model path (required, when -DANIRA_WITH_LIBTORCH=ON)
-    {{2048, 1, 150}}, // Input shape for LibTorch (required, when -DANIRA_WITH_LIBTORCH=ON)
-    {{2048, 1}}, // Output shape for LibTorch (required, when -DANIRA_WITH_LIBTORCH=ON)
-#endif
-#ifdef USE_ONNXRUNTIME
-    "path/to/your/model.onnx", // ONNX model path (required, when -DANIRA_WITH_ONNX=ON)
-    {{2048, 1, 150}}, // Input shape for ONNX (required, when -DANIRA_WITH_ONNX=ON)
-    {{2048, 1}}, // Output shape for ONNX (required, when -DANIRA_WITH_ONNX=ON)
-#endif
-#ifdef USE_TFLITE
-    "path/to/your/model.tflite", // TensorFlow Lite model path (required, when -DANIRA_WITH_TFLITE=ON)
-    {{2048, 150, 1}}, // Input shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
-    {{2048, 1}}, // Output shape for TensorFlow Lite (required, when -DANIRA_WITH_TFLITE=ON)
-#endif
-    42.66f, // Maximum inference time in ms for processing of all batches (required)
+**Note:** It is not necessary to submit a model for each backend anira was built with, only the one you want to use.
 
-    0, // Internal model latency in samples for processing of all batches (optional: default = 0)
-    false, // Warm-up the inference engine with a null inference run in prepare method (optional: default = false)
-          // Wait for the next processed buffer from the thread pool in the real-time thread's process block
-          // method to reduce latency. 0.f is no waiting and 0.5f is wait for half a buffertime. Example
-          // buffer size 512 and sample rate 48000 Hz, a value of 0.5f = 5.33 ms of maximum waiting time
-          // (optional: default = 0.f)
-    false, // Shall this session have an exclusive inference processor (optional: default = false) 
-    8, // Number of processors for parallel inference
-      // (optional: default = ((int) std::thread::hardware_concurrency() - 1 > 0) ?
-      // (int) std::thread::hardware_concurrency() - 1 : 1)), when m_session_exclusive_processor is true this value
-      // is set to 1
-    0.f  // ONLY AVAILABlE WHEN USING SEMAPHORES FOR THREAD SYNCHRONIZATION!
+
+#### Step 1.2: Define the input and output shapes of the model
+
+In the next step, define the input and output shapes of the model for each backend in a `std::vector<anira::TensorShape>`. The `anira::TensorShape` is defined as follows:
+
+```cpp
+{std::vector<int64_t> input_shape, std::vector<int64_t> output_shape, (optional) anira::InferenceBackend}
+```
+
+Now define the input and output shapes of your model for each backend used in the `std::vector<anira::ModelData>`.
+
+```cpp
+std::vector<anira::TensorShape> tensor_shapes = {
+    {{{1, 1, 15380}}, {{1, 1, 2048}}, anira::InferenceBackend::LIBTORCH},
+    {{{1, 1, 15380}}, {{1, 1, 2048}}, anira::InferenceBackend::ONNX},
+    {{{1, 15380, 1}}, {{1, 2048, 1}}, anira::InferenceBackend::TFLITE}
+};
+```
+**Note:** If the input and output shapes of the model are the same for all backends, you can also define only one `anira::TensorShape` without a specific `anira::InferenceBackend`.
+
+
+#### Step 1.3: Define the anira::InferenceConfig
+
+Finally, define the necessary `anira::InferenceConfig` with the model information, input/output shapes and the maximum inference time in ms. The maximum inference time is the measured worst case inference time. If the inference time during execution exceeds this value, it is likely that the audio signal will contain artifacts.
+
+```cpp
+anira::InferenceConfig inference_config (
+    model_data, // std::vector<anira::ModelData>
+    tensor_shapes, // std::vector<anira::TensorShape>
+    42.66f // Maximum inference time in ms for processing of all batches (required)
 );
 ```
+
+There are also some optional parameters that can be set in the `anira::InferenceConfig`:
+
+| Parameter | Description                                                                                                                                                                                                                                                                                                                                                                                        |
+| - |----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `internal_latency` | Type: `unsigned int`, default: `0`. Submit if your model has an internal latency. This allows the latency calculation to take it into account.                                                                                                                                                                                                                                                     |
+| `warm_up` | Type: `unsigned int`, default: `0`. Defines the number of warm-up iterations before starting the inference process.                                                                                                                                                                                                                                                                                |
+| `index_audio_data` | Type: `std::array<size_t, 2>` default: `{0, 0}`. Defines the input and output index of the audio data vector of tensors                                                                                                                                                                                                                                                                            |
+| `num_audio_channels` | Type `std::array<size_t, 2>` default: `{1, 1}`. Defines the number of audio channels used for the input and output audio tensors.                                                                                                                                                                                                                                                                  |
+| `session_exclusive_processor` | Type: `bool`, default: `false`. If set to `true`, the session will use an exclusive processor for inference and therefore cannot be processed parallel. Necessary for e.g. stateful models.                                                                                                                                                                                                        |
+| `num_parallel_processors` | Type: `unsigned int`, default: `std::thread::hardware_concurrency() / 2`. Defines the number of parallel processors that can be used for the inference.                                                                                                                                                                                                                                            |
+| `wait_in_process_block` | Type: `float`, default: `0.0f`. This parameter can only be set, if anira was bulid with `ANIRA_WITH_SEMAPHORE=ON`. This should be a value between `0.f` and `1.f`. It specifies the proportion of available processing time that the library will try to acquire new data from the inference threads on the real-time thread. This is a controversional parameter and should be used with caution. |
 
 ### Step 2: Create a PrePostProcessor Instance
 
