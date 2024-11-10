@@ -2,11 +2,7 @@
 
 namespace anira {
 
-#ifdef USE_SEMAPHORE
 InferenceThread::InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& next_inference) :
-#else
-InferenceThread::InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& next_inference) :
-#endif
     m_next_inference(next_inference)
 {
 }
@@ -71,11 +67,10 @@ bool InferenceThread::execute() {
 
 void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
     session->m_active_inferences.fetch_add(1, std::memory_order::release);
-#ifdef USE_SEMAPHORE
     inference(session, thread_safe_struct->m_processed_model_input, thread_safe_struct->m_raw_model_output);
+#ifdef USE_CONTROLLED_BLOCKING
     thread_safe_struct->m_done.release();
 #else
-    inference(session, thread_safe_struct->m_processed_model_input, thread_safe_struct->m_raw_model_output);
     thread_safe_struct->m_done.store(true, std::memory_order::release);
 #endif
     session->m_active_inferences.fetch_sub(1, std::memory_order::release);

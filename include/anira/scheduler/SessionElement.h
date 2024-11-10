@@ -1,7 +1,7 @@
 #ifndef ANIRA_SESSIONELEMENT_H
 #define ANIRA_SESSIONELEMENT_H
 
-#ifdef USE_SEMAPHORE
+#ifdef USE_CONTROLLED_BLOCKING
     #include <semaphore>
 #endif
 #include <atomic>
@@ -53,11 +53,10 @@ public:
 
     struct ThreadSafeStruct {
         ThreadSafeStruct(size_t num_input_samples, size_t num_output_samples, size_t num_input_channels, size_t num_output_channels);
-#ifdef USE_SEMAPHORE
-        std::binary_semaphore m_free{true};
+        std::atomic<bool> m_free{true};
+#ifdef USE_CONTROLLED_BLOCKING
         std::binary_semaphore m_done{false};
 #else
-        std::atomic<bool> m_free{true};
         std::atomic<bool> m_done{false};
 #endif
         unsigned long m_time_stamp;
@@ -71,12 +70,6 @@ public:
     unsigned long m_current_queue = 0;
     std::vector<unsigned long> m_time_stamps;
 
-#ifdef USE_SEMAPHORE
-    std::counting_semaphore<UINT16_MAX> m_session_counter{0};
-#else
-    std::atomic<int> m_session_counter{0};
-#endif
-    
     const int m_session_id;
 
     std::atomic<bool> m_initialized{false};

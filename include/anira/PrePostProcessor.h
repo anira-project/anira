@@ -29,9 +29,9 @@ public:
 protected:
     void pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output);
 
-    void pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output, int num_new_samples, int num_old_samples);
+    void pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output, size_t num_new_samples, size_t num_old_samples);
 
-    void pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output, int num_new_samples, int num_old_samples, int offset);
+    void pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output, size_t num_new_samples, size_t num_old_samples, size_t offset);
 
     void push_samples_to_buffer(const AudioBufferF& input, RingBuffer& output);
 

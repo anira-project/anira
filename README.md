@@ -111,13 +111,13 @@ By default, all three inference engines are installed. You can disable specific 
 
 - LibTorch: ```-DANIRA_WITH_LIBTORCH=OFF```
 - OnnxRuntime: ```-DANIRA_WITH_ONNXRUNTIME=OFF```
-- Tensrflow Lite. ```-DANIRA_WITH_TFLITE=OFF```
+- Tensrflow Lite: ```-DANIRA_WITH_TFLITE=OFF```
 
-To allow a controversial approach of controlled blocking in the audio callback to further reduce latency, a flag can be set to allow the use of a semaphore. The semaphore is not 100% real-time safe, but it allows the use of the `wait_in_process_block` option in the `InferenceConfig` class. We only recommend that you use this option if you are not spawning multiple instances of the `InferenceHandler' in serial. By default we use a real-time safe raw atomic operation. To enable the semaphore option, use the following flag:
+To allow a controversial approach of controlled blocking in the audio callback to further reduce latency, a flag can be set to allow the use of a semaphore. The semaphore is not 100% real-time safe, but it allows the use of the `wait_in_process_block` option in the `InferenceConfig` class. We only recommend that you use this option if you are not spawning multiple instances of the `InferenceHandler` in serial. By default, we use a real-time safe raw atomic operation.
 
-- Use semaphores for thread synchronization: ```-DANIRA_WITH_SEMAPHORES=ON```
+- Use controlled blocking operation for further latency reduction: ```-DANIRA_WITH_CONTROLLED_BLOCKING=ON```
 
-Moreover the following options are available:
+Moreover, the following options are available:
 
 - Build anira with benchmark capabilities: ```-DANIRA_WITH_BENCHMARK=ON```
 - Build example applications, plugins and populate example neural models: ```-DANIRA_WITH_EXAMPLES=ON```

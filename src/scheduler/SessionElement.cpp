@@ -19,15 +19,6 @@ SessionElement::ThreadSafeStruct::ThreadSafeStruct(size_t num_input_samples, siz
 void SessionElement::clear() {
     m_send_buffer.clear_with_positions();
     m_receive_buffer.clear_with_positions();
-
-#ifdef USE_SEMAPHORE
-    while (m_session_counter.try_acquire()) {
-        // Nothing to do here, just reducing count
-    }
-#else
-    m_session_counter.store(0);
-#endif
-
     m_time_stamps.clear();
     m_inference_queue.clear();
 }

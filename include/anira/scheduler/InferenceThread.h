@@ -1,11 +1,7 @@
 #ifndef ANIRA_INFERENCETHREAD_H
 #define ANIRA_INFERENCETHREAD_H
 
-#ifdef USE_SEMAPHORE
-    #include <semaphore>
-#else
-    #include <atomic>
-#endif
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -21,12 +17,8 @@ namespace anira {
     
 class ANIRA_API InferenceThread : public HighPriorityThread {
 public:
-#ifdef USE_SEMAPHORE
     InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& next_inference);
-#else
-    InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& next_inference);
-#endif
-    ~InferenceThread() = default;
+    ~InferenceThread() override = default;
 
     bool execute();
 
@@ -38,7 +30,6 @@ private:
     void exponential_backoff(std::array<int, 2> iterations);
 
 private:
-
     moodycamel::ConcurrentQueue<InferenceData>& m_next_inference;
     InferenceData m_inference_data;
  };

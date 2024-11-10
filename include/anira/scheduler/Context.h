@@ -1,11 +1,7 @@
 #ifndef ANIRA_CONTEXT_H
 #define ANIRA_CONTEXT_H
 
-#ifdef USE_SEMAPHORE
-    #include <semaphore>
-#else
-    #include <atomic>
-#endif
+#include <atomic>
 #include <memory>
 #include <vector>
 

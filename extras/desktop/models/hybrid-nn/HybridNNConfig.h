@@ -30,7 +30,9 @@ static std::vector<anira::TensorShape> tensor_shape_hybridnn_config = {
 static anira::InferenceConfig hybridnn_config (
         model_data_hybridnn_config,
         tensor_shape_hybridnn_config,
-        5.33f
+        5.33f,
+        0,
+        2
 );
 
 #endif //ANIRA_HYBRIDNNCONFIG_H
