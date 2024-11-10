@@ -17,8 +17,8 @@ option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
 option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
 option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 
-# Shall semaphores be used for synchronization instead of atomic variables?
-option(ANIRA_WITH_SEMAPHORE "Use semaphores for synchronization instead of atomic variables" OFF)
+# Shall the use of a controlled blocking operation for further reduction of latency be enabled?
+option(ANIRA_WITH_CONTROLLED_BLOCKING "Use of controlled blocking operation for further reduction of latency" OFF)
 
 # ==============================================================================
 # Setup the project
@@ -55,7 +55,6 @@ if (APPLE)
 	endif()
 endif ()
 
-# Sets the cpp language minimum, 20 because of new semaphore types
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
@@ -88,10 +87,8 @@ if(ANIRA_WITH_TFLITE)
     list(APPEND BACKEND_SOURCES src/backends/TFLiteProcessor.cpp)
 endif()
 
-if(ANIRA_WITH_SEMAPHORE)
-    message(STATUS "Using semaphores for thread synchronization.")
-else()
-    message(STATUS "Using atomic variables for thread synchronization.")
+if(ANIRA_WITH_CONTROLLED_BLOCKING)
+    message(STATUS "Using controlled blocking operation for further reduction of latency.")
 endif()
 
 ## ==============================================================================
@@ -174,8 +171,8 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
-    # Semaphore definitions
-    $<$<BOOL:${ANIRA_WITH_SEMAPHORE}>:USE_SEMAPHORE>
+    # Controlled blocking option definition
+    $<$<BOOL:${ANIRA_WITH_CONTROLLED_BLOCKING}>:USE_CONTROLLED_BLOCKING>
     # Version number
     -DANIRA_VERSION="${PROJECT_VERSION}"
 )

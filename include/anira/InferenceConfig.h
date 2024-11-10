@@ -129,7 +129,7 @@ public:
             std::array<size_t, 2> num_audio_channels = {1, 1}, // input and output number of audio channels
             bool session_exclusive_processor = false,
             unsigned int num_parallel_processors = ((int) std::thread::hardware_concurrency() / 2 > 0) ? (unsigned int) std::thread::hardware_concurrency() / 2 : 1
-#ifdef USE_SEMAPHORE
+#ifdef USE_CONTROLLED_BLOCKING
             , float wait_in_process_block = 0.f
 #endif
             );
@@ -155,7 +155,7 @@ public:
     bool m_session_exclusive_processor;
     size_t m_num_parallel_processors;
 
-#ifdef USE_SEMAPHORE
+#ifdef USE_CONTROLLED_BLOCKING
     float m_wait_in_process_block;
 #endif
     
@@ -173,7 +173,7 @@ public:
             m_num_audio_channels == other.m_num_audio_channels &&
             m_session_exclusive_processor == other.m_session_exclusive_processor &&
             m_num_parallel_processors == other.m_num_parallel_processors &&
-#ifdef USE_SEMAPHORE
+#ifdef USE_CONTROLLED_BLOCKING
             std::abs(m_wait_in_process_block - other.m_wait_in_process_block) < 1e-6 &&
 #endif
             m_input_sizes == other.m_input_sizes &&

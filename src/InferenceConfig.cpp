@@ -12,8 +12,8 @@ InferenceConfig::InferenceConfig (
         std::array<size_t, 2> num_audio_channels,
         bool session_exclusive_processor,
         unsigned int num_parallel_processors
-#ifdef USE_SEMAPHORE
-        , float wait_in_process_block = 0.f
+#ifdef USE_CONTROLLED_BLOCKING
+        , float wait_in_process_block
 #endif
         ) :
         m_model_data(model_data),
@@ -25,7 +25,7 @@ InferenceConfig::InferenceConfig (
         m_num_audio_channels(num_audio_channels),
         m_session_exclusive_processor(session_exclusive_processor),
         m_num_parallel_processors(num_parallel_processors)
-#ifdef USE_SEMAPHORE
+#ifdef USE_CONTROLLED_BLOCKING
         , m_wait_in_process_block(wait_in_process_block)
 #endif
 {

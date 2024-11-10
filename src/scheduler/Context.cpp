@@ -22,8 +22,8 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
         if (m_context->m_context_config.m_enabled_backends != context_config.m_enabled_backends) {
             std::cerr << "[ERROR] Context already initialized with different backends enabled!" << std::endl;
         }
-        if (m_context->m_context_config.m_synchronization_type != context_config.m_synchronization_type) {
-            std::cerr << "[ERROR] Context already initialized with different synchronization type!" << std::endl;
+        if (m_context->m_context_config.m_use_controlled_blocking != context_config.m_use_controlled_blocking) {
+            std::cerr << "[ERROR] Context already initialized with with different controlled blocking option!" << std::endl;
         }
         if (m_context->m_thread_pool.size() > context_config.m_num_threads) {
             m_context->new_num_threads(context_config.m_num_threads);
@@ -228,7 +228,7 @@ void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
 }
 
 void Context::new_data_request(std::shared_ptr<SessionElement> session, double buffer_size_in_sec) {
-#ifdef USE_SEMAPHORE
+#ifdef USE_CONTROLLED_BLOCKING
     auto timeToProcess = std::chrono::microseconds(static_cast<long>(buffer_size_in_sec * 1e6 * session->m_inference_config.m_wait_in_process_block));
     auto currentTime = std::chrono::system_clock::now();
     auto waitUntil = currentTime + timeToProcess;
@@ -236,7 +236,7 @@ void Context::new_data_request(std::shared_ptr<SessionElement> session, double b
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
-#ifdef USE_SEMAPHORE
+#ifdef USE_CONTROLLED_BLOCKING
                 if (session->m_inference_queue[i]->m_done.try_acquire_until(waitUntil)) {
 #else
                 if (session->m_inference_queue[i]->m_done.exchange(false)) {
@@ -268,11 +268,7 @@ std::vector<std::shared_ptr<SessionElement>>& Context::get_sessions() {
 
 bool Context::pre_process(std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
-#ifdef USE_SEMAPHORE
-        if (session->m_inference_queue[i]->m_free.try_acquire()) {
-#else
         if (session->m_inference_queue[i]->m_free.exchange(false)) {
-#endif
             session->m_pp_processor.pre_process(session->m_send_buffer, session->m_inference_queue[i]->m_processed_model_input, session->m_currentBackend.load(std::memory_order_relaxed));
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
@@ -301,11 +297,7 @@ bool Context::pre_process(std::shared_ptr<SessionElement> session) {
 
 void Context::post_process(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
     session->m_pp_processor.post_process(thread_safe_struct->m_raw_model_output, session->m_receive_buffer, session->m_currentBackend.load(std::memory_order_relaxed));
-#ifdef USE_SEMAPHORE
-    thread_safe_struct->m_free.release();
-#else
     thread_safe_struct->m_free.store(true, std::memory_order::release);
-#endif
 }
 
 void Context::start_thread_pool() {

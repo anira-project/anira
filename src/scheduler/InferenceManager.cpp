@@ -127,7 +127,7 @@ int InferenceManager::calculate_latency() {
     // First calculate some universal values
     int num_output_samples = m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[Output]] / m_inference_config.m_num_audio_channels[Output];
     float host_buffer_time = (float) m_spec.m_host_buffer_size * 1000.f / (float) m_spec.m_host_sample_rate;
-#ifdef USE_SEMAPHORE
+#ifdef USE_CONTROLLED_BLOCKING
     float wait_time = m_inference_config.m_wait_in_process_block * host_buffer_time;
 #else
     float wait_time = 0.f;

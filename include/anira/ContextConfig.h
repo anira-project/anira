@@ -11,11 +11,6 @@
 
 namespace anira {
 
-enum SynchronizationType {
-    SEMAPHORE,
-    ATOMIC
-};
-
 struct ANIRA_API ContextConfig {
     ContextConfig(
             int num_threads = ((int) std::thread::hardware_concurrency() / 2 > 0) ? (int) std::thread::hardware_concurrency() / 2 : 1, bool use_host_threads = false) :
@@ -31,10 +26,10 @@ struct ANIRA_API ContextConfig {
 #ifdef USE_TFLITE
         m_enabled_backends.push_back(InferenceBackend::TFLITE);
 #endif
-#ifdef USE_SEMAPHORE
-        m_synchronization_type = SynchronizationType::SEMAPHORE;
+#ifdef USE_CONTROLLED_BLOCKING
+        m_use_controlled_blocking = true;
 #else
-        m_synchronization_type = SynchronizationType::ATOMIC;
+        m_use_controlled_blocking = false;
 #endif
     }
 
@@ -42,7 +37,7 @@ struct ANIRA_API ContextConfig {
     bool m_use_host_threads;
     std::string m_anira_version = ANIRA_VERSION;
     std::vector<InferenceBackend> m_enabled_backends;
-    SynchronizationType m_synchronization_type;
+    bool m_use_controlled_blocking;
     
 
     bool operator==(const ContextConfig& other) const {
@@ -51,7 +46,7 @@ struct ANIRA_API ContextConfig {
             m_use_host_threads == other.m_use_host_threads &&
             m_anira_version == other.m_anira_version &&
             m_enabled_backends == other.m_enabled_backends &&
-            m_synchronization_type == other.m_synchronization_type;
+            m_use_controlled_blocking == other.m_use_controlled_blocking;
 
     }
 
