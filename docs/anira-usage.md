@@ -2,15 +2,15 @@
 
 ## Preface
 
-To use anira in your real-time audio application, you need to create instances for the following classes:
+Anira provides the following structures and classes to help you integrate real-time audio processing with your machine learning models:
 
-| Class              | Description                                                                                                                                                                                       |
-|--------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `ContextConfig`    | **Optional:**  A shared configuration struct is available across all anira instances to define thread pool behavior, such as specifying the number of threads or enabling host-provided threads.  |
-| `InferenceConfig`  | A configuration struct for defining model specifics such as input/output shape, model details, batch size, and more.                                                                              |
-| `PrePostProcessor` | Enables pre- and post-processing steps before and after inference. Either use the default PrePostProcessor or inherit from this class for custom processing.                                      |
-| `InferenceHandler` | Manages audio processing/inference for the real-time thread by offloading inference to a thread pool and updating the real-time thread's buffers with processed audio.                            |
-| `HostAudioConfig`  | A configuration struct for defining the host audio configs, number of channels, buffer size, and sample rate.                                                                                     |
+| Class | Description |
+| - | - |
+| `ContextConfig` | **Optional:** The configuration structure that defines the context across all anira instances. Here you can define the behaviour of the thread pool, such as specifying the number of threads or enabling host-provided threads. |
+| `InferenceHandler` | Manages audio processing/inference for the real-time thread, offloading inference to the thread pool and updating the real-time thread buffers with processed audio. This class provides the main interface for interacting with the library. |
+| `InferenceConfig`  | A configuration structure for defining model specifics such as input/output shape, model details such as maximum inference time, and more. Each InferenceHandler instance must be constructed with this configuration. |
+| `PrePostProcessor` | Enables pre- and post-processing steps before and after inference. Either use the default PrePostProcessor or inherit from this class for custom processing. |
+| `HostAudioConfig` | A structure for defining the host audio configuration: buffer size and sample rate. |
 
 ## Using anira for Real-time Audio Inference
 
