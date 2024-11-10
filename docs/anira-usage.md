@@ -16,17 +16,17 @@ Anira provides the following structures and classes to help you integrate real-t
 
 ### Step 1: Define your Model Configuration
 
-Start by specifying your model configuration using ``anira::InferenceConfig``. This includes the model path, input/output shapes, and other critical settings that match the requirements of your model.
+Start by specifying your model configuration using `anira::InferenceConfig`. This includes the model path, input/output shapes, and other critical settings that match the requirements of your model.
 
 #### Step 1.1: Define the model information and the corresponding inference backend
 
 First pass the model information and the corresponding inference backend in a `std::vector<anira::ModelData>`. `anira::ModelData` offers two ways to define the model information:
 
-1. Pass the model path
+1. Pass the model path as a string:
 ```cpp
 {std::string model_path, anira::InferenceBackend backend}
 ```
-2. Pass the binary data
+2. Pass the model data as binary information:
 ```cpp
 {void* model_data, size_t model_size, anira::InferenceBackend backend}
 ```
@@ -35,9 +35,9 @@ Now define your model information in a `std::vector<anira::ModelData>`.
 
 ```cpp
 std::vector<anira::ModelData> model_data = {
-    "path/to/your/model.pt", anira::InferenceBackend::LIBTORCH},
-    "path/to/your/model.onnx", anira::InferenceBackend::ONNX},
-    "path/to/your/model.tflite", anira::InferenceBackend::TFLITE}
+    {"path/to/your/model.pt", anira::InferenceBackend::LIBTORCH},
+    {"path/to/your/model.onnx", anira::InferenceBackend::ONNX},
+    {"path/to/your/model.tflite", anira::InferenceBackend::TFLITE}
 };
 ```
 
@@ -64,7 +64,7 @@ std::vector<anira::TensorShape> tensor_shapes = {
 **Note:** If the input and output shapes of the model are the same for all backends, you can also define only one `anira::TensorShape` without a specific `anira::InferenceBackend`.
 
 
-#### Step 1.3: Define the anira::InferenceConfig
+#### Step 1.3: Define the `anira::InferenceConfig`
 
 Finally, define the necessary `anira::InferenceConfig` with the model information, input/output shapes and the maximum inference time in ms. The maximum inference time is the measured worst case inference time. If the inference time during execution exceeds this value, it is likely that the audio signal will contain artifacts.
 
@@ -90,15 +90,15 @@ There are also some optional parameters that can be set in the `anira::Inference
 
 ### Step 2: Create a PrePostProcessor Instance
 
-If your model does not require any specific pre- or post-processing, you can use the default ``anira::PrePostProcessor``. This is likely to be the case if the input and output shapes of the model are the same, the batchsize is 1, and your model operates in the time domain.
+If your model does not require any specific pre- or post-processing, you can use the default `anira::PrePostProcessor`. This is likely to be the case if the input and output shapes of the model are the same, the batchsize is 1, and your model operates in the time domain.
 
 ```cpp
 anira::PrePostProcessor pp_processor;
 ```
 
-If your model requires custom pre- or post-processing, you can inherit from the ```anira::PrePostProcessor``` class and overwrite the ```pre_process``` and ```post_process``` methods so that they match your model's requirements. In the ```pre_process``` method, we get the input samples from the audio application through an ``anira::RingBuffer`` and push them into the output buffer, which is an ``anira::AudioBufferF``. This output buffer is then used for inference. In the ```post_process``` method we get the input samples through an ``anira::AudioBufferF`` and push them into the output buffer, which is an ``anira::RingBuffer``. The samples from this output buffer are then returned to the audio application by the ``anira::InferenceHandler``.
+If your model requires custom pre- or post-processing, you can inherit from the `anira::PrePostProcessor` class and overwrite the ```pre_process``` and ```post_process``` methods so that they match your model's requirements. In the ```pre_process``` method, we get the input samples from the audio application through an `anira::RingBuffer` and push them into the output buffer, which is an `anira::AudioBufferF`. This output buffer is then used for inference. In the ```post_process``` method we get the input samples through an `anira::AudioBufferF` and push them into the output buffer, which is an `anira::RingBuffer`. The samples from this output buffer are then returned to the audio application by the `anira::InferenceHandler`.
 
-When your pre- and post-processing requires to access values from the ```anira::InferenceConfig``` struct, you can store the config as a member in your custom pre- and post-processor class.  Here is an example of a custom pre- and post-processor. The ```anira::InferenceConfig``` inference_config is supposed to be provided in the "MyConfig.h" file.
+When your pre- and post-processing requires to access values from the `anira::InferenceConfig` struct, you can store the config as a member in your custom pre- and post-processor class.  Here is an example of a custom pre- and post-processor. The `anira::InferenceConfig` inference_config is supposed to be provided in the "MyConfig.h" file.
 
 ```cpp
 #include <anira/anira.h>
@@ -107,14 +107,14 @@ When your pre- and post-processing requires to access values from the ```anira::
 class CustomPrePostProcessor : public anira::PrePostProcessor {
 public:
     virtual void pre_process(anira::RingBuffer& input, anira::AudioBufferF& output, [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
-        pop_samples_from_buffer(input, output, m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[anira::IndexAudioData::Output]], m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]]-m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[anira::IndexAudioData::Output]]);
+        pop_samples_from_buffer(input, output, inference_config.m_output_sizes[inference_config.m_index_audio_data[anira::IndexAudioData::Output]], inference_config.m_input_sizes[inference_config.m_index_audio_data[anira::IndexAudioData::Input]]-inference_config.m_output_sizes[inference_config.m_index_audio_data[anira::IndexAudioData::Output]]);
     };
     
     anira::InferenceConfig config = inference_config;
 };
 ```
 
-**Note:** The ```anira::PrePostProcessor``` class provides some methods to help you implement your own pre- and post-processing.  The following methods are provided up until now:
+**Note:** The `anira::PrePostProcessor` class provides some methods to help you implement your own pre- and post-processing.  The following methods are provided up until now:
 
 | Method                                                                                                                                     | Description |
 |--------------------------------------------------------------------------------------------------------------------------------------------| - |
@@ -136,7 +136,7 @@ Some neural networks not only require audio data as input and output tensors. Fo
 
 ### Step 3: Create an InferenceHandler Instance
 
-In your application, you will need to create an instance of the ``anira::InferenceHandler`` class. This class is responsible for managing the inference process, including threading and real-time constraints. The constructor takes as arguments an instance of the default or custom ``anira::PrePostProcessor`` and an instance of the ``anira::InferenceConfig`` structure.
+In your application, you will need to create an instance of the `anira::InferenceHandler` class. This class is responsible for managing the inference process, including threading and real-time constraints. The constructor takes as arguments an instance of the default or custom `anira::PrePostProcessor` and an instance of the `anira::InferenceConfig` structure.
 
 ```cpp
 // Sample initialization in your application's initialization function
@@ -152,7 +152,7 @@ anira::InferenceHandler inference_handler(pp_processor, inference_config);
 
 #### Optional Step: Define the Context Configuration
 
-If you want to define a custom context configuration, you can do so by creating an instance of the ``anira::ContextConfig`` structure. This structure allows you to define the behaviour of the thread pool, by specifying the number of threads or allowing to use host-provided threads.
+If you want to define a custom context configuration, you can do so by creating an instance of the `anira::ContextConfig` structure. This structure allows you to define the behaviour of the thread pool, by specifying the number of threads or allowing to use host-provided threads.
 
 ```cpp
 // Use the existing anira::InferenceConfig and anira::PrePostProcessor instances
@@ -169,7 +169,7 @@ anira::InferenceHandler inference_handler(pp_processor, inference_config, contex
 
 ### Step 4: Allocate Memory Before Processing
 
-Before processing audio data, the `prepare` method of the ``anira::InferenceHandler`` instance must be called. This allocates all necessary memory in advance. The `prepare` method needs an instance of ``anira::HostAudioConfig`` which defines the buffer size and sample rate of the host audio application. We also need to select the inference backend we want to use. Depending on the backends you enabled during the build process, you can choose amongst `anira::LIBTORCH`, `anira::ONNX`, `anira::TFLITE` and `anira::CUSTOM`. After preparing the `anira::InferenceHandler`, you can get the latency of the inference process in samples by calling the `get_latency` method and use this information to compensate for the latency in your real-time audio application.
+Before processing audio data, the `prepare` method of the `anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The `prepare` method needs an instance of `anira::HostAudioConfig` which defines the buffer size and sample rate of the host audio application. We also need to select the inference backend we want to use. Depending on the backends you enabled during the build process, you can choose amongst `anira::LIBTORCH`, `anira::ONNX`, `anira::TFLITE` and `anira::CUSTOM`. After preparing the `anira::InferenceHandler`, you can get the latency of the inference process in samples by calling the `get_latency` method and use this information to compensate for the latency in your real-time audio application.
 
 ```cpp
 void prepareAudioProcessing(double sample_rate, int buffer_size, int num_channels) {
@@ -197,11 +197,11 @@ This step is only supported for CLAP-Plugins. If you want to use host-provided t
 In a next step we try to get the clap_host_thread_pool extension from the host.
 
 ```
-const clap_host_thread_pool* {nullptr};
+const clap_host_thread_pool* clap_thread_pool{nullptr};
 
 // Clap extensions should be available from the .init() call
 bool init() noexcept override {
-    m_clap_thread_pool = static_cast<clap_host_thread_pool const*>(_host.host()->get_extension(_host.host(), CLAP_EXT_THREAD_POOL));
+    clap_thread_pool = static_cast<clap_host_thread_pool const*>(_host.host()->get_extension(_host.host(), CLAP_EXT_THREAD_POOL));
 
     return true;
 }
@@ -215,9 +215,9 @@ bool activate(double sampleRate, uint32_t minFrameCount,
 {
     anira::HostAudioConfig config ((size_t) maxFrameCount, sampleRate);
     
-    if (m_clap_thread_pool != nullptr && m_clap_thread_pool->request_exec) {
+    if (clap_thread_pool != nullptr && clap_thread_pool->request_exec) {
         config.submit_task_to_host_thread = [this](int number_of_tasks) -> bool {
-            if (m_clap_thread_pool->request_exec(_host.host(), number_of_tasks)) {
+            if (clap_thread_pool->request_exec(_host.host(), number_of_tasks)) {
                 return true;
             } else {
                 return false;
@@ -243,11 +243,11 @@ void threadPoolExec(uint32_t taskIndex) noexcept override {
 
 ### Step 5: Real-time Audio Processing
 
-Now we are ready to process audio in the process callback of our real-time audio application. The process method of the ``anira::InferenceHandler`` instance takes the input samples for all channels as an array of float pointers - ``float**``, and after calling the process method, the data is overwritten with the processed output.
+Now we are ready to process audio in the process callback of our real-time audio application. The process method of the `anira::InferenceHandler` instance takes the input samples for all channels as an array of float pointers - ``float**``, and after calling the process method, the data is overwritten with the processed output.
 
 ```cpp
 // Real-time safe audio processing in the process callback of your application
-process(float** audio_data, int num_samples) {
+void process(float** audio_data, int num_samples) {
     inference_handler.process(audio_data, num_samples)
 }
 // audio_data now contains the processed audio samples
@@ -255,7 +255,7 @@ process(float** audio_data, int num_samples) {
 
 ### Optional Step 6: Define a Custom::InferenceBackend
 
-If you want to use a custom backend processor, you can inherit from the `anira::BackendBase` class and overwrite the `process` and  `prepare` method. The `process` method is called when the `anira::InferenceBackend::CUSTOM` backend is selected. The `process` method takes two `anira::AudioBufferF` instances as input and output buffers and a `std::shared_ptr<anira::SessionElement>` session element. The session element is necessary to e.g. send or retrieve additional values submitted by the pre- and post-processor.
+To use a custom backend processor, inherit from the `anira::BackendBase` class and overwrite the `process` and  `prepare` methods. The `process` method is called when the `anira::InferenceBackend::CUSTOM` backend is selected. The `process` method takes two `anira::AudioBufferF` instances as input and output buffers and a `std::shared_ptr<anira::SessionElement>` session element. The session element is necessary to e.g. send or retrieve additional values submitted by the pre- and post-processor.
 
 The custom backend enables the integration of additional inference engines, customization of existing engines, or the implementation of a simple roundtrip/bypass backend that directly returns input samples, bypassing the inference stage.
 
