@@ -9,7 +9,7 @@ anira facilitates the measurement of neural network's real-time performance, by 
 To use the benchmarking tools within anira, please follow the steps below. First, you'll find a step-by-step guide on benchmarking a single configuration, followed by instructions on extending the benchmarks to multiple configurations. Since the `anira::benchmark::ProcessBlockFixture` is a Google Benchmark fixture, you can use all the features of the Google Benchmark framework to further customize your benchmark setup. Please refer to the [Google Benchmark documentation](https://github.com/google/benchmark/blob/main/docs/user_guide.md) for more information.
 
 ## Single Configuration Benchmarking
--
+
 ### Step 1: Start Defining the Benchmark by Setting Up the InferenceHandler and Input AudioBuffer
 
 Before we can start to define the benchmark, we need to create an `anira::InferenceConfig` instance and an `anira::PrePostProcessor` instance. This is done in the same way as described in the [anira usage guide](anira-usage.md).

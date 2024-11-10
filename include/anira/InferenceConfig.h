@@ -128,7 +128,7 @@ public:
             std::array<size_t, 2> index_audio_data = {0, 0}, // input and output index of audio data vector of tensors
             std::array<size_t, 2> num_audio_channels = {1, 1}, // input and output number of audio channels
             bool session_exclusive_processor = false,
-            unsigned int num_parallel_processors = ((int) std::thread::hardware_concurrency() / 2 > 0) ? (unsigned int) std::thread::hardware_concurrency() / 2 : 1
+            unsigned int num_parallel_processors = (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2 : 1
 #ifdef USE_CONTROLLED_BLOCKING
             , float wait_in_process_block = 0.f
 #endif
@@ -153,7 +153,7 @@ public:
     std::array<size_t, 2> m_index_audio_data;
     std::array<size_t, 2> m_num_audio_channels;
     bool m_session_exclusive_processor;
-    size_t m_num_parallel_processors;
+    unsigned int m_num_parallel_processors;
 
 #ifdef USE_CONTROLLED_BLOCKING
     float m_wait_in_process_block;

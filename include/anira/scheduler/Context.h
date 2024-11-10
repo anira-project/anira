@@ -53,7 +53,7 @@ private:
     inline static ContextConfig m_context_config;
 
     static int get_available_session_id();
-    static void new_num_threads(int new_num_threads);
+    static void new_num_threads(unsigned int new_num_threads);
 
     static bool pre_process(std::shared_ptr<SessionElement> session);
     static void post_process(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> next_buffer);

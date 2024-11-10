@@ -13,7 +13,7 @@ namespace anira {
 
 struct ANIRA_API ContextConfig {
     ContextConfig(
-            int num_threads = ((int) std::thread::hardware_concurrency() / 2 > 0) ? (int) std::thread::hardware_concurrency() / 2 : 1, bool use_host_threads = false) :
+            unsigned int num_threads = (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2 : 1, bool use_host_threads = false) :
             m_num_threads(num_threads),
             m_use_host_threads(use_host_threads)
     {
@@ -33,7 +33,7 @@ struct ANIRA_API ContextConfig {
 #endif
     }
 
-    int m_num_threads;
+    unsigned int m_num_threads;
     bool m_use_host_threads;
     std::string m_anira_version = ANIRA_VERSION;
     std::vector<InferenceBackend> m_enabled_backends;

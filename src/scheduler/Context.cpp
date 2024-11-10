@@ -4,7 +4,7 @@ namespace anira {
 
 Context::Context(const ContextConfig& context_config) {
     m_context_config = context_config;
-    for (int i = 0; i < m_context_config.m_num_threads; ++i) {
+    for (unsigned int i = 0; i < m_context_config.m_num_threads; ++i) {
         m_thread_pool.emplace_back(std::make_unique<InferenceThread>(m_next_inference));
     }
 }
@@ -25,7 +25,7 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
         if (m_context->m_context_config.m_use_controlled_blocking != context_config.m_use_controlled_blocking) {
             std::cerr << "[ERROR] Context already initialized with with different controlled blocking option!" << std::endl;
         }
-        if (m_context->m_thread_pool.size() > context_config.m_num_threads) {
+        if ((unsigned int) m_context->m_thread_pool.size() > context_config.m_num_threads) {
             m_context->new_num_threads(context_config.m_num_threads);
             m_context->m_context_config.m_num_threads = context_config.m_num_threads;
         }
@@ -47,15 +47,15 @@ int Context::get_available_session_id() {
     return m_next_id.load();
 }
 
-void Context::new_num_threads(int new_num_threads) {
-    int current_num_threads = static_cast<int>(m_thread_pool.size());
+void Context::new_num_threads(unsigned int new_num_threads) {
+    unsigned int current_num_threads = (unsigned int) m_thread_pool.size();
 
     if (new_num_threads > current_num_threads) {
-        for (int i = current_num_threads; i < new_num_threads; ++i) {
+        for (unsigned int i = current_num_threads; i < new_num_threads; ++i) {
             m_thread_pool.emplace_back(std::make_unique<InferenceThread>(m_next_inference));
         }
     } else if (new_num_threads < current_num_threads) {
-        for (int i = current_num_threads - 1; i >= new_num_threads; --i) {
+        for (unsigned int i = current_num_threads - 1; i >= new_num_threads; --i) {
             m_thread_pool[i]->stop();
             while (m_thread_pool[i]->is_running()) {
                 std::this_thread::sleep_for(std::chrono::microseconds(50));
@@ -67,7 +67,7 @@ void Context::new_num_threads(int new_num_threads) {
 
 std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor) {
     int session_id = get_available_session_id();
-    if (inference_config.m_num_parallel_processors > m_thread_pool.size()) {
+    if (inference_config.m_num_parallel_processors > (unsigned int) m_thread_pool.size()) {
         std::cout << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in Context. Using number of threads as number of parallel processors." << std::endl;
         inference_config.m_num_parallel_processors = m_thread_pool.size();
     }
