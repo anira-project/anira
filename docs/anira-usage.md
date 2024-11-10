@@ -72,7 +72,7 @@ Finally, define the necessary `anira::InferenceConfig` with the model informatio
 anira::InferenceConfig inference_config (
     model_data, // std::vector<anira::ModelData>
     tensor_shapes, // std::vector<anira::TensorShape>
-    42.66f // Maximum inference time in ms for processing of all batches (required)
+    42.66f // Maximum inference time in ms
 );
 ```
 
