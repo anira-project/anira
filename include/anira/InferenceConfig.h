@@ -134,11 +134,11 @@ public:
 #endif
             );
 
-    ~InferenceConfig() = default;
-
     void set_input_sizes(const std::vector<size_t>& input_sizes);
     void set_output_sizes(const std::vector<size_t>& output_sizes);
     std::string get_model_path(InferenceBackend backend);
+    TensorShapeList get_input_shape();
+    TensorShapeList get_output_shape();
     TensorShapeList get_input_shape(InferenceBackend backend);
     TensorShapeList get_output_shape(InferenceBackend backend);
     void set_model_path(const std::string& model_path, InferenceBackend backend);

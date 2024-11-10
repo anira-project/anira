@@ -165,7 +165,7 @@ bool AniraClapPluginExample::activate(double sampleRate, uint32_t minFrameCount,
     anira::HostAudioConfig config ((size_t) maxFrameCount, sampleRate);
 
     if (m_clap_thread_pool && m_clap_thread_pool->request_exec) {
-        config.submit_task_to_host_thread = [this](int number_of_tasks) -> bool {
+        config.m_submit_task_to_host_thread = [this](int number_of_tasks) -> bool {
             if (m_clap_thread_pool->request_exec(_host.host(), number_of_tasks)) {
                 return true;
             } else {

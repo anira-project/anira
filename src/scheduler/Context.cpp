@@ -179,7 +179,7 @@ void Context::prepare(std::shared_ptr<SessionElement> session, HostAudioConfig n
     session->clear();
     session->prepare(new_config);
 
-    if (!new_config.submit_task_to_host_thread) {
+    if (!new_config.m_submit_task_to_host_thread) {
         m_context_config.m_use_host_threads = false;
     }
 
@@ -200,8 +200,8 @@ void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
     while (session->m_send_buffer.get_available_samples(0) >= (new_samples_needed_for_inference)) {
         bool success = pre_process(session);
 
-        if (success && session->m_host_config.submit_task_to_host_thread && m_host_threads_active.load()) {
-            bool host_exec_success = session->m_host_config.submit_task_to_host_thread(1);
+        if (success && session->m_host_config.m_submit_task_to_host_thread && m_host_threads_active.load()) {
+            bool host_exec_success = session->m_host_config.m_submit_task_to_host_thread(1);
 
             // !host_exec_success means that the host provided thread pool does not work anymore
             // Since we cannot rely on it anymore we use as fallback our own thread pool

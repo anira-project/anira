@@ -20,7 +20,7 @@ namespace anira {
 class ANIRA_API HighPriorityThread {
 public:
     HighPriorityThread();
-    ~HighPriorityThread();
+    virtual ~HighPriorityThread();
     
     void start();
     void stop();

@@ -49,7 +49,7 @@ InferenceConfig::InferenceConfig (
                     m_tensor_shape.push_back(tensor_shape);
                     break;
                 } 
-                assert((j < m_tensor_shape.size() - 1, "No tensor shape provided for model."));
+                assert((j < m_tensor_shape.size() - 1 && "No tensor shape provided for model."));
             }
         }
     }
@@ -90,8 +90,26 @@ std::string InferenceConfig::get_model_path(InferenceBackend backend) {
             return std::string((char*) m_model_data[i].m_data, m_model_data[i].m_size);
         }
     }
-    assert((false, "No model path found for backend."));
+    assert((false && "No model path found for backend."));
     return "";
+}
+
+TensorShapeList InferenceConfig::get_input_shape() {
+    for (int i = 0; i < m_tensor_shape.size(); ++i) {
+        if (m_tensor_shape[i].m_universal) {
+            return m_tensor_shape[i].m_input_shape;
+        }
+    }
+    return m_tensor_shape[0].m_input_shape;
+}
+
+TensorShapeList InferenceConfig::get_output_shape() {
+    for (int i = 0; i < m_tensor_shape.size(); ++i) {
+        if (m_tensor_shape[i].m_universal) {
+            return m_tensor_shape[i].m_output_shape;
+        }
+    }
+    return m_tensor_shape[0].m_output_shape;
 }
 
 TensorShapeList InferenceConfig::get_input_shape(InferenceBackend backend) {
@@ -102,7 +120,7 @@ TensorShapeList InferenceConfig::get_input_shape(InferenceBackend backend) {
             return m_tensor_shape[i].m_input_shape;
         }
     }
-    assert((false, "No input shape found for backend."));
+    assert((false && "No input shape found for backend."));
     return {};
 }
 
@@ -112,7 +130,7 @@ TensorShapeList InferenceConfig::get_output_shape(InferenceBackend backend) {
             return m_tensor_shape[i].m_output_shape;
         }
     }
-    assert((false, "No output shape found for backend."));
+    assert((false && "No output shape found for backend."));
     return {};
 }
 
@@ -128,7 +146,7 @@ void InferenceConfig::set_model_path(const std::string& model_path, InferenceBac
             return;
         }
     }
-    assert((false, "No model path found for backend."));
+    assert((false && "No model path found for backend."));
 }
 
 void InferenceConfig::set_input_shape(const TensorShapeList& input_shape, InferenceBackend backend) {
@@ -138,7 +156,7 @@ void InferenceConfig::set_input_shape(const TensorShapeList& input_shape, Infere
             return;
         }
     }
-    assert((false, "No tensor shape found for backend."));
+    assert((false && "No tensor shape found for backend."));
 }
 
 void InferenceConfig::set_output_shape(const TensorShapeList& output_shape, InferenceBackend backend) {
@@ -148,7 +166,7 @@ void InferenceConfig::set_output_shape(const TensorShapeList& output_shape, Infe
             return;
         }
     }
-    assert((false, "No tensor shape found for backend."));
+    assert((false && "No tensor shape found for backend."));
 }
 
 } // namespace anira
