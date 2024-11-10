@@ -172,7 +172,7 @@ anira::InferenceHandler inference_handler(pp_processor, inference_config, contex
 Before processing audio data, the `prepare` method of the `anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The `prepare` method needs an instance of `anira::HostAudioConfig` which defines the buffer size and sample rate of the host audio application. We also need to select the inference backend we want to use. Depending on the backends you enabled during the build process, you can choose amongst `anira::LIBTORCH`, `anira::ONNX`, `anira::TFLITE` and `anira::CUSTOM`. After preparing the `anira::InferenceHandler`, you can get the latency of the inference process in samples by calling the `get_latency` method and use this information to compensate for the latency in your real-time audio application.
 
 ```cpp
-void prepareAudioProcessing(double sample_rate, int buffer_size, int num_channels) {
+void prepare_audio_processing(double sample_rate, int buffer_size) {
 
     // Create an instance of anira::HostAudioConfig
     anira::HostAudioConfig host_config {
@@ -196,7 +196,7 @@ This step is only supported for CLAP-Plugins. If you want to use host-provided t
 
 In a next step we try to get the clap_host_thread_pool extension from the host.
 
-```
+```cpp
 const clap_host_thread_pool* clap_thread_pool{nullptr};
 
 // Clap extensions should be available from the .init() call
