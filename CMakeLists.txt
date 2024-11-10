@@ -26,7 +26,7 @@ option(ANIRA_WITH_CONTROLLED_BLOCKING "Use of controlled blocking operation for 
 
 set (PROJECT_NAME anira)
 
-project (${PROJECT_NAME} VERSION 0.1.3)
+project (${PROJECT_NAME} VERSION 1.0.0)
 
 if(APPLE)
     if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
