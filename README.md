@@ -23,23 +23,20 @@ The basic usage of anira is as follows:
 ```cpp
 #include <anira/anira.h>
 
-// Create a model configuration struct for your neural network
-anira::InferenceConfig my_nn_config(
-    "path/to/your/model.onnx (or *.pt, *.tflite)", // Model path
-    {{2048, 1, 150}}, // Input shape
-    {{2048, 1}}, // Output shape
-    42.66f // Maximum inference time in ms
+anira::InferenceConfig inference_config (
+        {{"path/to/your/model.onnx", anira::InferenceBackend::ONNX}}, // Model path
+        {{{{256, 1, 150}}, {{256, 1}}, anira::InferenceBackend::ONNX}},  // Input, Output shape
+        5.33f // Maximum inference time in ms
 );
 
 // Create a pre- and post-processor instance
-anira::PrePostProcessor my_pp_processor;
+anira::PrePostProcessor pp_processor;
 
 // Create an InferenceHandler instance
-anira::InferenceHandler inference_handler(my_pp_processor, my_nn_config);
+anira::InferenceHandler inference_handler(pp_processor, inference_config);
 
 // Create a HostAudioConfig instance containing the host config infos
 anira::HostAudioConfig host_config {
-    1, // currently only mono is supported
     buffer_size,
     sample_rate
 };
@@ -145,6 +142,7 @@ anira allows users to benchmark and compare the inference performance of differe
 ### Build in examples
 
 - [Simple JUCE Audio Plugin](examples/desktop/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
+- [CLAP Plugin Example](examples/desktop/clap-audio-plugin/): Demonstrates how to use anira in a real-time clap plugin utilizing host provided threads instead of anira's thread pool.
 - [Benchmark](examples/desktop/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
 - [Minimal Inference](examples/desktop/minimal-inference/): Demonstrates how minimal inference applications can be implemented in all three backends.
 
