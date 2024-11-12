@@ -6,7 +6,7 @@ Anira provides the following structures and classes to help you integrate real-t
 
 | Class | Description |
 | - | - |
-| `ContextConfig` | **Optional:** The configuration structure that defines the context across all anira instances. Here you can define the behaviour of the thread pool, such as specifying the number of threads or enabling host-provided threads. |
+| `ContextConfig` | **Optional:** The configuration structure that defines the context across all anira instances. Here you can define the behaviour of the thread pool, such as specifying the number of threads. |
 | `InferenceHandler` | Manages audio processing/inference for the real-time thread, offloading inference to the thread pool and updating the real-time thread buffers with processed audio. This class provides the main interface for interacting with the library. |
 | `InferenceConfig`  | A configuration structure for defining model specifics such as input/output shape, model details such as maximum inference time, and more. Each InferenceHandler instance must be constructed with this configuration. |
 | `PrePostProcessor` | Enables pre- and post-processing steps before and after inference. Either use the default PrePostProcessor or inherit from this class for custom processing. |
@@ -152,15 +152,14 @@ anira::InferenceHandler inference_handler(pp_processor, inference_config);
 
 #### Optional Step: Define the Context Configuration
 
-If you want to define a custom context configuration, you can do so by creating an instance of the `anira::ContextConfig` structure. This structure allows you to define the behaviour of the thread pool, by specifying the number of threads or allowing to use host-provided threads.
+If you want to define a custom context configuration, you can do so by creating an instance of the `anira::ContextConfig` structure. This structure allows you to define the behaviour of the thread pool, by specifying the number of threads.
 
 ```cpp
 // Use the existing anira::InferenceConfig and anira::PrePostProcessor instances
 
 // Create an instance of anira::ContextConfig
 anira::ContextConfig context_config {
-    4, // Number of threads
-    false // Use host-provided threads
+    4 // Number of threads
 };
 
 // Create an InferenceHandler instance
@@ -187,57 +186,6 @@ void prepare_audio_processing(double sample_rate, int buffer_size) {
     
     // Get the latency of the inference process in samples
     int latency_in_samples = inference_handler.get_latency();
-}
-```
-
-#### Optional Step: Enable host provided threads (for CLAP-Plugins)
-
-This step is only supported for CLAP-Plugins. If you want to use host-provided threads, ensure that the `anira::ContextConfig` structure is created with the `use_host_provided_threads` flag set to `true`.
-
-In a next step we try to get the clap_host_thread_pool extension from the host.
-
-```cpp
-const clap_host_thread_pool* clap_thread_pool{nullptr};
-
-// Clap extensions should be available from the .init() call
-bool init() noexcept override {
-    clap_thread_pool = static_cast<clap_host_thread_pool const*>(_host.host()->get_extension(_host.host(), CLAP_EXT_THREAD_POOL));
-
-    return true;
-}
-```
-
-Now, when we prepare the audio processing, we check, if the clap_thread_pool is available and if we can send execution request to the host thread pool. If the request is successful, we define a lambda function that allows `anira` to submit tasks to the host thread pool. The lambda must return a boolean value, if the task was successfully submitted to the host thread pool. If it fails, `anira` will start its own threads as a fallback.
-
-```cpp
-bool activate(double sampleRate, uint32_t minFrameCount,
-                             uint32_t maxFrameCount) noexcept override
-{
-    anira::HostAudioConfig config ((size_t) maxFrameCount, sampleRate);
-    
-    if (clap_thread_pool != nullptr && clap_thread_pool->request_exec) {
-        config.submit_task_to_host_thread = [this](int number_of_tasks) -> bool {
-            if (clap_thread_pool->request_exec(_host.host(), number_of_tasks)) {
-                return true;
-            } else {
-                return false;
-            }
-        };
-    }
-    
-    inference_handler.prepare(config);
-    
-    ... 
-    
-    return true;
-}
-```
-
-If `anira` submits now task to the host thread pool, `threadPoolExec(uint32_t taskIndex)` will be called in the host thread pool. This method should be overwritten in the application and should call the `exec_inference` method of the `anira::InferenceHandler` instance.
-
-```cpp
-void threadPoolExec(uint32_t taskIndex) noexcept override {
-    inference_handler.exec_inference();
 }
 ```
 
