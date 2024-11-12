@@ -51,23 +51,4 @@ elseif(UNIX)
 else()
     target_compile_definitions(${PROJECT_NAME} PRIVATE IS_WIN=1)
     set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".clap" PREFIX "")
-
-    # To make your plugin work in DAWs, you need to copy the shared libraries to the DAW's plugin folder
-    # This is just a temporary solution, a better approach would be to write a proper installer
-    # This installer could register the path to the shared libraries in the registry
-    # Depending on the DAW path you might need admin rights
-    set(DAW_PATHS
-            #"C:/ProgramData/Ableton/Live 12 Suite/Program"
-            #"C:/Program Files/REAPER (x64)/"
-            #"C:/Program Files/Bitwig Studio"
-    )
-
-    foreach(DAW_PATH IN LISTS DAW_PATHS)
-        add_custom_command(TARGET ${PROJECT_NAME}
-                POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${ANIRA_SHARED_LIBS_WIN}
-                ${DAW_PATH}
-        )
-    endforeach()
 endif()
