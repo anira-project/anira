@@ -139,7 +139,7 @@ anira allows users to benchmark and compare the inference performance of differe
 ### Build in examples
 
 - [Simple JUCE Audio Plugin](examples/desktop/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
-- [CLAP Plugin Example](examples/desktop/clap-audio-plugin/): Demonstrates how to use anira in a real-time clap plugin utilizing host provided threads instead of anira's thread pool.
+- [CLAP Plugin Example](examples/desktop/clap-audio-plugin/): Demonstrates how to use anira in a real-time clap plugin.
 - [Benchmark](examples/desktop/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
 - [Minimal Inference](examples/desktop/minimal-inference/): Demonstrates how minimal inference applications can be implemented in all three backends.
 - [Bela Example](examples/embedded/bela/bela-inference/): Demonstrates how to use anira in a real-time audio application on the Bela platform.
