@@ -8,7 +8,7 @@
 #include "../system/HighPriorityThread.h"
 #include "../utils/AudioBuffer.h"
 #include "SessionElement.h"
-#include "concurrentqueue.h"
+#include <concurrentqueue.h>
 #ifdef __x86_64__
 #include <immintrin.h>
 #endif

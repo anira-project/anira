@@ -10,7 +10,7 @@
 #include "InferenceThread.h"
 #include "../PrePostProcessor.h"
 #include "../utils/HostAudioConfig.h"
-#include "concurrentqueue.h"
+#include <concurrentqueue.h>
 
 #ifdef USE_LIBTORCH
     #include "../backends/LibTorchProcessor.h"
