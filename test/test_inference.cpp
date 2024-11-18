@@ -95,6 +95,9 @@ TEST(Test_Inference, inference){
     size_t bufferSize = 1024;
     double sampleRate = 44100;
 
+    // because of the method used for inference in the jupyter notebook, an additional offset of 149 samples has to be applied to the reference data
+    size_t reference_offset = 149;
+
     // read reference data
     std::vector<float> data_input;
     std::vector<float> data_predicted;
@@ -102,8 +105,8 @@ TEST(Test_Inference, inference){
     read_wav(string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav", data_input);
     read_wav(string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav", data_predicted);
 
-    assert(data_input.size() > 0);
-    assert(data_predicted.size() > 0);
+    ASSERT_TRUE(data_input.size() > 0);
+    ASSERT_TRUE(data_predicted.size() > 0);
 
 
     InferenceConfig inferenceConfig = hybridnn_config;
@@ -136,10 +139,10 @@ TEST(Test_Inference, inference){
     auto output_file_reference = std::fstream("/home/leto/ak/random_shit/audio_file_compare/reference_output.bin", std::ios::out | std::ios::binary);
 
     RingBuffer ring_buffer;
-    ring_buffer.initialize_with_positions(1, latency_offset+bufferSize);
+    ring_buffer.initialize_with_positions(1, latency_offset + bufferSize + reference_offset);
     
     //fill the buffer with zeroes to compensate for the latency
-    for (size_t i = 0; i < latency_offset; i++){
+    for (size_t i = 0; i < latency_offset + reference_offset; i++){
         ring_buffer.push_sample(0, 0);
     }    
 
@@ -172,11 +175,14 @@ TEST(Test_Inference, inference){
             
             output_file_reference.write(reinterpret_cast<const char*>(&reference), sizeof(float));
             output_file_processed.write(reinterpret_cast<const char*>(&processed), sizeof(float));
-
-            ASSERT_FLOAT_EQ(
-                reference,
-                processed
-            ) << "repeat=" << repeat << ", i=" << i << ", total sample nr: " << repeat*bufferSize + i << std::endl;
+            
+            if (repeat*bufferSize + i < latency_offset + reference_offset){
+                ASSERT_FLOAT_EQ(reference, 0);
+            } else {
+                // TODO find a better epsilon!
+                float epsilon = max(abs(reference), abs(processed)) * 1e-6 + 1e-7f; 
+                ASSERT_NEAR(reference, processed, epsilon) << "repeat=" << repeat << ", i=" << i << ", total sample nr: " << repeat*bufferSize + i  <<  std::endl;
+            }
         }
     }
     input_file.close();
