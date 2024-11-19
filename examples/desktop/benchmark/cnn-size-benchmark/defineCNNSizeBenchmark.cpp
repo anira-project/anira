@@ -101,10 +101,10 @@ BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_CNNSIZE)
 ->Unit(benchmark::kMillisecond)
 ->Iterations(NUM_ITERATIONS)->Repetitions(NUM_REPETITIONS)
 ->Apply(Arguments)
-->ComputeStatistics("min", anira::benchmark::calculate_min)
-->ComputeStatistics("max", anira::benchmark::calculate_max)
+->ComputeStatistics("min", anira::calculate_min)
+->ComputeStatistics("max", anira::calculate_max)
 ->ComputeStatistics("percentile", [](const std::vector<double>& v) -> double {
-    return anira::benchmark::calculate_percentile(v, PERCENTILE);
+    return anira::calculate_percentile(v, PERCENTILE);
   })
 ->DisplayAggregatesOnly(false)
 ->UseManualTime();
