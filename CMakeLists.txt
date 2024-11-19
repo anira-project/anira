@@ -21,12 +21,32 @@ option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 option(ANIRA_WITH_CONTROLLED_BLOCKING "Use of controlled blocking operation for further reduction of latency" OFF)
 
 # ==============================================================================
+# Get project version from git
+# ==============================================================================
+
+execute_process(COMMAND git describe --dirty
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE PROJECT_VERSION_FULL
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+execute_process(COMMAND git describe --tags --abbrev=0
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE PROJECT_VERSION_SHORT
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+# Retrive the v from the short version string
+string(SUBSTRING ${PROJECT_VERSION_SHORT} 1 -1 PROJECT_VERSION_SHORT)
+string(SUBSTRING ${PROJECT_VERSION_FULL} 1 -1 PROJECT_VERSION_FULL)
+
+message(STATUS "Project version: ${PROJECT_VERSION_SHORT} (${PROJECT_VERSION_FULL})")
+
+# ==============================================================================
 # Setup the project
 # ==============================================================================
 
 set (PROJECT_NAME anira)
 
-project (${PROJECT_NAME} VERSION 1.0.0)
+project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
 
 if(APPLE)
     if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
@@ -173,7 +193,7 @@ target_compile_definitions(${PROJECT_NAME}
     # Controlled blocking option definition
     $<$<BOOL:${ANIRA_WITH_CONTROLLED_BLOCKING}>:USE_CONTROLLED_BLOCKING>
     # Version number
-    -DANIRA_VERSION="${PROJECT_VERSION}"
+    -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
 )
 
 target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue)
