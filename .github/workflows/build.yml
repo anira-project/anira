@@ -83,10 +83,12 @@ jobs:
                 uses: actions/checkout@v4
                 with:
                     submodules: true
+                    fetch-depth: 0
 
             # We cache the build to speed up the build process
             -   name: cache the build
                 uses: mozilla-actions/sccache-action@v0.0.5
+
 
             # With DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" we can build universal binaries for apple computers, but this is not supported by the inference engines
             -   name: cmake configure
