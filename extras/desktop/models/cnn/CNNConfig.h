@@ -30,7 +30,9 @@ static std::vector<anira::TensorShape> tensor_shape_cnn_config = {
 static anira::InferenceConfig cnn_config (
         model_data_cnn_config,
         tensor_shape_cnn_config,
-        42.66f
+        42.66f,
+        0,
+        2
 );
 
 

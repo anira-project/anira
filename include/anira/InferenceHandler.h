@@ -11,8 +11,8 @@ namespace anira {
 class ANIRA_API InferenceHandler {
 public:
     InferenceHandler() = delete;
-    InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, const AniraContextConfig& context_config = AniraContextConfig());
-    InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase& custom_processor, const AniraContextConfig& context_config = AniraContextConfig());
+    InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, const ContextConfig& context_config = ContextConfig());
+    InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase& custom_processor, const ContextConfig& context_config = ContextConfig());
     ~InferenceHandler();
 
     void set_inference_backend(InferenceBackend inference_backend);

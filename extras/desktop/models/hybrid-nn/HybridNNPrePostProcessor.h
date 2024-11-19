@@ -8,9 +8,9 @@ class HybridNNPrePostProcessor : public anira::PrePostProcessor
 {
 public:
     virtual void pre_process(anira::RingBuffer& input, anira::AudioBufferF& output, [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
-        int64_t num_batches;
-        int64_t num_input_samples;
-        int64_t num_output_samples;
+        int64_t num_batches = 0;
+        int64_t num_input_samples = 0;
+        int64_t num_output_samples = 0;
 #ifdef USE_LIBTORCH
         if (current_inference_backend == anira::LIBTORCH) {
             num_batches = m_inference_config.get_input_shape(anira::InferenceBackend::LIBTORCH)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][0];
@@ -63,10 +63,10 @@ public:
         }
             
         for (size_t batch = 0; batch < (size_t) num_batches; batch++) {
-            int base_index = static_cast<int>(batch * num_input_samples);
-            pop_samples_from_buffer(input, output, static_cast<int>(num_output_samples), static_cast<int>(num_input_samples-num_output_samples), base_index);
+            size_t base_index = batch * (size_t) num_input_samples;
+            pop_samples_from_buffer(input, output, (size_t) num_output_samples, (size_t) (num_input_samples-num_output_samples), base_index);
         }
-    };
+    }
     
     anira::InferenceConfig m_inference_config = hybridnn_config;
 };

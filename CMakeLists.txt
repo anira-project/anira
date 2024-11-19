@@ -17,8 +17,28 @@ option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
 option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
 option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 
-# Shall semaphores be used for synchronization instead of atomic variables?
-option(ANIRA_WITH_SEMAPHORE "Use semaphores for synchronization instead of atomic variables" OFF)
+# Shall the use of a controlled blocking operation for further reduction of latency be enabled?
+option(ANIRA_WITH_CONTROLLED_BLOCKING "Use of controlled blocking operation for further reduction of latency" OFF)
+
+# ==============================================================================
+# Get project version from git
+# ==============================================================================
+
+execute_process(COMMAND git describe --dirty
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE PROJECT_VERSION_FULL
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+execute_process(COMMAND git describe --tags --abbrev=0
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE PROJECT_VERSION_SHORT
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+# Retrive the v from the short version string
+string(SUBSTRING ${PROJECT_VERSION_SHORT} 1 -1 PROJECT_VERSION_SHORT)
+string(SUBSTRING ${PROJECT_VERSION_FULL} 1 -1 PROJECT_VERSION_FULL)
+
+message(STATUS "Project version: ${PROJECT_VERSION_SHORT} (${PROJECT_VERSION_FULL})")
 
 # ==============================================================================
 # Setup the project
@@ -26,7 +46,7 @@ option(ANIRA_WITH_SEMAPHORE "Use semaphores for synchronization instead of atomi
 
 set (PROJECT_NAME anira)
 
-project (${PROJECT_NAME} VERSION 0.1.3)
+project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
 
 if(APPLE)
     if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
@@ -55,7 +75,6 @@ if (APPLE)
 	endif()
 endif ()
 
-# Sets the cpp language minimum, 20 because of new semaphore types
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
@@ -88,10 +107,8 @@ if(ANIRA_WITH_TFLITE)
     list(APPEND BACKEND_SOURCES src/backends/TFLiteProcessor.cpp)
 endif()
 
-if(ANIRA_WITH_SEMAPHORE)
-    message(STATUS "Using semaphores for thread synchronization.")
-else()
-    message(STATUS "Using atomic variables for thread synchronization.")
+if(ANIRA_WITH_CONTROLLED_BLOCKING)
+    message(STATUS "Using controlled blocking operation for further reduction of latency.")
 endif()
 
 ## ==============================================================================
@@ -107,7 +124,6 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(concurrentqueue)
-
 
 # ==============================================================================
 # Build the library
@@ -132,7 +148,7 @@ target_sources(${PROJECT_NAME}
         # Scheduler
         src/scheduler/InferenceManager.cpp
         src/scheduler/InferenceThread.cpp
-        src/scheduler/AniraContext.cpp
+        src/scheduler/Context.cpp
         src/scheduler/SessionElement.cpp
 
         # Utils
@@ -174,10 +190,10 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
-    # Semaphore definitions
-    $<$<BOOL:${ANIRA_WITH_SEMAPHORE}>:USE_SEMAPHORE>
+    # Controlled blocking option definition
+    $<$<BOOL:${ANIRA_WITH_CONTROLLED_BLOCKING}>:USE_CONTROLLED_BLOCKING>
     # Version number
-    -DANIRA_VERSION="${PROJECT_VERSION}"
+    -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
 )
 
 target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue)

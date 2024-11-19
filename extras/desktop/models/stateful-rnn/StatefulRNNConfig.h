@@ -32,7 +32,7 @@ static anira::InferenceConfig rnn_config (
         tensor_shape_rnn_config,
         42.66f,
         0,
-        0,
+        2,
         {0, 0},
         {1, 1},
         true

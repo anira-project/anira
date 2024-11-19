@@ -5,7 +5,7 @@
 #include <cmath>
 #include <algorithm>
 
-namespace anira::clap_plugin_example::utils {
+namespace clap_plugin_example::utils {
 
 class DryWetMixer {
 public:

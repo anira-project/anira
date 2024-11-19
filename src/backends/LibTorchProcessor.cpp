@@ -5,7 +5,7 @@ namespace anira {
 LibtorchProcessor::LibtorchProcessor(InferenceConfig& inference_config) : BackendBase(inference_config) {
     torch::set_num_threads(1);
 
-    for (size_t i = 0; i < m_inference_config.m_num_parallel_processors; ++i) {
+    for (unsigned int i = 0; i < m_inference_config.m_num_parallel_processors; ++i) {
         m_instances.emplace_back(std::make_shared<Instance>(m_inference_config));
     }
 }

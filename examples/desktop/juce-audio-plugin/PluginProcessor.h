@@ -67,8 +67,8 @@ private:
 private:
     juce::AudioProcessorValueTreeState parameters;
 
-    // Optional AniraContextConfig
-    anira::AniraContextConfig anira_context_config;
+    // Optional ContextConfig
+    anira::ContextConfig anira_context_config;
 
 #if MODEL_TO_USE == 1
     anira::InferenceConfig inference_config = cnn_config;

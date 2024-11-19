@@ -6,9 +6,11 @@
 include(GNUInstallDirs)
 
 # include the public headers of the anira library for the install target
+# TODO: File PR so that the concurrentqueue library does not have to be included that way
 target_include_directories(${PROJECT_NAME}
     PUBLIC
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/concurrentqueue/moodycamel>
 )
 
 # This will be problematic anyway since symbols are not found when linking the torch libraries privately

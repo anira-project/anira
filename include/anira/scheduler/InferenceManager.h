@@ -2,8 +2,8 @@
 #define ANIRA_INFERENCEMANAGER_H
 
 #include "InferenceThread.h"
-#include "../AniraContextConfig.h"
-#include "AniraContext.h"
+#include "../ContextConfig.h"
+#include "Context.h"
 #include "../utils/HostAudioConfig.h"
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
@@ -13,7 +13,7 @@ namespace anira {
 class ANIRA_API InferenceManager {
 public:
     InferenceManager() = delete;
-    InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor, const AniraContextConfig& context_config);
+    InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor, const ContextConfig& context_config);
     ~InferenceManager();
 
     void prepare(HostAudioConfig config);
@@ -26,7 +26,7 @@ public:
 
     // Required for unit test
     size_t get_num_received_samples() const;
-    const AniraContext& get_anira_context() const;
+    const Context& get_context() const;
 
     int get_missing_blocks() const;
     int get_session_id() const;
@@ -44,7 +44,7 @@ private:
     int leat_common_multiple(int a, int b);
 
 private:
-    std::shared_ptr<AniraContext> m_anira_context;
+    std::shared_ptr<Context> m_context;
 
     InferenceConfig& m_inference_config;
     std::shared_ptr<SessionElement> m_session;

@@ -8,7 +8,7 @@ if(NOT CMAKE_BUILD_TYPE)
     message(FATAL_ERROR "You need to specify CMAKE_BUILD_TYPE")
 endif()
 
-project(anira-clap-plugin-example VERSION 0.0.1 LANGUAGES C CXX)
+project(anira-clap-plugin-example VERSION ${PROJECT_VERSION} LANGUAGES C CXX)
 
 FetchContent_Declare(clap
         GIT_REPOSITORY https://github.com/free-audio/clap.git

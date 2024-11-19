@@ -1,20 +1,16 @@
-#ifndef ANIRA_ANIRACONTEXT_H
-#define ANIRA_ANIRACONTEXT_H
+#ifndef ANIRA_CONTEXT_H
+#define ANIRA_CONTEXT_H
 
-#ifdef USE_SEMAPHORE
-    #include <semaphore>
-#else
-    #include <atomic>
-#endif
+#include <atomic>
 #include <memory>
 #include <vector>
 
-#include "../AniraContextConfig.h"
+#include "../ContextConfig.h"
 #include "SessionElement.h"
 #include "InferenceThread.h"
 #include "../PrePostProcessor.h"
 #include "../utils/HostAudioConfig.h"
-#include "concurrentqueue.h"
+#include <concurrentqueue.h>
 
 #ifdef USE_LIBTORCH
     #include "../backends/LibTorchProcessor.h"
@@ -31,11 +27,11 @@
 
 namespace anira {
 
-class ANIRA_API AniraContext{
+class ANIRA_API Context{
 public:
-    AniraContext(const AniraContextConfig& context_config);
-    ~AniraContext();
-    static std::shared_ptr<AniraContext> get_instance(const AniraContextConfig& context_config);
+    Context(const ContextConfig& context_config);
+    ~Context();
+    static std::shared_ptr<Context> get_instance(const ContextConfig& context_config);
     static std::shared_ptr<SessionElement> create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor);
     static void release_session(std::shared_ptr<SessionElement> session);
     static void release_instance();
@@ -53,11 +49,11 @@ public:
     static std::vector<std::shared_ptr<SessionElement>>& get_sessions();
 
 private:
-    inline static std::shared_ptr<AniraContext> m_anira_context = nullptr; 
-    inline static AniraContextConfig m_context_config;
+    inline static std::shared_ptr<Context> m_context = nullptr; 
+    inline static ContextConfig m_context_config;
 
     static int get_available_session_id();
-    static void new_num_threads(int new_num_threads);
+    static void new_num_threads(unsigned int new_num_threads);
 
     static bool pre_process(std::shared_ptr<SessionElement> session);
     static void post_process(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> next_buffer);
@@ -91,4 +87,4 @@ private:
 
 } // namespace anira
 
-#endif //ANIRA_ANIRACONTEXT_H
+#endif //ANIRA_CONTEXT_H

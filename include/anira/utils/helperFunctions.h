@@ -1,12 +1,11 @@
-#ifndef ANIRA_BENCHMARK_HELPERFUNCTIONS_H
-#define ANIRA_BENCHMARK_HELPERFUNCTIONS_H
+#ifndef ANIRA_HELPERFUNCTIONS_H
+#define ANIRA_HELPERFUNCTIONS_H
 
 #include <vector>
 #include <algorithm>
 #include <stdexcept>
 
 namespace anira{
-namespace benchmark{
 
 /* ============================================================ *
  * ===================== Helper functions ===================== *
@@ -51,7 +50,6 @@ const auto calculate_max = [](const std::vector<double>& v) -> double {
     return *(std::max_element(std::begin(v), std::end(v)));
 };
 
-} // namespace benchmark
 } // namespace anira
 
-#endif // ANIRA_BENCHMARK_HELPERFUNCTIONS_H
+#endif // ANIRA_HELPERFUNCTIONS_H

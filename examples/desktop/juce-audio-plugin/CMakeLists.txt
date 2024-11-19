@@ -12,7 +12,7 @@ cmake_minimum_required(VERSION 3.15)
 
 set (PROJECT_NAME anira-juce-plugin-example)
 
-project (${PROJECT_NAME} VERSION 0.0.1)
+project (${PROJECT_NAME} VERSION ${PROJECT_VERSION})
 
 # Sets the cpp language minimum
 set(CMAKE_CXX_STANDARD 20)
@@ -41,10 +41,10 @@ else()
 endif()
 
 # add_compile_definitions(MODEL_TO_USE=1) # steerable-nafx
-# add_compile_definitions(MODEL_TO_USE=2) # GuitarLSTM
+add_compile_definitions(MODEL_TO_USE=2) # GuitarLSTM
 # add_compile_definitions(MODEL_TO_USE=3) # stateful-LSTM
 # add_compile_definitions(MODEL_TO_USE=4) # simple-gain
-add_compile_definitions(MODEL_TO_USE=5) # simple-stereo-gain
+# add_compile_definitions(MODEL_TO_USE=5) # simple-stereo-gain
 
 set (TARGET_NAME anira-juce-plugin-example)
 
@@ -52,14 +52,14 @@ juce_add_plugin(${TARGET_NAME}
 		# VERSION ...                               # Set this if the plugin version is different to the project version
 		# ICON_BIG ...                              # ICON_* arguments specify a path to an image file to use as an icon for the Standalone
 		# ICON_SMALL ...
-		COMPANY_NAME "AckvaSchulz"
+		COMPANY_NAME "Anira Project"
 		# IS_SYNTH TRUE/FALSE                       # Is this a synth or an effect?
 		# NEEDS_MIDI_INPUT TRUE/FALSE               # Does the plugin need midi input?
 		# NEEDS_MIDI_OUTPUT TRUE/FALSE              # Does the plugin need midi output?
 		# IS_MIDI_EFFECT TRUE/FALSE                 # Is this plugin a MIDI effect?
 		# EDITOR_WANTS_KEYBOARD_FOCUS TRUE/FALSE    # Does the editor need keyboard focus?
 		# COPY_PLUGIN_AFTER_BUILD TRUE/FALSE        # Should the plugin be installed to a default location after building?
-		PLUGIN_MANUFACTURER_CODE AcSc              # A four-character manufacturer id with at least one upper-case character
+		PLUGIN_MANUFACTURER_CODE Anir              # A four-character manufacturer id with at least one upper-case character
 		PLUGIN_CODE Anir                            # A unique four-character plugin id with exactly one upper-case character
 		# GarageBand 10.3 requires the first letter to be upper-case, and the remaining letters to be lower-case
 
@@ -73,7 +73,7 @@ juce_add_plugin(${TARGET_NAME}
 		endif()
 
 		FORMATS ${FORMATS_TO_BUILD}                     # The formats to build. Other valid formats are: AAX Unity VST AU AUv3
-		PRODUCT_NAME "anira-juce-plugin-example"			            # The name of the final executable, which can differ from the target name
+		PRODUCT_NAME "Anira JUCE Example"			            # The name of the final executable, which can differ from the target name
 		)
 
 juce_generate_juce_header(${TARGET_NAME})
@@ -122,8 +122,6 @@ target_link_libraries(${TARGET_NAME}
 )
 
 if (MSVC)
-	set(JUCE_MANIFEST_GENERATOR_PATH "${CMAKE_BINARY_DIR}/examples/desktop/juce-audio-plugin/${CMAKE_BUILD_TYPE}")
-
 	foreach(FORMAT IN LISTS FORMATS_TO_BUILD)
 		string(CONCAT CONCATENATED_TARGET ${TARGET_NAME}_${FORMAT})
 		add_custom_command(TARGET ${CONCATENATED_TARGET}
@@ -134,6 +132,8 @@ if (MSVC)
 		)
 	endforeach()
 
+	set(JUCE_MANIFEST_GENERATOR_PATH "${CMAKE_BINARY_DIR}/examples/desktop/juce-audio-plugin/${CMAKE_BUILD_TYPE}")
+
 	add_custom_command(TARGET ${TARGET_NAME}_VST3
 			PRE_BUILD
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -141,3 +141,7 @@ if (MSVC)
 			${JUCE_MANIFEST_GENERATOR_PATH}
 	)
 endif (MSVC)
+
+if(ANIRA_WITH_INSTALL)
+    include(${CMAKE_CURRENT_LIST_DIR}/install.cmake)
+endif()
