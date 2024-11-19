@@ -1,15 +1,6 @@
 #include "gtest/gtest.h"
 #include <anira/anira.h>
 
-#ifndef RANDOMDOUBLE
-#define RANDOMDOUBLE
-
-static double randomDouble(int LO, int HI){
-  return (double) LO + (double) (std::rand()) / ((double) (RAND_MAX/(HI-LO)));
-}
-
-#endif // RANDOMDOUBLE
-
 using namespace anira;
 TEST(Test_Audiobuffer, simple_write){
     AudioBufferF buffer = AudioBufferF(1,10);
