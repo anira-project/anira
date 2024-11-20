@@ -1,10 +1,9 @@
 .idea*
 *.DS_Store
-build/
+/build/
 modules/
 cmake-build*
 .vscode
-install/
 logs/
 results/
 venv/

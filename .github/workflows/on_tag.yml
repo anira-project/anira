@@ -1,0 +1,68 @@
+name: on tag
+
+on:
+  workflow_dispatch: # lets you run a build from github.com
+  # Runs the workflow on all push events
+  push:
+    # tags:
+    #   - 'v*.*.*'
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  build_test:
+    uses: ./.github/workflows/build_test.yml
+    secrets: inherit
+  build_release:
+    needs: build_test
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
+      matrix:
+        include:
+          - name: Linux-x86_64
+            os: ubuntu-latest
+          - name: macOS-x86_64
+            os: macOS-latest
+          - name: macOS-arm64
+            os: macOS-latest
+          - name: Windows-x86_64
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: get repo and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - name: setup
+        uses: ./.github/actions/setup
+      - name: build
+        uses: ./.github/actions/build
+        with:
+          BUILD_TYPE: Release
+          CMAKE_BUILD_PARALLEL_LEVEL: 4
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_INSTALL=ON"
+      - name: install
+        id: install
+        uses: ./.github/actions/install
+        with:
+          BUILD_TYPE: Release
+          PROJECT_NAME: anira
+          DEV_ID_APP_CERT: ${{ secrets.DEV_ID_APP_CERT }}
+          DEV_ID_APP_PWD: ${{ secrets.DEV_ID_APP_PWD }}
+          DEV_ID_APP: ${{ secrets.DEV_ID_APP }}   
+  release:
+    runs-on: ubuntu-latest
+    needs:
+      - build_release
+    steps:
+    - name: Get Artifacts
+      uses: actions/download-artifact@v4
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          */*.zip
+      
