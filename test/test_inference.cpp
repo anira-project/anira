@@ -11,7 +11,7 @@
 #include "../../../extras/desktop/models/hybrid-nn/HybridNNBypassProcessor.h" // Only needed for round trip test
 #include "WavReader.h"
 
-
+#define INFERENCE_TIMEOUT_S 2
 using namespace anira;
 
 static void fill_buffer(AudioBufferF &buffer){
@@ -27,14 +27,8 @@ static void push_buffer_to_ringbuffer(AudioBufferF const &buffer, RingBuffer &ri
     }
 }
 
-union Float_t{
-    Float_t(float num = 0.0f) : f(num) {}
 
-    int32_t i;
-    float f;
-};
-
-TEST(Test_Inference, passthrough){
+TEST(InferenceTest, Passthrough){
 
     size_t bufferSize = 2048;
     double sampleRate = 48000;
@@ -90,48 +84,55 @@ TEST(Test_Inference, passthrough){
     }
 }
 
+struct InferenceTestParams{
+    InferenceBackend backend;
+    HostAudioConfig audio_config;
+    string input_data_path;
+    string reference_data_path;
+    size_t reference_data_offset;
+    float epsilon_rel = 1e-6f;
+    float epsilon_abs = 1e-7f;
+};
 
-TEST(Test_Inference, inference_libtorch){
+// Test fixture for paramterized inference tests
+class InferenceTest: public ::testing::TestWithParam<InferenceTestParams>{        
+};
 
-    size_t buffer_size = 1024;
-    double sample_rate = 44100;
 
-    // because of the method used for inference in the jupyter notebook, an additional offset of 149 samples has to be applied to the reference data
-    size_t reference_offset = 149;
+
+// void test_inference(string input_data_path, string reference_data_path, size_t reference_offset, anira::HostAudioConfig& audio_config, InferenceConfig& inference_config, PrePostProcessor& pp_processor, InferenceBackend backend, float epsilon_rel = 1e-6, float epsilon_abs = 1e-7){
+TEST_P(InferenceTest, Simple){
+
+    auto test_params = GetParam();
+    auto buffer_size = test_params.audio_config.m_host_buffer_size;
+    auto reference_offset = test_params.reference_data_offset;
 
     // read reference data
     std::vector<float> data_input;
-    std::vector<float> data_predicted;
+    std::vector<float> data_reference;
 
-    read_wav(string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav", data_input);
-    read_wav(string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav", data_predicted);
+    read_wav(test_params.input_data_path, data_input);
+    read_wav(test_params.reference_data_path, data_reference);
 
     ASSERT_TRUE(data_input.size() > 0);
-    ASSERT_TRUE(data_predicted.size() > 0);
+    ASSERT_TRUE(data_reference.size() > 0);
 
     // setup inference
+    ContextConfig anira_context_config;
     InferenceConfig inference_config = hybridnn_config;
-    anira::ContextConfig anira_context_config;
-
-    // Create a pre- and post-processor instance
     HybridNNPrePostProcessor pp_processor;
-    HybridNNBypassProcessor bypass_processor(inference_config);
     // Create an InferenceHandler instance
-    anira::InferenceHandler inference_handler(pp_processor, inference_config, bypass_processor, anira_context_config);
+    InferenceHandler inference_handler(pp_processor, inference_config, anira_context_config);
 
-    // Create a HostAudioConfig instance containing the host config infos
-    anira::HostAudioConfig audio_config {
-        buffer_size,
-        sample_rate
-    };  
 
     // Allocate memory for audio processing
-    inference_handler.prepare(audio_config);
+    inference_handler.prepare(test_params.audio_config);
     // Select the inference backend
-    inference_handler.set_inference_backend(anira::LIBTORCH);
+    inference_handler.set_inference_backend(test_params.backend);
 
     int latency_offset = inference_handler.get_latency();
 
+    AudioBufferF test_buffer(1, buffer_size);
     RingBuffer ring_buffer;
     ring_buffer.initialize_with_positions(1, latency_offset + buffer_size + reference_offset);
     
@@ -140,17 +141,12 @@ TEST(Test_Inference, inference_libtorch){
         ring_buffer.push_sample(0, 0);
     }    
 
-    AudioBufferF test_buffer(1, buffer_size);
+    // TODO better default value for repeat
+    for (size_t repeat = 0; repeat < 150; repeat++){
 
-    std::cout << "starting test" << std::endl;
-
-    int ulp_max = 0;
-    for (size_t repeat = 0; repeat < 150; repeat++)
-    {
-        for (size_t i = 0; i < buffer_size; i++)
-        {
+        for (size_t i = 0; i < buffer_size; i++){
             test_buffer.set_sample(0, i, data_input.at((repeat*buffer_size)+i));
-            ring_buffer.push_sample(0, data_predicted.at((repeat*buffer_size)+i));
+            ring_buffer.push_sample(0, data_reference.at((repeat*buffer_size)+i));
         }
         
         size_t prev_samples = inference_handler.get_inference_manager().get_num_received_samples();
@@ -158,7 +154,11 @@ TEST(Test_Inference, inference_libtorch){
         inference_handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
         
         // wait until the block was properly processed
+        auto start = std::chrono::system_clock::now();
         while (!(inference_handler.get_inference_manager().get_num_received_samples() >= prev_samples)){
+            if (std::chrono::system_clock::now() >  start + std::chrono::duration<long int>(INFERENCE_TIMEOUT_S)){
+                FAIL() << "Timeout while waiting for block to be processed";
+            }
             std::this_thread::sleep_for(std::chrono::nanoseconds (10));
         }        
 
@@ -170,18 +170,184 @@ TEST(Test_Inference, inference_libtorch){
                 ASSERT_FLOAT_EQ(reference, 0);
             } else {
                 // TODO find a better epsilon!
-                float epsilon = max(abs(reference), abs(processed)) * 1e-6f + 1e-7f; 
-                int ulp_diff = abs(Float_t(reference).i - Float_t(processed).i);
-                ulp_max = max(ulp_max, ulp_diff);
-                ASSERT_NEAR(reference, processed, epsilon) << "repeat=" << repeat << ", i=" << i << ", total sample nr: " << repeat*buffer_size + i  << ", ULP diff: " << ulp_diff << std::endl;
-
+                float epsilon = max(abs(reference), abs(processed)) * test_params.epsilon_rel + test_params.epsilon_abs; 
+                ASSERT_NEAR(reference, processed, epsilon) << "repeat=" << repeat << ", i=" << i << ", total sample nr: " << repeat*buffer_size + i  << std::endl;
             }
         }
     }
 }
+string build_test_name(const testing::TestParamInfo<InferenceTest::ParamType>& info){
+    return std::to_string(info.param.audio_config.m_host_buffer_size) + "x" + std::to_string((int) info.param.audio_config.m_host_sample_rate);
+}
 
+INSTANTIATE_TEST_SUITE_P(
+    InferenceLibtorch, InferenceTest, ::testing::Values(
+        InferenceTestParams{
+            anira::LIBTORCH,
+            HostAudioConfig(1024, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+        },
+        InferenceTestParams{
+            anira::LIBTORCH,
+            HostAudioConfig(1025, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+        },
+        InferenceTestParams{
+            anira::LIBTORCH,
+            HostAudioConfig(2048, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+        },
+        InferenceTestParams{
+            anira::LIBTORCH,
+            HostAudioConfig(512, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+        },
+        InferenceTestParams{
+            anira::LIBTORCH,
+            HostAudioConfig(256, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+        },
+        InferenceTestParams{
+            anira::LIBTORCH,
+            HostAudioConfig(128, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+        }
+    ),
+    build_test_name
+);
+INSTANTIATE_TEST_SUITE_P(
+    InferenceOnnx, InferenceTest, ::testing::Values(
+        InferenceTestParams{
+            anira::ONNX,
+            HostAudioConfig(1024, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+            1e-6f,
+            2e-7f
+        },
+        InferenceTestParams{
+            anira::ONNX,
+            HostAudioConfig(2048, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+            1e-6f,
+            2e-7f
+        },
+        InferenceTestParams{
+            anira::ONNX,
+            HostAudioConfig(512, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+            1e-6f,
+            2e-7f
+        },
+        InferenceTestParams{
+            anira::ONNX,
+            HostAudioConfig(256, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+            1e-6f,
+            2e-7f
+        },
+        InferenceTestParams{
+            anira::ONNX,
+            HostAudioConfig(128, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+            1e-6f,
+            2e-7f
+        },
+        InferenceTestParams{
+            anira::ONNX,
+            HostAudioConfig(129, 44100),
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+            149,
+            1e-6f,
+            2e-7f
+        }
+    ),
+    build_test_name
+);
 
-TEST(Test_Inference, inference_onnx){
+INSTANTIATE_TEST_SUITE_P(
+    InferenceTflite, InferenceTest, ::testing::Values(
+        InferenceTestParams{
+            anira::TFLITE,
+            HostAudioConfig(1024, 44100),
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
+            149,
+            1e-6f,
+            2e-7f
+        },
+        InferenceTestParams{
+            anira::TFLITE,
+            HostAudioConfig(1025, 44100),
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
+            149,
+            1e-6f,
+            2e-7f
+        },
+        InferenceTestParams{
+            anira::TFLITE,
+            HostAudioConfig(2048, 44100),
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
+            149,
+            1e-6f,
+            2e-7f
+        },
+        InferenceTestParams{
+            anira::TFLITE,
+            HostAudioConfig(512, 44100),
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
+            149,
+            1e-6f,
+            2e-7f
+        },
+        InferenceTestParams{
+            anira::TFLITE,
+            HostAudioConfig(256, 44100),
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
+            149,
+            1e-6f,
+            2e-7f
+        },
+        InferenceTestParams{
+            anira::TFLITE,
+            HostAudioConfig(128, 44100),
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
+            string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
+            149,
+            1e-6f,
+            2e-7f
+        }
+    ),
+    build_test_name
+);
+
+TEST(InferenceTest, BufferNotFull){
 
     size_t buffer_size = 1024;
     double sample_rate = 44100;
@@ -232,39 +398,39 @@ TEST(Test_Inference, inference_onnx){
 
     AudioBufferF test_buffer(1, buffer_size);
 
-    std::cout << "starting test" << std::endl;
 
-    int ulp_max = 0;
+    size_t process_buffer_size = 128;
     for (size_t repeat = 0; repeat < 150; repeat++)
     {
-        for (size_t i = 0; i < buffer_size; i++)
+        for (size_t i = 0; i < process_buffer_size; i++)
         {
-            test_buffer.set_sample(0, i, data_input.at((repeat*buffer_size)+i));
-            ring_buffer.push_sample(0, data_predicted.at((repeat*buffer_size)+i));
+            test_buffer.set_sample(0, i, data_input.at((repeat*process_buffer_size)+i));
+            ring_buffer.push_sample(0, data_predicted.at((repeat*process_buffer_size)+i));
         }
         
         size_t prev_samples = inference_handler.get_inference_manager().get_num_received_samples();
 
-        inference_handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
+        inference_handler.process(test_buffer.get_array_of_write_pointers(), process_buffer_size);
         
         // wait until the block was properly processed
+        auto start = std::chrono::system_clock::now();
         while (!(inference_handler.get_inference_manager().get_num_received_samples() >= prev_samples)){
+            if (std::chrono::system_clock::now() >  start + std::chrono::duration<long int>(INFERENCE_TIMEOUT_S)){
+                FAIL() << "Timeout while waiting for block to be processed";
+            }
             std::this_thread::sleep_for(std::chrono::nanoseconds (10));
         }        
 
-        for (size_t i = 0; i < buffer_size; i++){
+        for (size_t i = 0; i < process_buffer_size; i++){
             float reference = ring_buffer.pop_sample(0);
             float processed = test_buffer.get_sample(0, i);
                         
-            if (repeat*buffer_size + i < latency_offset + reference_offset){
+            if (repeat*process_buffer_size + i < latency_offset + reference_offset){
                 ASSERT_FLOAT_EQ(reference, 0);
             } else {
                 // TODO find a better epsilon!
-                float epsilon = max(abs(reference), abs(processed)) * 1e-6f + 2e-7f; 
-                int ulp_diff = abs(Float_t(reference).i - Float_t(processed).i);
-                ulp_max = max(ulp_max, ulp_diff);
-                ASSERT_NEAR(reference, processed, epsilon) << "repeat=" << repeat << ", i=" << i << ", total sample nr: " << repeat*buffer_size + i  << ", ULP diff: " << ulp_diff << std::endl;
-
+                float epsilon = max(abs(reference), abs(processed)) * 1e-6f + 1e-7f; 
+                ASSERT_NEAR(reference, processed, epsilon) << "repeat=" << repeat << ", i=" << i << ", total sample nr: " << repeat*buffer_size + i  << std::endl;
             }
         }
     }
