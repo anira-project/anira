@@ -1,8 +1,7 @@
-name: on tag
+name: on_tag
 
 on:
-  workflow_dispatch: # lets you run a build from github.com
-  # Runs the workflow on all push events
+  workflow_dispatch:
   push:
     # tags:
     #   - 'v*.*.*'

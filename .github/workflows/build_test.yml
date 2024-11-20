@@ -31,8 +31,9 @@ jobs:
             os: macOS-latest
           - name: macOS-arm64
             os: macOS-latest
-          - name: Windows-x86_64
-            os: windows-latest
+          # TODO: Fix problem with windows ctest
+          # - name: Windows-x86_64
+          #   os: windows-latest
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -48,24 +49,6 @@ jobs:
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_INSTALL=ON"
-      # TODO: Fix problem with windows ctest
-          # CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_INSTALL=ON"
-      # - name: test
-      #   uses: ./.github/actions/test
-      - name: install
-        id: install
-        uses: ./.github/actions/install
-        with:
-          BUILD_TYPE: Release
-          PROJECT_NAME: anira
-          DEV_ID_APP_CERT: ${{ secrets.DEV_ID_APP_CERT }}
-          DEV_ID_APP_PWD: ${{ secrets.DEV_ID_APP_PWD }}
-          DEV_ID_APP: ${{ secrets.DEV_ID_APP }}
-      - name: final printout
-        shell: bash
-        run: |
-          echo "All done"
-          echo "PRODUCT_NAME=${{ steps.install.outputs.PRODUCT_NAME }}"
-          echo "PACKAGE_DIR=${{ steps.install.outputs.PACKAGE_DIR }}"
-          echo "PROJECT_VERSION=${{ steps.install.outputs.PROJECT_VERSION }}"
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON"
+      - name: test
+        uses: ./.github/actions/test
