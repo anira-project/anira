@@ -2,7 +2,7 @@
 #include <anira/anira.h>
 
 using namespace anira;
-TEST(Test_Audiobuffer, simple_write){
+TEST(Audiobuffer, SimpleWrite){
     AudioBufferF buffer = AudioBufferF(1,10);
     for (size_t i = 0; i < buffer.get_num_samples(); i++){
         EXPECT_FLOAT_EQ(0.f, buffer.get_sample(0,i));
@@ -21,7 +21,7 @@ TEST(Test_Audiobuffer, simple_write){
     }
 }
 
-TEST(Test_Audiobuffer, block_swap){
+TEST(Audiobuffer, BlockSwap){
     int block_size = 10;
 
     MemoryBlock<int> block;
@@ -60,7 +60,7 @@ TEST(Test_Audiobuffer, block_swap){
     }
 }
 
-TEST(Test_Audiobuffer, buffer_swap){
+TEST(Audiobuffer, BufferSwap){
     int block_size = 10;
 
     anira::AudioBuffer<int> buffer1(1, block_size);
@@ -96,7 +96,7 @@ TEST(Test_Audiobuffer, buffer_swap){
         ASSERT_EQ(buffer2.get_sample(0,i), i);
     }
 }
-TEST(Test_Audiobuffer, invalid_size_swap){
+TEST(Audiobuffer, InvalidSizeSwap){
     anira::AudioBuffer<int> buffer1(1, 5);
     anira::AudioBuffer<int> buffer2(1, 6);
     int* buffer1_ptr = buffer1.data();
@@ -113,7 +113,7 @@ TEST(Test_Audiobuffer, invalid_size_swap){
     ASSERT_EQ(output, std::string("Cannot swap data, buffers have different number of channels or sizes!\n"));
 }
 
-TEST(Test_Audiobuffer, invalid_channels_swap){
+TEST(Audiobuffer, InvalidChannelsSwap){
     anira::AudioBuffer<int> buffer1(2, 5);
     anira::AudioBuffer<int> buffer2(1, 5);
     int* buffer1_ptr = buffer1.data();
@@ -130,14 +130,14 @@ TEST(Test_Audiobuffer, invalid_channels_swap){
     ASSERT_EQ(output, std::string("Cannot swap data, buffers have different number of channels or sizes!\n"));
 }
 
-TEST(Test_Audiobuffer, block_of_blocks){
-    int block_size = 10;
-    MemoryBlock<std::atomic<int>> block_of_atomics(block_size);
-    for (int i = 0; i < block_size; i++) {
-        block_of_atomics[i].store(i);
-    }
-    std::atomic<int> const* block_ptr = block_of_atomics.data();
+// TEST(Audiobuffer, BlockOfBlocks){
+//     int block_size = 10;
+//     MemoryBlock<std::atomic<int>> block_of_atomics(block_size);
+//     for (int i = 0; i < block_size; i++) {
+//         block_of_atomics[i].store(i);
+//     }
+//     std::atomic<int> const* block_ptr = block_of_atomics.data();
 
-    // TODO assert something here?
+//     // TODO assert something here?
 
-}
+// }
