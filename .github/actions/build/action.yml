@@ -1,0 +1,49 @@
+name: build
+description: "Build the project with cmake"
+
+inputs:
+  BUILD_TYPE:
+    required: true
+    description: "The build type"
+  CMAKE_BUILD_PARALLEL_LEVEL:
+    required: true
+    description: "The number of parallel builds"
+  CMAKE_BUILD_ARGS:
+    required: true
+    description: "The cmake build arguments"
+
+runs:
+  using: "composite"
+  steps:
+    # We cache the build to speed up the build process
+    - name: cache the build
+      uses: mozilla-actions/sccache-action@v0.0.5
+
+    - name: print cmake build args
+      shell: bash
+      run: |
+        echo "BUILD_TYPE=${{ inputs.BUILD_TYPE }}"
+        echo "CMAKE_BUILD_PARALLEL_LEVEL=${{ inputs.CMAKE_BUILD_PARALLEL_LEVEL }}"
+        echo "CMAKE_BUILD_ARGS=${{ inputs.CMAKE_BUILD_ARGS }}"
+
+    # With DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" we can build universal binaries for apple computers, but this is not supported by the inference engines
+    - name: cmake configure
+      shell: bash
+      run: |
+        if [ "${{ matrix.name }}" == "Linux-x86_64" ]; then
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ${{ inputs.CMAKE_BUILD_ARGS }}
+        elif [ "${{ matrix.name }}" == "macOS-x86_64" ]; then
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_OSX_ARCHITECTURES=x86_64 ${{ inputs.CMAKE_BUILD_ARGS }}}}
+        elif [ "${{ matrix.name }}" == "macOS-arm64" ]; then
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_OSX_ARCHITECTURES=arm64 ${{ inputs.CMAKE_BUILD_ARGS }}}}
+        elif [ "${{ matrix.name }}" == "Windows-x86_64" ]; then
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ inputs.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ${{ inputs.CMAKE_BUILD_ARGS }}
+        else
+          echo "Unknown OS";
+        fi;
+
+    # Build the project
+    - name: cmake build
+      shell: bash
+      run: cmake --build build --config ${{ inputs.BUILD_TYPE }} --parallel ${{ inputs.CMAKE_BUILD_PARALLEL_LEVEL }}
+          

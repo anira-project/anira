@@ -1,0 +1,36 @@
+name: setup
+description: "Setup the project and install dependencies"
+
+runs:
+  using: "composite"
+  steps:
+      #A simple printout of the matrix
+      - name: printout
+        shell: bash
+        run: |
+          echo ${{ github.ref }}
+          echo "matrix.name=${{ matrix.name }}";
+          echo "matrix.os=${{ matrix.os }}";
+          if [ "${{ matrix.name }}" == "Linux-x86_64" ]; then
+            echo "$(uname -a)"
+          elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
+            echo "$(uname -a)"
+          fi;
+
+      # We need the osxutils to get the codesign and notorization tools
+      - name: install deps
+        shell: bash
+        run: |
+          if [ "${{ matrix.name }}" == "Linux-x86_64" ]; then
+            sudo apt-get update && sudo apt install ninja-build
+          elif [ "${{ matrix.name }}" == "macOS-x86_64" ]; then
+            brew install osxutils ninja
+            echo "brew prefix: $(brew --prefix)"
+          elif [ "${{ matrix.name }}" == "macOS-arm64" ]; then
+            brew install osxutils ninja
+            echo "brew prefix: $(brew --prefix)"
+          elif [ "${{ matrix.name }}" == "Windows-x86_64" ]; then
+            choco install ninja
+          else
+            echo "Unknown OS";
+          fi;
