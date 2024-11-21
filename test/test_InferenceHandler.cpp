@@ -1,6 +1,7 @@
 #include <thread>
 #include <stdint.h>
 #include <chrono>
+#include <format>
 
 #include "gtest/gtest.h"
 #include <anira/anira.h>
