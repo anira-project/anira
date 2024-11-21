@@ -1,5 +1,5 @@
 set(PROJECT_NAME tests)
-project (${PROJECT_NAME} VERSION 0.0.1)
+project (${PROJECT_NAME} VERSION ${PROJECT_VERSION})
 
 
 # Sets the cpp language minimum
@@ -19,9 +19,9 @@ add_compile_definitions(
 add_executable(${PROJECT_NAME})
 
 target_sources(${PROJECT_NAME} PRIVATE
-	test_inference.cpp
-    test_audiobuffer.cpp
-	test_wav_reader.cpp
+	test_InferenceHandler.cpp
+    utils/test_AudioBuffer.cpp
+	test_WavReader.cpp
 )
 
 target_link_libraries(${PROJECT_NAME} anira::anira)
