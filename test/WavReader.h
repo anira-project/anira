@@ -1,6 +1,4 @@
 #pragma once
-#ifndef ANIRA_WAVREADER_H
-#define ANIRA_WAVREADER_H
 // Adapted from https://stackoverflow.com/a/75704890
 #include <iostream>
 #include <cstdint>
@@ -93,5 +91,3 @@ inline int read_wav(string path, std::vector<float>& data){
     }
     return 0;
 }
-
-#endif // ANIRA_WAVREADER_H
