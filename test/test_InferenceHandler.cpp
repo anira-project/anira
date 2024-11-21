@@ -1,7 +1,6 @@
 #include <thread>
 #include <stdint.h>
 #include <chrono>
-#include <format>
 
 #include "gtest/gtest.h"
 #include <anira/anira.h>
@@ -148,7 +147,7 @@ TEST_P(InferenceTest, Simple){
     }
 }
 string build_test_name(const testing::TestParamInfo<InferenceTest::ParamType>& info){
-    return std::format("{}x{}", info.param.audio_config.m_host_sample_rate, info.param.audio_config.m_host_buffer_size);
+    return std::to_string((int)info.param.audio_config.m_host_sample_rate) + "x" + std::to_string(info.param.audio_config.m_host_buffer_size);
 }
 
 INSTANTIATE_TEST_SUITE_P(
