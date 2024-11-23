@@ -33,8 +33,8 @@ struct DataChunk
 // We assume 16-bit monochannel samples
 {  
     float* data;
-    int nb_of_samples;
-    DataChunk(int s): nb_of_samples{s}, data{new float[s]} {}
+    int num_samples;
+    DataChunk(int s): num_samples{s}, data{new float[s]} {}
     ~DataChunk(){delete[] data;}
 };
 
@@ -74,9 +74,8 @@ inline int read_wav(string path, std::vector<float>& data){
         else if(memcmp(ch.chunk_id, data_id, 4) == 0){
             DataChunk dat_chunk(ch.chunk_size/sizeof(float));
             ifs.read((char*)dat_chunk.data, ch.chunk_size);
-            std::cout << "dat_chunk size: " << dat_chunk.nb_of_samples << std::endl;
             // put data in vector
-            data.assign(dat_chunk.data, dat_chunk.data + dat_chunk.nb_of_samples);
+            data.assign(dat_chunk.data, dat_chunk.data + dat_chunk.num_samples);
 
             data_read = true;
         }
