@@ -201,6 +201,8 @@ INSTANTIATE_TEST_SUITE_P(
             string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
+            1e-6f,
+            2e-7f
         },
         InferenceTestParams{
             anira::LIBTORCH,
@@ -208,6 +210,8 @@ INSTANTIATE_TEST_SUITE_P(
             string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
+            1e-6f,
+            2e-7f
         },
         InferenceTestParams{
             anira::LIBTORCH,
@@ -215,6 +219,8 @@ INSTANTIATE_TEST_SUITE_P(
             string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
+            1e-6f,
+            2e-7f
         },
         InferenceTestParams{
             anira::LIBTORCH,
@@ -222,6 +228,8 @@ INSTANTIATE_TEST_SUITE_P(
             string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
+            1e-6f,
+            2e-7f
         }
     ),
     build_test_name
