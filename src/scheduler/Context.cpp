@@ -14,6 +14,7 @@ Context::~Context() {}
 std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_config) {
     if (m_context == nullptr) {
         m_context = std::make_shared<Context>(context_config);
+        std::cout << "[INFO] Anira version: " << m_context->m_context_config.m_anira_version << std::endl;
     } else {
         // TODO: Better error handling
         if (m_context->m_context_config.m_anira_version != context_config.m_anira_version) {
@@ -32,7 +33,6 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
             m_context->m_context_config.m_use_host_threads = false; // Can only be set to true again if all sessions are released
         }
     }
-    std::cout << "[INFO] Anira version: " << m_context->m_context_config.m_anira_version << std::endl;
     return m_context;
 }
 
