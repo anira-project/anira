@@ -26,6 +26,11 @@ struct FmtChunk{
     uint32_t byte_rate;
     uint16_t block_align;
     uint16_t bits_per_sample;
+    uint16_t extra_params_size;
+    char* extra_params;
+    FmtChunk(): extra_params{nullptr} {}
+    FmtChunk(uint32_t chunk_size): extra_params{new char[chunk_size - 18]} {}
+    ~FmtChunk(){delete[] extra_params;}
 };
 
 
@@ -63,10 +68,9 @@ inline int read_wav(string path, std::vector<float>& data){
     bool fmt_read = false;
     bool data_read = false;
     while(ifs.read((char*)(&ch), sizeof(ch))){
-
         // if fmt chunk?
         if (memcmp(ch.chunk_id, fmt_id, 4) == 0){
-            FmtChunk fmt;
+            FmtChunk fmt(ch.chunk_size);
             ifs.read((char*)(&fmt), ch.chunk_size);
             fmt_read = true;
         }
