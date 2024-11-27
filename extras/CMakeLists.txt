@@ -1,4 +1,4 @@
-if(ANIRA_WITH_EXAMPLES)
+if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_TESTS)
     add_subdirectory(desktop)
 elseif(ANIRA_WITH_BELA_EXAMPLE)
     add_subdirectory(embedded/bela)

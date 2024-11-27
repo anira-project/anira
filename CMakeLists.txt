@@ -254,8 +254,11 @@ endif()
 # ==============================================================================
 
 # First we import the extras folder since we need the compile definitions (model paths) for the examples
-if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE)
+if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE OR ANIRA_WITH_TESTS)
     add_subdirectory(extras)
+endif()
+
+if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE)    
     add_subdirectory(examples)
 endif()
 

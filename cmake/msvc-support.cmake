@@ -33,17 +33,23 @@ if (ANIRA_WITH_LIBTORCH)
 endif(ANIRA_WITH_LIBTORCH)
 
 # Google Benchmark and Google Test DLLs
-if (ANIRA_WITH_BENCHMARK)
+if (ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK)
     if(CMAKE_GENERATOR MATCHES "Visual Studio")
         list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}/gtest.dll")
         list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}/gtest_main.dll")
-        list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/_deps/benchmark-build/src/${CMAKE_BUILD_TYPE}/benchmark.dll")
     else()
         list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/bin/gtest.dll")
         list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/bin/gtest_main.dll")
+    endif()
+endif()
+
+if (ANIRA_WITH_BENCHMARK)
+    if(CMAKE_GENERATOR MATCHES "Visual Studio")
+        list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/_deps/benchmark-build/src/${CMAKE_BUILD_TYPE}/benchmark.dll")
+    else()
         list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/_deps/benchmark-build/src/benchmark.dll")
     endif()
-endif(ANIRA_WITH_BENCHMARK)
+endif()
 
 # Make a list of all necessary DLLs for the project
 get_directory_property(hasParent PARENT_DIRECTORY)

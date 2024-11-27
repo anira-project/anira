@@ -42,6 +42,26 @@ static double calculate_percentile(const std::vector<double>& v, double percenti
     }
 }
 
+/// @brief Fills the buffer with random samples
+/// @param buffer 
+static void fill_buffer(AudioBufferF &buffer){
+    for (size_t i = 0; i < buffer.get_num_samples(); i++){
+        float new_val = random_sample();
+        buffer.set_sample(0, i, new_val);
+    }
+}
+
+
+/// @brief pushes all samples in the AudioBuffer into the RingBuffer
+/// @param buffer 
+/// @param ringbuffer 
+static void push_buffer_to_ringbuffer(AudioBufferF const &buffer, RingBuffer &ringbuffer){
+    for (size_t i = 0; i < buffer.get_num_samples(); i++){
+        ringbuffer.push_sample(0, buffer.get_sample(0, i));
+    }
+}
+
+
 const auto calculate_min = [](const std::vector<double>& v) -> double {
     return *(std::min_element(std::begin(v), std::end(v)));
 };
