@@ -43,6 +43,12 @@ jobs:
           fetch-depth: 0
       - name: setup
         uses: ./.github/actions/setup
+      - name: add juce deps
+        shell: bash
+        run: |
+          if [ "${{ matrix.name }}" == "Linux-x86_64" ]; then
+            sudo apt install libxrandr-dev libxinerama-dev libxcursor-dev libfreetype6-dev libasound2-dev
+          fi
       - name: build
         uses: ./.github/actions/build
         with:
