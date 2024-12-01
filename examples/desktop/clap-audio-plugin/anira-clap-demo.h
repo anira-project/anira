@@ -13,9 +13,9 @@
 
 #include <anira/anira.h>
 
-#include "../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
-#include "../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../extras/desktop/models/hybrid-nn/HybridNNBypassProcessor.h"
+#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../../extras/models/hybrid-nn/HybridNNBypassProcessor.h"
 
 #include "utils/DryWetMixer.h"
 

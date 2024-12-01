@@ -6,9 +6,9 @@
 #include <anira/anira.h>
 #include <anira/utils/helperFunctions.h>
 
-#include "../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
-#include "../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../extras/desktop/models/hybrid-nn/HybridNNBypassProcessor.h" // Only needed for round trip test
+#include "../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../../extras/models/hybrid-nn/HybridNNBypassProcessor.h" // Only needed for round trip test
 #include "WavReader.h"
 
 #define INFERENCE_TIMEOUT_S 2

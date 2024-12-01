@@ -1,1 +1,0 @@
-message("TODO: Implement download of Bela Model.")
