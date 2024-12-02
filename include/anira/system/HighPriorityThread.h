@@ -20,7 +20,7 @@ namespace anira {
 class ANIRA_API HighPriorityThread {
 public:
     HighPriorityThread();
-    ~HighPriorityThread();
+    virtual ~HighPriorityThread();
     
     void start();
     void stop();
@@ -29,7 +29,11 @@ public:
 
     static void elevate_priority(std::thread::native_handle_type thread_native_handle, bool is_main_process = false);
     bool should_exit();
+    bool is_running();
 
+protected:
+    std::atomic<bool> m_is_running;
+    
 private:
     std::thread m_thread;
     std::atomic<bool> m_should_exit;

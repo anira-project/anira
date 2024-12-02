@@ -6,168 +6,178 @@
 #include <vector>
 #include <thread>
 #include <iostream>
+#include <cassert>
+#include <cstring>
+#include <anira/utils/InferenceBackend.h>
 #include "anira/system/AniraWinExports.h"
 
 namespace anira {
 
-struct ANIRA_API InferenceConfig {
-    InferenceConfig(
-#ifdef USE_LIBTORCH
-            std::string model_path_torch = "",
-            std::vector<int64_t> model_input_shape_torch = {},
-            std::vector<int64_t> model_output_shape_torch = {},
-#endif
-#ifdef USE_ONNXRUNTIME
-            std::string model_path_onnx = "",
-            std::vector<int64_t> model_input_shape_onnx = {},
-            std::vector<int64_t> model_output_shape_onnx = {},
-#endif
-#ifdef USE_TFLITE
-            std::string model_path_tflite = "",
-            std::vector<int64_t> model_input_shape_tflite = {},
-            std::vector<int64_t> model_output_shape_tflite = {},
-#endif
-            float max_inference_time = 0, // in ms per input of batch_size
-            int model_latency = 0, // in samples per input of batch_size
-            bool warm_up = false,
-            bool bind_session_to_processor = false,
-            int num_parallel_processors = ((int) std::thread::hardware_concurrency() / 2 > 0) ? (int) std::thread::hardware_concurrency() / 2 : 1
-#ifdef USE_SEMAPHORE
-            , float wait_in_process_block = 0.f
-#endif
-            )
- :
-#ifdef USE_LIBTORCH
-            m_model_path_torch(model_path_torch),
-            m_model_input_shape_torch(model_input_shape_torch),
-            m_model_output_shape_torch(model_output_shape_torch),
-#endif
-#ifdef USE_ONNXRUNTIME
-            m_model_path_onnx(model_path_onnx),
-            m_model_input_shape_onnx(model_input_shape_onnx),
-            m_model_output_shape_onnx(model_output_shape_onnx),
-#endif
-#ifdef USE_TFLITE
-            m_model_path_tflite(model_path_tflite),
-            m_model_input_shape_tflite(model_input_shape_tflite),
-            m_model_output_shape_tflite(model_output_shape_tflite),
-#endif
-            m_max_inference_time(max_inference_time),
-            m_model_latency(model_latency),
-            m_warm_up(warm_up),
-            m_bind_session_to_processor(bind_session_to_processor),
-            m_num_parallel_processors(num_parallel_processors)
-#ifdef USE_SEMAPHORE
-            , m_wait_in_process_block(wait_in_process_block)
-#endif
-    {
-#ifdef USE_LIBTORCH
-        if (m_model_input_shape_torch.size() > 0) {
-            m_new_model_input_size = 1;
-            for (int i = 0; i < m_model_input_shape_torch.size(); ++i) {
-                m_new_model_input_size *= (int) m_model_input_shape_torch[i];
-            }
-        }
-        if (m_model_output_shape_torch.size() > 0) {
-            m_new_model_output_size = 1;
-            for (int i = 0; i < m_model_output_shape_torch.size(); ++i) {
-                m_new_model_output_size *= (int) m_model_output_shape_torch[i];
-            }
-        }
-#elif USE_ONNXRUNTIME
-        if (m_model_input_shape_onnx.size() > 0) {
-            m_new_model_input_size = 1;
-            for (int i = 0; i < m_model_input_shape_onnx.size(); ++i) {
-                m_new_model_input_size *= (int) m_model_input_shape_onnx[i];
-            }
-        }
-        if (m_model_output_shape_onnx.size() > 0) {
-            m_new_model_output_size = 1;
-            for (int i = 0; i < m_model_output_shape_onnx.size(); ++i) {
-                m_new_model_output_size *= (int) m_model_output_shape_onnx[i];
-            }
-        }
-#elif USE_TFLITE
-        if (m_model_input_shape_tflite.size() > 0) {
-            m_new_model_input_size = 1;
-            for (int i = 0; i < m_model_input_shape_tflite.size(); ++i) {
-                m_new_model_input_size *= m_model_input_shape_tflite[i];
-            }
-        }
-        if (m_model_output_shape_tflite.size() > 0) {
-            m_new_model_output_size = 1;
-            for (int i = 0; i < m_model_output_shape_tflite.size(); ++i) {
-                m_new_model_output_size *= m_model_output_shape_tflite[i];
-            }
-        }
-#endif
-        if (m_bind_session_to_processor) {
-            m_num_parallel_processors = 1;
-        }
-        if (m_num_parallel_processors < 1) {
-            m_num_parallel_processors = 1;
-            std::cout << "[WARNING] Number of parellel processors must be at least 1. Setting to 1." << std::endl;
+enum IndexAudioData : size_t {
+    Input = 0,
+    Output = 1
+};
+
+typedef std::vector<std::vector<int64_t>> TensorShapeList;
+
+struct ModelData {
+    ModelData(void* data, size_t size, InferenceBackend backend, bool is_binary = true) : m_data(data), m_size(size), m_backend(backend), m_is_binary(is_binary) {}
+    ModelData(std::string model_path, InferenceBackend backend, bool is_binary = false) : m_size(model_path.size()), m_backend(backend), m_is_binary(is_binary) {
+        m_data = malloc(sizeof(char) * model_path.size());
+        memcpy(m_data, model_path.data(), model_path.size());
+        m_size = model_path.size();
+    }
+
+    ModelData(const ModelData& other) 
+        : m_size(other.m_size), m_backend(other.m_backend), m_is_binary(other.m_is_binary) {
+        if (!m_is_binary) {
+            m_data = malloc(sizeof(char) * other.m_size);
+            memcpy(m_data, other.m_data, other.m_size);
+        } else {
+            m_data = other.m_data;
         }
     }
 
-#ifdef USE_LIBTORCH
-    std::string m_model_path_torch;
-    std::vector<int64_t> m_model_input_shape_torch;
-    std::vector<int64_t> m_model_output_shape_torch;
-#endif
+    ModelData& operator=(const ModelData& other) {
+        if (this != &other) {
+            if (!m_is_binary) {
+                free(m_data);
+                m_data = malloc(other.m_size);
+                memcpy(m_data, other.m_data, other.m_size);
+            } else {
+                m_data = other.m_data;
+            }
+            m_size = other.m_size;
+            m_backend = other.m_backend;
+            m_is_binary = other.m_is_binary;
+        }
+        return *this;
+    }
 
-#ifdef USE_ONNXRUNTIME
-    std::string m_model_path_onnx;
-    std::vector<int64_t> m_model_input_shape_onnx;
-    std::vector<int64_t> m_model_output_shape_onnx;
-#endif
+    ~ModelData() {
+        if (!m_is_binary) {
+            free(m_data);
+        }
+    }
+    
+    void* m_data;
+    size_t m_size;
+    InferenceBackend m_backend;
+    bool m_is_binary;
 
-#ifdef USE_TFLITE
-    std::string m_model_path_tflite;
-    std::vector<int64_t> m_model_input_shape_tflite; // tflite requires int but for compatibility with other backends we use int64_t
-    std::vector<int64_t> m_model_output_shape_tflite;
-#endif
+    bool operator==(const ModelData& other) const {
+        return
+            m_data == other.m_data &&
+            m_size == other.m_size &&
+            m_backend == other.m_backend &&
+            m_is_binary == other.m_is_binary;
+    }
 
+    bool operator!=(const ModelData& other) const {
+        return !(*this == other);
+    }
+};
+
+struct TensorShape {
+    TensorShapeList m_input_shape;
+    TensorShapeList m_output_shape;
+    InferenceBackend m_backend;
+    bool m_universal = false;
+
+    TensorShape() = delete;
+    TensorShape(TensorShapeList input_shape, TensorShapeList output_shape, InferenceBackend backend) :
+        m_input_shape(input_shape),
+        m_output_shape(output_shape),
+        m_backend(backend) {
+        assert((m_input_shape.size() > 0 && "At least one input shape must be provided."));
+        assert((m_output_shape.size() > 0 && "At least one output shape must be provided."));
+    }
+
+    TensorShape(TensorShapeList input_shape, TensorShapeList output_shape) :
+        m_input_shape(input_shape),
+        m_output_shape(output_shape),
+        m_universal(true) {
+        assert((m_input_shape.size() > 0 && "At least one input shape must be provided."));
+        assert((m_output_shape.size() > 0 && "At least one output shape must be provided."));
+    }
+
+    bool operator==(const TensorShape& other) const {
+        return
+            m_input_shape == other.m_input_shape &&
+            m_output_shape == other.m_output_shape &&
+            m_backend == other.m_backend;
+    }
+
+    bool operator!=(const TensorShape& other) const {
+        return !(*this == other);
+    }
+};
+
+
+class ANIRA_API InferenceConfig {
+
+public:
+    InferenceConfig() = default;
+
+    InferenceConfig(
+            std::vector<ModelData> model_data,
+            std::vector<TensorShape> tensor_shape,
+            float max_inference_time, // in ms per inference
+            unsigned int internal_latency = 0, // in samples per inference
+            unsigned int warm_up = 0, // number of warm up inferences
+            std::array<size_t, 2> index_audio_data = {0, 0}, // input and output index of audio data vector of tensors
+            std::array<size_t, 2> num_audio_channels = {1, 1}, // input and output number of audio channels
+            bool session_exclusive_processor = false,
+            unsigned int num_parallel_processors = (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2 : 1
+#ifdef USE_CONTROLLED_BLOCKING
+            , float wait_in_process_block = 0.f
+#endif
+            );
+
+    void set_input_sizes(const std::vector<size_t>& input_sizes);
+    void set_output_sizes(const std::vector<size_t>& output_sizes);
+    std::string get_model_path(InferenceBackend backend);
+    TensorShapeList get_input_shape();
+    TensorShapeList get_output_shape();
+    TensorShapeList get_input_shape(InferenceBackend backend);
+    TensorShapeList get_output_shape(InferenceBackend backend);
+    void set_model_path(const std::string& model_path, InferenceBackend backend);
+    void set_input_shape(const TensorShapeList& input_shape, InferenceBackend backend);
+    void set_output_shape(const TensorShapeList& output_shape, InferenceBackend backend);
+
+    std::vector<ModelData> m_model_data;
+    std::vector<TensorShape> m_tensor_shape;
     float m_max_inference_time;
-    int m_model_latency;
-    bool m_warm_up;
-    bool m_bind_session_to_processor;
-    int m_num_parallel_processors;
+    unsigned int m_internal_latency;
+    unsigned int m_warm_up;
+    std::array<size_t, 2> m_index_audio_data;
+    std::array<size_t, 2> m_num_audio_channels;
+    bool m_session_exclusive_processor;
+    unsigned int m_num_parallel_processors;
 
-#ifdef USE_SEMAPHORE
+#ifdef USE_CONTROLLED_BLOCKING
     float m_wait_in_process_block;
 #endif
     
-    int m_new_model_input_size;
-    int m_new_model_output_size;
+    std::vector<size_t> m_input_sizes;
+    std::vector<size_t> m_output_sizes;
 
     bool operator==(const InferenceConfig& other) const {
         return
-#ifdef USE_LIBTORCH
-            m_model_path_torch == other.m_model_path_torch &&
-            m_model_input_shape_torch == other.m_model_input_shape_torch &&
-            m_model_output_shape_torch == other.m_model_output_shape_torch &&
-#endif
-#ifdef USE_ONNXRUNTIME
-            m_model_path_onnx == other.m_model_path_onnx &&
-            m_model_input_shape_onnx == other.m_model_input_shape_onnx &&
-            m_model_output_shape_onnx == other.m_model_output_shape_onnx &&
-#endif
-#ifdef USE_TFLITE
-            m_model_path_tflite == other.m_model_path_tflite &&
-            m_model_input_shape_tflite == other.m_model_input_shape_tflite &&
-            m_model_output_shape_tflite == other.m_model_output_shape_tflite &&
-#endif
-            m_max_inference_time == other.m_max_inference_time &&
-            m_model_latency == other.m_model_latency &&
+            m_model_data == other.m_model_data &&
+            m_tensor_shape == other.m_tensor_shape &&
+            std::abs(m_max_inference_time - other.m_max_inference_time) < 1e-6 &&
+            m_internal_latency == other.m_internal_latency &&
             m_warm_up == other.m_warm_up &&
-            m_bind_session_to_processor == other.m_bind_session_to_processor &&
+            m_index_audio_data == other.m_index_audio_data &&
+            m_num_audio_channels == other.m_num_audio_channels &&
+            m_session_exclusive_processor == other.m_session_exclusive_processor &&
             m_num_parallel_processors == other.m_num_parallel_processors &&
-#ifdef USE_SEMAPHORE
-            m_wait_in_process_block == other.m_wait_in_process_block &&
+#ifdef USE_CONTROLLED_BLOCKING
+            std::abs(m_wait_in_process_block - other.m_wait_in_process_block) < 1e-6 &&
 #endif
-            m_new_model_input_size == other.m_new_model_input_size &&
-            m_new_model_output_size == other.m_new_model_output_size;
+            m_input_sizes == other.m_input_sizes &&
+            m_output_sizes == other.m_output_sizes;
     }
 
     bool operator!=(const InferenceConfig& other) const {
@@ -175,7 +185,6 @@ struct ANIRA_API InferenceConfig {
     }
 
 };
-
 
 } // namespace anira
 

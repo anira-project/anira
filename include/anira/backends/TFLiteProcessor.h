@@ -6,6 +6,7 @@
 #include "BackendBase.h"
 #include "../InferenceConfig.h"
 #include "../utils/AudioBuffer.h"
+#include "../scheduler/SessionElement.h"
 #include <tensorflow/lite/c_api.h>
 #include <memory>
 
@@ -17,7 +18,7 @@ public:
     ~TFLiteProcessor();
 
     void prepare() override;
-    void process(AudioBufferF& input, AudioBufferF& output) override;
+    void process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) override;
 
 private:
     struct Instance {
@@ -25,14 +26,16 @@ private:
         ~Instance();
         
         void prepare();
-        void process(AudioBufferF& input, AudioBufferF& output);
+        void process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session);
 
         TfLiteModel* m_model;
         TfLiteInterpreterOptions* m_options;
         TfLiteInterpreter* m_interpreter;
 
-        TfLiteTensor* m_input_tensor;
-        const TfLiteTensor* m_output_tensor;
+        std::vector<MemoryBlock<float>> m_input_data;
+
+        std::vector<TfLiteTensor*> m_inputs;
+        std::vector<const TfLiteTensor*> m_outputs;
 
         InferenceConfig& m_inference_config;
         std::atomic<bool> m_processing {false};

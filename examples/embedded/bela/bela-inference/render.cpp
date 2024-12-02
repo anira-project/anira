@@ -20,8 +20,8 @@ int g_read_pointer = 0;							// Position of the last frame we played
 
 anira::InferenceConfig g_inference_config(
 	"model.pt",
-	{1, 1, 2048},
-	{1, 1, 2048},
+	{{1, 1, 2048}},
+	{{1, 1, 2048}},
 	21.53f,
 	0,
 	true,
@@ -58,7 +58,7 @@ bool setup(BelaContext *context, void *userData)
 	};
 
 	g_inference_handler.prepare(host_config);
-	g_inference_handler.set_inference_backend(anira::NONE);
+	g_inference_handler.set_inference_backend(anira::CUSTOM);
 	int latency = g_inference_handler.get_latency();
 	rt_printf("Inference latency: %d samples\n", latency);
 

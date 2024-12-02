@@ -3,22 +3,25 @@
 
 namespace anira {
 
-InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, const AniraContextConfig& context_config) : m_inference_manager(pp_processor, inference_config, nullptr, context_config) {
+InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, const ContextConfig& context_config) : m_inference_manager(pp_processor, inference_config, nullptr, context_config) {
 }
 
-InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase& custom_processor, const AniraContextConfig& context_config) : m_inference_manager(pp_processor, inference_config, &custom_processor, context_config) {
+InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase& custom_processor, const ContextConfig& context_config) : m_inference_manager(pp_processor, inference_config, &custom_processor, context_config) {
 }
 
 InferenceHandler::~InferenceHandler() {
 }
 
 void InferenceHandler::prepare(HostAudioConfig new_audio_config) {
-    assert(new_audio_config.m_host_channels == 1 && "Stereo processing is not fully implemented yet");
     m_inference_manager.prepare(new_audio_config);
 }
 
-void InferenceHandler::process(float **input_buffer, const size_t input_samples) {
-    m_inference_manager.process(input_buffer, input_samples);
+void InferenceHandler::process(float* const* data, size_t num_samples) {
+    m_inference_manager.process(data, data, num_samples);
+}
+
+void InferenceHandler::process(const float* const* input_data, float* const* output_data, size_t num_samples) {
+    m_inference_manager.process(input_data, output_data, num_samples);
 }
 
 void InferenceHandler::set_inference_backend(InferenceBackend inference_backend) {
@@ -31,6 +34,10 @@ InferenceBackend InferenceHandler::get_inference_backend() {
 
 int InferenceHandler::get_latency() {
     return m_inference_manager.get_latency();
+}
+
+void InferenceHandler::exec_inference() {
+    m_inference_manager.exec_inference();
 }
 
 InferenceManager &InferenceHandler::get_inference_manager() {

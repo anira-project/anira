@@ -2,14 +2,14 @@
 
 namespace anira {
 
-BackendBase::BackendBase(InferenceConfig &config) : m_inference_config(config) {
+BackendBase::BackendBase(InferenceConfig& inference_config) : m_inference_config(inference_config) {
 }
 
 void BackendBase::prepare() {
 
 }
 
-void BackendBase::process(AudioBufferF &input, AudioBufferF &output) {
+void BackendBase::process(AudioBufferF& input, AudioBufferF& output, [[maybe_unused]] std::shared_ptr<SessionElement> session) {
     auto equal_channels = input.get_num_channels() == output.get_num_channels();
     auto sample_diff = input.get_num_samples() - output.get_num_samples();
 

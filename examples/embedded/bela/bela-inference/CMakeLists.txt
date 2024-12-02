@@ -55,7 +55,6 @@ find_library(MATHNEON_LIB REQUIRED
 # Setting up anira
 ################################################################
 
-# set(ANIRA_WITH_SEMAPHORE OFF)
 # set(ANIRA_WITH_ONNXRUNTIME OFF) # Not yet supported
 # set(ANIRA_WITH_TFLITE OFF) # Not yet supported
 # # In case the libs from anira shall be installed

@@ -1,0 +1,99 @@
+name: build
+description: "Build the project with cmake"
+
+inputs:
+  BUILD_TYPE:
+    required: true
+    description: "The build type"
+  PROJECT_NAME:
+    required: true
+    description: "The project name"
+  DEV_ID_APP_CERT:
+    required: true
+    description: "The developer id application certificate"
+  DEV_ID_APP_PWD:
+    required: true
+    description: "The developer id application password"
+  DEV_ID_APP:
+    required: true
+    description: "The developer id application"
+  
+outputs:
+  PROJECT_VERSION:
+    value: ${{ steps.get_project_version.outputs.PROJECT_VERSION }}
+    description: "The version of the project"
+  PACKAGE_DIR:
+    value: ${{ steps.declare_artefact_variables.outputs.PACKAGE_DIR }}
+    description: "The packaging directory"
+  PRODUCT_NAME:
+    value: ${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}
+    description: "The product name"
+
+runs:
+  using: "composite"
+  steps:
+    # Build the install target
+    - name: install target
+      shell: bash
+      run: cmake --install build --config ${{ inputs.BUILD_TYPE }}
+
+    - name: get project version
+      id: get_project_version
+      shell: bash
+      run: |
+        version=$(grep 'CMAKE_PROJECT_VERSION:STATIC' build/CMakeCache.txt | cut -d'=' -f2)
+        echo "PROJECT_VERSION=${version}" >> $GITHUB_OUTPUT
+        echo "current project version: ${version}"
+
+    # Declaring the product name and the packaging directory
+    - name: declare artefact variables
+      id: declare_artefact_variables
+      shell: bash
+      run: |
+        echo "PACKAGE_DIR=artefacts/${{ inputs.PROJECT_NAME }}-${{ steps.get_project_version.outputs.PROJECT_VERSION }}-${{ matrix.name }}" >> $GITHUB_OUTPUT
+        echo "PRODUCT_NAME=${{ inputs.PROJECT_NAME }}-${{ steps.get_project_version.outputs.PROJECT_VERSION }}-${{ matrix.name }}" >> $GITHUB_OUTPUT
+        
+    # Moving the artefacts to a packaging directory
+    - name: move artefacts
+      shell: bash
+      run: |
+        mkdir -p artefacts;
+        mv "build/${{ inputs.PROJECT_NAME }}-${{ steps.get_project_version.outputs.PROJECT_VERSION }}" ${{ steps.declare_artefact_variables.outputs.PACKAGE_DIR }};
+
+    # We need to import the apple developer certificate so that we can codesign our binaries
+    - name: import certificates (macOS)
+      uses: apple-actions/import-codesign-certs@v3
+      if: ${{ matrix.os == 'macOS-latest' }}
+      with:
+        # GitHub encrypted secrets
+        p12-file-base64: ${{ inputs.DEV_ID_APP_CERT }}
+        p12-password: ${{ inputs.DEV_ID_APP_PWD }}
+    
+    # Codesigning all the libraries
+    - name: codesign (macOS)
+      shell: bash
+      if: ${{ matrix.os == 'macOS-latest' }}
+      run: |
+        # codesign all libs
+        codesign --force -s "${{ inputs.DEV_ID_APP }}" -v ${{ steps.declare_artefact_variables.outputs.PACKAGE_DIR }}/lib/*.dylib --deep --strict --options=runtime --timestamp;
+    
+    # Zip the artefact
+    - name: zip artefacts
+      working-directory: ${{github.workspace}}/artefacts
+      shell: bash
+      run: |
+        if [ "${{ matrix.name }}" == "Linux-x86_64" ]; then
+        zip -r ${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}.zip ${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}/
+        elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
+        zip -vr ${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}.zip ${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}/ -x "*.DS_Store"
+        elif [ "${{ matrix.name }}" == "Windows-x86_64" ]; then
+        pwsh -command "Compress-Archive -Path '${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}/' -DestinationPath '${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}.zip'"
+        else
+        echo "Unknown OS";
+        fi;
+    
+    - name: upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}.zip
+        path: ${{ steps.declare_artefact_variables.outputs.PACKAGE_DIR }}.zip

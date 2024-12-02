@@ -4,15 +4,21 @@ message(STATUS "Configuring anira")
 
 set(ANIRA_WITH_LIBTORCH @ANIRA_WITH_LIBTORCH@)
 set(ANIRA_WITH_BENCHMARK @ANIRA_WITH_BENCHMARK@)
+set(ANIRA_WITH_TESTS @ANIRA_WITH_TESTS@)
+
+find_package(concurrentqueue REQUIRED)
 
 # Find the dependencies
 if (ANIRA_WITH_LIBTORCH)
     find_package(Torch REQUIRED)
 endif()
+
+if (ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK)
+    find_package(GTest REQUIRED)
+endif()
     
 if (ANIRA_WITH_BENCHMARK)
     find_package(benchmark REQUIRED)
-    find_package(GTest REQUIRED)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/aniraTargets.cmake")

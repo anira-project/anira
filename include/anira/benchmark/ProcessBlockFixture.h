@@ -3,8 +3,8 @@
 
 #include <benchmark/benchmark.h>
 #include <iomanip>
+#include "../utils/helperFunctions.h"
 #include "../anira.h"
-#include "helperFunctions.h"
 
 namespace anira {
 namespace benchmark {

@@ -3,20 +3,21 @@
 #include <anira/anira.h>
 #include <anira/benchmark.h>
 
-#include "../../../../extras/desktop/models/cnn/CNNConfig.h"
-#include "../../../../extras/desktop/models/cnn/CNNPrePostProcessor.h"
-#include "../../../../extras/desktop/models/hybrid-nn/HybridNNConfig.h"
-#include "../../../../extras/desktop/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../../extras/desktop/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../../../../extras/desktop/models/stateful-rnn/StatefulRNNPrePostProcessor.h"
+#include "../../../../extras/models/cnn/CNNConfig.h"
+#include "../../../../extras/models/cnn/CNNPrePostProcessor.h"
+#include "../../../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../../extras/models/model-pool/SimpleGainConfig.h"
+#include "../../../../extras/models/model-pool/SimpleStereoGainConfig.h"
 
 
 /* ============================================================ *
  * ========================= Configs ========================== *
  * ============================================================ */
 
-#define NUM_ITERATIONS 50
-#define NUM_REPETITIONS 10
+#define NUM_ITERATIONS 5
+#define NUM_REPETITIONS 2
 #define BUFFER_SIZE 2048
 #define SAMPLE_RATE 44100
 
@@ -26,25 +27,28 @@
 
 typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
-CNNPrePostProcessor my_pp_processor;
-// HybridNNPrePostProcessor my_pp_processor;
-// StatefulRNNPrePostProcessor my_pp_processor;
-
-anira::InferenceConfig my_inference_config = cnn_config;
-// anira::InferenceConfig my_inference_config = hybridnn_config;
+// anira::InferenceConfig my_inference_config = cnn_config;
+// CNNPrePostProcessor my_pp_processor;
+anira::InferenceConfig my_inference_config = hybridnn_config;
+HybridNNPrePostProcessor my_pp_processor;
 // anira::InferenceConfig my_inference_config = rnn_config;
+// anira::PrePostProcessor my_pp_processor;
+// anira::InferenceConfig my_inference_config = gain_config;
+// anira::PrePostProcessor my_pp_processor(my_inference_config);
+// anira::InferenceConfig my_inference_config = stereo_gain_config;
+// anira::PrePostProcessor my_pp_processor(my_inference_config);
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
 
     // The buffer size return in get_buffer_size() is populated by state.range(0) param of the google benchmark
-    anira::HostAudioConfig host_config = {1, (size_t) get_buffer_size(), SAMPLE_RATE};
-    anira::InferenceBackend inference_backend = anira::LIBTORCH;
+    anira::HostAudioConfig host_config = {(size_t) get_buffer_size(), SAMPLE_RATE};
+    anira::InferenceBackend inference_backend = anira::ONNX;
 
     m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backend);
 
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(host_config.m_host_channels, host_config.m_host_buffer_size);
+    m_buffer = std::make_unique<anira::AudioBuffer<float>>(my_inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
 
     initialize_repetition(my_inference_config, host_config, inference_backend);
 

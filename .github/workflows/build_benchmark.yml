@@ -1,0 +1,59 @@
+name: build_benchmark
+
+on:
+  workflow_call:
+  workflow_dispatch: # lets you run a build from github.com
+  # Runs the workflow on all push events
+  pull_request:
+    branches:
+      - main
+      - develop
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+
+# When pushing new commits, cancel any workflows with the same name on that branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_test:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
+      matrix:
+        include:
+          - name: Linux-x86_64
+            os: ubuntu-latest
+          - name: macOS-x86_64
+            os: macOS-latest
+          - name: macOS-arm64
+            os: macOS-latest
+          - name: Windows-x86_64
+            os: windows-latest
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: get repo and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - name: setup
+        uses: ./.github/actions/setup
+      - name: add juce deps
+        shell: bash
+        run: |
+          if [ "${{ matrix.name }}" == "Linux-x86_64" ]; then
+            sudo apt install libxrandr-dev libxinerama-dev libxcursor-dev libfreetype6-dev libasound2-dev
+          fi
+      - name: build
+        uses: ./.github/actions/build
+        with:
+          BUILD_TYPE: Release
+          CMAKE_BUILD_PARALLEL_LEVEL: 4
+          TARGETS: (cnn-size-benchmark advanced-benchmark simple-benchmark)
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_EXAMPLES=ON"
+      - name: test
+        uses: ./.github/actions/test

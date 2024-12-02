@@ -18,8 +18,28 @@ option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
 option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
 option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 
-# Shall semaphores be used for synchronization instead of atomic variables?
-option(ANIRA_WITH_SEMAPHORE "Use semaphores for synchronization instead of atomic variables" OFF)
+# Shall the use of a controlled blocking operation for further reduction of latency be enabled?
+option(ANIRA_WITH_CONTROLLED_BLOCKING "Use of controlled blocking operation for further reduction of latency" OFF)
+
+# ==============================================================================
+# Get project version from git
+# ==============================================================================
+
+execute_process(COMMAND git describe --dirty
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE PROJECT_VERSION_FULL
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+execute_process(COMMAND git describe --tags --abbrev=0
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                OUTPUT_VARIABLE PROJECT_VERSION_SHORT
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+# Retrive the v from the short version string
+string(SUBSTRING ${PROJECT_VERSION_SHORT} 1 -1 PROJECT_VERSION_SHORT)
+string(SUBSTRING ${PROJECT_VERSION_FULL} 1 -1 PROJECT_VERSION_FULL)
+
+message(STATUS "Project version: ${PROJECT_VERSION_SHORT} (${PROJECT_VERSION_FULL})")
 
 # ==============================================================================
 # Setup the project
@@ -27,7 +47,7 @@ option(ANIRA_WITH_SEMAPHORE "Use semaphores for synchronization instead of atomi
 
 set (PROJECT_NAME anira)
 
-project (${PROJECT_NAME} VERSION 0.1.3)
+project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
 
 if(APPLE)
     if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
@@ -35,7 +55,13 @@ if(APPLE)
     elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
         set(CMAKE_SYSTEM_PROCESSOR "x86_64")
     else()
-        message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES not set to arm64 or x86_64. Please select one of the architectures as universal binaries are not supported by all backends.")
+        if (CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+            set(CMAKE_OSX_ARCHITECTURES "arm64")
+        elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+            set(CMAKE_OSX_ARCHITECTURES "x86_64")
+        else()
+            message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES not set to arm64 or x86_64. Please select one of the architectures as universal binaries are not supported by all backends.")
+        endif()
     endif()
 endif()
 
@@ -50,7 +76,6 @@ if (APPLE)
 	endif()
 endif ()
 
-# Sets the cpp language minimum, 20 because of new semaphore types
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
@@ -83,11 +108,23 @@ if(ANIRA_WITH_TFLITE)
     list(APPEND BACKEND_SOURCES src/backends/TFLiteProcessor.cpp)
 endif()
 
-if(ANIRA_WITH_SEMAPHORE)
-    message(STATUS "Using semaphores for thread synchronization.")
-else()
-    message(STATUS "Using atomic variables for thread synchronization.")
+if(ANIRA_WITH_CONTROLLED_BLOCKING)
+    message(STATUS "Using controlled blocking operation for further reduction of latency.")
 endif()
+
+## ==============================================================================
+# Fetch threadsafe queue
+# ==============================================================================
+
+include(FetchContent)
+
+FetchContent_Declare(
+    concurrentqueue
+    GIT_REPOSITORY https://github.com/cameron314/concurrentqueue.git
+    GIT_TAG v1.0.4
+)
+
+FetchContent_MakeAvailable(concurrentqueue)
 
 # ==============================================================================
 # Build the library
@@ -112,7 +149,7 @@ target_sources(${PROJECT_NAME}
         # Scheduler
         src/scheduler/InferenceManager.cpp
         src/scheduler/InferenceThread.cpp
-        src/scheduler/AniraContext.cpp
+        src/scheduler/Context.cpp
         src/scheduler/SessionElement.cpp
 
         # Utils
@@ -122,6 +159,7 @@ target_sources(${PROJECT_NAME}
         # Interface
         src/InferenceHandler.cpp
         src/PrePostProcessor.cpp
+        src/InferenceConfig.cpp
 
         # System
         src/system/HighPriorityThread.cpp
@@ -153,12 +191,13 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
-    # Semaphore definitions
-    $<$<BOOL:${ANIRA_WITH_SEMAPHORE}>:USE_SEMAPHORE>
+    # Controlled blocking option definition
+    $<$<BOOL:${ANIRA_WITH_CONTROLLED_BLOCKING}>:USE_CONTROLLED_BLOCKING>
     # Version number
-    -DANIRA_VERSION="${PROJECT_VERSION}"
+    -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
 )
 
+target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue)
 
 if(ANIRA_WITH_LIBTORCH)
     # The find_package(Torch) adds the libraries libc10.so and libkineto.a as full paths to ${TORCH_LIBRARIES}. This is no problem when we add anira as a subdirectory to another project, but when we install the library, the torch libraries will be link targets of the anira library with full paths and hence not found on other systems. Therefore, we link those libs privately and only add the torch target publicly.
@@ -216,8 +255,11 @@ endif()
 # ==============================================================================
 
 # First we import the extras folder since we need the compile definitions (model paths) for the examples
-if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE)
+if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE OR ANIRA_WITH_TESTS)
     add_subdirectory(extras)
+endif()
+
+if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE)    
     add_subdirectory(examples)
 endif()
 
