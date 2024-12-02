@@ -2,13 +2,18 @@
 
 JackClient::JackClient([[ maybe_unused ]] int argc, char *argv[]): 
         m_host_audio_semaphore(1),
-        #if MODEL_TO_USE == 1 || MODEL_TO_USE == 2
-                // The noneProcessor is not needed for inference, but for the round trip test to output audio when selecting the NONE backend. It must be customized when default prePostProcessor is replaced by a custom one.
-                noneProcessor(inferenceConfig),
-                inferenceHandler(prePostProcessor, inferenceConfig, noneProcessor)
-        #elif MODEL_TO_USE == 3
-                inferenceHandler(prePostProcessor, inferenceConfig)
-        #endif        
+        anira_context_config(
+            std::thread::hardware_concurrency() / 2 > 0 ? std::thread::hardware_concurrency() / 2 : 1, // Total number of threads
+            false
+        ),
+#if MODEL_TO_USE == 1 || MODEL_TO_USE == 2
+        // The bypass_processor is not needed for inference, but for the round trip test to output audio when selecting the CUSTOM backend. It must be customized when default pp_processor is replaced by a custom one.
+        bypass_processor(inference_config),
+        inference_handler(pp_processor, inference_config, bypass_processor, anira_context_config)
+#elif MODEL_TO_USE == 3 || MODEL_TO_USE == 4 || MODEL_TO_USE == 5
+        pp_processor(inference_config),
+        inference_handler(pp_processor, inference_config)
+#endif     
 {
 
     const char *server_name = NULL;
@@ -51,7 +56,8 @@ JackClient::JackClient([[ maybe_unused ]] int argc, char *argv[]):
     #endif
 
     // create input and output ports
-    m_n_input_channels = 1; // until multichannel processing is implemented, this should always be 1
+    
+    m_n_input_channels = MODEL_TO_USE == 5 ? 2 : 1; // Model 5 is stereo
     m_n_output_channels = m_n_input_channels; // for now these should always be the same
 
     input_ports = ( jack_port_t** ) calloc ( m_n_input_channels, sizeof ( jack_port_t* ) );
@@ -86,7 +92,7 @@ JackClient::JackClient([[ maybe_unused ]] int argc, char *argv[]):
     jack_on_shutdown (m_client, shutdown, this);
 
     // TODO do this somewhere proper
-    inferenceHandler.set_inference_backend(m_inference_backend);
+    inference_handler.set_inference_backend(m_inference_backend);
 
     m_nframes = jack_get_buffer_size(m_client);
     m_samplerate = jack_get_sample_rate(m_client);
@@ -157,7 +163,7 @@ void JackClient::parse_args(int argc, char* argv[]) {
                 } else if (strcmp("libtorch", optarg) == 0){
                     m_inference_backend = anira::LIBTORCH;
                 } else if (strcmp("none", optarg) == 0){
-                    m_inference_backend = anira::NONE;
+                    m_inference_backend = anira::CUSTOM;
                 } else {
                     printf("[WARNING] invalid inference backend, choosing default onnx");
                 }
@@ -198,15 +204,15 @@ void JackClient::parse_args(int argc, char* argv[]) {
 }
 
 void JackClient::prepare() {
-    prepare({m_n_input_channels, m_nframes, m_samplerate});
+    prepare({m_nframes, m_samplerate});
 }
 
 void JackClient::prepare(anira::HostAudioConfig config) {
     // TODO: shall the client be deactivated before preparing?
     if(verbose)
         std::cout << "[debug] entering prepare with HostAudioConfig buffer_size="  << config.m_host_buffer_size << ", sr=" << config.m_host_sample_rate << std::endl;
-
-    inferenceHandler.prepare(config);
+    
+    inference_handler.prepare(config);
 
     if(verbose)
         std::cout << "[debug] finished preparing inference handler" << std::endl;
@@ -261,7 +267,7 @@ int JackClient::process(jack_nframes_t nframes, void *arg) {
     }
 
     // process directly on the output buffer
-    jack_client->inferenceHandler.process((float**) jack_client->out, (size_t) nframes);
+    jack_client->inference_handler.process((float**) jack_client->out, (size_t) nframes);
 
 
     
