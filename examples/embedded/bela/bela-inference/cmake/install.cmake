@@ -8,10 +8,12 @@ include(GNUInstallDirs)
 # define the directory where the executable will be installed CMAKE_INSTALL_PREFIX
 set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-${PROJECT_VERSION}" CACHE PATH "Where the library will be installed to" FORCE)
 
-set(CUSTOM_RPATH "/root/anira/lib")
 if (ANIRA_WITH_INSTALL)
     list(APPEND CUSTOM_RPATH "$ORIGIN/../lib")
+else()
+    list(APPEND CUSTOM_RPATH "/root/anira/lib")
 endif()
+
 set_target_properties(${PROJECT_NAME}
     PROPERTIES
         INSTALL_RPATH "${CUSTOM_RPATH}"

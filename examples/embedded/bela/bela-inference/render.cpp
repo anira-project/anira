@@ -13,22 +13,13 @@ Anira x Bela Example
 #include <Bela.h>
 #include <libraries/AudioFile/AudioFile.h>
 #include <anira/anira.h>
+#include "../SimpleGainConfig.h"
 
 std::string g_filename = "ts9_test1_out_FP32.wav";	// Name of the sound file (in project folder)
 std::vector<float> g_sample_buffer;				// Buffer that holds the sound file
 int g_read_pointer = 0;							// Position of the last frame we played
 
-anira::InferenceConfig g_inference_config(
-	"model.pt",
-	{{1, 1, 2048}},
-	{{1, 1, 2048}},
-	21.53f,
-	0,
-	true,
-	0.f,
-	false,
-	1
-);
+anira::InferenceConfig g_inference_config = gain_config;
 
 anira::PrePostProcessor g_pp_processor;
 anira::InferenceHandler g_inference_handler(g_pp_processor, g_inference_config);
@@ -51,14 +42,8 @@ bool setup(BelaContext *context, void *userData)
     			g_filename.c_str(), g_sample_buffer.size(),
     			g_sample_buffer.size() / context->audioSampleRate);
 
-	anira::HostAudioConfig host_config{
-		1,
-		context->audioFrames,
-		context->audioSampleRate
-	};
-
-	g_inference_handler.prepare(host_config);
-	g_inference_handler.set_inference_backend(anira::CUSTOM);
+	g_inference_handler.prepare({(size_t)context->audioFrames, context->audioSampleRate});
+	g_inference_handler.set_inference_backend(anira::ONNX);
 	int latency = g_inference_handler.get_latency();
 	rt_printf("Inference latency: %d samples\n", latency);
 
