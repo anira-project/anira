@@ -39,8 +39,8 @@ private:
     size_t m_n_output_channels; 
     jack_port_t **input_ports;
     jack_port_t **output_ports;
-    jack_default_audio_sample_t **in;
-    jack_default_audio_sample_t **out;
+    jack_default_audio_sample_t **in = nullptr;
+    jack_default_audio_sample_t **out = nullptr;
 
     size_t m_nframes;
     double m_samplerate;

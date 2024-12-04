@@ -217,8 +217,11 @@ void JackClient::prepare(anira::HostAudioConfig config) {
     if(verbose)
         std::cout << "[debug] finished preparing inference handler" << std::endl;
 
-    delete[] in;
-    delete[] out;
+    // TODO check memory leaks
+    if (in != nullptr)
+        delete[] in;
+    if (out != nullptr)
+        delete[] out;
 
     // allocate memory for the input and output buffers
     in = new jack_default_audio_sample_t*[m_n_input_channels];

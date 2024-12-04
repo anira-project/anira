@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.15)
 # Shall the library be built as a shared library?
 option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
 option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
-option(ANIRA_WITH_EXAMPLES "Add Example Targets for desktop plattforms (juce plugin, benchmarks, minimal inference and model examples)" ON)
+option(ANIRA_WITH_EXAMPLES "Add Example Targets for desktop plattforms (juce plugin, benchmarks, minimal inference and model examples)" OFF)
 option(ANIRA_WITH_JACK_EXAMPLE "Add Example Targets for JACK-client (includes a model)" ON)
 option(ANIRA_WITH_BELA_EXAMPLE "Add Example Targets for bela plattform (includes a model)" OFF)
 option(ANIRA_WITH_INSTALL "Add install targets" OFF)
