@@ -38,8 +38,6 @@ execute_process(COMMAND git describe --tags --abbrev=0
 string(SUBSTRING ${PROJECT_VERSION_SHORT} 1 -1 PROJECT_VERSION_SHORT)
 string(SUBSTRING ${PROJECT_VERSION_FULL} 1 -1 PROJECT_VERSION_FULL)
 
-message(STATUS "Project version: ${PROJECT_VERSION_SHORT} (${PROJECT_VERSION_FULL})")
-
 # ==============================================================================
 # Setup the project
 # ==============================================================================
@@ -65,7 +63,9 @@ if(APPLE)
 endif()
 
 # Print the processor architecture selected for build. Defaults to CMAKE_HOST_SYSTEM_PROCESSOR when no crosscompile tolchain is defined. CMAKE_HOST_SYSTEM_PROCESSOR is only defined after the project() call. For OSX this value can be overwritten by the CMAKE_OSX_ARCHITECTURES.
-message(STATUS "Selected processor architecture: ${CMAKE_SYSTEM_PROCESSOR}")
+
+message(STATUS "Building ${PROJECT_NAME} for ${CMAKE_SYSTEM_NAME} on ${CMAKE_SYSTEM_PROCESSOR}")
+message(STATUS "Project version: ${PROJECT_VERSION_SHORT} (${PROJECT_VERSION_FULL})")
 
 # Sets the minimum macOS version, c++20 is only available from macOS 11.0
 if (APPLE)
@@ -81,10 +81,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 # ==============================================================================
 # Download and install the selected inference engines
 # ==============================================================================
-
-if(NOT ANIRA_WITH_LIBTORCH AND NOT ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_WITH_TFLITE)
-    message(FATAL_ERROR "No backend selected. Please select at least one backend by setting one of the following options to ON: ANIRA_WITH_LIBTORCH, ANIRA_WITH_ONNXRUNTIME, or ANIRA_WITH_TFLITE. For example, add '-DANIRA_WITH_LIBTORCH=ON' to your CMake command line.")
-endif()
 
 message(STATUS "Selected backends:")
 
