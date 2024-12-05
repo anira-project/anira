@@ -68,7 +68,7 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
     int session_id = get_available_session_id();
     if (inference_config.m_num_parallel_processors > (unsigned int) m_thread_pool.size()) {
         std::cout << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in Context. Using number of threads as number of parallel processors." << std::endl;
-        inference_config.m_num_parallel_processors = m_thread_pool.size();
+        inference_config.m_num_parallel_processors = (unsigned int) m_thread_pool.size();
     }
 
     std::shared_ptr<SessionElement> session = std::make_shared<SessionElement>(session_id, pp_processor, inference_config);
@@ -286,11 +286,7 @@ bool Context::pre_process(std::shared_ptr<SessionElement> session) {
             return true;
         }
     }
-#ifndef BELA
     std::cout << "[WARNING] No free inference queue found in session: " << session->m_session_id << "!" << std::endl;
-#else
-    printf("[WARNING] No free inference queue found in session: %d!\n", session->m_session_id);
-#endif
     return false;
 }
 
