@@ -16,9 +16,7 @@ static std::vector<anira::ModelData> model_data_gain_config = {
 };
 
 static std::vector<anira::TensorShape> tensor_shape_gain_config = {
-#if USE_LIBTORCH || USE_ONNXRUNTIME || USE_TFLITE
     {{{1, 1, 512}, {1}}, {{1, 1, 512}, {1}}}, // When no backend is specified, the tensor shape is seen as universal for all backends
-#endif
 };
 
 static anira::InferenceConfig gain_config(
