@@ -29,7 +29,6 @@ InferenceConfig::InferenceConfig (
         , m_wait_in_process_block(wait_in_process_block)
 #endif
 {
-    assert((m_model_data.size() > 0 && "At least one model data must be provided."));
     assert((m_tensor_shape.size() > 0 && "At least one tensor shape must be provided."));
     for (size_t i = 0; i < m_model_data.size(); ++i) {
         bool success = false;

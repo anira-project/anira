@@ -25,7 +25,7 @@ set(INSTALL_TARGETS ${TARGET_NAME}_Standalone ${TARGET_NAME}_VST3)
 # in this case we set the rpath to the directories where the other libraries are installed
 # $ORIGIN in Linux is a special token that gets replaced by the directory of the library at runtime from that point we could navigate to the other libraries
 # The same token for macOS is @loader_path
-if(LINUX)
+if(UNIX AND NOT APPLE)
     foreach(TARGET ${INSTALL_TARGETS})
         set_target_properties(${TARGET}
             PROPERTIES

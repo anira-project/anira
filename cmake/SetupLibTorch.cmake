@@ -1,5 +1,9 @@
 # torch stopped uploading the binaries for macOS x86_64, but we use self-built binaries
-set(LIBTORCH_VERSION 2.4.1)
+if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
+    set(LIBTORCH_VERSION 2.5.1)
+else()
+    set(LIBTORCH_VERSION 2.4.1)
+endif()
 
 if (NOT WIN32)
     set(TORCH_BUILD_TYPE "")
@@ -33,10 +37,14 @@ else()
     if(UNIX AND NOT APPLE)
         if (CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
             set(LIB_LIBTORCH_PRE_BUILD_LIB_NAME "libtorch-${LIBTORCH_VERSION}-Linux-aarch64")
+            set(LIB_LIBTORCH_PRE_BUILD_LIB_TYPE "zip")
         elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
             set(LIB_LIBTORCH_PRE_BUILD_LIB_NAME "libtorch-${LIBTORCH_VERSION}-Linux-x86_64")
+            set(LIB_LIBTORCH_PRE_BUILD_LIB_TYPE "zip")
+        elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
+            set(LIB_LIBTORCH_PRE_BUILD_LIB_NAME "pytorch-v${LIBTORCH_VERSION}")
+            set(LIB_LIBTORCH_PRE_BUILD_LIB_TYPE "tar.gz")
         endif()
-        set(LIB_LIBTORCH_PRE_BUILD_LIB_TYPE "zip")
     endif()
 
     if(UNIX AND APPLE)
@@ -48,12 +56,12 @@ else()
         set(LIB_LIBTORCH_PRE_BUILD_LIB_TYPE "zip")
     endif()
 
-    if (NOT DEFINED LIBTORCH_URL)
-        if(WIN32)
-            set(LIBTORCH_URL https://download.pytorch.org/libtorch/cpu/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}.${LIB_LIBTORCH_PRE_BUILD_LIB_TYPE})
-        else()
-            set(LIBTORCH_URL https://github.com/faressc/libtorch-cpp-lib/releases/download/v${LIBTORCH_VERSION}/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}.${LIB_LIBTORCH_PRE_BUILD_LIB_TYPE})
-        endif()
+    if(WIN32)
+        set(LIBTORCH_URL https://download.pytorch.org/libtorch/cpu/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}.${LIB_LIBTORCH_PRE_BUILD_LIB_TYPE})
+    elseif(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
+        set(LIBTORCH_URL https://github.com/pelinski/bela-torch/releases/download/v${LIBTORCH_VERSION}/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}.${LIB_LIBTORCH_PRE_BUILD_LIB_TYPE})
+    else()
+        set(LIBTORCH_URL https://github.com/faressc/libtorch-cpp-lib/releases/download/v${LIBTORCH_VERSION}/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}.${LIB_LIBTORCH_PRE_BUILD_LIB_TYPE})
     endif()
 
     message(STATUS "Downloading: ${LIBTORCH_URL}")
@@ -63,21 +71,27 @@ else()
     file(DOWNLOAD ${LIBTORCH_URL} ${LIBTORCH_PATH} STATUS LIBTORCH_DOWNLOAD_STATUS SHOW_PROGRESS)
     list(GET LIBTORCH_DOWNLOAD_STATUS 0 LIBTORCH_DOWNLOAD_STATUS_NO)
 
-    file(ARCHIVE_EXTRACT
-            INPUT ${CMAKE_BINARY_DIR}/import/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}.${LIB_LIBTORCH_PRE_BUILD_LIB_TYPE}
-            DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/)
-
-    if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/libtorch)
-        file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/libtorch/ DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/)
-        file(REMOVE_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/libtorch/)
+    if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
+        execute_process(
+            COMMAND tar -xzf ${LIBTORCH_PATH} -C ${LIBTORCH_ROOTDIR}/
+            WORKING_DIRECTORY ${LIBTORCH_ROOTDIR}/)
     else()
-        file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}/ DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/)
-        file(REMOVE_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}/)
+        file(ARCHIVE_EXTRACT
+            INPUT ${LIBTORCH_PATH}
+            DESTINATION ${LIBTORCH_ROOTDIR}/)
+    endif()
+
+    if(EXISTS ${LIBTORCH_ROOTDIR}/libtorch)
+        file(COPY ${LIBTORCH_ROOTDIR}/libtorch/ DESTINATION ${LIBTORCH_ROOTDIR}/)
+        file(REMOVE_RECURSE ${LIBTORCH_ROOTDIR}/libtorch/)
+    elseif(EXISTS ${LIBTORCH_ROOTDIR}/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME})
+        file(COPY ${LIBTORCH_ROOTDIR}/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}/ DESTINATION ${LIBTORCH_ROOTDIR}/)
+        file(REMOVE_RECURSE ${LIBTORCH_ROOTDIR}/${LIB_LIBTORCH_PRE_BUILD_LIB_NAME}/)
     endif()
 
     if(LIBTORCH_DOWNLOAD_STATUS_NO)
         message(STATUS "Pre-built library not downloaded. Error occurred, try again and check cmake/SetupLibTorch.cmake")
-        file(REMOVE_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE})
+        file(REMOVE_RECURSE ${LIBTORCH_ROOTDIR})
         file(REMOVE ${LIBTORCH_PATH})
     else()
         message(STATUS "Linking downloaded LibTorch pre-built library.")
@@ -99,7 +113,7 @@ if (MSVC)
     endif()
 endif()
 
-set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/modules/libtorch-${LIBTORCH_VERSION}${TORCH_BUILD_TYPE}/")
+set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${LIBTORCH_ROOTDIR}/")
 
 get_directory_property(hasParent PARENT_DIRECTORY)
 if(hasParent)

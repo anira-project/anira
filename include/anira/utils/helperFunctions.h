@@ -4,6 +4,8 @@
 #include <vector>
 #include <algorithm>
 #include <stdexcept>
+#include "AudioBuffer.h"
+#include "RingBuffer.h"
 
 namespace anira{
 

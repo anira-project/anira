@@ -63,11 +63,7 @@ void InferenceManager::process_output(float* const* output_data, size_t num_samp
                 }
             }
             m_inference_counter.fetch_sub(1);
-#ifndef BELA
             std::cout << "[WARNING] Catch up samples in session: " << m_session->m_session_id << "!" << std::endl;
-#else
-            printf("[WARNING] Catch up samples in session: %d!\n", m_session->m_session_id);
-#endif
         }
         else {
             break;
@@ -82,11 +78,7 @@ void InferenceManager::process_output(float* const* output_data, size_t num_samp
     } else {
         clear_data(output_data, num_samples, m_inference_config.m_num_audio_channels[Output]);
         m_inference_counter.fetch_add(1);
-#ifndef BELA
-            std::cout << "[WARNING] Missing samples in session: " << m_session->m_session_id << "!" << std::endl;
-#else
-            printf("[WARNING] Missing samples in session: %d!\n", m_session->m_session_id);
-#endif
+        std::cout << "[WARNING] Missing samples in session: " << m_session->m_session_id << "!" << std::endl;
     }
 }
 

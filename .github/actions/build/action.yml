@@ -11,6 +11,9 @@ inputs:
   CMAKE_BUILD_ARGS:
     required: true
     description: "The cmake build arguments"
+  TARGETS:
+    required: false
+    description: "The targets to build"
 
 runs:
   using: "composite"
@@ -42,8 +45,18 @@ runs:
           echo "Unknown OS";
         fi;
 
-    # Build the project
-    - name: cmake build
+    - name: build targets
       shell: bash
-      run: cmake --build build --config ${{ inputs.BUILD_TYPE }} --parallel ${{ inputs.CMAKE_BUILD_PARALLEL_LEVEL }}
+      run: |
+        TARGETS=${{ inputs.TARGETS }}
+        if [ -n "${TARGETS}" ]; then
+          for target in ${TARGETS[@]}; do
+          echo "Building target: $target"
+          cmake --build build --config ${{ inputs.BUILD_TYPE }} --parallel ${{ inputs.CMAKE_BUILD_PARALLEL_LEVEL }} --target $target
+          done
+        else
+          echo "Building all targets"
+          cmake --build build --config ${{ inputs.BUILD_TYPE }} --parallel ${{ inputs.CMAKE_BUILD_PARALLEL_LEVEL }}
+        fi
+
           
