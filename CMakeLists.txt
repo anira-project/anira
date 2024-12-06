@@ -205,9 +205,13 @@ if(ANIRA_WITH_LIBTORCH)
     # The find_package(Torch) adds the libraries libc10.so and libkineto.a as full paths to ${TORCH_LIBRARIES}. This is no problem when we add anira as a subdirectory to another project, but when we install the library, the torch libraries will be link targets of the anira library with full paths and hence not found on other systems. Therefore, we link those libs privately and only add the torch target publicly.
     # Also until cmake 3.26, there is a bug where the torch_cpu library is not found when linking publicly https://gitlab.kitware.com/cmake/cmake/-/issues/24163 and anira is added as a subdirectory to another project, see
     # But this is necessary for when we install the library since otherwise symbols are not found
+    # Another problem are that on armv7l with benchmarking enabled, some symbols are not found when linking the torch_cpu library privately
     if (CMAKE_VERSION VERSION_LESS "3.26.0" AND NOT (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR))
         target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
         set(TORCH_LIBRARIES_ALL_PRIVATE TRUE)
+        if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
+            target_link_libraries(${PROJECT_NAME} PUBLIC torch_cpu)
+        endif()
     else()
         foreach(TORCH_LIB ${TORCH_LIBRARIES})
             if(TORCH_LIB STREQUAL "torch" OR TORCH_LIB STREQUAL "torch_library")
