@@ -98,9 +98,15 @@ endif()
 
 # the other ones don't have cmake config files so we have to install them manually
 if(ANIRA_WITH_ONNXRUNTIME)
-    install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/include/"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-    )
+    if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
+        install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/include/onnxruntime/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+        )
+    else()
+        install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/include/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+        )
+    endif()
     install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/lib/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     )
