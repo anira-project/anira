@@ -132,7 +132,7 @@ if (MSVC)
 		)
 	endforeach()
 
-	set(JUCE_MANIFEST_GENERATOR_PATH "${CMAKE_BINARY_DIR}/examples/desktop/juce-audio-plugin/${CMAKE_BUILD_TYPE}")
+	set(JUCE_MANIFEST_GENERATOR_PATH "${CMAKE_BINARY_DIR}/examples/juce-audio-plugin/${CMAKE_BUILD_TYPE}")
 
 	add_custom_command(TARGET ${TARGET_NAME}_VST3
 			PRE_BUILD

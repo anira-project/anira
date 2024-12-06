@@ -7,8 +7,7 @@ cmake_minimum_required(VERSION 3.15)
 # Shall the library be built as a shared library?
 option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
 option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
-option(ANIRA_WITH_EXAMPLES "Add Example Targets for desktop plattforms (juce plugin, benchmarks, minimal inference and model examples)" OFF)
-option(ANIRA_WITH_BELA_EXAMPLE "Add Example Targets for bela plattform (includes a model)" OFF)
+option(ANIRA_WITH_EXAMPLES "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
 option(ANIRA_WITH_INSTALL "Add install targets" OFF)
 option(ANIRA_WITH_TESTS "Add Build Tests" OFF)
 
@@ -60,6 +59,14 @@ if(APPLE)
             message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES not set to arm64 or x86_64. Please select one of the architectures as universal binaries are not supported by all backends.")
         endif()
     endif()
+endif()
+
+if(APPLE)
+    set(ANIRA_OPERATING_SYSTEM "macOS")
+elseif(UNIX)
+    set(ANIRA_OPERATING_SYSTEM "Linux")
+elseif(WIN32)
+    set(ANIRA_OPERATING_SYSTEM "Windows")
 endif()
 
 # Print the processor architecture selected for build. Defaults to CMAKE_HOST_SYSTEM_PROCESSOR when no crosscompile tolchain is defined. CMAKE_HOST_SYSTEM_PROCESSOR is only defined after the project() call. For OSX this value can be overwritten by the CMAKE_OSX_ARCHITECTURES.
@@ -198,9 +205,13 @@ if(ANIRA_WITH_LIBTORCH)
     # The find_package(Torch) adds the libraries libc10.so and libkineto.a as full paths to ${TORCH_LIBRARIES}. This is no problem when we add anira as a subdirectory to another project, but when we install the library, the torch libraries will be link targets of the anira library with full paths and hence not found on other systems. Therefore, we link those libs privately and only add the torch target publicly.
     # Also until cmake 3.26, there is a bug where the torch_cpu library is not found when linking publicly https://gitlab.kitware.com/cmake/cmake/-/issues/24163 and anira is added as a subdirectory to another project, see
     # But this is necessary for when we install the library since otherwise symbols are not found
+    # Another problem are that on armv7l with benchmarking enabled, some symbols are not found when linking the torch_cpu library privately
     if (CMAKE_VERSION VERSION_LESS "3.26.0" AND NOT (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR))
         target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
         set(TORCH_LIBRARIES_ALL_PRIVATE TRUE)
+        if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
+            target_link_libraries(${PROJECT_NAME} PUBLIC torch_cpu)
+        endif()
     else()
         foreach(TORCH_LIB ${TORCH_LIBRARIES})
             if(TORCH_LIB STREQUAL "torch" OR TORCH_LIB STREQUAL "torch_library")
@@ -250,11 +261,11 @@ endif()
 # ==============================================================================
 
 # First we import the extras folder since we need the compile definitions (model paths) for the examples
-if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE OR ANIRA_WITH_TESTS)
+if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_TESTS)
     add_subdirectory(extras)
 endif()
 
-if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE)    
+if(ANIRA_WITH_EXAMPLES)    
     add_subdirectory(examples)
 endif()
 
