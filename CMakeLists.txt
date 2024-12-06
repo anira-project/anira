@@ -7,8 +7,7 @@ cmake_minimum_required(VERSION 3.15)
 # Shall the library be built as a shared library?
 option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
 option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
-option(ANIRA_WITH_EXAMPLES "Add Example Targets for desktop plattforms (juce plugin, benchmarks, minimal inference and model examples)" OFF)
-option(ANIRA_WITH_BELA_EXAMPLE "Add Example Targets for bela plattform (includes a model)" OFF)
+option(ANIRA_WITH_EXAMPLES "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
 option(ANIRA_WITH_INSTALL "Add install targets" OFF)
 option(ANIRA_WITH_TESTS "Add Build Tests" OFF)
 
@@ -60,6 +59,14 @@ if(APPLE)
             message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES not set to arm64 or x86_64. Please select one of the architectures as universal binaries are not supported by all backends.")
         endif()
     endif()
+endif()
+
+if(APPLE)
+    set(ANIRA_OPERATING_SYSTEM "macOS")
+elseif(UNIX)
+    set(ANIRA_OPERATING_SYSTEM "Linux")
+elseif(WIN32)
+    set(ANIRA_OPERATING_SYSTEM "Windows")
 endif()
 
 # Print the processor architecture selected for build. Defaults to CMAKE_HOST_SYSTEM_PROCESSOR when no crosscompile tolchain is defined. CMAKE_HOST_SYSTEM_PROCESSOR is only defined after the project() call. For OSX this value can be overwritten by the CMAKE_OSX_ARCHITECTURES.
@@ -250,11 +257,11 @@ endif()
 # ==============================================================================
 
 # First we import the extras folder since we need the compile definitions (model paths) for the examples
-if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE OR ANIRA_WITH_TESTS)
+if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_TESTS)
     add_subdirectory(extras)
 endif()
 
-if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BELA_EXAMPLE)    
+if(ANIRA_WITH_EXAMPLES)    
     add_subdirectory(examples)
 endif()
 
