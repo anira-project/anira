@@ -1,6 +1,7 @@
 ![anira Logo](/docs/img/anira-logo.png)
 
 ![build_test](https://github.com/anira-project/anira/actions/workflows/build_test.yml/badge.svg)
+![build_benchmark](https://github.com/anira-project/anira/actions/workflows/build_benchmark.yml/badge.svg)
 ![on_tag](https://github.com/anira-project/anira/actions/workflows/on_tag.yml/badge.svg)
 
 ---
