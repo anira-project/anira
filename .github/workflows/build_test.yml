@@ -48,6 +48,6 @@ jobs:
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON"
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_BUILD_EXAMPLES=ON"
       - name: test
         uses: ./.github/actions/test
