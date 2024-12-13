@@ -10,14 +10,14 @@ Licence: Apache 2.0
 #include <array>
 #include <tensorflow/lite/c_api.h>
 
-#include "../../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../../../../extras/models/hybrid-nn/HybridNNConfig.h"
-#include "../../../../extras/models/cnn/CNNConfig.h"
-#include "../../../../extras/models/model-pool/SimpleGainConfig.h"
-#include "../../../../extras/models/model-pool/SimpleStereoGainConfig.h"
+#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../extras/models/cnn/CNNConfig.h"
+#include "../../../extras/models/model-pool/SimpleGainConfig.h"
+#include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
 
-#include "../../../../include/anira/utils/MemoryBlock.h"
-#include "../../../../include/anira/utils/AudioBuffer.h"
+#include "../../../include/anira/utils/MemoryBlock.h"
+#include "../../../include/anira/utils/AudioBuffer.h"
 
 #define TFLITE_MINIMAL_CHECK(x)                              \
     if (!(x)) {                                                \
