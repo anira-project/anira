@@ -3,11 +3,11 @@
 #include <anira/anira.h>
 #include <anira/benchmark.h>
 
-#include "../../../../extras/models/cnn/CNNConfig.h"
-#include "../../../../extras/models/cnn/CNNPrePostProcessor.h"
-#include "../../../../extras/models/hybrid-nn/HybridNNConfig.h"
-#include "../../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../extras/models/cnn/CNNConfig.h"
+#include "../../../extras/models/cnn/CNNPrePostProcessor.h"
+#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #include "ClearCustomProcessor.h"
 
 

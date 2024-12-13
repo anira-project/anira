@@ -6,15 +6,15 @@
 
 #include <anira/anira.h>
 
-#include "../../../extras/models/cnn/CNNConfig.h"
-#include "../../../extras/models/cnn/CNNPrePostProcessor.h"
-#include "../../../extras/models/cnn/CNNBypassProcessor.h" // This one is only needed for the round trip test, when selecting the Custom backend
-#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
-#include "../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../extras/models/hybrid-nn/HybridNNBypassProcessor.h" // Only needed for round trip test
-#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../../../extras/models/model-pool/SimpleGainConfig.h"
-#include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
+#include "../../extras/models/cnn/CNNConfig.h"
+#include "../../extras/models/cnn/CNNPrePostProcessor.h"
+#include "../../extras/models/cnn/CNNBypassProcessor.h" // This one is only needed for the round trip test, when selecting the Custom backend
+#include "../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h" // Only needed for round trip test
+#include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../extras/models/model-pool/SimpleGainConfig.h"
+#include "../../extras/models/model-pool/SimpleStereoGainConfig.h"
 
 //==============================================================================
 class AudioPluginAudioProcessor  : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener

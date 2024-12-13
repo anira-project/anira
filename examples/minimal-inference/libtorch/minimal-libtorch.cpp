@@ -10,14 +10,14 @@ Licence: modified BSD
 #include <iostream>
 #include <memory>
 
-#include "../../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../../../../extras/models/hybrid-nn/HybridNNConfig.h"
-#include "../../../../extras/models/cnn/CNNConfig.h"
-#include "../../../../extras/models/model-pool/SimpleGainConfig.h"
-#include "../../../../extras/models/model-pool/SimpleStereoGainConfig.h"
+#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../../extras/models/cnn/CNNConfig.h"
+#include "../../../extras/models/model-pool/SimpleGainConfig.h"
+#include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
 
-#include "../../../../include/anira/utils/MemoryBlock.h"
-#include "../../../../include/anira/utils/AudioBuffer.h"
+#include "../../../include/anira/utils/MemoryBlock.h"
+#include "../../../include/anira/utils/AudioBuffer.h"
 
 // m_ prefix is not used to indicate member variables it is used to be compatible with code in the LibTorchProcessor class
 
