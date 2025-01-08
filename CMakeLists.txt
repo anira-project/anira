@@ -245,6 +245,7 @@ endif()
 
 if(ANIRA_WITH_INSTALL)
     include(cmake/install.cmake)
+    include(cmake/package.cmake)
 endif()
 
 # ==============================================================================
