@@ -91,15 +91,15 @@ install(TARGETS ${PROJECT_NAME}
 if(ANIRA_WITH_LIBTORCH)
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/include/"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-        COMPONENT deps
+        COMPONENT deps-backends
     )
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/lib/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-        COMPONENT deps
+        COMPONENT deps-backends
     )
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/share/cmake/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake"
-        COMPONENT deps
+        COMPONENT deps-backends
     )
 endif()
 
@@ -108,28 +108,28 @@ if(ANIRA_WITH_ONNXRUNTIME)
     if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
         install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/include/onnxruntime/"
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-            COMPONENT deps
+            COMPONENT deps-backends
         )
     else()
         install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/include/"
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-            COMPONENT deps
+            COMPONENT deps-backends
         )
     endif()
     install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/lib/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-        COMPONENT deps
+        COMPONENT deps-backends
     )
 endif()
 
 if(ANIRA_WITH_TFLITE)
     install(DIRECTORY "${TENSORFLOWLITE_ROOTDIR}/include/"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-        COMPONENT deps
+        COMPONENT deps-backends
     )
     install(DIRECTORY "${TENSORFLOWLITE_ROOTDIR}/lib/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-        COMPONENT deps
+        COMPONENT deps-backends
     )
 endif()
 
