@@ -2,6 +2,7 @@
 # go into the build dir
 # call "cpack -G DEB"
 # sometimes it needs to be called twice...
+# after installing with "apt install ./libanira*.deb" update the ld cache with "ldconfig"
 
 set(CPACK_THREADS 10)
 
@@ -37,7 +38,6 @@ set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 set(CPACK_COMPONENTS_GROUPING ONE_PER_GROUP)
 set(CPACK_DEB_COMPONENT_INSTALL YES)
 
-
 # setup components
 cpack_add_component(runtime REQUIRED)
 cpack_add_component(dev DEPENDS runtime)
@@ -46,6 +46,11 @@ cpack_add_component(dev DEPENDS runtime)
 cpack_add_component(deps-backends GROUP deps)
 cpack_add_component(Devel GROUP deps)
 cpack_add_component(Unspecified GROUP deps)
+
+if (ANIRA_WITH_BENCHMARK)
+    cpack_add_component(gtest GROUP deps)
+    cpack_add_component(gmock GROUP deps)
+endif()
 
 # remove -runtime suffix of runtime package, add major version number instead 
 set(CPACK_DEBIAN_RUNTIME_PACKAGE_NAME ${CPACK_PACKAGE_NAME}${PROJECT_VERSION_MAJOR})
