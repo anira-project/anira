@@ -24,12 +24,12 @@ option(ANIRA_WITH_CONTROLLED_BLOCKING "Use of controlled blocking operation for 
 # ==============================================================================
 
 execute_process(COMMAND git describe --dirty
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                 OUTPUT_VARIABLE PROJECT_VERSION_FULL
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 execute_process(COMMAND git describe --tags --abbrev=0
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                 OUTPUT_VARIABLE PROJECT_VERSION_SHORT
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
 
