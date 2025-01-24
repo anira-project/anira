@@ -1,4 +1,4 @@
-name: build_benchmark
+name: build_examples
 
 on:
   workflow_call:
@@ -49,14 +49,11 @@ jobs:
             # Fix the juce bug with ft2build.h not found
             sudo ln -s /usr/include/freetype2/ft2build.h /usr/include/ft2build.h
             sudo ln -s /usr/include/freetype2/freetype /usr/include/freetype
-          fi
-      
+          fi   
       - name: build
         uses: ./.github/actions/build
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          TARGETS: (cnn-size-benchmark advanced-benchmark simple-benchmark)
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_EXAMPLES=ON"
-      - name: test
-        uses: ./.github/actions/test
+          TARGETS: (anira-clap-plugin-example anira-juce-plugin-example_All minimal-libtorch minimal-onnxruntime minimal-tflite)
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_EXAMPLES=ON"
