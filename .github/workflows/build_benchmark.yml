@@ -47,7 +47,11 @@ jobs:
         run: |
           if [ "${{ matrix.name }}" == "Linux-x86_64" ]; then
             sudo apt install libxrandr-dev libxinerama-dev libxcursor-dev libfreetype6-dev libasound2-dev
+            # Fix the juce bug with ft2build.h not found
+            ln -s /usr/include/freetype2/ft2build.h /usr/include/ft2build.h
+            ln -s /usr/include/freetype2/freetype /usr/include/freetype
           fi
+      
       - name: build
         uses: ./.github/actions/build
         with:
