@@ -72,27 +72,34 @@ endif()
 # the variant with PUBLIC_HEADER property unfortunately does not preserve the folder structure therefore we use the simple install directory command
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/anira
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    COMPONENT dev
 )
 
 # install the target and create export-set
 install(TARGETS ${PROJECT_NAME}
     EXPORT "aniraTargets"
     # these get default values from GNUInstallDirs
-    RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR} # .dll files
+    RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR} # .dll files 
+    COMPONENT runtime
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} # .so or .dylib files
+    COMPONENT runtime NAMELINK_COMPONENT dev
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} # .lib files
+    COMPONENT dev
 )
 
 # libtorch has cmake config files that we can use to install the library later with find_package and then just link to it
 if(ANIRA_WITH_LIBTORCH)
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/include/"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+        COMPONENT deps-backends
     )
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/lib/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        COMPONENT deps-backends
     )
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/share/cmake/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake"
+        COMPONENT deps-backends
     )
 endif()
 
@@ -101,23 +108,28 @@ if(ANIRA_WITH_ONNXRUNTIME)
     if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
         install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/include/onnxruntime/"
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+            COMPONENT deps-backends
         )
     else()
         install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/include/"
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+            COMPONENT deps-backends
         )
     endif()
     install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/lib/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        COMPONENT deps-backends
     )
 endif()
 
 if(ANIRA_WITH_TFLITE)
     install(DIRECTORY "${TENSORFLOWLITE_ROOTDIR}/include/"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+        COMPONENT deps-backends
     )
     install(DIRECTORY "${TENSORFLOWLITE_ROOTDIR}/lib/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        COMPONENT deps-backends
     )
 endif()
 
@@ -130,6 +142,7 @@ endif()
 install(EXPORT "aniraTargets"
     NAMESPACE ${PROJECT_NAME}::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
+    COMPONENT dev
 )
 
 include(CMakePackageConfigHelpers)
@@ -152,4 +165,5 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/aniraConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/aniraConfigVersion.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
+    COMPONENT dev
 )
