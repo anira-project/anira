@@ -8,7 +8,6 @@ on:
   pull_request:
     branches:
       - main
-      - develop
 
 env:
   SCCACHE_GHA_ENABLED: "true"

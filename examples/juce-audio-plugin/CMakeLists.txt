@@ -29,7 +29,7 @@ include(FetchContent)
 
 FetchContent_Declare(JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-        GIT_TAG 8.0.4
+        GIT_TAG 8.0.6
         GIT_PROGRESS TRUE
 )
 FetchContent_MakeAvailable(JUCE)
@@ -100,7 +100,6 @@ target_compile_definitions(${TARGET_NAME}
     JUCE_WEB_BROWSER=0  # If you remove this, add `NEEDS_WEB_BROWSER TRUE` to the `juce_add_plugin` call
     JUCE_USE_CURL=0     # If you remove this, add `NEEDS_CURL TRUE` to the `juce_add_plugin` call
     JUCE_VST3_CAN_REPLACE_VST2=0
-    DONT_SET_USING_JUCE_NAMESPACE=1
 
     # Backend-specific definitions
     $<$<BOOL:${BACKEND_LIBTORCH}>:USE_LIBTORCH>
