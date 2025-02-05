@@ -35,14 +35,24 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_
 {
     m_session_options.SetIntraOpNumThreads(1);
 
-#ifdef _WIN32
-    std::string modelpath_str = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
-    std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
-#else
-    std::string modelpath = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
-#endif
-    m_session = std::make_unique<Ort::Session>(m_env, modelpath.c_str(), m_session_options);
+    // Check if the model is binary
+    if (m_inference_config.is_model_binary(anira::InferenceBackend::ONNX)) {
+        const anira::ModelData* model_data = m_inference_config.get_model_data(anira::InferenceBackend::ONNX);
+        assert(model_data && "Model data not found for binary model!");
 
+        // Load model from binary data
+        m_session = std::make_unique<Ort::Session>(m_env, model_data->m_data, model_data->m_size, m_session_options);
+    } else {
+        // Load model from file path
+#ifdef _WIN32
+        std::string modelpath_str = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
+        std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
+#else
+        std::string modelpath = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
+#endif
+        m_session = std::make_unique<Ort::Session>(m_env, modelpath.c_str(), m_session_options);
+    }
+    
     m_input_names.resize(m_session->GetInputCount());
     m_output_names.resize(m_session->GetOutputCount());
     m_input_name.clear();

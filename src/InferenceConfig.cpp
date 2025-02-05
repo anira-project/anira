@@ -93,6 +93,25 @@ std::string InferenceConfig::get_model_path(InferenceBackend backend) {
     return "";
 }
 
+// Check if the model is binary
+bool InferenceConfig::is_model_binary(InferenceBackend backend) const {
+    for (const auto& model : m_model_data) {
+        if (model.m_backend == backend) {
+            return model.m_is_binary;
+        }
+    }
+    return false; // Default to false if no model is found
+}
+// Get binary model data
+const ModelData* InferenceConfig::get_model_data(InferenceBackend backend) const {
+    for (const auto& model : m_model_data) {
+        if (model.m_backend == backend) {
+            return &model;
+        }
+    }
+    return nullptr; // No model data found
+}
+
 TensorShapeList InferenceConfig::get_input_shape() {
     for (int i = 0; i < m_tensor_shape.size(); ++i) {
         if (m_tensor_shape[i].m_universal) {
