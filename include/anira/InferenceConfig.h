@@ -137,6 +137,8 @@ public:
     void set_input_sizes(const std::vector<size_t>& input_sizes);
     void set_output_sizes(const std::vector<size_t>& output_sizes);
     std::string get_model_path(InferenceBackend backend);
+    const ModelData* get_model_data(InferenceBackend backend) const;
+    bool is_model_binary(InferenceBackend backend) const;
     TensorShapeList get_input_shape();
     TensorShapeList get_output_shape();
     TensorShapeList get_input_shape(InferenceBackend backend);

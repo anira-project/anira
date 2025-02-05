@@ -31,6 +31,8 @@ First pass the model information and the corresponding inference backend in a `s
 {void* model_data, size_t model_size, anira::InferenceBackend backend}
 ```
 
+> Note: Defining the model data as binary information is only possible for the `anira::ONNX` until now.
+
 Now define your model information in a `std::vector<anira::ModelData>`.
 
 ```cpp
