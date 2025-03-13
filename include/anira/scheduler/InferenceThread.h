@@ -18,7 +18,7 @@ namespace anira {
 class ANIRA_API InferenceThread : public HighPriorityThread {
 public:
     InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& next_inference);
-    ~InferenceThread() override = default;
+    ~InferenceThread() override;
 
     bool execute();
 
