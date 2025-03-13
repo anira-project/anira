@@ -7,6 +7,10 @@ InferenceThread::InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& nex
 {
 }
 
+InferenceThread::~InferenceThread() {
+    stop();
+}
+
 void InferenceThread::run() {
     while (!should_exit()) {
         constexpr std::array<int, 2> iterations = {4, 32};
