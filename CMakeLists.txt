@@ -89,8 +89,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 # Download and install the selected inference engines
 # ==============================================================================
 
-message(STATUS "Selected backends:")
-
 set(BACKEND_SOURCES)
 set(BACKEND_BUILD_HEADER_DIRS)
 set(BACKEND_BUILD_LIBRARY_DIRS)
