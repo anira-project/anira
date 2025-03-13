@@ -89,8 +89,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 # Download and install the selected inference engines
 # ==============================================================================
 
-message(STATUS "Selected backends:")
-
 set(BACKEND_SOURCES)
 set(BACKEND_BUILD_HEADER_DIRS)
 set(BACKEND_BUILD_LIBRARY_DIRS)
@@ -136,7 +134,7 @@ FetchContent_MakeAvailable(concurrentqueue)
 add_library(${PROJECT_NAME})
 
 # enable position independent code because otherwise the static library cannot be linked into a shared library
-set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON VERSION ${CMAKE_PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
+set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
 # add an alias so that the project can be used with add_subdirectory
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
