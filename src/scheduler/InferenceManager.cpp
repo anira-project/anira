@@ -30,7 +30,7 @@ void InferenceManager::prepare(HostAudioConfig new_config) {
 
     m_init_samples = calculate_latency();
     for (size_t i = 0; i < m_inference_config.m_num_audio_channels[Output]; ++i) {
-        for (size_t j = 0; j < m_init_samples; ++j) {
+        for (size_t j = 0; j < m_init_samples - m_inference_config.m_internal_latency; ++j) {
             m_session->m_receive_buffer.push_sample(i, 0.f);
         }
     }
