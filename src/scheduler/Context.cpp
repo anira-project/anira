@@ -1,4 +1,5 @@
 #include <anira/scheduler/Context.h>
+#include <anira/utils/Logger.h>
 
 namespace anira {
 
@@ -14,16 +15,16 @@ Context::~Context() {}
 std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_config) {
     if (m_context == nullptr) {
         m_context = std::make_shared<Context>(context_config);
-        std::cout << "[INFO] Anira version: " << m_context->m_context_config.m_anira_version << std::endl;
+        LOG_INFO << "[INFO] Anira version: " << m_context->m_context_config.m_anira_version << std::endl;
     } else {
         // TODO: Better error handling
         if (m_context->m_context_config.m_anira_version != context_config.m_anira_version) {
         }
         if (m_context->m_context_config.m_enabled_backends != context_config.m_enabled_backends) {
-            std::cerr << "[ERROR] Context already initialized with different backends enabled!" << std::endl;
+            LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!" << std::endl;
         }
         if (m_context->m_context_config.m_use_controlled_blocking != context_config.m_use_controlled_blocking) {
-            std::cerr << "[ERROR] Context already initialized with with different controlled blocking option!" << std::endl;
+            LOG_ERROR << "[ERROR] Context already initialized with with different controlled blocking option!" << std::endl;
         }
         if ((unsigned int) m_context->m_thread_pool.size() > context_config.m_num_threads) {
             m_context->new_num_threads(context_config.m_num_threads);
@@ -67,7 +68,7 @@ void Context::new_num_threads(unsigned int new_num_threads) {
 std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor) {
     int session_id = get_available_session_id();
     if (inference_config.m_num_parallel_processors > (unsigned int) m_thread_pool.size()) {
-        std::cout << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in Context. Using number of threads as number of parallel processors." << std::endl;
+        LOG_INFO << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in Context. Using number of threads as number of parallel processors." << std::endl;
         inference_config.m_num_parallel_processors = (unsigned int) m_thread_pool.size();
     }
 
@@ -114,7 +115,7 @@ void Context::release_session(std::shared_ptr<SessionElement> session) {
 
     for (auto& inference_data : inference_stack) {
         if (!m_next_inference.try_enqueue(inference_data)) {
-            std::cerr << "[ERROR] Could not requeue inference data!" << std::endl;
+            LOG_ERROR << "[ERROR] Could not requeue inference data!" << std::endl;
         }
     }
 
@@ -171,7 +172,7 @@ void Context::prepare(std::shared_ptr<SessionElement> session, HostAudioConfig n
 
     for (auto& inference_data : inference_stack) {
         if (!m_next_inference.try_enqueue(inference_data)) {
-            std::cerr << "[ERROR] Could not requeue inference data!" << std::endl;
+            LOG_ERROR << "[ERROR] Could not requeue inference data!" << std::endl;
         }
     }
 
@@ -278,7 +279,7 @@ bool Context::pre_process(std::shared_ptr<SessionElement> session) {
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
             InferenceData inference_data = {session, session->m_inference_queue[i]};
             if (!m_next_inference.try_enqueue(inference_data)) {
-                std::cerr << "[ERROR] Could not enqueue next inference!" << std::endl;
+                LOG_ERROR << "[ERROR] Could not enqueue next inference!" << std::endl;
                 session->m_inference_queue[i]->m_free.exchange(true);
                 session->m_time_stamps.pop_back();
                 return false;
@@ -291,7 +292,7 @@ bool Context::pre_process(std::shared_ptr<SessionElement> session) {
             return true;
         }
     }
-    std::cout << "[WARNING] No free inference queue found in session: " << session->m_session_id << "!" << std::endl;
+    LOG_INFO << "[WARNING] No free inference queue found in session: " << session->m_session_id << "!" << std::endl;
     return false;
 }
 
