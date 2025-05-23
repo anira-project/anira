@@ -33,6 +33,8 @@ public:
 
     void exec_inference() const;
 
+    void set_non_realtime (bool is_non_realtime) const;
+
 private:
     void process_input(const float* const* input_data, size_t num_samples);
     void process_output(float* const* output_data, size_t num_samples);

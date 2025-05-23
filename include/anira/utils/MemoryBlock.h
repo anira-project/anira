@@ -4,6 +4,8 @@
 #include <iostream>
 #include <type_traits>
 
+#include <anira/utils/Logger.h>
+
 namespace anira {
 
 template <typename T>
@@ -14,7 +16,7 @@ public:
         if (data != nullptr) {
             m_data = (T*) data;
         } else {
-            std::cerr << "Failed to allocate memory!" << std::endl;
+            LOG_ERROR << "Failed to allocate memory!" << std::endl;
         }
     }
 
@@ -28,7 +30,7 @@ public:
             m_data = (T*) data;
             memcpy(m_data, other.m_data, sizeof(T) * m_size);
         } else {
-            std::cerr << "Failed to allocate memory!" << std::endl;
+            LOG_ERROR << "Failed to allocate memory!" << std::endl;
         }
     }
 
@@ -41,7 +43,7 @@ public:
                 m_data = (T*) data;
                 memcpy(m_data, other.m_data, sizeof(T) * m_size);
             } else {
-                std::cerr << "Failed to allocate memory!" << std::endl;
+                LOG_ERROR << "Failed to allocate memory!" << std::endl;
             }
         }
         return *this;
@@ -92,7 +94,7 @@ public:
         if (data != nullptr) {
             m_data = (T*) data;
         } else {
-            std::cerr << "Failed to reallocate memory!" << std::endl;
+            LOG_ERROR << "Failed to reallocate memory!" << std::endl;
         }
     }
 
@@ -109,7 +111,7 @@ public:
             if (m_size == other.m_size) {
                 std::swap(m_data, other.m_data);
             } else {
-                std::cerr << "Cannot swap data with different sizes!" << std::endl;
+                LOG_ERROR << "Cannot swap data with different sizes!" << std::endl;
             }
         }
     }
@@ -118,7 +120,7 @@ public:
         if (m_size == size) {
             std::swap(m_data, data);
         } else {
-            std::cerr << "Cannot swap data with different sizes!" << std::endl;
+            LOG_ERROR << "Cannot swap data with different sizes!" << std::endl;
         }
     }
         

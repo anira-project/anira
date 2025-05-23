@@ -1,4 +1,5 @@
 #include <anira/scheduler/InferenceThread.h>
+#include <anira/utils/Logger.h>
 
 namespace anira {
 
@@ -88,7 +89,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBu
         }
         else {
             session->m_default_processor.process(input, output, session);
-            std::cerr << "[ERROR] LibTorch model has not been provided. Using default processor." << std::endl;
+            LOG_ERROR << "[ERROR] LibTorch model has not been provided. Using default processor." << std::endl;
         }
     }
 #endif
@@ -99,7 +100,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBu
         }
         else {
             session->m_default_processor.process(input, output, session);
-            std::cerr << "[ERROR] OnnxRuntime model has not been provided. Using default processor." << std::endl;
+            LOG_ERROR << "[ERROR] OnnxRuntime model has not been provided. Using default processor." << std::endl;
         }
     }
 #endif
@@ -110,7 +111,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBu
         }
         else {
             session->m_default_processor.process(input, output, session);
-            std::cerr << "[ERROR] TFLite model has not been provided. Using default processor." << std::endl;
+            LOG_ERROR << "[ERROR] TFLite model has not been provided. Using default processor." << std::endl;
         }
     }
 #endif

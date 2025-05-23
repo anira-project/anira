@@ -1,4 +1,5 @@
 #include <anira/backends/LibTorchProcessor.h>
+#include <anira/utils/Logger.h>
 
 namespace anira {
 
@@ -36,8 +37,8 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inf
         m_module = torch::jit::load(m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
     }
     catch (const c10::Error& e) {
-        std::cerr << "[ERROR] error loading the model\n";
-        std::cerr << e.what() << std::endl;
+        LOG_ERROR << "[ERROR] error loading the model\n";
+        LOG_ERROR << e.what() << std::endl;
     }
     m_inputs.resize(m_inference_config.m_input_sizes.size());
     m_input_data.resize(m_inference_config.m_input_sizes.size());
