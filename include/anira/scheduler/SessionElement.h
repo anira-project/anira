@@ -83,6 +83,8 @@ public:
 
     HostAudioConfig m_host_config;
 
+    bool m_is_non_real_time = false;
+
 #ifdef USE_LIBTORCH
     std::shared_ptr<LibtorchProcessor> m_libtorch_processor = nullptr;
 #endif
