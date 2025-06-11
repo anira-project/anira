@@ -20,7 +20,7 @@ runs:
   steps:
     # We cache the build to speed up the build process
     - name: cache the build
-      uses: mozilla-actions/sccache-action@v0.0.5
+      uses: mozilla-actions/sccache-action@v0.0.8
 
     - name: print cmake build args
       shell: bash

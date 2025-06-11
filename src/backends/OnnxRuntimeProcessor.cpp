@@ -1,4 +1,5 @@
 #include <anira/backends/OnnxRuntimeProcessor.h>
+#include <anira/utils/Logger.h>
 
 namespace anira {
 
@@ -84,7 +85,7 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_
         try {
             m_outputs = m_session->Run(Ort::RunOptions{nullptr}, m_input_names.data(), m_inputs.data(), m_input_names.size(), m_output_names.data(), m_output_names.size());
         } catch (Ort::Exception &e) {
-            std::cerr << e.what() << std::endl;
+            LOG_ERROR << e.what() << std::endl;
         }
     }
 }
@@ -120,7 +121,7 @@ void OnnxRuntimeProcessor::Instance::process(AudioBufferF& input, AudioBufferF& 
     try {
         m_outputs = m_session->Run(Ort::RunOptions{nullptr}, m_input_names.data(), m_inputs.data(), m_input_names.size(), m_output_names.data(), m_output_names.size());
     } catch (Ort::Exception &e) {
-        std::cerr << e.what() << std::endl;
+        LOG_ERROR << e.what() << std::endl;
     }
 
     for (size_t i = 0; i < m_outputs.size(); i++) {

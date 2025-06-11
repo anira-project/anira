@@ -40,6 +40,10 @@ void InferenceHandler::exec_inference() {
     m_inference_manager.exec_inference();
 }
 
+void InferenceHandler::set_non_realtime(bool is_non_realtime) {
+    m_inference_manager.set_non_realtime(is_non_realtime);
+}
+
 InferenceManager &InferenceHandler::get_inference_manager() {
     return m_inference_manager;
 }

@@ -18,6 +18,7 @@ option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 
 # Shall the use of a controlled blocking operation for further reduction of latency be enabled?
 option(ANIRA_WITH_CONTROLLED_BLOCKING "Use of controlled blocking operation for further reduction of latency" OFF)
+option(ANIRA_WITH_LOGGING "Enable logging printouts" ON)
 
 # ==============================================================================
 # Get project version from git
@@ -192,6 +193,7 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
     # Controlled blocking option definition
     $<$<BOOL:${ANIRA_WITH_CONTROLLED_BLOCKING}>:USE_CONTROLLED_BLOCKING>
+    $<$<BOOL:${ANIRA_WITH_LOGGING}>:ENABLE_LOGGING>
     # Version number
     -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
 )

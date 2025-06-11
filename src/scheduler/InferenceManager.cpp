@@ -1,4 +1,5 @@
 #include <anira/scheduler/InferenceManager.h>
+#include <anira/utils/Logger.h>
 
 namespace anira {
 
@@ -63,7 +64,7 @@ void InferenceManager::process_output(float* const* output_data, size_t num_samp
                 }
             }
             m_inference_counter.fetch_sub(1);
-            std::cout << "[WARNING] Catch up samples in session: " << m_session->m_session_id << "!" << std::endl;
+            LOG_INFO << "[WARNING] Catch up samples in session: " << m_session->m_session_id << "!" << std::endl;
         }
         else {
             break;
@@ -78,7 +79,7 @@ void InferenceManager::process_output(float* const* output_data, size_t num_samp
     } else {
         clear_data(output_data, num_samples, m_inference_config.m_num_audio_channels[Output]);
         m_inference_counter.fetch_add(1);
-        std::cout << "[WARNING] Missing samples in session: " << m_session->m_session_id << "!" << std::endl;
+        LOG_INFO << "[WARNING] Missing samples in session: " << m_session->m_session_id << "!" << std::endl;
     }
 }
 
@@ -113,6 +114,10 @@ int InferenceManager::get_session_id() const {
 
 void InferenceManager::exec_inference() const {
     m_context->exec_inference();
+}
+
+void InferenceManager::set_non_realtime(bool is_non_realtime) const {
+    m_session->m_is_non_real_time = is_non_realtime;
 }
 
 int InferenceManager::calculate_latency() {

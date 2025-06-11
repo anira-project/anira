@@ -1,4 +1,5 @@
 #include <anira/InferenceConfig.h>
+#include <anira/utils/Logger.h>
 
 namespace anira {
 
@@ -71,7 +72,7 @@ InferenceConfig::InferenceConfig (
     }
     if (m_num_parallel_processors < 1) {
         m_num_parallel_processors = 1;
-        std::cout << "[WARNING] Number of parellel processors must be at least 1. Setting to 1." << std::endl;
+        LOG_INFO << "[WARNING] Number of parellel processors must be at least 1. Setting to 1." << std::endl;
     }
 }
 

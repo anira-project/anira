@@ -3,8 +3,10 @@
 
 #include <iostream>
 #include <cstring>
-#include "MemoryBlock.h"
-#include "anira/system/AniraWinExports.h"
+#include <anira/utils/MemoryBlock.h>
+#include <anira/system/AniraWinExports.h>
+
+#include <anira/utils/Logger.h>
 
 namespace anira {
 
@@ -136,7 +138,7 @@ public:
                 m_channels = other.m_channels;
                 other.m_channels = temp_channels;
             } else {
-                std::cerr << "Cannot swap data, buffers have different number of channels or sizes!" << std::endl;
+                LOG_ERROR << "Cannot swap data, buffers have different number of channels or sizes!" << std::endl;
             }
         }
     }
@@ -146,7 +148,7 @@ public:
             m_data.swap_data(other);
             reset_channel_ptr();
         } else {
-            std::cerr << "Cannot swap data, MemoryBlock has a different size!" << std::endl;
+            LOG_ERROR << "Cannot swap data, MemoryBlock has a different size!" << std::endl;
         }
     }
 
@@ -155,7 +157,7 @@ public:
             m_data.swap_data(data, size);
             reset_channel_ptr();
         } else {
-            std::cerr << "Cannot swap data, MemoryBlock has a different size!" << std::endl;
+            LOG_ERROR << "Cannot swap data, MemoryBlock has a different size!" << std::endl;
         }
     }
 
@@ -187,7 +189,7 @@ private:
         if (channels != nullptr) {
             m_channels = (T**) channels;
         } else {
-            std::cerr << "Failed to allocate memory!" << std::endl;
+            LOG_ERROR << "Failed to allocate memory!" << std::endl;
         }
         for (size_t i = 0; i < m_num_channels; i++) {
             m_channels[i] = m_data.data() + i * m_size;
