@@ -112,10 +112,6 @@ int InferenceManager::get_session_id() const {
     return m_session->m_session_id;
 }
 
-void InferenceManager::exec_inference() const {
-    m_context->exec_inference();
-}
-
 void InferenceManager::set_non_realtime(bool is_non_realtime) const {
     m_session->m_is_non_real_time = is_non_realtime;
 }

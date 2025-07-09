@@ -31,8 +31,6 @@ public:
     int get_missing_blocks() const;
     int get_session_id() const;
 
-    void exec_inference() const;
-
     void set_non_realtime (bool is_non_realtime) const;
 
 private:

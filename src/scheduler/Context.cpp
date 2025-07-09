@@ -30,9 +30,6 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
             m_context->new_num_threads(context_config.m_num_threads);
             m_context->m_context_config.m_num_threads = context_config.m_num_threads;
         }
-        if (!context_config.m_use_host_threads && m_context->m_context_config.m_use_host_threads) {
-            m_context->m_context_config.m_use_host_threads = false; // Can only be set to true again if all sessions are released
-        }
     }
     return m_context;
 }
@@ -179,19 +176,9 @@ void Context::prepare(std::shared_ptr<SessionElement> session, HostAudioConfig n
     session->clear();
     session->prepare(new_config);
 
-    if (!new_config.m_submit_task_to_host_thread) {
-        m_context_config.m_use_host_threads = false;
-    }
-
     start_thread_pool();
 
     session->m_initialized.store(true);
-
-    if (m_context_config.m_use_host_threads) {
-        m_host_threads_active.store(true);
-    } else {
-        m_host_threads_active.store(false);
-    }
 }
 
 void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
@@ -199,17 +186,6 @@ void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
     int new_samples_needed_for_inference = session->m_inference_config.m_output_sizes[session->m_inference_config.m_index_audio_data[Output]] / session->m_inference_config.m_num_audio_channels[Output];
     while (session->m_send_buffer.get_available_samples(0) >= (new_samples_needed_for_inference)) {
         bool success = pre_process(session);
-
-        if (success && session->m_host_config.m_submit_task_to_host_thread && m_host_threads_active.load()) {
-            bool host_exec_success = session->m_host_config.m_submit_task_to_host_thread(1);
-
-            // !host_exec_success means that the host provided thread pool does not work anymore
-            // Since we cannot rely on it anymore we use as fallback our own thread pool
-            if (!host_exec_success) {
-                start_thread_pool();
-                m_host_threads_active.store(false);
-            }
-        }
 
         // !success means that there is no free m_inference_queue
         if (!success) {
@@ -257,16 +233,6 @@ void Context::new_data_request(std::shared_ptr<SessionElement> session, double b
     }
 }
 
-void Context::exec_inference() {
-    assert(m_host_threads_active.load() && "exec_inference is only supported when providing a host thread pool");
-
-    if (m_host_threads_active.load()) {
-        while (!m_thread_pool[0]->execute()) {
-            // We do not need to iterate over m_thread_pool, since we ensure internally thread safety
-        }
-    }
-}
-
 std::vector<std::shared_ptr<SessionElement>>& Context::get_sessions() {
     return m_sessions;
 }
@@ -302,14 +268,12 @@ void Context::post_process(std::shared_ptr<SessionElement> session, std::shared_
 }
 
 void Context::start_thread_pool() {
-    if (!m_context->m_context_config.m_use_host_threads) {
-        for (size_t i = 0; i < m_thread_pool.size(); ++i) {
-            if (!m_thread_pool[i]->is_running()) {
-                m_thread_pool[i]->start();
-            }
-            while (!m_thread_pool[i]->is_running()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(50));
-            }
+    for (size_t i = 0; i < m_thread_pool.size(); ++i) {
+        if (!m_thread_pool[i]->is_running()) {
+            m_thread_pool[i]->start();
+        }
+        while (!m_thread_pool[i]->is_running()) {
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
         }
     }
 }

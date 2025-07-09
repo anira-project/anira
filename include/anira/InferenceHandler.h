@@ -25,8 +25,6 @@ public:
 
     int get_latency();
 
-    void exec_inference();
-
     void set_non_realtime (bool is_non_realtime);
 
     InferenceManager &get_inference_manager(); // TODO remove

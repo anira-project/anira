@@ -36,10 +36,6 @@ int InferenceHandler::get_latency() {
     return m_inference_manager.get_latency();
 }
 
-void InferenceHandler::exec_inference() {
-    m_inference_manager.exec_inference();
-}
-
 void InferenceHandler::set_non_realtime(bool is_non_realtime) {
     m_inference_manager.set_non_realtime(is_non_realtime);
 }

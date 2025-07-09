@@ -44,8 +44,6 @@ public:
     void new_data_submitted(std::shared_ptr<SessionElement> session);
     void new_data_request(std::shared_ptr<SessionElement> session, double buffer_size_in_sec);
 
-    static void exec_inference();
-
     static std::vector<std::shared_ptr<SessionElement>>& get_sessions();
 
 private:
@@ -79,8 +77,6 @@ private:
 #ifdef USE_TFLITE
     inline static std::vector<std::shared_ptr<TFLiteProcessor>> m_tflite_processors;
 #endif
-
-    inline static std::atomic<bool> m_host_threads_active{false};
 
     inline static moodycamel::ConcurrentQueue<InferenceData> m_next_inference = moodycamel::ConcurrentQueue<InferenceData>(MIN_CAPACITY_INFERENCE_QUEUE, 0, MAX_NUM_INSTANCES);
 };
