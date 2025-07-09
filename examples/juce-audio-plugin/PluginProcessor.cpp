@@ -14,8 +14,7 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
         parameters (*this, nullptr, juce::Identifier (getName()), PluginParameters::createParameterLayout()),
         // Optional anira_context_config
         anira_context_config(
-            std::thread::hardware_concurrency() / 2 > 0 ? std::thread::hardware_concurrency() / 2 : 1, // Total number of threads
-            false // Use host threads (VST3 plugins do not support using external threads)
+            std::thread::hardware_concurrency() / 2 > 0 ? std::thread::hardware_concurrency() / 2 : 1 // Total number of threads
         ),
 #if MODEL_TO_USE == 1 || MODEL_TO_USE == 2
         // The bypass_processor is not needed for inference, but for the round trip test to output audio when selecting the CUSTOM backend. It must be customized when default pp_processor is replaced by a custom one.
