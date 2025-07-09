@@ -107,6 +107,10 @@ target_compile_definitions(${TARGET_NAME}
     $<$<BOOL:${BACKEND_TFLITE}>:USE_TFLITE>
 )
 
+if(UNIX AND NOT APPLE)
+	target_compile_definitions(${TARGET_NAME} PRIVATE JUCE_JACK=1)
+endif()
+
 target_link_libraries(${TARGET_NAME}
     PRIVATE
         anira::anira
