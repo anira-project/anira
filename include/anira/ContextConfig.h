@@ -13,7 +13,7 @@ namespace anira {
 
 struct ANIRA_API ContextConfig {
     ContextConfig(
-            unsigned int num_threads = (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2 : 1, bool use_host_threads = false) :
+            unsigned int num_threads = (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2 : 1) :
             m_num_threads(num_threads)
     {
 #ifdef USE_LIBTORCH
