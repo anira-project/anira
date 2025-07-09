@@ -2,7 +2,7 @@
 
 ## Architecture
 
-- [ ] Model config should be a json file
+- [ ] Model and context config should be one json file
 - [ ] Change the non-audio data to use ringbuffers instead of raw atomics
 - [ ] Add interface for direct push and pull from m_inference_queue
 - [ ] Add ability to turn off the latency compensation
