@@ -15,11 +15,11 @@ InferenceManager::~InferenceManager() {
 }
 
 void InferenceManager::set_backend(InferenceBackend new_inference_backend) {
-    m_session->m_currentBackend.store(new_inference_backend, std::memory_order_relaxed);
+    m_session->m_current_backend.store(new_inference_backend, std::memory_order_relaxed);
 }
 
 InferenceBackend InferenceManager::get_backend() const {
-    return m_session->m_currentBackend.load(std::memory_order_relaxed);
+    return m_session->m_current_backend.load(std::memory_order_relaxed);
 }
 
 void InferenceManager::prepare(HostAudioConfig new_config) {
@@ -118,7 +118,7 @@ void InferenceManager::set_non_realtime(bool is_non_realtime) const {
 
 int InferenceManager::calculate_latency() {
     // First calculate some universal values
-    int num_output_samples = m_inference_config.m_output_sizes[m_inference_config.m_index_audio_data[Output]] / m_inference_config.m_num_audio_channels[Output];
+    int num_output_samples = m_inference_config.get_postprocess_output_size()[m_inference_config.m_index_audio_data[Output]];
     float host_buffer_time = (float) m_spec.m_host_buffer_size * 1000.f / (float) m_spec.m_host_sample_rate;
 #ifdef USE_CONTROLLED_BLOCKING
     float wait_time = m_inference_config.m_wait_in_process_block * host_buffer_time;

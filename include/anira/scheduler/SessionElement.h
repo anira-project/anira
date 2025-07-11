@@ -52,7 +52,7 @@ public:
     RingBuffer m_receive_buffer;
 
     struct ThreadSafeStruct {
-        ThreadSafeStruct(size_t num_input_samples, size_t num_output_samples, size_t num_input_channels, size_t num_output_channels);
+        ThreadSafeStruct(size_t tensor_input_size, size_t tensor_output_size);
         std::atomic<bool> m_free{true};
 #ifdef USE_CONTROLLED_BLOCKING
         std::binary_semaphore m_done{false};
@@ -66,7 +66,7 @@ public:
 
     std::vector<std::shared_ptr<ThreadSafeStruct>> m_inference_queue;
 
-    std::atomic<InferenceBackend> m_currentBackend {CUSTOM};
+    std::atomic<InferenceBackend> m_current_backend {CUSTOM};
     unsigned long m_current_queue = 0;
     std::vector<unsigned long> m_time_stamps;
 

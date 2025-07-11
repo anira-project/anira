@@ -8,16 +8,16 @@ PrePostProcessor::PrePostProcessor() {
 PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config) {
     m_index_audio_data = inference_config.m_index_audio_data;
 
-    m_inputs.resize(inference_config.m_input_sizes.size());
-    for (size_t i = 0; i < inference_config.m_input_sizes.size(); ++i) {
+    m_inputs.resize(inference_config.get_tensor_input_size().size());
+    for (size_t i = 0; i < inference_config.get_tensor_input_size().size(); ++i) {
         if(i != inference_config.m_index_audio_data[Input]) {
-            m_inputs[i].resize(inference_config.m_input_sizes[i]);
+            m_inputs[i].resize(inference_config.get_tensor_input_size()[i]);
         }
     }
-    m_outputs.resize(inference_config.m_output_sizes.size());
-    for (size_t i = 0; i < inference_config.m_output_sizes.size(); ++i) {
+    m_outputs.resize(inference_config.get_tensor_output_size().size());
+    for (size_t i = 0; i < inference_config.get_tensor_output_size().size(); ++i) {
         if(i != inference_config.m_index_audio_data[Output]) {
-            m_outputs[i].resize(inference_config.m_output_sizes[i]);
+            m_outputs[i].resize(inference_config.get_tensor_output_size()[i]);
         }
     }
 }

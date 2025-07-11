@@ -42,9 +42,9 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     m_interpreter = TfLiteInterpreterCreate(m_model, m_options);
 
     // This is necessary when we have dynamic input shapes, it should be done before allocating tensors obviously
-    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         std::vector<int> input_shape;
-        std::vector<int64_t> input_shape64 = m_inference_config.get_input_shape(anira::InferenceBackend::TFLITE)[i];
+        std::vector<int64_t> input_shape64 = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[i];
         for (size_t j = 0; j < input_shape64.size(); j++) {
             input_shape.push_back((int) input_shape64[j]);
         }
@@ -55,8 +55,8 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     TfLiteInterpreterAllocateTensors(m_interpreter);
 
     // Fill an Buffer with some data
-    anira::BufferF input(1, m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]);
-    for(int i = 0; i < m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]; ++i) {
+    anira::BufferF input(1, m_inference_config.get_tensor_input_size()[m_inference_config.m_index_audio_data[anira::Input]]);
+    for(int i = 0; i < m_inference_config.get_tensor_input_size()[m_inference_config.m_index_audio_data[anira::Input]]; ++i) {
         input.set_sample(0, i, i * 0.000001f);
     }
 
@@ -64,10 +64,10 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     std::vector<TfLiteTensor*> m_inputs;
     std::vector<anira::MemoryBlock<float>> m_input_data;
 
-    m_inputs.resize(m_inference_config.m_input_sizes.size());
-    m_input_data.resize(m_inference_config.m_input_sizes.size());
-    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
-        m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
+    m_inputs.resize(m_inference_config.get_tensor_input_shape().size());
+    m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
+        m_input_data[i].resize(m_inference_config.get_tensor_input_size()[i]);
         m_inputs[i] = TfLiteInterpreterGetInputTensor(m_interpreter, i);
         if (i != m_inference_config.m_index_audio_data[anira::Input]) {
             m_input_data[i].clear();
@@ -75,7 +75,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
             m_input_data[i].swap_data(input.get_memory_block());
             input.reset_channel_ptr();
         }
-        TfLiteTensorCopyFromBuffer(m_inputs[i], m_input_data[i].data(), m_inference_config.m_input_sizes[i] * sizeof(float));
+        TfLiteTensorCopyFromBuffer(m_inputs[i], m_input_data[i].data(), m_inference_config.get_tensor_input_size()[i] * sizeof(float));
     }
 
     for (int i = 0; i < m_inputs.size(); ++i) {
@@ -95,8 +95,8 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     // Get output tensors
     std::vector<const TfLiteTensor*> m_outputs;
 
-    m_outputs.resize(m_inference_config.m_output_sizes.size());
-    for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+    m_outputs.resize(m_inference_config.get_tensor_output_shape().size());
+    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
         m_outputs[i] = TfLiteInterpreterGetOutputTensor(m_interpreter, i);
     }
 
@@ -113,13 +113,13 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     // Extract the output tensor data
     std::vector<anira::MemoryBlock<float>> m_output_data;
-    m_output_data.resize(m_inference_config.m_output_sizes.size());
+    m_output_data.resize(m_inference_config.get_tensor_output_shape().size());
 
-    for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
         float* output_data = (float*) TfLiteTensorData(m_outputs[i]);
-        for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
-            m_output_data[i].resize(m_inference_config.m_output_sizes[i]);
-            for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+        for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
+            m_output_data[i].resize(m_inference_config.get_tensor_output_size()[i]);
+            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
                 m_output_data[i][j] = output_data[j];
             }
         }

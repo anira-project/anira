@@ -17,13 +17,13 @@ static std::vector<anira::ModelData> model_data_cnn_config = {
 
 static std::vector<anira::TensorShape> tensor_shape_cnn_config = {
 #ifdef USE_LIBTORCH
-        {{{1, 1, 15380}}, {{1, 1, 2048}}, anira::InferenceBackend::LIBTORCH},
+        {{{1, 1, 15380}}, {}, {2048}, {{1, 1, 2048}}, {}, {}, anira::InferenceBackend::LIBTORCH},
 #endif
 #ifdef USE_ONNXRUNTIME
-        {{{1, 1, 15380}}, {{1, 1, 2048}}, anira::InferenceBackend::ONNX},
+        {{{1, 1, 15380}}, {}, {2048}, {{1, 1, 2048}}, {}, {}, anira::InferenceBackend::ONNX},
 #endif
 #ifdef USE_TFLITE
-        {{{1, 15380, 1}}, {{1, 2048, 1}}, anira::InferenceBackend::TFLITE},
+        {{{1, 15380, 1}}, {}, {2048}, {{1, 2048, 1}}, {}, {}, anira::InferenceBackend::TFLITE},
 #endif
 };
 

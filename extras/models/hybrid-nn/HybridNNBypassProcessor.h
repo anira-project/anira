@@ -11,14 +11,14 @@ public:
         size_t num_batches;
         size_t num_input_samples;
 #if USE_LIBTORCH
-        num_batches = (size_t) m_inference_config.get_input_shape(anira::InferenceBackend::LIBTORCH)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][0];
-        num_input_samples = (size_t) m_inference_config.get_input_shape(anira::InferenceBackend::LIBTORCH)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+        num_batches = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+        num_input_samples = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][2];
 #elif USE_ONNXRUNTIME
-        num_batches = (size_t) m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][0];
-        num_input_samples = (size_t) m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][2];
+        num_batches = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+        num_input_samples = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][2];
 #elif USE_TFLITE
-        num_batches = (size_t) m_inference_config.get_input_shape(anira::InferenceBackend::TFLITE)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][0];
-        num_input_samples = (size_t) m_inference_config.get_input_shape(anira::InferenceBackend::TFLITE)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][1];
+        num_batches = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][0];
+        num_input_samples = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]][1];
 #endif
 
         for (size_t channel = 0; channel < input.get_num_channels(); ++channel) {

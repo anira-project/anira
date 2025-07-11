@@ -119,17 +119,16 @@ void adapt_cnn_config(anira::InferenceConfig& inference_config, int buffer_size,
     int output_size = buffer_size;
 
 #ifdef USE_LIBTORCH
-        inference_config.set_input_shape({{1, 1, input_size}}, anira::LIBTORCH);
-        inference_config.set_output_shape({{1, 1, output_size}}, anira::LIBTORCH);
+        inference_config.set_tensor_input_shape({{1, 1, input_size}}, anira::LIBTORCH);
+        inference_config.set_tensor_output_shape({{1, 1, output_size}}, anira::LIBTORCH);
 #endif
 #ifdef USE_ONNXRUNTIME
-        inference_config.set_input_shape({{1, 1, input_size}}, anira::ONNX);
-        inference_config.set_output_shape({{1, 1, output_size}}, anira::ONNX);
+        inference_config.set_tensor_input_shape({{1, 1, input_size}}, anira::ONNX);
+        inference_config.set_tensor_output_shape({{1, 1, output_size}}, anira::ONNX);
 #endif
 #ifdef USE_TFLITE
-        inference_config.set_input_shape({{1, input_size, 1}}, anira::TFLITE);
-        inference_config.set_output_shape({{1, output_size, 1}}, anira::TFLITE);
+        inference_config.set_tensor_input_shape({{1, input_size, 1}}, anira::TFLITE);
+        inference_config.set_tensor_output_shape({{1, output_size, 1}}, anira::TFLITE);
 #endif
-    inference_config.m_input_sizes[0] = input_size;
-    inference_config.m_output_sizes[0] = output_size;
+    inference_config.set_preprocess_input_size(std::vector<size_t>{static_cast<size_t>(input_size - receptive_field)});
 }

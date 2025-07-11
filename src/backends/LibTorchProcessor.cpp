@@ -40,11 +40,11 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inf
         LOG_ERROR << "[ERROR] error loading the model\n";
         LOG_ERROR << e.what() << std::endl;
     }
-    m_inputs.resize(m_inference_config.m_input_sizes.size());
-    m_input_data.resize(m_inference_config.m_input_sizes.size());
-    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
-        m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
-        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
+    m_inputs.resize(m_inference_config.get_tensor_input_shape().size());
+    m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
+        m_input_data[i].resize(m_inference_config.get_tensor_input_size()[i]);
+        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
     }
 
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
@@ -53,13 +53,13 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inf
 }
 
 void LibtorchProcessor::Instance::prepare() {
-    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_input_data[i].clear();
     }
 }
 
 void LibtorchProcessor::Instance::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) {
-    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         if (i != m_inference_config.m_index_audio_data[Input]) {
             for (size_t j = 0; j < m_input_data[i].size(); j++) {
                 m_input_data[i][j] = session->m_pp_processor.get_input(i, j);
@@ -69,7 +69,7 @@ void LibtorchProcessor::Instance::process(BufferF& input, BufferF& output, std::
             input.reset_channel_ptr();
         }
         // This is necessary because the tensor data pointers seem to change from inference to inference
-        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
+        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
     }
 
     // Run inference
@@ -77,31 +77,31 @@ void LibtorchProcessor::Instance::process(BufferF& input, BufferF& output, std::
 
     // We need to copy the data because we cannot access the data pointer ref of the tensor directly
     if(m_outputs.isTuple()) {
-        for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+        for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
             if (i != m_inference_config.m_index_audio_data[Output]) {
-                for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
                     session->m_pp_processor.set_output(m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j], i, j);
                 }
             } else {
-                for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
                     output.get_memory_block()[j] = m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j];
                 }
             }
         }
     } else if(m_outputs.isTensorList()) {
-        for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+        for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
             if (i != m_inference_config.m_index_audio_data[Output]) {
-                for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
                     session->m_pp_processor.set_output(m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j], i, j);
                 }
             } else {
-                for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+                for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
                     output.get_memory_block()[j] = m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j];
                 }
             }
         }
     } else if (m_outputs.isTensor()) {
-        for (size_t i = 0; i < m_inference_config.m_output_sizes[0]; i++) {
+        for (size_t i = 0; i < m_inference_config.get_tensor_output_size()[0]; i++) {
             output.get_memory_block()[i] = m_outputs.toTensor().view({-1}).data_ptr<float>()[i];
         }
     }

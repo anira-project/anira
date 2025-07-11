@@ -13,7 +13,8 @@ enum InferenceBackend {
 #ifdef USE_TFLITE
     TFLITE,
 #endif
-    CUSTOM
+    CUSTOM,
+    UNIVERSAL
 };
 
 } // namespace anira

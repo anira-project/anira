@@ -44,9 +44,9 @@ TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config) : m_infer
     m_interpreter = TfLiteInterpreterCreate(m_model, m_options);
 
     // This is necessary when we have dynamic input shapes, it should be done before allocating tensors obviously
-    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         std::vector<int> input_shape;
-        std::vector<int64_t> input_shape64 = m_inference_config.get_input_shape(anira::InferenceBackend::TFLITE)[i];
+        std::vector<int64_t> input_shape64 = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[i];
         for (size_t j = 0; j < input_shape64.size(); j++) {
             input_shape.push_back((int) input_shape64[j]);
         }
@@ -55,15 +55,15 @@ TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config) : m_infer
 
     TfLiteInterpreterAllocateTensors(m_interpreter);
 
-    m_inputs.resize(m_inference_config.m_input_sizes.size());
-    m_input_data.resize(m_inference_config.m_input_sizes.size());
-    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
-        m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
+    m_inputs.resize(m_inference_config.get_tensor_input_shape().size());
+    m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
+        m_input_data[i].resize(m_inference_config.get_tensor_input_size()[i]);
         m_inputs[i] = TfLiteInterpreterGetInputTensor(m_interpreter, i);
     }
 
-    m_outputs.resize(m_inference_config.m_output_sizes.size());
-    for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+    m_outputs.resize(m_inference_config.get_tensor_output_shape().size());
+    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
         m_outputs[i] = TfLiteInterpreterGetOutputTensor(m_interpreter, i);
     }
 
@@ -79,13 +79,13 @@ TFLiteProcessor::Instance::~Instance() {
 }
 
 void TFLiteProcessor::Instance::prepare() {
-    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_input_data[i].clear();
     }
 }
 
 void TFLiteProcessor::Instance::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) {
-    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         if (i != m_inference_config.m_index_audio_data[Input]) {
             for (size_t j = 0; j < m_input_data[i].size(); j++) {
                 m_input_data[i][j] = session->m_pp_processor.get_input(i, j);
@@ -95,21 +95,21 @@ void TFLiteProcessor::Instance::process(BufferF& input, BufferF& output, std::sh
             input.reset_channel_ptr();
         }
         // TODO: Check if we can find a solution to avoid copying the data
-        TfLiteTensorCopyFromBuffer(m_inputs[i], m_input_data[i].data(), m_inference_config.m_input_sizes[i] * sizeof(float));
+        TfLiteTensorCopyFromBuffer(m_inputs[i], m_input_data[i].data(), m_inference_config.get_tensor_input_size()[i] * sizeof(float));
     }
 
     // Run inference
     TfLiteInterpreterInvoke(m_interpreter);
 
     // We need to copy the data because we cannot access the data pointer ref of the tensor directly
-    for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
         float* output_read_ptr = (float*) TfLiteTensorData(m_outputs[i]);
         if (i != m_inference_config.m_index_audio_data[Output]) {
-            for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
                 session->m_pp_processor.set_output(output_read_ptr[j], i, j);
             }
         } else {
-            for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
                 output.get_memory_block()[j] = output_read_ptr[j];
             }
         }

@@ -83,7 +83,7 @@ void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std:
 
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, BufferF& input, BufferF& output) {
 #ifdef USE_LIBTORCH
-    if (session->m_currentBackend.load(std::memory_order_relaxed) == LIBTORCH) {
+    if (session->m_current_backend.load(std::memory_order_relaxed) == LIBTORCH) {
         if (session->m_libtorch_processor != nullptr) {
             session->m_libtorch_processor->process(input, output, session);
         }
@@ -94,7 +94,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session, BufferF
     }
 #endif
 #ifdef USE_ONNXRUNTIME
-    if (session->m_currentBackend.load(std::memory_order_relaxed) == ONNX) {
+    if (session->m_current_backend.load(std::memory_order_relaxed) == ONNX) {
         if (session->m_onnx_processor != nullptr) {
             session->m_onnx_processor->process(input, output, session);
         }
@@ -105,7 +105,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session, BufferF
     }
 #endif
 #ifdef USE_TFLITE
-    if (session->m_currentBackend.load(std::memory_order_relaxed) == TFLITE) {
+    if (session->m_current_backend.load(std::memory_order_relaxed) == TFLITE) {
         if (session->m_tflite_processor != nullptr) {
             session->m_tflite_processor->process(input, output, session);
         }
@@ -115,7 +115,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session, BufferF
         }
     }
 #endif
-    if (session->m_currentBackend.load(std::memory_order_relaxed) == CUSTOM) {
+    if (session->m_current_backend.load(std::memory_order_relaxed) == CUSTOM) {
         session->m_custom_processor->process(input, output, session);
     }
 }
