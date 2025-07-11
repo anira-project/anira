@@ -15,7 +15,7 @@ Licence: MIT
 #include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
 
 #include "../../../include/anira/utils/MemoryBlock.h"
-#include "../../../include/anira/utils/AudioBuffer.h"
+#include "../../../include/anira/utils/Buffer.h"
 
 void minimal_inference(anira::InferenceConfig m_inference_config) {
 
@@ -44,8 +44,8 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     Ort::Session m_session(m_env, m_inference_config.get_model_path(anira::InferenceBackend::ONNX).c_str(), Ort::SessionOptions{ nullptr });
 #endif
 
-    // Fill an AudioBuffer with some data
-    anira::AudioBufferF input(1, m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]);
+    // Fill an Buffer with some data
+    anira::BufferF input(1, m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]);
     for(int i = 0; i < m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]; ++i) {
         input.set_sample(0, i, i * 0.000001f);
     }

@@ -11,20 +11,20 @@
 namespace anira {
 
 template <typename T>
-class ANIRA_API AudioBuffer
+class ANIRA_API Buffer
 {
 public:
     // Default constructor creates an empty buffer with channelcount 0 and no memory allocated
-    AudioBuffer() = default;
+    Buffer() = default;
     
     // Constructor creates a buffer with the given number of channels and samples
-    AudioBuffer(size_t num_channels, size_t size) : m_num_channels(num_channels), m_size(size), m_data(num_channels * size) {
+    Buffer(size_t num_channels, size_t size) : m_num_channels(num_channels), m_size(size), m_data(num_channels * size) {
         malloc_channels();
         clear();
     }
 
     // Copy constructor takes an lvalue reference to another buffer and creates a new buffer with the same number of channels and samples and copies the data from the other buffer to the new buffer
-    AudioBuffer(const AudioBuffer& other) : m_num_channels(other.m_num_channels), m_size(other.m_size), m_data(other.m_data) {
+    Buffer(const Buffer& other) : m_num_channels(other.m_num_channels), m_size(other.m_size), m_data(other.m_data) {
         if (m_num_channels == 0 || m_size == 0) {
             return;
         } else {
@@ -34,18 +34,18 @@ public:
 
     // Move constructor takes an rvalue reference to another buffer and moves the data from the other buffer to the new buffer, then the other buffer is left in a valid but null state
     // marked as noexcept since it is not supposed to throw exceptions and if it does, the program will terminate, this is because the move constructor could corrupt the data in the other buffer if it fails
-    AudioBuffer(AudioBuffer&& other) noexcept : m_num_channels(other.m_num_channels), m_size(other.m_size), m_data(std::move(other.m_data)), m_channels(other.m_channels) {
+    Buffer(Buffer&& other) noexcept : m_num_channels(other.m_num_channels), m_size(other.m_size), m_data(std::move(other.m_data)), m_channels(other.m_channels) {
         other.m_num_channels = 0;
         other.m_size = 0;
         other.m_channels = nullptr;
     }
 
-    ~AudioBuffer() {
+    ~Buffer() {
         free(m_channels);
     }
 
     // Copy assignment operator takes an lvalue reference to another buffer and copies the data from the other buffer to this buffer
-    AudioBuffer& operator=(const AudioBuffer& other) {
+    Buffer& operator=(const Buffer& other) {
         if (this != &other) {
             free(m_channels);
             m_num_channels = other.m_num_channels;
@@ -58,7 +58,7 @@ public:
 
     // Move assignment operator takes an rvalue reference to another buffer and moves the data from the other buffer to this buffer, then the other buffer is left in a valid but null state
     // marked as noexcept since it is not supposed to throw exceptions and if it does, the program will terminate, this is because the move operation could corrupt the data in the other buffer if it fails
-    AudioBuffer& operator=(AudioBuffer&& other) noexcept {
+    Buffer& operator=(Buffer&& other) noexcept {
         if (this != &other) {
             free(m_channels);
             m_num_channels = other.m_num_channels;
@@ -130,7 +130,7 @@ public:
         return m_data;
     }
 
-    void swap_data(AudioBuffer& other) {
+    void swap_data(Buffer& other) {
         if (this != &other) {
             if( m_num_channels == other.m_num_channels && m_size == other.m_size) {
                 m_data.swap_data(other.m_data);
@@ -204,7 +204,7 @@ private:
 };
 
 
-using AudioBufferF = AudioBuffer<float>;
+using BufferF = Buffer<float>;
 
 } // namespace anira
 

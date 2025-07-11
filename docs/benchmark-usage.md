@@ -10,11 +10,11 @@ To use the benchmarking tools within anira, please follow the steps below. First
 
 ## Single Configuration Benchmarking
 
-### Step 1: Start Defining the Benchmark by Setting Up the InferenceHandler and Input AudioBuffer
+### Step 1: Start Defining the Benchmark by Setting Up the InferenceHandler and Input Buffer
 
 Before we can start to define the benchmark, we need to create an `anira::InferenceConfig` instance and an `anira::PrePostProcessor` instance. This is done in the same way as described in the [anira usage guide](anira-usage.md).
 
-After that we can start to define the benchmark with the `BENCHMARK_DEFINE_F` macro. The first argument is the fixture class and the second argument is the name of the benchmark. The following code snippet shows how to use the `anira::benchmark::ProcessBlockFixture` and how to create and prepare a static `anira::InferenceHandler` class member within the fixture class. We will also create a static `anira::AudioBuffer` member, which will be used later as an input buffer. Finally, we will initialize the repetition. This will allow the anira fixture class to keep track of all configurations used and print options such as model path and buffer size in the benchmark log. Note that this code is only run once per repetition, not for every iteration. It is also not measured by the benchmark.
+After that we can start to define the benchmark with the `BENCHMARK_DEFINE_F` macro. The first argument is the fixture class and the second argument is the name of the benchmark. The following code snippet shows how to use the `anira::benchmark::ProcessBlockFixture` and how to create and prepare a static `anira::InferenceHandler` class member within the fixture class. We will also create a static `anira::Buffer` member, which will be used later as an input buffer. Finally, we will initialize the repetition. This will allow the anira fixture class to keep track of all configurations used and print options such as model path and buffer size in the benchmark log. Note that this code is only run once per repetition, not for every iteration. It is also not measured by the benchmark.
 
 ```cpp
 // benchmark.cpp
@@ -42,8 +42,8 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backend);
 
-    // Create a static AudioBuffer instance
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(my_inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
+    // Create a static Buffer instance
+    m_buffer = std::make_unique<anira::Buffer<float>>(my_inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
 
     // Initialize the repetition
     initialize_repetition(my_inference_config, host_config, inference_backend, true);
@@ -53,9 +53,9 @@ Note: In the `initialize_repetition` function, we can use the fourth argument to
 
 ### Step 2: Measure the Runtime of the Process Method
 
-After the `anira::InferenceHandler` is prepared and the `anira::AudioBuffer` is created, we can start to measure and record the runtime of the `process` method. For this we will use the `state` object that is passed to the benchmark function. The `state` object is used by the Google Benchmark framework to control the benchmark.
+After the `anira::InferenceHandler` is prepared and the `anira::Buffer` is created, we can start to measure and record the runtime of the `process` method. For this we will use the `state` object that is passed to the benchmark function. The `state` object is used by the Google Benchmark framework to control the benchmark.
 
-First we push random samples in the range of -1.f and 1.f into the `anira::AudioBuffer` and initialize the iteration. Then we measure the runtime of the `process` method by calling it and waiting for the result. We have to wait for the result because the processing of the buffer is not done in the same thread as the call to the `process` function. Then we update the fixture with the measured runtime. Finally, when all iterations are done, the `anira::InferenceHandler` and the `anira::Audiobuffer` will be reset and if the repetition was initialized with the sleep after a repetition option, the fixture will sleep.
+First we push random samples in the range of -1.f and 1.f into the `anira::Buffer` and initialize the iteration. Then we measure the runtime of the `process` method by calling it and waiting for the result. We have to wait for the result because the processing of the buffer is not done in the same thread as the call to the `process` function. Then we update the fixture with the measured runtime. Finally, when all iterations are done, the `anira::InferenceHandler` and the `anira::Buffer` will be reset and if the repetition was initialized with the sleep after a repetition option, the fixture will sleep.
 
 ```cpp
 // benchmark.cpp (continued)
@@ -83,7 +83,7 @@ First we push random samples in the range of -1.f and 1.f into the `anira::Audio
         // Update the fixture with the measured runtime
         interation_step(start, end, state);
     }
-    // Repetition is done, reset the InferenceHandler and the AudioBuffer
+    // Repetition is done, reset the InferenceHandler and the Buffer
     repetition_step();
 }
 ```
@@ -240,7 +240,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     // Use state.range(2) to select the inference backend
     m_inference_handler->set_inference_backend(inference_backends[state.range(2)]);
 
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
+    m_buffer = std::make_unique<anira::Buffer<float>>(inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
 
     initialize_repetition(inference_config, host_config, inference_backends[state.range(2)]);
 

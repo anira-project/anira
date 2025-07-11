@@ -5,7 +5,7 @@
 
 #include "BackendBase.h"
 #include "../InferenceConfig.h"
-#include "../utils/AudioBuffer.h"
+#include "../utils/Buffer.h"
 #include "../scheduler/SessionElement.h"
 
 #include <onnxruntime_cxx_api.h>
@@ -18,7 +18,7 @@ public:
     ~OnnxRuntimeProcessor();
 
     void prepare() override;
-    void process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) override;
+    void process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) override;
 
 private:
     struct Instance {
@@ -26,7 +26,7 @@ private:
         ~Instance();
 
         void prepare();
-        void process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session);
+        void process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session);
 
         Ort::MemoryInfo m_memory_info;
         Ort::Env m_env;

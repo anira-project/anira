@@ -7,7 +7,7 @@ class CNNBypassProcessor : public anira::BackendBase {
 public:
     CNNBypassProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
 
-    void process(anira::AudioBufferF &input, anira::AudioBufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
+    void process(anira::BufferF &input, anira::BufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
         auto sample_diff = input.get_num_samples() - output.get_num_samples();
 
         for (size_t channel = 0; channel < input.get_num_channels(); ++channel) {

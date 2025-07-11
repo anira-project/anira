@@ -7,9 +7,9 @@ cmake_minimum_required(VERSION 3.15)
 # Shall the library be built as a shared library?
 option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
 option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
-option(ANIRA_WITH_EXAMPLES "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
+option(ANIRA_WITH_EXAMPLES "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" ON)
 option(ANIRA_WITH_INSTALL "Add install targets" OFF)
-option(ANIRA_WITH_TESTS "Add Build Tests" OFF)
+option(ANIRA_WITH_TESTS "Add Build Tests" ON)
 
 # Select the backends for the inference engine, multiple backends can be selected
 option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
@@ -153,7 +153,7 @@ target_sources(${PROJECT_NAME}
         src/scheduler/SessionElement.cpp
 
         # Utils
-        src/utils/AudioBuffer.cpp
+        src/utils/Buffer.cpp
         src/utils/RingBuffer.cpp
 
         # Interface

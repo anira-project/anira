@@ -7,7 +7,7 @@
 #include <atomic>
 #include <queue>
 
-#include "../utils/AudioBuffer.h"
+#include "../utils/Buffer.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/InferenceBackend.h"
 #include "../utils/HostAudioConfig.h"
@@ -60,8 +60,8 @@ public:
         std::atomic<bool> m_done{false};
 #endif
         unsigned long m_time_stamp;
-        AudioBufferF m_processed_model_input = AudioBufferF();
-        AudioBufferF m_raw_model_output = AudioBufferF();
+        BufferF m_processed_model_input = BufferF();
+        BufferF m_raw_model_output = BufferF();
     };
 
     std::vector<std::shared_ptr<ThreadSafeStruct>> m_inference_queue;

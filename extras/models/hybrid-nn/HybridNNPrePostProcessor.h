@@ -7,7 +7,7 @@
 class HybridNNPrePostProcessor : public anira::PrePostProcessor
 {
 public:
-    virtual void pre_process(anira::RingBuffer& input, anira::AudioBufferF& output, [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
+    virtual void pre_process(anira::RingBuffer& input, anira::BufferF& output, [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
         int64_t num_batches = 0;
         int64_t num_input_samples = 0;
         int64_t num_output_samples = 0;

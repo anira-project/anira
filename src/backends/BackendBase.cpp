@@ -9,7 +9,7 @@ void BackendBase::prepare() {
 
 }
 
-void BackendBase::process(AudioBufferF& input, AudioBufferF& output, [[maybe_unused]] std::shared_ptr<SessionElement> session) {
+void BackendBase::process(BufferF& input, BufferF& output, [[maybe_unused]] std::shared_ptr<SessionElement> session) {
     auto equal_channels = input.get_num_channels() == output.get_num_channels();
     auto sample_diff = input.get_num_samples() - output.get_num_samples();
 

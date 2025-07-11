@@ -17,7 +17,7 @@ Licence: modified BSD
 #include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
 
 #include "../../../include/anira/utils/MemoryBlock.h"
-#include "../../../include/anira/utils/AudioBuffer.h"
+#include "../../../include/anira/utils/Buffer.h"
 
 // m_ prefix is not used to indicate member variables it is used to be compatible with code in the LibTorchProcessor class
 
@@ -38,8 +38,8 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
         std::cerr << e.what() << std::endl;
     }
 
-    // Fill an AudioBuffer with some data
-    anira::AudioBufferF input(1, m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]);
+    // Fill an Buffer with some data
+    anira::BufferF input(1, m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]);
     for(int i = 0; i < m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]; ++i) {
         input.set_sample(0, i, i * 0.000001f);
     }

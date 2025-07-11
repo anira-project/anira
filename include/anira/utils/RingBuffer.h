@@ -3,11 +3,11 @@
 
 #include <vector>
 #include <cmath>
-#include "AudioBuffer.h"
+#include "Buffer.h"
 
 namespace anira {
 
-class ANIRA_API RingBuffer : public AudioBuffer<float>
+class ANIRA_API RingBuffer : public Buffer<float>
 {
 public:
     RingBuffer();

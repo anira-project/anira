@@ -98,7 +98,7 @@ If your model does not require any specific pre- or post-processing, you can use
 anira::PrePostProcessor pp_processor;
 ```
 
-If your model requires custom pre- or post-processing, you can inherit from the `anira::PrePostProcessor` class and overwrite the ```pre_process``` and ```post_process``` methods so that they match your model's requirements. In the ```pre_process``` method, we get the input samples from the audio application through an `anira::RingBuffer` and push them into the output buffer, which is an `anira::AudioBufferF`. This output buffer is then used for inference. In the ```post_process``` method we get the input samples through an `anira::AudioBufferF` and push them into the output buffer, which is an `anira::RingBuffer`. The samples from this output buffer are then returned to the audio application by the `anira::InferenceHandler`.
+If your model requires custom pre- or post-processing, you can inherit from the `anira::PrePostProcessor` class and overwrite the ```pre_process``` and ```post_process``` methods so that they match your model's requirements. In the ```pre_process``` method, we get the input samples from the audio application through an `anira::RingBuffer` and push them into the output buffer, which is an `anira::BufferF`. This output buffer is then used for inference. In the ```post_process``` method we get the input samples through an `anira::BufferF` and push them into the output buffer, which is an `anira::RingBuffer`. The samples from this output buffer are then returned to the audio application by the `anira::InferenceHandler`.
 
 When your pre- and post-processing requires to access values from the `anira::InferenceConfig` struct, you can store the config as a member in your custom pre- and post-processor class.  Here is an example of a custom pre- and post-processor. The `anira::InferenceConfig` inference_config is supposed to be provided in the "MyConfig.h" file.
 
@@ -108,7 +108,7 @@ When your pre- and post-processing requires to access values from the `anira::In
 
 class CustomPrePostProcessor : public anira::PrePostProcessor {
 public:
-    virtual void pre_process(anira::RingBuffer& input, anira::AudioBufferF& output, [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
+    virtual void pre_process(anira::RingBuffer& input, anira::BufferF& output, [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
         pop_samples_from_buffer(input, output, inference_config.m_output_sizes[inference_config.m_index_audio_data[anira::IndexAudioData::Output]], inference_config.m_input_sizes[inference_config.m_index_audio_data[anira::IndexAudioData::Input]]-inference_config.m_output_sizes[inference_config.m_index_audio_data[anira::IndexAudioData::Output]]);
     };
     
@@ -120,10 +120,10 @@ public:
 
 | Method                                                                                                                                     | Description |
 |--------------------------------------------------------------------------------------------------------------------------------------------| - |
-| `void pop_samples_from_buffer(anira::RingBuffer& input, anira::AudioBufferF& output)`                                                      | Pop output.size() samples from the input buffer and push them into the output buffer. |
-| `void pop_samples_from_buffer(anira::RingBuffer& input, anira::AudioBufferF& output, int num_new_samples, int num_old_samples)`            | Pop num_new_samples new samples from the input buffer and get num_old_samples already poped samples from the input buffer and push them into the output buffer. The order of the samples in the output buffer is from oldest to newest. This can be useful for models that have a large receptive field that requires acces to past samples. |
-| `void pop_samples_from_buffer(anira::RingBuffer& input, anira::AudioBufferF& output, int num_new_samples, int num_old_samples, int offset)` | Same as the above method, but starts writing to the output buffer at the offset. |
-| `void push_samples_to_buffer(anira::AudioBufferF& input, anira::RingBuffer& output)`                                                       | Pushes input.size() samples from the input buffer into the output buffer. |
+| `void pop_samples_from_buffer(anira::RingBuffer& input, anira::BufferF& output)`                                                      | Pop output.size() samples from the input buffer and push them into the output buffer. |
+| `void pop_samples_from_buffer(anira::RingBuffer& input, anira::BufferF& output, int num_new_samples, int num_old_samples)`            | Pop num_new_samples new samples from the input buffer and get num_old_samples already poped samples from the input buffer and push them into the output buffer. The order of the samples in the output buffer is from oldest to newest. This can be useful for models that have a large receptive field that requires acces to past samples. |
+| `void pop_samples_from_buffer(anira::RingBuffer& input, anira::BufferF& output, int num_new_samples, int num_old_samples, int offset)` | Same as the above method, but starts writing to the output buffer at the offset. |
+| `void push_samples_to_buffer(anira::BufferF& input, anira::RingBuffer& output)`                                                       | Pushes input.size() samples from the input buffer into the output buffer. |
 
 #### Optional Step: Submit and Retrieve Additional Tensor Values
 
@@ -205,7 +205,7 @@ void process(float** audio_data, int num_samples) {
 
 ### Optional Step 6: Define a Custom::InferenceBackend
 
-To use a custom backend processor, inherit from the `anira::BackendBase` class and overwrite the `process` and  `prepare` methods. The `process` method is called when the `anira::InferenceBackend::CUSTOM` backend is selected. The `process` method takes two `anira::AudioBufferF` instances as input and output buffers and a `std::shared_ptr<anira::SessionElement>` session element. The session element is necessary to e.g. send or retrieve additional values submitted by the pre- and post-processor.
+To use a custom backend processor, inherit from the `anira::BackendBase` class and overwrite the `process` and  `prepare` methods. The `process` method is called when the `anira::InferenceBackend::CUSTOM` backend is selected. The `process` method takes two `anira::BufferF` instances as input and output buffers and a `std::shared_ptr<anira::SessionElement>` session element. The session element is necessary to e.g. send or retrieve additional values submitted by the pre- and post-processor.
 
 The custom backend enables the integration of additional inference engines, customization of existing engines, or the implementation of a simple roundtrip/bypass backend that directly returns input samples, bypassing the inference stage.
 
@@ -220,7 +220,7 @@ class BypassProcessor : public anira::BackendBase {
 public:
     BypassProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
 
-    void process(anira::AudioBufferF &input, anira::AudioBufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
+    void process(anira::BufferF &input, anira::BufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
         auto equal_channels = input.get_num_channels() == output.get_num_channels();
         auto sample_diff = input.get_num_samples() - output.get_num_samples();
 

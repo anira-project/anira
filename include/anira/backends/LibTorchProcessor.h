@@ -15,7 +15,7 @@
 #endif
 
 #include "../InferenceConfig.h"
-#include "../utils/AudioBuffer.h"
+#include "../utils/Buffer.h"
 #include "BackendBase.h"
 #include "../scheduler/SessionElement.h"
 #include <stdlib.h>
@@ -47,13 +47,13 @@ public:
     ~LibtorchProcessor();
 
     void prepare() override;
-    void process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) override;
+    void process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) override;
 
 private:
     struct Instance {
         Instance(InferenceConfig& inference_config);
         void prepare();
-        void process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session);
+        void process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session);
 
         torch::jit::script::Module m_module;
 

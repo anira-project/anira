@@ -22,15 +22,15 @@ PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config) {
     }
 }
 
-void PrePostProcessor::pre_process(RingBuffer& input, AudioBufferF& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
+void PrePostProcessor::pre_process(RingBuffer& input, BufferF& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
     pop_samples_from_buffer(input, output);
 }
 
-void PrePostProcessor::post_process(AudioBufferF& input, RingBuffer& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
+void PrePostProcessor::post_process(BufferF& input, RingBuffer& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
     push_samples_to_buffer(input, output);
 }
 
-void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output) {
+void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, BufferF& output) {
     for (size_t i = 0; i < output.get_num_channels(); i++) {
         for (size_t j = 0; j < output.get_num_samples(); j++) {
             output.set_sample(i, j, input.pop_sample(i));
@@ -38,11 +38,11 @@ void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, AudioBufferF& 
     }
 }
 
-void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output, size_t num_new_samples, size_t num_old_samples) {
+void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_new_samples, size_t num_old_samples) {
     pop_samples_from_buffer(input, output, num_new_samples, num_old_samples, 0);
 }
 
-void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output, size_t num_new_samples, size_t num_old_samples, size_t offset) {
+void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_new_samples, size_t num_old_samples, size_t offset) {
     int num_total_samples = num_new_samples + num_old_samples;
     for (size_t i = 0; i < output.get_num_channels(); i++) {
         // int j is important to be signed, because it is used in the condition j >= 0
@@ -56,7 +56,7 @@ void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, AudioBufferF& 
     }
 }
 
-void PrePostProcessor::push_samples_to_buffer(const AudioBufferF& input, RingBuffer& output) {
+void PrePostProcessor::push_samples_to_buffer(const BufferF& input, RingBuffer& output) {
     for (size_t i = 0; i < input.get_num_channels(); i++) {
         for (size_t j = 0; j < input.get_num_samples(); j++) {
             output.push_sample(i, input.get_sample(i, j));

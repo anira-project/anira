@@ -81,7 +81,7 @@ void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std:
     session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 }
 
-void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output) {
+void InferenceThread::inference(std::shared_ptr<SessionElement> session, BufferF& input, BufferF& output) {
 #ifdef USE_LIBTORCH
     if (session->m_currentBackend.load(std::memory_order_relaxed) == LIBTORCH) {
         if (session->m_libtorch_processor != nullptr) {

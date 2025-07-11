@@ -11,7 +11,7 @@
 #include "scheduler/InferenceThread.h"
 #include "scheduler/Context.h"
 #include "scheduler/SessionElement.h"
-#include "utils/AudioBuffer.h"
+#include "utils/Buffer.h"
 #include "utils/HostAudioConfig.h"
 #include "utils/InferenceBackend.h"
 #include "utils/RingBuffer.h"

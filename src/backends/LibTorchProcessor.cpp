@@ -20,7 +20,7 @@ void LibtorchProcessor::prepare() {
     }
 }
 
-void LibtorchProcessor::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) { 
+void LibtorchProcessor::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) { 
     while (true) {
         for(auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
@@ -58,7 +58,7 @@ void LibtorchProcessor::Instance::prepare() {
     }
 }
 
-void LibtorchProcessor::Instance::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) {
+void LibtorchProcessor::Instance::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
         if (i != m_inference_config.m_index_audio_data[Input]) {
             for (size_t j = 0; j < m_input_data[i].size(); j++) {

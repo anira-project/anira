@@ -102,7 +102,7 @@ TEST_P(InferenceTest, Simple){
 
     int latency_offset = inference_handler.get_latency();
 
-    AudioBufferF test_buffer(1, buffer_size);
+    BufferF test_buffer(1, buffer_size);
     RingBuffer ring_buffer;
     ring_buffer.initialize_with_positions(1, latency_offset + buffer_size + reference_offset);
     
@@ -374,7 +374,7 @@ INSTANTIATE_TEST_SUITE_P(
 //         ring_buffer.push_sample(0, 0);
 //     }    
 
-//     AudioBufferF test_buffer(1, buffer_size);
+//     BufferF test_buffer(1, buffer_size);
 
 
 //     size_t process_buffer_size = 128;

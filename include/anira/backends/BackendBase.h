@@ -2,7 +2,7 @@
 #define ANIRA_BACKENDBASE_H
 
 #include "../InferenceConfig.h"
-#include "../utils/AudioBuffer.h"
+#include "../utils/Buffer.h"
 #include "../system/AniraWinExports.h"
 #include <memory>
 
@@ -14,7 +14,7 @@ class ANIRA_API BackendBase {
 public:
     BackendBase(InferenceConfig& inference_config);
     virtual void prepare();
-    virtual void process(AudioBufferF& input, AudioBufferF& output, [[maybe_unused]] std::shared_ptr<SessionElement> session);
+    virtual void process(BufferF& input, BufferF& output, [[maybe_unused]] std::shared_ptr<SessionElement> session);
 
     InferenceConfig& m_inference_config;
 };

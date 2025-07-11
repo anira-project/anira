@@ -4,7 +4,7 @@
 #include <vector>
 #include <algorithm>
 #include <stdexcept>
-#include "AudioBuffer.h"
+#include "Buffer.h"
 #include "RingBuffer.h"
 
 namespace anira{
@@ -14,7 +14,7 @@ namespace anira{
  * ============================================================ */
 
 static float random_sample () {
-    return -1.f + (float) (std::rand()) / ((float) (RAND_MAX/2.f));
+    return -1.f + (float) (std::rand()) / (((float) RAND_MAX/2.f));
 }
 
 static double calculate_percentile(const std::vector<double>& v, double percentile) {
@@ -46,7 +46,7 @@ static double calculate_percentile(const std::vector<double>& v, double percenti
 
 /// @brief Fills the buffer with random samples
 /// @param buffer 
-static void fill_buffer(AudioBufferF &buffer){
+static void fill_buffer(BufferF &buffer){
     for (size_t i = 0; i < buffer.get_num_samples(); i++){
         float new_val = random_sample();
         buffer.set_sample(0, i, new_val);
@@ -54,10 +54,10 @@ static void fill_buffer(AudioBufferF &buffer){
 }
 
 
-/// @brief pushes all samples in the AudioBuffer into the RingBuffer
+/// @brief pushes all samples in the Buffer into the RingBuffer
 /// @param buffer 
 /// @param ringbuffer 
-static void push_buffer_to_ringbuffer(AudioBufferF const &buffer, RingBuffer &ringbuffer){
+static void push_buffer_to_ringbuffer(BufferF const &buffer, RingBuffer &ringbuffer){
     for (size_t i = 0; i < buffer.get_num_samples(); i++){
         ringbuffer.push_sample(0, buffer.get_sample(0, i));
     }

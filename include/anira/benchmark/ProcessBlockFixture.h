@@ -31,7 +31,7 @@ public:
     void repetition_step();
 
     inline static std::unique_ptr<anira::InferenceHandler> m_inference_handler = nullptr;
-    inline static std::unique_ptr<anira::AudioBuffer<float>> m_buffer = nullptr;
+    inline static std::unique_ptr<anira::Buffer<float>> m_buffer = nullptr;
 
 private:
     int m_buffer_size = 0;

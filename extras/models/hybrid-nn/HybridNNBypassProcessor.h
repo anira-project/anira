@@ -7,7 +7,7 @@ class HybridNNBypassProcessor : public anira::BackendBase {
 public:
     HybridNNBypassProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
 
-    void process(anira::AudioBufferF &input, anira::AudioBufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
+    void process(anira::BufferF &input, anira::BufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
         size_t num_batches;
         size_t num_input_samples;
 #if USE_LIBTORCH

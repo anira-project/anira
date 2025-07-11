@@ -20,7 +20,7 @@ add_executable(${PROJECT_NAME})
 
 target_sources(${PROJECT_NAME} PRIVATE
 	test_InferenceHandler.cpp
-    utils/test_AudioBuffer.cpp
+    utils/test_Buffer.cpp
 	test_WavReader.cpp
 )
 

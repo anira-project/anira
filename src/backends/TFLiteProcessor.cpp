@@ -22,7 +22,7 @@ void TFLiteProcessor::prepare() {
     }
 }
 
-void TFLiteProcessor::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) {
+void TFLiteProcessor::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) {
     while (true) {
         for(auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
@@ -84,7 +84,7 @@ void TFLiteProcessor::Instance::prepare() {
     }
 }
 
-void TFLiteProcessor::Instance::process(AudioBufferF& input, AudioBufferF& output, std::shared_ptr<SessionElement> session) {
+void TFLiteProcessor::Instance::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
         if (i != m_inference_config.m_index_audio_data[Input]) {
             for (size_t j = 0; j < m_input_data[i].size(); j++) {

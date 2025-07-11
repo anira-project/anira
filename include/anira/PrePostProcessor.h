@@ -18,8 +18,8 @@ public:
     PrePostProcessor(InferenceConfig& inference_config);
     ~PrePostProcessor() = default;
 
-    virtual void pre_process(RingBuffer& input, AudioBufferF& output, [[maybe_unused]] InferenceBackend current_inference_backend);
-    virtual void post_process(AudioBufferF& input, RingBuffer& output, [[maybe_unused]] InferenceBackend current_inference_backend);
+    virtual void pre_process(RingBuffer& input, BufferF& output, [[maybe_unused]] InferenceBackend current_inference_backend);
+    virtual void post_process(BufferF& input, RingBuffer& output, [[maybe_unused]] InferenceBackend current_inference_backend);
 
     void set_input(const float& input, size_t i, size_t j);
     void set_output(const float& output, size_t i, size_t j);
@@ -27,13 +27,13 @@ public:
     float get_output(size_t i, size_t j);
 
 protected:
-    void pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output);
+    void pop_samples_from_buffer(RingBuffer& input, BufferF& output);
 
-    void pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output, size_t num_new_samples, size_t num_old_samples);
+    void pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_new_samples, size_t num_old_samples);
 
-    void pop_samples_from_buffer(RingBuffer& input, AudioBufferF& output, size_t num_new_samples, size_t num_old_samples, size_t offset);
+    void pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_new_samples, size_t num_old_samples, size_t offset);
 
-    void push_samples_to_buffer(const AudioBufferF& input, RingBuffer& output);
+    void push_samples_to_buffer(const BufferF& input, RingBuffer& output);
 
 private:
     std::vector<MemoryBlock<std::atomic<float>>> m_inputs;
