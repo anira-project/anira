@@ -2,10 +2,9 @@
 
 ## Architecture
 
-- [ ] Make m_inference_counter.fetch_add(1) dependent on number of samples
+- [ ] Add option to select different model functions
 - [ ] Make processBlockFixture could be more versatile with new shapes
 - [ ] Model and context config should be one json file
-- [ ] Add option to select different model functions
 - [ ] Fix TFLite benchmark error
 
 ## Testing

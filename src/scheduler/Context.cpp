@@ -276,7 +276,6 @@ bool Context::pre_process(std::shared_ptr<SessionElement> session) {
             return true;
         }
     }
-    LOG_INFO << "[WARNING] No free inference queue found in session: " << session->m_session_id << "!" << std::endl;
     return false;
 }
 

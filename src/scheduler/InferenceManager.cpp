@@ -27,7 +27,8 @@ void InferenceManager::prepare(HostAudioConfig new_config) {
 
     m_context->prepare(m_session, m_spec);
 
-    m_inference_counter.store(0);
+    m_missing_samples.clear();
+    m_missing_samples.resize(m_inference_config.get_tensor_output_shape().size(), 0);
 
     m_init_samples.clear();
     m_init_samples = calculate_latency();
@@ -79,33 +80,25 @@ void InferenceManager::process_input(const float* const* const* input_data, size
 }
 
 void InferenceManager::process_output(float* const* const* output_data, size_t* num_samples) {
-    bool enough_samples = true;
-    while (m_inference_counter.load() > 0) {
-        for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-            if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-                if (m_session->m_receive_buffer[i].get_available_samples(0) < 2 * (size_t) num_samples[i]) {
-                    enough_samples = false;
-                    break;
-                }
-            }
-        }
-        if (enough_samples) {
-            for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-                if (m_inference_config.get_postprocess_output_size()[i] > 0) {
+    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+        if (m_inference_config.get_postprocess_output_size()[i] > 0) {
+            int missing_samples_before = m_missing_samples[i];
+            while (m_missing_samples[i]) {
+                if (m_session->m_receive_buffer[i].get_available_samples(0) > num_samples[i]) {
                     for (size_t channel = 0; channel < m_inference_config.get_postprocess_output_channels()[i]; ++channel) {
-                        for (size_t sample = 0; sample < num_samples[i]; ++sample) {
-                            m_session->m_receive_buffer[i].pop_sample(channel);
-                        }
+                        m_session->m_receive_buffer[i].pop_sample(channel);
                     }
+                    m_missing_samples[i] -= num_samples[i];
+                } else {
+                    break; // Exit the loop if not enough samples to pop
                 }
-                m_inference_counter.fetch_sub(1);
-                LOG_INFO << "[WARNING] Catch up samples in session: " << m_session->m_session_id << "!" << std::endl;
             }
-        } else {
-            break; // Exit the loop if not enough samples to catch up
+            if (missing_samples_before - m_missing_samples[i] > 0) {
+                LOG_INFO << "[WARNING] Catch up missing samples: " << missing_samples_before - m_missing_samples[i] << " in session: " << m_session->m_session_id << " for tensor index: " << i << "!" << std::endl;
+            }
         }
     }
-    enough_samples = true;
+    bool enough_samples = true;
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0) {
             if (m_session->m_receive_buffer[i].get_available_samples(0) < (size_t) num_samples[i]) {
@@ -130,8 +123,11 @@ void InferenceManager::process_output(float* const* const* output_data, size_t* 
         }
     } else {
         clear_data(output_data, num_samples, m_inference_config.get_postprocess_output_channels());
-        m_inference_counter.fetch_add(1);
-        LOG_INFO << "[WARNING] Missing samples in session: " << m_session->m_session_id << "!" << std::endl;
+        for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+            if (m_inference_config.get_postprocess_output_size()[i] > 0)
+                m_missing_samples[i] += num_samples[i];
+                LOG_INFO << "[WARNING] Missing samples: " << m_missing_samples[i] << " in session: " << m_session->m_session_id << " for tensor index: " << i << "!" << std::endl;
+        }
     }
 }
 
@@ -162,10 +158,6 @@ const Context& InferenceManager::get_context() const {
 size_t InferenceManager::get_num_received_samples(size_t tensor_index, size_t channel) const {
     m_context->new_data_request(m_session, 0.);
     return m_session->m_receive_buffer[tensor_index].get_available_samples(channel);
-}
-
-int InferenceManager::get_missing_blocks() const {
-    return m_inference_counter.load();
 }
 
 int InferenceManager::get_session_id() const {

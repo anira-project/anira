@@ -31,7 +31,6 @@ public:
     size_t get_num_received_samples(size_t tensor_index, size_t channel) const;
     const Context& get_context() const;
 
-    int get_missing_blocks() const;
     int get_session_id() const;
 
     void set_non_realtime (bool is_non_realtime) const;
@@ -55,7 +54,7 @@ private:
     HostAudioConfig m_spec;
 
     std::vector<int> m_init_samples;
-    std::atomic<int> m_inference_counter {0};
+    std::vector<int> m_missing_samples;
 };
 
 } // namespace anira
