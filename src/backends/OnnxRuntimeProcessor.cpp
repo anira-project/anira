@@ -19,7 +19,7 @@ void OnnxRuntimeProcessor::prepare() {
     }
 }
 
-void OnnxRuntimeProcessor::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) {
+void OnnxRuntimeProcessor::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) {
     while (true) {
         for(auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
@@ -101,21 +101,15 @@ void OnnxRuntimeProcessor::Instance::prepare() {
     }
 }
 
-void OnnxRuntimeProcessor::Instance::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) {
+void OnnxRuntimeProcessor::Instance::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
-        if (i != m_inference_config.m_index_audio_data[Input]) {
-            for (size_t j = 0; j < m_input_data[i].size(); j++) {
-                m_input_data[i][j] = session->m_pp_processor.get_input(i, j);
-            }
-        } else {
-            m_inputs[i] = Ort::Value::CreateTensor<float>(
-                    m_memory_info,
-                    input.data(),
-                    input.get_num_samples() * input.get_num_channels(),
-                    m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
-                    m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].size()
-            );
-        }
+        m_inputs[i] = Ort::Value::CreateTensor<float>(
+                m_memory_info,
+                input[i].data(),
+                input[i].get_num_samples() * input[i].get_num_channels(),
+                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
+                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].size()
+        );
     }
 
     try {
@@ -126,14 +120,8 @@ void OnnxRuntimeProcessor::Instance::process(BufferF& input, BufferF& output, st
 
     for (size_t i = 0; i < m_outputs.size(); i++) {
         const auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();
-        if (i != m_inference_config.m_index_audio_data[Output]) {
-            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-                session->m_pp_processor.set_output(output_read_ptr[j], i, j);
-            }
-        } else {
-            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-                output.get_memory_block()[j] = output_read_ptr[j];
-            }
+        for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
+            output[i].get_memory_block()[j] = output_read_ptr[j];
         }
     }
 }

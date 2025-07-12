@@ -119,7 +119,7 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
 
     inference_handler.prepare(host_config);
 
-    auto new_latency = inference_handler.get_latency();
+    auto new_latency = inference_handler.get_latency()[0]; // The 0th tensor is the audio data tensor, so we only need the first element of the latency vector
     setLatencySamples(new_latency);
 
     dry_wet_mixer.setWetLatency((float) new_latency);
@@ -165,11 +165,11 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     dry_wet_mixer.mixWetSamples(buffer);
 
-#if MODEL_TO_USE == 4
-    float peak_gain = pp_processor.get_output(1, 0);
+#if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
+    // For the simple-gain and simple-stereo-gain models, we can retrieve the peak gain value from the post-processor.
+    // float peak_gain = pp_processor.get_output(1, 0);
     // std::cout << "peak_gain: " << peak_gain << std::endl;
 #endif
-
     if (isNonRealtime()) {
         processesNonRealtime(buffer);
     }
@@ -234,8 +234,4 @@ void AudioPluginAudioProcessor::processesNonRealtime(const juce::AudioBuffer<flo
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new AudioPluginAudioProcessor();
-}
-
-anira::InferenceManager &AudioPluginAudioProcessor::get_inference_manager() {
-    return inference_handler.get_inference_manager();
 }

@@ -13,7 +13,7 @@ ProcessBlockFixture::~ProcessBlockFixture() {
 }
 
 void ProcessBlockFixture::initialize_iteration() {
-    m_prev_num_received_samples = m_inference_handler->get_inference_manager().get_num_received_samples();
+    m_prev_num_received_samples = m_inference_handler->get_num_received_samples(0);
 }
 
 void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference_config, const HostAudioConfig& host_config, const InferenceBackend& inference_backend, bool sleep_after_repetition) {
@@ -65,19 +65,19 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
             m_host_config = host_config;
         }
         std::cout << "\n----------------------------------------------------------------------------------------------------------------------------------------" << std::endl;
-        std::cout << "Model: " << m_model_name << " | Backend: " << m_inference_backend_name << " | Sample Rate: " << std::fixed << std::setprecision(0) << m_host_config.m_host_sample_rate << " Hz | Buffer Size: " << m_host_config.m_host_buffer_size << " = " << std::fixed << std::setprecision(4) << (float) m_host_config.m_host_buffer_size * 1000.f/m_host_config.m_host_sample_rate << " ms" << std::endl;
+        std::cout << "Model: " << m_model_name << " | Backend: " << m_inference_backend_name << " | Host Input Sample Rate: " << std::fixed << std::setprecision(0) << m_host_config.m_host_input_sample_rate << " Hz | Host Input Buffer Size: " << m_host_config.m_max_host_input_size << " = " << std::fixed << std::setprecision(4) << (float) m_host_config.m_max_host_input_size * 1000.f/m_host_config.m_host_input_sample_rate << " ms" << std::endl;
         std::cout << "----------------------------------------------------------------------------------------------------------------------------------------\n" << std::endl;
     }
 
 }
 
 bool ProcessBlockFixture::buffer_processed() {
-    return m_inference_handler->get_inference_manager().get_num_received_samples() >= m_prev_num_received_samples;
+    return m_inference_handler->get_num_received_samples(0) >= m_prev_num_received_samples;
 }
 
 void ProcessBlockFixture::push_random_samples_in_buffer(anira::HostAudioConfig host_config) {
     for (size_t channel = 0; channel < m_inference_config.get_preprocess_input_channels()[0]; channel++) {
-        for (size_t sample = 0; sample < host_config.m_host_buffer_size; sample++) {
+        for (size_t sample = 0; sample < host_config.m_max_host_input_size; sample++) {
             m_buffer->set_sample(channel, sample, random_sample());
         }
     }

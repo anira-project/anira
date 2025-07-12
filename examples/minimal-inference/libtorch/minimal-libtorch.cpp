@@ -38,9 +38,9 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
         std::cerr << e.what() << std::endl;
     }
 
-    // Fill an Buffer with some data
-    anira::BufferF input(1, m_inference_config.get_tensor_input_size()[m_inference_config.m_index_audio_data[anira::Input]]);
-    for(int i = 0; i < m_inference_config.get_tensor_input_size()[m_inference_config.m_index_audio_data[anira::Input]]; ++i) {
+    // Fill a Buffer with some data
+    anira::BufferF input(1, m_inference_config.get_tensor_input_size()[0]);
+    for(int i = 0; i < m_inference_config.get_tensor_input_size()[0]; ++i) {
         input.set_sample(0, i, i * 0.000001f);
     }
 
@@ -53,7 +53,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_input_data[i].resize(m_inference_config.get_tensor_input_size()[i]);
-        if (i != m_inference_config.m_index_audio_data[anira::Input]) {
+        if (i != 0) {
             m_input_data[i].clear();
         } else {
             m_input_data[i].swap_data(input.get_memory_block());

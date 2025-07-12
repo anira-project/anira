@@ -7,14 +7,14 @@ class CNNBypassProcessor : public anira::BackendBase {
 public:
     CNNBypassProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
 
-    void process(anira::BufferF &input, anira::BufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
-        auto sample_diff = input.get_num_samples() - output.get_num_samples();
+    void process(std::vector<anira::BufferF> &input, std::vector<anira::BufferF> &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
+        auto sample_diff = input[0].get_num_samples() - output[0].get_num_samples();
 
-        for (size_t channel = 0; channel < input.get_num_channels(); ++channel) {
-            auto write_ptr = output.get_write_pointer(channel);
-            auto read_ptr = input.get_read_pointer(channel);
+        for (size_t channel = 0; channel < input[0].get_num_channels(); ++channel) {
+            auto write_ptr = output[0].get_write_pointer(channel);
+            auto read_ptr = input[0].get_read_pointer(channel);
 
-            for (size_t i = 0; i < output.get_num_samples(); ++i) {
+            for (size_t i = 0; i < output[0].get_num_samples(); ++i) {
                 write_ptr[i] = read_ptr[i+sample_diff];
             }
         }

@@ -22,7 +22,7 @@ void TFLiteProcessor::prepare() {
     }
 }
 
-void TFLiteProcessor::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) {
+void TFLiteProcessor::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) {
     while (true) {
         for(auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
@@ -84,16 +84,10 @@ void TFLiteProcessor::Instance::prepare() {
     }
 }
 
-void TFLiteProcessor::Instance::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) {
+void TFLiteProcessor::Instance::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
-        if (i != m_inference_config.m_index_audio_data[Input]) {
-            for (size_t j = 0; j < m_input_data[i].size(); j++) {
-                m_input_data[i][j] = session->m_pp_processor.get_input(i, j);
-            }
-        } else {
-            m_input_data[i].swap_data(input.get_memory_block());
-            input.reset_channel_ptr();
-        }
+        m_input_data[i].swap_data(input[i].get_memory_block());
+        input[i].reset_channel_ptr();
         // TODO: Check if we can find a solution to avoid copying the data
         TfLiteTensorCopyFromBuffer(m_inputs[i], m_input_data[i].data(), m_inference_config.get_tensor_input_size()[i] * sizeof(float));
     }
@@ -104,14 +98,8 @@ void TFLiteProcessor::Instance::process(BufferF& input, BufferF& output, std::sh
     // We need to copy the data because we cannot access the data pointer ref of the tensor directly
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
         float* output_read_ptr = (float*) TfLiteTensorData(m_outputs[i]);
-        if (i != m_inference_config.m_index_audio_data[Output]) {
-            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-                session->m_pp_processor.set_output(output_read_ptr[j], i, j);
-            }
-        } else {
-            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-                output.get_memory_block()[j] = output_read_ptr[j];
-            }
+        for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
+            output[i].get_memory_block()[j] = output_read_ptr[j];
         }
     }
 }

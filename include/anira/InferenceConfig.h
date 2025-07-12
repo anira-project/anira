@@ -210,8 +210,6 @@ public:
             float max_inference_time, // in ms per inference
             unsigned int internal_latency = 0, // in samples per inference
             unsigned int warm_up = 0, // number of warm up inferences
-            std::array<size_t, 2> index_audio_data = {0, 0}, // input and output index of audio data vector of tensors
-            std::array<size_t, 2> num_audio_channels = {1, 1}, // input and output number of audio channels
             bool session_exclusive_processor = false,
             unsigned int num_parallel_processors = (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2 : 1
 #ifdef USE_CONTROLLED_BLOCKING
@@ -227,7 +225,7 @@ public:
     std::vector<size_t> get_tensor_input_size(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
     std::vector<size_t> get_tensor_output_size(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
     std::vector<size_t> get_preprocess_input_channels(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
-    std::vector<size_t> get_preprocess_output_channels(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
+    std::vector<size_t> get_postprocess_output_channels(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
     std::vector<size_t> get_preprocess_input_size(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
     std::vector<size_t> get_postprocess_output_size(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
     void set_tensor_input_shape(const TensorShapeList& input_shape, InferenceBackend backend = InferenceBackend::UNIVERSAL);
@@ -241,10 +239,8 @@ public:
     std::vector<ModelData> m_model_data;
     std::vector<TensorShape> m_tensor_shape;
     float m_max_inference_time;
-    unsigned int m_internal_latency;
+    std::vector<unsigned int> m_internal_latency;
     unsigned int m_warm_up;
-    std::array<size_t, 2> m_index_audio_data;
-    std::array<size_t, 2> m_num_audio_channels;
     bool m_session_exclusive_processor;
     unsigned int m_num_parallel_processors;
 
@@ -259,8 +255,6 @@ public:
             std::abs(m_max_inference_time - other.m_max_inference_time) < 1e-6 &&
             m_internal_latency == other.m_internal_latency &&
             m_warm_up == other.m_warm_up &&
-            m_index_audio_data == other.m_index_audio_data &&
-            m_num_audio_channels == other.m_num_audio_channels &&
             m_session_exclusive_processor == other.m_session_exclusive_processor &&
             m_num_parallel_processors == other.m_num_parallel_processors
 #ifdef USE_CONTROLLED_BLOCKING

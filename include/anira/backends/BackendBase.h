@@ -14,7 +14,7 @@ class ANIRA_API BackendBase {
 public:
     BackendBase(InferenceConfig& inference_config);
     virtual void prepare();
-    virtual void process(BufferF& input, BufferF& output, [[maybe_unused]] std::shared_ptr<SessionElement> session);
+    virtual void process(std::vector<BufferF>& input, std::vector<BufferF>& output, [[maybe_unused]] std::shared_ptr<SessionElement> session);
 
     InferenceConfig& m_inference_config;
 };

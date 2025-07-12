@@ -47,13 +47,13 @@ public:
     ~LibtorchProcessor();
 
     void prepare() override;
-    void process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) override;
+    void process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) override;
 
 private:
     struct Instance {
         Instance(InferenceConfig& inference_config);
         void prepare();
-        void process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session);
+        void process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session);
 
         torch::jit::script::Module m_module;
 

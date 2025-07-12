@@ -9,8 +9,8 @@ class CNNPrePostProcessor : public anira::PrePostProcessor
 public:
     using anira::PrePostProcessor::PrePostProcessor;
 
-    virtual void pre_process(anira::RingBuffer& input, anira::BufferF& output, [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
-        pop_samples_from_buffer(input, output, m_inference_config.get_tensor_output_size()[m_inference_config.m_index_audio_data[anira::IndexAudioData::Output]], m_inference_config.get_tensor_input_size()[m_inference_config.m_index_audio_data[anira::IndexAudioData::Input]]-m_inference_config.get_tensor_output_size()[m_inference_config.m_index_audio_data[anira::IndexAudioData::Output]]);
+    virtual void pre_process(std::vector<anira::RingBuffer>& input, std::vector<anira::BufferF>& output, [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
+        pop_samples_from_buffer(input[0], output[0], m_inference_config.get_tensor_output_size()[0], m_inference_config.get_tensor_input_size()[0]-m_inference_config.get_tensor_output_size()[0]);
     }
 };
 

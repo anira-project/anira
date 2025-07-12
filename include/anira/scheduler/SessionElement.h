@@ -48,11 +48,11 @@ public:
 
     template <typename T> void set_processor(std::shared_ptr<T>& processor);
 
-    RingBuffer m_send_buffer;
-    RingBuffer m_receive_buffer;
+    std::vector<RingBuffer> m_send_buffer;
+    std::vector<RingBuffer> m_receive_buffer;
 
     struct ThreadSafeStruct {
-        ThreadSafeStruct(size_t tensor_input_size, size_t tensor_output_size);
+        ThreadSafeStruct(std::vector<size_t> tensor_input_size, std::vector<size_t> tensor_output_size);
         std::atomic<bool> m_free{true};
 #ifdef USE_CONTROLLED_BLOCKING
         std::binary_semaphore m_done{false};
@@ -60,8 +60,8 @@ public:
         std::atomic<bool> m_done{false};
 #endif
         unsigned long m_time_stamp;
-        BufferF m_processed_model_input = BufferF();
-        BufferF m_raw_model_output = BufferF();
+        std::vector<BufferF> m_tensor_input_data;
+        std::vector<BufferF> m_tensor_output_data;
     };
 
     std::vector<std::shared_ptr<ThreadSafeStruct>> m_inference_queue;

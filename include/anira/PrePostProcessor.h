@@ -18,8 +18,8 @@ public:
     PrePostProcessor(InferenceConfig& inference_config);
     ~PrePostProcessor() = default;
 
-    virtual void pre_process(RingBuffer& input, BufferF& output, [[maybe_unused]] InferenceBackend current_inference_backend);
-    virtual void post_process(BufferF& input, RingBuffer& output, [[maybe_unused]] InferenceBackend current_inference_backend);
+    virtual void pre_process(std::vector<RingBuffer>& input, std::vector<BufferF>& output, [[maybe_unused]] InferenceBackend current_inference_backend);
+    virtual void post_process(std::vector<BufferF>& input, std::vector<RingBuffer>& output, [[maybe_unused]] InferenceBackend current_inference_backend);
 
     void set_input(const float& input, size_t i, size_t j);
     void set_output(const float& output, size_t i, size_t j);
@@ -41,8 +41,6 @@ protected:
 private:
     std::vector<MemoryBlock<std::atomic<float>>> m_inputs;
     std::vector<MemoryBlock<std::atomic<float>>> m_outputs;
-
-    std::array<size_t, 2> m_index_audio_data;
 };
 
 } // namespace anira

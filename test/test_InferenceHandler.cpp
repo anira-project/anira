@@ -54,8 +54,8 @@ std::ostream& operator<<(std::ostream& stream, const InferenceTestParams& params
     
     stream << "{ ";
     stream << "backend = " << backend;
-    stream << ", buffersize = " << params.audio_config.m_host_buffer_size;
-    stream << ", samplerate = " << params.audio_config.m_host_sample_rate;
+    stream << ", max_host_input_size = " << params.audio_config.m_max_host_input_size;
+    stream << ", host_input_sample_rate = " << params.audio_config.m_host_input_sample_rate;
     stream << " }";
 
     return stream;
@@ -72,7 +72,7 @@ class InferenceTest: public ::testing::TestWithParam<InferenceTestParams>{
 TEST_P(InferenceTest, Simple){
 
     auto const& test_params = GetParam();
-    auto const& buffer_size = test_params.audio_config.m_host_buffer_size;
+    auto const& buffer_size = test_params.audio_config.m_max_host_input_size;
     auto const& reference_offset = test_params.reference_data_offset;
 
     // read reference data
@@ -100,7 +100,7 @@ TEST_P(InferenceTest, Simple){
     // Select the inference backend
     inference_handler.set_inference_backend(test_params.backend);
 
-    int latency_offset = inference_handler.get_latency();
+    int latency_offset = inference_handler.get_latency()[0]; // The 0th tensor is the audio data tensor, so we only need the first element of the latency vector
 
     BufferF test_buffer(1, buffer_size);
     RingBuffer ring_buffer;
@@ -119,13 +119,13 @@ TEST_P(InferenceTest, Simple){
             ring_buffer.push_sample(0, data_reference.at((repeat*buffer_size)+i));
         }
         
-        size_t prev_samples = inference_handler.get_inference_manager().get_num_received_samples();
+        size_t prev_samples = inference_handler.get_num_received_samples(0);
 
         inference_handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
         
         // wait until the block was properly processed
         auto start = std::chrono::system_clock::now();
-        while (!(inference_handler.get_inference_manager().get_num_received_samples() >= prev_samples)){
+        while (!(inference_handler.get_num_received_samples(0) >= prev_samples)){
             if (std::chrono::system_clock::now() >  start + std::chrono::duration<long int>(INFERENCE_TIMEOUT_S)){
                 FAIL() << "Timeout while waiting for block to be processed";
             }
@@ -147,7 +147,7 @@ TEST_P(InferenceTest, Simple){
     }
 }
 string build_test_name(const testing::TestParamInfo<InferenceTest::ParamType>& info){
-    return std::to_string((int)info.param.audio_config.m_host_sample_rate) + "x" + std::to_string(info.param.audio_config.m_host_buffer_size);
+    return std::to_string((int)info.param.audio_config.m_host_input_sample_rate) + "x" + std::to_string(info.param.audio_config.m_max_host_input_size);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -386,13 +386,13 @@ INSTANTIATE_TEST_SUITE_P(
 //             ring_buffer.push_sample(0, data_predicted.at((repeat*process_buffer_size)+i));
 //         }
         
-//         size_t prev_samples = inference_handler.get_inference_manager().get_num_received_samples();
+//         size_t prev_samples = inference_handler.get_num_received_samples(0);
 
 //         inference_handler.process(test_buffer.get_array_of_write_pointers(), process_buffer_size);
         
 //         // wait until the block was properly processed
 //         auto start = std::chrono::system_clock::now();
-//         while (!(inference_handler.get_inference_manager().get_num_received_samples() >= prev_samples)){
+//         while (!(inference_handler.get_num_received_samples(0) >= prev_samples)){
 //             if (std::chrono::system_clock::now() >  start + std::chrono::duration<long int>(INFERENCE_TIMEOUT_S)){
 //                 FAIL() << "Timeout while waiting for block to be processed";
 //             }

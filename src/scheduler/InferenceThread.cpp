@@ -72,7 +72,7 @@ bool InferenceThread::execute() {
 
 void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
     session->m_active_inferences.fetch_add(1, std::memory_order::release);
-    inference(session, thread_safe_struct->m_processed_model_input, thread_safe_struct->m_raw_model_output);
+    inference(session, thread_safe_struct->m_tensor_input_data, thread_safe_struct->m_tensor_output_data);
 #ifdef USE_CONTROLLED_BLOCKING
     thread_safe_struct->m_done.release();
 #else
@@ -81,7 +81,7 @@ void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std:
     session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 }
 
-void InferenceThread::inference(std::shared_ptr<SessionElement> session, BufferF& input, BufferF& output) {
+void InferenceThread::inference(std::shared_ptr<SessionElement> session, std::vector<BufferF>& input, std::vector<BufferF>& output) {
 #ifdef USE_LIBTORCH
     if (session->m_current_backend.load(std::memory_order_relaxed) == LIBTORCH) {
         if (session->m_libtorch_processor != nullptr) {

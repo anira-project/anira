@@ -182,22 +182,40 @@ void Context::prepare(std::shared_ptr<SessionElement> session, HostAudioConfig n
 }
 
 void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
-    // TODO: We assume that the model_output_size gives us the amount of new samples that we need to process. This can differ from the model_input_size because we might need to add some padding or past samples. Find a better way to determine the amount of new samples.
-    int new_samples_needed_for_inference = session->m_inference_config.get_preprocess_input_size()[session->m_inference_config.m_index_audio_data[Output]];
-    while (session->m_send_buffer.get_available_samples(0) >= (new_samples_needed_for_inference)) {
-        bool success = pre_process(session);
-
-        // !success means that there is no free m_inference_queue
-        if (!success) {
-            for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_input_channels()[0]; channel++) {
-                for (size_t i = 0; i < new_samples_needed_for_inference; i++) {
-                    session->m_send_buffer.pop_sample(channel);
+    bool ready_for_preprocess = true;
+    while (ready_for_preprocess) {
+        for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_input_shape().size(); tensor_index++) {
+            if (session->m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
+                for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_input_channels()[tensor_index]; channel++) {
+                    if (session->m_send_buffer[tensor_index].get_available_samples(channel) < session->m_inference_config.get_preprocess_input_size()[tensor_index]) {
+                        ready_for_preprocess = false;
+                        break;
+                    }
                 }
             }
-            for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_output_channels()[0]; channel++) {
-                for (size_t i = 0; i < new_samples_needed_for_inference; i++) {
-                    session->m_receive_buffer.push_sample(channel, 0.f);
+            if (!ready_for_preprocess) {
+                break;
+            }
+        }
+        if (ready_for_preprocess) {
+            bool success = pre_process(session);
+            
+            if (!success) {
+                for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_input_shape().size(); tensor_index++) {
+                    for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_input_channels()[tensor_index]; channel++) {
+                        for (size_t i = 0; i < session->m_inference_config.get_preprocess_input_size()[tensor_index]; i++) { // Non-streamable parameters have no input size
+                            session->m_send_buffer[tensor_index].pop_sample(channel);
+                        }
+                    }
                 }
+                for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_output_shape().size(); tensor_index++) {
+                    for (size_t channel = 0; channel < session->m_inference_config.get_postprocess_output_channels()[tensor_index]; channel++) { 
+                        for (size_t i = 0; i < session->m_inference_config.get_postprocess_output_size()[tensor_index]; i++) { // Non-streamable parameters have no output size
+                            session->m_receive_buffer[tensor_index].push_sample(channel, 0.f);
+                        }
+                    }
+                }
+                LOG_INFO << "[WARNING] No free inference queue found in session: " << session->m_session_id << "!" << std::endl;
             }
         }
     }
@@ -240,7 +258,7 @@ std::vector<std::shared_ptr<SessionElement>>& Context::get_sessions() {
 bool Context::pre_process(std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
         if (session->m_inference_queue[i]->m_free.exchange(false)) {
-            session->m_pp_processor.pre_process(session->m_send_buffer, session->m_inference_queue[i]->m_processed_model_input, session->m_current_backend.load(std::memory_order_relaxed));
+            session->m_pp_processor.pre_process(session->m_send_buffer, session->m_inference_queue[i]->m_tensor_input_data, session->m_current_backend.load(std::memory_order_relaxed));
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
             InferenceData inference_data = {session, session->m_inference_queue[i]};
@@ -263,7 +281,7 @@ bool Context::pre_process(std::shared_ptr<SessionElement> session) {
 }
 
 void Context::post_process(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
-    session->m_pp_processor.post_process(thread_safe_struct->m_raw_model_output, session->m_receive_buffer, session->m_current_backend.load(std::memory_order_relaxed));
+    session->m_pp_processor.post_process(thread_safe_struct->m_tensor_output_data, session->m_receive_buffer, session->m_current_backend.load(std::memory_order_relaxed));
     thread_safe_struct->m_free.store(true, std::memory_order::release);
 }
 

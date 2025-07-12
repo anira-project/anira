@@ -9,8 +9,6 @@ InferenceConfig::InferenceConfig (
         float max_inference_time,
         unsigned int internal_latency,
         unsigned int warm_up,
-        std::array<size_t, 2> index_audio_data,
-        std::array<size_t, 2> num_audio_channels,
         bool session_exclusive_processor,
         unsigned int num_parallel_processors
 #ifdef USE_CONTROLLED_BLOCKING
@@ -22,8 +20,6 @@ InferenceConfig::InferenceConfig (
         m_max_inference_time(max_inference_time),
         m_internal_latency(internal_latency),
         m_warm_up(warm_up),
-        m_index_audio_data(index_audio_data),
-        m_num_audio_channels(num_audio_channels),
         m_session_exclusive_processor(session_exclusive_processor),
         m_num_parallel_processors(num_parallel_processors)
 #ifdef USE_CONTROLLED_BLOCKING
@@ -90,7 +86,7 @@ std::vector<size_t> InferenceConfig::get_preprocess_input_channels(InferenceBack
     return get_tensor_shape(backend).m_preprocess_input_channels;
 }
 
-std::vector<size_t> InferenceConfig::get_preprocess_output_channels(InferenceBackend backend) const {
+std::vector<size_t> InferenceConfig::get_postprocess_output_channels(InferenceBackend backend) const {
     return get_tensor_shape(backend).m_preprocess_output_channels;
 }
 
@@ -302,6 +298,9 @@ void InferenceConfig::update_tensor_shapes() {
                 length /= num_channels; // Adjust length by number of channels
                 shape.m_postprocess_output_size.push_back(length);
             }
+        }
+        if (shape.m_tensor_output_shape.size() != m_internal_latency.size()) {
+            m_internal_latency.resize(shape.m_tensor_output_shape.size(), 0);
         }
     }
     assert((m_tensor_shape.size() > 0 && "At least one tensor shape must be provided."));

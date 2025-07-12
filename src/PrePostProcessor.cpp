@@ -3,28 +3,42 @@
 namespace anira {
 
 PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config) : m_inference_config(inference_config) {
-    m_index_audio_data = inference_config.m_index_audio_data;
-
-    m_inputs.resize(inference_config.get_tensor_input_size().size());
-    for (size_t i = 0; i < inference_config.get_tensor_input_size().size(); ++i) {
-        if(i != inference_config.m_index_audio_data[Input]) {
-            m_inputs[i].resize(inference_config.get_tensor_input_size()[i]);
+    m_inputs.resize(m_inference_config.get_tensor_input_shape().size());
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
+        if(m_inference_config.get_preprocess_input_size()[i] <= 0) {
+            m_inputs[i].resize(m_inference_config.get_tensor_input_size()[i]);
         }
     }
-    m_outputs.resize(inference_config.get_tensor_output_size().size());
-    for (size_t i = 0; i < inference_config.get_tensor_output_size().size(); ++i) {
-        if(i != inference_config.m_index_audio_data[Output]) {
-            m_outputs[i].resize(inference_config.get_tensor_output_size()[i]);
+    m_outputs.resize(m_inference_config.get_tensor_output_shape().size());
+    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+        if(m_inference_config.get_postprocess_output_size()[i] <= 0) {
+            m_outputs[i].resize(m_inference_config.get_tensor_output_size()[i]);
         }
     }
 }
 
-void PrePostProcessor::pre_process(RingBuffer& input, BufferF& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
-    pop_samples_from_buffer(input, output, m_inference_config.get_preprocess_input_size()[m_inference_config.m_index_audio_data[Input]]);
+void PrePostProcessor::pre_process(std::vector<RingBuffer>& input, std::vector<BufferF>& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
+    for (size_t tensor_index = 0; tensor_index < m_inference_config.get_tensor_input_shape().size(); tensor_index++) {
+        if (m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
+            pop_samples_from_buffer(input[tensor_index], output[tensor_index], m_inference_config.get_preprocess_input_size()[tensor_index]);
+        } else {
+            for (size_t sample = 0; sample < m_inference_config.get_tensor_input_size()[tensor_index]; sample++) {
+                output[tensor_index].set_sample(0, sample, get_input(tensor_index, sample)); // Non-streamble tensors have no channel count
+            }
+        }
+    }
 }
 
-void PrePostProcessor::post_process(BufferF& input, RingBuffer& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
-    push_samples_to_buffer(input, output, m_inference_config.get_postprocess_output_size()[m_inference_config.m_index_audio_data[Output]]);
+void PrePostProcessor::post_process(std::vector<BufferF>& input, std::vector<RingBuffer>& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
+    for (size_t tensor_index = 0; tensor_index < m_inference_config.get_tensor_output_shape().size(); tensor_index++) {
+        if (m_inference_config.get_postprocess_output_size()[tensor_index] > 0) {
+            push_samples_to_buffer(input[tensor_index], output[tensor_index], m_inference_config.get_postprocess_output_size()[tensor_index]);
+        } else {
+            for (size_t sample = 0; sample < m_inference_config.get_tensor_output_size()[tensor_index]; sample++) {
+                set_output(input[tensor_index].get_sample(0, sample), tensor_index, sample); // Non-streamble tensors have no channel count
+            }
+        }
+    }
 }
 
 void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_samples) {
@@ -64,28 +78,28 @@ void PrePostProcessor::push_samples_to_buffer(const BufferF& input, RingBuffer& 
 void PrePostProcessor::set_input(const float& input, size_t i, size_t j) {
     assert(("Index i out of bounds" && i < m_inputs.size()));
     assert(("Index j out of bounds" && j < m_inputs[i].size()));
-    assert(("Index contains audio data, which should be passed in the processBlock method." && i != m_index_audio_data[Input]));
+    // assert(("Index is streamable, data should be passed via the process method." && this->m_inference_config.get_preprocess_input_size()[i] > 0)); TODO: Why does this not work?
     m_inputs[i][j].store(input);
 }
 
 void PrePostProcessor::set_output(const float& output, size_t i, size_t j) {
     assert(("Index i out of bounds" && i < m_outputs.size()));
     assert(("Index j out of bounds" && j < m_outputs[i].size()));
-    assert(("Index contains audio data, which should be returned in the processBlock method." && i != m_index_audio_data[Output]));
+    // assert(("Index is streamable, data should be passed via the process method." && m_inference_config.get_postprocess_output_size()[i] > 0));
     m_outputs[i][j].store(output);
 }
 
 float PrePostProcessor::get_input(size_t i, size_t j) {
     assert(("Index i out of bounds" && i < m_inputs.size()));
     assert(("Index j out of bounds" && j < m_inputs[i].size()));
-    assert(("Index contains audio data, which should be passed in the processBlock method." && i != m_index_audio_data[Input]));
+    // assert(("Index is streamable, data should be retrieved via the process method." && m_inference_config.get_preprocess_input_size()[i] > 0));
     return m_inputs[i][j].load();
 }
 
 float PrePostProcessor::get_output(size_t i, size_t j) {
     assert(("Index i out of bounds" && i < m_outputs.size()));
     assert(("Index j out of bounds" && j < m_outputs[i].size()));
-    assert(("Index contains audio data, which should be returned in the processBlock method." && i != m_index_audio_data[Output]));
+    // assert(("Index is streamable, data should be retrieved via the process method." && m_inference_config.get_postprocess_output_size()[i] > 0));
     return m_outputs[i][j].load();
 }
 

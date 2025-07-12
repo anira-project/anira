@@ -26,7 +26,7 @@ private:
     void run() override;
 
     void do_inference(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct);
-    void inference(std::shared_ptr<SessionElement> session, BufferF& input, BufferF& output);
+    void inference(std::shared_ptr<SessionElement> session, std::vector<BufferF>& input, std::vector<BufferF>& output);
     void exponential_backoff(std::array<int, 2> iterations);
 
 private:

@@ -20,7 +20,7 @@ void LibtorchProcessor::prepare() {
     }
 }
 
-void LibtorchProcessor::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) { 
+void LibtorchProcessor::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) { 
     while (true) {
         for(auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
@@ -58,16 +58,10 @@ void LibtorchProcessor::Instance::prepare() {
     }
 }
 
-void LibtorchProcessor::Instance::process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) {
+void LibtorchProcessor::Instance::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
-        if (i != m_inference_config.m_index_audio_data[Input]) {
-            for (size_t j = 0; j < m_input_data[i].size(); j++) {
-                m_input_data[i][j] = session->m_pp_processor.get_input(i, j);
-            }
-        } else {
-            m_input_data[i].swap_data(input.get_memory_block());
-            input.reset_channel_ptr();
-        }
+        m_input_data[i].swap_data(input[i].get_memory_block());
+        input[i].reset_channel_ptr();
         // This is necessary because the tensor data pointers seem to change from inference to inference
         m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
     }
@@ -78,31 +72,19 @@ void LibtorchProcessor::Instance::process(BufferF& input, BufferF& output, std::
     // We need to copy the data because we cannot access the data pointer ref of the tensor directly
     if(m_outputs.isTuple()) {
         for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
-            if (i != m_inference_config.m_index_audio_data[Output]) {
-                for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-                    session->m_pp_processor.set_output(m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j], i, j);
-                }
-            } else {
-                for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-                    output.get_memory_block()[j] = m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j];
-                }
+            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
+                output[i].get_memory_block()[j] = m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j];
             }
         }
     } else if(m_outputs.isTensorList()) {
         for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
-            if (i != m_inference_config.m_index_audio_data[Output]) {
-                for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-                    session->m_pp_processor.set_output(m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j], i, j);
-                }
-            } else {
-                for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-                    output.get_memory_block()[j] = m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j];
-                }
+            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
+                output[i].get_memory_block()[j] = m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j];
             }
         }
     } else if (m_outputs.isTensor()) {
-        for (size_t i = 0; i < m_inference_config.get_tensor_output_size()[0]; i++) {
-            output.get_memory_block()[i] = m_outputs.toTensor().view({-1}).data_ptr<float>()[i];
+        for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[0]; j++) {
+            output[0].get_memory_block()[j] = m_outputs.toTensor().view({-1}).data_ptr<float>()[j];
         }
     }
 }

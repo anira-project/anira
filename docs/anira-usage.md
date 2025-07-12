@@ -84,8 +84,6 @@ There are also some optional parameters that can be set in the `anira::Inference
 | - |----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `internal_latency` | Type: `unsigned int`, default: `0`. Submit if your model has an internal latency. This allows the latency calculation to take it into account.                                                                                                                                                                                                                                                     |
 | `warm_up` | Type: `unsigned int`, default: `0`. Defines the number of warm-up iterations before starting the inference process.                                                                                                                                                                                                                                                                                |
-| `index_audio_data` | Type: `std::array<size_t, 2>` default: `{0, 0}`. Defines the input and output index of the audio data vector of tensors                                                                                                                                                                                                                                                                            |
-| `num_audio_channels` | Type `std::array<size_t, 2>` default: `{1, 1}`. Defines the number of audio channels used for the input and output audio tensors.                                                                                                                                                                                                                                                                  |
 | `session_exclusive_processor` | Type: `bool`, default: `false`. If set to `true`, the session will use an exclusive processor for inference and therefore cannot be processed parallel. Necessary for e.g. stateful models.                                                                                                                                                                                                        |
 | `num_parallel_processors` | Type: `unsigned int`, default: `std::thread::hardware_concurrency() / 2`. Defines the number of parallel processors that can be used for the inference.                                                                                                                                                                                                                                            |
 | `wait_in_process_block` | Type: `float`, default: `0.0f`. This parameter can only be set, if anira was build with `ANIRA_WITH_CONTROLLED_BLOCKING=ON`. This should be a value between `0.f` and `1.f`. It specifies the proportion of available processing time that the library will try to acquire new data from the inference threads on the real-time thread. This is a controversial parameter and should be used with caution. |
@@ -98,23 +96,18 @@ If your model does not require any specific pre- or post-processing, you can use
 anira::PrePostProcessor pp_processor(inference_config);
 ```
 
-If your model requires custom pre- or post-processing, you can inherit from the `anira::PrePostProcessor` class and overwrite the ```pre_process``` and ```post_process``` methods so that they match your model's requirements. In the ```pre_process``` method, we get the input samples from the audio application through an `anira::RingBuffer` and push them into the output buffer, which is an `anira::BufferF`. This output buffer is then used for inference. In the ```post_process``` method we get the input samples through an `anira::BufferF` and push them into the output buffer, which is an `anira::RingBuffer`. The samples from this output buffer are then returned to the audio application by the `anira::InferenceHandler`.
-
-When your pre- and post-processing requires to access values from the `anira::InferenceConfig` struct, you can store the config as a member in your custom pre- and post-processor class.  Here is an example of a custom pre- and post-processor. The `anira::InferenceConfig` inference_config is supposed to be provided in the "MyConfig.h" file.
+If your model requires custom pre- or post-processing, you can inherit from the `anira::PrePostProcessor` class and overwrite the ```pre_process``` and ```post_process``` methods so that they match your model's requirements. In the ```pre_process``` method, we get the input samples from the audio application through an `std::vector<anira::RingBuffer>` and push them into the output buffer, which is an `std::vector<anira::BufferF>`. This output buffer is then used for inference. In the ```post_process``` method we get the input samples through an `std::vector<anira::BufferF>` and push them into the output buffer, which is an `std::vector<anira::RingBuffer>`. The samples from this output buffer are then returned to the audio application by the `anira::InferenceHandler`.
 
 ```cpp
 #include <anira/anira.h>
-#include "MyConfig.h"
 
 class CustomPrePostProcessor : public anira::PrePostProcessor {
 public:
     using anira::PrePostProcessor::PrePostProcessor;
 
-    virtual void pre_process(anira::RingBuffer& input, anira::BufferF& output, [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
-        pop_samples_from_buffer(input, output, inference_config.get_tensor_output_size()[inference_config.m_index_audio_data[anira::IndexAudioData::Output]], inference_config.get_tensor_input_size()[inference_config.m_index_audio_data[anira::IndexAudioData::Input]]-inference_config.get_tensor_output_size()[inference_config.m_index_audio_data[anira::IndexAudioData::Output]]);
+    virtual void pre_process(std::vector<anira::RingBuffer>& input, std::vector<anira::BufferF>& output, [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
+        pop_samples_from_buffer(input[0], output[0], m_inference_config.get_tensor_output_size()[0], m_inference_config.get_tensor_input_size()[0]-m_inference_config.get_tensor_output_size()[0]);
     };
-    
-    anira::InferenceConfig config = inference_config;
 };
 ```
 

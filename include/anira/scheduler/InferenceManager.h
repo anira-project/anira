@@ -17,15 +17,18 @@ public:
     ~InferenceManager();
 
     void prepare(HostAudioConfig config);
-    void process(const float* const* input_data, float* const* output_data, size_t num_samples);
+    void process(const float* const* const* input_data, size_t* num_input_samples, float* const* const* output_data, size_t* num_output_samples);
+
+    void push_data(const float* const* const* input_data, size_t* num_input_samples);
+    void pop_data(float* const* const* output_data, size_t* num_output_samples);
 
     void set_backend(InferenceBackend new_inference_backend);
     InferenceBackend get_backend() const;
 
-    int get_latency() const;
+    std::vector<int> get_latency() const;
 
     // Required for unit test
-    size_t get_num_received_samples() const;
+    size_t get_num_received_samples(size_t tensor_index, size_t channel) const;
     const Context& get_context() const;
 
     int get_missing_blocks() const;
@@ -34,23 +37,24 @@ public:
     void set_non_realtime (bool is_non_realtime) const;
 
 private:
-    void process_input(const float* const* input_data, size_t num_samples);
-    void process_output(float* const* output_data, size_t num_samples);
-    void clear_data(float* const* data, size_t input_samples, size_t num_channels);
-    int calculate_latency();
-    int calculate_buffer_adaptation(int m_host_buffer_size, int model_output_size);
-    int max_num_inferences(int m_host_buffer_size, int model_output_size);
+    void process_input(const float* const* const* input_data, size_t* num_samples);
+    void process_output(float* const* const* output_data, size_t* num_samples);
+    void clear_data(float* const* const* data, size_t* input_samples, const std::vector<size_t>& num_channels);
+    std::vector<int> calculate_latency();
+    int calculate_buffer_adaptation(int host_buffer_size, int model_output_size);
+    int max_num_inferences(int host_buffer_size, int model_output_size);
     int greatest_common_divisor(int a, int b);
-    int leat_common_multiple(int a, int b);
+    int least_common_multiple(int a, int b);
 
 private:
     std::shared_ptr<Context> m_context;
 
     InferenceConfig& m_inference_config;
+    PrePostProcessor& m_pp_processor;
     std::shared_ptr<SessionElement> m_session;
     HostAudioConfig m_spec;
 
-    size_t m_init_samples = 0;
+    std::vector<int> m_init_samples;
     std::atomic<int> m_inference_counter {0};
 };
 

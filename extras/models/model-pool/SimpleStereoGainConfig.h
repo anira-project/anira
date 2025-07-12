@@ -24,9 +24,7 @@ static anira::InferenceConfig stereo_gain_config(
     tensor_shape_stereo_gain_config,
     5.f,
     0,
-    1,
-    {0, 0},
-    {2, 2}
+    1
 );
 
 #endif //ANIRA_SIMPLESTEREOGAINCONFIG_H

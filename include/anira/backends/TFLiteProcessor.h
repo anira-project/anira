@@ -18,7 +18,7 @@ public:
     ~TFLiteProcessor();
 
     void prepare() override;
-    void process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session) override;
+    void process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) override;
 
 private:
     struct Instance {
@@ -26,7 +26,7 @@ private:
         ~Instance();
         
         void prepare();
-        void process(BufferF& input, BufferF& output, std::shared_ptr<SessionElement> session);
+        void process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session);
 
         TfLiteModel* m_model;
         TfLiteInterpreterOptions* m_options;

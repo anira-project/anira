@@ -57,7 +57,6 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     juce::AudioProcessorValueTreeState& getValueTreeState() { return parameters; }
-    anira::InferenceManager &get_inference_manager();
 
 private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
