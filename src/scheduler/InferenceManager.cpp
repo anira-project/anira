@@ -30,7 +30,7 @@ void InferenceManager::prepare(HostAudioConfig new_config) {
     m_inference_counter.store(0);
 
     m_init_samples = calculate_latency();
-    for (size_t i = 0; i < m_inference_config.m_num_audio_channels[Output]; ++i) {
+    for (size_t i = 0; i < m_inference_config.get_preprocess_output_channels()[0]; ++i) {
         for (size_t j = 0; j < m_init_samples - m_inference_config.m_internal_latency; ++j) {
             m_session->m_receive_buffer.push_sample(i, 0.f);
         }
@@ -48,7 +48,7 @@ void InferenceManager::process(const float* const* input_data, float* const* out
 }
 
 void InferenceManager::process_input(const float* const* input_data, size_t num_samples) {
-    for (size_t channel = 0; channel < m_inference_config.m_num_audio_channels[Input]; ++channel) {
+    for (size_t channel = 0; channel < m_inference_config.get_preprocess_input_channels()[0]; ++channel) {
         for (size_t sample = 0; sample < num_samples; ++sample) {
             m_session->m_send_buffer.push_sample(channel, input_data[channel][sample]);
         }
@@ -58,7 +58,7 @@ void InferenceManager::process_input(const float* const* input_data, size_t num_
 void InferenceManager::process_output(float* const* output_data, size_t num_samples) {    
     while (m_inference_counter.load() > 0) {
         if (m_session->m_receive_buffer.get_available_samples(0) >= 2 * (size_t) num_samples) {
-            for (size_t channel = 0; channel < m_inference_config.m_num_audio_channels[Output]; ++channel) {
+            for (size_t channel = 0; channel < m_inference_config.get_preprocess_output_channels()[0]; ++channel) {
                 for (size_t sample = 0; sample < num_samples; ++sample) {
                     m_session->m_receive_buffer.pop_sample(channel);
                 }
@@ -71,13 +71,13 @@ void InferenceManager::process_output(float* const* output_data, size_t num_samp
         }
     }
     if (m_session->m_receive_buffer.get_available_samples(0) >= (size_t) num_samples) {
-        for (size_t channel = 0; channel < m_inference_config.m_num_audio_channels[Output]; ++channel) {
+        for (size_t channel = 0; channel < m_inference_config.get_preprocess_output_channels()[0]; ++channel) {
             for (size_t sample = 0; sample < num_samples; ++sample) {
                 output_data[channel][sample] = m_session->m_receive_buffer.pop_sample(channel);
             }
         }
     } else {
-        clear_data(output_data, num_samples, m_inference_config.m_num_audio_channels[Output]);
+        clear_data(output_data, num_samples, m_inference_config.get_preprocess_output_channels()[0]);
         m_inference_counter.fetch_add(1);
         LOG_INFO << "[WARNING] Missing samples in session: " << m_session->m_session_id << "!" << std::endl;
     }

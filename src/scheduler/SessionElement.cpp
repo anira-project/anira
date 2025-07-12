@@ -26,8 +26,8 @@ void SessionElement::clear() {
 void SessionElement::prepare(HostAudioConfig new_config) {
     m_host_config = new_config;
 
-    m_send_buffer.initialize_with_positions(m_inference_config.m_num_audio_channels[Input], (size_t) m_host_config.m_host_sample_rate * 50); // TODO find appropriate size dynamically
-    m_receive_buffer.initialize_with_positions(m_inference_config.m_num_audio_channels[Output], (size_t) m_host_config.m_host_sample_rate * 50); // TODO find appropriate size dynamically
+    m_send_buffer.initialize_with_positions(m_inference_config.get_preprocess_input_channels()[0], (size_t) m_host_config.m_host_sample_rate * 50); // TODO find appropriate size dynamically
+    m_receive_buffer.initialize_with_positions(m_inference_config.get_preprocess_output_channels()[0], (size_t) m_host_config.m_host_sample_rate * 50); // TODO find appropriate size dynamically
 
     // Now calculate the number of structs necessary to keep the inference queues filled
     size_t max_inference_time_in_samples = (size_t) std::ceil(m_inference_config.m_max_inference_time * m_host_config.m_host_sample_rate / 1000);

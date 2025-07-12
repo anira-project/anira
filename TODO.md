@@ -9,6 +9,7 @@
 - [ ] Add option to select different model functions
 - [ ] Add option for dynamic input size
 - [ ] Manual inference triggering
+- [ ] Fix TFLite benchmark error
 
 ## How to handle parameters
 

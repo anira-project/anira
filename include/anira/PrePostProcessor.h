@@ -14,7 +14,7 @@ namespace anira {
 class ANIRA_API PrePostProcessor
 {
 public:
-    PrePostProcessor(); 
+    PrePostProcessor() = delete;
     PrePostProcessor(InferenceConfig& inference_config);
     ~PrePostProcessor() = default;
 
@@ -27,14 +27,17 @@ public:
     float get_output(size_t i, size_t j);
 
 protected:
-    void pop_samples_from_buffer(RingBuffer& input, BufferF& output);
+    void pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_samples);
 
     void pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_new_samples, size_t num_old_samples);
 
     void pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_new_samples, size_t num_old_samples, size_t offset);
 
-    void push_samples_to_buffer(const BufferF& input, RingBuffer& output);
+    void push_samples_to_buffer(const BufferF& input, RingBuffer& output, size_t num_samples);
 
+protected:
+    InferenceConfig& m_inference_config;
+    
 private:
     std::vector<MemoryBlock<std::atomic<float>>> m_inputs;
     std::vector<MemoryBlock<std::atomic<float>>> m_outputs;

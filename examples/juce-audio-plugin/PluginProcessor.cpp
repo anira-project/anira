@@ -16,12 +16,12 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
         anira_context_config(
             std::thread::hardware_concurrency() / 2 > 0 ? std::thread::hardware_concurrency() / 2 : 1 // Total number of threads
         ),
+        pp_processor(inference_config),
 #if MODEL_TO_USE == 1 || MODEL_TO_USE == 2
         // The bypass_processor is not needed for inference, but for the round trip test to output audio when selecting the CUSTOM backend. It must be customized when default pp_processor is replaced by a custom one.
         bypass_processor(inference_config),
         inference_handler(pp_processor, inference_config, bypass_processor, anira_context_config),
 #elif MODEL_TO_USE == 3 || MODEL_TO_USE == 4 || MODEL_TO_USE == 5
-        pp_processor(inference_config),
         inference_handler(pp_processor, inference_config),
 #endif
         dry_wet_mixer(32768) // 32768 samples of max latency compensation for the dry-wet mixer

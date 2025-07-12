@@ -60,14 +60,13 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_CNNSIZE)(::benchmark::State& state) {
 
     anira::PrePostProcessor *my_pp_processor;
 
-    my_pp_processor = new CNNPrePostProcessor();
-    static_cast<CNNPrePostProcessor*>(my_pp_processor)->m_inference_config = inference_config;
+    my_pp_processor = new CNNPrePostProcessor(inference_config);
 
     m_inference_handler = std::make_unique<anira::InferenceHandler>(*my_pp_processor, inference_config);
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backends[state.range(2)]);
 
-    m_buffer = std::make_unique<anira::Buffer<float>>(inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
+    m_buffer = std::make_unique<anira::Buffer<float>>(inference_config.get_preprocess_input_channels()[0], host_config.m_host_buffer_size);
 
     initialize_repetition(inference_config, host_config, inference_backends[state.range(2)]);
 

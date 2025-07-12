@@ -16,7 +16,7 @@ static std::vector<anira::ModelData> model_data_gain_config = {
 };
 
 static std::vector<anira::TensorShape> tensor_shape_gain_config = {
-    {{{1, 1, 512}, {1}}, {{1, 1, 512}, {1}}}, // When no backend is specified, the tensor shape is seen as universal for all backends
+    {{{1, 1, 512}, {1}}, {}, {512, 0}, {{1, 1, 512}, {1}}, {}, {512, 0}}, // When no backend is specified, the tensor shape is seen as universal for all backends
 };
 
 static anira::InferenceConfig gain_config(

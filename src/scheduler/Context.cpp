@@ -189,12 +189,12 @@ void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
 
         // !success means that there is no free m_inference_queue
         if (!success) {
-            for (size_t channel = 0; channel < session->m_inference_config.m_num_audio_channels[Input]; channel++) {
+            for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_input_channels()[0]; channel++) {
                 for (size_t i = 0; i < new_samples_needed_for_inference; i++) {
                     session->m_send_buffer.pop_sample(channel);
                 }
             }
-            for (size_t channel = 0; channel < session->m_inference_config.m_num_audio_channels[Output]; channel++) {
+            for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_output_channels()[0]; channel++) {
                 for (size_t i = 0; i < new_samples_needed_for_inference; i++) {
                     session->m_receive_buffer.push_sample(channel, 0.f);
                 }

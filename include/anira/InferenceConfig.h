@@ -83,8 +83,8 @@ struct TensorShape {
     TensorShapeList m_tensor_output_shape;
     std::vector<size_t> m_tensor_input_size;
     std::vector<size_t> m_tensor_output_size;
-    std::vector<size_t> m_input_channels;
-    std::vector<size_t> m_output_channels;
+    std::vector<size_t> m_preprocess_input_channels;
+    std::vector<size_t> m_preprocess_output_channels;
     std::vector<size_t> m_preprocess_input_size;
     std::vector<size_t> m_postprocess_output_size;
     InferenceBackend m_backend;
@@ -94,8 +94,8 @@ struct TensorShape {
     TensorShape(TensorShapeList input_shape, std::vector<size_t> input_channels, std::vector<size_t> preprocess_input_size, TensorShapeList output_shape, std::vector<size_t> output_channels, std::vector<size_t> postprocess_output_size, InferenceBackend backend = InferenceBackend::UNIVERSAL) :
         m_tensor_input_shape(input_shape),
         m_tensor_output_shape(output_shape),
-        m_input_channels(input_channels),
-        m_output_channels(output_channels),
+        m_preprocess_input_channels(input_channels),
+        m_preprocess_output_channels(output_channels),
         m_preprocess_input_size(preprocess_input_size),
         m_postprocess_output_size(postprocess_output_size),
         m_backend(backend) {
@@ -122,20 +122,20 @@ struct TensorShape {
             m_tensor_output_size.push_back(tensor_output_size);
         }
 
-        if (m_input_channels.size() == 0) {
+        if (m_preprocess_input_channels.size() == 0) {
             for (size_t i = 0; i < m_tensor_input_shape.size(); ++i) {
-                m_input_channels.push_back(1); // Default to 1 channel if not specified
+                m_preprocess_input_channels.push_back(1); // Default to 1 channel if not specified
             }
         }
-        if (m_output_channels.size() == 0) {
+        if (m_preprocess_output_channels.size() == 0) {
             for (size_t i = 0; i < m_tensor_output_shape.size(); ++i) {
-                m_output_channels.push_back(1); // Default to 1 channel if not specified
+                m_preprocess_output_channels.push_back(1); // Default to 1 channel if not specified
             }
         }
         if (m_preprocess_input_size.size() == 0) {
             for (size_t i = 0; i < m_tensor_input_shape.size(); ++i) {
                 const auto& shape = m_tensor_input_shape[i];
-                const size_t num_channels = m_input_channels[i];
+                const size_t num_channels = m_preprocess_input_channels[i];
                 size_t length = 1;
                 for (int64_t dim : shape) {
                     if (dim < 1) {
@@ -151,7 +151,7 @@ struct TensorShape {
         if (m_postprocess_output_size.size() == 0) {
             for (size_t i = 0; i < m_tensor_output_shape.size(); ++i) {
                 const auto& shape = m_tensor_output_shape[i];
-                const size_t num_channels = m_output_channels[i];
+                const size_t num_channels = m_preprocess_output_channels[i];
                 size_t length = 1;
                 for (int64_t dim : shape) {
                     if (dim < 1) {
@@ -166,8 +166,8 @@ struct TensorShape {
         }
         assert((m_tensor_input_shape.size() > 0 && "At least one input shape must be provided."));
         assert((m_tensor_output_shape.size() > 0 && "At least one output shape must be provided."));
-        assert((m_tensor_input_shape.size() == m_input_channels.size() && "Input shape size must match input channels size."));
-        assert((m_tensor_output_shape.size() == m_output_channels.size() && "Output shape size must match output channels size."));
+        assert((m_tensor_input_shape.size() == m_preprocess_input_channels.size() && "Input shape size must match input channels size."));
+        assert((m_tensor_output_shape.size() == m_preprocess_output_channels.size() && "Output shape size must match output channels size."));
         assert((m_preprocess_input_size.size() == m_tensor_input_shape.size() && "Length for preprocessing must match input shape size."));
         assert((m_postprocess_output_size.size() == m_tensor_output_shape.size() && "Length for postprocessing must match output shape size."));
     }
@@ -186,8 +186,8 @@ struct TensorShape {
             m_tensor_output_shape == other.m_tensor_output_shape &&
             m_tensor_input_size == other.m_tensor_input_size &&
             m_tensor_output_size == other.m_tensor_output_size &&
-            m_input_channels == other.m_input_channels &&
-            m_output_channels == other.m_output_channels &&
+            m_preprocess_input_channels == other.m_preprocess_input_channels &&
+            m_preprocess_output_channels == other.m_preprocess_output_channels &&
             m_preprocess_input_size == other.m_preprocess_input_size &&
             m_postprocess_output_size == other.m_postprocess_output_size &&
             m_backend == other.m_backend;
@@ -226,14 +226,14 @@ public:
     TensorShapeList get_tensor_output_shape(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
     std::vector<size_t> get_tensor_input_size(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
     std::vector<size_t> get_tensor_output_size(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
-    std::vector<size_t> get_input_channels(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
-    std::vector<size_t> get_output_channels(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
+    std::vector<size_t> get_preprocess_input_channels(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
+    std::vector<size_t> get_preprocess_output_channels(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
     std::vector<size_t> get_preprocess_input_size(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
     std::vector<size_t> get_postprocess_output_size(InferenceBackend backend = InferenceBackend::UNIVERSAL) const;
     void set_tensor_input_shape(const TensorShapeList& input_shape, InferenceBackend backend = InferenceBackend::UNIVERSAL);
     void set_tensor_output_shape(const TensorShapeList& output_shape, InferenceBackend backend = InferenceBackend::UNIVERSAL);
-    void set_input_channels(const std::vector<size_t>& input_channels, InferenceBackend backend = InferenceBackend::UNIVERSAL);
-    void set_output_channels(const std::vector<size_t>& output_channels, InferenceBackend backend = InferenceBackend::UNIVERSAL);
+    void set_preprocess_input_channels(const std::vector<size_t>& input_channels, InferenceBackend backend = InferenceBackend::UNIVERSAL);
+    void set_preprocess_output_channels(const std::vector<size_t>& output_channels, InferenceBackend backend = InferenceBackend::UNIVERSAL);
     void set_preprocess_input_size(const std::vector<size_t>& preprocess_input_size, InferenceBackend backend = InferenceBackend::UNIVERSAL);
     void set_postprocess_output_size(const std::vector<size_t>& postprocess_output_size, InferenceBackend backend = InferenceBackend::UNIVERSAL);
     void set_model_path(const std::string& model_path, InferenceBackend backend);

@@ -28,11 +28,11 @@
 typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
 // anira::InferenceConfig my_inference_config = cnn_config;
-// CNNPrePostProcessor my_pp_processor;
+// CNNPrePostProcessor my_pp_processor(my_inference_config);
 anira::InferenceConfig my_inference_config = hybridnn_config;
-HybridNNPrePostProcessor my_pp_processor;
+HybridNNPrePostProcessor my_pp_processor(my_inference_config);
 // anira::InferenceConfig my_inference_config = rnn_config;
-// anira::PrePostProcessor my_pp_processor;
+// anira::PrePostProcessor my_pp_processor(my_inference_config);
 // anira::InferenceConfig my_inference_config = gain_config;
 // anira::PrePostProcessor my_pp_processor(my_inference_config);
 // anira::InferenceConfig my_inference_config = stereo_gain_config;
@@ -48,7 +48,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backend);
 
-    m_buffer = std::make_unique<anira::Buffer<float>>(my_inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
+    m_buffer = std::make_unique<anira::Buffer<float>>(my_inference_config.get_preprocess_input_channels()[0], host_config.m_host_buffer_size);
 
     initialize_repetition(my_inference_config, host_config, inference_backend);
 

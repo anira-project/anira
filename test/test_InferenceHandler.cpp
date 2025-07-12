@@ -88,7 +88,7 @@ TEST_P(InferenceTest, Simple){
     // setup inference
     ContextConfig anira_context_config;
     InferenceConfig inference_config = hybridnn_config;
-    HybridNNPrePostProcessor pp_processor;
+    HybridNNPrePostProcessor pp_processor(inference_config);
     HybridNNBypassProcessor bypass_processor(inference_config);
 
     // Create an InferenceHandler instance

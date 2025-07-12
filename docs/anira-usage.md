@@ -95,7 +95,7 @@ There are also some optional parameters that can be set in the `anira::Inference
 If your model does not require any specific pre- or post-processing, you can use the default `anira::PrePostProcessor`. This is likely to be the case if the input and output shapes of the model are the same, the batchsize is 1, and your model operates in the time domain.
 
 ```cpp
-anira::PrePostProcessor pp_processor;
+anira::PrePostProcessor pp_processor(inference_config);
 ```
 
 If your model requires custom pre- or post-processing, you can inherit from the `anira::PrePostProcessor` class and overwrite the ```pre_process``` and ```post_process``` methods so that they match your model's requirements. In the ```pre_process``` method, we get the input samples from the audio application through an `anira::RingBuffer` and push them into the output buffer, which is an `anira::BufferF`. This output buffer is then used for inference. In the ```post_process``` method we get the input samples through an `anira::BufferF` and push them into the output buffer, which is an `anira::RingBuffer`. The samples from this output buffer are then returned to the audio application by the `anira::InferenceHandler`.
@@ -108,6 +108,8 @@ When your pre- and post-processing requires to access values from the `anira::In
 
 class CustomPrePostProcessor : public anira::PrePostProcessor {
 public:
+    using anira::PrePostProcessor::PrePostProcessor;
+
     virtual void pre_process(anira::RingBuffer& input, anira::BufferF& output, [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
         pop_samples_from_buffer(input, output, inference_config.get_tensor_output_size()[inference_config.m_index_audio_data[anira::IndexAudioData::Output]], inference_config.get_tensor_input_size()[inference_config.m_index_audio_data[anira::IndexAudioData::Input]]-inference_config.get_tensor_output_size()[inference_config.m_index_audio_data[anira::IndexAudioData::Output]]);
     };
@@ -144,9 +146,9 @@ In your application, you will need to create an instance of the `anira::Inferenc
 // Sample initialization in your application's initialization function
 
 // Default PrePostProcessor
-anira::PrePostProcessor pp_processor;
+anira::PrePostProcessor pp_processor(inference_config);
 // or custom PrePostProcessor
-CustomPrePostProcessor pp_processor;
+CustomPrePostProcessor pp_processor(inference_config);
 
 // Create an InferenceHandler instance
 anira::InferenceHandler inference_handler(pp_processor, inference_config);

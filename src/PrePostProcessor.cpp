@@ -2,10 +2,7 @@
 
 namespace anira {
 
-PrePostProcessor::PrePostProcessor() {
-}
-
-PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config) {
+PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config) : m_inference_config(inference_config) {
     m_index_audio_data = inference_config.m_index_audio_data;
 
     m_inputs.resize(inference_config.get_tensor_input_size().size());
@@ -23,17 +20,17 @@ PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config) {
 }
 
 void PrePostProcessor::pre_process(RingBuffer& input, BufferF& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
-    pop_samples_from_buffer(input, output);
+    pop_samples_from_buffer(input, output, m_inference_config.get_preprocess_input_size()[m_inference_config.m_index_audio_data[Input]]);
 }
 
 void PrePostProcessor::post_process(BufferF& input, RingBuffer& output, [[maybe_unused]] InferenceBackend current_inference_backend) {
-    push_samples_to_buffer(input, output);
+    push_samples_to_buffer(input, output, m_inference_config.get_postprocess_output_size()[m_inference_config.m_index_audio_data[Output]]);
 }
 
-void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, BufferF& output) {
-    for (size_t i = 0; i < output.get_num_channels(); i++) {
-        for (size_t j = 0; j < output.get_num_samples(); j++) {
-            output.set_sample(i, j, input.pop_sample(i));
+void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_samples) {
+    for (size_t i = 0; i < input.get_num_channels(); i++) {
+        for (size_t j = 0; j < num_samples; j++) {
+            output.set_sample(0, j+(i*num_samples), input.pop_sample(i)); // The output buffer is always a single channel buffer
         }
     }
 }
@@ -44,22 +41,22 @@ void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, BufferF& outpu
 
 void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_new_samples, size_t num_old_samples, size_t offset) {
     int num_total_samples = num_new_samples + num_old_samples;
-    for (size_t i = 0; i < output.get_num_channels(); i++) {
+    for (size_t i = 0; i < input.get_num_channels(); i++) {
         // int j is important to be signed, because it is used in the condition j >= 0
         for (int j = num_total_samples - 1; j >= 0; j--) {
             if (j >= num_old_samples) {
-                output.set_sample(i, (size_t) (num_total_samples - j + num_old_samples - 1) + offset, input.pop_sample(i));
+                output.set_sample(0, (size_t) (num_total_samples - j + num_old_samples - 1) + offset, input.pop_sample(i));
             } else {
-                output.set_sample(i, (size_t) j + offset, input.get_sample_from_tail(i, num_total_samples - (size_t) j));
+                output.set_sample(0, (size_t) j + offset, input.get_sample_from_tail(i, num_total_samples - (size_t) j));
             }
         }
     }
 }
 
-void PrePostProcessor::push_samples_to_buffer(const BufferF& input, RingBuffer& output) {
-    for (size_t i = 0; i < input.get_num_channels(); i++) {
-        for (size_t j = 0; j < input.get_num_samples(); j++) {
-            output.push_sample(i, input.get_sample(i, j));
+void PrePostProcessor::push_samples_to_buffer(const BufferF& input, RingBuffer& output, size_t num_samples) {
+    for (size_t i = 0; i < output.get_num_channels(); i++) {
+        for (size_t j = 0; j < num_samples; j++) {
+            output.push_sample(i, input.get_sample(0, j+(i*num_samples)));
         }
     }
 }

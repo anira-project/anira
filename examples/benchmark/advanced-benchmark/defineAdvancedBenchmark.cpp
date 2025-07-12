@@ -66,13 +66,11 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     anira::PrePostProcessor *my_pp_processor;
 
     if (state.range(1) == 0) {
-        my_pp_processor = new CNNPrePostProcessor();
-        static_cast<CNNPrePostProcessor*>(my_pp_processor)->m_inference_config = inference_config;
+        my_pp_processor = new CNNPrePostProcessor(inference_config);
     } else if (state.range(1) == 1) {
-        my_pp_processor = new HybridNNPrePostProcessor();
-        static_cast<HybridNNPrePostProcessor*>(my_pp_processor)->m_inference_config = inference_config;
+        my_pp_processor = new HybridNNPrePostProcessor(inference_config);
     } else if (state.range(1) == 2) {
-        my_pp_processor = new anira::PrePostProcessor();
+        my_pp_processor = new anira::PrePostProcessor(inference_config);
     }
 
     ClearCustomProcessor clear_custom_processor(inference_config);
@@ -81,7 +79,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backends[state.range(2)]);
 
-    m_buffer = std::make_unique<anira::Buffer<float>>(inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
+    m_buffer = std::make_unique<anira::Buffer<float>>(inference_config.get_preprocess_input_channels()[0], host_config.m_host_buffer_size);
 
     initialize_repetition(inference_config, host_config, inference_backends[state.range(2)]);
 

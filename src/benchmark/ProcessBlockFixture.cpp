@@ -76,7 +76,7 @@ bool ProcessBlockFixture::buffer_processed() {
 }
 
 void ProcessBlockFixture::push_random_samples_in_buffer(anira::HostAudioConfig host_config) {
-    for (size_t channel = 0; channel < m_inference_config.m_num_audio_channels[anira::Input]; channel++) {
+    for (size_t channel = 0; channel < m_inference_config.get_preprocess_input_channels()[0]; channel++) {
         for (size_t sample = 0; sample < host_config.m_host_buffer_size; sample++) {
             m_buffer->set_sample(channel, sample, random_sample());
         }

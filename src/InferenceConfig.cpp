@@ -86,12 +86,12 @@ std::vector<size_t> InferenceConfig::get_tensor_output_size(InferenceBackend bac
     return get_tensor_shape(backend).m_tensor_output_size;
 }
 
-std::vector<size_t> InferenceConfig::get_input_channels(InferenceBackend backend) const {
-    return get_tensor_shape(backend).m_input_channels;
+std::vector<size_t> InferenceConfig::get_preprocess_input_channels(InferenceBackend backend) const {
+    return get_tensor_shape(backend).m_preprocess_input_channels;
 }
 
-std::vector<size_t> InferenceConfig::get_output_channels(InferenceBackend backend) const {
-    return get_tensor_shape(backend).m_output_channels;
+std::vector<size_t> InferenceConfig::get_preprocess_output_channels(InferenceBackend backend) const {
+    return get_tensor_shape(backend).m_preprocess_output_channels;
 }
 
 std::vector<size_t> InferenceConfig::get_preprocess_input_size(InferenceBackend backend) const {
@@ -107,7 +107,7 @@ void InferenceConfig::set_tensor_input_shape(const TensorShapeList& input_shape,
         if (shape.m_backend == backend || backend == InferenceBackend::UNIVERSAL) {
             shape.m_tensor_input_shape = input_shape;
             shape.m_tensor_input_size.clear();
-            shape.m_input_channels.clear();
+            shape.m_preprocess_input_channels.clear();
             shape.m_preprocess_input_size.clear();
         }
     }
@@ -120,7 +120,7 @@ void InferenceConfig::set_tensor_output_shape(const TensorShapeList& output_shap
         if (shape.m_backend == backend || backend == InferenceBackend::UNIVERSAL) {
             shape.m_tensor_output_shape = output_shape;
             shape.m_tensor_output_size.clear();
-            shape.m_output_channels.clear();
+            shape.m_preprocess_output_channels.clear();
             shape.m_postprocess_output_size.clear();
         }
     }
@@ -129,10 +129,10 @@ void InferenceConfig::set_tensor_output_shape(const TensorShapeList& output_shap
 }
 
 
-void InferenceConfig::set_input_channels(const std::vector<size_t>& input_channels, InferenceBackend backend) {
+void InferenceConfig::set_preprocess_input_channels(const std::vector<size_t>& input_channels, InferenceBackend backend) {
     for (TensorShape& shape : m_tensor_shape) {
         if (shape.m_backend == backend || backend == InferenceBackend::UNIVERSAL) {
-            shape.m_input_channels = input_channels;
+            shape.m_preprocess_input_channels = input_channels;
             shape.m_preprocess_input_size.clear();
         }
     }
@@ -140,10 +140,10 @@ void InferenceConfig::set_input_channels(const std::vector<size_t>& input_channe
     return;
 }
 
-void InferenceConfig::set_output_channels(const std::vector<size_t>& output_channels, InferenceBackend backend) {
+void InferenceConfig::set_preprocess_output_channels(const std::vector<size_t>& output_channels, InferenceBackend backend) {
     for (TensorShape& shape : m_tensor_shape) {
         if (shape.m_backend == backend || backend == InferenceBackend::UNIVERSAL) {
-            shape.m_output_channels = output_channels;
+            shape.m_preprocess_output_channels = output_channels;
             shape.m_postprocess_output_size.clear();
         }
     }
@@ -257,23 +257,23 @@ void InferenceConfig::update_tensor_shapes() {
                 shape.m_tensor_output_size.push_back(tensor_output_size);
             }
         }
-        if (shape.m_input_channels.size() != shape.m_tensor_input_size.size()) {
-            shape.m_input_channels.clear();
+        if (shape.m_preprocess_input_channels.size() != shape.m_tensor_input_size.size()) {
+            shape.m_preprocess_input_channels.clear();
             for (size_t i = 0; i < shape.m_tensor_input_shape.size(); ++i) {
-                shape.m_input_channels.push_back(1); // Default to 1 channel if not specified
+                shape.m_preprocess_input_channels.push_back(1); // Default to 1 channel if not specified
             }
         }
-        if (shape.m_output_channels.size() != shape.m_tensor_output_size.size()) {
-            shape.m_output_channels.clear();
+        if (shape.m_preprocess_output_channels.size() != shape.m_tensor_output_size.size()) {
+            shape.m_preprocess_output_channels.clear();
             for (size_t i = 0; i < shape.m_tensor_output_shape.size(); ++i) {
-                shape.m_output_channels.push_back(1); // Default to 1 channel if not specified
+                shape.m_preprocess_output_channels.push_back(1); // Default to 1 channel if not specified
             }
         }
         if (shape.m_preprocess_input_size.size() != shape.m_tensor_input_shape.size()) {
             shape.m_preprocess_input_size.clear();
             for (size_t i = 0; i < shape.m_tensor_input_shape.size(); ++i) {
                 const auto& input_shape = shape.m_tensor_input_shape[i];
-                const size_t num_channels = shape.m_input_channels[i];
+                const size_t num_channels = shape.m_preprocess_input_channels[i];
                 size_t length = 1;
                 for (int64_t dim : input_shape) {
                     if (dim < 1) {
@@ -290,7 +290,7 @@ void InferenceConfig::update_tensor_shapes() {
             shape.m_postprocess_output_size.clear();
             for (size_t i = 0; i < shape.m_tensor_output_shape.size(); ++i) {
                 const auto& output_shape = shape.m_tensor_output_shape[i];
-                const size_t num_channels = shape.m_output_channels[i];
+                const size_t num_channels = shape.m_preprocess_output_channels[i];
                 size_t length = 1;
                 for (int64_t dim : output_shape) {
                     if (dim < 1) {
@@ -307,8 +307,8 @@ void InferenceConfig::update_tensor_shapes() {
     assert((m_tensor_shape.size() > 0 && "At least one tensor shape must be provided."));
     assert((m_tensor_shape[0].m_tensor_input_shape.size() > 0 && "At least one input shape must be provided."));
     assert((m_tensor_shape[0].m_tensor_output_shape.size() > 0 && "At least one output shape must be provided."));
-    assert((m_tensor_shape[0].m_tensor_input_shape.size() == m_tensor_shape[0].m_input_channels.size() && "Input shape size must match input channels size."));
-    assert((m_tensor_shape[0].m_tensor_output_shape.size() == m_tensor_shape[0].m_output_channels.size() && "Output shape size must match output channels size."));
+    assert((m_tensor_shape[0].m_tensor_input_shape.size() == m_tensor_shape[0].m_preprocess_input_channels.size() && "Input shape size must match input channels size."));
+    assert((m_tensor_shape[0].m_tensor_output_shape.size() == m_tensor_shape[0].m_preprocess_output_channels.size() && "Output shape size must match output channels size."));
     assert((m_tensor_shape[0].m_preprocess_input_size.size() == m_tensor_shape[0].m_tensor_input_shape.size() && "Length for preprocessing must match input shape size."));
     assert((m_tensor_shape[0].m_postprocess_output_size.size() == m_tensor_shape[0].m_tensor_output_shape.size() && "Length for postprocessing must match output shape size."));
     assert((m_tensor_shape[0].m_tensor_input_shape.size() == m_tensor_shape[0].m_tensor_input_size.size() && "Input shape size must match tensor input size."));
