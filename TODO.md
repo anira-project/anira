@@ -2,12 +2,10 @@
 
 ## Architecture
 
-- [ ] Think about internal latency
 - [ ] Make m_inference_counter.fetch_add(1) dependent on number of samples
-- [ ] Make processBlockFixture more versatile with new shapes
+- [ ] Make processBlockFixture could be more versatile with new shapes
 - [ ] Model and context config should be one json file
 - [ ] Add option to select different model functions
-- [ ] Manual inference triggering
 - [ ] Fix TFLite benchmark error
 
 ## Testing

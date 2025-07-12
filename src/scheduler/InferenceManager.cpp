@@ -34,7 +34,7 @@ void InferenceManager::prepare(HostAudioConfig new_config) {
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
             if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-                for (size_t k = 0; k < m_init_samples[i] - m_inference_config.m_internal_latency[i]; ++k) {
+                for (size_t k = 0; k < m_init_samples[i] - m_inference_config.get_internal_latency()[i]; ++k) {
                     m_session->m_receive_buffer[i].push_sample(j, 0.f);
                 }
             }
@@ -207,7 +207,7 @@ std::vector<int> InferenceManager::calculate_latency() {
             float total_inference_time_after_wait = (max_possible_inferences * m_inference_config.m_max_inference_time) - wait_time;
             int num_buffers_for_max_inferences = std::ceil(total_inference_time_after_wait / host_buffer_time);
             int inference_caused_latency = num_buffers_for_max_inferences * host_output_size;
-            int model_caused_latency = m_inference_config.m_internal_latency[i];
+            int model_caused_latency = m_inference_config.get_internal_latency()[i];
             // Add it all together
             result.push_back(buffer_adaptation + inference_caused_latency + model_caused_latency);
         }

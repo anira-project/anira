@@ -140,6 +140,8 @@ void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int
         inference_config.set_tensor_input_shape({{1, input_size, 1}}, anira::TFLITE);
         inference_config.set_tensor_output_shape({{1, output_size, 1}}, anira::TFLITE);
 #endif
+        inference_config.clear_processing_spec();
+        inference_config.update_processing_spec();
         inference_config.set_preprocess_input_size(std::vector<size_t>{static_cast<size_t>(input_size - receptive_field)});
     } else if (model == 1) {
 #ifdef USE_LIBTORCH
@@ -160,6 +162,8 @@ void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int
         inference_config.set_tensor_input_shape({{buffer_size, 150, 1}}, anira::TFLITE);
         inference_config.set_tensor_output_shape({{buffer_size, 1}}, anira::TFLITE);
 #endif
+        inference_config.clear_processing_spec();
+        inference_config.update_processing_spec();
         inference_config.set_preprocess_input_size(std::vector<size_t>{static_cast<size_t>(buffer_size)});
     } else if (model == 2) {
 #ifdef USE_LIBTORCH
@@ -174,5 +178,7 @@ void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int
         inference_config.set_tensor_input_shape({{1, buffer_size, 1}}, anira::TFLITE);
         inference_config.set_tensor_output_shape({{1, buffer_size, 1}}, anira::TFLITE);
 #endif
+        inference_config.clear_processing_spec();
+        inference_config.update_processing_spec();
     }
 }

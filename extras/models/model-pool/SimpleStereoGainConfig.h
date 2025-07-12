@@ -16,14 +16,21 @@ static std::vector<anira::ModelData> model_data_stereo_gain_config = {
 };
 
 static std::vector<anira::TensorShape> tensor_shape_stereo_gain_config = {
-    {{{1, 2, 512}, {1}}, {2, 1}, {512, 0}, {{1, 2, 512}, {1}}, {2, 1}, {512, 0}}, // When no backend is specified, the tensor shape is seen as universal for all backends
+    {{{1, 2, 512}, {1}}, {{1, 2, 512}, {1}}}, // When no backend is specified, the tensor shape is seen as universal for all backends
+};
+
+static anira::ProcessingSpec processing_spec_stereo_gain_config = {
+    {2, 1}, // preprocess_input_channels
+    {2, 1}, // postprocess_output_channels
+    {512, 0}, // preprocess_input_size; zero indicates non-streamable input
+    {512, 0} // postprocess_output_size; zero indicates non-streamable output
 };
 
 static anira::InferenceConfig stereo_gain_config(
     model_data_stereo_gain_config,
     tensor_shape_stereo_gain_config,
+    processing_spec_stereo_gain_config,
     5.f,
-    0,
     1
 );
 

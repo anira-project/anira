@@ -129,5 +129,7 @@ void adapt_cnn_config(anira::InferenceConfig& inference_config, int buffer_size,
         inference_config.set_tensor_input_shape({{1, input_size, 1}}, anira::TFLITE);
         inference_config.set_tensor_output_shape({{1, output_size, 1}}, anira::TFLITE);
 #endif
+    inference_config.clear_processing_spec();
+    inference_config.update_processing_spec();
     inference_config.set_preprocess_input_size(std::vector<size_t>{static_cast<size_t>(input_size - receptive_field)});
 }
