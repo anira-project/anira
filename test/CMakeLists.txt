@@ -22,6 +22,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	test_InferenceHandler.cpp
     utils/test_Buffer.cpp
 	scheduler/test_InferenceManager.cpp
+	scheduler/test_SessionElement.cpp
 	test_WavReader.cpp
 )
 
