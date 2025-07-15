@@ -16,15 +16,30 @@ namespace anira {
 typedef std::vector<std::vector<int64_t>> TensorShapeList;
 
 struct ModelData {
-    ModelData(void* data, size_t size, InferenceBackend backend, bool is_binary = true) : m_data(data), m_size(size), m_backend(backend), m_is_binary(is_binary) {}
-    ModelData(std::string model_path, InferenceBackend backend, bool is_binary = false) : m_size(model_path.size()), m_backend(backend), m_is_binary(is_binary) {
-        m_data = malloc(sizeof(char) * model_path.size());
-        memcpy(m_data, model_path.data(), model_path.size());
-        m_size = model_path.size();
+    ModelData(void* data, size_t size, InferenceBackend backend, const std::string& model_function = "", bool is_binary = true) : m_data(data), m_size(size), m_backend(backend), m_model_function(std::move(model_function)), m_is_binary(is_binary) {
+        assert((m_size > 0 && "Model data size must be greater than zero."));
+        assert((m_data != nullptr && "Model data pointer cannot be null."));
+        if (!m_model_function.empty()) {
+            if (backend == InferenceBackend::LIBTORCH) {
+                m_model_function = model_function; // For LIBTORCH, we can specify a function name
+            } else {
+                std::cerr << "Model function is only applicable for LIBTORCH backend." << std::endl;
+            }
+        }
+        if (!is_binary) {
+            m_data = malloc(sizeof(char) * size);
+            memcpy(m_data, data, size);
+        } else {
+            if (backend != InferenceBackend::ONNX) {
+                std::cerr << "Binary model is only supported for ONNX backend." << std::endl;
+            }
+        }
     }
+    ModelData(const std::string& model_path, InferenceBackend backend, const std::string& model_function = "", bool is_binary = false) 
+        : ModelData((void*) model_path.data(), model_path.size(), backend, std::move(model_function), is_binary) {}
 
     ModelData(const ModelData& other) 
-        : m_size(other.m_size), m_backend(other.m_backend), m_is_binary(other.m_is_binary) {
+        : m_size(other.m_size), m_backend(other.m_backend), m_model_function(other.m_model_function), m_is_binary(other.m_is_binary) {
         if (!m_is_binary) {
             m_data = malloc(sizeof(char) * other.m_size);
             memcpy(m_data, other.m_data, other.m_size);
@@ -58,6 +73,7 @@ struct ModelData {
     void* m_data;
     size_t m_size;
     InferenceBackend m_backend;
+    std::string m_model_function; // Function name in the model, if applicable
     bool m_is_binary;
 
     bool operator==(const ModelData& other) const {
@@ -65,6 +81,7 @@ struct ModelData {
             m_data == other.m_data &&
             m_size == other.m_size &&
             m_backend == other.m_backend &&
+            m_model_function == other.m_model_function &&
             m_is_binary == other.m_is_binary;
     }
 
@@ -140,22 +157,14 @@ struct ProcessingSpec {
     ProcessingSpec(
             std::vector<size_t> preprocess_input_channels,
             std::vector<size_t> preprocess_output_channels) :
-        m_preprocess_input_channels(std::move(preprocess_input_channels)),
-        m_postprocess_output_channels(std::move(preprocess_output_channels)),
-        m_preprocess_input_size({}),
-        m_postprocess_output_size({}),
-        m_internal_latency({}) {}
+        ProcessingSpec(std::move(preprocess_input_channels), std::move(preprocess_output_channels), {}, {}, {}) {}
     
     ProcessingSpec(
             std::vector<size_t> preprocess_input_channels,
             std::vector<size_t> preprocess_output_channels,
             std::vector<size_t> preprocess_input_size,
             std::vector<size_t> postprocess_output_size) :
-        m_preprocess_input_channels(std::move(preprocess_input_channels)),
-        m_postprocess_output_channels(std::move(preprocess_output_channels)),
-        m_preprocess_input_size(std::move(preprocess_input_size)),
-        m_postprocess_output_size(std::move(postprocess_output_size)),
-        m_internal_latency({}) {}
+        ProcessingSpec(std::move(preprocess_input_channels), std::move(preprocess_output_channels), std::move(preprocess_input_size), std::move(postprocess_output_size), {}) {}
 
     bool operator==(const ProcessingSpec& other) const {
         return
@@ -215,6 +224,7 @@ public:
 
     std::string get_model_path(InferenceBackend backend);
     const ModelData* get_model_data(InferenceBackend backend) const;
+    std::string get_model_function(InferenceBackend backend) const;
     bool is_model_binary(InferenceBackend backend) const;
     TensorShapeList get_tensor_input_shape() const;
     TensorShapeList get_tensor_output_shape() const;

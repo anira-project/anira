@@ -20,13 +20,17 @@ public:
 
     void prepare(HostAudioConfig new_audio_config);
 
-    void process(float* const* data, size_t num_samples, size_t tensor_index = 0); // data[channel][index] at tensor index (only works if the input and output datashapes are the same) AND only one tensor index is streamable (e.g. audio fx with none streamable parameters)
-    void process(const float* const* const* input_data, size_t* num_input_samples, float* const* const* output_data, size_t* num_output_samples); // data[tensor_index][channel][index]
+    size_t process(float* const* data, size_t num_samples, size_t tensor_index = 0); // data[channel][index] at tensor index (only works if the input and output datashapes are the same) AND only one tensor index is streamable (e.g. audio fx with none streamable parameters)
+    size_t process(const float* const* input_data, size_t num_input_samples, float* const* output_data, size_t num_output_samples, size_t tensor_index = 0); // data[tensor_index][channel][index] at tensor index
+    size_t* process(const float* const* const* input_data, size_t* num_input_samples, float* const* const* output_data, size_t* num_output_samples); // data[tensor_index][channel][index]
 
+    void push_data(const float* const* input_data, size_t num_input_samples, size_t tensor_index = 0); // data[channel][index] at tensor index
     void push_data(const float* const* const* input_data, size_t* num_input_samples);
-    void pop_data(float* const* const* output_data, size_t* num_output_samples);
+    size_t pop_data(float* const* output_data, size_t num_output_samples, size_t tensor_index = 0); // data[channel][index] at tensor index
+    size_t* pop_data(float* const* const* output_data, size_t* num_output_samples);
 
-    std::vector<int> get_latency();
+    unsigned int get_latency(size_t tensor_index = 0) const; // Returns the latency for the specified tensor index
+    std::vector<unsigned int> get_latency_vector() const; // Returns the latency for all tensor indices
     size_t get_num_received_samples(size_t tensor_index, size_t channel = 0) const;
 
     void set_non_realtime (bool is_non_realtime);

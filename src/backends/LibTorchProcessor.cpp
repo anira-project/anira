@@ -48,7 +48,13 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inf
     }
 
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
-        m_outputs = m_module.forward(m_inputs);
+        if (!m_inference_config.get_model_function(InferenceBackend::LIBTORCH).empty()) {
+            auto method = m_module.get_method(m_inference_config.get_model_function(InferenceBackend::LIBTORCH));
+            m_outputs = method(m_inputs);
+        } else {
+            // Run inference
+            m_outputs = m_module.forward(m_inputs);
+        }
     }
 }
 
@@ -67,7 +73,12 @@ void LibtorchProcessor::Instance::process(std::vector<BufferF>& input, std::vect
     }
 
     // Run inference
-    m_outputs = m_module.forward(m_inputs);
+    if (!m_inference_config.get_model_function(InferenceBackend::LIBTORCH).empty()) {
+        auto method = m_module.get_method(m_inference_config.get_model_function(InferenceBackend::LIBTORCH));
+        m_outputs = method(m_inputs);
+    } else {
+        m_outputs = m_module.forward(m_inputs);
+    }
 
     // We need to copy the data because we cannot access the data pointer ref of the tensor directly
     if(m_outputs.isTuple()) {

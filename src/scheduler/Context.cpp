@@ -231,9 +231,13 @@ void Context::new_data_request(std::shared_ptr<SessionElement> session, double b
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
                 if (session->m_is_non_real_time) {
+#ifdef USE_CONTROLLED_BLOCKING
+                    session->m_inference_queue[i]->m_done.acquire();
+#else
                     while (!session->m_inference_queue[i]->m_done.load(std::memory_order_acquire)) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     }
+#endif
                 }
 #ifdef USE_CONTROLLED_BLOCKING
                 if (session->m_inference_queue[i]->m_done.try_acquire_until(waitUntil)) {

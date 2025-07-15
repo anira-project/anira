@@ -47,6 +47,15 @@ std::string InferenceConfig::get_model_path(InferenceBackend backend) {
     return "";
 }
 
+std::string InferenceConfig::get_model_function(InferenceBackend backend) const {
+    for (const auto& model : m_model_data) {
+        if (model.m_backend == backend) {
+            return model.m_model_function;
+        }
+    }
+    return ""; // Return empty string if no model function is found
+}
+
 // Check if the model is binary
 bool InferenceConfig::is_model_binary(InferenceBackend backend) const {
     for (const auto& model : m_model_data) {
@@ -366,6 +375,8 @@ void InferenceConfig::update_processing_spec() {
                 throw std::invalid_argument("Invalid number of channels for non-streamable tensor.");
             }
         }
+    }
+    for (size_t i = 0; i < m_processing_spec.m_tensor_output_size.size(); ++i) {
         if (m_processing_spec.m_postprocess_output_size[i] == 0) {
             if (m_processing_spec.m_postprocess_output_channels[i] != 1) {
                 LOG_ERROR << "For non-streamable tensors (postprocess_output_size[" << i << "] == 0), the number of channels must be 1." << std::endl;

@@ -46,7 +46,7 @@ inference_handler.prepare({buffer_size, sample_rate});
 inference_handler.set_inference_backend(anira::ONNX);
 
 // Optionally get the latency of the inference process in samples
-int latency_in_samples = inference_handler.get_latency();
+unsigned int latency_in_samples = inference_handler.get_latency();
 
 // Real-time safe audio processing in process callback of your application
 process(float** audio_data, int num_samples) {

@@ -41,14 +41,14 @@ HybridNNPrePostProcessor my_pp_processor(my_inference_config);
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
 
     // The buffer size return in get_buffer_size() is populated by state.range(0) param of the google benchmark
-    anira::HostAudioConfig host_config = {(size_t) get_buffer_size(), SAMPLE_RATE};
+    anira::HostAudioConfig host_config = {static_cast<float>(get_buffer_size()), SAMPLE_RATE};
     anira::InferenceBackend inference_backend = anira::ONNX;
 
     m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backend);
 
-    m_buffer = std::make_unique<anira::Buffer<float>>(my_inference_config.get_preprocess_input_channels()[0], host_config.m_max_host_input_size);
+    m_buffer = std::make_unique<anira::Buffer<float>>(my_inference_config.get_preprocess_input_channels()[0], host_config.m_max_buffer_size);
 
     initialize_repetition(my_inference_config, host_config, inference_backend);
 

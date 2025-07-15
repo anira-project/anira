@@ -33,8 +33,8 @@ void SessionElement::clear() {
     m_inference_queue.clear();
 }
 
-void SessionElement::prepare(HostAudioConfig new_config) {
-    m_host_config = new_config;
+void SessionElement::prepare(const HostAudioConfig& host_config) {
+    m_host_config = host_config;
 
     m_send_buffer.clear();
     m_receive_buffer.clear();
@@ -56,30 +56,35 @@ void SessionElement::prepare(HostAudioConfig new_config) {
         }
     }
 
+    size_t num_structs = calculate_num_structs(host_config);
+
+    // How big are the input and output buffers
+    std::vector<size_t> tensor_input_size = m_inference_config.get_tensor_input_size();
+    std::vector<size_t> tensor_output_size = m_inference_config.get_tensor_output_size();
+
+    for (int i = 0; i < num_structs; ++i) {
+        m_inference_queue.emplace_back(std::make_unique<ThreadSafeStruct>(tensor_input_size, tensor_output_size));
+    }
+
+    m_time_stamps.reserve(num_structs);
+}
+
+size_t SessionElement::calculate_num_structs(const HostAudioConfig& host_config) const {
     // Now calculate the number of structs necessary to keep the inference queues filled
-    size_t max_inference_time_in_samples = (size_t) std::ceil(m_inference_config.m_max_inference_time * m_host_config.m_host_input_sample_rate / 1000);
-    int new_samples_needed_for_inference = m_inference_config.get_preprocess_input_size()[m_host_config.m_input_tensor_index];
-    float structs_per_buffer = std::ceil((float) m_host_config.m_max_host_input_size / (float) new_samples_needed_for_inference);
+    size_t max_inference_time_in_samples = (size_t) std::ceil(m_inference_config.m_max_inference_time * host_config.m_sample_rate / 1000);
+    int new_samples_needed_for_inference = m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
+    float structs_per_buffer = std::ceil((float) host_config.m_max_buffer_size / (float) new_samples_needed_for_inference);
     float structs_per_max_inference_time = std::ceil((float) max_inference_time_in_samples / (float) new_samples_needed_for_inference);
     // ceil to full buffers
     structs_per_max_inference_time = std::ceil(structs_per_max_inference_time/structs_per_buffer) * structs_per_buffer;
     // we can have multiple max_inference_times per buffer
-    float max_inference_times_per_buffer = std::max(std::floor((float) m_host_config.m_max_host_input_size / (float) (max_inference_time_in_samples)), 1.f);
+    float max_inference_times_per_buffer = std::max(std::floor((float) host_config.m_max_buffer_size / (float) (max_inference_time_in_samples)), 1.f);
     // minimum number of structs necessary to keep available inference queues where the ringbuffer can push to if we have n_free_threads > structs_per_buffer
     // int n_structs = (int) (structs_per_buffer + structs_per_max_inference_time);
     // but because we can have multiple instances (sessions) that use the same threadpool, we have to multiply structs_per_max_inference_time with the struct_per_buffer
     // because each struct can take max_inference_time time to process and be free again
     int n_structs = (int) (structs_per_buffer + structs_per_max_inference_time * std::ceil(structs_per_buffer/max_inference_times_per_buffer));
-
-    // How big are the input and output buffers
-    std::vector<size_t> tensor_input_size = m_inference_config.get_tensor_input_size();
-    std::vector<size_t> tensor_output_size = m_inference_config.get_tensor_output_size();
-    
-    for (int i = 0; i < n_structs; ++i) {
-        m_inference_queue.emplace_back(std::make_unique<ThreadSafeStruct>(tensor_input_size, tensor_output_size));
-    }
-
-    m_time_stamps.reserve(n_structs);
+    return n_structs;
 }
 
 template <typename T> void SessionElement::set_processor(std::shared_ptr<T>& processor) {

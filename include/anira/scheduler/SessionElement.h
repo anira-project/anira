@@ -44,7 +44,8 @@ public:
     SessionElement(int newSessionID, PrePostProcessor& pp_processor, InferenceConfig& inference_config);
 
     void clear();
-    void prepare(HostAudioConfig new_config);
+    void prepare(const HostAudioConfig& spec);
+    size_t calculate_num_structs(const HostAudioConfig& spec) const;
 
     template <typename T> void set_processor(std::shared_ptr<T>& processor);
 

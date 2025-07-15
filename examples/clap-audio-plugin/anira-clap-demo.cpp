@@ -159,7 +159,7 @@ bool AniraClapPluginExample::activate(double sampleRate, uint32_t minFrameCount,
 
     m_inference_handler.prepare(config);
 
-    m_plugin_latency = (uint32_t) m_inference_handler.get_latency()[0];
+    m_plugin_latency = (uint32_t) m_inference_handler.get_latency();
     m_dry_wet_mixer.prepare(sampleRate, maxFrameCount, (size_t) m_plugin_latency);
 
     return true;
