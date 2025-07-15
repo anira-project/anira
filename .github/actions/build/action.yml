@@ -33,13 +33,13 @@ runs:
     - name: cmake configure
       shell: bash
       run: |
-        if [ "${{ matrix.name }}" == "Linux-x86_64" ]; then
+        if [[ "${{ matrix.name }}" == Linux-x86_64* ]]; then
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ${{ inputs.CMAKE_BUILD_ARGS }}
-        elif [ "${{ matrix.name }}" == "macOS-x86_64" ]; then
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_OSX_ARCHITECTURES=x86_64 ${{ inputs.CMAKE_BUILD_ARGS }}}}
-        elif [ "${{ matrix.name }}" == "macOS-arm64" ]; then
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_OSX_ARCHITECTURES=arm64 ${{ inputs.CMAKE_BUILD_ARGS }}}}
-        elif [ "${{ matrix.name }}" == "Windows-x86_64" ]; then
+        elif [[ "${{ matrix.name }}" == macOS-x86_64* ]]; then
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_OSX_ARCHITECTURES=x86_64 ${{ inputs.CMAKE_BUILD_ARGS }}
+        elif [[ "${{ matrix.name }}" == macOS-arm64* ]]; then
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_OSX_ARCHITECTURES=arm64 ${{ inputs.CMAKE_BUILD_ARGS }}
+        elif [[ "${{ matrix.name }}" == Windows-x86_64* ]]; then
           cmake -B build -DCMAKE_BUILD_TYPE=${{ inputs.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ${{ inputs.CMAKE_BUILD_ARGS }}
         else
           echo "Unknown OS";
