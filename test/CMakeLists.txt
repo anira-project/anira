@@ -21,6 +21,7 @@ add_executable(${PROJECT_NAME})
 target_sources(${PROJECT_NAME} PRIVATE
 	test_InferenceHandler.cpp
     utils/test_Buffer.cpp
+	scheduler/test_InferenceManager.cpp
 	test_WavReader.cpp
 )
 
