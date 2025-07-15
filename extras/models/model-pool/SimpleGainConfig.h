@@ -31,7 +31,6 @@ static anira::InferenceConfig gain_config(
     tensor_shape_gain_config,
     processing_spec_gain_config,
     5.f,
-    0,
     1
 );
 

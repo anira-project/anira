@@ -39,7 +39,7 @@ static anira::InferenceConfig hybridnn_config (
         tensor_shape_hybridnn_config,
         processing_spec_hybridnn_config,
         5.33f,
-        2
+        3
 );
 
 #endif //ANIRA_HYBRIDNNCONFIG_H

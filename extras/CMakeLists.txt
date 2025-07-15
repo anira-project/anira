@@ -40,3 +40,24 @@ set(STATEFULLSTM_MODELS_PATH_TENSORFLOW "${CMAKE_CURRENT_LIST_DIR}/models/statef
 set(STATEFULLSTM_MODELS_PATH_PYTORCH "${CMAKE_CURRENT_LIST_DIR}/models/stateful-rnn/stateful-lstm/models/" CACHE PATH "Path to the StatefulLSTM PyTorch models")
 
 set(SIMPLEGAIN_MODEL_PATH "${CMAKE_CURRENT_LIST_DIR}/models/model-pool/example-models/SimpleGainNetwork/models/" CACHE PATH "Path to the SimpleGainNetwork models")
+
+set(RAVE_MODEL_URL "https://play.forum.ircam.fr/rave-vst-api/get_model/darbouka_onnx")
+set(RAVE_MODEL_DIR "${CMAKE_CURRENT_LIST_DIR}/models/third-party/ircam-acids/RAVE" CACHE PATH "Path to the RAVE model")
+set(RAVE_MODEL_DARBOUKA_PATH "${RAVE_MODEL_DIR}/darbouka_onnx.ts")
+
+file(MAKE_DIRECTORY "${RAVE_MODEL_DIR}")
+
+if(NOT EXISTS "${RAVE_MODEL_DARBOUKA_PATH}")
+    message(STATUS "Downloading RAVE model from ${RAVE_MODEL_URL} to ${RAVE_MODEL_DARBOUKA_PATH}")
+    file(DOWNLOAD
+    "${RAVE_MODEL_URL}"
+    "${RAVE_MODEL_DARBOUKA_PATH}"
+    SHOW_PROGRESS
+    STATUS DOWNLOAD_STATUS
+    LOG DOWNLOAD_LOG
+    )
+    list(GET DOWNLOAD_STATUS 0 DOWNLOAD_RESULT)
+    if(NOT DOWNLOAD_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to download RAVE model: ${DOWNLOAD_LOG}")
+    endif()
+endif()

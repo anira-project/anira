@@ -11,3 +11,4 @@ extras/models/stateful-rnn/stateful-lstm/
 extras/models/hybrid-nn/GuitarLSTM/
 extras/models/cnn/steerable-nafx/
 extras/models/model-pool/example-models/
+extras/models/third-party/ircam-acids/RAVE/

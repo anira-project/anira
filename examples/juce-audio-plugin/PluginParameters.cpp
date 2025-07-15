@@ -10,6 +10,28 @@ juce::AudioProcessorValueTreeState::ParameterLayout PluginParameters::createPara
                                                                    1.0f,
                                                                    db_attributes));
 #endif
+#if MODEL_TO_USE == 7
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (LATENT_0_ID,
+                                                                    LATENT_0_NAME,
+                                                                    latentRange,
+                                                                    0.0f,
+                                                                    latentAttributes));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (LATENT_1_ID,
+                                                                    LATENT_1_NAME,
+                                                                    latentRange,
+                                                                    0.0f,
+                                                                    latentAttributes));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (LATENT_2_ID,
+                                                                    LATENT_2_NAME,
+                                                                    latentRange,
+                                                                    0.0f,
+                                                                    latentAttributes));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (LATENT_3_ID,
+                                                                    LATENT_3_NAME,
+                                                                    latentRange,
+                                                                    0.0f,
+                                                                    latentAttributes));
+#endif
 
     params.push_back (std::make_unique<juce::AudioParameterChoice> (BACKEND_TYPE_ID,
                                                                     BACKEND_TYPE_NAME,

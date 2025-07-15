@@ -16,13 +16,21 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
         anira_context_config(
             std::thread::hardware_concurrency() / 2 > 0 ? std::thread::hardware_concurrency() / 2 : 1 // Total number of threads
         ),
+#if MODEL_TO_USE != 7
         pp_processor(inference_config),
+#else
+        pp_processor_encoder(inference_config_encoder),
+        pp_processor_decoder(inference_config_decoder),
+#endif
 #if MODEL_TO_USE == 1 || MODEL_TO_USE == 2
         // The bypass_processor is not needed for inference, but for the round trip test to output audio when selecting the CUSTOM backend. It must be customized when default pp_processor is replaced by a custom one.
         bypass_processor(inference_config),
         inference_handler(pp_processor, inference_config, bypass_processor, anira_context_config),
-#elif MODEL_TO_USE == 3 || MODEL_TO_USE == 4 || MODEL_TO_USE == 5
+#elif MODEL_TO_USE == 3 || MODEL_TO_USE == 4 || MODEL_TO_USE == 5 || MODEL_TO_USE == 6
         inference_handler(pp_processor, inference_config),
+#elif MODEL_TO_USE == 7
+        inference_handler_encoder(pp_processor_encoder, inference_config_encoder),
+        inference_handler_decoder(pp_processor_decoder, inference_config_decoder),
 #endif
         dry_wet_mixer(32768) // 32768 samples of max latency compensation for the dry-wet mixer
 {
@@ -110,18 +118,38 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
                                  static_cast<juce::uint32>(samplesPerBlock),
                                  static_cast<juce::uint32>(getTotalNumInputChannels())};
 
-    anira::HostAudioConfig host_config {
-        (size_t) samplesPerBlock,
-        sampleRate
-    };
-
     dry_wet_mixer.prepare(spec);
 
+#if MODEL_TO_USE != 7
+    anira::HostAudioConfig host_config {
+        static_cast<float>(samplesPerBlock),
+        static_cast<float>(sampleRate)
+    };
     inference_handler.prepare(host_config);
+#else
+    anira::HostAudioConfig host_config_encoder {
+        static_cast<float>(samplesPerBlock),
+        static_cast<float>(sampleRate),
+    };
+    // The decoder needs to be prepared with the buffer size and sample rate of the latent space.
+    anira::HostAudioConfig host_config_decoder {
+        static_cast<float>((float) samplesPerBlock / 2048.f),
+        static_cast<float>((float) sampleRate / 2048.f),
+    };
+    inference_handler_encoder.prepare(host_config_encoder);
+    inference_handler_decoder.prepare(host_config_decoder);
+#endif
 
-    auto new_latency = inference_handler.get_latency()[0]; // The 0th tensor is the audio data tensor, so we only need the first element of the latency vector
+#if MODEL_TO_USE != 7
+    int new_latency = (int) inference_handler.get_latency(); // The 0th tensor is the audio data tensor, so we only need the first element of the latency vector
+#else
+    // Encoder latency must be multiplied by 2048, because the encoder compresses the audio data by a factor of 2048 in the time domain.
+    int new_latency_encoder = (int) inference_handler_encoder.get_latency() * 2048;
+    int new_latency_decoder = (int) inference_handler_decoder.get_latency();
+    int new_latency = new_latency_encoder + new_latency_decoder; // The total latency is the sum of the latencies of both encoders
+#endif
+    
     setLatencySamples(new_latency);
-
     dry_wet_mixer.setWetLatency((float) new_latency);
 
     for (auto & parameterID : PluginParameters::getPluginParameterList()) {
@@ -161,7 +189,35 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     dry_wet_mixer.pushDrySamples(buffer);
 
+#if MODEL_TO_USE != 7
     inference_handler.process(buffer.getArrayOfWritePointers(), (size_t) buffer.getNumSamples());
+#else
+    // For the RAVE model, we need to process the encoder and decoder separately.
+    float latent_space[4][1];
+    float* latent_space_ptrs[4];
+    for (int i = 0; i < 4; ++i) {
+        latent_space_ptrs[i] = latent_space[i];
+    }
+    m_count_input_samples += buffer.getNumSamples();
+    inference_handler_encoder.push_data(buffer.getArrayOfWritePointers(), (size_t) buffer.getNumSamples());
+    // Only pop data from the encoder when we have enough samples needed for one time step in the latent space vector (2048 samples).
+    while (m_count_input_samples >= 2048) {
+        size_t received_samples = inference_handler_encoder.pop_data(latent_space_ptrs, 1);
+        if (received_samples == 0) {
+            std::cout << "No data received from encoder!" << std::endl;
+            break;
+        } else {
+            m_count_input_samples -= 2048;
+        }
+        // Make some latent space modulation :)
+        latent_space[0][0] += static_cast<float>(parameters.getParameterAsValue(PluginParameters::LATENT_0_ID.getParamID()).getValue());
+        latent_space[1][0] += static_cast<float>(parameters.getParameterAsValue(PluginParameters::LATENT_1_ID.getParamID()).getValue());
+        latent_space[2][0] += static_cast<float>(parameters.getParameterAsValue(PluginParameters::LATENT_2_ID.getParamID()).getValue());
+        latent_space[3][0] += static_cast<float>(parameters.getParameterAsValue(PluginParameters::LATENT_3_ID.getParamID()).getValue());
+        inference_handler_decoder.push_data(latent_space_ptrs, received_samples);
+    }
+    inference_handler_decoder.pop_data(buffer.getArrayOfWritePointers(), (size_t) buffer.getNumSamples());
+#endif
 
     dry_wet_mixer.mixWetSamples(buffer);
 
@@ -208,6 +264,7 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID
     } else if (parameterID == PluginParameters::BACKEND_TYPE_ID.getParamID()) {
         int paramInt = (int) newValue;
         auto paramString = PluginParameters::backendTypes[paramInt];
+#if MODEL_TO_USE != 7
 #ifdef USE_TFLITE
         if (paramString == "TFLITE") inference_handler.set_inference_backend(anira::TFLITE);
 #endif
@@ -218,8 +275,22 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID
         if (paramString == "LIBTORCH") inference_handler.set_inference_backend(anira::LIBTORCH);
 #endif
         if (paramString == "BYPASS") inference_handler.set_inference_backend(anira::CUSTOM);
+#else
+#ifdef USE_LIBTORCH
+        if (paramString == "LIBTORCH") {
+            inference_handler_encoder.set_inference_backend(anira::LIBTORCH);
+            inference_handler_decoder.set_inference_backend(anira::LIBTORCH);
+        }
+#endif
+        if (paramString == "BYPASS") {
+            inference_handler_encoder.set_inference_backend(anira::CUSTOM);
+            inference_handler_decoder.set_inference_backend(anira::CUSTOM);
+        }
+#endif
+#if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
     } else if (parameterID == PluginParameters::GAIN_ID.getParamID()) {
         pp_processor.set_input(newValue, 1, 0);
+#endif
     }
 }
 
