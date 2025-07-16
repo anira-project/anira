@@ -330,7 +330,7 @@ private:
         bool m_session_exclusive_processor = anira::InferenceConfig::Defaults::m_session_exclusive_processor;
         unsigned int m_num_parallel_processors = anira::InferenceConfig::Defaults::m_num_parallel_processors;
 #ifdef USE_CONTROLLED_BLOCKING
-        static constexpr float m_wait_in_process_block = anira::InferenceConfig::Defaults::m_wait_in_process_block;
+        float m_wait_in_process_block = anira::InferenceConfig::Defaults::m_wait_in_process_block;
 #endif
     };
 
