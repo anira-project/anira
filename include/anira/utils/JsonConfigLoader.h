@@ -121,7 +121,7 @@ private:
                     single_parameters.m_session_exclusive_processor,
                     single_parameters.m_num_parallel_processors
 #ifdef USE_CONTROLLED_BLOCKING
-                    single_parameters.m_wait_in_process_block
+                    , single_parameters.m_wait_in_process_block
 #endif
                 );
             } else {
@@ -133,7 +133,7 @@ private:
                     single_parameters.m_session_exclusive_processor,
                     single_parameters.m_num_parallel_processors
 #ifdef USE_CONTROLLED_BLOCKING
-                    single_parameters.m_wait_in_process_block
+                    , single_parameters.m_wait_in_process_block
 #endif
                 );
             }
