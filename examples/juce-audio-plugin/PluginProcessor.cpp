@@ -12,13 +12,15 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
 #endif
                        ),
         parameters (*this, nullptr, juce::Identifier (getName()), PluginParameters::createParameterLayout()),
+#if MODEL_TO_USE != 8
         // Optional anira_context_config
         anira_context_config(
             std::thread::hardware_concurrency() / 2 > 0 ? std::thread::hardware_concurrency() / 2 : 1 // Total number of threads
         ),
-#if MODEL_TO_USE != 7
+#endif
+#if MODEL_TO_USE != 7 && MODEL_TO_USE != 8
         pp_processor(inference_config),
-#else
+#elif MODEL_TO_USE == 7
         pp_processor_encoder(inference_config_encoder),
         pp_processor_decoder(inference_config_decoder),
 #endif
@@ -31,6 +33,12 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
 #elif MODEL_TO_USE == 7
         inference_handler_encoder(pp_processor_encoder, inference_config_encoder),
         inference_handler_decoder(pp_processor_decoder, inference_config_decoder),
+#elif MODEL_TO_USE == 8
+        json_config_loader(RAVE_MODEL_DARBOUKA_JSON_CONFIG_PATH),
+        anira_context_config(std::move(*json_config_loader.get_context_config())),
+        inference_config(std::move(*json_config_loader.get_inference_config())),
+        pp_processor(inference_config),
+        inference_handler(pp_processor, inference_config),
 #endif
         dry_wet_mixer(32768) // 32768 samples of max latency compensation for the dry-wet mixer
 {

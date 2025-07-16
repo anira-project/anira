@@ -34,7 +34,7 @@ class PluginParameters {
             DRY_WET_NAME = "Dry/Wet"
     ;
 
-#if MODEL_TO_USE == 6 || MODEL_TO_USE == 7
+#if MODEL_TO_USE == 6 || MODEL_TO_USE == 7 || MODEL_TO_USE == 8
     inline static juce::StringArray backendTypes {"LIBTORCH", "BYPASS"};
 #else
     inline static juce::StringArray backendTypes {"TFLITE", "LIBTORCH", "ONNX", "BYPASS"};

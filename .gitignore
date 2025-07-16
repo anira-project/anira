@@ -12,3 +12,4 @@ extras/models/hybrid-nn/GuitarLSTM/
 extras/models/cnn/steerable-nafx/
 extras/models/model-pool/example-models/
 extras/models/third-party/ircam-acids/RAVE/
+extras/**/*.json

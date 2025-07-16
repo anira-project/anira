@@ -1,0 +1,23 @@
+{
+  "context_config": {
+    "num_threads": 1
+  },
+  "inference_config": {
+    "model_data": [
+      {
+        "model_path": "@DARBOUKA_MODEL_ABSOLUTE_PATH@",
+        "inference_backend": "LIBTORCH"
+      }
+    ],
+    "tensor_shape": [
+      {
+        "input_shape": [1, 1, 2048],
+        "output_shape": [1, 1, 2048],
+        "inference_backend": "LIBTORCH"
+      }
+    ],
+    "max_inference_time": 42.66,
+    "warm_up": 5,
+    "session_exclusive_processor": true
+  }
+}

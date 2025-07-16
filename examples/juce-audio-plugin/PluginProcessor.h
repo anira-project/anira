@@ -77,6 +77,10 @@ private:
 private:
     juce::AudioProcessorValueTreeState parameters;
 
+#if MODEL_TO_USE == 8
+    anira::JsonConfigLoader json_config_loader;
+#endif
+
     // Optional ContextConfig
     anira::ContextConfig anira_context_config;
 
@@ -105,6 +109,9 @@ private:
     anira::InferenceConfig inference_config_decoder = rave_decoder_config;
     anira::PrePostProcessor pp_processor_encoder;
     anira::PrePostProcessor pp_processor_decoder;
+#elif MODEL_TO_USE == 8
+    anira::InferenceConfig inference_config;
+    anira::PrePostProcessor pp_processor;
 #else
     #error "MODEL_TO_USE must be defined to one of the available models."
 #endif

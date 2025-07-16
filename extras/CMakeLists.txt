@@ -61,3 +61,10 @@ if(NOT EXISTS "${RAVE_MODEL_DARBOUKA_PATH}")
         message(FATAL_ERROR "Failed to download RAVE model: ${DOWNLOAD_LOG}")
     endif()
 endif()
+
+set(DARBOUKA_MODEL_ABSOLUTE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/models/third-party/ircam-acids/RAVE/darbouka_onnx.ts")
+configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/models/third-party/ircam-acids/RaveDarboukaConfig.json.in"
+        "${CMAKE_CURRENT_SOURCE_DIR}/models/third-party/ircam-acids/RaveDarboukaConfig.json"
+)
+set(RAVE_MODEL_DARBOUKA_JSON_CONFIG_PATH "${CMAKE_CURRENT_SOURCE_DIR}/models/third-party/ircam-acids/RaveDarboukaConfig.json" CACHE PATH "Path to the RAVE json model config")

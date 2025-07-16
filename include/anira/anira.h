@@ -16,5 +16,6 @@
 #include "utils/InferenceBackend.h"
 #include "utils/RingBuffer.h"
 #include "system/HighPriorityThread.h"
+#include "utils/JsonConfigLoader.h"
 
 #endif // ANIRA_H
