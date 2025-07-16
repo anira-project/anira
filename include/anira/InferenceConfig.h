@@ -183,6 +183,19 @@ struct ProcessingSpec {
 class ANIRA_API InferenceConfig {
 
 public:
+    struct Defaults
+    {
+        static constexpr unsigned int m_warm_up = 0;
+        static constexpr bool m_session_exclusive_processor = false;
+        inline static unsigned int m_num_parallel_processors =
+            (std::thread::hardware_concurrency() / 2 > 0)
+                ? std::thread::hardware_concurrency() / 2
+                : 1;
+#ifdef USE_CONTROLLED_BLOCKING
+        static constexpr float m_wait_in_process_block = 0.f;
+#endif
+    };
+
     InferenceConfig() = default;
 
     InferenceConfig(
@@ -190,11 +203,11 @@ public:
             std::vector<TensorShape> tensor_shape,
             ProcessingSpec processing_spec,
             float max_inference_time, // in ms per inference
-            unsigned int warm_up = 0, // number of warm up inferences
-            bool session_exclusive_processor = false,
-            unsigned int num_parallel_processors = (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2 : 1
+            unsigned int warm_up = Defaults::m_warm_up, // number of warm up inferences
+            bool session_exclusive_processor = Defaults::m_session_exclusive_processor,
+            unsigned int num_parallel_processors = Defaults::m_num_parallel_processors
 #ifdef USE_CONTROLLED_BLOCKING
-            , float wait_in_process_block = 0.f
+            , float wait_in_process_block = Defaults::m_wait_in_process_block
 #endif
             );
     
@@ -202,11 +215,11 @@ public:
             std::vector<ModelData> model_data,
             std::vector<TensorShape> tensor_shape,
             float max_inference_time, // in ms per inference
-            unsigned int warm_up = 0, // number of warm up inferences
-            bool session_exclusive_processor = false,
-            unsigned int num_parallel_processors = (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2 : 1
+            unsigned int warm_up = Defaults::m_warm_up, // number of warm up inferences
+            bool session_exclusive_processor = Defaults::m_session_exclusive_processor,
+            unsigned int num_parallel_processors = Defaults::m_num_parallel_processors
 #ifdef USE_CONTROLLED_BLOCKING
-            , float wait_in_process_block = 0.f
+            , float wait_in_process_block = Defaults::m_wait_in_process_block
 #endif
             ) :
         InferenceConfig(
