@@ -45,9 +45,13 @@ public:
 
     void clear();
     void prepare(const HostAudioConfig& spec);
-    size_t calculate_num_structs(const HostAudioConfig& spec) const;
 
     template <typename T> void set_processor(std::shared_ptr<T>& processor);
+// public for testing purposes
+    size_t calculate_num_structs(const HostAudioConfig& spec) const;
+    std::vector<unsigned int> calculate_latency(const HostAudioConfig& host_config);
+    std::vector<size_t> calculate_send_buffer_sizes(const HostAudioConfig& spec, const std::vector<unsigned int>& init_samples, const size_t num_structs) const;
+    std::vector<size_t> calculate_receive_buffer_sizes(const HostAudioConfig& spec, const std::vector<unsigned int>& init_samples, const size_t num_structs) const;
 
     std::vector<RingBuffer> m_send_buffer;
     std::vector<RingBuffer> m_receive_buffer;
@@ -82,9 +86,9 @@ public:
     BackendBase m_default_processor;
     BackendBase* m_custom_processor;
 
-    HostAudioConfig m_host_config;
-
     bool m_is_non_real_time = false;
+
+    std::vector<unsigned int> m_latency;
 
 #ifdef USE_LIBTORCH
     std::shared_ptr<LibtorchProcessor> m_libtorch_processor = nullptr;
@@ -95,6 +99,14 @@ public:
 #ifdef USE_TFLITE
     std::shared_ptr<TFLiteProcessor> m_tflite_processor = nullptr;
 #endif
+
+private:
+    int calculate_buffer_adaptation(float host_buffer_size, int postprocess_output_size);
+    int max_num_inferences(float host_buffer_size, int postprocess_input_size);
+    int greatest_common_divisor(int a, int b);
+    int least_common_multiple(int a, int b);
+
+    HostAudioConfig m_host_config;
 };
 
 struct InferenceData {

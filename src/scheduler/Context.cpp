@@ -152,7 +152,7 @@ void Context::release_session(std::shared_ptr<SessionElement> session) {
     }
 }
 
-void Context::prepare(std::shared_ptr<SessionElement> session, HostAudioConfig new_config) {
+void Context::prepare_session(std::shared_ptr<SessionElement> session, HostAudioConfig new_config) {
     session->m_initialized.store(false);
 
     while (session->m_active_inferences.load(std::memory_order::acquire) != 0) {

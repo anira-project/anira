@@ -39,11 +39,6 @@ private:
     void process_input(const float* const* const* input_data, size_t* num_samples);
     size_t* process_output(float* const* const* output_data, size_t* num_samples);
     void clear_data(float* const* const* data, size_t* input_samples, const std::vector<size_t>& num_channels);
-    std::vector<unsigned int> calculate_latency(const HostAudioConfig& host_config);
-    int calculate_buffer_adaptation(float host_buffer_size, int postprocess_output_size);
-    int max_num_inferences(float host_buffer_size, int postprocess_input_size);
-    int greatest_common_divisor(int a, int b);
-    int least_common_multiple(int a, int b);
 
 private:
     std::shared_ptr<Context> m_context;
@@ -53,7 +48,6 @@ private:
     std::shared_ptr<SessionElement> m_session;
     HostAudioConfig m_host_config;
 
-    std::vector<unsigned int> m_init_samples;
     std::vector<size_t> m_missing_samples;
 };
 

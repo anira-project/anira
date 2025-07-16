@@ -2,9 +2,9 @@
 
 ## Architecture
 
+- [ ] Dynamic Ringbuffer sizes
 - [ ] Model and context config should be also available as json file
 - [ ] InferenceConfig should return bool if correct
-- [ ] Dynamic Ringbuffer sizes
 - [ ] RTSan check in CI
 - [ ] Change model_path function
 - [ ] Make processBlockFixture could be more versatile with new shapes

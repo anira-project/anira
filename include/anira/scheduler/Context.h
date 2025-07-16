@@ -37,7 +37,7 @@ public:
     static void release_instance();
     static void release_thread_pool();
 
-    void prepare(std::shared_ptr<SessionElement> session, HostAudioConfig new_config);
+    void prepare_session(std::shared_ptr<SessionElement> session, HostAudioConfig new_config);
 
     static int get_num_sessions();
 
