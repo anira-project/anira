@@ -15,6 +15,8 @@ struct SessionElementTestParams {
     HostAudioConfig host_config;
     InferenceConfig inference_config;
     size_t expected_num_structs;
+    std::vector<size_t> expected_send_buffer_sizes;
+    std::vector<size_t> expected_receive_buffer_sizes;
 };
 
 std::ostream& operator<<(std::ostream& stream, const SessionElementTestParams& params)
@@ -27,6 +29,8 @@ std::ostream& operator<<(std::ostream& stream, const SessionElementTestParams& p
     stream << " }, Inference Config: { ";
     stream << "max_inference_time = " << params.inference_config.m_max_inference_time << " ms";
     stream << " }, Expected num_structs = " << params.expected_num_structs;
+    stream << ", Expected send buffer sizes = " << params.expected_send_buffer_sizes;
+    stream << ", Expected receive buffer sizes = " << params.expected_receive_buffer_sizes;
     stream << " }";
 
     return stream;
@@ -36,7 +40,7 @@ std::ostream& operator<<(std::ostream& stream, const SessionElementTestParams& p
 class SessionElementTest: public ::testing::TestWithParam<SessionElementTestParams>{
 };
 
-TEST_P(SessionElementTest, CalculateNumStructs){
+TEST_P(SessionElementTest, StructAndRingbuffers){
     auto test_params = GetParam();
     
     PrePostProcessor pp_processor(test_params.inference_config);
@@ -47,11 +51,29 @@ TEST_P(SessionElementTest, CalculateNumStructs){
         test_params.inference_config
     );
 
+    session_element.prepare(test_params.host_config);
+
     size_t actual_num_structs = session_element.calculate_num_structs(test_params.host_config);
+    std::vector<size_t> send_buffer_sizes = session_element.calculate_send_buffer_sizes(test_params.host_config);
+    std::vector<size_t> receive_buffer_sizes = session_element.calculate_receive_buffer_sizes(test_params.host_config);
 
     ASSERT_EQ(actual_num_structs, test_params.expected_num_structs) 
         << "Number of structs mismatch. Expected: " << test_params.expected_num_structs 
         << ", Got: " << actual_num_structs;
+
+    for (size_t i = 0; i < test_params.expected_send_buffer_sizes.size(); ++i) {
+        ASSERT_EQ(send_buffer_sizes[i], test_params.expected_send_buffer_sizes[i])
+            << "Send buffer size mismatch at index " << i 
+            << ". Expected: " << test_params.expected_send_buffer_sizes[i] 
+            << ", Got: " << send_buffer_sizes[i];
+    }
+
+    for (size_t i = 0; i < test_params.expected_receive_buffer_sizes.size(); ++i) {
+        ASSERT_EQ(receive_buffer_sizes[i], test_params.expected_receive_buffer_sizes[i])
+            << "Receive buffer size mismatch at index " << i 
+            << ". Expected: " << test_params.expected_receive_buffer_sizes[i] 
+            << ", Got: " << receive_buffer_sizes[i];
+    }
 }
 
 std::string build_test_name(const testing::TestParamInfo<SessionElementTest::ParamType>& info){
@@ -94,7 +116,7 @@ std::string build_test_name(const testing::TestParamInfo<SessionElementTest::Par
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    CalculateNumStructs, SessionElementTest, ::testing::Values(
+ StructAndRingbuffers, SessionElementTest, ::testing::Values(
         // Basic test cases similar to InferenceManager tests
         SessionElementTestParams {
             HostAudioConfig(2048, 48000),
@@ -103,7 +125,9 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
                 40.f
             ),
-            2
+            2,
+            {4096}, // Expected send buffer sizes
+            {6144}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
             HostAudioConfig(1, 48000.0/2048),
@@ -112,7 +136,9 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
                 40.f
             ),
-            2
+            2,
+            {2},
+            {6144}
         },
         SessionElementTestParams {
             HostAudioConfig(1, 48000.0/2048),
@@ -121,7 +147,9 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
                 50.f
             ),
-            3
+            3,
+            {2},
+            {8192}
         },
         SessionElementTestParams {
             HostAudioConfig(256, 48000.0),
@@ -131,7 +159,9 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({1}, {4}),
                 40.f
             ),
-            2
+            2,
+            {2304}, // Expected send buffer sizes
+            {3}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
             HostAudioConfig(1./256., 48000./2048.),
@@ -141,7 +171,9 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({4}, {1}),
                 40.f
             ),
-            2
+            2,
+            {2}, // Expected send buffer sizes
+            {4104}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
             HostAudioConfig(1., 48000./2048.),
@@ -151,7 +183,9 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({16}, {1, 2}),
                 40.f
             ),
-            2
+            2,
+            {2}, // Expected send buffer sizes
+            {6144, 768}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
             HostAudioConfig(256., 48000./8, 1),
@@ -161,7 +195,9 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({16, 2}, {1, 3}),
                 5.f
             ),
-            2
+            2,
+            {2, 512}, // Expected send buffer sizes
+            {6144, 384}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
             HostAudioConfig(600., 48000./8, 1),
@@ -171,7 +207,9 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({16, 2}, {1, 3}),
                 50.f
             ),
-            9
+            9,
+            {6, 1448}, // Expected send buffer sizes
+            {23232, 1452}  // Expected receive buffer sizes
         },
         // Non-power-of-two buffer size tests
         SessionElementTestParams {
@@ -181,7 +219,9 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
                 13.f
             ),
-            2
+            2,
+            {2244}, // Expected send buffer sizes
+            {4196}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
             HostAudioConfig(300, 44100),
@@ -190,7 +230,9 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
                 40.f
             ),
-            3
+            3,
+            {1620}, // Expected send buffer sizes
+            {3372}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
             HostAudioConfig(2.5, 48000./2048.),
@@ -200,7 +242,9 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({8}, {1}),
                 12.f
             ),
-            6
+            6,
+            {6}, // Expected send buffer sizes
+            {8704}  // Expected receive buffer sizes
         },
         // Edge cases with very small buffer sizes
         SessionElementTestParams {
@@ -210,7 +254,9 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
                 30.f
             ),
-            4
+            4,
+            {513}, // Expected send buffer sizes
+            {2049}  // Expected receive buffer sizes
         },
         // Test with large buffer sizes
         SessionElementTestParams {
@@ -220,7 +266,9 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
                 20.f
             ),
-            12
+            12,
+            {8192}, // Expected send buffer sizes
+            {16384}  // Expected receive buffer sizes
         },
         // Test with very short inference times
         SessionElementTestParams {
@@ -230,7 +278,9 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 256}}, {{1, 1, 256}})},
                 1.f
             ),
-            4
+            4,
+            {1024}, // Expected send buffer sizes
+            {1536}  // Expected receive buffer sizes
         },
         // Test with very long inference times
         SessionElementTestParams {
@@ -240,7 +290,9 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 256}}, {{1, 1, 256}})},
                 100.f
             ),
-            40
+            40,
+            {1024}, // Expected send buffer sizes
+            {10752}  // Expected receive buffer sizes
         }
     ),
     build_test_name

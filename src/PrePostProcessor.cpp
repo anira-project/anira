@@ -61,7 +61,7 @@ void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input, BufferF& outpu
             if (j >= num_old_samples) {
                 output.set_sample(0, (size_t) (num_total_samples - j + num_old_samples - 1) + offset, input.pop_sample(i));
             } else {
-                output.set_sample(0, (size_t) j + offset, input.get_sample_from_tail(i, num_total_samples - (size_t) j));
+                output.set_sample(0, (size_t) j + offset, input.get_past_sample(i, num_total_samples - (size_t) j));
             }
         }
     }

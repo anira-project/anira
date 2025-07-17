@@ -39,9 +39,11 @@ void SessionElement::prepare(const HostAudioConfig& host_config) {
     // Calculate the latency, number of structs needed and the sizes of the send and receive buffers
     m_latency.clear();
     m_latency = calculate_latency(host_config);
-    size_t num_structs = calculate_num_structs(host_config);
-    std::vector<size_t> send_buffer_sizes = calculate_send_buffer_sizes(host_config, m_latency, num_structs);
-    std::vector<size_t> receive_buffer_sizes = calculate_receive_buffer_sizes(host_config, m_latency, num_structs);
+    m_num_structs = calculate_num_structs(host_config);
+    m_send_buffer_size.clear();
+    m_receive_buffer_size.clear();
+    m_send_buffer_size = calculate_send_buffer_sizes(host_config);
+    m_receive_buffer_size = calculate_receive_buffer_sizes(host_config);
 
     // Resize the send and receive buffers
     m_send_buffer.clear();
@@ -50,15 +52,15 @@ void SessionElement::prepare(const HostAudioConfig& host_config) {
     m_receive_buffer.resize(m_inference_config.get_tensor_output_shape().size());
 
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
-        if (send_buffer_sizes[i] > 0) {
-            m_send_buffer[i].initialize_with_positions(m_inference_config.get_preprocess_input_channels()[i], send_buffer_sizes[i]);
+        if (m_send_buffer_size[i] > 0) {
+            m_send_buffer[i].initialize_with_positions(m_inference_config.get_preprocess_input_channels()[i], m_send_buffer_size[i]);
         } else {
             m_send_buffer[i].clear_with_positions();
         }
     }
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-        if (receive_buffer_sizes[i] > 0) {
-            m_receive_buffer[i].initialize_with_positions(m_inference_config.get_postprocess_output_channels()[i], receive_buffer_sizes[i]);
+        if (m_receive_buffer_size[i] > 0) {
+            m_receive_buffer[i].initialize_with_positions(m_inference_config.get_postprocess_output_channels()[i], m_receive_buffer_size[i]);
         } else {
             m_receive_buffer[i].clear_with_positions();
         }
@@ -81,12 +83,12 @@ void SessionElement::prepare(const HostAudioConfig& host_config) {
     std::vector<size_t> tensor_input_size = m_inference_config.get_tensor_input_size();
     std::vector<size_t> tensor_output_size = m_inference_config.get_tensor_output_size();
 
-    for (int i = 0; i < num_structs; ++i) {
+    for (int i = 0; i < m_num_structs; ++i) {
         m_inference_queue.emplace_back(std::make_unique<ThreadSafeStruct>(tensor_input_size, tensor_output_size));
     }
 
     m_time_stamps.clear();
-    m_time_stamps.reserve(num_structs);
+    m_time_stamps.reserve(m_num_structs);
 }
 
 template <typename T> void SessionElement::set_processor(std::shared_ptr<T>& processor) {
@@ -229,18 +231,17 @@ int SessionElement::least_common_multiple(int a, int b) const {
     return a * b / greatest_common_divisor(a, b);
 }
 
-std::vector<size_t> SessionElement::calculate_send_buffer_sizes(const HostAudioConfig& host_config, const std::vector<unsigned int>& init_samples, const size_t num_structs) const {
+std::vector<size_t> SessionElement::calculate_send_buffer_sizes(const HostAudioConfig& host_config) const {
     std::vector<size_t> send_buffer_sizes;
-
-    int max_possible_inferences = max_num_inferences(host_config.m_max_buffer_size, m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index]);
-
-    int new_samples_needed_for_inference = m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
-    float structs_per_buffer = std::ceil((float) host_config.m_max_buffer_size / (float) new_samples_needed_for_inference);
 
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
         if (m_inference_config.get_preprocess_input_size()[i] > 0) {
-            size_t buffer_size = m_inference_config.get_preprocess_input_size()[i] * 400;
-            send_buffer_sizes.push_back(buffer_size);
+            float ratio_host_input = host_config.m_max_buffer_size / m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
+            int host_input_size = std::ceil(m_inference_config.get_preprocess_input_size()[i] * ratio_host_input);
+            int preprocess_input_size = m_inference_config.get_preprocess_input_size()[i];
+            int buffer_adaptation = calculate_buffer_adaptation(host_input_size, preprocess_input_size);
+            int past_samples_needed = std::max(static_cast<int>(m_inference_config.get_tensor_input_size()[i]/m_inference_config.get_preprocess_input_channels()[i]) - preprocess_input_size, 0);
+            send_buffer_sizes.push_back(host_input_size + buffer_adaptation + past_samples_needed + host_input_size); // 2 host_input_size because of not full buffers
         } else {
             send_buffer_sizes.push_back(0);
         }
@@ -248,12 +249,15 @@ std::vector<size_t> SessionElement::calculate_send_buffer_sizes(const HostAudioC
     return send_buffer_sizes;
 }
 
-std::vector<size_t> SessionElement::calculate_receive_buffer_sizes(const HostAudioConfig& host_config, const std::vector<unsigned int>& init_samples, const size_t num_structs) const {
+std::vector<size_t> SessionElement::calculate_receive_buffer_sizes(const HostAudioConfig& host_config) const {
     std::vector<size_t> receive_buffer_sizes;
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-            size_t buffer_size = m_inference_config.get_postprocess_output_size()[i] * 400;
-            receive_buffer_sizes.push_back(buffer_size);
+            float ratio_host_input = host_config.m_max_buffer_size / m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
+            int host_output_size = std::ceil(m_inference_config.get_postprocess_output_size()[i] * ratio_host_input);
+            int postprocess_output_size = m_inference_config.get_postprocess_output_size()[i];
+            int new_samples = std::ceil(m_num_structs * postprocess_output_size);
+            receive_buffer_sizes.push_back(new_samples + host_output_size); // Add host_output_size to account for the not full buffers
         } else {
             receive_buffer_sizes.push_back(0);
         }

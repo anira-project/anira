@@ -50,8 +50,8 @@ public:
 // public for testing purposes
     size_t calculate_num_structs(const HostAudioConfig& spec) const;
     std::vector<unsigned int> calculate_latency(const HostAudioConfig& host_config);
-    std::vector<size_t> calculate_send_buffer_sizes(const HostAudioConfig& spec, const std::vector<unsigned int>& init_samples, const size_t num_structs) const;
-    std::vector<size_t> calculate_receive_buffer_sizes(const HostAudioConfig& spec, const std::vector<unsigned int>& init_samples, const size_t num_structs) const;
+    std::vector<size_t> calculate_send_buffer_sizes(const HostAudioConfig& host_config) const;
+    std::vector<size_t> calculate_receive_buffer_sizes(const HostAudioConfig& host_config) const;
 
     std::vector<RingBuffer> m_send_buffer;
     std::vector<RingBuffer> m_receive_buffer;
@@ -105,6 +105,10 @@ private:
     int max_num_inferences(float host_buffer_size, int postprocess_input_size) const;
     int greatest_common_divisor(int a, int b) const;
     int least_common_multiple(int a, int b) const;
+
+    size_t m_num_structs = 0;
+    std::vector<size_t> m_send_buffer_size;
+    std::vector<size_t> m_receive_buffer_size;
 
     HostAudioConfig m_host_config;
 };
