@@ -8,6 +8,7 @@ set(ANIRA_WITH_TESTS @ANIRA_WITH_TESTS@)
 set(ANIRA_VERSION @PROJECT_VERSION_FULL@)
 
 find_package(concurrentqueue REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 # Find the dependencies
 if (ANIRA_WITH_LIBTORCH)
