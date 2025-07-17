@@ -19,6 +19,7 @@ option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 # Shall the use of a controlled blocking operation for further reduction of latency be enabled?
 option(ANIRA_WITH_CONTROLLED_BLOCKING "Use of controlled blocking operation for further reduction of latency" OFF)
 option(ANIRA_WITH_LOGGING "Enable logging printouts" ON)
+option(ANIRA_WITH_RADSAN "Enable RealtimeSanitizer (RADSan) checks (requires RADSan clang)" OFF)
 
 # ==============================================================================
 # Get project version from git
@@ -205,6 +206,11 @@ target_compile_definitions(${PROJECT_NAME}
     # Version number
     -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
 )
+
+if(ANIRA_WITH_RADSAN)
+    include(cmake/real-time-sanitizers.cmake)
+    anira_radsan_configure(${PROJECT_NAME})
+endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json)
 
