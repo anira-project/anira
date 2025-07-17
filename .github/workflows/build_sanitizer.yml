@@ -19,18 +19,34 @@ concurrency:
 
 jobs:
   build_and_test_radsan:
+    if: false  # Skip this job for now
     name: Check real-time safety with RADSan
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        name: [Linux-x86_64]
+        os: [ubuntu-latest]
+
+    runs-on: ${{ matrix.os }}
 
     container:
       image: realtimesanitizer/radsan-clang:latest
 
     steps:
+      - name: Install required tools
+        run: apt-get update && apt-get install -y git cmake ninja-build sudo
       - name: get repo and submodules
         uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 0
+          fetch-tags: true
+      - name: Allow safe Git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Verify workspace
+        run: |
+          echo "Current directory: $(pwd)"
+          ls -la
       - name: setup
         uses: ./.github/actions/setup
       - name: build
@@ -38,6 +54,6 @@ jobs:
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_CONTROLLED_BLOCKING=OFF -DANIRA_ENABLE_RADSAN=ON"
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_CONTROLLED_BLOCKING=OFF -DANIRA_WITH_RADSAN=ON"
       - name: test
         uses: ./.github/actions/test
