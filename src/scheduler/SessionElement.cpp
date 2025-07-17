@@ -109,26 +109,33 @@ template <typename T> void SessionElement::set_processor(std::shared_ptr<T>& pro
 
 size_t SessionElement::calculate_num_structs(const HostAudioConfig& host_config) const {
     // Now calculate the number of structs necessary to keep the inference queues filled
-    size_t max_inference_time_in_samples = (size_t) std::ceil(m_inference_config.m_max_inference_time * host_config.m_sample_rate / 1000);
+    float max_inference_time_in_samples = m_inference_config.m_max_inference_time * host_config.m_sample_rate / 1000;
     int new_samples_needed_for_inference = m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
-    float structs_per_buffer = std::ceil((float) host_config.m_max_buffer_size / (float) new_samples_needed_for_inference);
-    float structs_per_max_inference_time = std::ceil((float) max_inference_time_in_samples / (float) new_samples_needed_for_inference);
-    // ceil to full buffers
-    structs_per_max_inference_time = std::ceil(structs_per_max_inference_time/structs_per_buffer) * structs_per_buffer;
-    // we can have multiple max_inference_times per buffer
-    float max_inference_times_per_buffer = std::max(std::floor((float) host_config.m_max_buffer_size / (float) (max_inference_time_in_samples)), 1.f);
-    // minimum number of structs necessary to keep available inference queues where the ringbuffer can push to if we have n_free_threads > structs_per_buffer
-    // int n_structs = (int) (structs_per_buffer + structs_per_max_inference_time);
-    // but because we can have multiple instances (sessions) that use the same threadpool, we have to multiply structs_per_max_inference_time with the struct_per_buffer
-    // because each struct can take max_inference_time time to process and be free again
-    int n_structs = (int) (structs_per_buffer + structs_per_max_inference_time * std::ceil(structs_per_buffer/max_inference_times_per_buffer));
+    int max_possible_inferences = 0;
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
+        if (m_inference_config.get_preprocess_input_size()[i] > 0) {
+            float ratio_host_input = host_config.m_max_buffer_size / m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
+            float host_input_size = m_inference_config.get_preprocess_input_size()[i] * ratio_host_input;
+            max_possible_inferences = std::max(max_possible_inferences, max_num_inferences(host_input_size, m_inference_config.get_preprocess_input_size()[i]));
+        }
+    }
+    int structs_per_max_inference_time = std::ceil((float) max_inference_time_in_samples / (float) new_samples_needed_for_inference);
+    // We need to multiply the number of structs per max inference time with the maximum possible inferences, because all can run in parallel
+    int n_structs = (int) (max_possible_inferences + structs_per_max_inference_time * max_possible_inferences);
     return n_structs;
 }
 
 std::vector<unsigned int> SessionElement::calculate_latency(const HostAudioConfig& host_config) {
     std::vector<float> result_float;
     std::vector<unsigned int> result;
-    int max_possible_inferences = max_num_inferences(host_config.m_max_buffer_size, m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index]);
+    float max_possible_inferences = 0.f;
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
+        if (m_inference_config.get_preprocess_input_size()[i] > 0) {
+            float ratio_host_input = host_config.m_max_buffer_size / m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
+            float host_input_size = m_inference_config.get_preprocess_input_size()[i] * ratio_host_input;
+            max_possible_inferences = std::max(max_possible_inferences, (float) max_num_inferences(host_input_size, m_inference_config.get_preprocess_input_size()[i]));
+        }
+    }
     for (size_t i = 0; i < m_inference_config.get_postprocess_output_size().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] <= 0) {
             result_float.push_back(0);
@@ -176,30 +183,41 @@ std::vector<unsigned int> SessionElement::calculate_latency(const HostAudioConfi
     return result;
 }
 
-int SessionElement::calculate_buffer_adaptation(float host_buffer_size, int postprocess_output_size) {
-    float samples_in_buffer = host_buffer_size;
+int SessionElement::calculate_buffer_adaptation(float host_buffer_size, int postprocess_output_size) const {
     int res = 0;
-    for (float i = samples_in_buffer; i <= least_common_multiple(samples_in_buffer, postprocess_output_size) ; i+=samples_in_buffer) {
+    for (float i = host_buffer_size; i < least_common_multiple(std::floor(host_buffer_size), postprocess_output_size); i+=host_buffer_size) {
         float remainder = std::fmod(i, (float)postprocess_output_size);
         res = std::max<int>(res, std::ceil(remainder));
     }
+    // We do not want special handling of float buffer sizes as the user must then only pop data if he pushed enough for an int buffersize
     return res;
 }
 
-int SessionElement::max_num_inferences(float host_buffer_size, int postprocess_input_size) {
+int SessionElement::max_num_inferences(float host_buffer_size, int postprocess_input_size) const {
     float samples_in_buffer = host_buffer_size;
     int res = (int) (samples_in_buffer / (float) postprocess_input_size);
     res = std::max<int>(res, 1);
     int num_inferences = 0;
-    for (float i = samples_in_buffer; i < least_common_multiple(host_buffer_size, postprocess_input_size) ; i+=host_buffer_size) {
+    for (float i = samples_in_buffer; i < least_common_multiple(std::floor(host_buffer_size), postprocess_input_size); i+=host_buffer_size) {
         num_inferences = (int) (samples_in_buffer / (float) postprocess_input_size);
         res = std::max<int>(res, num_inferences);
         samples_in_buffer += host_buffer_size - num_inferences * postprocess_input_size;
     }
+    // Here we handle the maximum number of inferences that can be done with a float buffer size
+    if (std::fmod(host_buffer_size, 1.f) > 1e-6f) {
+        samples_in_buffer = host_buffer_size;
+        float remainder = 0.f;
+        do {
+            num_inferences = (int) (samples_in_buffer / (float) postprocess_input_size);
+            res = std::max<int>(res, num_inferences);
+            remainder = std::fmod(samples_in_buffer, 1.f);
+            samples_in_buffer += host_buffer_size - num_inferences * postprocess_input_size;
+        } while (remainder > std::fmod(samples_in_buffer, 1.f));
+    }
     return res;
 }
 
-int SessionElement::greatest_common_divisor(int a, int b) {
+int SessionElement::greatest_common_divisor(int a, int b) const {
     if (b == 0) {
         return a;
     } else {
@@ -207,12 +225,18 @@ int SessionElement::greatest_common_divisor(int a, int b) {
     }
 }
 
-int SessionElement::least_common_multiple(int a, int b) {
+int SessionElement::least_common_multiple(int a, int b) const {
     return a * b / greatest_common_divisor(a, b);
 }
 
-std::vector<size_t> SessionElement::calculate_send_buffer_sizes(const HostAudioConfig& spec, const std::vector<unsigned int>& init_samples, const size_t num_structs) const {
+std::vector<size_t> SessionElement::calculate_send_buffer_sizes(const HostAudioConfig& host_config, const std::vector<unsigned int>& init_samples, const size_t num_structs) const {
     std::vector<size_t> send_buffer_sizes;
+
+    int max_possible_inferences = max_num_inferences(host_config.m_max_buffer_size, m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index]);
+
+    int new_samples_needed_for_inference = m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
+    float structs_per_buffer = std::ceil((float) host_config.m_max_buffer_size / (float) new_samples_needed_for_inference);
+
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
         if (m_inference_config.get_preprocess_input_size()[i] > 0) {
             size_t buffer_size = m_inference_config.get_preprocess_input_size()[i] * 400;
@@ -224,7 +248,7 @@ std::vector<size_t> SessionElement::calculate_send_buffer_sizes(const HostAudioC
     return send_buffer_sizes;
 }
 
-std::vector<size_t> SessionElement::calculate_receive_buffer_sizes(const HostAudioConfig& spec, const std::vector<unsigned int>& init_samples, const size_t num_structs) const {
+std::vector<size_t> SessionElement::calculate_receive_buffer_sizes(const HostAudioConfig& host_config, const std::vector<unsigned int>& init_samples, const size_t num_structs) const {
     std::vector<size_t> receive_buffer_sizes;
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0) {

@@ -182,41 +182,35 @@ void Context::prepare_session(std::shared_ptr<SessionElement> session, HostAudio
 }
 
 void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
-    bool ready_for_preprocess = true;
-    while (ready_for_preprocess) {
+    while (true) {
         for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_input_shape().size(); tensor_index++) {
             if (session->m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
                 for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_input_channels()[tensor_index]; channel++) {
                     if (session->m_send_buffer[tensor_index].get_available_samples(channel) < session->m_inference_config.get_preprocess_input_size()[tensor_index]) {
-                        ready_for_preprocess = false;
-                        break;
+                        return;
                     }
                 }
-            }
-            if (!ready_for_preprocess) {
-                break;
             }
         }
-        if (ready_for_preprocess) {
-            bool success = pre_process(session);
-            
-            if (!success) {
-                for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_input_shape().size(); tensor_index++) {
-                    for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_input_channels()[tensor_index]; channel++) {
-                        for (size_t i = 0; i < session->m_inference_config.get_preprocess_input_size()[tensor_index]; i++) { // Non-streamable parameters have no input size
-                            session->m_send_buffer[tensor_index].pop_sample(channel);
-                        }
+        bool success = pre_process(session);
+        
+        if (!success) {
+            for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_input_shape().size(); tensor_index++) {
+                for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_input_channels()[tensor_index]; channel++) {
+                    for (size_t i = 0; i < session->m_inference_config.get_preprocess_input_size()[tensor_index]; i++) { // Non-streamable parameters have no input size
+                        session->m_send_buffer[tensor_index].pop_sample(channel);
                     }
                 }
-                for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_output_shape().size(); tensor_index++) {
-                    for (size_t channel = 0; channel < session->m_inference_config.get_postprocess_output_channels()[tensor_index]; channel++) { 
-                        for (size_t i = 0; i < session->m_inference_config.get_postprocess_output_size()[tensor_index]; i++) { // Non-streamable parameters have no output size
-                            session->m_receive_buffer[tensor_index].push_sample(channel, 0.f);
-                        }
-                    }
-                }
-                LOG_INFO << "[WARNING] No free inference queue found in session: " << session->m_session_id << "!" << std::endl;
             }
+            for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_output_shape().size(); tensor_index++) {
+                for (size_t channel = 0; channel < session->m_inference_config.get_postprocess_output_channels()[tensor_index]; channel++) { 
+                    for (size_t i = 0; i < session->m_inference_config.get_postprocess_output_size()[tensor_index]; i++) { // Non-streamable parameters have no output size
+                        session->m_receive_buffer[tensor_index].push_sample(channel, 0.f);
+                    }
+                }
+            }
+            LOG_INFO << "[WARNING] No free inference queue found in session: " << session->m_session_id << "!" << std::endl;
+            return;
         }
     }
 }

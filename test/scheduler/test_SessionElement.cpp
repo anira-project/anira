@@ -169,7 +169,7 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
                 ProcessingSpec({16, 2}, {1, 3}),
-                40.f
+                50.f
             ),
             9
         },
@@ -200,7 +200,7 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({8}, {1}),
                 12.f
             ),
-            9
+            6
         },
         // Edge cases with very small buffer sizes
         SessionElementTestParams {
@@ -240,7 +240,7 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 256}}, {{1, 1, 256}})},
                 100.f
             ),
-            42
+            40
         }
     ),
     build_test_name
