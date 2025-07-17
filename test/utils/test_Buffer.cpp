@@ -129,15 +129,3 @@ TEST(Buffer, InvalidChannelsSwap){
     ASSERT_EQ(buffer2_ptr, buffer2.data());
     ASSERT_EQ(output, std::string("Cannot swap data, buffers have different number of channels or sizes!\n"));
 }
-
-// TEST(Buffer, BlockOfBlocks){
-//     int block_size = 10;
-//     MemoryBlock<std::atomic<int>> block_of_atomics(block_size);
-//     for (int i = 0; i < block_size; i++) {
-//         block_of_atomics[i].store(i);
-//     }
-//     std::atomic<int> const* block_ptr = block_of_atomics.data();
-
-//     // TODO assert something here?
-
-// }
