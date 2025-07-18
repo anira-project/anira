@@ -42,7 +42,7 @@ std::ostream& operator<<(std::ostream& stream, const SessionElementTestParams& p
 class SessionElementTest: public ::testing::TestWithParam<SessionElementTestParams>{
 };
 
-TEST_P(SessionElementTest, StructAndRingbuffers){
+TEST_P(SessionElementTest, LatencyStructAndRingbuffers){
     auto test_params = GetParam();
     
     PrePostProcessor pp_processor(test_params.inference_config);
@@ -121,7 +121,7 @@ std::string build_test_name(const testing::TestParamInfo<SessionElementTest::Par
 }
 
 INSTANTIATE_TEST_SUITE_P(
- StructAndRingbuffers, SessionElementTest, ::testing::Values(
+    LatencyStructAndRingbuffers, SessionElementTest, ::testing::Values(
         // Basic test cases similar to InferenceManager tests
         SessionElementTestParams {
             HostAudioConfig(2048, 48000),
@@ -136,11 +136,56 @@ INSTANTIATE_TEST_SUITE_P(
             {6144}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
+            HostAudioConfig(2048, 48000),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+                17.f,
+                0,
+                false,
+                0.5f
+            ),
+            {0},
+            2,
+            {2048}, // Expected send buffer sizes
+            {4096}  // Expected receive buffer sizes
+        },
+        SessionElementTestParams {
             HostAudioConfig(2048, 48000, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                20.f
+                20.f,
+                0,
+                false,
+                0.5f
+            ),
+            {3967},
+            2,
+            {4096}, // Expected send buffer sizes
+            {8063}  // Expected receive buffer sizes
+        },
+        SessionElementTestParams {
+            HostAudioConfig(2048, 48000, true),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+                10.f,
+                0,
+                false,
+                0.5f
+            ),
+            {3007},
+            2,
+            {4096}, // Expected send buffer sizes
+            {7103}  // Expected receive buffer sizes
+        },
+        SessionElementTestParams {
+            HostAudioConfig(2048, 48000, true),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+                19.f
             ),
             {4095},
             2,
@@ -285,6 +330,35 @@ INSTANTIATE_TEST_SUITE_P(
             6,
             {6}, // Expected send buffer sizes
             {9727}  // Expected receive buffer sizes
+        },
+        SessionElementTestParams {
+            HostAudioConfig(2.5, 48000./1024., true),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
+                ProcessingSpec({8}, {1}),
+                4.f,
+                0,
+                false,
+                0.5f
+            ),
+            {1407},
+            6,
+            {6}, // Expected send buffer sizes
+            {7551}  // Expected receive buffer sizes
+        },
+        SessionElementTestParams {
+            HostAudioConfig(2048, 48000, true),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 1, 10000}}, {{1, 1, 2048}})},
+                ProcessingSpec({1}, {1}, {2048}, {2048}),
+                21.f
+            ),
+            {4095},
+            2,
+            {12048}, // Expected send buffer sizes
+            {8191}  // Expected receive buffer sizes
         },
         // Edge cases with very small buffer sizes
         SessionElementTestParams {

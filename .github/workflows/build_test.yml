@@ -26,28 +26,12 @@ jobs:
         include:
           - name: Linux-x86_64
             os: ubuntu-latest
-            controlled_blocking: OFF
-          - name: Linux-x86_64-controlled_blocking
-            os: ubuntu-latest
-            controlled_blocking: ON
           - name: macOS-x86_64
             os: macOS-latest
-            controlled_blocking: OFF
-          - name: macOS-x86_64-controlled_blocking
-            os: macOS-latest
-            controlled_blocking: ON
           - name: macOS-arm64
             os: macOS-latest
-            controlled_blocking: OFF
-          - name: macOS-arm64-controlled_blocking
-            os: macOS-latest
-            controlled_blocking: ON
           - name: Windows-x86_64
             os: windows-latest
-            controlled_blocking: OFF
-          - name: Windows-x86_64-controlled_blocking
-            os: windows-latest
-            controlled_blocking: ON
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -63,6 +47,6 @@ jobs:
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_CONTROLLED_BLOCKING=${{ matrix.controlled_blocking }}"
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON"
       - name: test
         uses: ./.github/actions/test

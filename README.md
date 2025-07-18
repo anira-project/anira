@@ -117,9 +117,7 @@ By default, all three inference engines are installed. You can disable specific 
 - OnnxRuntime: `-DANIRA_WITH_ONNXRUNTIME=OFF`
 - Tensrflow Lite: `-DANIRA_WITH_TFLITE=OFF`
 
-To allow a controversial approach of controlled blocking in the audio callback to further reduce latency, a flag can be set to allow the use of a semaphore. The semaphore is not 100% real-time safe, but it allows the use of the `wait_in_process_block` option in the `InferenceConfig` class. We only recommend that you use this option if you are not spawning multiple instances of the `InferenceHandler` in serial. By default, we use a real-time safe raw atomic operation.
-
-- Use controlled blocking operation for further latency reduction: `-DANIRA_WITH_CONTROLLED_BLOCKING=ON`
+To allow a controversial approach of controlled blocking in the audio callback to further reduce latency, a flag can be set to allow the use of a semaphore. The semaphore is not 100% real-time safe, but it allows the use of the `blocking_ratio` option in the `InferenceConfig` class. We only recommend that you use this option if you are not spawning multiple instances of the `InferenceHandler` in serial. By default, we use a real-time safe raw atomic operation.
 
 Moreover, the following options are available:
 

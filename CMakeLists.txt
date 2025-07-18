@@ -17,7 +17,6 @@ option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
 option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 
 # Shall the use of a controlled blocking operation for further reduction of latency be enabled?
-option(ANIRA_WITH_CONTROLLED_BLOCKING "Use of controlled blocking operation for further reduction of latency" OFF)
 option(ANIRA_WITH_LOGGING "Enable logging printouts" ON)
 option(ANIRA_WITH_RADSAN "Enable RealtimeSanitizer (RADSan) checks (requires RADSan clang)" OFF)
 
@@ -110,10 +109,6 @@ if(ANIRA_WITH_TFLITE)
     list(APPEND BACKEND_SOURCES src/backends/TFLiteProcessor.cpp)
 endif()
 
-if(ANIRA_WITH_CONTROLLED_BLOCKING)
-    message(STATUS "Using controlled blocking operation for further reduction of latency.")
-endif()
-
 ## ==============================================================================
 # Fetch threadsafe queue
 # ==============================================================================
@@ -200,8 +195,6 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
-    # Controlled blocking option definition
-    $<$<BOOL:${ANIRA_WITH_CONTROLLED_BLOCKING}>:USE_CONTROLLED_BLOCKING>
     $<$<BOOL:${ANIRA_WITH_LOGGING}>:ENABLE_LOGGING>
     # Version number
     -DANIRA_VERSION="${PROJECT_VERSION_FULL}"

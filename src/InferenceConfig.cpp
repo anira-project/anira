@@ -10,10 +10,8 @@ InferenceConfig::InferenceConfig (
         float max_inference_time,
         unsigned int warm_up,
         bool session_exclusive_processor,
+        float blocking_ratio,
         unsigned int num_parallel_processors
-#ifdef USE_CONTROLLED_BLOCKING
-        , float wait_in_process_block
-#endif
         ) :
         m_model_data(model_data),
         m_tensor_shape(tensor_shape),
@@ -21,10 +19,8 @@ InferenceConfig::InferenceConfig (
         m_processing_spec(processing_spec),
         m_warm_up(warm_up),
         m_session_exclusive_processor(session_exclusive_processor),
+        m_blocking_ratio(blocking_ratio),
         m_num_parallel_processors(num_parallel_processors)
-#ifdef USE_CONTROLLED_BLOCKING
-        , m_wait_in_process_block(wait_in_process_block)
-#endif
 {
     update_processing_spec();
 

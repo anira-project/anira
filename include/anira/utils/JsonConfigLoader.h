@@ -119,10 +119,8 @@ private:
                     single_parameters.m_max_inference_time,
                     single_parameters.m_warm_up,
                     single_parameters.m_session_exclusive_processor,
+                    single_parameters.m_blocking_ratio,
                     single_parameters.m_num_parallel_processors
-#ifdef USE_CONTROLLED_BLOCKING
-                    , single_parameters.m_wait_in_process_block
-#endif
                 );
             } else {
                 m_inference_config = std::make_unique<anira::InferenceConfig>(
@@ -131,10 +129,8 @@ private:
                     single_parameters.m_max_inference_time,
                     single_parameters.m_warm_up,
                     single_parameters.m_session_exclusive_processor,
+                    single_parameters.m_blocking_ratio,
                     single_parameters.m_num_parallel_processors
-#ifdef USE_CONTROLLED_BLOCKING
-                    , single_parameters.m_wait_in_process_block
-#endif
                 );
             }
         }
@@ -328,10 +324,8 @@ private:
         float m_max_inference_time = 0.f;
         unsigned int m_warm_up = anira::InferenceConfig::Defaults::m_warm_up;
         bool m_session_exclusive_processor = anira::InferenceConfig::Defaults::m_session_exclusive_processor;
+        float m_blocking_ratio = anira::InferenceConfig::Defaults::m_blocking_ratio;
         unsigned int m_num_parallel_processors = anira::InferenceConfig::Defaults::m_num_parallel_processors;
-#ifdef USE_CONTROLLED_BLOCKING
-        float m_wait_in_process_block = anira::InferenceConfig::Defaults::m_wait_in_process_block;
-#endif
     };
 
     static SingleParameterStruct create_single_parameters_from_config(const nlohmann::basic_json<>& config, bool& necessary_parameter_set)
@@ -372,6 +366,16 @@ private:
             }
         }
 
+        if (config.contains("blocking_ratio")) {
+            const auto& blocking_ratio_json = config.at("blocking_ratio");
+            if (blocking_ratio_json.is_number_float()) {
+                const float blocking_ratio = blocking_ratio_json.get<float>();
+                single_parameters.m_blocking_ratio = blocking_ratio;
+            } else {
+                LOG_ERROR << "Invalid 'blocking_ratio' value: expected a float." << std::endl;
+            }
+        }
+
         if (config.contains("num_parallel_processors")) {
             const auto& num_parallel_processors_json = config.at("num_parallel_processors");
             if (num_parallel_processors_json.is_number_unsigned()) {
@@ -381,22 +385,6 @@ private:
                 LOG_ERROR << "Invalid 'num_parallel_processors' value: expected an unsigned integer." << std::endl;
             }
         }
-#ifdef USE_CONTROLLED_BLOCKING
-        if (config.contains("wait_in_process_block")) {
-            const auto& wait_in_process_block_json = config.at("wait_in_process_block");
-            if (wait_in_process_block_json.is_number_float()) {
-                const float wait_in_process_block = wait_in_process_block_json.get<float>();
-                single_parameters.m_wait_in_process_block = wait_in_process_block;
-            } else {
-                LOG_ERROR << "Invalid 'wait_in_process_block' value: expected a float." << std::endl;
-            }
-        }
-#else
-        if (config.contains("wait_in_process_block")) {
-            LOG_INFO << "Invalid 'wait_in_process_block' value: anira was configured without the 'USE_CONTROLLED_BLOCKING' feature." << std::endl;
-        }
-#endif
-
         return single_parameters;
     }
 

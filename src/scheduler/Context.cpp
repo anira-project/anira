@@ -23,9 +23,6 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
         if (m_context->m_context_config.m_enabled_backends != context_config.m_enabled_backends) {
             LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!" << std::endl;
         }
-        if (m_context->m_context_config.m_use_controlled_blocking != context_config.m_use_controlled_blocking) {
-            LOG_ERROR << "[ERROR] Context already initialized with with different controlled blocking option!" << std::endl;
-        }
         if ((unsigned int) m_context->m_thread_pool.size() > context_config.m_num_threads) {
             m_context->new_num_threads(context_config.m_num_threads);
             m_context->m_context_config.m_num_threads = context_config.m_num_threads;
@@ -216,32 +213,34 @@ void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
 }
 
 void Context::new_data_request(std::shared_ptr<SessionElement> session, double buffer_size_in_sec) {
-#ifdef USE_CONTROLLED_BLOCKING
-    auto timeToProcess = std::chrono::microseconds(static_cast<long>(buffer_size_in_sec * 1e6 * session->m_inference_config.m_wait_in_process_block));
+    auto timeToProcess = std::chrono::microseconds(static_cast<long>(buffer_size_in_sec * 1e6 * session->m_inference_config.m_blocking_ratio));
     auto currentTime = std::chrono::system_clock::now();
-    auto waitUntil = currentTime + timeToProcess;
-#endif
+    auto waitUntil = currentTime + timeToProcess; // TODO: Not needed for session->m_inference_config.m_blocking_ratio = 0.f..
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
                 if (session->m_is_non_real_time) {
-#ifdef USE_CONTROLLED_BLOCKING
-                    session->m_inference_queue[i]->m_done.acquire();
-#else
-                    while (!session->m_inference_queue[i]->m_done.load(std::memory_order_acquire)) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+                        session->m_inference_queue[i]->m_done_semaphore.acquire();
+                    } else {
+                        while (!session->m_inference_queue[i]->m_done_atomic.exchange(false, std::memory_order::acquire)) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        }
                     }
-#endif
-                }
-#ifdef USE_CONTROLLED_BLOCKING
-                if (session->m_inference_queue[i]->m_done.try_acquire_until(waitUntil)) {
-#else
-                if (session->m_inference_queue[i]->m_done.exchange(false)) {
-#endif
-                    session->m_time_stamps.pop_back();
-                    post_process(session, session->m_inference_queue[i]);
                 } else {
-                    return;
+                    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+                        if (session->m_inference_queue[i]->m_done_semaphore.try_acquire_until(waitUntil)) {
+                            session->m_time_stamps.pop_back();
+                            post_process(session, session->m_inference_queue[i]);
+                        } else {
+                            return;
+                        }
+                    } else if (session->m_inference_queue[i]->m_done_atomic.exchange(false, std::memory_order::acquire)) {
+                        session->m_time_stamps.pop_back();
+                        post_process(session, session->m_inference_queue[i]);
+                    } else {
+                        return;
+                    }
                 }
                 break;
             }

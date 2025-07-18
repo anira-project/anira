@@ -25,26 +25,18 @@ struct ANIRA_API ContextConfig {
 #ifdef USE_TFLITE
         m_enabled_backends.push_back(InferenceBackend::TFLITE);
 #endif
-#ifdef USE_CONTROLLED_BLOCKING
-        m_use_controlled_blocking = true;
-#else
-        m_use_controlled_blocking = false;
-#endif
     }
 
     unsigned int m_num_threads;
     std::string m_anira_version = ANIRA_VERSION;
     std::vector<InferenceBackend> m_enabled_backends;
-    bool m_use_controlled_blocking;
     
 
     bool operator==(const ContextConfig& other) const {
         return
             m_num_threads == other.m_num_threads &&
             m_anira_version == other.m_anira_version &&
-            m_enabled_backends == other.m_enabled_backends &&
-            m_use_controlled_blocking == other.m_use_controlled_blocking;
-
+            m_enabled_backends == other.m_enabled_backends;
     }
 
     bool operator!=(const ContextConfig& other) const {

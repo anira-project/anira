@@ -73,11 +73,11 @@ bool InferenceThread::execute() {
 void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
     session->m_active_inferences.fetch_add(1, std::memory_order::release);
     inference(session, thread_safe_struct->m_tensor_input_data, thread_safe_struct->m_tensor_output_data);
-#ifdef USE_CONTROLLED_BLOCKING
-    thread_safe_struct->m_done.release();
-#else
-    thread_safe_struct->m_done.store(true, std::memory_order::release);
-#endif
+    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+        thread_safe_struct->m_done_semaphore.release();
+    } else {
+        thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
+    }
     session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 }
 

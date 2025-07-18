@@ -187,13 +187,11 @@ public:
     {
         static constexpr unsigned int m_warm_up = 0;
         static constexpr bool m_session_exclusive_processor = false;
+        static constexpr float m_blocking_ratio = 0.f;
         inline static unsigned int m_num_parallel_processors =
             (std::thread::hardware_concurrency() / 2 > 0)
                 ? std::thread::hardware_concurrency() / 2
                 : 1;
-#ifdef USE_CONTROLLED_BLOCKING
-        static constexpr float m_wait_in_process_block = 0.f;
-#endif
     };
 
     InferenceConfig() = default;
@@ -205,10 +203,8 @@ public:
             float max_inference_time, // in ms per inference
             unsigned int warm_up = Defaults::m_warm_up, // number of warm up inferences
             bool session_exclusive_processor = Defaults::m_session_exclusive_processor,
+            float blocking_ratio = Defaults::m_blocking_ratio,
             unsigned int num_parallel_processors = Defaults::m_num_parallel_processors
-#ifdef USE_CONTROLLED_BLOCKING
-            , float wait_in_process_block = Defaults::m_wait_in_process_block
-#endif
             );
     
     InferenceConfig(
@@ -217,10 +213,8 @@ public:
             float max_inference_time, // in ms per inference
             unsigned int warm_up = Defaults::m_warm_up, // number of warm up inferences
             bool session_exclusive_processor = Defaults::m_session_exclusive_processor,
+            float blocking_ratio = Defaults::m_blocking_ratio,
             unsigned int num_parallel_processors = Defaults::m_num_parallel_processors
-#ifdef USE_CONTROLLED_BLOCKING
-            , float wait_in_process_block = Defaults::m_wait_in_process_block
-#endif
             ) :
         InferenceConfig(
             std::move(model_data),
@@ -229,10 +223,8 @@ public:
             max_inference_time,
             warm_up,
             session_exclusive_processor,
+            blocking_ratio,
             num_parallel_processors
-#ifdef USE_CONTROLLED_BLOCKING
-            , wait_in_process_block
-#endif
             ) {}
 
     std::string get_model_path(InferenceBackend backend);
@@ -267,11 +259,8 @@ public:
     float m_max_inference_time;
     unsigned int m_warm_up;
     bool m_session_exclusive_processor;
+    float m_blocking_ratio;
     unsigned int m_num_parallel_processors;
-
-#ifdef USE_CONTROLLED_BLOCKING
-    float m_wait_in_process_block;
-#endif
     
     bool operator==(const InferenceConfig& other) const {
         return
@@ -281,10 +270,8 @@ public:
             m_processing_spec == other.m_processing_spec &&
             m_warm_up == other.m_warm_up &&
             m_session_exclusive_processor == other.m_session_exclusive_processor &&
+            std::abs(m_blocking_ratio - other.m_blocking_ratio) < 1e-6 &&
             m_num_parallel_processors == other.m_num_parallel_processors
-#ifdef USE_CONTROLLED_BLOCKING
-            && std::abs(m_wait_in_process_block - other.m_wait_in_process_block) < 1e-6
-#endif 
             ;
     }
 

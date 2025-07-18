@@ -1,9 +1,7 @@
 #ifndef ANIRA_SESSIONELEMENT_H
 #define ANIRA_SESSIONELEMENT_H
 
-#ifdef USE_CONTROLLED_BLOCKING
-    #include <semaphore>
-#endif
+#include <semaphore>
 #include <atomic>
 #include <queue>
 
@@ -59,11 +57,9 @@ public:
     struct ThreadSafeStruct {
         ThreadSafeStruct(std::vector<size_t> tensor_input_size, std::vector<size_t> tensor_output_size);
         std::atomic<bool> m_free{true};
-#ifdef USE_CONTROLLED_BLOCKING
-        std::binary_semaphore m_done{false};
-#else
-        std::atomic<bool> m_done{false};
-#endif
+        std::binary_semaphore m_done_semaphore{false};
+        std::atomic<bool> m_done_atomic{false};
+        
         unsigned long m_time_stamp;
         std::vector<BufferF> m_tensor_input_data;
         std::vector<BufferF> m_tensor_output_data;
@@ -108,7 +104,8 @@ private:
     std::vector<unsigned int> sync_latencies(const std::vector<float>& latencies) const;
     float max_num_inferences(const HostAudioConfig& host_config) const;
     int calculate_buffer_adaptation(float host_buffer_size, int postprocess_output_size) const;
-    int calculate_inference_caused_latency(float max_possible_inferences, float host_buffer_size, float host_sample_rate) const;
+    int calculate_inference_caused_latency(float max_possible_inferences, float host_buffer_size, float host_sample_rate, float wait_time) const;
+    float calculate_wait_time(float host_buffer_size, float host_sample_rate) const;
     int greatest_common_divisor(int a, int b) const;
     int least_common_multiple(int a, int b) const;
 
