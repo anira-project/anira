@@ -131,18 +131,21 @@ void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
 #if MODEL_TO_USE != 7
     anira::HostAudioConfig host_config {
         static_cast<float>(samplesPerBlock),
-        static_cast<float>(sampleRate)
+        static_cast<float>(sampleRate),
+        // true // Shall smaller buffers be allowed? If true more latency
     };
     inference_handler.prepare(host_config);
 #else
     anira::HostAudioConfig host_config_encoder {
         static_cast<float>(samplesPerBlock),
         static_cast<float>(sampleRate),
+        // true // Shall smaller buffers be allowed? If true more latency
     };
     // The decoder needs to be prepared with the buffer size and sample rate of the latent space.
     anira::HostAudioConfig host_config_decoder {
         static_cast<float>((float) samplesPerBlock / 2048.f),
         static_cast<float>((float) sampleRate / 2048.f),
+        // true // Shall smaller buffers be allowed?
     };
     inference_handler_encoder.prepare(host_config_encoder);
     inference_handler_decoder.prepare(host_config_decoder);

@@ -57,7 +57,7 @@ std::ostream& operator<<(std::ostream& stream, const InferenceTestParams& params
     
     stream << "{ ";
     stream << "backend = " << backend;
-    stream << ", max_host_buffer_size = " << params.host_config.m_max_buffer_size;
+    stream << ", host_buffer_size = " << params.host_config.m_buffer_size;
     stream << ", host_sample_rate = " << params.host_config.m_sample_rate;
     stream << " }";
 
@@ -75,7 +75,7 @@ class InferenceTest: public ::testing::TestWithParam<InferenceTestParams>{
 TEST_P(InferenceTest, Simple){
 
     auto const& test_params = GetParam();
-    auto const& buffer_size = test_params.host_config.m_max_buffer_size;
+    auto const& buffer_size = test_params.host_config.m_buffer_size;
     auto const& reference_offset = test_params.reference_data_offset;
 
     // read reference data
@@ -155,7 +155,7 @@ std::string build_test_name(const testing::TestParamInfo<InferenceTest::ParamTyp
 
     // Set precision to 4 decimal places for cleaner names
     ss_sample_rate << std::fixed << std::setprecision(4) << info.param.host_config.m_sample_rate;
-    ss_buffer_size << std::fixed << std::setprecision(4) << info.param.host_config.m_max_buffer_size;
+    ss_buffer_size << std::fixed << std::setprecision(4) << info.param.host_config.m_buffer_size;
     
     std::string sample_rate_str = ss_sample_rate.str();
     std::string buffer_size_str = ss_buffer_size.str();

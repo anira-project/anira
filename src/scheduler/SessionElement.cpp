@@ -36,10 +36,42 @@ void SessionElement::clear() {
 void SessionElement::prepare(const HostAudioConfig& host_config) {
     m_host_config = host_config;
 
-    // Calculate the latency, number of structs needed and the sizes of the send and receive buffers
+    // Calculate the latency, number of structs needed
     m_latency.clear();
-    m_latency = calculate_latency(host_config);
+    std::vector<float> latency = calculate_latency(host_config);
+    m_latency = sync_latencies(latency);
     m_num_structs = calculate_num_structs(host_config);
+
+    // If the host config allows smaller buffers, we need to adjust the latency and number of structs
+    if (host_config.m_allow_smaller_buffers) {
+        HostAudioConfig adjusted_config = host_config;
+        std::vector<float> adjusted_latency;
+        size_t adjusted_num_structs;
+
+        while (--adjusted_config.m_buffer_size > 0) {
+            adjusted_latency = calculate_latency(adjusted_config);
+            for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+                if (m_inference_config.get_postprocess_output_size()[i] > 0) {
+                    int buffer_adaptation = calculate_buffer_adaptation(adjusted_config.get_relative_buffer_size(m_inference_config, i, false), m_inference_config.get_postprocess_output_size()[i]);
+                    int additional_latency = std::max(0, static_cast<int>(std::ceil(host_config.get_relative_buffer_size(m_inference_config, i, false))) - buffer_adaptation);
+                    adjusted_latency[i] = adjusted_latency[i] + additional_latency;
+                }
+            }
+            std::vector<unsigned int> adjusted_latency_synced = sync_latencies(adjusted_latency);
+
+            for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+                if (adjusted_latency_synced[i] > m_latency[i])
+                    m_latency[i] = adjusted_latency_synced[i];
+            }
+
+            adjusted_num_structs = calculate_num_structs(adjusted_config);
+
+            if (adjusted_num_structs > m_num_structs)
+                m_num_structs = adjusted_num_structs;
+        }
+    }
+
+    // Calculate the max size of the send and receive buffers
     m_send_buffer_size.clear();
     m_receive_buffer_size.clear();
     m_send_buffer_size = calculate_send_buffer_sizes(host_config);
@@ -116,8 +148,7 @@ size_t SessionElement::calculate_num_structs(const HostAudioConfig& host_config)
     int max_possible_inferences = 0;
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
         if (m_inference_config.get_preprocess_input_size()[i] > 0) {
-            float ratio_host_input = host_config.m_max_buffer_size / m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
-            float host_input_size = m_inference_config.get_preprocess_input_size()[i] * ratio_host_input;
+            float host_input_size = host_config.get_relative_buffer_size(m_inference_config, i, true);
             max_possible_inferences = std::max(max_possible_inferences, max_num_inferences(host_input_size, m_inference_config.get_preprocess_input_size()[i]));
         }
     }
@@ -127,14 +158,12 @@ size_t SessionElement::calculate_num_structs(const HostAudioConfig& host_config)
     return n_structs;
 }
 
-std::vector<unsigned int> SessionElement::calculate_latency(const HostAudioConfig& host_config) {
+std::vector<float> SessionElement::calculate_latency(const HostAudioConfig& host_config) {
     std::vector<float> result_float;
-    std::vector<unsigned int> result;
     float max_possible_inferences = 0.f;
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
         if (m_inference_config.get_preprocess_input_size()[i] > 0) {
-            float ratio_host_input = host_config.m_max_buffer_size / m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
-            float host_input_size = m_inference_config.get_preprocess_input_size()[i] * ratio_host_input;
+            float host_input_size = host_config.get_relative_buffer_size(m_inference_config, i, true);
             max_possible_inferences = std::max(max_possible_inferences, (float) max_num_inferences(host_input_size, m_inference_config.get_preprocess_input_size()[i]));
         }
     }
@@ -142,10 +171,8 @@ std::vector<unsigned int> SessionElement::calculate_latency(const HostAudioConfi
         if (m_inference_config.get_postprocess_output_size()[i] <= 0) {
             result_float.push_back(0);
         } else {
-            float ratio_host_input = host_config.m_max_buffer_size / m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
-            float host_output_size = m_inference_config.get_postprocess_output_size()[i] * ratio_host_input;
-            float ratio_input_output = (float) m_inference_config.get_postprocess_output_size()[i] / (float) m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
-            float sample_rate = host_config.m_sample_rate * ratio_input_output;
+            float host_output_size = host_config.get_relative_buffer_size(m_inference_config, i, false);
+            float sample_rate = host_config.get_relative_sample_rate(m_inference_config, i, false);
             float host_buffer_time = host_output_size * 1000.f / sample_rate;
 #ifdef USE_CONTROLLED_BLOCKING
             float wait_time = m_inference_config.m_wait_in_process_block * host_buffer_time;
@@ -162,25 +189,29 @@ std::vector<unsigned int> SessionElement::calculate_latency(const HostAudioConfi
             result_float.push_back(buffer_adaptation + inference_caused_latency);
         }
     }
-    if (result_float.size() > 1) {
+
+    return result_float;
+}
+
+std::vector<unsigned int> SessionElement::sync_latencies(const std::vector<float>& latencies) const {
+    std::vector<unsigned int> result;
+    if (latencies.size() > 1) {
         float latency_ratio = 0.f;
-        for (size_t i = 0; i < result_float.size(); ++i) {
+        for (size_t i = 0; i < latencies.size(); ++i) {
             // check because otherwise we would divide by zero
             if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-                latency_ratio = std::max<float>(latency_ratio, (float) result_float[i] / m_inference_config.get_postprocess_output_size()[i]);
+                latency_ratio = std::max<float>(latency_ratio, latencies[i] / m_inference_config.get_postprocess_output_size()[i]);
             }
         }
-        for (size_t i = 0; i < result_float.size(); ++i) {
+        for (size_t i = 0; i < latencies.size(); ++i) {
             if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-                result_float[i] = std::ceil(latency_ratio) * m_inference_config.get_postprocess_output_size()[i];
-                result.push_back(std::ceil(result_float[i] + m_inference_config.get_internal_latency()[i])); // Add the internal latency to the result
+                result.push_back(std::ceil(latency_ratio * m_inference_config.get_postprocess_output_size()[i]));
             } else {
                 result.push_back(0); // If no output size, just return 0
             }
         }
-    }
-    else {
-        result.push_back(std::ceil(result_float[0] + m_inference_config.get_internal_latency()[0])); // If only one output size, just return the calculated value
+    } else {
+        result.push_back(std::ceil(latencies[0] + m_inference_config.get_internal_latency()[0])); // If only one output size, just return the calculated value
     }
     return result;
 }
@@ -236,12 +267,15 @@ std::vector<size_t> SessionElement::calculate_send_buffer_sizes(const HostAudioC
 
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
         if (m_inference_config.get_preprocess_input_size()[i] > 0) {
-            float ratio_host_input = host_config.m_max_buffer_size / m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
-            int host_input_size = std::ceil(m_inference_config.get_preprocess_input_size()[i] * ratio_host_input);
+            int host_input_size = std::ceil(host_config.get_relative_buffer_size(m_inference_config, i, true));
             int preprocess_input_size = m_inference_config.get_preprocess_input_size()[i];
             int buffer_adaptation = calculate_buffer_adaptation(host_input_size, preprocess_input_size);
             int past_samples_needed = std::max(static_cast<int>(m_inference_config.get_tensor_input_size()[i]/m_inference_config.get_preprocess_input_channels()[i]) - preprocess_input_size, 0);
-            send_buffer_sizes.push_back(host_input_size + buffer_adaptation + past_samples_needed + host_input_size); // 2 host_input_size because of not full buffers
+            int result = host_input_size + buffer_adaptation + past_samples_needed;
+            if (host_config.m_allow_smaller_buffers) {
+                result += host_input_size;
+            }
+            send_buffer_sizes.push_back(result);
         } else {
             send_buffer_sizes.push_back(0);
         }
@@ -253,11 +287,9 @@ std::vector<size_t> SessionElement::calculate_receive_buffer_sizes(const HostAud
     std::vector<size_t> receive_buffer_sizes;
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-            float ratio_host_input = host_config.m_max_buffer_size / m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index];
-            int host_output_size = std::ceil(m_inference_config.get_postprocess_output_size()[i] * ratio_host_input);
             int postprocess_output_size = m_inference_config.get_postprocess_output_size()[i];
             int new_samples = std::ceil(m_num_structs * postprocess_output_size);
-            receive_buffer_sizes.push_back(new_samples + host_output_size); // Add host_output_size to account for the not full buffers
+            receive_buffer_sizes.push_back(new_samples + m_latency[i]);
         } else {
             receive_buffer_sizes.push_back(0);
         }

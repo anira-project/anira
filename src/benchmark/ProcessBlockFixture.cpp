@@ -65,7 +65,7 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
             m_host_config = host_config;
         }
         std::cout << "\n----------------------------------------------------------------------------------------------------------------------------------------" << std::endl;
-        std::cout << "Model: " << m_model_name << " | Backend: " << m_inference_backend_name << " | Host Sample Rate: " << std::fixed << std::setprecision(0) << m_host_config.m_sample_rate << " Hz | Host Buffer Size: " << m_host_config.m_max_buffer_size << " = " << std::fixed << std::setprecision(4) << (float) m_host_config.m_max_buffer_size * 1000.f/m_host_config.m_sample_rate << " ms" << std::endl;
+        std::cout << "Model: " << m_model_name << " | Backend: " << m_inference_backend_name << " | Host Sample Rate: " << std::fixed << std::setprecision(0) << m_host_config.m_sample_rate << " Hz | Host Buffer Size: " << m_host_config.m_buffer_size << " = " << std::fixed << std::setprecision(4) << (float) m_host_config.m_buffer_size * 1000.f/m_host_config.m_sample_rate << " ms" << std::endl;
         std::cout << "----------------------------------------------------------------------------------------------------------------------------------------\n" << std::endl;
     }
 
@@ -77,7 +77,7 @@ bool ProcessBlockFixture::buffer_processed() {
 
 void ProcessBlockFixture::push_random_samples_in_buffer(anira::HostAudioConfig host_config) {
     for (size_t channel = 0; channel < m_inference_config.get_preprocess_input_channels()[0]; channel++) {
-        for (size_t sample = 0; sample < host_config.m_max_buffer_size; sample++) {
+        for (size_t sample = 0; sample < host_config.m_buffer_size; sample++) {
             m_buffer->set_sample(channel, sample, random_sample());
         }
     }

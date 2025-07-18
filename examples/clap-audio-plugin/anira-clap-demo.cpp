@@ -155,9 +155,13 @@ bool AniraClapPluginExample::audioPortsInfo(uint32_t index, bool isInput,
 bool AniraClapPluginExample::activate(double sampleRate, uint32_t minFrameCount,
                              uint32_t maxFrameCount) noexcept
 {
-    anira::HostAudioConfig config ((size_t) maxFrameCount, sampleRate);
+    anira::HostAudioConfig host_config {
+        static_cast<float>(maxFrameCount),
+        static_cast<float>(sampleRate),
+        // true, // Allow smaller buffers? Introduces more latency
+    };
 
-    m_inference_handler.prepare(config);
+    m_inference_handler.prepare(host_config);
 
     m_plugin_latency = (uint32_t) m_inference_handler.get_latency();
     m_dry_wet_mixer.prepare(sampleRate, maxFrameCount, (size_t) m_plugin_latency);
