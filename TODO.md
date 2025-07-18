@@ -2,7 +2,6 @@
 
 ## Architecture
 
-- [ ] Dynamic Ringbuffer sizes
 - [ ] Model and context config should be also available as json file
 - [ ] InferenceConfig should return bool if correct
 - [ ] RTSan check in CI

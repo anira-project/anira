@@ -33,20 +33,20 @@ struct ANIRA_API HostAudioConfig {
     }
 
     float get_relative_buffer_size(const InferenceConfig& inference_config, size_t tensor_index, bool input = true) const {
-        float ratio_buffer_size = m_buffer_size / inference_config.get_preprocess_input_size()[m_tensor_index];
+        float ratio_buffer_size = m_buffer_size / static_cast<float>(inference_config.get_preprocess_input_size()[m_tensor_index]);
         if (input) {
-            return inference_config.get_preprocess_input_size()[tensor_index] * ratio_buffer_size;
+            return static_cast<float>(inference_config.get_preprocess_input_size()[tensor_index]) * ratio_buffer_size;
         } else {
-            return inference_config.get_postprocess_output_size()[tensor_index] * ratio_buffer_size;
+            return static_cast<float>(inference_config.get_postprocess_output_size()[tensor_index]) * ratio_buffer_size;
         }
     }
 
     float get_relative_sample_rate(const InferenceConfig& inference_config, size_t tensor_index, bool input = true) const {
-        float ratio_sample_rate = m_sample_rate / inference_config.get_preprocess_input_size()[m_tensor_index];
+        float ratio_sample_rate = m_sample_rate / static_cast<float>(inference_config.get_preprocess_input_size()[m_tensor_index]);
         if (input) {
-            return inference_config.get_preprocess_input_size()[tensor_index] * ratio_sample_rate;
+            return static_cast<float>(inference_config.get_preprocess_input_size()[tensor_index]) * ratio_sample_rate;
         } else {
-            return inference_config.get_postprocess_output_size()[tensor_index] * ratio_sample_rate;
+            return static_cast<float>(inference_config.get_postprocess_output_size()[tensor_index]) * ratio_sample_rate;
         }
     }
 };
