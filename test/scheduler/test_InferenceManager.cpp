@@ -113,7 +113,7 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
                 40.f
             ),
-            { 2048 }
+            { 5886 }
         },
         InferenceManagerTestParams {
             HostAudioConfig(1, 48000.0/2048),
@@ -130,9 +130,9 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 4, 1}})},
                 ProcessingSpec({1}, {4}),
-                40.f
+                20.f
             ),
-            { 3 }
+            { 2 }
         },
         InferenceManagerTestParams {
             HostAudioConfig(1./256., 48000./2048.),
@@ -162,7 +162,7 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({16}, {1, 2}),
                 40.f
             ),
-            { 2048, 256 }
+            { 6144, 768 }
         },
         InferenceManagerTestParams {
             HostAudioConfig(256., 48000./8, false, 1),
@@ -182,7 +182,7 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({16, 2}, {1, 3}),
                 40.f
             ),
-            { 4896, 306 }
+            { 6144, 384 }
         },
         InferenceManagerTestParams {
             HostAudioConfig(128., 48000./8, true, 1),
@@ -192,7 +192,7 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({16, 2}, {2}),
                 40.f
             ),
-            { 4896 }
+            { 4924 }
         },
         // Non-power-of-two buffer size tests
         InferenceManagerTestParams {
@@ -224,6 +224,16 @@ INSTANTIATE_TEST_SUITE_P(
             { 3072 }
         },
         InferenceManagerTestParams {
+            HostAudioConfig(2.5, 48000./2048., true),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
+                ProcessingSpec({8}, {1}),
+                13.f
+            ),
+            { 3583 }
+        },
+        InferenceManagerTestParams {
             HostAudioConfig(1500, 44100./8., false, 1),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
@@ -231,7 +241,7 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({4, 2}, {1, 1}),
                 50.f
             ),
-            { 18496, 6936 }
+            { 18944, 7104 }
         },
         InferenceManagerTestParams {
             HostAudioConfig(1500, 44100./8., true, 1),
@@ -241,7 +251,7 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({4, 2, 1}, {1, 1}),
                 50.f
             ),
-            { 23990, 8996 }
+            { 18944, 7104 }
         },
         InferenceManagerTestParams {
             HostAudioConfig(256., 48000./8, false, 1),
