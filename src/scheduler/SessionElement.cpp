@@ -92,6 +92,8 @@ void SessionElement::prepare(const HostAudioConfig& host_config) {
                     adjusted_latency.push_back(inference_caused_latency + buffer_adaptation);
                 }
             }
+
+            // Sync the latencies when we have multiple outputs
             std::vector<unsigned int> adjusted_latency_synced = sync_latencies(adjusted_latency);
 
             for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
@@ -259,9 +261,7 @@ int SessionElement::calculate_inference_caused_latency(float max_possible_infere
     // Calculate the different parts of the latency
     float total_inference_time_after_wait = (max_possible_inferences * m_inference_config.m_max_inference_time) - wait_time;
     float num_buffers_for_max_inferences = std::ceil(total_inference_time_after_wait / host_buffer_time);
-    int inference_caused_latency = std::ceil(num_buffers_for_max_inferences * host_buffer_size);
-    // Add it all together
-    return inference_caused_latency;
+    return std::ceil(num_buffers_for_max_inferences * host_buffer_size);
 }
 
 float SessionElement::max_num_inferences(const HostAudioConfig& host_config) const {
