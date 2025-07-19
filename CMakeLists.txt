@@ -10,6 +10,7 @@ option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" O
 option(ANIRA_WITH_EXAMPLES "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
 option(ANIRA_WITH_INSTALL "Add install targets" OFF)
 option(ANIRA_WITH_TESTS "Add Build Tests" OFF)
+option(ANIRA_WITH_DOCS "Add Build Documentation" OFF)
 
 # Select the backends for the inference engine, multiple backends can be selected
 option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
@@ -278,4 +279,8 @@ endif()
 
 if (ANIRA_WITH_TESTS)
     add_subdirectory(test)
+endif()
+
+if (ANIRA_WITH_DOCS)
+    add_subdirectory(docs)
 endif()
