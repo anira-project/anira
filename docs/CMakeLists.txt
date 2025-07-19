@@ -1,4 +1,5 @@
 # look for Doxygen package
+# Needs to be installed i.e. sudo dnf install doxygen
 find_package(Doxygen)
 
 if (DOXYGEN_FOUND)
@@ -18,9 +19,10 @@ if (DOXYGEN_FOUND)
         COMMENT "Generating API documentation with Doxygen"
         VERBATIM )
 else (DOXYGEN_FOUND)
-  message("Doxygen need to be installed to generate the doxygen documentation")
+    message("Doxygen need to be installed to generate the doxygen documentation")
 endif (DOXYGEN_FOUND)
 
+# This needs sphinx and breathe to be installed i.e. sudo dnf install python3-sphinx python3-breathe
 find_program(SPHINX_EXECUTABLE
     NAMES sphinx-build
     DOC "Path to sphinx-build executable")
@@ -37,7 +39,7 @@ if (SPHINX_EXECUTABLE)
         COMMENT "Generating HTML documentation with Sphinx"
         VERBATIM )
 else (SPHINX_EXECUTABLE)
-  message("Sphinx need to be installed to generate the sphinx documentation")
+    message("Sphinx need to be installed to generate the sphinx documentation")
 endif (SPHINX_EXECUTABLE)
 
 add_custom_target(docs
