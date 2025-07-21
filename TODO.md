@@ -9,10 +9,6 @@
 - [ ] Make processBlockFixture could be more versatile with new shapes
 - [ ] Fix TFLite benchmark error
 
-## Documentation
-
-- [ ] Find a new documentation website generator
-
 ## Testing
 
 - [ ] Run the examples as tests in CI

@@ -1,0 +1,61 @@
+name: build_docs_and_deploy
+
+on:
+  workflow_call:
+  workflow_dispatch: # lets you run a build from github.com
+  # Runs the workflow on all push events
+  push:
+  pull_request:
+    branches:
+      - main
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  matrix.name: "Linux-x86_64"
+  matrix.os: "ubuntu-latest"
+
+# When pushing new commits, cancel any workflows with the same name on that branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_docs:
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: get repo and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - name: setup
+        uses: ./.github/actions/setup
+      - name: dependencies
+        run: |
+          sudo apt-get install -y doxygen graphviz python3-sphinx python3-breathe python3-furo
+      - name: build
+        uses: ./.github/actions/build
+        with:
+          BUILD_TYPE: Release
+          CMAKE_BUILD_PARALLEL_LEVEL: 4
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_DOCS=ON"
+          TARGETS: "docs"
+      - name: upload docs
+        uses: actions/upload-pages-artifact@v3 # or specific "vX.X.X" version tag for this action
+        with:
+          path: build/docs/sphinx/html
+
+  # Deployment job
+  deploy:
+    needs: build_docs
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

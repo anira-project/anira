@@ -1,0 +1,4 @@
+Namespace benchmark
+===================
+
+.. doxygennamespace:: benchmark

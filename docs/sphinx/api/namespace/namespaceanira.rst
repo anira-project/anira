@@ -1,0 +1,4 @@
+Namespace anira
+===============
+
+.. doxygennamespace:: anira
