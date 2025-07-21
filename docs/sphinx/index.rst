@@ -6,7 +6,7 @@ anira Documentation
    :align: center
    :width: 800px
 
-|build_test| |build_benchmark| |build_examples| |on_tag|
+|build_test| |build_benchmark| |build_examples| |build_docs| |on_tag|
 
 .. |build_test| image:: https://github.com/anira-project/anira/actions/workflows/build_test.yml/badge.svg
    :target: https://github.com/anira-project/anira/actions/workflows/build_test.yml

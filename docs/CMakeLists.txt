@@ -55,6 +55,9 @@ else (SPHINX_EXECUTABLE)
     message(WARNING "Sphinx need to be installed to generate the sphinx documentation")
 endif (SPHINX_EXECUTABLE)
 
+# Here we build .rst files from the Doxygen XML output using Breathe
+# Since the toctree directive is used in the index.rst, we need to put the generated files in the same directory as the index.rst
+# Therefore add the files to our version control system and build them only occasionally
 find_program(BREATHE_EXECUTABLE
     NAMES breathe-apidoc
     DOC "Path to breathe-apidoc executable")
