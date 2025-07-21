@@ -17,6 +17,9 @@ anira Documentation
 .. |build_examples| image:: https://github.com/anira-project/anira/actions/workflows/build_examples.yml/badge.svg
    :target: https://github.com/anira-project/anira/actions/workflows/build_examples.yml
 
+.. |build_docs| image:: https://github.com/anira-project/anira/actions/workflows/build_docs_and_deploy.yml/badge.svg
+   :target: https://github.com/anira-project/anira/actions/workflows/build_docs_and_deploy.yml
+
 .. |on_tag| image:: https://github.com/anira-project/anira/actions/workflows/on_tag.yml/badge.svg
    :target: https://github.com/anira-project/anira/actions/workflows/on_tag.yml
 

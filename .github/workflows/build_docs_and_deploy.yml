@@ -11,8 +11,6 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
-  matrix.name: "Linux-x86_64"
-  matrix.os: "ubuntu-latest"
 
 # When pushing new commits, cancel any workflows with the same name on that branch
 concurrency:
@@ -21,7 +19,7 @@ concurrency:
 
 jobs:
   build_docs:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: get repo and submodules
         uses: actions/checkout@v4
@@ -32,7 +30,7 @@ jobs:
         uses: ./.github/actions/setup
       - name: dependencies
         run: |
-          sudo apt-get install -y doxygen graphviz python3-sphinx python3-breathe python3-furo
+          sudo apt-get install -y doxygen graphviz python3-sphinx python3-breathe furo
       - name: build
         uses: ./.github/actions/build
         with:
@@ -48,6 +46,7 @@ jobs:
   # Deployment job
   deploy:
     needs: build_docs
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     permissions:
       pages: write
       id-token: write
