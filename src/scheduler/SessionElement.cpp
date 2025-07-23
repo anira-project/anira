@@ -33,7 +33,7 @@ void SessionElement::clear() {
     m_inference_queue.clear();
 }
 
-void SessionElement::prepare(const HostAudioConfig& host_config) {
+void SessionElement::prepare(const HostAudioConfig& host_config, std::vector<long> custom_latency) {
     m_host_config = host_config;
 
     // Calculate the latency, number of structs needed
@@ -118,6 +118,15 @@ void SessionElement::prepare(const HostAudioConfig& host_config) {
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0) {
             m_latency[i] += m_inference_config.get_internal_latency()[i];
+        }
+    }
+
+    // Overwrite with custom latency if provided
+    if (custom_latency.size() == m_inference_config.get_tensor_output_shape().size()) {
+        for (size_t i = 0; i < custom_latency.size(); ++i) {
+            if (custom_latency[i] >= 0) {
+                m_latency[i] = custom_latency[i];
+            }
         }
     }
 

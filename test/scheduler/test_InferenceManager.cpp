@@ -58,6 +58,121 @@ TEST_P(InferenceManagerTest, Simple){
     }
 }
 
+TEST_P(InferenceManagerTest, WithCustomLatency) {
+    auto test_params = GetParam();
+    auto buffer_size = test_params.host_config.m_buffer_size;
+    auto sample_rate = test_params.host_config.m_sample_rate;
+
+    PrePostProcessor pp_processor(test_params.inference_config);
+    BackendBase* custom_processor = nullptr; // Use default processor
+    ContextConfig context_config;
+
+    InferenceManager inference_manager(
+        pp_processor,
+        test_params.inference_config,
+        custom_processor,
+        context_config
+    );
+
+    // Create custom latency values - double the expected values for testing
+    std::vector<long> custom_latency;
+    for (const auto& latency : test_params.expected_latency) {
+        custom_latency.push_back(latency * 2);
+    }
+
+    // Prepare with custom latency
+    inference_manager.prepare(test_params.host_config, custom_latency);
+
+    // Verify that the latency values match our custom ones
+    std::vector<unsigned int> actual_latency = inference_manager.get_latency();
+
+    ASSERT_EQ(actual_latency.size(), custom_latency.size()) << "Latency vector size mismatch";
+    
+    for (size_t i = 0; i < custom_latency.size(); ++i) {
+        ASSERT_EQ(actual_latency[i], custom_latency[i]) 
+            << "Custom latency not applied correctly for tensor " << i;
+    }
+}
+
+// Test with empty custom latency (should fall back to calculated values)
+TEST_P(InferenceManagerTest, WithEmptyCustomLatency) {
+    auto test_params = GetParam();
+    auto buffer_size = test_params.host_config.m_buffer_size;
+    auto sample_rate = test_params.host_config.m_sample_rate;
+
+    PrePostProcessor pp_processor(test_params.inference_config);
+    BackendBase* custom_processor = nullptr; // Use default processor
+    ContextConfig context_config;
+
+    InferenceManager inference_manager(
+        pp_processor,
+        test_params.inference_config,
+        custom_processor,
+        context_config
+    );
+
+    // Prepare with empty custom latency vector
+    std::vector<long> empty_custom_latency;
+    inference_manager.prepare(test_params.host_config, empty_custom_latency);
+
+    // Verify that the latency values match the expected calculated ones
+    std::vector<unsigned int> actual_latency = inference_manager.get_latency();
+    
+    ASSERT_EQ(actual_latency.size(), test_params.expected_latency.size()) << "Latency vector size mismatch";
+    
+    for (size_t i = 0; i < test_params.expected_latency.size(); ++i) {
+        ASSERT_EQ(actual_latency[i], test_params.expected_latency[i]) 
+            << "Latency did not fall back to calculated value for tensor " << i;
+    }
+}
+
+// Test with partial custom latency (should use provided values and calculate the rest)
+TEST_P(InferenceManagerTest, WithPartialCustomLatency) {
+    auto test_params = GetParam();
+    auto buffer_size = test_params.host_config.m_buffer_size;
+    auto sample_rate = test_params.host_config.m_sample_rate;
+
+    // Skip test if we don't have at least 2 tensors
+    if (test_params.expected_latency.size() < 2) {
+        GTEST_SKIP() << "Test requires at least 2 tensors to test partial custom latency";
+        return;
+    }
+
+    PrePostProcessor pp_processor(test_params.inference_config);
+    BackendBase* custom_processor = nullptr; // Use default processor
+    ContextConfig context_config;
+
+    InferenceManager inference_manager(
+        pp_processor,
+        test_params.inference_config,
+        custom_processor,
+        context_config
+    );
+
+    // Create partial custom latency (only for the first tensor)
+    std::vector<long> partial_custom_latency(test_params.expected_latency.size(), -1);
+    // Set a custom value for the first tensor
+    partial_custom_latency[0] = test_params.expected_latency[0] * 3;
+    
+    // Prepare with partial custom latency
+    inference_manager.prepare(test_params.host_config, partial_custom_latency);
+    
+    // Verify latency values
+    std::vector<unsigned int> actual_latency = inference_manager.get_latency();
+    
+    ASSERT_EQ(actual_latency.size(), test_params.expected_latency.size()) << "Latency vector size mismatch";
+    
+    // First latency should be our custom value
+    ASSERT_EQ(actual_latency[0], partial_custom_latency[0]) 
+        << "Custom latency not applied correctly for first tensor";
+        
+    // Remaining latencies should be calculated values
+    for (size_t i = 1; i < test_params.expected_latency.size(); ++i) {
+        ASSERT_EQ(actual_latency[i], test_params.expected_latency[i]) 
+            << "Latency calculation incorrect for tensor " << i;
+    }
+}
+
 std::string build_test_name(const testing::TestParamInfo<InferenceManagerTest::ParamType>& info){
     std::stringstream ss_sample_rate, ss_buffer_size, ss_max_inference_time;
     std::vector<std::stringstream> ss_tensor_input_size, ss_tensor_output_size;

@@ -16,9 +16,9 @@ public:
     InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor, const ContextConfig& context_config);
     ~InferenceManager();
 
-    void prepare(HostAudioConfig config);
-    size_t* process(const float* const* const* input_data, size_t* num_input_samples, float* const* const* output_data, size_t* num_output_samples);
+    void prepare(HostAudioConfig config, std::vector<long> custom_latency = {});
 
+    size_t* process(const float* const* const* input_data, size_t* num_input_samples, float* const* const* output_data, size_t* num_output_samples);
     void push_data(const float* const* const* input_data, size_t* num_input_samples);
     size_t* pop_data(float* const* const* output_data, size_t* num_output_samples);
 

@@ -42,7 +42,7 @@ public:
     SessionElement(int newSessionID, PrePostProcessor& pp_processor, InferenceConfig& inference_config);
 
     void clear();
-    void prepare(const HostAudioConfig& spec);
+    void prepare(const HostAudioConfig& spec, std::vector<long> custom_latency = {});
 
     template <typename T> void set_processor(std::shared_ptr<T>& processor);
 // public for testing purposes

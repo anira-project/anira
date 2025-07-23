@@ -22,10 +22,10 @@ InferenceBackend InferenceManager::get_backend() const {
     return m_session->m_current_backend.load(std::memory_order_relaxed);
 }
 
-void InferenceManager::prepare(HostAudioConfig new_config) {
+void InferenceManager::prepare(HostAudioConfig new_config, std::vector<long> custom_latency) {
     m_host_config = new_config;
 
-    m_context->prepare_session(m_session, m_host_config);
+    m_context->prepare_session(m_session, m_host_config, custom_latency);
 
     m_missing_samples.clear();
     m_missing_samples.resize(m_inference_config.get_tensor_output_shape().size(), 0);
