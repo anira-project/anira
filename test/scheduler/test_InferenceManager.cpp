@@ -9,7 +9,7 @@
 using namespace anira;
 
 struct InferenceManagerTestParams {
-    HostAudioConfig host_config;
+    HostConfig host_config;
     InferenceConfig inference_config;
     std::vector<unsigned int> expected_latency;
 };
@@ -213,7 +213,7 @@ std::string build_test_name(const testing::TestParamInfo<InferenceManagerTest::P
 INSTANTIATE_TEST_SUITE_P(
     CalculateLatency, InferenceManagerTest, ::testing::Values(
         InferenceManagerTestParams {
-            HostAudioConfig(2048, 48000, true),
+            HostConfig(2048, 48000, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
@@ -222,7 +222,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 4095 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(1, 48000.0/2048, true),
+            HostConfig(1, 48000.0/2048, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
@@ -231,7 +231,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 5886 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(1, 48000.0/2048),
+            HostConfig(1, 48000.0/2048),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
@@ -240,7 +240,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 4096 },
         },
         InferenceManagerTestParams {
-            HostAudioConfig(256, 48000.0, true),
+            HostConfig(256, 48000.0, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 4, 1}})},
@@ -250,7 +250,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 2 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(1./256., 48000./2048.),
+            HostConfig(1./256., 48000./2048.),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 4, 1}}, {{1, 1, 2048}})},
@@ -260,7 +260,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 3960 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(1., 48000./2048.),
+            HostConfig(1., 48000./2048.),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}}, {{1, 1, 2048}})},
@@ -270,7 +270,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 2048 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(1., 48000./2048., true),
+            HostConfig(1., 48000./2048., true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}}, {{1, 1, 2048}, {2, 256}})},
@@ -280,7 +280,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 6144, 768 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(256., 48000./8, false, 1),
+            HostConfig(256., 48000./8, false, 1),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
@@ -290,7 +290,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 2048, 128 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(128., 48000./8, true, 1),
+            HostConfig(128., 48000./8, true, 1),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
@@ -300,7 +300,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 6144, 384 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(128., 48000./8, true, 1),
+            HostConfig(128., 48000./8, true, 1),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 2, 2048}})},
@@ -311,7 +311,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // Non-power-of-two buffer size tests
         InferenceManagerTestParams {
-            HostAudioConfig(100, 48000),
+            HostConfig(100, 48000),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
@@ -320,7 +320,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 2744 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(300, 44100),
+            HostConfig(300, 44100),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
@@ -329,7 +329,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 2820 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(2.5, 48000./2048.),
+            HostConfig(2.5, 48000./2048.),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
@@ -339,7 +339,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 3072 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(2.5, 48000./2048., true),
+            HostConfig(2.5, 48000./2048., true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
@@ -349,7 +349,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 3583 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(1500, 44100./8., false, 1),
+            HostConfig(1500, 44100./8., false, 1),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 4, 1}, {2, 128}}, {{1, 1, 512}, {3, 64}})},
@@ -359,7 +359,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 18944, 7104 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(1500, 44100./8., true, 1),
+            HostConfig(1500, 44100./8., true, 1),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 4, 1}, {2, 128}, {1, 2}}, {{1, 1, 512}, {3, 64}})},
@@ -369,7 +369,7 @@ INSTANTIATE_TEST_SUITE_P(
             { 18944, 7104 }
         },
         InferenceManagerTestParams {
-            HostAudioConfig(256., 48000./8, false, 1),
+            HostConfig(256., 48000./8, false, 1),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 4, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},

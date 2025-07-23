@@ -33,8 +33,8 @@ anira::PrePostProcessor my_pp_processor(my_inference_config);
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
 
-    // Define the host audio configuration that shall be used / simulated for the benchmark
-    anira::HostAudioConfig host_config(BUFFER_SIZE, SAMPLE_RATE);
+    // Define the host configuration that shall be used / simulated for the benchmark
+    anira::HostConfig host_config(BUFFER_SIZE, SAMPLE_RATE);
     anira::InferenceBackend inference_backend = anira::ONNX;
 
     // Create a static InferenceHandler instance, prepare and select backend
@@ -178,7 +178,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_BUFFER_SIZES)(::benchmark::S
     ...
 
     // Here we use the state object to pass the variable buffer size
-    anira::HostAudioConfig host_config = {(size_t) state.range(0), SAMPLE_RATE};
+    anira::HostConfig host_config = {(size_t) state.range(0), SAMPLE_RATE};
 
     m_inference_handler->prepare(host_config);
 
@@ -228,7 +228,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)(::benchmark:
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) {
 
     // The buffer size return in get_buffer_size() is populated by state.range(0) param of the google benchmark
-    anira::HostAudioConfig host_config = {(size_t) get_buffer_size(), SAMPLE_RATE};
+    anira::HostConfig host_config = {(size_t) get_buffer_size(), SAMPLE_RATE};
 
     // Use state.range(1) to pass a distinct InferenceConfig and its respective PrePostProcessor
     anira::InferenceConfig inference_config = inference_configs[state.range(1)];

@@ -16,9 +16,9 @@ public:
     ~ProcessBlockFixture();
 
     void initialize_iteration();
-    void initialize_repetition(const InferenceConfig& inference_config, const HostAudioConfig& host_config, const InferenceBackend& inference_backend, bool sleep_after_repetition = true);
+    void initialize_repetition(const InferenceConfig& inference_config, const HostConfig& host_config, const InferenceBackend& inference_backend, bool sleep_after_repetition = true);
     bool buffer_processed();
-    void push_random_samples_in_buffer(anira::HostAudioConfig host_config);
+    void push_random_samples_in_buffer(anira::HostConfig host_config);
     int get_buffer_size();
     int get_repetition();
 
@@ -44,7 +44,7 @@ private:
     std::string m_inference_backend_name;
     InferenceBackend m_inference_backend;
     InferenceConfig m_inference_config;
-    HostAudioConfig m_host_config;
+    HostConfig m_host_config;
 
     void SetUp(const ::benchmark::State& state);
     void TearDown(const ::benchmark::State& state);

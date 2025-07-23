@@ -96,7 +96,7 @@ Here's a minimal example to get you started with anira:
    anira::InferenceHandler handler(processor, config);
 
    // Step 4: Prepare for audio processing
-   anira::HostAudioConfig hostConfig(512, 48000);  // buffer size, sample rate
+   anira::HostConfig hostConfig(512, 48000);  // buffer size, sample rate
    handler.prepare(hostConfig);
    handler.set_inference_backend(anira::InferenceBackend::ONNX);
 

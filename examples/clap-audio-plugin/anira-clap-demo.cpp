@@ -155,7 +155,7 @@ bool AniraClapPluginExample::audioPortsInfo(uint32_t index, bool isInput,
 bool AniraClapPluginExample::activate(double sampleRate, uint32_t minFrameCount,
                              uint32_t maxFrameCount) noexcept
 {
-    anira::HostAudioConfig host_config {
+    anira::HostConfig host_config {
         static_cast<float>(maxFrameCount),
         static_cast<float>(sampleRate),
         // true, // Allow smaller buffers? Introduces more latency

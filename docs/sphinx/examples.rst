@@ -128,7 +128,7 @@ Minimal setup for LibTorch backend:
        anira::InferenceHandler handler(processor, config);
 
        // Prepare for processing
-       anira::HostAudioConfig host_config(512, 48000.0);
+       anira::HostConfig host_config(512, 48000.0);
        handler.prepare(host_config);
        handler.set_inference_backend(anira::LIBTORCH);
 
@@ -163,7 +163,7 @@ Minimal setup for ONNX Runtime backend:
        anira::InferenceHandler handler(processor, config);
 
        // Prepare for processing
-       anira::HostAudioConfig host_config(256, 44100.0);
+       anira::HostConfig host_config(256, 44100.0);
        handler.prepare(host_config);
        handler.set_inference_backend(anira::ONNX);
 
@@ -198,7 +198,7 @@ Minimal setup for TensorFlow Lite backend:
        anira::InferenceHandler handler(processor, config);
 
        // Prepare for processing
-       anira::HostAudioConfig host_config(1024, 96000.0);
+       anira::HostConfig host_config(1024, 96000.0);
        handler.prepare(host_config);
        handler.set_inference_backend(anira::TFLITE);
 
@@ -298,10 +298,10 @@ Performance Optimization Tips
    .. code-block:: cpp
 
       // For low-latency applications
-      anira::HostAudioConfig lowLatency(64, 48000.0);
+      anira::HostConfig lowLatency(64, 48000.0);
       
       // For high-throughput applications
-      anira::HostAudioConfig highThroughput(1024, 48000.0);
+      anira::HostConfig highThroughput(1024, 48000.0);
 
 2. **Thread Pool Configuration**
 

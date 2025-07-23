@@ -99,7 +99,7 @@ Anira provides the following structures and classes to help you integrate real-t
 |                  | Either use the default PrePostProcessor or inherit from this class       |
 |                  | for custom processing.                                                   |
 +------------------+--------------------------------------------------------------------------+
-| HostAudioConfig  | A structure for defining the host audio configuration: buffer size       |
+| HostConfig  | A structure for defining the host configuration: buffer size       |
 |                  | and sample rate.                                                         |
 +------------------+--------------------------------------------------------------------------+
 
@@ -329,7 +329,7 @@ If you want to define a custom context configuration, you can do so by creating 
 Step 4: Allocate Memory Before Processing
 -----------------------------------------
 
-Before processing audio data, the ``prepare`` method of the ``anira::InferenceHandler`` instance must be called. This allocates all necessary memory in advance. The ``prepare`` method needs an instance of ``anira::HostAudioConfig`` which defines the buffer size and sample rate of the host audio application.
+Before processing audio data, the ``prepare`` method of the ``anira::InferenceHandler`` instance must be called. This allocates all necessary memory in advance. The ``prepare`` method needs an instance of ``anira::HostConfig`` which defines the buffer size and sample rate of the host application.
 
 We also need to select the inference backend we want to use. Depending on the backends you enabled during the build process, you can choose amongst ``anira::LIBTORCH``, ``anira::ONNX``, ``anira::TFLITE`` and ``anira::CUSTOM``.
 
@@ -339,8 +339,8 @@ After preparing the ``anira::InferenceHandler``, you can get the latency of the 
 
    void prepare_audio_processing(double sample_rate, int buffer_size) {
 
-       // Create an instance of anira::HostAudioConfig
-       anira::HostAudioConfig host_config {
+       // Create an instance of anira::HostConfig
+       anira::HostConfig host_config {
            buffer_size,
            sample_rate
        };

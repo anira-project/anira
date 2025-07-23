@@ -12,11 +12,11 @@ InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor, InferenceConf
 InferenceHandler::~InferenceHandler() {
 }
 
-void InferenceHandler::prepare(HostAudioConfig new_audio_config) {
+void InferenceHandler::prepare(HostConfig new_audio_config) {
     m_inference_manager.prepare(new_audio_config, std::vector<long>(m_inference_config.get_tensor_output_shape().size(), -1));
 }
 
-void InferenceHandler::prepare(HostAudioConfig new_audio_config, unsigned int custom_latency, size_t tensor_index) {
+void InferenceHandler::prepare(HostConfig new_audio_config, unsigned int custom_latency, size_t tensor_index) {
     std::vector<long> custom_latency_vector(m_inference_config.get_tensor_output_shape().size(), -1);
     if (m_inference_config.get_postprocess_output_size()[tensor_index] <= 0) {
         assert(false && "Tensor index is a non-streamable output.");
@@ -29,7 +29,7 @@ void InferenceHandler::prepare(HostAudioConfig new_audio_config, unsigned int cu
     m_inference_manager.prepare(new_audio_config, custom_latency_vector);
 }
 
-void InferenceHandler::prepare(HostAudioConfig new_audio_config, std::vector<unsigned int> custom_latency) {
+void InferenceHandler::prepare(HostConfig new_audio_config, std::vector<unsigned int> custom_latency) {
     assert(custom_latency.size() == m_inference_config.get_tensor_output_shape().size() && "Custom latency size must match the number of output tensors.");
     std::vector<long> custom_latency_long(custom_latency.begin(), custom_latency.end());
     for (size_t i = 0; i < custom_latency.size(); ++i) {

@@ -1,5 +1,5 @@
-#ifndef ANIRA_HOSTAUDIOCONFIG_H
-#define ANIRA_HOSTAUDIOCONFIG_H
+#ifndef ANIRA_HOSTCONFIG_H
+#define ANIRA_HOSTCONFIG_H
 
 #include <cstddef>
 #include <functional>
@@ -7,9 +7,9 @@
 
 namespace anira {
 
-struct ANIRA_API HostAudioConfig {
-    HostAudioConfig() = default;
-    HostAudioConfig(float max_host_input_size, float host_input_sample_rate, 
+struct ANIRA_API HostConfig {
+    HostConfig() = default;
+    HostConfig(float max_host_input_size, float host_input_sample_rate, 
                     bool allow_smaller_buffers = false, size_t input_tensor_index = 0)
         : m_buffer_size(max_host_input_size),
           m_sample_rate(host_input_sample_rate),
@@ -21,14 +21,14 @@ struct ANIRA_API HostAudioConfig {
     bool m_allow_smaller_buffers = false; // Whether to allow smaller buffer sizes
     size_t m_tensor_index = 0; // Index of the tensor in the session element's send buffer
 
-    bool operator==(const HostAudioConfig& other) const {
+    bool operator==(const HostConfig& other) const {
         return std::abs(m_buffer_size - other.m_buffer_size) < 1e-6
             && std::abs(m_sample_rate - other.m_sample_rate) < 1e-6
             && m_allow_smaller_buffers == other.m_allow_smaller_buffers
             && m_tensor_index == other.m_tensor_index;
     }
 
-    bool operator!=(const HostAudioConfig& other) const {
+    bool operator!=(const HostConfig& other) const {
         return !(*this == other);
     }
 
@@ -53,4 +53,4 @@ struct ANIRA_API HostAudioConfig {
 
 } // namespace anira
 
-#endif //ANIRA_HOSTAUDIOCONFIG_H
+#endif //ANIRA_HOSTCONFIG_H

@@ -19,7 +19,7 @@ using namespace anira;
 
 struct InferenceTestParams{
     InferenceBackend backend;
-    HostAudioConfig host_config;
+    HostConfig host_config;
     std::string input_data_path;
     std::string reference_data_path;
     size_t reference_data_offset;
@@ -260,7 +260,7 @@ INSTANTIATE_TEST_SUITE_P(
     InferenceBypass, InferenceTest, ::testing::Values(
         InferenceTestParams{
             anira::CUSTOM,
-            HostAudioConfig(1024, 44100),
+            HostConfig(1024, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             0,
@@ -269,7 +269,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::CUSTOM,
-            HostAudioConfig(2048, 44100),
+            HostConfig(2048, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             0,
@@ -278,7 +278,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::CUSTOM,
-            HostAudioConfig(512, 44100),
+            HostConfig(512, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             0,
@@ -287,7 +287,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::CUSTOM,
-            HostAudioConfig(256, 44100),
+            HostConfig(256, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             0,
@@ -296,7 +296,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::CUSTOM,
-            HostAudioConfig(300, 44100),
+            HostConfig(300, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             0,
@@ -312,7 +312,7 @@ INSTANTIATE_TEST_SUITE_P(
     InferenceLibtorch, InferenceTest, ::testing::Values(
         InferenceTestParams{
             anira::LIBTORCH,
-            HostAudioConfig(1024, 44100),
+            HostConfig(1024, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
@@ -321,7 +321,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::LIBTORCH,
-            HostAudioConfig(2048, 44100),
+            HostConfig(2048, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
@@ -330,7 +330,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::LIBTORCH,
-            HostAudioConfig(512, 44100),
+            HostConfig(512, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
@@ -339,7 +339,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::LIBTORCH,
-            HostAudioConfig(256, 44100),
+            HostConfig(256, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
@@ -348,7 +348,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::LIBTORCH,
-            HostAudioConfig(300, 44100),
+            HostConfig(300, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
@@ -365,7 +365,7 @@ INSTANTIATE_TEST_SUITE_P(
     InferenceOnnx, InferenceTest, ::testing::Values(
         InferenceTestParams{
             anira::ONNX,
-            HostAudioConfig(1024, 44100),
+            HostConfig(1024, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
@@ -374,7 +374,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::ONNX,
-            HostAudioConfig(2048, 44100),
+            HostConfig(2048, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
@@ -383,7 +383,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::ONNX,
-            HostAudioConfig(512, 44100),
+            HostConfig(512, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
@@ -392,7 +392,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::ONNX,
-            HostAudioConfig(256, 44100),
+            HostConfig(256, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
@@ -401,7 +401,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::ONNX,
-            HostAudioConfig(300, 44100),
+            HostConfig(300, 44100),
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
             149,
@@ -418,7 +418,7 @@ INSTANTIATE_TEST_SUITE_P(
     InferenceTflite, InferenceTest, ::testing::Values(
         InferenceTestParams{
             anira::TFLITE,
-            HostAudioConfig(1024, 44100),
+            HostConfig(1024, 44100),
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
             149,
@@ -427,7 +427,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::TFLITE,
-            HostAudioConfig(2048, 44100),
+            HostConfig(2048, 44100),
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
             149,
@@ -436,7 +436,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::TFLITE,
-            HostAudioConfig(512, 44100),
+            HostConfig(512, 44100),
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
             149,
@@ -445,7 +445,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::TFLITE,
-            HostAudioConfig(256, 44100),
+            HostConfig(256, 44100),
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
             149,
@@ -454,7 +454,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         InferenceTestParams{
             anira::TFLITE,
-            HostAudioConfig(300, 44100),
+            HostConfig(300, 44100),
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
             149,

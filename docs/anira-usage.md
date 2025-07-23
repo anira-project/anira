@@ -10,7 +10,7 @@ Anira provides the following structures and classes to help you integrate real-t
 | `InferenceHandler` | Manages audio processing/inference for the real-time thread, offloading inference to the thread pool and updating the real-time thread buffers with processed audio. This class provides the main interface for interacting with the library. |
 | `InferenceConfig`  | A configuration structure for defining model specifics such as input/output shape, model details such as maximum inference time, and more. Each InferenceHandler instance must be constructed with this configuration. |
 | `PrePostProcessor` | Enables pre- and post-processing steps before and after inference. Either use the default PrePostProcessor or inherit from this class for custom processing. |
-| `HostAudioConfig` | A structure for defining the host audio configuration: buffer size and sample rate. |
+| `HostConfig` | A structure for defining the host configuration: buffer size and sample rate. |
 
 ## Using anira for Real-time Audio Inference
 
@@ -165,13 +165,13 @@ anira::InferenceHandler inference_handler(pp_processor, inference_config, contex
 
 ### Step 4: Allocate Memory Before Processing
 
-Before processing audio data, the `prepare` method of the `anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The `prepare` method needs an instance of `anira::HostAudioConfig` which defines the buffer size and sample rate of the host audio application. We also need to select the inference backend we want to use. Depending on the backends you enabled during the build process, you can choose amongst `anira::LIBTORCH`, `anira::ONNX`, `anira::TFLITE` and `anira::CUSTOM`. After preparing the `anira::InferenceHandler`, you can get the latency of the inference process in samples by calling the `get_latency` method and use this information to compensate for the latency in your real-time audio application.
+Before processing audio data, the `prepare` method of the `anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The `prepare` method needs an instance of `anira::HostConfig` which defines the buffer size and sample rate of the host application. We also need to select the inference backend we want to use. Depending on the backends you enabled during the build process, you can choose amongst `anira::LIBTORCH`, `anira::ONNX`, `anira::TFLITE` and `anira::CUSTOM`. After preparing the `anira::InferenceHandler`, you can get the latency of the inference process in samples by calling the `get_latency` method and use this information to compensate for the latency in your real-time audio application.
 
 ```cpp
 void prepare_audio_processing(double sample_rate, int buffer_size) {
 
-    // Create an instance of anira::HostAudioConfig
-    anira::HostAudioConfig host_config {
+    // Create an instance of anira::HostConfig
+    anira::HostConfig host_config {
         buffer_size,
         sample_rate
     };

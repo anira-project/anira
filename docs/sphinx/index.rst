@@ -56,7 +56,7 @@ The basic usage of anira is as follows:
    // Create an InferenceHandler instance
    anira::InferenceHandler inference_handler(pp_processor, inference_config);
 
-   // Pass the host audio configuration and allocate memory for audio processing
+   // Pass the host configuration and allocate memory for audio processing
    inference_handler.prepare({buffer_size, sample_rate});
 
    // Select the inference backend

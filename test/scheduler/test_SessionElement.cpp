@@ -12,7 +12,7 @@
 using namespace anira;
 
 struct SessionElementTestParams {
-    HostAudioConfig host_config;
+    HostConfig host_config;
     InferenceConfig inference_config;
     std::vector<unsigned int> expected_latency;
     size_t expected_num_structs;
@@ -124,7 +124,7 @@ INSTANTIATE_TEST_SUITE_P(
     LatencyStructAndRingbuffers, SessionElementTest, ::testing::Values(
         // Basic test cases similar to InferenceManager tests
         SessionElementTestParams {
-            HostAudioConfig(2048, 48000),
+            HostConfig(2048, 48000),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
@@ -136,7 +136,7 @@ INSTANTIATE_TEST_SUITE_P(
             {6144}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(2048, 48000),
+            HostConfig(2048, 48000),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
@@ -151,7 +151,7 @@ INSTANTIATE_TEST_SUITE_P(
             {4096}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(2048, 48000, true),
+            HostConfig(2048, 48000, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
@@ -166,7 +166,7 @@ INSTANTIATE_TEST_SUITE_P(
             {8063}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(2048, 48000, true),
+            HostConfig(2048, 48000, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
@@ -181,7 +181,7 @@ INSTANTIATE_TEST_SUITE_P(
             {7103}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(2048, 48000, true),
+            HostConfig(2048, 48000, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
@@ -193,7 +193,7 @@ INSTANTIATE_TEST_SUITE_P(
             {8191}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(1, 48000.0/2048, true),
+            HostConfig(1, 48000.0/2048, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
@@ -205,7 +205,7 @@ INSTANTIATE_TEST_SUITE_P(
             {8191}
         },
         SessionElementTestParams {
-            HostAudioConfig(1, 48000.0/2048),
+            HostConfig(1, 48000.0/2048),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
@@ -217,7 +217,7 @@ INSTANTIATE_TEST_SUITE_P(
             {10240}
         },
         SessionElementTestParams {
-            HostAudioConfig(1, 48000.0/2048, true),
+            HostConfig(1, 48000.0/2048, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
@@ -229,7 +229,7 @@ INSTANTIATE_TEST_SUITE_P(
             {12287}
         },
         SessionElementTestParams {
-            HostAudioConfig(256, 48000.0),
+            HostConfig(256, 48000.0),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 4, 1}})},
@@ -242,7 +242,7 @@ INSTANTIATE_TEST_SUITE_P(
             {3}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(1./256., 48000./2048., true),
+            HostConfig(1./256., 48000./2048., true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 4, 1}}, {{1, 1, 2048}})},
@@ -255,7 +255,7 @@ INSTANTIATE_TEST_SUITE_P(
             {8068}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(1., 48000./2048.),
+            HostConfig(1., 48000./2048.),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}}, {{1, 1, 2048}, {2, 256}})},
@@ -268,7 +268,7 @@ INSTANTIATE_TEST_SUITE_P(
             {6144, 768}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(256., 48000./8, true, 1),
+            HostConfig(256., 48000./8, true, 1),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
@@ -281,7 +281,7 @@ INSTANTIATE_TEST_SUITE_P(
             {8192, 512}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(600., 48000./8, false, 1),
+            HostConfig(600., 48000./8, false, 1),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
@@ -295,7 +295,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // Non-power-of-two buffer size tests
         SessionElementTestParams {
-            HostAudioConfig(100, 48000, true),
+            HostConfig(100, 48000, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
@@ -307,7 +307,7 @@ INSTANTIATE_TEST_SUITE_P(
             {6855}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(300, 44100),
+            HostConfig(300, 44100),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
@@ -319,7 +319,7 @@ INSTANTIATE_TEST_SUITE_P(
             {5892}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(2.5, 48000./2048., true),
+            HostConfig(2.5, 48000./2048., true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
@@ -332,7 +332,7 @@ INSTANTIATE_TEST_SUITE_P(
             {9727}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(2.5, 48000./1024., true),
+            HostConfig(2.5, 48000./1024., true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
@@ -348,7 +348,7 @@ INSTANTIATE_TEST_SUITE_P(
             {7551}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
-            HostAudioConfig(2048, 48000, true),
+            HostConfig(2048, 48000, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 10000}}, {{1, 1, 2048}})},
@@ -362,7 +362,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // Edge cases with very small buffer sizes
         SessionElementTestParams {
-            HostAudioConfig(1, 44100, true),
+            HostConfig(1, 44100, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
@@ -375,7 +375,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // Test with large buffer sizes
         SessionElementTestParams {
-            HostAudioConfig(4096, 96000),
+            HostConfig(4096, 96000),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
@@ -388,7 +388,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // Test with very short inference times
         SessionElementTestParams {
-            HostAudioConfig(512, 48000, true),
+            HostConfig(512, 48000, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 256}}, {{1, 1, 256}})},
@@ -401,7 +401,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // Test with very long inference times
         SessionElementTestParams {
-            HostAudioConfig(512, 48000),
+            HostConfig(512, 48000),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 256}}, {{1, 1, 256}})},

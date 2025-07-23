@@ -56,8 +56,8 @@ We will also create a static ``anira::Buffer`` member, which will be used later 
 
    BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
 
-       // Define the host audio configuration that shall be used / simulated for the benchmark
-       anira::HostAudioConfig host_config(BUFFER_SIZE, SAMPLE_RATE);
+       // Define the host configuration that shall be used / simulated for the benchmark
+       anira::HostConfig host_config(BUFFER_SIZE, SAMPLE_RATE);
        anira::InferenceBackend inference_backend = anira::ONNX;
 
        // Create a static InferenceHandler instance, prepare and select backend
@@ -167,7 +167,7 @@ Create a parameterized benchmark that tests all combinations:
        anira::InferenceBackend backend = static_cast<anira::InferenceBackend>(state.range(2));
 
        // Set up configuration
-       anira::HostAudioConfig host_config(buffer_size, sample_rate);
+       anira::HostConfig host_config(buffer_size, sample_rate);
 
        // Create and prepare InferenceHandler
        m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);

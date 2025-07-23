@@ -12,7 +12,7 @@
 #include "scheduler/Context.h"
 #include "scheduler/SessionElement.h"
 #include "utils/Buffer.h"
-#include "utils/HostAudioConfig.h"
+#include "utils/HostConfig.h"
 #include "utils/InferenceBackend.h"
 #include "utils/RingBuffer.h"
 #include "system/HighPriorityThread.h"

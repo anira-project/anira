@@ -77,7 +77,7 @@ public:
      * 
      * @param new_audio_config The new audio configuration containing sample rate, buffer size, etc.
      */
-    void prepare(HostAudioConfig new_audio_config);
+    void prepare(HostConfig new_audio_config);
 
     /**
      * @brief Prepares the inference handler for processing with new audio configuration and a custom latency
@@ -89,7 +89,7 @@ public:
      * @param custom_latency Custom latency value in samples to override the calculated latency
      * @param tensor_index Index of the tensor to apply the custom latency (default: 0)
      */
-    void prepare(HostAudioConfig new_audio_config, unsigned int custom_latency, size_t tensor_index = 0);
+    void prepare(HostConfig new_audio_config, unsigned int custom_latency, size_t tensor_index = 0);
 
     /**
      * @brief Prepares the inference handler for processing with new audio configuration and custom latencies for each tensor
@@ -100,7 +100,7 @@ public:
      * @param new_audio_config The new audio configuration containing sample rate, buffer size, etc.
      * @param custom_latency Vector of custom latency values in samples for each tensor
      */
-    void prepare(HostAudioConfig new_audio_config, std::vector<unsigned int> custom_latency);
+    void prepare(HostConfig new_audio_config, std::vector<unsigned int> custom_latency);
 
     /**
      * @brief Processes audio data in-place for models with identical input/output shapes

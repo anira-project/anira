@@ -22,7 +22,7 @@ InferenceBackend InferenceManager::get_backend() const {
     return m_session->m_current_backend.load(std::memory_order_relaxed);
 }
 
-void InferenceManager::prepare(HostAudioConfig new_config, std::vector<long> custom_latency) {
+void InferenceManager::prepare(HostConfig new_config, std::vector<long> custom_latency) {
     m_host_config = new_config;
 
     m_context->prepare_session(m_session, m_host_config, custom_latency);

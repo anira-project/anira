@@ -4,7 +4,7 @@
 #include "InferenceThread.h"
 #include "../ContextConfig.h"
 #include "Context.h"
-#include "../utils/HostAudioConfig.h"
+#include "../utils/HostConfig.h"
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
 
@@ -16,7 +16,7 @@ public:
     InferenceManager(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor, const ContextConfig& context_config);
     ~InferenceManager();
 
-    void prepare(HostAudioConfig config, std::vector<long> custom_latency = {});
+    void prepare(HostConfig config, std::vector<long> custom_latency = {});
 
     size_t* process(const float* const* const* input_data, size_t* num_input_samples, float* const* const* output_data, size_t* num_output_samples);
     void push_data(const float* const* const* input_data, size_t* num_input_samples);
@@ -46,7 +46,7 @@ private:
     InferenceConfig& m_inference_config;
     PrePostProcessor& m_pp_processor;
     std::shared_ptr<SessionElement> m_session;
-    HostAudioConfig m_host_config;
+    HostConfig m_host_config;
 
     std::vector<size_t> m_missing_samples;
 };

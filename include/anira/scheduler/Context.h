@@ -9,7 +9,7 @@
 #include "SessionElement.h"
 #include "InferenceThread.h"
 #include "../PrePostProcessor.h"
-#include "../utils/HostAudioConfig.h"
+#include "../utils/HostConfig.h"
 #include <concurrentqueue.h>
 
 #ifdef USE_LIBTORCH
@@ -37,7 +37,7 @@ public:
     static void release_instance();
     static void release_thread_pool();
 
-    void prepare_session(std::shared_ptr<SessionElement> session, HostAudioConfig new_config, std::vector<long> custom_latency = {});
+    void prepare_session(std::shared_ptr<SessionElement> session, HostConfig new_config, std::vector<long> custom_latency = {});
 
     static int get_num_sessions();
 

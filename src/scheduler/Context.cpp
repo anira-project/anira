@@ -149,7 +149,7 @@ void Context::release_session(std::shared_ptr<SessionElement> session) {
     }
 }
 
-void Context::prepare_session(std::shared_ptr<SessionElement> session, HostAudioConfig new_config, std::vector<long> custom_latency) {
+void Context::prepare_session(std::shared_ptr<SessionElement> session, HostConfig new_config, std::vector<long> custom_latency) {
     session->m_initialized.store(false);
 
     while (session->m_active_inferences.load(std::memory_order::acquire) != 0) {
