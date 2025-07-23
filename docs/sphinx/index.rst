@@ -1,4 +1,4 @@
-anira Documentation
+Anira Documentation
 ===================
 
 .. image:: ../img/anira-logo.png
@@ -6,27 +6,51 @@ anira Documentation
    :align: center
    :width: 800px
 
-|build_test| |build_benchmark| |build_examples| |build_docs| |on_tag|
-
-.. |build_test| image:: https://github.com/anira-project/anira/actions/workflows/build_test.yml/badge.svg
+.. image:: https://github.com/anira-project/anira/actions/workflows/build_test.yml/badge.svg
    :target: https://github.com/anira-project/anira/actions/workflows/build_test.yml
+   :alt: Build Test
+   :height: 20px
+   :class: badge-inline
 
-.. |build_benchmark| image:: https://github.com/anira-project/anira/actions/workflows/build_benchmark.yml/badge.svg
+.. image:: https://github.com/anira-project/anira/actions/workflows/build_benchmark.yml/badge.svg
    :target: https://github.com/anira-project/anira/actions/workflows/build_benchmark.yml
-
-.. |build_examples| image:: https://github.com/anira-project/anira/actions/workflows/build_examples.yml/badge.svg
+   :alt: Build Benchmark
+   :height: 20px
+   :class: badge-inline
+   
+.. image:: https://github.com/anira-project/anira/actions/workflows/build_examples.yml/badge.svg
    :target: https://github.com/anira-project/anira/actions/workflows/build_examples.yml
-
-.. |build_docs| image:: https://github.com/anira-project/anira/actions/workflows/build_docs_and_deploy.yml/badge.svg
+   :alt: Build Examples
+   :height: 20px
+   :class: badge-inline
+   
+.. image:: https://github.com/anira-project/anira/actions/workflows/build_docs_and_deploy.yml/badge.svg
    :target: https://github.com/anira-project/anira/actions/workflows/build_docs_and_deploy.yml
-
-.. |on_tag| image:: https://github.com/anira-project/anira/actions/workflows/on_tag.yml/badge.svg
+   :alt: Build Docs
+   :height: 20px
+   :class: badge-inline
+   
+.. image:: https://github.com/anira-project/anira/actions/workflows/on_tag.yml/badge.svg
    :target: https://github.com/anira-project/anira/actions/workflows/on_tag.yml
+   :alt: On Tag
+   :height: 20px
+   :class: badge-inline
+
+.. raw:: html
+
+   <style>
+   .badge-inline {
+     display: inline-block !important;
+     margin-right: 5px;
+   }
+   </style>
+
+
 
 **anira** is a high-performance library designed to enable easy real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends, `LibTorch <https://github.com/pytorch/pytorch/>`_, `ONNXRuntime <https://github.com/microsoft/onnxruntime/>`_, and `Tensorflow Lite <https://github.com/tensorflow/tensorflow/>`_, anira bridges the gap between advanced neural network architectures and real-time audio processing. In the `paper <https://doi.org/10.1109/IS262782.2024.10704099>`_ you can find more information about the architecture and the design decisions of **anira**, as well as extensive performance evaluations with the built-in benchmarking capabilities.
 
 Features
-========
+--------
 
 - **Real-time Safe Execution**: Ensures deterministic runtimes suitable for real-time audio applications
 - **Thread Pool Management**: Utilizes a static thread pool to avoid oversubscription and enables efficient parallel inference
@@ -36,7 +60,7 @@ Features
 - **Cross-Platform Compatibility**: Works seamlessly on macOS, Linux, and Windows
 
 Quick Start
-===========
+-----------
 
 The basic usage of anira is as follows:
 
@@ -72,15 +96,15 @@ The basic usage of anira is as follows:
    // audio_data now contains the processed audio samples
 
 Installation
-============
+------------
 
 CMake Integration
------------------
+~~~~~~~~~~~~~~~~~
 
 anira can be easily integrated into your CMake project. Either add anira as a submodule or download the pre-built binaries from the `releases page <https://github.com/anira-project/anira/releases/latest>`_.
 
 Add as a git submodule
-~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: bash
 
@@ -102,7 +126,7 @@ In your CMakeLists.txt, add anira as a subdirectory and link your target to the 
    target_link_libraries(your_target anira::anira)
 
 With pre-built binaries
-~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^^
 
 Download the pre-built binaries from your operating system and architecture from the `releases page <https://github.com/anira-project/anira/releases/latest>`_.
 
@@ -120,7 +144,7 @@ Download the pre-built binaries from your operating system and architecture from
    target_link_libraries(your_target anira::anira)
 
 Build from source
-~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^
 
 You can also build anira from source using CMake. All dependencies are automatically installed during the build process.
 
@@ -131,7 +155,7 @@ You can also build anira from source using CMake. All dependencies are automatic
    cmake --build build --config Release --target anira
 
 Build options
-~~~~~~~~~~~~~
+^^^^^^^^^^^^^
 
 By default, all three inference engines are installed. You can disable specific backends as needed:
 
@@ -147,7 +171,7 @@ Moreover, the following options are available:
 - Build anira with documentation: ``-DANIRA_WITH_DOCS=ON``
 
 Documentation
-=============
+-------------
 
 .. toctree::
    :maxdepth: 1
@@ -169,7 +193,7 @@ Documentation
    api/*
 
 Citation
-========
+--------
 
 If you use anira in your research or project, please cite either the `paper <https://doi.org/10.1109/IS262782.2024.10704099>`_ or the software itself:
 
@@ -196,7 +220,7 @@ If you use anira in your research or project, please cite either the `paper <htt
    }
 
 License
-=======
+-------
 
 This project is licensed under `Apache-2.0 <https://github.com/anira-project/anira/blob/main/LICENSE>`_.
 

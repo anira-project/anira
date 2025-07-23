@@ -1,11 +1,23 @@
-# Define what content to include in the generated documentation
-set(DOC_SOURCES
-    # Main pages
-    "${CMAKE_CURRENT_SOURCE_DIR}/sphinx/index.rst"
-    "${CMAKE_CURRENT_SOURCE_DIR}/sphinx/usage.rst"
-    "${CMAKE_CURRENT_SOURCE_DIR}/sphinx/benchmarking.rst"
-    "${CMAKE_CURRENT_SOURCE_DIR}/sphinx/examples.rst"
-)
+# Set up Python virtual environment for Sphinx
+find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+set(DOCS_VENV_DIR "${CMAKE_CURRENT_BINARY_DIR}/venv")
+
+# Use a more robust approach with a custom target for venv creation
+add_custom_target(create_docs_venv)
+
+# Check if venv already exists
+if(NOT EXISTS ${DOCS_VENV_DIR})
+    add_custom_command(
+        TARGET create_docs_venv
+        POST_BUILD
+        COMMAND ${Python3_EXECUTABLE} -m venv ${DOCS_VENV_DIR}
+        COMMAND ${DOCS_VENV_DIR}/bin/pip install --upgrade pip
+        COMMAND ${DOCS_VENV_DIR}/bin/pip install --quiet sphinx breathe sphinxawesome-theme
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        COMMENT "Creating virtual environment for Sphinx documentation"
+        VERBATIM
+    )
+endif()
 
 # look for Doxygen package
 # Needs to be installed i.e. sudo dnf install doxygen
@@ -30,49 +42,33 @@ else (DOXYGEN_FOUND)
     message(WARNING "Doxygen need to be installed to generate the doxygen documentation")
 endif (DOXYGEN_FOUND)
 
-# This needs sphinx, furo and breathe to be installed i.e. sudo dnf install python3-sphinx python3-breathe python3-furo
-find_program(SPHINX_EXECUTABLE
-    NAMES sphinx-build
-    DOC "Path to sphinx-build executable")
-    
-    
-if (SPHINX_EXECUTABLE)
-    set(SPHINX_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/sphinx)
-    set(SPHINX_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/sphinx)
+# Set up directories for Sphinx documentation
+set(SPHINX_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/sphinx)
+set(SPHINX_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/sphinx)
 
-    configure_file(${SPHINX_SOURCE_DIR}/conf.py.in ${SPHINX_BUILD_DIR}/conf.py @ONLY)
-    
-    add_custom_target(sphinx-docs
-    COMMAND ${SPHINX_EXECUTABLE} -b html 
+# Configure the Sphinx configuration file
+configure_file(${SPHINX_SOURCE_DIR}/conf.py.in ${SPHINX_BUILD_DIR}/conf.py @ONLY)
+
+add_custom_target(sphinx-docs
+    COMMAND ${DOCS_VENV_DIR}/bin/sphinx-build -b html 
     -c ${SPHINX_BUILD_DIR} 
     ${SPHINX_SOURCE_DIR} 
     ${SPHINX_BUILD_DIR}/html
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    COMMENT "Generating HTML documentation with Sphinx"
-    DEPENDS doxygen-docs ${DOC_SOURCES}
-    VERBATIM )
-else (SPHINX_EXECUTABLE)
-    message(WARNING "Sphinx need to be installed to generate the sphinx documentation")
-endif (SPHINX_EXECUTABLE)
+    COMMENT "Generating HTML documentation with Sphinx using virtual environment"
+    DEPENDS create_docs_venv doxygen-docs
+    VERBATIM
+)
 
-# Here we build .rst files from the Doxygen XML output using Breathe
-# Since the toctree directive is used in the index.rst, we need to put the generated files in the same directory as the index.rst
-# Therefore add the files to our version control system and build them only occasionally
-find_program(BREATHE_EXECUTABLE
-    NAMES breathe-apidoc
-    DOC "Path to breathe-apidoc executable")
-
-if (BREATHE_EXECUTABLE)
-    add_custom_target(breathe-apidocs
-        COMMAND ${BREATHE_EXECUTABLE} -o ${SPHINX_SOURCE_DIR}/api
-            ${CMAKE_CURRENT_BINARY_DIR}/doxygen/xml
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        COMMENT "Generating API documentation with Breathe"
-        DEPENDS doxygen-docs
-        VERBATIM )
-else (BREATHE_EXECUTABLE)
-    message(WARNING "Breathe need to be installed to generate the breathe documentation")
-endif (BREATHE_EXECUTABLE)
+# Use breathe-apidoc from the virtual environment
+add_custom_target(breathe-apidocs
+    COMMAND ${DOCS_VENV_DIR}/bin/breathe-apidoc -o ${SPHINX_SOURCE_DIR}/api
+    ${CMAKE_CURRENT_BINARY_DIR}/doxygen/xml
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Generating API documentation with Breathe using virtual environment"
+    DEPENDS create_docs_venv doxygen-docs
+    VERBATIM
+)
 
 add_custom_target(docs
     COMMENT "Build both Doxygen and Sphinx documentation"
