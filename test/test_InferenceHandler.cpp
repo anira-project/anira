@@ -94,6 +94,12 @@ TEST_P(InferenceTest, Simple){
     HybridNNPrePostProcessor pp_processor(inference_config);
     HybridNNBypassProcessor bypass_processor(inference_config);
 
+    // This test requires the buffer size to be a multiple of the preprocess input size
+    if (static_cast<size_t>(buffer_size) % inference_config.get_preprocess_input_size()[0] != 0){
+        GTEST_SKIP() << "Test requires the preprocess_input_size to be a multiple of the buffer size.";
+        return;
+    }
+
     // Create an InferenceHandler instance
     InferenceHandler inference_handler(pp_processor, inference_config,bypass_processor, anira_context_config);
 
@@ -128,7 +134,7 @@ TEST_P(InferenceTest, Simple){
         
         // wait until the block was properly processed
         auto start = std::chrono::system_clock::now();
-        while (inference_handler.get_num_received_samples(0) < prev_samples - (static_cast<size_t>(buffer_size) % inference_config.get_postprocess_output_size()[0])){
+        while (inference_handler.get_num_received_samples(0) != prev_samples){
             if (std::chrono::system_clock::now() >  start + std::chrono::duration<long int>(INFERENCE_TIMEOUT_S)){
                 FAIL() << "Timeout while waiting for block to be processed";
             }

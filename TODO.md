@@ -12,6 +12,7 @@
 ## Testing
 
 - [ ] Run the examples as tests in CI
+- [ ] InferenceHandler tests with buffersizes that are not a multiple of the preprocess input size
 
 ## Packaging
 
