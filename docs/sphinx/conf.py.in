@@ -31,19 +31,20 @@ breathe_default_members = ('members', 'undoc-members')
 breathe_domain_by_extension = {"h": "cpp", "hpp": "cpp"}
 breathe_implementation_filename_extensions = ['.c', '.cc', '.cpp']
 
-templates_path = ['_templates']
+templates_path = ['@SPHINX_SOURCE_DIR@/_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'venv']
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = "sphinxawesome_theme"
+html_theme = "shibuya"
 
-# Enable syntax highlighting for C++
-pygments_style = 'xcode'
-pygments_style_dark = 'github-dark'
-highlight_language = 'cpp'
+# Add custom CSS for better syntax highlighting
+html_static_path = ['@SPHINX_SOURCE_DIR@/_static']
+html_css_files = [
+    'custom.css',
+]
 
-# For the hyprlinks of headers
-from sphinxawesome_theme.postprocess import Icons
-html_permalinks_icon = Icons.permalinks_icon
+html_theme_options = {
+  "github_url": "https://github.com/anira-project/anira"
+}

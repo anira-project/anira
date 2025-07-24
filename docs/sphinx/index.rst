@@ -65,6 +65,7 @@ Quick Start
 The basic usage of anira is as follows:
 
 .. code-block:: cpp
+   :linenos:
 
    #include <anira/anira.h>
 

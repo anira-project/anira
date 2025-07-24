@@ -12,7 +12,7 @@ if(NOT EXISTS ${DOCS_VENV_DIR})
         POST_BUILD
         COMMAND ${Python3_EXECUTABLE} -m venv ${DOCS_VENV_DIR}
         COMMAND ${DOCS_VENV_DIR}/bin/pip install --upgrade pip
-        COMMAND ${DOCS_VENV_DIR}/bin/pip install --quiet sphinx breathe sphinxawesome-theme
+        COMMAND ${DOCS_VENV_DIR}/bin/pip install --quiet sphinx breathe shibuya
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         COMMENT "Creating virtual environment for Sphinx documentation"
         VERBATIM
