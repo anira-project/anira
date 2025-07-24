@@ -27,7 +27,7 @@ Prerequisites
 - Optional: backends you want to work with (LibTorch, ONNX Runtime, TensorFlow Lite)
 
 Getting the Code
-~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~
 
 1. Fork the anira repository on GitHub
 2. Clone your fork locally:

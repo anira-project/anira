@@ -96,7 +96,7 @@ Handles data formatting between audio buffers and neural network tensors.
 * Manages intermediate buffers
 
 InferenceManager
-~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~
 
 Coordinates the thread pool and inference scheduling.
 

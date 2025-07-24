@@ -60,8 +60,6 @@ The following example shows how to use :cpp:class:`anira::InferenceHandler`:
        anira::InferenceHandler handler(processor, config);
    }
 
-You can reference this code block later: :ref:`inference-handler-example`
-
 **Full class documentation (uncomment to use):**
 
 ..
@@ -99,7 +97,7 @@ Anira provides the following structures and classes to help you integrate real-t
 |                  | Either use the default PrePostProcessor or inherit from this class       |
 |                  | for custom processing.                                                   |
 +------------------+--------------------------------------------------------------------------+
-| HostConfig  | A structure for defining the host configuration: buffer size       |
+| HostConfig       | A structure for defining the host configuration: buffer size             |
 |                  | and sample rate.                                                         |
 +------------------+--------------------------------------------------------------------------+
 

@@ -127,7 +127,7 @@ Unexpected Results or Crashes
 4. Check that your model works correctly outside of anira (e.g., in PyTorch or TensorFlow directly)
 
 Performance Optimization
-------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 Improving Inference Speed
 ^^^^^^^^^^^^^^^^^^^^^^^^^

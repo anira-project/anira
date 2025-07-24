@@ -185,13 +185,7 @@ Documentation
    examples
    troubleshooting
    contributing
-
-.. toctree::
-   :maxdepth: 1
-   :caption: API Documentation:
-   :glob:
-
-   api/*
+   api/index
 
 Citation
 --------

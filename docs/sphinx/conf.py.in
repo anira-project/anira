@@ -46,5 +46,23 @@ html_css_files = [
 ]
 
 html_theme_options = {
-  "github_url": "https://github.com/anira-project/anira"
+  "github_url": "https://github.com/anira-project/anira",
+  "nav_links": [
+      {
+          "title": "API Documentation",
+          "url": "api/index",
+          "children": [
+              {
+                  "title": "Class List",
+                  "url": "api/classlist",
+                  "summary": "List of all classes in the API",
+              },
+              {
+                  "title": "Struct List",
+                  "url": "api/structlist",
+                  "summary": "List of all structs in the API",
+              },
+          ]
+      },
+  ]
 }

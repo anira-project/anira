@@ -274,7 +274,7 @@ Compile and run your benchmarks:
    ./build/your_benchmark_executable
 
 Output and Analysis
-~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
 
 The benchmark will produce output showing:
 

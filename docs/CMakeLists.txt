@@ -46,8 +46,24 @@ endif (DOXYGEN_FOUND)
 set(SPHINX_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/sphinx)
 set(SPHINX_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/sphinx)
 
+# Use breathe-apidoc from the virtual environment
+add_custom_target(breathe-apidocs
+    COMMAND ${DOCS_VENV_DIR}/bin/breathe-apidoc -o ${SPHINX_SOURCE_DIR}/api
+    ${CMAKE_CURRENT_BINARY_DIR}/doxygen/xml
+    -g class,struct -f
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1InferenceConfig_1_1Defaults.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1SessionElement_1_1ThreadSafeStruct.rst
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Generating API documentation with Breathe using virtual environment"
+    DEPENDS create_docs_venv doxygen-docs
+    VERBATIM
+)
+
 # Configure the Sphinx configuration file
 configure_file(${SPHINX_SOURCE_DIR}/conf.py.in ${SPHINX_BUILD_DIR}/conf.py @ONLY)
+
+# Collect all files in SPHINX_SOURCE_DIR as dependencies
+file(GLOB_RECURSE SPHINX_SOURCE_FILES "${SPHINX_SOURCE_DIR}/*")
 
 add_custom_target(sphinx-docs
     COMMAND ${DOCS_VENV_DIR}/bin/sphinx-build -b html 
@@ -56,23 +72,8 @@ add_custom_target(sphinx-docs
     ${SPHINX_BUILD_DIR}/html
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     COMMENT "Generating HTML documentation with Sphinx using virtual environment"
-    DEPENDS create_docs_venv doxygen-docs
+    DEPENDS create_docs_venv doxygen-docs breathe-apidocs ${SPHINX_SOURCE_FILES}
     VERBATIM
-)
-
-# Use breathe-apidoc from the virtual environment
-add_custom_target(breathe-apidocs
-    COMMAND ${DOCS_VENV_DIR}/bin/breathe-apidoc -o ${SPHINX_SOURCE_DIR}/api
-    ${CMAKE_CURRENT_BINARY_DIR}/doxygen/xml
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    COMMENT "Generating API documentation with Breathe using virtual environment"
-    DEPENDS create_docs_venv doxygen-docs
-    VERBATIM
-)
-
-add_custom_target(docs
-    COMMENT "Build both Doxygen and Sphinx documentation"
-    DEPENDS sphinx-docs
 )
 
 if (ANIRA_WITH_INSTALL)
