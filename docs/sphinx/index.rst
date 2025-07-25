@@ -75,23 +75,6 @@ Installation
     :start-after: .. _installation:
     :end-before: .. _installation_end:
 
-Build options
-~~~~~~~~~~~~~
-
-By default, all three inference engines are installed. You can disable specific backends as needed:
-
-- LibTorch: ``-DANIRA_WITH_LIBTORCH=OFF``
-- OnnxRuntime: ``-DANIRA_WITH_ONNXRUNTIME=OFF``
-- Tensrflow Lite: ``-DANIRA_WITH_TFLITE=OFF``
-
-Moreover, the following options are available:
-
-- Build anira with benchmark capabilities: ``-DANIRA_WITH_BENCHMARK=ON``
-- Build example applications, plugins and populate example neural models: ``-DANIRA_WITH_EXAMPLES=ON``
-- Build anira with tests: ``-DANIRA_WITH_TESTS=ON``
-- Build anira with documentation: ``-DANIRA_WITH_DOCS=ON``
-- Disable the logging system: ``-DANIRA_WITH_LOGGING=OFF``
-
 Documentation
 -------------
 

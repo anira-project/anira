@@ -10,7 +10,7 @@ There are many ways to contribute to anira:
 
 - **Bug reports**: Report issues you encounter
 - **Feature requests**: Suggest new features or improvements
-- **Documentation**: Help improve or translate documentation
+- **Documentation**: Help improve the documentation
 - **Code contributions**: Fix bugs or implement new features
 - **Examples**: Create example projects that use anira
 - **Testing**: Help test on different platforms and configurations
@@ -24,7 +24,6 @@ Prerequisites
 - C++17 compatible compiler
 - CMake 3.14 or higher
 - Git
-- Optional: backends you want to work with (LibTorch, ONNX Runtime, TensorFlow Lite)
 
 Getting the Code
 ~~~~~~~~~~~~~~~~
@@ -50,7 +49,7 @@ Build with all features enabled:
 
 .. code-block:: bash
 
-    cmake . -B build -DCMAKE_BUILD_TYPE=Debug -DANIRA_WITH_TESTS=ON -DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_EXAMPLES=ON
+    cmake . -B build -DCMAKE_BUILD_TYPE=Debug -DANIRA_WITH_TESTS=ON -DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_EXAMPLES=ON -DANIRA_BUILD_DOCS=ON
     cmake --build build
 
 Run tests to verify your setup:
@@ -70,15 +69,6 @@ General
 - Write clear, readable, and maintainable code
 - Include appropriate documentation for public API
 - Add tests for new functionality
-
-Code Style
-~~~~~~~~~~
-
-- Use camelCase for function and method names
-- Use snake_case for variable names
-- Use PascalCase for class names
-- Use UPPER_CASE for constants and macros
-- Use 4 spaces for indentation, no tabs
 
 Documentation
 ~~~~~~~~~~~~~
@@ -141,22 +131,10 @@ To build the documentation locally:
 
 .. code-block:: bash
 
-    cmake . -B build -DCMAKE_BUILD_TYPE=Release
-    cmake --build build --target docs
+    cmake . -B build -DCMAKE_BUILD_TYPE=Release -DANIRA_BUILD_DOCS=ON
+    cmake --build build --target sphinx-docs
 
 The documentation will be built in `build/docs/sphinx/html/`.
-
-Release Process
----------------
-
-The anira release process follows these steps:
-
-1. Update version numbers in relevant files
-2. Update changelog with all notable changes
-3. Create a release branch
-4. Build and test the release artifacts
-5. Tag the release in Git
-6. Publish the release on GitHub
 
 Getting Help
 ------------

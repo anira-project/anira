@@ -20,7 +20,7 @@ Installation
 
 .. _installation:
 
-anira can be easily integrated into your CMake project. Either add anira as a submodule, download the pre-built binaries from the `releases page <https://github.com/anira-project/anira/releases/latest>`_ or build from source.
+Anira can be easily integrated into your CMake project. Either add anira as a submodule, download the pre-built binaries from the `releases page <https://github.com/anira-project/anira/releases/latest>`_ or build from source.
 
 Option 1: Add as Git Submodule (Recommended)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -74,6 +74,23 @@ Option 3: Build from Source
     cmake . -B build -DCMAKE_BUILD_TYPE=Release
     cmake --build build --config Release --target anira
     cmake --install build --prefix /path/to/install/directory
+
+Build options
+~~~~~~~~~~~~~
+
+By default, all three inference engines are installed. You can disable specific backends as needed:
+
+- LibTorch: ``-DANIRA_WITH_LIBTORCH=OFF``
+- OnnxRuntime: ``-DANIRA_WITH_ONNXRUNTIME=OFF``
+- Tensorflow Lite: ``-DANIRA_WITH_TFLITE=OFF``
+
+Moreover, the following options are available:
+
+- Build anira with benchmark capabilities: ``-DANIRA_WITH_BENCHMARK=ON``
+- Build example applications, plugins and populate example neural models: ``-DANIRA_WITH_EXAMPLES=ON``
+- Build anira with tests: ``-DANIRA_WITH_TESTS=ON``
+- Build anira with documentation: ``-DANIRA_WITH_DOCS=ON``
+- Disable the logging system: ``-DANIRA_WITH_LOGGING=OFF``
 
 .. _installation_end:
 
