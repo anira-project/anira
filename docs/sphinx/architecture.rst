@@ -76,8 +76,8 @@ The primary interface for users, handling the overall integration of neural netw
 * Handles buffer management
 * Reports latency information
 
-InferenceConfig
-~~~~~~~~~~~~~~~
+:cpp::class:`anira::InferenceHandler`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Stores configuration data for models and processing parameters.
 
@@ -86,8 +86,8 @@ Stores configuration data for models and processing parameters.
 * Maximum inference time limits
 * Memory management settings
 
-PrePostProcessor
-~~~~~~~~~~~~~~~~
+:cpp::class:`anira::PrePostProcessor`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Handles data formatting between audio buffers and neural network tensors.
 
@@ -95,8 +95,8 @@ Handles data formatting between audio buffers and neural network tensors.
 * Converts model outputs back to audio format
 * Manages intermediate buffers
 
-InferenceManager
-~~~~~~~~~~~~~~~~
+:cpp::class:`anira::InferenceManager`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Coordinates the thread pool and inference scheduling.
 
@@ -109,10 +109,10 @@ Backend Processors
 
 Backend-specific implementations for different inference engines.
 
-* LibTorchProcessor - PyTorch C++ API integration
-* OnnxRuntimeProcessor - ONNX Runtime integration
-* TFLiteProcessor - TensorFlow Lite integration
-* CustomProcessor - For custom inference engines
+* :cpp::class:`anira::LibTorchProcessor` - PyTorch C++ API integration
+* :cpp::class:`anira::OnnxRuntimeProcessor` - ONNX Runtime integration
+* :cpp::class:`anira::TFLiteProcessor` - TensorFlow Lite integration
+* :cpp::class:`anira::CustomProcessor` - For custom inference engines
 
 Data Flow
 ---------
