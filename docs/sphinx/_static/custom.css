@@ -25,6 +25,19 @@ dt.sig>a.internal:before {
   white-space: normal;
 }
 
+/* Change the color of inline and block code elements */
+code,
+pre,
+.rst-content code,
+.rst-content pre,
+.highlight pre {
+  background-color: #161b22 !important;
+  color: #c9d1d9 !important;
+  padding: 0.2em 0.4em !important;
+  font-family: var(--sy-f-mono, 'Fira Mono', 'Consolas', 'Monaco', monospace) !important;
+  font-size: 0.95em !important;
+}
+
 /* Customize Shibuya's syntax highlighting to match github-dark */
 :root {
     /* Override Shibuya's dark syntax colors to match github-dark exactly */
