@@ -22,7 +22,7 @@ Anira supports two types of tensors that require different handling in custom pr
 
 **Non-Streamable Tensors:**
 - Control parameters, static values, or metadata (non-time-varying)
-- Have ``preprocess_input_size <= 0`` and ``postprocess_output_size <= 0``  
+- Have ``preprocess_input_size == 0`` and ``postprocess_output_size == 0``  
 - Data comes from the preprocessor's internal storage via ``get_input()`` and ``set_input()`` methods
 - Must be manually written to and read from :cpp:type:`anira::BufferF` tensors
 - Note: Non-streamable tensors have no channel count (always use channel 0)
