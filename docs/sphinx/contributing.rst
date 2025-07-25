@@ -34,14 +34,14 @@ Getting the Code
 
 .. code-block:: bash
 
-   git clone https://github.com/YOUR-USERNAME/anira.git
-   cd anira
-   
+    git clone https://github.com/YOUR-USERNAME/anira.git
+    cd anira
+    
 3. Add the original repository as an upstream remote:
 
 .. code-block:: bash
 
-   git remote add upstream https://github.com/anira-project/anira.git
+    git remote add upstream https://github.com/anira-project/anira.git
 
 Building for Development
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -50,15 +50,15 @@ Build with all features enabled:
 
 .. code-block:: bash
 
-   cmake . -B build -DCMAKE_BUILD_TYPE=Debug -DANIRA_WITH_TESTS=ON -DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_EXAMPLES=ON
-   cmake --build build
+    cmake . -B build -DCMAKE_BUILD_TYPE=Debug -DANIRA_WITH_TESTS=ON -DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_EXAMPLES=ON
+    cmake --build build
 
 Run tests to verify your setup:
 
 .. code-block:: bash
 
-   cd build
-   ctest
+    cd build
+    ctest
 
 Coding Guidelines
 -----------------
@@ -104,26 +104,26 @@ Pull Request Process
 
 .. code-block:: bash
 
-   git checkout -b feature/your-feature-name
+    git checkout -b feature/your-feature-name
 
 2. Make your changes and commit them:
 
 .. code-block:: bash
 
-   git commit -m "Description of your changes"
+    git commit -m "Description of your changes"
 
 3. Keep your branch updated with upstream:
 
 .. code-block:: bash
 
-   git fetch upstream
-   git rebase upstream/main
+    git fetch upstream
+    git rebase upstream/main
 
 4. Push your branch to your fork:
 
 .. code-block:: bash
 
-   git push origin feature/your-feature-name
+    git push origin feature/your-feature-name
 
 5. Create a pull request from your branch to the main repository
 
@@ -141,8 +141,8 @@ To build the documentation locally:
 
 .. code-block:: bash
 
-   cmake . -B build -DCMAKE_BUILD_TYPE=Release
-   cmake --build build --target docs
+    cmake . -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build --target docs
 
 The documentation will be built in `build/docs/sphinx/html/`.
 

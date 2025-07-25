@@ -2,8 +2,7 @@ API Documentation
 =================
 
 .. toctree::
-   :maxdepth: 1
-   :glob:
+    :maxdepth: 1
 
-   classlist
-   structlist
+    classlist
+    structlist

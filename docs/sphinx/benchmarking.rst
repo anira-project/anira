@@ -36,43 +36,43 @@ After that we can start to define the benchmark with the ``BENCHMARK_DEFINE_F`` 
 We will also create a static ``anira::Buffer`` member, which will be used later as an input buffer. Finally, we will initialize the repetition. This will allow the anira fixture class to keep track of all configurations used and print options such as model path and buffer size in the benchmark log.
 
 .. note::
-   This code is only run once per repetition, not for every iteration. It is also not measured by the benchmark.
+    This code is only run once per repetition, not for every iteration. It is also not measured by the benchmark.
 
 .. code-block:: cpp
 
-   // benchmark.cpp
+    // benchmark.cpp
 
-   #include <gtest/gtest.h>
-   #include <benchmark/benchmark.h>
-   #include <anira/anira.h>
-   #include <anira/benchmark.h>
+    #include <gtest/gtest.h>
+    #include <benchmark/benchmark.h>
+    #include <anira/anira.h>
+    #include <anira/benchmark.h>
 
-   typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
+    typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
-   anira::InferenceConfig my_inference_config(
-       ...
-   );
-   anira::PrePostProcessor my_pp_processor(my_inference_config);
+    anira::InferenceConfig my_inference_config(
+        ...
+    );
+    anira::PrePostProcessor my_pp_processor(my_inference_config);
 
-   BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
+    BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
 
-       // Define the host configuration that shall be used / simulated for the benchmark
-       anira::HostConfig host_config(BUFFER_SIZE, SAMPLE_RATE);
-       anira::InferenceBackend inference_backend = anira::ONNX;
+        // Define the host configuration that shall be used / simulated for the benchmark
+        anira::HostConfig host_config(BUFFER_SIZE, SAMPLE_RATE);
+        anira::InferenceBackend inference_backend = anira::ONNX;
 
-       // Create a static InferenceHandler instance, prepare and select backend
-       m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
-       m_inference_handler->prepare(host_config);
-       m_inference_handler->set_inference_backend(inference_backend);
+        // Create a static InferenceHandler instance, prepare and select backend
+        m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
+        m_inference_handler->prepare(host_config);
+        m_inference_handler->set_inference_backend(inference_backend);
 
-       // Create a static Buffer instance
-       m_buffer = std::make_unique<anira::Buffer<float>>(my_inference_config.get_preprocess_input_channels()[0], host_config.m_buffer_size);
+        // Create a static Buffer instance
+        m_buffer = std::make_unique<anira::Buffer<float>>(my_inference_config.get_preprocess_input_channels()[0], host_config.m_buffer_size);
 
-       // Initialize the repetition
-       initialize_repetition(my_inference_config, host_config, inference_backend, true);
+        // Initialize the repetition
+        initialize_repetition(my_inference_config, host_config, inference_backend, true);
 
 .. note::
-   In the ``initialize_repetition`` function, we can use the fourth argument to specify whether we want to sleep after a repetition. This can be useful if we want to give the system some time to cool down after a repetition. The time the fixture will sleep after a repetition is equal to the time it took to process all the iterations.
+    In the ``initialize_repetition`` function, we can use the fourth argument to specify whether we want to sleep after a repetition. This can be useful if we want to give the system some time to cool down after a repetition. The time the fixture will sleep after a repetition is equal to the time it took to process all the iterations.
 
 Step 2: Measure the Runtime of the Process Method
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -85,34 +85,34 @@ Then we update the fixture with the measured runtime. Finally, when all iteratio
 
 .. code-block:: cpp
 
-   // benchmark.cpp (continued)
-       for (auto _ : state) {
-           // Fill the buffer with random samples
-           push_random_samples_in_buffer(host_config);
+    // benchmark.cpp (continued)
+        for (auto _ : state) {
+            // Fill the buffer with random samples
+            push_random_samples_in_buffer(host_config);
 
-           // Initialize the iteration
-           initialize_iteration();
+            // Initialize the iteration
+            initialize_iteration();
 
-           // Here we start the actual measurement of the runtime
-           auto start = std::chrono::high_resolution_clock::now();
-           
-           // Process the buffer
-           m_inference_handler->process(m_buffer->get_array_of_write_pointers(), get_buffer_size());
+            // Here we start the actual measurement of the runtime
+            auto start = std::chrono::high_resolution_clock::now();
+            
+            // Process the buffer
+            m_inference_handler->process(m_buffer->get_array_of_write_pointers(), get_buffer_size());
 
-           // Wait for the result
-           while (!buffer_processed()) {
-               std::this_thread::sleep_for(std::chrono::nanoseconds (10));
-           }
-           
-           // End of the measurement
-           auto end = std::chrono::high_resolution_clock::now();
+            // Wait for the result
+            while (!buffer_processed()) {
+                std::this_thread::sleep_for(std::chrono::nanoseconds (10));
+            }
+            
+            // End of the measurement
+            auto end = std::chrono::high_resolution_clock::now();
 
-           // Update the fixture with the measured runtime
-           interation_step(start, end, state);
-       }
-       // Repetition is done, reset the InferenceHandler and the Buffer
-       repetition_step();
-   }
+            // Update the fixture with the measured runtime
+            interation_step(start, end, state);
+        }
+        // Repetition is done, reset the InferenceHandler and the Buffer
+        repetition_step();
+    }
 
 Step 3: Register the Benchmark
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -123,10 +123,10 @@ Here we also define which time unit we want to use for the benchmark and the num
 
 .. code-block:: cpp
 
-   BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_SIMPLE)
-   ->Unit(benchmark::kMillisecond)
-   ->Iterations(NUM_ITERATIONS)->Repetitions(NUM_REPETITIONS)
-   ->UseManualTime();
+    BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_SIMPLE)
+    ->Unit(benchmark::kMillisecond)
+    ->Iterations(NUM_ITERATIONS)->Repetitions(NUM_REPETITIONS)
+    ->UseManualTime();
 
 Multiple Configuration Benchmarking
 ------------------------------------
@@ -140,18 +140,18 @@ First, define the parameter ranges you want to test:
 
 .. code-block:: cpp
 
-   // Define buffer sizes to test
-   std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024};
-   
-   // Define sample rates to test
-   std::vector<double> sample_rates = {44100.0, 48000.0, 96000.0};
-   
-   // Define inference backends to test
-   std::vector<anira::InferenceBackend> backends = {
-       anira::InferenceBackend::ONNX,
-       anira::InferenceBackend::LIBTORCH,
-       anira::InferenceBackend::TFLITE
-   };
+    // Define buffer sizes to test
+    std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024};
+    
+    // Define sample rates to test
+    std::vector<double> sample_rates = {44100.0, 48000.0, 96000.0};
+    
+    // Define inference backends to test
+    std::vector<anira::InferenceBackend> backends = {
+        anira::InferenceBackend::ONNX,
+        anira::InferenceBackend::LIBTORCH,
+        anira::InferenceBackend::TFLITE
+    };
 
 Parameterized Benchmark Definition
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -160,47 +160,47 @@ Create a parameterized benchmark that tests all combinations:
 
 .. code-block:: cpp
 
-   BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_PARAMETERIZED)(::benchmark::State& state) {
-       // Extract parameters from state
-       int buffer_size = state.range(0);
-       double sample_rate = state.range(1);
-       anira::InferenceBackend backend = static_cast<anira::InferenceBackend>(state.range(2));
+    BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_PARAMETERIZED)(::benchmark::State& state) {
+        // Extract parameters from state
+        int buffer_size = state.range(0);
+        double sample_rate = state.range(1);
+        anira::InferenceBackend backend = static_cast<anira::InferenceBackend>(state.range(2));
 
-       // Set up configuration
-       anira::HostConfig host_config(buffer_size, sample_rate);
+        // Set up configuration
+        anira::HostConfig host_config(buffer_size, sample_rate);
 
-       // Create and prepare InferenceHandler
-       m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
-       m_inference_handler->prepare(host_config);
-       m_inference_handler->set_inference_backend(backend);
+        // Create and prepare InferenceHandler
+        m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
+        m_inference_handler->prepare(host_config);
+        m_inference_handler->set_inference_backend(backend);
 
-       // Create buffer
-       m_buffer = std::make_unique<anira::Buffer<float>>(
-           my_inference_config.get_preprocess_input_channels()[0], 
-           buffer_size
-       );
+        // Create buffer
+        m_buffer = std::make_unique<anira::Buffer<float>>(
+            my_inference_config.get_preprocess_input_channels()[0], 
+            buffer_size
+        );
 
-       // Initialize repetition
-       initialize_repetition(my_inference_config, host_config, backend, true);
+        // Initialize repetition
+        initialize_repetition(my_inference_config, host_config, backend, true);
 
-       // Benchmark loop
-       for (auto _ : state) {
-           push_random_samples_in_buffer(host_config);
-           initialize_iteration();
+        // Benchmark loop
+        for (auto _ : state) {
+            push_random_samples_in_buffer(host_config);
+            initialize_iteration();
 
-           auto start = std::chrono::high_resolution_clock::now();
-           m_inference_handler->process(m_buffer->get_array_of_write_pointers(), buffer_size);
-           
-           while (!buffer_processed()) {
-               std::this_thread::sleep_for(std::chrono::nanoseconds(10));
-           }
-           
-           auto end = std::chrono::high_resolution_clock::now();
-           interation_step(start, end, state);
-       }
-       
-       repetition_step();
-   }
+            auto start = std::chrono::high_resolution_clock::now();
+            m_inference_handler->process(m_buffer->get_array_of_write_pointers(), buffer_size);
+            
+            while (!buffer_processed()) {
+                std::this_thread::sleep_for(std::chrono::nanoseconds(10));
+            }
+            
+            auto end = std::chrono::high_resolution_clock::now();
+            interation_step(start, end, state);
+        }
+        
+        repetition_step();
+    }
 
 Registering Parameterized Benchmarks
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -209,19 +209,19 @@ Register the parameterized benchmark with all parameter combinations:
 
 .. code-block:: cpp
 
-   // Register with parameter combinations
-   BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_PARAMETERIZED)
-   ->ArgsProduct({
-       benchmark::CreateRange(64, 1024, 2),  // Buffer sizes: 64, 128, 256, 512, 1024
-       {44100, 48000, 96000},                // Sample rates
-       {static_cast<int>(anira::InferenceBackend::ONNX),
-        static_cast<int>(anira::InferenceBackend::LIBTORCH),
-        static_cast<int>(anira::InferenceBackend::TFLITE)}  // Backends
-   })
-   ->Unit(benchmark::kMillisecond)
-   ->Iterations(100)
-   ->Repetitions(5)
-   ->UseManualTime();
+    // Register with parameter combinations
+    BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_PARAMETERIZED)
+    ->ArgsProduct({
+        benchmark::CreateRange(64, 1024, 2),  // Buffer sizes: 64, 128, 256, 512, 1024
+        {44100, 48000, 96000},                // Sample rates
+        {static_cast<int>(anira::InferenceBackend::ONNX),
+         static_cast<int>(anira::InferenceBackend::LIBTORCH),
+         static_cast<int>(anira::InferenceBackend::TFLITE)}  // Backends
+    })
+    ->Unit(benchmark::kMillisecond)
+    ->Iterations(100)
+    ->Repetitions(5)
+    ->UseManualTime();
 
 Advanced Benchmarking Features
 ------------------------------
@@ -233,15 +233,15 @@ You can add custom metrics to track additional performance indicators:
 
 .. code-block:: cpp
 
-   // In your benchmark loop
-   for (auto _ : state) {
-       // ... benchmark code ...
-       
-       // Add custom counters
-       state.counters["Latency_Samples"] = inference_handler->get_latency();
-       state.counters["CPU_Usage"] = get_cpu_usage();
-       state.counters["Memory_Usage"] = get_memory_usage();
-   }
+    // In your benchmark loop
+    for (auto _ : state) {
+        // ... benchmark code ...
+        
+        // Add custom counters
+        state.counters["Latency_Samples"] = inference_handler->get_latency();
+        state.counters["CPU_Usage"] = get_cpu_usage();
+        state.counters["Memory_Usage"] = get_memory_usage();
+    }
 
 Warmup Iterations
 ~~~~~~~~~~~~~~~~~
@@ -250,14 +250,14 @@ For more accurate measurements, especially with neural networks that may have in
 
 .. code-block:: cpp
 
-   // Add warmup iterations before the main benchmark
-   for (int warmup = 0; warmup < 10; ++warmup) {
-       push_random_samples_in_buffer(host_config);
-       m_inference_handler->process(m_buffer->get_array_of_write_pointers(), buffer_size);
-       while (!buffer_processed()) {
-           std::this_thread::sleep_for(std::chrono::nanoseconds(10));
-       }
-   }
+    // Add warmup iterations before the main benchmark
+    for (int warmup = 0; warmup < 10; ++warmup) {
+        push_random_samples_in_buffer(host_config);
+        m_inference_handler->process(m_buffer->get_array_of_write_pointers(), buffer_size);
+        while (!buffer_processed()) {
+            std::this_thread::sleep_for(std::chrono::nanoseconds(10));
+        }
+    }
 
 Running Benchmarks
 ------------------
@@ -266,12 +266,12 @@ Compile and run your benchmarks:
 
 .. code-block:: bash
 
-   # Build with benchmark support
-   cmake . -B build -DCMAKE_BUILD_TYPE=Release -DANIRA_WITH_BENCHMARK=ON
-   cmake --build build --config Release
+    # Build with benchmark support
+    cmake . -B build -DCMAKE_BUILD_TYPE=Release -DANIRA_WITH_BENCHMARK=ON
+    cmake --build build --config Release
 
-   # Run benchmarks
-   ./build/your_benchmark_executable
+    # Run benchmarks
+    ./build/your_benchmark_executable
 
 Output and Analysis
 ~~~~~~~~~~~~~~~~~~~
@@ -288,18 +288,18 @@ Example output:
 
 .. code-block:: text
 
-   Run on (8 X 3000 MHz CPU s)
-   CPU Caches:
-     L1 Data 32 KiB (x4)
-     L1 Instruction 32 KiB (x4)
-     L2 Unified 256 KiB (x4)
-     L3 Unified 8192 KiB (x1)
-   -------------------------------------------------------------------
-   Benchmark                           Time           CPU Iterations
-   -------------------------------------------------------------------
-   BM_SIMPLE/256/48000/ONNX        2.34 ms      2.34 ms        100
-   BM_SIMPLE/512/48000/ONNX        4.21 ms      4.21 ms        100
-   BM_SIMPLE/256/48000/LIBTORCH    3.12 ms      3.12 ms        100
+    Run on (8 X 3000 MHz CPU s)
+    CPU Caches:
+      L1 Data 32 KiB (x4)
+      L1 Instruction 32 KiB (x4)
+      L2 Unified 256 KiB (x4)
+      L3 Unified 8192 KiB (x1)
+    -------------------------------------------------------------------
+    Benchmark                           Time           CPU Iterations
+    -------------------------------------------------------------------
+    BM_SIMPLE/256/48000/ONNX        2.34 ms      2.34 ms        100
+    BM_SIMPLE/512/48000/ONNX        4.21 ms      4.21 ms        100
+    BM_SIMPLE/256/48000/LIBTORCH    3.12 ms      3.12 ms        100
 
 Best Practices
 --------------

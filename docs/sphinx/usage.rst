@@ -23,53 +23,56 @@ You can reference classes and methods within code comments:
 
 .. code-block:: cpp
 
-   // The anira::InferenceHandler manages the inference process
-   anira::InferenceHandler handler(processor, config);
-   
-   // Call the process() method for real-time audio processing
-   handler.process(audio_data, num_samples);
+    // The anira::InferenceHandler manages the inference process
+    anira::InferenceHandler handler(processor, config);
+    
+    // Call the process() method for real-time audio processing
+    handler.process(audio_data, num_samples);
 
 **Highlighted Code with References:**
 
 .. code-block:: cpp
-   :emphasize-lines: 2, 5
-   :linenos:
-   :caption: Example using anira::InferenceHandler
+    :emphasize-lines: 2, 5
+    :linenos:
+    :caption: Example using anira::InferenceHandler
 
-   // Initialize the inference system
-   anira::InferenceHandler handler(processor, config);  // <- Main class
-   handler.prepare(host_config);
-   
-   handler.process(audio_data, num_samples);  // <- Key method
+    // Initialize the inference system
+    anira::InferenceHandler handler(processor, config);  // <- Main class
+    handler.prepare(host_config);
+    
+    handler.process(audio_data, num_samples);  // <- Key method
 
 **Code with Cross-references:**
 
 The following example shows how to use :cpp:class:`anira::InferenceHandler`:
 
 .. code-block:: cpp
-   :name: inference-handler-example
+    :name: inference-handler-example
 
-   void setup_inference() {
-       // Create configuration - see anira::InferenceConfig documentation
-       anira::InferenceConfig config(model_data, tensor_shapes, 42.66f);
-       
-       // Initialize processor - inherits from anira::PrePostProcessor
-       CustomProcessor processor(config);
-       
-       // Create handler - the main anira::InferenceHandler instance
-       anira::InferenceHandler handler(processor, config);
-   }
+    void setup_inference() {
+        // Create configuration - see anira::InferenceConfig documentation
+        anira::InferenceConfig config(model_data, tensor_shapes, 42.66f);
+        
+        // Initialize processor - inherits from anira::PrePostProcessor
+        CustomProcessor processor(config);
+        
+        // Create handler - the main anira::InferenceHandler instance
+        anira::InferenceHandler handler(processor, config);
+    }
+
+Reference the code block in your documentation:
+You can refer to the code block above using :ref:`inference-handler-example`.
 
 **Full class documentation (uncomment to use):**
 
 ..
-   .. doxygenclass:: anira::PrePostProcessor
-      :members:
+    .. doxygenclass:: anira::PrePostProcessor
+        :members:
 
 **Specific method documentation:**
 
 ..
-   .. doxygenfunction:: anira::InferenceHandler::process
+    .. doxygenfunction:: anira::InferenceHandler::process
 
 Overview
 --------
@@ -115,29 +118,29 @@ First pass the model information and the corresponding inference backend in a ``
 
 .. code-block:: cpp
 
-   {std::string model_path, anira::InferenceBackend backend}
+    {std::string model_path, anira::InferenceBackend backend}
 
 2. Pass the model data as binary information:
 
 .. code-block:: cpp
 
-   {void* model_data, size_t model_size, anira::InferenceBackend backend}
+    {void* model_data, size_t model_size, anira::InferenceBackend backend}
 
 .. note::
-   Defining the model data as binary information is only possible for the ``anira::ONNX`` until now.
+    Defining the model data as binary information is only possible for the ``anira::ONNX`` until now.
 
 Now define your model information in a ``std::vector<anira::ModelData>``.
 
 .. code-block:: cpp
 
-   std::vector<anira::ModelData> model_data = {
-       {"path/to/your/model.pt", anira::InferenceBackend::LIBTORCH},
-       {"path/to/your/model.onnx", anira::InferenceBackend::ONNX},
-       {"path/to/your/model.tflite", anira::InferenceBackend::TFLITE}
-   };
+    std::vector<anira::ModelData> model_data = {
+        {"path/to/your/model.pt", anira::InferenceBackend::LIBTORCH},
+        {"path/to/your/model.onnx", anira::InferenceBackend::ONNX},
+        {"path/to/your/model.tflite", anira::InferenceBackend::TFLITE}
+    };
 
 .. note::
-   It is not necessary to submit a model for each backend anira was built with, only the one you want to use.
+    It is not necessary to submit a model for each backend anira was built with, only the one you want to use.
 
 Step 1.2: Define the input and output shapes of the model
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -146,20 +149,20 @@ In the next step, define the input and output shapes of the model for each backe
 
 .. code-block:: cpp
 
-   {std::vector<int64_t> input_shape, std::vector<int64_t> output_shape, (optional) anira::InferenceBackend}
+    {std::vector<int64_t> input_shape, std::vector<int64_t> output_shape, (optional) anira::InferenceBackend}
 
 Now define the input and output shapes of your model for each backend used in the ``std::vector<anira::ModelData>``.
 
 .. code-block:: cpp
 
-   std::vector<anira::TensorShape> tensor_shapes = {
-       {{{1, 1, 15380}}, {{1, 1, 2048}}, anira::InferenceBackend::LIBTORCH},
-       {{{1, 1, 15380}}, {{1, 1, 2048}}, anira::InferenceBackend::ONNX},
-       {{{1, 15380, 1}}, {{1, 2048, 1}}, anira::InferenceBackend::TFLITE}
-   };
+    std::vector<anira::TensorShape> tensor_shapes = {
+        {{{1, 1, 15380}}, {{1, 1, 2048}}, anira::InferenceBackend::LIBTORCH},
+        {{{1, 1, 15380}}, {{1, 1, 2048}}, anira::InferenceBackend::ONNX},
+        {{{1, 15380, 1}}, {{1, 2048, 1}}, anira::InferenceBackend::TFLITE}
+    };
 
 .. note::
-   If the input and output shapes of the model are the same for all backends, you can also define only one ``anira::TensorShape`` without a specific ``anira::InferenceBackend``.
+    If the input and output shapes of the model are the same for all backends, you can also define only one ``anira::TensorShape`` without a specific ``anira::InferenceBackend``.
 
 Step 1.3: Define the anira::InferenceConfig
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -168,11 +171,11 @@ Finally, define the necessary ``anira::InferenceConfig`` with the model informat
 
 .. code-block:: cpp
 
-   anira::InferenceConfig inference_config (
-       model_data, // std::vector<anira::ModelData>
-       tensor_shapes, // std::vector<anira::TensorShape>
-       42.66f // Maximum inference time in ms
-   );
+    anira::InferenceConfig inference_config (
+        model_data, // std::vector<anira::ModelData>
+        tensor_shapes, // std::vector<anira::TensorShape>
+        42.66f // Maximum inference time in ms
+    );
 
 There are also some optional parameters that can be set in the ``anira::InferenceConfig``:
 
@@ -213,8 +216,8 @@ If your model does not require any specific pre- or post-processing, you can use
 
 .. code-block:: cpp
 
-   // Create an instance of anira::PrePostProcessor
-   anira::PrePostProcessor pp_processor(inference_config);
+    // Create an instance of anira::PrePostProcessor
+    anira::PrePostProcessor pp_processor(inference_config);
 
 Custom Pre/Post Processing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -227,23 +230,23 @@ In the ``post_process`` method we get the input samples through an ``std::vector
 
 .. code-block:: cpp
 
-   #include <anira/anira.h>
+    #include <anira/anira.h>
 
-   class CustomPrePostProcessor : public anira::PrePostProcessor {
-   public:
-       using anira::PrePostProcessor::PrePostProcessor;
+    class CustomPrePostProcessor : public anira::PrePostProcessor {
+    public:
+        using anira::PrePostProcessor::PrePostProcessor;
 
-       virtual void pre_process(std::vector<anira::RingBuffer>& input, 
-                               std::vector<anira::BufferF>& output, 
-                               [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
-           pop_samples_from_buffer(input[0], output[0], 
-                                 m_inference_config.get_tensor_output_size()[0], 
-                                 m_inference_config.get_tensor_input_size()[0]-m_inference_config.get_tensor_output_size()[0]);
-       };
-   };
+        virtual void pre_process(std::vector<anira::RingBuffer>& input, 
+                                std::vector<anira::BufferF>& output, 
+                                [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
+            pop_samples_from_buffer(input[0], output[0], 
+                                  m_inference_config.get_tensor_output_size()[0], 
+                                  m_inference_config.get_tensor_input_size()[0]-m_inference_config.get_tensor_output_size()[0]);
+        };
+    };
 
 .. note::
-   The ``anira::PrePostProcessor`` class provides some methods to help you implement your own pre- and post-processing.
+    The ``anira::PrePostProcessor`` class provides some methods to help you implement your own pre- and post-processing.
 
 Available Helper Methods
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -297,15 +300,15 @@ In your application, you will need to create an instance of the :cpp:class:`anir
 
 .. code-block:: cpp
 
-   // Sample initialization in your application's initialization function
+    // Sample initialization in your application's initialization function
 
-   // Default PrePostProcessor
-   anira::PrePostProcessor pp_processor(inference_config);
-   // or custom PrePostProcessor
-   CustomPrePostProcessor pp_processor(inference_config);
+    // Default PrePostProcessor
+    anira::PrePostProcessor pp_processor(inference_config);
+    // or custom PrePostProcessor
+    CustomPrePostProcessor pp_processor(inference_config);
 
-   // Create an InferenceHandler instance
-   anira::InferenceHandler inference_handler(pp_processor, inference_config);
+    // Create an InferenceHandler instance
+    anira::InferenceHandler inference_handler(pp_processor, inference_config);
 
 Optional: Define the Context Configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -314,15 +317,15 @@ If you want to define a custom context configuration, you can do so by creating 
 
 .. code-block:: cpp
 
-   // Use the existing anira::InferenceConfig and anira::PrePostProcessor instances
+    // Use the existing anira::InferenceConfig and anira::PrePostProcessor instances
 
-   // Create an instance of anira::ContextConfig
-   anira::ContextConfig context_config {
-       4 // Number of threads
-   };
+    // Create an instance of anira::ContextConfig
+    anira::ContextConfig context_config {
+        4 // Number of threads
+    };
 
-   // Create an InferenceHandler instance
-   anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
+    // Create an InferenceHandler instance
+    anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
 
 Step 4: Allocate Memory Before Processing
 -----------------------------------------
@@ -335,22 +338,22 @@ After preparing the ``anira::InferenceHandler``, you can get the latency of the 
 
 .. code-block:: cpp
 
-   void prepare_audio_processing(double sample_rate, int buffer_size) {
+    void prepare_audio_processing(double sample_rate, int buffer_size) {
 
-       // Create an instance of anira::HostConfig
-       anira::HostConfig host_config {
-           buffer_size,
-           sample_rate
-       };
+        // Create an instance of anira::HostConfig
+        anira::HostConfig host_config {
+            buffer_size,
+            sample_rate
+        };
 
-       inference_handler.prepare(host_config);
+        inference_handler.prepare(host_config);
 
-       // Select the inference backend
-       inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
-       
-       // Get the latency of the inference process in samples
-       int latency_in_samples = inference_handler.get_latency();
-   }
+        // Select the inference backend
+        inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
+        
+        // Get the latency of the inference process in samples
+        int latency_in_samples = inference_handler.get_latency();
+    }
 
 Step 5: Real-time Audio Processing
 ----------------------------------
@@ -359,11 +362,11 @@ Now we are ready to process audio in the process callback of our real-time audio
 
 .. code-block:: cpp
 
-   // Real-time safe audio processing in the process callback of your application
-   void process(float** audio_data, int num_samples) {
-       inference_handler.process(audio_data, num_samples)
-   }
-   // audio_data now contains the processed audio samples
+    // Real-time safe audio processing in the process callback of your application
+    void process(float** audio_data, int num_samples) {
+        inference_handler.process(audio_data, num_samples)
+    }
+    // audio_data now contains the processed audio samples
 
 Custom Backend Processors
 -------------------------
@@ -381,37 +384,37 @@ The following example demonstrates how to implement a custom bypass backend for 
 
 .. code-block:: cpp
 
-   #include <anira/anira.h>
+    #include <anira/anira.h>
 
-   class BypassProcessor : public anira::BackendBase {
-   public:
-       BypassProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
+    class BypassProcessor : public anira::BackendBase {
+    public:
+        BypassProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
 
-       void process(anira::BufferF &input, anira::BufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
-           auto equal_channels = input.get_num_channels() == output.get_num_channels();
-           auto sample_diff = input.get_num_samples() - output.get_num_samples();
+        void process(anira::BufferF &input, anira::BufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
+            auto equal_channels = input.get_num_channels() == output.get_num_channels();
+            auto sample_diff = input.get_num_samples() - output.get_num_samples();
 
-           if (equal_channels && sample_diff >= 0) {
-               for (size_t channel = 0; channel < input.get_num_channels(); ++channel) {
-                   auto write_ptr = output.get_write_pointer(channel);
-                   auto read_ptr = input.get_read_pointer(channel);
+            if (equal_channels && sample_diff >= 0) {
+                for (size_t channel = 0; channel < input.get_num_channels(); ++channel) {
+                    auto write_ptr = output.get_write_pointer(channel);
+                    auto read_ptr = input.get_read_pointer(channel);
 
-                   for (size_t i = 0; i < output.get_num_samples(); ++i) {
-                       write_ptr[i] = read_ptr[i+sample_diff];
-                   }
-               }
-           }
-       }
-   };
+                    for (size_t i = 0; i < output.get_num_samples(); ++i) {
+                        write_ptr[i] = read_ptr[i+sample_diff];
+                    }
+                }
+            }
+        }
+    };
 
 After defining the custom backend processor, you can create an instance of the ``BypassProcessor`` class and pass it to the ``anira::InferenceHandler`` instance as an additional argument in the constructor. The ``anira::InferenceHandler`` will then use the ``BypassProcessor`` instance when the ``anira::CUSTOM`` backend is selected.
 
 .. code-block:: cpp
 
-   // Create an instance of the custom CustomProcessor
-   BypassProcessor bypass_processor(inference_config);
-   // In Step 3: Create an InferenceHandler Instance
-   anira::InferenceHandler inference_handler(pp_processor, inference_config, bypass_processor);
+    // Create an instance of the custom CustomProcessor
+    BypassProcessor bypass_processor(inference_config);
+    // In Step 3: Create an InferenceHandler Instance
+    anira::InferenceHandler inference_handler(pp_processor, inference_config, bypass_processor);
 
 .. note::
-   If you want to implement a custom inference backend use the existing backend implementations as a reference.
+    If you want to implement a custom inference backend use the existing backend implementations as a reference.

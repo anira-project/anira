@@ -10,58 +10,58 @@ anira is designed with real-time audio applications in mind, focusing on determi
 
 .. code-block:: text
 
-    +-----------------------------------+
-    |         InferenceHandler          |
-    |   (Main user-facing interface)    |
-    +----------------+------------------+
-                     |
-                     v
-    +----------------+------------------+
-    |        InferenceConfig           |
-    | (Model paths, shapes, settings)   |
-    +----------------+------------------+
-                     |
-                     v
-    +----------------+------------------+
-    |      PrePostProcessor            |
-    |  (Format conversion, buffering)   |
-    +----------------+------------------+
-                     |
-                     v
-    +----------------+------------------+
-    |         InferenceManager         |
-    |    (Thread pool coordination)    |
-    +----------------+------------------+
-                     |
-                     v
-    +----------------+------------------+       +----------------------+
-    |         Backend Processors       | <---> |   Inference Engines  |
-    | (LibTorch, ONNX, TensorFlow Lite)|       | (External libraries) |
-    +-----------------------------------+       +----------------------+
+     +-----------------------------------+
+     |         InferenceHandler          |
+     |   (Main user-facing interface)    |
+     +----------------+------------------+
+                      |
+                      v
+     +----------------+------------------+
+     |        InferenceConfig           |
+     | (Model paths, shapes, settings)   |
+     +----------------+------------------+
+                      |
+                      v
+     +----------------+------------------+
+     |      PrePostProcessor            |
+     |  (Format conversion, buffering)   |
+     +----------------+------------------+
+                      |
+                      v
+     +----------------+------------------+
+     |         InferenceManager         |
+     |    (Thread pool coordination)    |
+     +----------------+------------------+
+                      |
+                      v
+     +----------------+------------------+       +----------------------+
+     |         Backend Processors       | <---> |   Inference Engines  |
+     | (LibTorch, ONNX, TensorFlow Lite)|       | (External libraries) |
+     +-----------------------------------+       +----------------------+
 
 Key Design Principles
 ---------------------
 
 1. **Real-time Safety**
-   
-   * No dynamic memory allocation during audio processing
-   * Deterministic performance guarantees
-   * Thread-safety with atomic operations
-   * Pre-allocated buffers and resources
+    
+    * No dynamic memory allocation during audio processing
+    * Deterministic performance guarantees
+    * Thread-safety with atomic operations
+    * Pre-allocated buffers and resources
 
 2. **Flexibility**
-   
-   * Support for multiple inference backends
-   * Configurable thread management
-   * Customizable pre/post-processing
-   * Support for both stateful and stateless models
+    
+    * Support for multiple inference backends
+    * Configurable thread management
+    * Customizable pre/post-processing
+    * Support for both stateful and stateless models
 
 3. **Performance**
-   
-   * Efficient buffer management with zero-copy where possible
-   * Thread pool to prevent oversubscription
-   * Optimized tensor operations
-   * Benchmarking tools for performance analysis
+    
+    * Efficient buffer management with zero-copy where possible
+    * Thread pool to prevent oversubscription
+    * Optimized tensor operations
+    * Benchmarking tools for performance analysis
 
 Component Responsibilities
 --------------------------

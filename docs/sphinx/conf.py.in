@@ -15,11 +15,11 @@ author = 'Valentin Ackva and Fares Schulz'
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = [
-    'breathe',
-    'sphinx.ext.autodoc',
-    'sphinx.ext.intersphinx',
-    'sphinx.ext.viewcode',
-    'sphinx.ext.napoleon'
+        'breathe',
+        'sphinx.ext.autodoc',
+        'sphinx.ext.intersphinx',
+        'sphinx.ext.viewcode',
+        'sphinx.ext.napoleon'
 ]
 
 # Breathe configuration
@@ -42,27 +42,53 @@ html_theme = "shibuya"
 # Add custom CSS for better syntax highlighting
 html_static_path = ['@SPHINX_SOURCE_DIR@/_static']
 html_css_files = [
-    'custom.css',
+        'custom.css',
 ]
 
 html_theme_options = {
-  "github_url": "https://github.com/anira-project/anira",
-  "nav_links": [
-      {
-          "title": "API Documentation",
-          "url": "api/index",
-          "children": [
-              {
-                  "title": "Class List",
-                  "url": "api/classlist",
-                  "summary": "List of all classes in the API",
-              },
-              {
-                  "title": "Struct List",
-                  "url": "api/structlist",
-                  "summary": "List of all structs in the API",
-              },
-          ]
-      },
-  ]
+    "github_url": "https://github.com/anira-project/anira",
+    "nav_links": [
+            {
+                "title": "About",
+                "url": "about",
+                "summary": "About the Anira library"
+            },
+            {
+                "title": "Getting Started",
+                "url": "getting_started",
+                "summary": "How to get started with Anira"
+            },
+            {
+                "title": "Usage Guide",
+                "url": "usage",
+                "summary": "Detailed usage instructions for Anira"
+            },
+            {
+                "title": "Examples",
+                "url": "examples/index",
+                "children": [
+                        {
+                                "title": "Simple Example",
+                                "url": "examples/simple",
+                                "summary": "A simple example of using Anira",
+                        },
+                ]
+            },
+            {
+                "title": "API Documentation",
+                "url": "api/index",
+                "children": [
+                        {
+                                "title": "Class List",
+                                "url": "api/classlist",
+                                "summary": "List of all classes in the API",
+                        },
+                        {
+                                "title": "Struct List",
+                                "url": "api/structlist",
+                                "summary": "List of all structs in the API",
+                        },
+                ]
+            },
+    ]
 }
