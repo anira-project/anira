@@ -37,7 +37,7 @@ jobs:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
           CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_DOCS=ON"
-          TARGETS: "docs"
+          TARGETS: "sphinx-docs"
       - name: upload docs
         uses: actions/upload-pages-artifact@v3 # or specific "vX.X.X" version tag for this action
         with:
