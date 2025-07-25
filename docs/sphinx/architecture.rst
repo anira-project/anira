@@ -66,7 +66,7 @@ Key Design Principles
 Component Responsibilities
 --------------------------
 
-InferenceHandler
+:cpp:class:`anira::InferenceHandler`
 ~~~~~~~~~~~~~~~~
 
 The primary interface for users, handling the overall integration of neural network inference into audio processing workflows.
@@ -76,7 +76,7 @@ The primary interface for users, handling the overall integration of neural netw
 * Handles buffer management
 * Reports latency information
 
-:cpp::class:`anira::InferenceHandler`
+:cpp:class:`anira::InferenceConfig`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Stores configuration data for models and processing parameters.
@@ -86,7 +86,7 @@ Stores configuration data for models and processing parameters.
 * Maximum inference time limits
 * Memory management settings
 
-:cpp::class:`anira::PrePostProcessor`
+:cpp:class:`anira::PrePostProcessor`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Handles data formatting between audio buffers and neural network tensors.
@@ -95,7 +95,7 @@ Handles data formatting between audio buffers and neural network tensors.
 * Converts model outputs back to audio format
 * Manages intermediate buffers
 
-:cpp::class:`anira::InferenceManager`
+:cpp:class:`anira::InferenceManager`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Coordinates the thread pool and inference scheduling.
@@ -109,10 +109,10 @@ Backend Processors
 
 Backend-specific implementations for different inference engines.
 
-* :cpp::class:`anira::LibTorchProcessor` - PyTorch C++ API integration
-* :cpp::class:`anira::OnnxRuntimeProcessor` - ONNX Runtime integration
-* :cpp::class:`anira::TFLiteProcessor` - TensorFlow Lite integration
-* :cpp::class:`anira::CustomProcessor` - For custom inference engines
+* :cpp:class:`anira::LibtorchProcessor` - PyTorch C++ API integration
+* :cpp:class:`anira::OnnxRuntimeProcessor` - ONNX Runtime integration
+* :cpp:class:`anira::TFLiteProcessor` - TensorFlow Lite integration
+* :cpp:class:`anira::BackendBase` - For inheritance for custom inference engines
 
 Data Flow
 ---------
