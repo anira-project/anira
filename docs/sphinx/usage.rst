@@ -257,8 +257,8 @@ The structure also includes an optional parameter that controls whether the buff
     };
 
 ..  note::
-    The buffer size can be specified as a floating-point value to allow for fractional buffer relationships. For instance, a buffer size of 0.5f means that the inference handler will receive one sample for the specified input tensor every two host buffer cycles. If the model's output is double the size of the input, the inference handler will be able to return one sample for each host buffer cycle.
-    
+    The buffer size parameter accepts floating-point values, allowing you to specify fractional relationships between the host buffer and the model processing buffer. For example, setting a buffer size of 0.5f means the :cpp:class:`anira::InferenceHandler` will receive one sample for the specified input tensor every two host buffer cycles. The latency calculation in anira accounts for this, assuming the sample is provided during the second host buffer cycle (worst-case scenario). If your model produces output at twice the input rate, the :cpp:class:`anira::InferenceHandler` can return one sample per host buffer cycle.
+
 4.2. Prepare
 ~~~~~~~~~~~~
 
@@ -268,7 +268,7 @@ The :cpp:func:`anira::InferenceHandler::prepare` method is called with an instan
 
 .. code-block:: cpp
 
-    // Prepare the inference handler with automatic latency calculation
+    // Prepare the :cpp with automatic latency calculation
     inference_handler.prepare(host_config);
 
 **Preparing with custom latency for a specific output tensor:**
@@ -461,7 +461,7 @@ Some neural networks require additional input parameters or output values that d
 
 .. code-block:: cpp
 
-    // In your custom PrePostProcessor or directly via the inference handler
+    // In your custom PrePostProcessor or directly via the :cpp
     
     // Set input values for non-streamable tensors
     pp_processor.set_input(gain_value, tensor_index, sample_index);
