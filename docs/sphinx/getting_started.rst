@@ -282,6 +282,6 @@ Next Steps
 ----------
 
 - Check the :doc:`usage` page for more detailed usage instructions
-- See the :doc:`examples/index` page for complete example applications
+- See the :doc:`examples` page for complete example applications
 - Review the :doc:`architecture` to understand anira's design
 - Try the :doc:`benchmarking` tools to evaluate your models' performance

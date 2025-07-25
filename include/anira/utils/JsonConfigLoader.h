@@ -290,9 +290,9 @@ private:
             config_required = true;
         }
 
-        if (config.contains("internal_latency")) {
-            const auto& internal_latency = config.at("internal_latency");
-            processing_spec.m_internal_latency = parse_size_t_json_shape(internal_latency, "internal_latency");
+        if (config.contains("internal_model_latency")) {
+            const auto& internal_model_latency = config.at("internal_model_latency");
+            processing_spec.m_internal_model_latency = parse_size_t_json_shape(internal_model_latency, "internal_model_latency");
             config_required = true;
         }
 

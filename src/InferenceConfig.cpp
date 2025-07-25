@@ -123,8 +123,8 @@ std::vector<size_t> InferenceConfig::get_postprocess_output_size() const {
     return m_processing_spec.m_postprocess_output_size;
 }
 
-std::vector<size_t> InferenceConfig::get_internal_latency() const {
-    return m_processing_spec.m_internal_latency;
+std::vector<size_t> InferenceConfig::get_internal_model_latency() const {
+    return m_processing_spec.m_internal_model_latency;
 }
 
 void InferenceConfig::set_tensor_input_shape(const TensorShapeList& input_shape) {
@@ -190,8 +190,8 @@ void InferenceConfig::set_postprocess_output_size(const std::vector<size_t>& pos
     return;
 }
 
-void InferenceConfig::set_internal_latency(const std::vector<size_t>& internal_latency) {
-    m_processing_spec.m_internal_latency = internal_latency;
+void InferenceConfig::set_internal_model_latency(const std::vector<size_t>& internal_model_latency) {
+    m_processing_spec.m_internal_model_latency = internal_model_latency;
     return;
 }
 
@@ -230,7 +230,7 @@ void InferenceConfig::clear_processing_spec() {
     m_processing_spec.m_postprocess_output_channels.clear();
     m_processing_spec.m_preprocess_input_size.clear();
     m_processing_spec.m_postprocess_output_size.clear();
-    m_processing_spec.m_internal_latency.clear();
+    m_processing_spec.m_internal_model_latency.clear();
     m_processing_spec.m_tensor_input_size.clear();
     m_processing_spec.m_tensor_output_size.clear();
 }
@@ -327,10 +327,10 @@ void InferenceConfig::update_processing_spec() {
                     m_processing_spec.m_postprocess_output_size.push_back(length);
                 }
             }
-            if (m_processing_spec.m_internal_latency.size() != output_size.size()) {
-                m_processing_spec.m_internal_latency.clear();
+            if (m_processing_spec.m_internal_model_latency.size() != output_size.size()) {
+                m_processing_spec.m_internal_model_latency.clear();
                 for (size_t j = 0; j < output_size.size(); ++j) {
-                    m_processing_spec.m_internal_latency.push_back(0); // Default to 0 latency if not specified
+                    m_processing_spec.m_internal_model_latency.push_back(0); // Default to 0 latency if not specified
                 }
             }
         } else {
@@ -360,7 +360,7 @@ void InferenceConfig::update_processing_spec() {
         LOG_ERROR << "Postprocess output size mismatch. Must match the number of output tensors." << std::endl;
         throw std::invalid_argument("Postprocess output size mismatch.");
     }
-    if (m_processing_spec.m_internal_latency.size() != m_processing_spec.m_tensor_output_size.size()) {
+    if (m_processing_spec.m_internal_model_latency.size() != m_processing_spec.m_tensor_output_size.size()) {
         LOG_ERROR << "Internal latency size mismatch. Must match the number of output tensors." << std::endl;
         throw std::invalid_argument("Internal latency size mismatch.");
     }

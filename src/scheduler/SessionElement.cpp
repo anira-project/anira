@@ -117,7 +117,7 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
     // Add the internal model latency to the latency
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-            m_latency[i] += m_inference_config.get_internal_latency()[i];
+            m_latency[i] += m_inference_config.get_internal_model_latency()[i];
         }
     }
 
@@ -161,7 +161,7 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_latency[i] > 0) {
             for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
-                for (size_t k = 0; k < m_latency[i] - m_inference_config.get_internal_latency()[i]; ++k) {
+                for (size_t k = 0; k < m_latency[i] - m_inference_config.get_internal_model_latency()[i]; ++k) {
                     m_receive_buffer[i].push_sample(j, 0.f);
                 }
             }

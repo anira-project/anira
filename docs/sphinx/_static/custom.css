@@ -1,3 +1,30 @@
+/* Bigger class names and functions in the API docs */
+dt.sig {
+  position:relative;
+  font-size:1rem;
+  padding:.25rem .5rem .25rem 3rem;
+  text-indent:-2.4rem;
+  border-radius:6px
+}
+dt.sig:after {
+  content:"";
+  display:table;
+  clear:both
+}
+
+/* Get rid of annoying line breaks in the breathe documentation */
+dt.sig>a.internal {
+  /* Default Sphinx theme values */
+  font-size: 1em;
+  border: none;
+  color: inherit;
+}
+dt.sig>a.internal:before {
+  /* Default Sphinx theme values */
+  content: none;
+  white-space: normal;
+}
+
 /* Customize Shibuya's syntax highlighting to match github-dark */
 :root {
     /* Override Shibuya's dark syntax colors to match github-dark exactly */

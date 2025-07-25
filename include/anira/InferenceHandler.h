@@ -58,7 +58,7 @@ public:
     /**
      * @brief Sets the inference backend to use for neural network processing
      * 
-     * @param inference_backend The backend type to use (e.g., ONNX, LibTorch, TensorFlow Lite)
+     * @param inference_backend The backend type to use (e.g., ONNX, LibTorch, TensorFlow Lite or custom)
      */
     void set_inference_backend(InferenceBackend inference_backend);
     
@@ -105,7 +105,7 @@ public:
     /**
      * @brief Processes audio data in-place for models with identical input/output shapes
      * 
-     * This is the most efficient processing method when input and output have the same
+     * This is the most simple processing method when input and output have the same
      * data shape and only one tensor index is streamable (e.g., audio effects with
      * non-streamable parameters).
      * 
@@ -122,7 +122,7 @@ public:
      * @brief Processes audio data with separate input and output buffers
      * 
      * This method allows for different input and output buffer sizes and is suitable
-     * for models that change the number of samples (e.g., pitch shifters, time stretchers).
+     * for models that have different input and output shapes.
      * 
      * @param input_data Input audio data organized as data[channel][sample]
      * @param num_input_samples Number of input samples
@@ -204,7 +204,7 @@ public:
     /**
      * @brief Gets the processing latency for a specific tensor
      * 
-     * Returns the latency introduced by the inference processing in samples.
+     * Returns the latency introduced by the inference processing in samples for a specific tensor.
      * This includes buffering delays and model-specific processing latency.
      * 
      * @param tensor_index Index of the tensor to query (default: 0)
@@ -222,7 +222,7 @@ public:
     /**
      * @brief Gets the number of samples received for a specific tensor and channel
      * 
-     * This method is useful for monitoring the data flow and debugging purposes.
+     * This method is useful for monitoring the data flow, benchmarking and debugging purposes.
      * 
      * @param tensor_index Index of the tensor to query
      * @param channel Channel index to query (default: 0)

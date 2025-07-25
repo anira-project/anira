@@ -116,7 +116,7 @@ Thread Priority Issues
 
 **Solution**: On Linux, you may need to set the `rtprio` limit for your user. Add the following to `/etc/security/limits.conf`:
 
-.. code-block:: conf
+.. code-block::
 
     your_username - rtprio 99
 

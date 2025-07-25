@@ -136,7 +136,7 @@ struct ProcessingSpec {
     std::vector<size_t> m_postprocess_output_channels;
     std::vector<size_t> m_preprocess_input_size;
     std::vector<size_t> m_postprocess_output_size;
-    std::vector<size_t> m_internal_latency;
+    std::vector<size_t> m_internal_model_latency;
     std::vector<size_t> m_tensor_input_size;
     std::vector<size_t> m_tensor_output_size;
 
@@ -147,12 +147,12 @@ struct ProcessingSpec {
             std::vector<size_t> preprocess_output_channels,
             std::vector<size_t> preprocess_input_size,
             std::vector<size_t> postprocess_output_size,
-            std::vector<size_t> internal_latency) :
+            std::vector<size_t> internal_model_latency) :
         m_preprocess_input_channels(std::move(preprocess_input_channels)),
         m_postprocess_output_channels(std::move(preprocess_output_channels)),
         m_preprocess_input_size(std::move(preprocess_input_size)),
         m_postprocess_output_size(std::move(postprocess_output_size)),
-        m_internal_latency(std::move(internal_latency)) {}
+        m_internal_model_latency(std::move(internal_model_latency)) {}
 
     ProcessingSpec(
             std::vector<size_t> preprocess_input_channels,
@@ -172,7 +172,7 @@ struct ProcessingSpec {
             m_postprocess_output_channels == other.m_postprocess_output_channels &&
             m_preprocess_input_size == other.m_preprocess_input_size &&
             m_postprocess_output_size == other.m_postprocess_output_size &&
-            m_internal_latency == other.m_internal_latency;
+            m_internal_model_latency == other.m_internal_model_latency;
     }
 
     bool operator!=(const ProcessingSpec& other) const {
@@ -241,7 +241,7 @@ public:
     std::vector<size_t> get_postprocess_output_channels() const;
     std::vector<size_t> get_preprocess_input_size() const;
     std::vector<size_t> get_postprocess_output_size() const;
-    std::vector<size_t> get_internal_latency() const;
+    std::vector<size_t> get_internal_model_latency() const;
     void set_tensor_input_shape(const TensorShapeList& input_shape);
     void set_tensor_output_shape(const TensorShapeList& output_shape);
     void set_tensor_input_shape(const TensorShapeList& input_shape, InferenceBackend backend);
@@ -250,7 +250,7 @@ public:
     void set_preprocess_output_channels(const std::vector<size_t>& output_channels);
     void set_preprocess_input_size(const std::vector<size_t>& preprocess_input_size);
     void set_postprocess_output_size(const std::vector<size_t>& postprocess_output_size);
-    void set_internal_latency(const std::vector<size_t>& internal_latency);
+    void set_internal_model_latency(const std::vector<size_t>& internal_model_latency);
     void set_model_path(const std::string& model_path, InferenceBackend backend);
 
     std::vector<ModelData> m_model_data;

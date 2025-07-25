@@ -53,7 +53,11 @@ add_custom_target(breathe-apidocs
     -g class,struct -f
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1InferenceConfig_1_1Defaults.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1SessionElement_1_1ThreadSafeStruct.rst
+    # Add :allow-dot-graphs: directive to all class and struct files
+    COMMAND bash -c "find ${SPHINX_SOURCE_DIR}/api/class -name '*.rst' -exec sed -i '/^\\.\\.\\s\\+doxygenclass::/a\\    :allow-dot-graphs:' {} +"
+    COMMAND bash -c "find ${SPHINX_SOURCE_DIR}/api/struct -name '*.rst' -exec sed -i '/^\\.\\.\\s\\+doxygenstruct::/a\\    :allow-dot-graphs:' {} +"
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+
     COMMENT "Generating API documentation with Breathe using virtual environment"
     DEPENDS create_docs_venv doxygen-docs
     VERBATIM

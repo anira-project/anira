@@ -100,29 +100,29 @@ In some cases, you may want to define a processing specification that describes 
 
 The following parameters can be defined in the :cpp:struct:`anira::ProcessingSpec`:
 
-+---------------------------+------------------------------------------------------------------------------------------------+
-| Parameter                 | Description                                                                                    |
-+===========================+================================================================================================+
-| Number of input channels  | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{input_tensor_shape.size(), 1}``  |
-|                           | Defines the number of input channels for the model. Only streamable tensors can have input     |
-|                           | channels != 1.                                                                                 |
-+---------------------------+------------------------------------------------------------------------------------------------+
-| Number of output channels | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{output_tensor_shape.size(), 1}`` |
-|                           | Defines the number of output channels for the model. Only streamable tensors can have output   |
-|                           | channels != 1.                                                                                 |
-+---------------------------+------------------------------------------------------------------------------------------------+
-| Preprocess Input Size     | Type: ``std::vector<size_t>``, default: ``input_tensor_sizes``. Specifies the minimum number   |
-|                           | of samples required per tensor before triggering preprocessing and inference. For streamable   |
-|                           | tensors, this determines how many samples must accumulate before processing begins. Set to     |
-|                           | ``0`` for non-streamable tensors to start processing immediately without waiting for samples.  |
-+---------------------------+------------------------------------------------------------------------------------------------+
-| Postprocess Output Size   | Type: ``std::vector<size_t>``, default: ``output_tensor_sizes``. Defines the number of samples |
-|                           | that will be returned after the postprocessing step. Set to ``0`` for non-streamable tensors.  |
-+---------------------------+------------------------------------------------------------------------------------------------+
-| Internal Model Latency    | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{input_tensor_shape.size(), 0}``. |
-|                           | Submit if your model has an internal latency. This allows for the latency calculation to take  |
-|                           | it into account.                                                                               |
-+---------------------------+------------------------------------------------------------------------------------------------+
++-------------------------------+------------------------------------------------------------------------------------------------+
+| Parameter                     | Description                                                                                    |
++===============================+================================================================================================+
+| preprocess_input_channels     | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{input_tensor_shape.size(), 1}``  |
+|                               | Defines the number of input channels for the model. Only streamable tensors can have input     |
+|                               | channels != 1.                                                                                 |
++-------------------------------+------------------------------------------------------------------------------------------------+
+| postprocess_output_channels   | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{output_tensor_shape.size(), 1}`` |
+|                               | Defines the number of output channels for the model. Only streamable tensors can have output   |
+|                               | channels != 1.                                                                                 |
++-------------------------------+------------------------------------------------------------------------------------------------+
+| preprocess_input_size         | Type: ``std::vector<size_t>``, default: ``input_tensor_sizes``. Specifies the minimum number   |
+|                               | of samples required per tensor before triggering preprocessing and inference. For streamable   |
+|                               | tensors, this determines how many samples must accumulate before processing begins. Set to     |
+|                               | ``0`` for non-streamable tensors to start processing immediately without waiting for samples.  |
++-------------------------------+------------------------------------------------------------------------------------------------+
+| postprocess_output_size       | Type: ``std::vector<size_t>``, default: ``output_tensor_sizes``. Defines the number of samples |
+|                               | that will be returned after the postprocessing step. Set to ``0`` for non-streamable tensors.  |
++-------------------------------+------------------------------------------------------------------------------------------------+
+| internal_model_latency        | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{input_tensor_shape.size(), 0}``. |
+|                               | Submit if your model has an internal latency. This allows for the latency calculation to take  |
+|                               | it into account.                                                                               |
++-------------------------------+------------------------------------------------------------------------------------------------+
 
 You only need to define the parameters that are relevant for your model. If you do not define an :cpp:struct:`anira::ProcessingSpec`, the default values will be used. Here is an example of how to define the :cpp:struct:`anira::ProcessingSpec` with all parameters:
 

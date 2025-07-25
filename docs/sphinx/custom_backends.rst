@@ -92,9 +92,9 @@ The :cpp:func:`anira::BackendBase::prepare` method is called once during the ini
 
 The :cpp:func:`anira::BackendBase::process` method is called for each inference operation. This method receives:
 
-- ``input``: :cpp:type:`std::vector<anira::BufferF>&` containing input data from the pre-processor for all input tensors
-- ``output``: :cpp:type:`std::vector<anira::BufferF>&` where results should be written for all output tensors
-- ``session``: :cpp:type:`std::shared_ptr<anira::SessionElement>` for accessing additional session data
+- ``input``: vector of :cpp:type:`anira::BufferF` containing input data from the pre-processor for all input tensors
+- ``output``: vector of :cpp:type:`anira::BufferF` where results should be written for all output tensors
+- ``session``: shared pointer of :cpp:type:`anira::SessionElement` for accessing additional session data
 
 The vectors contain one :cpp:type:`anira::BufferF` for each tensor defined in your model. Most audio processing models have a single input and single output tensor (both at index 0), but some models may have multiple tensors for different purposes (e.g., audio data, control parameters, confidence outputs).
 
