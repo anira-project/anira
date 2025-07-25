@@ -30,7 +30,7 @@ jobs:
         uses: ./.github/actions/setup
       - name: dependencies
         run: |
-          sudo apt-get install -y doxygen graphviz python3-sphinx python3-breathe furo
+          sudo apt-get install -y doxygen graphviz
       - name: build
         uses: ./.github/actions/build
         with:
