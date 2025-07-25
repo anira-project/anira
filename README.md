@@ -44,7 +44,7 @@ anira::InferenceHandler inference_handler(pp_processor, inference_config);
 inference_handler.prepare({buffer_size, sample_rate});
 
 // Select the inference backend
-inference_handler.set_inference_backend(anira::ONNX);
+inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
 
 // Optionally get the latency of the inference process in samples
 unsigned int latency_in_samples = inference_handler.get_latency();

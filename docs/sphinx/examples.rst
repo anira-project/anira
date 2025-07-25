@@ -3,28 +3,6 @@ Examples
 
 This section provides examples and demonstrations of how to use anira in various contexts, from simple audio processing to complex real-time plugins.
 
-Overview
---------
-
-The examples in this documentation are organized into several categories to help you get started with anira quickly and understand different integration patterns:
-
-**Quick Start Examples**
-    Simple, focused examples that demonstrate core concepts and get you running quickly.
-
-**Built-in Examples** 
-    Complete, production-ready examples included with the anira source code that showcase real-world integration patterns.
-
-**External Examples**
-    Community and official examples hosted in separate repositories that demonstrate advanced usage patterns.
-
-Quick Start Examples
---------------------
-
-.. toctree::
-    :maxdepth: 1
-
-    simple
-
 Built-in Examples
 -----------------
 
@@ -54,6 +32,9 @@ Key files:
 
     cmake . -B build -DANIRA_WITH_EXAMPLES=ON
     cmake --build build --target anira-juce-plugin-example_VST3
+
+.. note::
+    In the JUCE plugin example, there are several different models available. You can select the model by changing the ``MODEL_TO_USE`` variable in the ``CMakeLists.txt`` file.
 
 CLAP Plugin Example
 ~~~~~~~~~~~~~~~~~~~

@@ -102,7 +102,9 @@ Documentation
     about
     getting_started
     usage
-    examples/index
+    custom_preprocessing
+    custom_backends
+    examples
     api/index
     architecture
     benchmarking

@@ -1,46 +1,42 @@
 Benchmarking Guide
 ==================
 
-This guide shows you how to use anira's benchmarking capabilities to measure neural network's real-time performance using the custom benchmark fixture class within the Google Benchmark framework.
-
 Overview
 --------
 
-anira facilitates the measurement of neural network's real-time performance, by providing a custom benchmark fixture class within the `Google Benchmark <https://github.com/google/benchmark>`_ framework - the ``anira::benchmark::ProcessBlockFixture``.
+anira facilitates the measurement of neural network's real-time performance by providing a custom benchmark fixture class within the `Google Benchmark <https://github.com/google/benchmark>`_ framework - the :cpp:class:`anira::benchmark::ProcessBlockFixture`. This fixture class constructs a static instance of the :cpp:class:`anira::InferenceHandler` class and measures the runtimes of several consecutive calls to the :cpp:func:`anira::InferenceHandler::process` method.
 
-Within this fixture class, a static instance of the ``anira::InferenceHandler`` class is constructed. The fixture class is designed to measure the runtimes of several consecutive calls to the ``process`` method of this instance. The number of calls to the ``process`` method can be configured by the user and is defined as iterations, as it is done in the Google Benchmark framework.
+The fixture is designed to:
 
-After all iterations are completed, the fixture will destroy the ``anira::InferenceHandler`` instance, freeing all threads and resources that have been used. This whole process can be repeated for a given number of repetitions as well as for different configurations.
+- Measure runtime performance across multiple iterations
+- Compare first inference with subsequent ones to detect warm-up requirements
+- Test different configurations (buffer sizes, inference backends)
+- Estimate maximum inference times for real-time constraints
 
-In this way, the user can reliably compare the first inference with the subsequent ones and find out if the chosen inference backend needs some warm-up time. In addition, the user can compare runtimes for different configurations, such as different host buffer sizes and inference backends, and get an estimate of the maximum inference time.
+.. note::
+    To use anira's benchmarking capabilities, you should first become familiar with the main anira usage patterns. The benchmarking tools build upon the same :cpp:class:`anira::InferenceHandler`, :cpp:struct:`anira::InferenceConfig`, and :cpp:class:`anira::PrePostProcessor` classes described in the :doc:`usage` section. The benchmarking fixture is a specialized tool that extends the standard usage patterns to measure performance in a controlled manner.
 
 Prerequisites
 -------------
 
-To use anira's benchmarking capabilities, you should first become familiar with the :doc:`usage` guide. This guide will show you how to create the necessary classes, configure the inference backend, and prepare anira for real-time audio processing.
+Before using the benchmarking tools, ensure that:
 
-To use the benchmarking tools within anira, please follow the steps below. First, you'll find a step-by-step guide on benchmarking a single configuration, followed by instructions on extending the benchmarks to multiple configurations.
+1. anira was built with the ``ANIRA_BUILD_BENCHMARK`` option set to ``ON``
+2. You have a working :cpp:struct:`anira::InferenceConfig` and :cpp:class:`anira::PrePostProcessor` setup
+3. Your model files are accessible and properly configured
 
-Since the ``anira::benchmark::ProcessBlockFixture`` is a Google Benchmark fixture, you can use all the features of the Google Benchmark framework to further customize your benchmark setup. Please refer to the `Google Benchmark documentation <https://github.com/google/benchmark/blob/main/docs/user_guide.md>`_ for more information.
+In the cmake configuration, the build system automatically links Google Benchmark and Google Test libraries when anira is built with benchmarking support.
 
 Single Configuration Benchmarking
 ----------------------------------
 
-Step 1: Set Up the InferenceHandler and Input Buffer
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1. Define the Benchmark Setup
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Before we can start to define the benchmark, we need to create an ``anira::InferenceConfig`` instance and an ``anira::PrePostProcessor`` instance. This is done in the same way as described in the :doc:`usage` guide.
-
-After that we can start to define the benchmark with the ``BENCHMARK_DEFINE_F`` macro. The first argument is the fixture class and the second argument is the name of the benchmark. The following code snippet shows how to use the ``anira::benchmark::ProcessBlockFixture`` and how to create and prepare a static ``anira::InferenceHandler`` class member within the fixture class.
-
-We will also create a static ``anira::Buffer`` member, which will be used later as an input buffer. Finally, we will initialize the repetition. This will allow the anira fixture class to keep track of all configurations used and print options such as model path and buffer size in the benchmark log.
-
-.. note::
-    This code is only run once per repetition, not for every iteration. It is also not measured by the benchmark.
+Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The fixture handles the creation and management of the :cpp:class:`anira::InferenceHandler` instance:
 
 .. code-block:: cpp
-
-    // benchmark.cpp
+    :caption: benchmark.cpp
 
     #include <gtest/gtest.h>
     #include <benchmark/benchmark.h>
@@ -49,266 +45,364 @@ We will also create a static ``anira::Buffer`` member, which will be used later 
 
     typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
+    // Configure your inference setup (same as in regular usage)
     anira::InferenceConfig my_inference_config(
-        ...
+        // ... your model configuration
     );
     anira::PrePostProcessor my_pp_processor(my_inference_config);
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
-
-        // Define the host configuration that shall be used / simulated for the benchmark
+        // Define the host configuration for the benchmark
         anira::HostConfig host_config(BUFFER_SIZE, SAMPLE_RATE);
-        anira::InferenceBackend inference_backend = anira::ONNX;
+        anira::InferenceBackend inference_backend = anira::InferenceBackend::ONNX;
 
-        // Create a static InferenceHandler instance, prepare and select backend
+        // Create and prepare the InferenceHandler instance
         m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
         m_inference_handler->prepare(host_config);
         m_inference_handler->set_inference_backend(inference_backend);
 
-        // Create a static Buffer instance
-        m_buffer = std::make_unique<anira::Buffer<float>>(my_inference_config.get_preprocess_input_channels()[0], host_config.m_buffer_size);
+        // Create the input buffer
+        m_buffer = std::make_unique<anira::Buffer<float>>(
+            my_inference_config.get_preprocess_input_channels()[0], 
+            host_config.m_buffer_size
+        );
 
-        // Initialize the repetition
+        // Initialize the repetition (enables configuration tracking and optional sleep)
         initialize_repetition(my_inference_config, host_config, inference_backend, true);
 
 .. note::
-    In the ``initialize_repetition`` function, we can use the fourth argument to specify whether we want to sleep after a repetition. This can be useful if we want to give the system some time to cool down after a repetition. The time the fixture will sleep after a repetition is equal to the time it took to process all the iterations.
+    The :cpp:func:`initialize_repetition` method sets up the benchmark fixture, allowing you to track configuration changes and optionally sleep between repetitions for thermal stability. The first parameter is the inference configuration, the second is the host configuration, the third is the inference backend, and the fourth controls whether to sleep after each repetition. The sleep duration is equal to the time taken to process all iterations, allowing for thermal cooldown between repetitions.
 
-Step 2: Measure the Runtime of the Process Method
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+2. Measure Process Method Runtime
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-After the ``anira::InferenceHandler`` is prepared and the ``anira::Buffer`` is created, we can start to measure and record the runtime of the ``process`` method. For this we will use the ``state`` object that is passed to the benchmark function. The ``state`` object is used by the Google Benchmark framework to control the benchmark.
-
-First we push random samples in the range of -1.f and 1.f into the ``anira::Buffer`` and initialize the iteration. Then we measure the runtime of the ``process`` method by calling it and waiting for the result. We have to wait for the result because the processing of the buffer is not done in the same thread as the call to the ``process`` function.
-
-Then we update the fixture with the measured runtime. Finally, when all iterations are done, the ``anira::InferenceHandler`` and the ``anira::Buffer`` will be reset and if the repetition was initialized with the sleep after a repetition option, the fixture will sleep.
+Implement the main measurement loop using the Google Benchmark framework's state control:
 
 .. code-block:: cpp
+    :caption: benchmark.cpp
 
-    // benchmark.cpp (continued)
+        // Main benchmark loop
         for (auto _ : state) {
-            // Fill the buffer with random samples
+            // Fill buffer with random samples in range [-1.0, 1.0]
             push_random_samples_in_buffer(host_config);
 
-            // Initialize the iteration
+            // Initialize iteration tracking
             initialize_iteration();
 
-            // Here we start the actual measurement of the runtime
+            // Begin timing measurement
             auto start = std::chrono::high_resolution_clock::now();
             
-            // Process the buffer
+            // Process the buffer (this triggers inference)
             m_inference_handler->process(m_buffer->get_array_of_write_pointers(), get_buffer_size());
 
-            // Wait for the result
-            while (!buffer_processed()) {
-                std::this_thread::sleep_for(std::chrono::nanoseconds (10));
-            }
-            
-            // End of the measurement
-            auto end = std::chrono::high_resolution_clock::now();
-
-            // Update the fixture with the measured runtime
-            interation_step(start, end, state);
-        }
-        // Repetition is done, reset the InferenceHandler and the Buffer
-        repetition_step();
-    }
-
-Step 3: Register the Benchmark
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Once the benchmark is defined, we need to register it with the Google Benchmark framework. This is done by calling the ``BENCHMARK_REGISTER_F`` macro. The first argument is the fixture class, the second argument is the name of the benchmark. The name of the benchmark is used to identify it in the test log.
-
-Here we also define which time unit we want to use for the benchmark and the number of iterations and repetitions. Finally, we need to specify that we want to use manual timing, since we are measuring the runtime of the ``process`` method ourselves.
-
-.. code-block:: cpp
-
-    BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_SIMPLE)
-    ->Unit(benchmark::kMillisecond)
-    ->Iterations(NUM_ITERATIONS)->Repetitions(NUM_REPETITIONS)
-    ->UseManualTime();
-
-Multiple Configuration Benchmarking
-------------------------------------
-
-To benchmark multiple configurations, we can use Google Benchmark's parameterized benchmarks. This allows us to test different buffer sizes, sample rates, inference backends, and other parameters in a systematic way.
-
-Setting Up Parameter Ranges
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-First, define the parameter ranges you want to test:
-
-.. code-block:: cpp
-
-    // Define buffer sizes to test
-    std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024};
-    
-    // Define sample rates to test
-    std::vector<double> sample_rates = {44100.0, 48000.0, 96000.0};
-    
-    // Define inference backends to test
-    std::vector<anira::InferenceBackend> backends = {
-        anira::InferenceBackend::ONNX,
-        anira::InferenceBackend::LIBTORCH,
-        anira::InferenceBackend::TFLITE
-    };
-
-Parameterized Benchmark Definition
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Create a parameterized benchmark that tests all combinations:
-
-.. code-block:: cpp
-
-    BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_PARAMETERIZED)(::benchmark::State& state) {
-        // Extract parameters from state
-        int buffer_size = state.range(0);
-        double sample_rate = state.range(1);
-        anira::InferenceBackend backend = static_cast<anira::InferenceBackend>(state.range(2));
-
-        // Set up configuration
-        anira::HostConfig host_config(buffer_size, sample_rate);
-
-        // Create and prepare InferenceHandler
-        m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
-        m_inference_handler->prepare(host_config);
-        m_inference_handler->set_inference_backend(backend);
-
-        // Create buffer
-        m_buffer = std::make_unique<anira::Buffer<float>>(
-            my_inference_config.get_preprocess_input_channels()[0], 
-            buffer_size
-        );
-
-        // Initialize repetition
-        initialize_repetition(my_inference_config, host_config, backend, true);
-
-        // Benchmark loop
-        for (auto _ : state) {
-            push_random_samples_in_buffer(host_config);
-            initialize_iteration();
-
-            auto start = std::chrono::high_resolution_clock::now();
-            m_inference_handler->process(m_buffer->get_array_of_write_pointers(), buffer_size);
-            
+            // Wait for processing completion (inference is asynchronous)
             while (!buffer_processed()) {
                 std::this_thread::sleep_for(std::chrono::nanoseconds(10));
             }
             
+            // End timing measurement
             auto end = std::chrono::high_resolution_clock::now();
+
+            // Record the measured runtime
             interation_step(start, end, state);
         }
         
+        // Clean up after all iterations complete
         repetition_step();
     }
 
-Registering Parameterized Benchmarks
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. note::
+    The :cpp:func:`anira::InferenceHandler::process` method operates asynchronously. To ensure accurate timing measurements, you must wait for the :cpp:func:`buffer_processed` method to return ``true`` before stopping the timer. This guarantees that the measured time includes the complete processing duration, not just the time to initiate processing.
 
-Register the parameterized benchmark with all parameter combinations:
+3. Register the Benchmark
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: cpp
-
-    // Register with parameter combinations
-    BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_PARAMETERIZED)
-    ->ArgsProduct({
-        benchmark::CreateRange(64, 1024, 2),  // Buffer sizes: 64, 128, 256, 512, 1024
-        {44100, 48000, 96000},                // Sample rates
-        {static_cast<int>(anira::InferenceBackend::ONNX),
-         static_cast<int>(anira::InferenceBackend::LIBTORCH),
-         static_cast<int>(anira::InferenceBackend::TFLITE)}  // Backends
-    })
-    ->Unit(benchmark::kMillisecond)
-    ->Iterations(100)
-    ->Repetitions(5)
-    ->UseManualTime();
-
-Advanced Benchmarking Features
-------------------------------
-
-Custom Metrics
-~~~~~~~~~~~~~~
-
-You can add custom metrics to track additional performance indicators:
+Configure and register your benchmark with the Google Benchmark framework:
 
 .. code-block:: cpp
+    :caption: benchmark.cpp
 
-    // In your benchmark loop
-    for (auto _ : state) {
-        // ... benchmark code ...
-        
-        // Add custom counters
-        state.counters["Latency_Samples"] = inference_handler->get_latency();
-        state.counters["CPU_Usage"] = get_cpu_usage();
-        state.counters["Memory_Usage"] = get_memory_usage();
-    }
+    BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_SIMPLE)
+        ->Unit(benchmark::kMillisecond)
+        ->Iterations(NUM_ITERATIONS)
+        ->Repetitions(NUM_REPETITIONS)
+        ->UseManualTime();
 
-Warmup Iterations
-~~~~~~~~~~~~~~~~~
+The key parameters are:
 
-For more accurate measurements, especially with neural networks that may have initialization overhead:
+- **Unit**: Specify the time unit for results (e.g., ``benchmark::kMillisecond``)
+- **Iterations**: Number of :cpp:func:`anira::InferenceHandler::process` calls per repetition
+- **Repetitions**: Number of times to repeat the entire benchmark
+- **UseManualTime**: Required since we manually measure processing time
 
-.. code-block:: cpp
+4. CMake Configuration
+~~~~~~~~~~~~~~~~~~~~~~
 
-    // Add warmup iterations before the main benchmark
-    for (int warmup = 0; warmup < 10; ++warmup) {
-        push_random_samples_in_buffer(host_config);
-        m_inference_handler->process(m_buffer->get_array_of_write_pointers(), buffer_size);
-        while (!buffer_processed()) {
-            std::this_thread::sleep_for(std::chrono::nanoseconds(10));
-        }
-    }
+Set up your CMake project to build and test the benchmark:
 
-Running Benchmarks
-------------------
+.. code-block:: cmake
 
-Compile and run your benchmarks:
+    project(benchmark_project)
+
+    # Enable benchmarking in anira
+    set(ANIRA_BUILD_BENCHMARK ON)
+    add_subdirectory(anira)
+
+    # Create benchmark executable
+    add_executable(benchmark_target benchmark.cpp)
+    target_link_libraries(benchmark_target anira::anira)
+
+5. Run the Benchmark
+~~~~~~~~~~~~~~~~~~~~
+
+You can then simply execute your benchmark executable:
 
 .. code-block:: bash
 
-    # Build with benchmark support
-    cmake . -B build -DCMAKE_BUILD_TYPE=Release -DANIRA_WITH_BENCHMARK=ON
-    cmake --build build --config Release
+    ./build/benchmark_target
 
-    # Run benchmarks
-    ./build/your_benchmark_executable
+Or use Google Test to integrate it with your test suite:
 
-Output and Analysis
+Create Unit Test Integration
+----------------------------
+
+Write a Google Test case
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Integrate the benchmark with Google Test for easy execution:
+
+.. code-block:: cpp
+    :caption: test.cpp
+
+    #include <benchmark/benchmark.h>
+    #include <gtest/gtest.h>
+    #include <anira/anira.h>
+
+    TEST(Benchmark, Simple) {
+        // Elevate process priority for more consistent timing
+    #if __linux__ || __APPLE__
+        pthread_t self = pthread_self();
+    #elif WIN32
+        HANDLE self = GetCurrentThread();
+    #endif
+        anira::HighPriorityThread::elevate_priority(self, true);
+
+        // Execute the benchmark
+        benchmark::RunSpecifiedBenchmarks();
+    }
+
+Integrate via CMake
 ~~~~~~~~~~~~~~~~~~~
 
-The benchmark will produce output showing:
+Set up your CMake project to include the benchmark and find the test:
 
-- Mean execution time per iteration
-- Standard deviation
-- Minimum and maximum times
-- Custom metrics you've added
-- Configuration parameters for each test
+.. code-block:: cmake
 
-Example output:
+    project(benchmark_project)
 
-.. code-block:: text
+    # Enable benchmarking in anira
+    set(ANIRA_BUILD_BENCHMARK ON)
+    add_subdirectory(anira)
 
-    Run on (8 X 3000 MHz CPU s)
-    CPU Caches:
-      L1 Data 32 KiB (x4)
-      L1 Instruction 32 KiB (x4)
-      L2 Unified 256 KiB (x4)
-      L3 Unified 8192 KiB (x1)
-    -------------------------------------------------------------------
-    Benchmark                           Time           CPU Iterations
-    -------------------------------------------------------------------
-    BM_SIMPLE/256/48000/ONNX        2.34 ms      2.34 ms        100
-    BM_SIMPLE/512/48000/ONNX        4.21 ms      4.21 ms        100
-    BM_SIMPLE/256/48000/LIBTORCH    3.12 ms      3.12 ms        100
+    # Create benchmark executable
+    add_executable(benchmark_target benchmark.cpp)
+    target_link_libraries(benchmark_target anira::anira)
+
+    # Add Google Test support
+    enable_testing()
+    gtest_discover_tests(benchmark_target)
+
+Run the Test
+~~~~~~~~~~~~
+
+Execute your benchmark using CTest:
+
+.. code-block:: bash
+
+    # Run all tests with verbose output
+    ctest -VV
+
+    # Run specific benchmark test
+    ctest -R Benchmark.Simple -VV
+
+    # For long-running benchmarks, increase timeout
+    ctest --timeout 100000 -VV
+
+.. note::
+    Test outputs are stored in the ``Testing`` directory of your build folder. Use the ``-VV`` flag to see detailed benchmark results in the console.
+
+Multiple Configuration Benchmarking
+------------------------------------
+
+For comprehensive performance analysis, you can benchmark multiple configurations by passing arguments to your benchmark functions.
+
+Single Argument Benchmarks
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Test different buffer sizes by passing arguments during registration:
+
+.. code-block:: cpp
+    :caption: benchmark.cpp
+
+    BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_BUFFER_SIZES)(::benchmark::State& state) {
+        // Use state.range(0) to get the buffer size argument
+        anira::HostConfig host_config = {(size_t) state.range(0), SAMPLE_RATE};
+        anira::InferenceBackend inference_backend = anira::InferenceBackend::ONNX;
+
+        m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
+        m_inference_handler->prepare(host_config);
+        m_inference_handler->set_inference_backend(inference_backend);
+
+        m_buffer = std::make_unique<anira::Buffer<float>>(
+            my_inference_config.get_preprocess_input_channels()[0], 
+            host_config.m_buffer_size
+        );
+
+        initialize_repetition(my_inference_config, host_config, inference_backend);
+
+        // ... measurement loop (same as single configuration)
+    }
+
+    BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_MULTIPLE_BUFFER_SIZES)
+        ->Unit(benchmark::kMillisecond)
+        ->Iterations(50)
+        ->Repetitions(10)
+        ->UseManualTime()
+        ->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096);
+
+.. warning::
+    Currently, the :cpp:class:`anira::benchmark::ProcessBlockFixture` requires buffer sizes that are multiples of the model output size. The :cpp:func:`buffer_processed` function may not return ``true`` for other buffer sizes.
+
+Multiple Argument Benchmarks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For complex configuration testing, define argument combinations using a custom function:
+
+.. code-block:: cpp
+    :caption: benchmark.cpp
+
+    // Define test configurations
+    std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
+    std::vector<anira::InferenceBackend> inference_backends = {
+        anira::InferenceBackend::LIBTORCH, anira::InferenceBackend::ONNX, anira::InferenceBackend::TFLITE, anira::InferenceBackend::CUSTOM
+    };
+    std::vector<anira::InferenceConfig> inference_configs = {
+        cnn_config, hybridnn_config, rnn_config
+    };
+
+    // Define argument combinations
+    static void Arguments(::benchmark::internal::Benchmark* b) {
+        for (int i = 0; i < buffer_sizes.size(); ++i) {
+            for (int j = 0; j < inference_configs.size(); ++j) {
+                for (int k = 0; k < inference_backends.size(); ++k) {
+                    // Skip incompatible combinations (e.g., ONNX + stateful RNN)
+                    if (!(j == 2 && k == 1)) {
+                        b->Args({buffer_sizes[i], j, k});
+                    }
+                }
+            }
+        }
+    }
+
+    BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)(::benchmark::State& state) {
+        // Extract configuration from arguments
+        anira::HostConfig host_config = {(size_t) state.range(0), SAMPLE_RATE};
+        anira::InferenceConfig& inference_config = inference_configs[state.range(1)];
+        anira::InferenceBackend inference_backend = inference_backends[state.range(2)];
+
+        // Setup with selected configuration
+        anira::PrePostProcessor pp_processor(inference_config);
+        m_inference_handler = std::make_unique<anira::InferenceHandler>(pp_processor, inference_config);
+        m_inference_handler->prepare(host_config);
+        m_inference_handler->set_inference_backend(inference_backend);
+
+        m_buffer = std::make_unique<anira::Buffer<float>>(
+            inference_config.get_preprocess_input_channels()[0], 
+            host_config.m_buffer_size
+        );
+
+        initialize_repetition(inference_config, host_config, inference_backend);
+
+        // ... measurement loop
+    }
+
+    BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)
+        ->Unit(benchmark::kMillisecond)
+        ->Iterations(NUM_ITERATIONS)
+        ->Repetitions(NUM_REPETITIONS)
+        ->UseManualTime()
+        ->Apply(Arguments);
+
+Specialized Benchmarking Scenarios
+-----------------------------------
+
+Benchmarking Without Inference
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To measure only pre/post-processing overhead without actual inference:
+
+.. code-block:: cpp
+    :caption: benchmark.cpp
+
+    BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_NO_INFERENCE)(::benchmark::State& state) {
+        // ... setup code ...
+        
+        // Use CUSTOM backend with default processor (performs roundtrip without inference)
+        m_inference_handler->set_inference_backend(anira::InferenceBackend::CUSTOM);
+        
+        // ... measurement loop ...
+    }
+
+This configuration measures the overhead of anira's processing pipeline without the neural network inference step.
+
+Benchmarking Custom Inference
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For custom inference backend implementations:
+
+.. code-block:: cpp
+    :caption: benchmark.cpp
+
+    // Define your custom processor class first
+    class MyCustomProcessor : public anira::BackendBase {
+        // ... implement your custom inference logic ...
+    };
+
+    BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_CUSTOM_INFERENCE)(::benchmark::State& state) {
+        // ... setup code ...
+        
+        // Register your custom processor
+        // (implementation depends on your custom backend design)
+        
+        m_inference_handler->set_inference_backend(anira::InferenceBackend::CUSTOM);
+        
+        // ... measurement loop ...
+    }
 
 Best Practices
 --------------
 
-1. **Consistent Environment**: Run benchmarks on a consistent system configuration
-2. **Multiple Repetitions**: Use multiple repetitions to account for system variance
-3. **Isolation**: Close other applications to minimize interference
-4. **Warmup**: Include warmup iterations for neural network models
-5. **Statistical Analysis**: Use the statistical output to understand performance variance
-6. **Documentation**: Document your benchmark configurations and system specifications
+1. **Consistent Environment**: Run benchmarks on a dedicated system with minimal background processes
+2. **Thermal Management**: Use the sleep option in :cpp:func:`initialize_repetition` for thermal stability
+3. **Multiple Repetitions**: Use sufficient repetitions to account for system variability
+4. **Priority Elevation**: Always elevate process priority for consistent timing measurements
+5. **Warm-up Analysis**: Compare first vs. subsequent iterations to identify warm-up requirements
+6. **Configuration Coverage**: Test realistic buffer sizes and configurations for your target use case
 
-This benchmarking framework allows you to systematically evaluate the real-time performance of different neural network models and configurations, helping you optimize your audio processing pipeline for production use.
+Interpreting Results
+--------------------
+
+Benchmark results include:
+
+- **Mean Processing Time**: Average time per process call
+- **Standard Deviation**: Timing variability indicator  
+- **Min/Max Times**: Best and worst case performance
+- **Iterations/Repetitions**: Statistical confidence measures
+
+Use these metrics to:
+
+- Verify real-time constraints are met
+- Compare backend performance
+- Identify optimal buffer sizes
+- Detect performance regressions
+

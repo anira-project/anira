@@ -1,135 +1,62 @@
 Usage Guide
 ===========
 
-This guide provides comprehensive instructions for integrating anira into your real-time audio processing applications.
-
-Class Reference Examples
-------------------------
-
-Here are different ways to reference classes in Sphinx:
-
-**Basic class reference:**
-The :cpp:class:`anira::PrePostProcessor` class enables pre- and post-processing steps.
-
-**Namespace reference:**
-All anira classes are in the :cpp:class:`anira` namespace.
-
-**Method reference:**
-Use the :cpp:func:`anira::InferenceHandler::process` method for real-time processing.
-
-**Advanced Code Block Referencing:**
-
-You can reference classes and methods within code comments:
-
-.. code-block:: cpp
-
-    // The anira::InferenceHandler manages the inference process
-    anira::InferenceHandler handler(processor, config);
-    
-    // Call the process() method for real-time audio processing
-    handler.process(audio_data, num_samples);
-
-**Highlighted Code with References:**
-
-.. code-block:: cpp
-    :emphasize-lines: 2, 5
-    :linenos:
-    :caption: Example using anira::InferenceHandler
-
-    // Initialize the inference system
-    anira::InferenceHandler handler(processor, config);  // <- Main class
-    handler.prepare(host_config);
-    
-    handler.process(audio_data, num_samples);  // <- Key method
-
-**Code with Cross-references:**
-
-The following example shows how to use :cpp:class:`anira::InferenceHandler`:
-
-.. code-block:: cpp
-    :name: inference-handler-example
-
-    void setup_inference() {
-        // Create configuration - see anira::InferenceConfig documentation
-        anira::InferenceConfig config(model_data, tensor_shapes, 42.66f);
-        
-        // Initialize processor - inherits from anira::PrePostProcessor
-        CustomProcessor processor(config);
-        
-        // Create handler - the main anira::InferenceHandler instance
-        anira::InferenceHandler handler(processor, config);
-    }
-
-Reference the code block in your documentation:
-You can refer to the code block above using :ref:`inference-handler-example`.
-
-**Full class documentation (uncomment to use):**
-
-..
-    .. doxygenclass:: anira::PrePostProcessor
-        :members:
-
-**Specific method documentation:**
-
-..
-    .. doxygenfunction:: anira::InferenceHandler::process
-
 Overview
 --------
 
 Anira provides the following structures and classes to help you integrate real-time audio processing with your machine learning models:
 
-+------------------+--------------------------------------------------------------------------+
-| Class            | Description                                                              |
-+==================+==========================================================================+
-| ContextConfig    | **Optional:** The configuration structure that defines the context       |
-|                  | across all anira instances. Here you can define the behaviour of the     |
-|                  | thread pool, such as specifying the number of threads.                   |
-+------------------+--------------------------------------------------------------------------+
-| InferenceHandler | Manages audio processing/inference for the real-time thread,             |
-|                  | offloading inference to the thread pool and updating the real-time       |
-|                  | thread buffers with processed audio. This class provides the main        |
-|                  | interface for interacting with the library.                              |
-+------------------+--------------------------------------------------------------------------+
-| InferenceConfig  | A configuration structure for defining model specifics such as           |
-|                  | input/output shape, model details such as maximum inference time,        |
-|                  | and more. Each InferenceHandler instance must be constructed with        |
-|                  | this configuration.                                                      |
-+------------------+--------------------------------------------------------------------------+
-| PrePostProcessor | Enables pre- and post-processing steps before and after inference.       |
-|                  | Either use the default PrePostProcessor or inherit from this class       |
-|                  | for custom processing.                                                   |
-+------------------+--------------------------------------------------------------------------+
-| HostConfig       | A structure for defining the host configuration: buffer size             |
-|                  | and sample rate.                                                         |
-+------------------+--------------------------------------------------------------------------+
++---------------------------------------+--------------------------------------------------------------------------+
+| Class                                 | Description                                                              |
++=======================================+==========================================================================+
+| :cpp:class:`anira::InferenceHandler`  | Manages audio processing/inference for the real-time thread,             |
+|                                       | offloading inference to the thread pool and updating the real-time       |
+|                                       | thread buffers with processed audio. This class provides the main        |
+|                                       | interface for interacting with the library.                              |
++---------------------------------------+--------------------------------------------------------------------------+
+| :cpp:struct:`anira::InferenceConfig`  | A configuration structure for defining model specifics such as           |
+|                                       | input/output shape, model details such as maximum inference time,        |
+|                                       | and more. Each InferenceHandler instance must be constructed with        |
+|                                       | this configuration.                                                      |
++---------------------------------------+--------------------------------------------------------------------------+
+| :cpp:class:`anira::PrePostProcessor`  | Enables pre- and post-processing steps before and after inference.       |
+|                                       | Either use the default PrePostProcessor or inherit from this class       |
+|                                       | for custom processing.                                                   |
++---------------------------------------+--------------------------------------------------------------------------+
+| :cpp:class:`anira::HostConfig`        | A structure for defining the host configuration: buffer size             |
+|                                       | and sample rate.                                                         |
++---------------------------------------+--------------------------------------------------------------------------+
+| :cpp:struct:`anira::ContextConfig`    | **Optional:** The configuration structure that defines the context       |
+|                                       | across all anira instances. Here you can define the behaviour of the     |
+|                                       | thread pool, such as specifying the number of threads.                   |
++---------------------------------------+--------------------------------------------------------------------------+
 
-Step 1: Define your Model Configuration
----------------------------------------
+1. Inference Configuration
+--------------------------
 
-Start by specifying your model configuration using ``anira::InferenceConfig``. This includes the model path, input/output shapes, and other critical settings that match the requirements of your model.
+Start by specifying your model configuration using :cpp:struct:`anira::InferenceConfig`. This includes the model path, input/output shapes, and other critical settings that match the requirements of your model.
 
-Step 1.1: Define the model information and the corresponding inference backend
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1.1. ModelData
+~~~~~~~~~~~~~~
 
-First pass the model information and the corresponding inference backend in a ``std::vector<anira::ModelData>``. ``anira::ModelData`` offers two ways to define the model information:
+First define the model information and the corresponding inference backend in a :cpp:struct:`anira::ModelData`. There are two ways to define the model information:
 
-1. Pass the model path as a string:
+Pass the model path as a string:
 
 .. code-block:: cpp
 
     {std::string model_path, anira::InferenceBackend backend}
 
-2. Pass the model data as binary information:
+Pass the model data as binary information:
 
 .. code-block:: cpp
 
     {void* model_data, size_t model_size, anira::InferenceBackend backend}
 
 .. note::
-    Defining the model data as binary information is only possible for the ``anira::ONNX`` until now.
+    Defining the model data as binary information is only possible for the ``anira::InferenceBackend::ONNX`` until now.
 
-Now define your model information in a ``std::vector<anira::ModelData>``.
+The :cpp:struct:`anira::InferenceConfig` requires a vector of :cpp:struct:`anira::ModelData`.
 
 .. code-block:: cpp
 
@@ -142,159 +69,127 @@ Now define your model information in a ``std::vector<anira::ModelData>``.
 .. note::
     It is not necessary to submit a model for each backend anira was built with, only the one you want to use.
 
-Step 1.2: Define the input and output shapes of the model
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1.2. TensorShape
+~~~~~~~~~~~~~~~~
 
-In the next step, define the input and output shapes of the model for each backend in a ``std::vector<anira::TensorShape>``. The ``anira::TensorShape`` is defined as follows:
-
-.. code-block:: cpp
-
-    {std::vector<int64_t> input_shape, std::vector<int64_t> output_shape, (optional) anira::InferenceBackend}
-
-Now define the input and output shapes of your model for each backend used in the ``std::vector<anira::ModelData>``.
+In the next step, define the input and output shapes of the model in an :cpp:struct:`anira::TensorShape`. The input and output_shapes are defined as :cpp:type:`anira::TensorShapeList`, where each inner vector represents the shape of a tensor.
 
 .. code-block:: cpp
 
-    std::vector<anira::TensorShape> tensor_shapes = {
-        {{{1, 1, 15380}}, {{1, 1, 2048}}, anira::InferenceBackend::LIBTORCH},
-        {{{1, 1, 15380}}, {{1, 1, 2048}}, anira::InferenceBackend::ONNX},
-        {{{1, 15380, 1}}, {{1, 2048, 1}}, anira::InferenceBackend::TFLITE}
+    {anira::TensorShapeList input_shape, anira::TensorShapeList output_shape, (optional) anira::InferenceBackend}
+
+The input and output shapes are defined as a vector of integers, where each integer represents the size of a dimension in the tensor. The optional :cpp:enum:`anira::InferenceBackend` parameter allows you to specify which backend this shape corresponds to. If you do not specify the backend, the shape is used for all backends that do not have a specific shape defined.
+
+The :cpp:struct:`anira::InferenceConfig` requires a vector of :cpp:struct:`anira::TensorShape`.
+
+.. code-block:: cpp
+
+    std::vector<anira::TensorShape> tensor_shape = {
+        {{{1, 4, 15380}, {1, 1}}, {{1, 1, 2048}, {1, 1}}, anira::InferenceBackend::LIBTORCH},
+        {{{1, 4, 15380}, {1, 1}}, {{1, 1, 2048}, {1, 1}}, anira::InferenceBackend::ONNX},
+        {{{1, 15380, 4}, {1, 1}}, {{1, 2048, 1}, {1, 1}}, anira::InferenceBackend::TFLITE}
     };
 
 .. note::
-    If the input and output shapes of the model are the same for all backends, you can also define only one ``anira::TensorShape`` without a specific ``anira::InferenceBackend``.
+    If the input and output shapes of the model are the same for all backends, you can also define only one :cpp:struct:`anira::TensorShape` without a specific :cpp:enum:`anira::InferenceBackend`:
 
-Step 1.3: Define the anira::InferenceConfig
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1.3. (Optional) ProcessingSpec
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Finally, define the necessary ``anira::InferenceConfig`` with the model information, input/output shapes and the maximum inference time in ms. The maximum inference time is the measured worst case inference time. If the inference time during execution exceeds this value, it is likely that the audio signal will contain artifacts.
+In some cases, you may want to define a processing specification that describes how the model should be processed. This is optional and can be used to specify additional parameters for the inference process. Here you can define the number of input and output channels and also whether tensors shall be streamable or non-streamable.
+
+The following parameters can be defined in the :cpp:struct:`anira::ProcessingSpec`:
+
++---------------------------+------------------------------------------------------------------------------------------------+
+| Parameter                 | Description                                                                                    |
++===========================+================================================================================================+
+| Number of input channels  | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{input_tensor_shape.size(), 1}``  |
+|                           | Defines the number of input channels for the model. Only streamable tensors can have input     |
+|                           | channels != 1.                                                                                 |
++---------------------------+------------------------------------------------------------------------------------------------+
+| Number of output channels | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{output_tensor_shape.size(), 1}`` |
+|                           | Defines the number of output channels for the model. Only streamable tensors can have output   |
+|                           | channels != 1.                                                                                 |
++---------------------------+------------------------------------------------------------------------------------------------+
+| Preprocess Input Size     | Type: ``std::vector<size_t>``, default: ``input_tensor_sizes``. Specifies the minimum number   |
+|                           | of samples required per tensor before triggering preprocessing and inference. For streamable   |
+|                           | tensors, this determines how many samples must accumulate before processing begins. Set to     |
+|                           | ``0`` for non-streamable tensors to start processing immediately without waiting for samples.  |
++---------------------------+------------------------------------------------------------------------------------------------+
+| Postprocess Output Size   | Type: ``std::vector<size_t>``, default: ``output_tensor_sizes``. Defines the number of samples |
+|                           | that will be returned after the postprocessing step. Set to ``0`` for non-streamable tensors.  |
++---------------------------+------------------------------------------------------------------------------------------------+
+| Internal Model Latency    | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{input_tensor_shape.size(), 0}``. |
+|                           | Submit if your model has an internal latency. This allows for the latency calculation to take  |
+|                           | it into account.                                                                               |
++---------------------------+------------------------------------------------------------------------------------------------+
+
+You only need to define the parameters that are relevant for your model. If you do not define an :cpp:struct:`anira::ProcessingSpec`, the default values will be used. Here is an example of how to define the :cpp:struct:`anira::ProcessingSpec` with all parameters:
+
+.. code-block:: cpp
+
+    std::vector<anira::ProcessingSpec> processing_spec = {
+        {4, 1}, // Input tensor 0 has 4 input channels, and tensor 1 has 1 input channel
+        {1, 1}, // Output tensor 0 has 1 output channel, and tensor 1 has 1 output channel
+        {2048, 0}, // Preprocess input size is 2048 for tensor 0 and 0 for tensor 1
+        {2048, 0}, // Postprocess output size is 2048 for tensor 0 and 0 for tensor 1
+        {0, 0}  // Internal model latency is 0 for both tensors, meaning no internal latency
+    };
+
+1.4. InferenceConfig
+~~~~~~~~~~~~~~~~~~~~
+
+Finally, define the necessary :cpp:struct:`anira::InferenceConfig` with the vector of :cpp:struct:`anira::ModelData`, vector of :cpp:struct:`anira::TensorShape`, the optional :cpp:struct:`anira::ProcessingSpec`, and the maximum inference time. The maximum inference time is the measured worst case inference time. If the inference time during execution exceeds this value, it is likely that the audio signal will contain dropouts. There are also some other optional parameters that can be set in the :cpp:struct:`anira::InferenceConfig` to further customize the inference process.
 
 .. code-block:: cpp
 
     anira::InferenceConfig inference_config (
         model_data, // std::vector<anira::ModelData>
-        tensor_shapes, // std::vector<anira::TensorShape>
+        tensor_shape, // std::vector<anira::TensorShape>
+        processing_spec, // anira::ProcessingSpec (optional)
         42.66f // Maximum inference time in ms
     );
 
-There are also some optional parameters that can be set in the ``anira::InferenceConfig``:
+These are the other optional parameters that can be set in the :cpp:struct:`anira::InferenceConfig`:
 
-+---------------------------+--------------------------------------------------------+
-| Parameter                 | Description                                            |
-+===========================+========================================================+
-| internal_latency          | Type: ``unsigned int``, default: ``0``. Submit if      |
-|                           | your model has an internal latency. This allows the    |
-|                           | latency calculation to take it into account.           |
-+---------------------------+--------------------------------------------------------+
-| warm_up                   | Type: ``unsigned int``, default: ``0``. Defines the    |
-|                           | number of warm-up iterations before starting the       |
-|                           | inference process.                                     |
-+---------------------------+--------------------------------------------------------+
-| session_exclusive_processor | Type: ``bool``, default: ``false``. If set to        |
-|                           | ``true``, the session will use an exclusive processor  |
-|                           | for inference and therefore cannot be processed        |
-|                           | parallel. Necessary for e.g. stateful models.          |
-+---------------------------+--------------------------------------------------------+
-| num_parallel_processors   | Type: ``unsigned int``, default:                       |
-|                           | ``std::thread::hardware_concurrency() / 2``. Defines   |
-|                           | the number of parallel processors that can be used     |
-|                           | for the inference.                                     |
-+---------------------------+--------------------------------------------------------+
-| blocking_ratio            | Type: ``float``, default: ``0.0f``. This should be a   |
-|                           | value between ``0.f`` and ``1.f``. It specifies the    |
-|                           | proportion of available processing time that the       |
-|                           | library will try to acquire new data from the          |
-|                           | inference threads on the real-time thread. This is a   |
-|                           | controversial parameter and should be used with        |
-|                           | caution.                                               |
-+---------------------------+--------------------------------------------------------+
++-----------------------------+--------------------------------------------------------+
+| Parameter                   | Description                                            |
++=============================+========================================================+
+| warm_up                     | Type: ``unsigned int``, default: ``0``. Defines the    |
+|                             | number of warm-up iterations before starting the       |
+|                             | inference process.                                     |
++-----------------------------+--------------------------------------------------------+
+| session_exclusive_processor | Type: ``bool``, default: ``false``. If set to          |
+|                             | ``true``, the session will use an exclusive processor  |
+|                             | for inference and therefore cannot be processed        |
+|                             | parallel. Necessary for e.g. stateful models.          |
++-----------------------------+--------------------------------------------------------+
+| blocking_ratio              | Type: ``float``, default: ``0.0f``. Defines the        |
+|                             | proportion of available processing time (0.0-0.99)     |
+|                             | that the library will use to acquire new data from     |
+|                             | inference threads on the real-time thread. Use with    |
+|                             | caution as this affects real-time performance.         |
++-----------------------------+--------------------------------------------------------+
+| num_parallel_processors     | Type: ``unsigned int``, default:                       |
+|                             | ``std::thread::hardware_concurrency() / 2``. Defines   |
+|                             | the number of parallel processors that can be used     |
+|                             | for the inference.                                     |
++-----------------------------+--------------------------------------------------------+
 
-Step 2: Create a PrePostProcessor Instance
-------------------------------------------
+2. Pre and Post Processing
+--------------------------
 
-If your model does not require any specific pre- or post-processing, you can use the default :cpp:class:`anira::PrePostProcessor`. This is likely to be the case if the input and output shapes of the model are the same, the batchsize is 1, and your model operates in the time domain.
+For most use cases, you can use the default :cpp:class:`anira::PrePostProcessor` without modification. This is suitable when your model operates in the time domain with straightforward input/output tensor shapes.
 
 .. code-block:: cpp
 
     // Create an instance of anira::PrePostProcessor
     anira::PrePostProcessor pp_processor(inference_config);
 
-Custom Pre/Post Processing
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+If your model requires custom pre- or post-processing (such as frequency domain transforms, custom windowing, or multi-tensor operations), you can create a custom preprocessor by inheriting from the :cpp:class:`anira::PrePostProcessor` class. For detailed information on implementing custom preprocessing and postprocessing, see the :doc:`custom_preprocessing` chapter.
 
-If your model requires custom pre- or post-processing, you can inherit from the :cpp:class:`anira::PrePostProcessor` class and overwrite the :cpp:func:`anira::PrePostProcessor::pre_process` and :cpp:func:`anira::PrePostProcessor::post_process` methods so that they match your model's requirements.
-
-In the ``pre_process`` method, we get the input samples from the audio application through an ``std::vector<anira::RingBuffer>`` and push them into the output buffer, which is an ``std::vector<anira::BufferF>``. This output buffer is then used for inference.
-
-In the ``post_process`` method we get the input samples through an ``std::vector<anira::BufferF>`` and push them into the output buffer, which is an ``std::vector<anira::RingBuffer>``. The samples from this output buffer are then returned to the audio application by the :cpp:class:`anira::InferenceHandler`.
-
-.. code-block:: cpp
-
-    #include <anira/anira.h>
-
-    class CustomPrePostProcessor : public anira::PrePostProcessor {
-    public:
-        using anira::PrePostProcessor::PrePostProcessor;
-
-        virtual void pre_process(std::vector<anira::RingBuffer>& input, 
-                                std::vector<anira::BufferF>& output, 
-                                [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
-            pop_samples_from_buffer(input[0], output[0], 
-                                  m_inference_config.get_tensor_output_size()[0], 
-                                  m_inference_config.get_tensor_input_size()[0]-m_inference_config.get_tensor_output_size()[0]);
-        };
-    };
-
-.. note::
-    The ``anira::PrePostProcessor`` class provides some methods to help you implement your own pre- and post-processing.
-
-Available Helper Methods
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-+-----------------------------------+-----------------------------------------------+
-| Method                            | Description                                   |
-+===================================+===============================================+
-| pop_samples_from_buffer           | Pop output.size() samples from the input      |
-| (input, output)                   | buffer and push them into the output buffer.  |
-+-----------------------------------+-----------------------------------------------+
-| pop_samples_from_buffer           | Pop num_new_samples new samples from the      |
-| (input, output, num_new_samples,  | input buffer and get num_old_samples already  |
-| num_old_samples)                  | poped samples from the input buffer and push  |
-|                                   | them into the output buffer. The order of     |
-|                                   | the samples in the output buffer is from      |
-|                                   | oldest to newest.                             |
-+-----------------------------------+-----------------------------------------------+
-| pop_samples_from_buffer           | Same as the above method, but starts writing  |
-| (input, output, num_new_samples,  | to the output buffer at the offset.           |
-| num_old_samples, offset)          |                                               |
-+-----------------------------------+-----------------------------------------------+
-| push_samples_to_buffer            | Pushes input.size() samples from the input    |
-| (input, output)                   | buffer into the output buffer.                |
-+-----------------------------------+-----------------------------------------------+
-
-Additional Tensor Values
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-Some neural networks not only require audio data as input and output tensors. For example, some models require additional input parameters or output values, like e.g. a prediction of the model's confidence. In this case you can use the ``anira::PrePostProcessor`` to submit or retrieve additional values.
-
-+-------------------------------+-----------------------------------------------+
-| Method                        | Description                                   |
-+===============================+===============================================+
-| set_input(input, i, j)        | Sets the input value at position i, j in the  |
-|                               | input tensor.                                 |
-+-------------------------------+-----------------------------------------------+
-| set_output(output, i, j)      | Sets the output value at position i, j in     |
-|                               | the output tensor.                            |
-+-------------------------------+-----------------------------------------------+
-| get_input(i, j)               | Returns the input value at position i, j in   |
-|                               | the input tensor.                             |
-+-------------------------------+-----------------------------------------------+
-| get_output(i, j)              | Returns the output value at position i, j in  |
-|                               | the output tensor.                            |
-+-------------------------------+-----------------------------------------------+
-
-Step 3: Create an InferenceHandler Instance
--------------------------------------------
+3. Inference Handler
+--------------------
 
 In your application, you will need to create an instance of the :cpp:class:`anira::InferenceHandler` class. This class is responsible for managing the inference process, including threading and real-time constraints. The constructor takes as arguments an instance of the default or custom :cpp:class:`anira::PrePostProcessor` and an instance of the :cpp:class:`anira::InferenceConfig` structure.
 
@@ -310,10 +205,10 @@ In your application, you will need to create an instance of the :cpp:class:`anir
     // Create an InferenceHandler instance
     anira::InferenceHandler inference_handler(pp_processor, inference_config);
 
-Optional: Define the Context Configuration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+3.1. (Optional) ContextConfig
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-If you want to define a custom context configuration, you can do so by creating an instance of the ``anira::ContextConfig`` structure. This structure allows you to define the behaviour of the thread pool, by specifying the number of threads.
+If you want to define a custom context configuration, you can do so by creating an instance of the :cpp:struct:`anira::ContextConfig` structure. This structure allows you to define the behaviour of the thread pool, by specifying the number of threads.
 
 .. code-block:: cpp
 
@@ -327,94 +222,273 @@ If you want to define a custom context configuration, you can do so by creating 
     // Create an InferenceHandler instance
     anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
 
-Step 4: Allocate Memory Before Processing
------------------------------------------
+4. Get ready for Processing
+---------------------------
 
-Before processing audio data, the ``prepare`` method of the ``anira::InferenceHandler`` instance must be called. This allocates all necessary memory in advance. The ``prepare`` method needs an instance of ``anira::HostConfig`` which defines the buffer size and sample rate of the host application.
+Before processing audio data, the :cpp:func:`anira::InferenceHandler::prepare` method of the :cpp:class:`anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The :cpp:func:`anira::InferenceHandler::prepare` method needs an instance of :cpp:struct:`anira::HostConfig` which defines the buffer size and sample rate of the host application. Also an inference backend must be selected, which is done by calling the :cpp:func:`anira::InferenceHandler::set_inference_backend` method.
 
-We also need to select the inference backend we want to use. Depending on the backends you enabled during the build process, you can choose amongst ``anira::LIBTORCH``, ``anira::ONNX``, ``anira::TFLITE`` and ``anira::CUSTOM``.
+4.1. HostConfig
+~~~~~~~~~~~~~~~
 
-After preparing the ``anira::InferenceHandler``, you can get the latency of the inference process in samples by calling the ``get_latency`` method and use this information to compensate for the latency in your real-time audio application.
+The :cpp:struct:`anira::HostConfig` structure defines the host application's configuration, including buffer size and sample rate. This configuration is essential for the :cpp:class:`anira::InferenceHandler` to allocate appropriate memory and calculate processing latency.
 
-.. code-block:: cpp
+To construct :cpp:struct:`anira::HostConfig`, provide the buffer size and sample rate for a specific streamable input tensor. By default, tensor index 0 is used. For models with multiple input tensors, specify the desired tensor index.
 
-    void prepare_audio_processing(double sample_rate, int buffer_size) {
+The structure also includes an optional parameter that controls whether the buffer size is seen as static or as the maximum buffer size. When this parameter is set to true, variable buffer sizes smaller than the specified maximum are allowed, which is useful for real-time applications with dynamic buffer sizes. However, this may increase the latency that anira calculates, since it needs to compensate for all possible size variations.
 
-        // Create an instance of anira::HostConfig
-        anira::HostConfig host_config {
-            buffer_size,
-            sample_rate
-        };
-
-        inference_handler.prepare(host_config);
-
-        // Select the inference backend
-        inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
-        
-        // Get the latency of the inference process in samples
-        int latency_in_samples = inference_handler.get_latency();
-    }
-
-Step 5: Real-time Audio Processing
-----------------------------------
-
-Now we are ready to process audio in the process callback of our real-time audio application. The process method of the ``anira::InferenceHandler`` instance takes the input samples for all channels as an array of float pointers - ``float**``, and after calling the process method, the data is overwritten with the processed output.
+**Create HostConfig with static buffer size for input tensor 0:**
 
 .. code-block:: cpp
 
-    // Real-time safe audio processing in the process callback of your application
-    void process(float** audio_data, int num_samples) {
-        inference_handler.process(audio_data, num_samples)
-    }
-    // audio_data now contains the processed audio samples
-
-Custom Backend Processors
--------------------------
-
-To use a custom backend processor, inherit from the ``anira::BackendBase`` class and overwrite the ``process`` and ``prepare`` methods. The ``process`` method is called when the ``anira::InferenceBackend::CUSTOM`` backend is selected.
-
-The ``process`` method takes two ``anira::BufferF`` instances as input and output buffers and a ``std::shared_ptr<anira::SessionElement>`` session element. The session element is necessary to e.g. send or retrieve additional values submitted by the pre- and post-processor.
-
-The custom backend enables the integration of additional inference engines, customization of existing engines, or the implementation of a simple roundtrip/bypass backend that directly returns input samples, bypassing the inference stage.
-
-Example: Bypass Backend
-~~~~~~~~~~~~~~~~~~~~~~~
-
-The following example demonstrates how to implement a custom bypass backend for a CNN model, where 15380 past samples are used as input and 2048 samples are returned as output. In order to bypass the inference stage, we just have to return the last 2048 samples of the input buffer.
-
-.. code-block:: cpp
-
-    #include <anira/anira.h>
-
-    class BypassProcessor : public anira::BackendBase {
-    public:
-        BypassProcessor(anira::InferenceConfig& inference_config) : anira::BackendBase(inference_config) {}
-
-        void process(anira::BufferF &input, anira::BufferF &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
-            auto equal_channels = input.get_num_channels() == output.get_num_channels();
-            auto sample_diff = input.get_num_samples() - output.get_num_samples();
-
-            if (equal_channels && sample_diff >= 0) {
-                for (size_t channel = 0; channel < input.get_num_channels(); ++channel) {
-                    auto write_ptr = output.get_write_pointer(channel);
-                    auto read_ptr = input.get_read_pointer(channel);
-
-                    for (size_t i = 0; i < output.get_num_samples(); ++i) {
-                        write_ptr[i] = read_ptr[i+sample_diff];
-                    }
-                }
-            }
-        }
+    anira::HostConfig host_config {
+        2048.f, // Buffer size in samples
+        44100.f // Sample rate in Hz
     };
 
-After defining the custom backend processor, you can create an instance of the ``BypassProcessor`` class and pass it to the ``anira::InferenceHandler`` instance as an additional argument in the constructor. The ``anira::InferenceHandler`` will then use the ``BypassProcessor`` instance when the ``anira::CUSTOM`` backend is selected.
+**Create HostConfig with maximum buffer size for input tensor 1:**
 
 .. code-block:: cpp
 
-    // Create an instance of the custom CustomProcessor
-    BypassProcessor bypass_processor(inference_config);
-    // In Step 3: Create an InferenceHandler Instance
-    anira::InferenceHandler inference_handler(pp_processor, inference_config, bypass_processor);
+    anira::HostConfig host_config {
+        2048.f, // Buffer size in samples
+        44100.f, // Sample rate in Hz
+        true, // Allow smaller buffer sizes (optional, default is false)
+        1 // Tensor index (optional, default is 0)
+    };
+
+..  note::
+    The buffer size can be specified as a floating-point value to allow for fractional buffer relationships. For instance, a buffer size of 0.5f means that the inference handler will receive one sample for the specified input tensor every two host buffer cycles. If the model's output is double the size of the input, the inference handler will be able to return one sample for each host buffer cycle.
+    
+4.2. Prepare
+~~~~~~~~~~~~
+
+The :cpp:func:`anira::InferenceHandler::prepare` method is called with an instance of :cpp:struct:`anira::HostConfig` to allocate the necessary memory for the inference process. This method must be called before processing audio data. You can optionally specify the latency compensation for the inference process by passing a latency value in samples for a specific output tensor or a vector of latency values for all output tensors. If you do not specify a latency value, anira will calculate a minimal latency based on the information in the :cpp:struct:`anira::HostConfig` and the :cpp:struct:`anira::InferenceConfig`. This latency calculation is quite sophisticated and you can read more about it in the :doc:`latency` section.
+
+**Preparing without custom latency (automatic latency calculation):**
+
+.. code-block:: cpp
+
+    // Prepare the inference handler with automatic latency calculation
+    inference_handler.prepare(host_config);
+
+**Preparing with custom latency for a specific output tensor:**
+
+.. code-block:: cpp
+
+    // Prepare with custom latency for the first output tensor (index 0)
+    size_t custom_latency_samples = 1024;
+    size_t output_tensor_index = 0;
+    inference_handler.prepare(host_config, custom_latency_samples, output_tensor_index);
+
+**Preparing with custom latency for all output tensors:**
+
+.. code-block:: cpp
+
+    // Prepare with custom latency values for all output tensors
+    std::vector<size_t> custom_latency_values = {1024, 512}; // Different latency for each tensor
+    inference_handler.prepare(host_config, custom_latency_values);
 
 .. note::
-    If you want to implement a custom inference backend use the existing backend implementations as a reference.
+    Only streamable tensors can have a latency != 0. Non-streamable tensors are available via the :cpp:func:`anira::PrePostProcessor::get_output` method and do not require a latency value.
+
+4.3. Select Backend
+~~~~~~~~~~~~~~~~~~~
+
+Before processing audio, you must select which inference backend to use. The available backends depend on which ones were enabled during the build process. You can choose from:
+
+- ``anira::InferenceBackend::LIBTORCH`` - PyTorch/LibTorch models
+- ``anira::InferenceBackend::ONNX`` - ONNX Runtime models  
+- ``anira::InferenceBackend::TFLITE`` - TensorFlow Lite models
+- ``anira::InferenceBackend::CUSTOM`` - Custom backend implementations
+
+Select the backend that corresponds to your model format:
+
+.. code-block:: cpp
+
+    // Select the inference backend
+    inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
+
+.. note::
+    Please refer to the :doc:`custom_backends` section for more information on how to implement your own custom backend.
+
+5. Real-time Processing
+-----------------------
+
+Now we are ready to process audio in the process callback of our real-time audio application. For streamable as well as non-streamable tensors, the :cpp:func:`anira::InferenceHandler::process` or the :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::InferenceHandler::pop_data` methods can be used to process audio data. All methods can be used in the real-time thread. Each function is overloaded so it can be used with a single tensor or with a vector of tensors.
+
+5.1. Process Method
+~~~~~~~~~~~~~~~~~~~
+
+The :cpp:func:`anira::InferenceHandler::process` method is the most straightforward approach for real-time audio processing when input and output happen simultaneously.
+
+**Simple In-Place Processing:**
+
+For models where input and output have the same shape and only one tensor is streamable:
+
+.. code-block:: cpp
+
+    // In your real-time audio callback
+    void processBlock(float** audio_data, int num_samples) {
+        // Process audio in-place - input is overwritten with output
+        size_t processed_samples = inference_handler.process(
+            audio_data, 
+            num_samples
+        );
+        // audio_data now contains the processed audio samples
+    }
+
+**Separate Input/Output Buffers:**
+
+For models where the input and output shapes differ or when you want to keep input and output separate:
+
+.. code-block:: cpp
+
+    void processBlock(float** input_audio, float** output_audio, int num_samples) {
+        size_t output_samples = inference_handler.process(
+            input_audio,                // const float* const* - input data
+            num_samples,                // number of input samples
+            output_audio,               // float* const* - output buffer
+            output_buffer_size          // maximum output buffer size
+        );
+        // output_samples contains the actual number of samples written
+    }
+
+**Multi-Tensor Processing:**
+
+For models with multiple input and output tensors (e.g., audio + control parameters):
+
+.. code-block:: cpp
+
+    // Prepare input and output data for multiple tensors in initialization
+    const float* const* const* input_data = new const float* const*[2];
+    float* const* const* output_data = new float* const*[2];
+
+    void processBlock(float** audio_input, float* control_params, 
+                     float** audio_output, float* confidence_output, 
+                     int num_audio_samples) {
+        
+        input_data[0] = audio_input;                           // Tensor 0: audio data
+        input_data[1] = (const float* const*) &control_params; // Tensor 1: control parameters
+        
+        output_data[0] = audio_output;                        // Tensor 0: processed audio
+        output_data[1] = (float* const*) &confidence_output;  // Tensor 1: confidence scores
+        
+        // Specify number of samples for each tensor
+        size_t input_samples[] = {num_audio_samples, 4};      // Audio samples, 4 control values
+        size_t output_samples[] = {num_audio_samples, 1};     // Audio samples, 1 confidence value
+        
+        // Process all tensors simultaneously
+        size_t* processed_samples = inference_handler.process(
+            input_data, input_samples,
+            output_data, output_samples
+        );
+    }
+
+    // Clean up
+    delete[] input_data;
+    delete[] output_data;
+
+5.2. Push/Pop Data Method
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::InferenceHandler::pop_data` methods enable decoupled processing where input and output operations are separated. This is particularly useful for:
+
+- Models with different input/output timing requirements
+- Buffered processing scenarios
+
+.. warning::
+    The :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::InferenceHandler::pop_data` methods should only be called from the same thread. Otherwise you may run into race conditions or other threading issues.
+
+**Basic Decoupled Processing:**
+
+.. code-block:: cpp
+
+    void processBlock(float** input_audio, float** output_audio, int num_samples) {
+        // Push input data to the inference pipeline
+        inference_handler.push_data(
+            input_audio,                // const float* const* - input data
+            num_samples,                // number of input samples
+            0                          // tensor index (optional, defaults to 0)
+        );
+        
+        // Pop processed output data from the pipeline
+        size_t received_samples = inference_handler.pop_data(
+            output_audio,              // float* const* - output buffer
+            num_samples,               // maximum number of output samples
+            0                          // tensor index (optional, defaults to 0)
+        );
+        
+        // received_samples contains the actual number of samples retrieved
+    }
+
+**Multi-Tensor Decoupled Processing:**
+
+.. code-block:: cpp
+
+    // Prepare input and output data for multiple tensors in initialization
+    const float* const* const* input_data = new const float* const*[2];
+    float* const* const* output_data = new float* const*[2];
+
+    void processBlock(float** audio_input, float* control_params,
+                     float** audio_output, float* confidence_output,
+                     int num_audio_samples) {
+        
+        // Push data for multiple tensors
+        input_data[0] = audio_input;
+        input_data[1] = (const float* const*) &control_params;
+        
+        size_t input_samples[] = {num_audio_samples, 4};
+        inference_handler.push_data(input_data, input_samples);
+        
+        // Pop data for multiple tensors
+        output_data[0] = audio_output;
+        output_data[1] = (float* const*) &confidence_output;
+        
+        size_t output_samples[] = {num_audio_samples, 1};
+        size_t* received_samples = inference_handler.pop_data(output_data, output_samples);
+    }
+    
+    // Clean up
+    delete[] input_data;
+    delete[] output_data;
+
+5.3. Processing Non-Streamable Tensors
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Some neural networks require additional input parameters or output values that do not need to be time-aligned and can therefore be updated asynchronously with the host buffers. For non-streamable tensors (those with ``preprocess_input_size`` or ``postprocess_output_size`` set to 0), you can use the :cpp:class:`anira::PrePostProcessor` methods to submit or retrieve additional values.
+
+**Setting and Getting Non-Streamable Values:**
+
+.. code-block:: cpp
+
+    // In your custom PrePostProcessor or directly via the inference handler
+    
+    // Set input values for non-streamable tensors
+    pp_processor.set_input(gain_value, tensor_index, sample_index);
+    pp_processor.set_input(threshold_value, tensor_index, sample_index + 1);
+    
+    // Get output values from non-streamable tensors  
+    float confidence_score = pp_processor.get_output(tensor_index, sample_index);
+    float peak_gain = pp_processor.get_output(tensor_index, sample_index + 1);
+
+**Example: Audio Effect with Control Parameters:**
+
+.. code-block:: cpp
+
+    void processBlock(float** audio_data, int num_samples, 
+                     float gain_param, float threshold_param) {
+        
+        // Set control parameters for non-streamable tensor (tensor index 1)
+        pp_processor.set_input(gain_param, 1, 0);
+        pp_processor.set_input(threshold_param, 1, 1);
+        
+        // Process audio (tensor index 0 is streamable audio data)
+        inference_handler.process(audio_data, num_samples);
+        
+        // Retrieve computed values from non-streamable output tensor (tensor index 1)
+        float computed_peak_gain = pp_processor.get_output(1, 0);
+        float signal_energy = pp_processor.get_output(1, 1);
+    }
+
+..  note::
+    The functions :cpp:func:`anira::PrePostProcessor::set_input` and :cpp:func:`anira::PrePostProcessor::get_output` can be called from any thread, allowing you to update control parameters or retrieve additional values asynchronously without blocking the real-time audio processing thread.

@@ -17,13 +17,13 @@ anira is designed with real-time audio applications in mind, focusing on determi
                       |
                       v
      +----------------+------------------+
-     |        InferenceConfig           |
+     |        InferenceConfig            |
      | (Model paths, shapes, settings)   |
      +----------------+------------------+
                       |
                       v
      +----------------+------------------+
-     |      PrePostProcessor            |
+     |      PrePostProcessor             |
      |  (Format conversion, buffering)   |
      +----------------+------------------+
                       |
@@ -35,8 +35,8 @@ anira is designed with real-time audio applications in mind, focusing on determi
                       |
                       v
      +----------------+------------------+       +----------------------+
-     |         Backend Processors       | <---> |   Inference Engines  |
-     | (LibTorch, ONNX, TensorFlow Lite)|       | (External libraries) |
+     |         Backend Processors        | <---> |   Inference Engines  |
+     | (LibTorch, ONNX, TensorFlow Lite) |       | (External libraries) |
      +-----------------------------------+       +----------------------+
 
 Key Design Principles
@@ -112,6 +112,7 @@ Backend-specific implementations for different inference engines.
 * LibTorchProcessor - PyTorch C++ API integration
 * OnnxRuntimeProcessor - ONNX Runtime integration
 * TFLiteProcessor - TensorFlow Lite integration
+* CustomProcessor - For custom inference engines
 
 Data Flow
 ---------

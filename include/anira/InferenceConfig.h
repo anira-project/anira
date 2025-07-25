@@ -180,7 +180,7 @@ struct ProcessingSpec {
     }
 };
 
-class ANIRA_API InferenceConfig {
+struct ANIRA_API InferenceConfig {
 
 public:
     struct Defaults

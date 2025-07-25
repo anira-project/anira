@@ -26,13 +26,9 @@ public:
     float get_input(size_t i, size_t j);
     float get_output(size_t i, size_t j);
 
-protected:
     void pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_samples);
-
     void pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_new_samples, size_t num_old_samples);
-
     void pop_samples_from_buffer(RingBuffer& input, BufferF& output, size_t num_new_samples, size_t num_old_samples, size_t offset);
-
     void push_samples_to_buffer(const BufferF& input, RingBuffer& output, size_t num_samples);
 
 protected:

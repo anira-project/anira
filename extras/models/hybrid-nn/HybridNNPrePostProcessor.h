@@ -14,27 +14,27 @@ public:
         int64_t num_input_samples = 0;
         int64_t num_output_samples = 0;
 #ifdef USE_LIBTORCH
-        if (current_inference_backend == anira::LIBTORCH) {
+        if (current_inference_backend == anira::InferenceBackend::LIBTORCH) {
             num_batches = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[0][0];
             num_input_samples = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[0][2];
             num_output_samples = m_inference_config.get_tensor_output_shape(anira::InferenceBackend::LIBTORCH)[0][1];
         }
 #endif
 #ifdef USE_ONNXRUNTIME
-        if (current_inference_backend == anira::ONNX) {
+        if (current_inference_backend == anira::InferenceBackend::ONNX) {
             num_batches = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[0][0];
             num_input_samples = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[0][2];
             num_output_samples = m_inference_config.get_tensor_output_shape(anira::InferenceBackend::ONNX)[0][1];
         }
 #endif
 #ifdef USE_TFLITE
-        if (current_inference_backend == anira::TFLITE) {
+        if (current_inference_backend == anira::InferenceBackend::TFLITE) {
             num_batches = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[0][0];
             num_input_samples = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[0][1];
             num_output_samples = m_inference_config.get_tensor_output_shape(anira::InferenceBackend::TFLITE)[0][1];
         }
 #endif 
-        else if (current_inference_backend == anira::CUSTOM) {
+        else if (current_inference_backend == anira::InferenceBackend::CUSTOM) {
 #if USE_LIBTORCH
             num_batches = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[0][0];
             num_input_samples = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[0][2];
@@ -52,15 +52,15 @@ public:
 
         if (
 #ifdef USE_LIBTORCH
-            current_inference_backend != anira::LIBTORCH &&
+            current_inference_backend != anira::InferenceBackend::LIBTORCH &&
 #endif
 #ifdef USE_ONNXRUNTIME
-            current_inference_backend != anira::ONNX &&
+            current_inference_backend != anira::InferenceBackend::ONNX &&
 #endif
 #ifdef USE_TFLITE
-            current_inference_backend != anira::TFLITE &&
+            current_inference_backend != anira::InferenceBackend::TFLITE &&
 #endif
-            current_inference_backend != anira::CUSTOM) {
+            current_inference_backend != anira::InferenceBackend::CUSTOM) {
             throw std::runtime_error("Invalid inference backend");
         }
             

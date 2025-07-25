@@ -21,15 +21,15 @@
 std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
 std::vector<anira::InferenceBackend> inference_backends = {
 #ifdef USE_LIBTORCH    
-    anira::LIBTORCH,
+    anira::InferenceBackend::LIBTORCH,
 #endif
 #ifdef USE_ONNXRUNTIME
-    anira::ONNX,
+    anira::InferenceBackend::ONNX,
 #endif
 #ifdef USE_TFLITE
-    anira::TFLITE,
+    anira::InferenceBackend::TFLITE,
 #endif
-    anira::CUSTOM
+    anira::InferenceBackend::CUSTOM
 };
 std::vector<anira::InferenceConfig> inference_configs = {cnn_config, medium_cnn_config, small_cnn_config};
 anira::InferenceConfig inference_config;
@@ -118,16 +118,16 @@ void adapt_cnn_config(anira::InferenceConfig& inference_config, int buffer_size,
     int output_size = buffer_size;
 
 #ifdef USE_LIBTORCH
-        inference_config.set_tensor_input_shape({{1, 1, input_size}}, anira::LIBTORCH);
-        inference_config.set_tensor_output_shape({{1, 1, output_size}}, anira::LIBTORCH);
+        inference_config.set_tensor_input_shape({{1, 1, input_size}}, anira::InferenceBackend::LIBTORCH);
+        inference_config.set_tensor_output_shape({{1, 1, output_size}}, anira::InferenceBackend::LIBTORCH);
 #endif
 #ifdef USE_ONNXRUNTIME
-        inference_config.set_tensor_input_shape({{1, 1, input_size}}, anira::ONNX);
-        inference_config.set_tensor_output_shape({{1, 1, output_size}}, anira::ONNX);
+        inference_config.set_tensor_input_shape({{1, 1, input_size}}, anira::InferenceBackend::ONNX);
+        inference_config.set_tensor_output_shape({{1, 1, output_size}}, anira::InferenceBackend::ONNX);
 #endif
 #ifdef USE_TFLITE
-        inference_config.set_tensor_input_shape({{1, input_size, 1}}, anira::TFLITE);
-        inference_config.set_tensor_output_shape({{1, output_size, 1}}, anira::TFLITE);
+        inference_config.set_tensor_input_shape({{1, input_size, 1}}, anira::InferenceBackend::TFLITE);
+        inference_config.set_tensor_output_shape({{1, output_size, 1}}, anira::InferenceBackend::TFLITE);
 #endif
     inference_config.clear_processing_spec();
     inference_config.update_processing_spec();

@@ -42,7 +42,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
 
     // The buffer size return in get_buffer_size() is populated by state.range(0) param of the google benchmark
     anira::HostConfig host_config = {static_cast<float>(get_buffer_size()), SAMPLE_RATE};
-    anira::InferenceBackend inference_backend = anira::ONNX;
+    anira::InferenceBackend inference_backend = anira::InferenceBackend::ONNX;
 
     m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
     m_inference_handler->prepare(host_config);

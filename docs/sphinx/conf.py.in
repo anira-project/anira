@@ -64,17 +64,6 @@ html_theme_options = {
                 "summary": "Detailed usage instructions for Anira"
             },
             {
-                "title": "Examples",
-                "url": "examples/index",
-                "children": [
-                        {
-                                "title": "Simple Example",
-                                "url": "examples/simple",
-                                "summary": "A simple example of using Anira",
-                        },
-                ]
-            },
-            {
                 "title": "API Documentation",
                 "url": "api/index",
                 "children": [

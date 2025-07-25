@@ -183,7 +183,7 @@ Here's how to configure and process multi-tensor models with anira:
     // Input and output data structures
     // audio_input: float** with shape [num_channels][num_samples] 
     // audio_output: float** with shape [num_channels][num_samples]
-    // control_params: float array with 4 control values
+    // control_params: float* with 4 control values
     // confidence_output: float* to receive confidence score
     // num_samples: number of audio samples to process
 

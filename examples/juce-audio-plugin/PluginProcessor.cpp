@@ -277,25 +277,25 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID
         auto paramString = PluginParameters::backendTypes[paramInt];
 #if MODEL_TO_USE != 7
 #ifdef USE_TFLITE
-        if (paramString == "TFLITE") inference_handler.set_inference_backend(anira::TFLITE);
+        if (paramString == "TFLITE") inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
 #endif
 #ifdef USE_ONNXRUNTIME
-        if (paramString == "ONNX") inference_handler.set_inference_backend(anira::ONNX);
+        if (paramString == "ONNX") inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
 #endif
 #ifdef USE_LIBTORCH
-        if (paramString == "LIBTORCH") inference_handler.set_inference_backend(anira::LIBTORCH);
+        if (paramString == "LIBTORCH") inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
 #endif
-        if (paramString == "BYPASS") inference_handler.set_inference_backend(anira::CUSTOM);
+        if (paramString == "BYPASS") inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
 #else
 #ifdef USE_LIBTORCH
         if (paramString == "LIBTORCH") {
-            inference_handler_encoder.set_inference_backend(anira::LIBTORCH);
-            inference_handler_decoder.set_inference_backend(anira::LIBTORCH);
+            inference_handler_encoder.set_inference_backend(anira::InferenceBackend::LIBTORCH);
+            inference_handler_decoder.set_inference_backend(anira::InferenceBackend::LIBTORCH);
         }
 #endif
         if (paramString == "BYPASS") {
-            inference_handler_encoder.set_inference_backend(anira::CUSTOM);
-            inference_handler_decoder.set_inference_backend(anira::CUSTOM);
+            inference_handler_encoder.set_inference_backend(anira::InferenceBackend::CUSTOM);
+            inference_handler_decoder.set_inference_backend(anira::InferenceBackend::CUSTOM);
         }
 #endif
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5

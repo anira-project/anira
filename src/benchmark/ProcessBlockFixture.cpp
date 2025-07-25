@@ -32,24 +32,24 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
             switch (m_inference_backend)
             {
 #ifdef USE_LIBTORCH
-            case anira::LIBTORCH:
+            case anira::InferenceBackend::LIBTORCH:
                 m_inference_backend_name = "libtorch";
                 path = m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH);
                 break;
 #endif
 #ifdef USE_ONNXRUNTIME
-            case anira::ONNX:
+            case anira::InferenceBackend::ONNX:
                 m_inference_backend_name = "onnx";
                 path = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
                 break;
 #endif
 #ifdef USE_TFLITE
-            case anira::TFLITE:
+            case anira::InferenceBackend::TFLITE:
                 m_inference_backend_name = "tflite";
                 path = m_inference_config.get_model_path(anira::InferenceBackend::TFLITE);
                 break;
 #endif
-            case anira::CUSTOM:
+            case anira::InferenceBackend::CUSTOM:
                 m_inference_backend_name = "custom";
                 path = "no_model";
                 break;
