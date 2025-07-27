@@ -57,6 +57,16 @@ namespace anira {
 class ANIRA_API Context{
 public:
 
+    /**
+     * @brief Constructor that initializes the context with specified configuration
+     * 
+     * Creates a new context instance with the provided configuration settings.
+     * This constructor is should not be called directly. Use
+     * get_instance() to obtain a context instance.
+     * 
+     * @param context_config Configuration settings for thread pool size, backend preferences, etc.
+     */
+    Context(const ContextConfig& context_config);    
     
     /**
      * @brief Destructor that cleans up all context resources
@@ -182,17 +192,6 @@ public:
     static std::vector<std::shared_ptr<SessionElement>>& get_sessions();
 
 private:
-    /**
-     * @brief Constructor that initializes the context with specified configuration
-     * 
-     * Creates a new context instance with the provided configuration settings.
-     * This constructor is private and should not be called directly. Use
-     * get_instance() to obtain a context instance.
-     * 
-     * @param context_config Configuration settings for thread pool size, backend preferences, etc.
-     */
-    Context(const ContextConfig& context_config);    
-
     inline static std::shared_ptr<Context> m_context = nullptr;    ///< Singleton instance of the context
     inline static ContextConfig m_context_config;                  ///< Configuration used for the current context instance
 

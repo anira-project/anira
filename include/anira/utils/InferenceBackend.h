@@ -3,8 +3,6 @@
 
 namespace anira {
 
-namespace anira {
-
 /**
  * @brief Enumeration of supported neural network inference backends
  * 
