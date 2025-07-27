@@ -36,10 +36,11 @@ class PluginParameters {
 
 #if MODEL_TO_USE == 6 || MODEL_TO_USE == 7 || MODEL_TO_USE == 8
     inline static juce::StringArray backendTypes {"LIBTORCH", "BYPASS"};
+    inline static juce::String defaultBackend = "LIBTORCH";
 #else
     inline static juce::StringArray backendTypes {"TFLITE", "LIBTORCH", "ONNX", "BYPASS"};
-#endif
     inline static juce::String defaultBackend = "BYPASS";
+#endif
 
     static juce::StringArray getPluginParameterList();
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();

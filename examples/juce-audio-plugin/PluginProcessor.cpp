@@ -275,7 +275,7 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID
     } else if (parameterID == PluginParameters::BACKEND_TYPE_ID.getParamID()) {
         int paramInt = (int) newValue;
         auto paramString = PluginParameters::backendTypes[paramInt];
-#if MODEL_TO_USE != 7
+#if MODEL_TO_USE != 6 && MODEL_TO_USE != 7 && MODEL_TO_USE != 8
 #ifdef USE_TFLITE
         if (paramString == "TFLITE") inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
 #endif
