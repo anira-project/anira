@@ -18,7 +18,7 @@ static anira::ProcessingSpec processing_spec_rave_config{
     {1},  // postprocess_output_channels
     {2048}, // preprocess_input_size
     {2048}, // postprocess_output_size
-    {2060}  // internal_model_latency
+    {2048}  // internal_model_latency
 };
 
 static anira::InferenceConfig rave_config(
