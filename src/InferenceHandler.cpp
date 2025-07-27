@@ -137,4 +137,8 @@ void InferenceHandler::set_non_realtime(bool is_non_realtime) {
     m_inference_manager.set_non_realtime(is_non_realtime);
 }
 
+void InferenceHandler::reset() {
+    m_inference_manager.reset();
+}
+
 } // namespace anira

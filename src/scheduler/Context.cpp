@@ -93,25 +93,9 @@ void Context::release_thread_pool() {
 }
 
 void Context::release_session(std::shared_ptr<SessionElement> session) {
-    session->m_initialized.store(false);
+    session->m_initialized.store(false, std::memory_order::acquire);
 
-    while (session->m_active_inferences.load(std::memory_order::acquire) != 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(50));
-    }
-
-    std::vector<InferenceData> inference_stack;
-    InferenceData inference_data;
-    while (m_next_inference.try_dequeue(inference_data)) {
-        if (inference_data.m_session != session) {
-            inference_stack.emplace_back(inference_data);
-        }
-    }
-
-    for (auto& inference_data : inference_stack) {
-        if (!m_next_inference.try_enqueue(inference_data)) {
-            LOG_ERROR << "[ERROR] Could not requeue inference data!" << std::endl;
-        }
-    }
+    drain_inference_queue(session);
 
     InferenceConfig inference_config = session->m_inference_config;
 #ifdef USE_LIBTORCH
@@ -150,32 +134,15 @@ void Context::release_session(std::shared_ptr<SessionElement> session) {
 }
 
 void Context::prepare_session(std::shared_ptr<SessionElement> session, HostConfig new_config, std::vector<long> custom_latency) {
-    session->m_initialized.store(false);
+    session->m_initialized.store(false, std::memory_order::acquire);
 
-    while (session->m_active_inferences.load(std::memory_order::acquire) != 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(50));
-    }
+    drain_inference_queue(session);
 
-    std::vector<InferenceData> inference_stack;
-    InferenceData inference_data;
-    while (m_next_inference.try_dequeue(inference_data)) {
-        if (inference_data.m_session != session) {
-            inference_stack.emplace_back(inference_data);
-        }
-    }
-
-    for (auto& inference_data : inference_stack) {
-        if (!m_next_inference.try_enqueue(inference_data)) {
-            LOG_ERROR << "[ERROR] Could not requeue inference data!" << std::endl;
-        }
-    }
-
-    session->clear();
     session->prepare(new_config, custom_latency);
 
     start_thread_pool();
 
-    session->m_initialized.store(true);
+    session->m_initialized.store(true, std::memory_order::release);
 }
 
 void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
@@ -292,6 +259,26 @@ void Context::start_thread_pool() {
     }
 }
 
+void Context::drain_inference_queue(std::shared_ptr<SessionElement> session) {
+    while (session->m_active_inferences.load(std::memory_order::acquire) != 0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+    }
+
+    std::vector<InferenceData> inference_stack;
+    InferenceData inference_data;
+    while (m_next_inference.try_dequeue(inference_data)) {
+        if (inference_data.m_session != session) {
+            inference_stack.emplace_back(inference_data);
+        }
+    }
+
+    for (auto& inference_data : inference_stack) {
+        if (!m_next_inference.try_enqueue(inference_data)) {
+            LOG_ERROR << "[ERROR] Could not requeue inference data!" << std::endl;
+        }
+    }
+}
+
 int Context::get_num_sessions() {
     return m_active_sessions.load();
 }
@@ -332,6 +319,17 @@ template <typename T> void Context::release_processor(InferenceConfig& inference
         }
     }
 }
+
+void Context::reset_session(std::shared_ptr<SessionElement> session) {
+    session->m_initialized.store(false, std::memory_order::acquire);
+
+    drain_inference_queue(session);
+
+    session->clear();
+
+    session->m_initialized.store(true, std::memory_order::release);
+}
+
 
 #ifdef USE_LIBTORCH
 template void Context::set_processor<LibtorchProcessor>(std::shared_ptr<SessionElement> session, InferenceConfig& inference_config, std::vector<std::shared_ptr<LibtorchProcessor>>& processors, InferenceBackend backend);

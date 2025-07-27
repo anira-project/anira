@@ -195,6 +195,16 @@ public:
      */
     void set_non_realtime (bool is_non_realtime) const;
 
+    /**
+     * @brief Resets the inference session to its initial state
+     *
+     * This method clears all internal buffers, resets the inference pipeline,
+     * and prepares the handler for a new processing session.
+     * 
+     * @note This method waits for all ongoing inferences to complete before resetting.
+     */
+    void reset();
+
 private:
     /**
      * @brief Processes input data through the preprocessing pipeline

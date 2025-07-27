@@ -160,4 +160,11 @@ void InferenceManager::set_non_realtime(bool is_non_realtime) const {
     m_session->m_is_non_real_time = is_non_realtime;
 }
 
+void InferenceManager::reset() {
+    m_context->reset_session(m_session);
+    for (size_t& missing_samples : m_missing_samples) {
+        missing_samples = 0; // Reset missing samples to zero
+    }
+}
+
 } // namespace anira

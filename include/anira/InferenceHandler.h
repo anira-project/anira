@@ -241,6 +241,16 @@ public:
      */
     void set_non_realtime (bool is_non_realtime);
 
+    /**
+     * @brief Resets the inference handler to its initial state
+     *
+     * This method clears all internal buffers, resets the inference pipeline,
+     * and prepares the handler for a new processing session.
+     * 
+     * @note This method waits for all ongoing inferences to complete before resetting.
+     */
+    void reset();
+
 private:
     InferenceConfig& m_inference_config;    ///< Reference to the inference configuration
     InferenceManager m_inference_manager;   ///< Internal inference manager handling the processing pipeline

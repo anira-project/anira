@@ -30,7 +30,33 @@ void SessionElement::clear() {
         buffer.clear_with_positions();
     }
     m_time_stamps.clear();
-    m_inference_queue.clear();
+   
+    for (auto& inference : m_inference_queue) {
+        inference->m_free.store(true, std::memory_order_relaxed);
+        if (m_inference_config.m_blocking_ratio > 0.f) {
+            inference->m_done_semaphore.acquire();
+        } else {
+            inference->m_done_atomic.store(false, std::memory_order_relaxed);
+        }
+        inference->m_time_stamp = 0;
+        for (auto& input_data : inference->m_tensor_input_data) {
+            input_data.clear();
+        }
+        for (auto& output_data : inference->m_tensor_output_data) {
+            output_data.clear();
+        }
+    }
+
+    // Push back 0.f for latency
+    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+        if (m_latency[i] > 0) {
+            for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
+                for (size_t k = 0; k < m_latency[i] - m_inference_config.get_internal_model_latency()[i]; ++k) {
+                    m_receive_buffer[i].push_sample(j, 0.f);
+                }
+            }
+        }
+    }
 }
 
 void SessionElement::prepare(const HostConfig& host_config, std::vector<long> custom_latency) {

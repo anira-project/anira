@@ -191,10 +191,18 @@ public:
      */
     static std::vector<std::shared_ptr<SessionElement>>& get_sessions();
 
-private:
-    inline static std::shared_ptr<Context> m_context = nullptr;    ///< Singleton instance of the context
-    inline static ContextConfig m_context_config;                  ///< Configuration used for the current context instance
+    /**
+     * @brief Resets a session to its initial state
+     *
+     * Clears all internal buffers, resets the inference pipeline,
+     * and prepares the session for a new processing session. This method is
+     * typically used to reinitialize a session without releasing it completely.
+     *
+     * @param session Shared pointer to the session to reset
+     */
+    void reset_session(std::shared_ptr<SessionElement> session);
 
+private:
     /**
      * @brief Gets the next available session ID
      * 
@@ -245,12 +253,18 @@ private:
      */
     static void start_thread_pool();
 
-    inline static std::vector<std::shared_ptr<SessionElement>> m_sessions;        ///< Vector of all active inference sessions
-    inline static std::atomic<int> m_next_id{-1};                               ///< Thread-safe counter for generating unique session IDs
-    inline static std::atomic<int> m_active_sessions{0};                        ///< Thread-safe counter of currently active sessions
-    inline static bool m_thread_pool_should_exit = false;                       ///< Flag indicating whether the thread pool should shut down
-
-    inline static std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;  ///< Vector of inference threads in the thread pool
+    /**
+     * @brief Drain Session Inference Queue
+     * 
+     * Drains the inference queue for the specified session, processing all
+     * pending inference requests. This method is typically called when the session
+     * is being reset or released to ensure all pending inferences are completed.
+     * 
+     * @param session Shared pointer to the session whose queue to drain
+     * 
+     * @warning Make sure to uninitialize the session before calling this method.
+     */
+    static void drain_inference_queue(std::shared_ptr<SessionElement> session);
 
     /**
      * @brief Template method for setting backend processors
@@ -280,6 +294,26 @@ private:
      */
     template <typename T> static void release_processor(InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors, std::shared_ptr<T>& processor);
 
+
+    inline static std::shared_ptr<Context> m_context = nullptr;    ///< Singleton instance of the context
+    inline static ContextConfig m_context_config;                  ///< Configuration used for the current context instance
+
+    inline static std::vector<std::shared_ptr<SessionElement>> m_sessions;        ///< Vector of all active inference sessions
+    inline static std::atomic<int> m_next_id{-1};                               ///< Thread-safe counter for generating unique session IDs
+    inline static std::atomic<int> m_active_sessions{0};                        ///< Thread-safe counter of currently active sessions
+    inline static bool m_thread_pool_should_exit = false;                       ///< Flag indicating whether the thread pool should shut down
+
+    inline static std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;  ///< Vector of inference threads in the thread pool
+
+    /**
+     * @brief Thread-safe concurrent queue for inference requests
+     * 
+     * Lock-free concurrent queue that manages inference requests from all sessions.
+     * The queue is initialized with minimum capacity and maximum instance limits
+     * to ensure efficient memory usage and prevent resource exhaustion.
+     */
+    inline static moodycamel::ConcurrentQueue<InferenceData> m_next_inference = moodycamel::ConcurrentQueue<InferenceData>(MIN_CAPACITY_INFERENCE_QUEUE, 0, MAX_NUM_INSTANCES);
+
 #ifdef USE_LIBTORCH
     inline static std::vector<std::shared_ptr<LibtorchProcessor>> m_libtorch_processors;   ///< Pool of LibTorch backend processors
 #endif
@@ -290,14 +324,6 @@ private:
     inline static std::vector<std::shared_ptr<TFLiteProcessor>> m_tflite_processors;       ///< Pool of TensorFlow Lite backend processors
 #endif
 
-    /**
-     * @brief Thread-safe concurrent queue for inference requests
-     * 
-     * Lock-free concurrent queue that manages inference requests from all sessions.
-     * The queue is initialized with minimum capacity and maximum instance limits
-     * to ensure efficient memory usage and prevent resource exhaustion.
-     */
-    inline static moodycamel::ConcurrentQueue<InferenceData> m_next_inference = moodycamel::ConcurrentQueue<InferenceData>(MIN_CAPACITY_INFERENCE_QUEUE, 0, MAX_NUM_INSTANCES);
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr
