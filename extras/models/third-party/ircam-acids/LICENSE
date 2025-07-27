@@ -1,6 +1,6 @@
 # License
 
-The models that get downloaded under the "./RAVE" directory are licensed under the [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) license.
+The models under the "./RAVE" directory have been trained with the [RAVE](https://github.com/acids-ircam/RAVE) architecture and are licensed under the [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) license.
 
 ## Creative Commons Attribution-NonCommercial 4.0 International
 

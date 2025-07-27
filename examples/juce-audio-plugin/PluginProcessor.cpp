@@ -34,7 +34,7 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
         inference_handler_encoder(pp_processor_encoder, inference_config_encoder),
         inference_handler_decoder(pp_processor_decoder, inference_config_decoder),
 #elif MODEL_TO_USE == 8
-        json_config_loader(RAVE_MODEL_DARBOUKA_JSON_CONFIG_PATH),
+        json_config_loader(RAVE_MODEL_FUNK_DRUM_JSON_CONFIG_PATH),
         anira_context_config(std::move(*json_config_loader.get_context_config())),
         inference_config(std::move(*json_config_loader.get_inference_config())),
         pp_processor(inference_config),

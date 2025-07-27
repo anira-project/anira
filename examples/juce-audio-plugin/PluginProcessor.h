@@ -21,10 +21,10 @@
 #elif MODEL_TO_USE == 5
 #include "../../extras/models/model-pool/SimpleStereoGainConfig.h"
 #elif MODEL_TO_USE == 6
-#include "../../extras/models/third-party/ircam-acids/RaveDarboukaConfig.h"
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfig.h"
 #elif MODEL_TO_USE == 7
-#include "../../extras/models/third-party/ircam-acids/RaveDarboukaConfigEncoder.h"
-#include "../../extras/models/third-party/ircam-acids/RaveDarboukaConfigDecoder.h"
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.h"
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigDecoder.h"
 #endif
 
 //==============================================================================
@@ -102,11 +102,11 @@ private:
     anira::InferenceConfig inference_config = stereo_gain_config;
     anira::PrePostProcessor pp_processor;
 #elif MODEL_TO_USE == 6
-    anira::InferenceConfig inference_config = rave_config;
+    anira::InferenceConfig inference_config = rave_funk_drum_config;
     anira::PrePostProcessor pp_processor;
 #elif MODEL_TO_USE == 7
-    anira::InferenceConfig inference_config_encoder = rave_encoder_config;
-    anira::InferenceConfig inference_config_decoder = rave_decoder_config;
+    anira::InferenceConfig inference_config_encoder = rave_funk_drum_encoder_config;
+    anira::InferenceConfig inference_config_decoder = rave_funk_drum_decoder_config;
     anira::PrePostProcessor pp_processor_encoder;
     anira::PrePostProcessor pp_processor_decoder;
 #elif MODEL_TO_USE == 8

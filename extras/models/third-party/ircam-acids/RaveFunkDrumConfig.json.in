@@ -5,7 +5,7 @@
   "inference_config": {
     "model_data": [
       {
-        "model_path": "@DARBOUKA_MODEL_ABSOLUTE_PATH@",
+        "model_path": "@RAVE_FUNK_DRUM_MODEL_PATH@",
         "inference_backend": "LIBTORCH"
       }
     ],
