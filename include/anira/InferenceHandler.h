@@ -245,7 +245,8 @@ public:
      * @brief Resets the inference handler to its initial state
      *
      * This method clears all internal buffers, resets the inference pipeline,
-     * and prepares the handler for a new processing session.
+     * and prepares the handler for a new processing session. This also resets
+     * the latency and available samples for all tensors.
      * 
      * @note This method waits for all ongoing inferences to complete before resetting.
      */
