@@ -13,7 +13,7 @@ ProcessBlockFixture::~ProcessBlockFixture() {
 }
 
 void ProcessBlockFixture::initialize_iteration() {
-    m_prev_num_received_samples = m_inference_handler->get_num_received_samples(0);
+    m_prev_num_received_samples = m_inference_handler->get_available_samples(0);
 }
 
 void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference_config, const HostConfig& host_config, const InferenceBackend& inference_backend, bool sleep_after_repetition) {
@@ -72,7 +72,7 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
 }
 
 bool ProcessBlockFixture::buffer_processed() {
-    return m_inference_handler->get_num_received_samples(0) >= m_prev_num_received_samples;
+    return m_inference_handler->get_available_samples(0) >= m_prev_num_received_samples;
 }
 
 void ProcessBlockFixture::push_random_samples_in_buffer(anira::HostConfig host_config) {

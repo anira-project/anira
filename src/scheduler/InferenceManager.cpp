@@ -147,9 +147,13 @@ const Context& InferenceManager::get_context() const {
     return *m_context;
 }
 
-size_t InferenceManager::get_num_received_samples(size_t tensor_index, size_t channel) const {
+size_t InferenceManager::get_available_samples(size_t tensor_index, size_t channel) const {
     m_context->new_data_request(m_session, 0.);
-    return m_session->m_receive_buffer[tensor_index].get_available_samples(channel);
+    if (m_inference_config.get_postprocess_output_size()[tensor_index] > 0) {
+        return m_session->m_receive_buffer[tensor_index].get_available_samples(channel);
+    } else {
+        return 0;
+    }
 }
 
 int InferenceManager::get_session_id() const {

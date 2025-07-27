@@ -228,7 +228,7 @@ public:
      * @param channel Channel index to query (default: 0)
      * @return Number of samples received for the specified tensor and channel
      */
-    size_t get_num_received_samples(size_t tensor_index, size_t channel = 0) const;
+    size_t get_available_samples(size_t tensor_index, size_t channel = 0) const;
 
     /**
      * @brief Configures the handler for non-real-time operation

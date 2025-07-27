@@ -93,7 +93,7 @@ void Context::release_thread_pool() {
 }
 
 void Context::release_session(std::shared_ptr<SessionElement> session) {
-    session->m_initialized.store(false, std::memory_order::acquire);
+    session->m_initialized.store(false, std::memory_order::release);
 
     drain_inference_queue(session);
 
@@ -134,7 +134,7 @@ void Context::release_session(std::shared_ptr<SessionElement> session) {
 }
 
 void Context::prepare_session(std::shared_ptr<SessionElement> session, HostConfig new_config, std::vector<long> custom_latency) {
-    session->m_initialized.store(false, std::memory_order::acquire);
+    session->m_initialized.store(false, std::memory_order::release);
 
     drain_inference_queue(session);
 
@@ -321,7 +321,7 @@ template <typename T> void Context::release_processor(InferenceConfig& inference
 }
 
 void Context::reset_session(std::shared_ptr<SessionElement> session) {
-    session->m_initialized.store(false, std::memory_order::acquire);
+    session->m_initialized.store(false, std::memory_order::release);
 
     drain_inference_queue(session);
 

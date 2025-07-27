@@ -129,8 +129,8 @@ std::vector<unsigned int> InferenceHandler::get_latency_vector() const {
     return m_inference_manager.get_latency();
 }
 
-size_t InferenceHandler::get_num_received_samples(size_t tensor_index, size_t channel) const {
-    return m_inference_manager.get_num_received_samples(tensor_index, channel);
+size_t InferenceHandler::get_available_samples(size_t tensor_index, size_t channel) const {
+    return m_inference_manager.get_available_samples(tensor_index, channel);
 }
 
 void InferenceHandler::set_non_realtime(bool is_non_realtime) {

@@ -67,7 +67,7 @@ Component Responsibilities
 --------------------------
 
 :cpp:class:`anira::InferenceHandler`
-~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The primary interface for users, handling the overall integration of neural network inference into audio processing workflows.
 
@@ -77,7 +77,7 @@ The primary interface for users, handling the overall integration of neural netw
 * Reports latency information
 
 :cpp:class:`anira::InferenceConfig`
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Stores configuration data for models and processing parameters.
 
@@ -87,7 +87,7 @@ Stores configuration data for models and processing parameters.
 * Memory management settings
 
 :cpp:class:`anira::PrePostProcessor`
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Handles data formatting between audio buffers and neural network tensors.
 
@@ -96,7 +96,7 @@ Handles data formatting between audio buffers and neural network tensors.
 * Manages intermediate buffers
 
 :cpp:class:`anira::InferenceManager`
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Coordinates the thread pool and inference scheduling.
 
