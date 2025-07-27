@@ -32,9 +32,6 @@ public:
      * 
      * @param inference_config Reference to inference configuration containing model path,
      *                        tensor shapes, and processing parameters
-     * 
-     * @throws std::runtime_error if ONNX Runtime initialization fails
-     * @throws std::invalid_argument if configuration is invalid for ONNX Runtime
      */
     OnnxRuntimeProcessor(InferenceConfig& inference_config);
 
@@ -78,6 +75,8 @@ private:
      * Each instance is used by only one thread at a time, eliminating the need for
      * locks during inference operations. The atomic processing flag ensures safe
      * instance allocation across threads.
+     * 
+     * @see OnnxRuntimeProcessor
      */
     struct Instance {
         /**

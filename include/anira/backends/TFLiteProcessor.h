@@ -75,6 +75,8 @@ private:
      * Each instance is used by only one thread at a time, eliminating the need for
      * locks during inference operations. The atomic processing flag ensures safe
      * instance allocation across threads.
+     * 
+     * @see TFLiteProcessor
      */
     struct Instance {
         /**

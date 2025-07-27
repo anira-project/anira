@@ -82,9 +82,6 @@ public:
      * 
      * Loads the TorchScript model into all parallel processing instances, allocates
      * input/output tensors, and performs warm-up inferences if specified in the configuration.
-     * 
-     * @note This method must be called before any process() operations
-     * @note Thread-safe: Should only be called during initialization phase
      */
     void prepare() override;
 
@@ -112,6 +109,8 @@ private:
      * Each instance is used by only one thread at a time, eliminating the need for
      * locks during inference operations. The atomic processing flag ensures safe
      * instance allocation across threads.
+     * 
+     * @see LibtorchProcessor
      */
     struct Instance {
         /**
