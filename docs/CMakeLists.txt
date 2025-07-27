@@ -20,7 +20,7 @@ if(NOT EXISTS ${DOCS_VENV_DIR})
 endif()
 
 # look for Doxygen package
-# Needs to be installed i.e. sudo dnf install doxygen
+# Needs to be installed i.e. sudo dnf install doxygen graphviz
 find_package(Doxygen REQUIRED)
 
 if (DOXYGEN_FOUND)
