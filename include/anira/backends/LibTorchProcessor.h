@@ -75,7 +75,7 @@ public:
      * Ensures proper cleanup of all LibTorch modules, tensors, and allocated memory.
      * All processing instances are safely destroyed.
      */
-    ~LibtorchProcessor();
+    ~LibtorchProcessor() override;
 
     /**
      * @brief Prepares all LibTorch instances for inference operations

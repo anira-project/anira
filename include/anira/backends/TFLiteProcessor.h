@@ -41,7 +41,7 @@ public:
      * Ensures proper cleanup of all TensorFlow Lite interpreters, models, and allocated memory.
      * All processing instances are safely destroyed with proper resource deallocation.
      */
-    ~TFLiteProcessor();
+    ~TFLiteProcessor() override;
 
     /**
      * @brief Prepares all TensorFlow Lite instances for inference operations

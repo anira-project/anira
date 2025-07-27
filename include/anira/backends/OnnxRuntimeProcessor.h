@@ -41,7 +41,7 @@ public:
      * Ensures proper cleanup of all ONNX Runtime sessions, tensors, and allocated memory.
      * All processing instances are safely destroyed with proper resource deallocation.
      */
-    ~OnnxRuntimeProcessor();
+    ~OnnxRuntimeProcessor() override;
 
     /**
      * @brief Prepares all ONNX Runtime instances for inference operations
