@@ -15,7 +15,10 @@ static std::vector<anira::TensorShape> tensor_shape_rave_decoder_config = {
 
 static anira::ProcessingSpec processing_spec_rave_decoder_config{
     {4}, // preprocess_input_channels
-    {1}  // postprocess_output_channels
+    {1},  // postprocess_output_channels
+    {1}, // preprocess_input_size
+    {2048}, // postprocess_output_size
+    {2060} // internal_model_latency
 };
 
 static anira::InferenceConfig rave_decoder_config(
