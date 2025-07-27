@@ -17,7 +17,7 @@ namespace anira {
  * The CUSTOM backend is always available for user-defined inference implementations.
  * 
  * Performance and compatibility considerations:
- * - LIBTORCH: PyTorch models, good GPU support, larger memory footprint
+ * - LIBTORCH: PyTorch models, larger memory footprint
  * - ONNX: Cross-platform ONNX models, optimized for CPU inference
  * - TFLITE: TensorFlow Lite models, optimized for mobile and embedded devices
  * - CUSTOM: User-defined backends for specialized inference implementations

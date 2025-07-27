@@ -120,7 +120,6 @@ private:
         std::atomic<bool> m_processing {false};                  ///< Flag indicating if instance is currently processing
 
 #if DOXYGEN
-        // Placeholder for Doxygen documentation
         // Since Doxygen does not find classes structures nested in std::shared_ptr
         MemoryBlock<float>* __doxygen_force_0; ///< Placeholder for Doxygen documentation
 #endif

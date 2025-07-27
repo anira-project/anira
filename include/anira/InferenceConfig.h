@@ -737,9 +737,8 @@ public:
      */
     void update_processing_spec();
 
-private:
 #if DOXYGEN
-    // Placeholder to include in Doxygen diagram
+private:
     // Since Doxygen does not find classes structures nested in std::vectors or std::shared_ptr
     ModelData* __doxygen_force_0;
     TensorShape* __doxygen_force_1;
