@@ -18,24 +18,6 @@ namespace anira {
  * including thread pool management and available inference backends. This configuration
  * is shared across all inference sessions within a single context instance.
  * 
- * @par Key Features:
- * - **Thread Pool Management**: Controls the number of background inference threads
- * - **Backend Discovery**: Automatically detects available inference backends at compile time
- * - **Version Tracking**: Maintains anira library version information
- * - **Resource Sharing**: Enables efficient resource sharing across multiple inference sessions
- * 
- * @par Threading Behavior:
- * The context manages a pool of high-priority threads for neural network inference.
- * Each thread can handle inference requests from multiple sessions, providing
- * efficient resource utilization and reduced latency.
- * 
- * @par Backend Support:
- * Available backends are automatically detected based on compile-time flags:
- * - LibTorch (if USE_LIBTORCH is defined)
- * - ONNX Runtime (if USE_ONNXRUNTIME is defined) 
- * - TensorFlow Lite (if USE_TFLITE is defined)
- * - Custom backend (always available)
- * 
  * @par Usage Examples:
  * @code
  * // Use default configuration (half of available CPU cores)
@@ -65,19 +47,8 @@ struct ANIRA_API ContextConfig {
      * @param num_threads Number of background inference threads to create
      *                   Default: Half of available CPU cores (minimum 1)
      * 
-     * @par Thread Count Guidelines:
-     * - **Default (recommended)**: Half of available CPU cores ensures good performance
-     *   while leaving resources for the audio thread and other application tasks
-     * - **Low-latency applications**: Consider using fewer threads (1-2) to minimize
-     *   thread switching overhead
-     * - **High-throughput applications**: May benefit from more threads, up to the
-     *   number of available CPU cores
-     * 
      * @note The constructor automatically detects and registers available inference
      * backends based on compile-time definitions (USE_LIBTORCH, USE_ONNXRUNTIME, USE_TFLITE)
-     * 
-     * @warning Setting num_threads to 0 will result in undefined behavior. The default
-     * calculation ensures at least 1 thread is always allocated.
      */
     ContextConfig(
             unsigned int num_threads = (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2 : 1) :
@@ -100,13 +71,6 @@ struct ANIRA_API ContextConfig {
      * Controls the size of the thread pool used for neural network inference.
      * These threads run at high priority to minimize inference latency and are
      * shared across all inference sessions within the context.
-     * 
-     * @par Performance Considerations:
-     * - **More threads**: Can improve throughput when running multiple models
-     *   or handling high inference rates, but increases memory usage and
-     *   context switching overhead
-     * - **Fewer threads**: Reduces resource usage and may improve latency
-     *   for single-model scenarios, but may bottleneck with multiple sessions
      * 
      * @note This value is set during construction and cannot be changed without
      * recreating the context. All inference sessions using this context will
@@ -137,13 +101,6 @@ struct ANIRA_API ContextConfig {
      * - InferenceBackend::ONNX (if USE_ONNXRUNTIME is defined)
      * - InferenceBackend::TFLITE (if USE_TFLITE is defined)
      * - InferenceBackend::CUSTOM (always available)
-     * 
-     * @par Usage:
-     * This list can be used to:
-     * - Validate that a required backend is available before creating models
-     * - Provide UI elements for backend selection
-     * - Implement fallback logic when preferred backends are unavailable
-     * - Generate compatibility reports
      * 
      * @note The CUSTOM backend is not automatically added to this list but is
      * always available for use with custom backend implementations.
