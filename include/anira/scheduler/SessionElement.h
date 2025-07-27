@@ -110,6 +110,16 @@ private:
     int least_common_multiple(int a, int b) const;
 
     HostConfig m_host_config;
+
+#if DOXYGEN
+    // Placeholder for Doxygen documentation
+    // Since Doxygen does not find classes structures nested in std::shared_ptr
+    ThreadSafeStruct* __doxygen_force_0; ///< Placeholder for Doxygen documentation
+    RingBuffer* __doxygen_force_1; ///< Placeholder for Doxygen documentation
+    LibtorchProcessor* __doxygen_force_2; ///< Placeholder for Doxygen documentation
+    OnnxRuntimeProcessor* __doxygen_force_3; ///< Placeholder for Doxygen documentation
+    TFLiteProcessor* __doxygen_force_4; ///< Placeholder for Doxygen documentation
+#endif
 };
 
 struct InferenceData {

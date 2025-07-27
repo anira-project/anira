@@ -15,7 +15,7 @@ namespace anira {
 
 typedef std::vector<std::vector<int64_t>> TensorShapeList;
 
-struct ModelData {
+struct ANIRA_API ModelData {
     ModelData(void* data, size_t size, InferenceBackend backend, const std::string& model_function = "", bool is_binary = true) : m_data(data), m_size(size), m_backend(backend), m_model_function(std::move(model_function)), m_is_binary(is_binary) {
         assert((m_size > 0 && "Model data size must be greater than zero."));
         assert((m_data != nullptr && "Model data pointer cannot be null."));
@@ -90,7 +90,7 @@ struct ModelData {
     }
 };
 
-struct TensorShape {
+struct ANIRA_API TensorShape {
     TensorShapeList m_tensor_input_shape;
     TensorShapeList m_tensor_output_shape;
     InferenceBackend m_backend;
@@ -131,7 +131,7 @@ struct TensorShape {
     }
 };
 
-struct ProcessingSpec {
+struct ANIRA_API ProcessingSpec {
     std::vector<size_t> m_preprocess_input_channels;
     std::vector<size_t> m_postprocess_output_channels;
     std::vector<size_t> m_preprocess_input_size;
@@ -282,6 +282,14 @@ public:
     const TensorShape& get_tensor_shape(InferenceBackend backend) const;
     void clear_processing_spec();
     void update_processing_spec();
+
+private:
+#if DOXYGEN
+    // Placeholder to include in Doxygen diagram
+    // Since Doxygen does not find classes structures nested in std::vectors or std::shared_ptr
+    ModelData* __doxygen_force_0;
+    TensorShape* __doxygen_force_1;
+#endif
 };
 
 } // namespace anira

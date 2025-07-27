@@ -47,9 +47,19 @@ private:
 
         InferenceConfig& m_inference_config;
         std::atomic<bool> m_processing {false};
+
+#if DOXYGEN
+        // Placeholder for Doxygen documentation
+        // Since Doxygen does not find classes structures nested in std::shared_ptr
+        MemoryBlock<float>* __doxygen_force_0; ///< Placeholder for Doxygen documentation
+#endif
     };
 
     std::vector<std::shared_ptr<Instance>> m_instances;
+
+#if DOXYGEN
+    Instance* __doxygen_force_0; ///< Placeholder for Doxygen documentation
+#endif
 };
 
 } // namespace anira

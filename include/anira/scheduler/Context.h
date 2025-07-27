@@ -79,6 +79,17 @@ private:
 #endif
 
     inline static moodycamel::ConcurrentQueue<InferenceData> m_next_inference = moodycamel::ConcurrentQueue<InferenceData>(MIN_CAPACITY_INFERENCE_QUEUE, 0, MAX_NUM_INSTANCES);
+
+#if DOXYGEN
+    // Placeholder for Doxygen documentation
+    // Since Doxygen does not find classes structures nested in std::shared_ptr
+    SessionElement* __doxygen_force_0; ///< Placeholder for Doxygen documentation
+    InferenceThread* __doxygen_force_1; ///< Placeholder for Doxygen documentation
+    LibtorchProcessor* __doxygen_force_2; ///< Placeholder for Doxygen documentation
+    OnnxRuntimeProcessor* __doxygen_force_3; ///< Placeholder for Doxygen documentation
+    TFLiteProcessor* __doxygen_force_4; ///< Placeholder for Doxygen documentation
+    InferenceData* __doxygen_force_5; ///< Placeholder for Doxygen documentation
+#endif
 };
 
 } // namespace anira

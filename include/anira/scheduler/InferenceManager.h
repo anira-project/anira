@@ -49,6 +49,13 @@ private:
     HostConfig m_host_config;
 
     std::vector<size_t> m_missing_samples;
+
+#if DOXYGEN
+    // Placeholder for Doxygen documentation
+    // Since Doxygen does not find classes structures nested in std::shared_ptr
+    Context* __doxygen_force_0; ///< Placeholder for Doxygen documentation
+    SessionElement* __doxygen_force_1; ///< Placeholder for Doxygen documentation
+#endif
 };
 
 } // namespace anira

@@ -241,6 +241,12 @@ private:
      * sample-by-sample (e.g., peak values, analysis results).
      */
     std::vector<MemoryBlock<std::atomic<float>>> m_outputs;
+
+#if DOXYGEN
+    // Placeholder for Doxygen documentation
+    // Since Doxygen does not find classes structures nested in std::vectors
+    MemoryBlock<std::atomic<float>>* __doxygen_force_0; ///< Placeholder for Doxygen documentation
+#endif
 };
 
 } // namespace anira
