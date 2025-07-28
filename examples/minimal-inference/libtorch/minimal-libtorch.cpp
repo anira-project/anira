@@ -17,7 +17,7 @@ Licence: modified BSD
 #include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
 
 #include "../../../include/anira/utils/MemoryBlock.h"
-#include "../../../include/anira/utils/AudioBuffer.h"
+#include "../../../include/anira/utils/Buffer.h"
 
 // m_ prefix is not used to indicate member variables it is used to be compatible with code in the LibTorchProcessor class
 
@@ -38,9 +38,9 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
         std::cerr << e.what() << std::endl;
     }
 
-    // Fill an AudioBuffer with some data
-    anira::AudioBufferF input(1, m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]);
-    for(int i = 0; i < m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]; ++i) {
+    // Fill a Buffer with some data
+    anira::BufferF input(1, m_inference_config.get_tensor_input_size()[0]);
+    for(int i = 0; i < m_inference_config.get_tensor_input_size()[0]; ++i) {
         input.set_sample(0, i, i * 0.000001f);
     }
 
@@ -49,17 +49,17 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     std::vector<anira::MemoryBlock<float>> m_input_data;
 
     // Create input tensors
-    m_inputs.resize(m_inference_config.m_input_sizes.size());
-    m_input_data.resize(m_inference_config.m_input_sizes.size());
-    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
-        m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
-        if (i != m_inference_config.m_index_audio_data[anira::Input]) {
+    m_inputs.resize(m_inference_config.get_tensor_input_shape().size());
+    m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
+        m_input_data[i].resize(m_inference_config.get_tensor_input_size()[i]);
+        if (i != 0) {
             m_input_data[i].clear();
         } else {
             m_input_data[i].swap_data(input.get_memory_block());
             input.reset_channel_ptr();
         }
-        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
+        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
     }
 
 
@@ -76,25 +76,25 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     // We need to copy the data because we cannot access the data pointer ref of the tensor directly
     if(m_outputs.isTuple()) {
         std::cout << "Output is a tensor list" << std::endl;
-        for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+        for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
             std::cout << "Output size " << i << ": " << m_outputs.toTuple()->elements()[i].toTensor().sizes() << '\n';
         }
-        m_output_data.resize(m_inference_config.m_output_sizes.size());
-        for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
-            m_output_data[i].resize(m_inference_config.m_output_sizes[i]);
-            for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+        m_output_data.resize(m_inference_config.get_tensor_output_shape().size());
+        for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
+            m_output_data[i].resize(m_inference_config.get_tensor_output_size()[i]);
+            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
                 m_output_data[i][j] = m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j];
             }
         }
     } else if(m_outputs.isTensorList()) {
         std::cout << "Output is a tensor list" << std::endl;
-        for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
+        for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
             std::cout << "Output size " << i << ": " << m_outputs.toTensorList().get(i).sizes() << '\n';
         }
-        m_output_data.resize(m_inference_config.m_output_sizes.size());
-        for (size_t i = 0; i < m_inference_config.m_output_sizes.size(); i++) {
-            m_output_data[i].resize(m_inference_config.m_output_sizes[i]);
-            for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+        m_output_data.resize(m_inference_config.get_tensor_output_shape().size());
+        for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
+            m_output_data[i].resize(m_inference_config.get_tensor_output_size()[i]);
+            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
                 m_output_data[i][j] = m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j];
             }
         }
@@ -102,8 +102,8 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
         std::cout << "Output is a tensor" << std::endl;
         std::cout << "Output size: " << m_outputs.toTensor().sizes() << '\n';
         m_output_data.resize(1);
-        m_output_data[0].resize(m_inference_config.m_output_sizes[0]);
-        for (size_t i = 0; i < m_inference_config.m_output_sizes[0]; i++) {
+        m_output_data[0].resize(m_inference_config.get_tensor_output_size()[0]);
+        for (size_t i = 0; i < m_inference_config.get_tensor_output_size()[0]; i++) {
             m_output_data[0][i] = m_outputs.toTensor().view({-1}).data_ptr<float>()[i];
         }
     }

@@ -6,67 +6,24 @@ namespace anira {
 InferenceConfig::InferenceConfig (
         std::vector<ModelData> model_data,
         std::vector<TensorShape> tensor_shape,
+        ProcessingSpec processing_spec,
         float max_inference_time,
-        unsigned int internal_latency,
         unsigned int warm_up,
-        std::array<size_t, 2> index_audio_data,
-        std::array<size_t, 2> num_audio_channels,
         bool session_exclusive_processor,
+        float blocking_ratio,
         unsigned int num_parallel_processors
-#ifdef USE_CONTROLLED_BLOCKING
-        , float wait_in_process_block
-#endif
         ) :
         m_model_data(model_data),
         m_tensor_shape(tensor_shape),
         m_max_inference_time(max_inference_time),
-        m_internal_latency(internal_latency),
+        m_processing_spec(processing_spec),
         m_warm_up(warm_up),
-        m_index_audio_data(index_audio_data),
-        m_num_audio_channels(num_audio_channels),
         m_session_exclusive_processor(session_exclusive_processor),
+        m_blocking_ratio(blocking_ratio),
         m_num_parallel_processors(num_parallel_processors)
-#ifdef USE_CONTROLLED_BLOCKING
-        , m_wait_in_process_block(wait_in_process_block)
-#endif
 {
-    assert((m_tensor_shape.size() > 0 && "At least one tensor shape must be provided."));
-    for (size_t i = 0; i < m_model_data.size(); ++i) {
-        bool success = false;
-        for (size_t j = 0; j < m_tensor_shape.size(); ++j) {
-            if (!m_tensor_shape[j].m_universal) {
-                if (m_model_data[i].m_backend == m_tensor_shape[j].m_backend){
-                    success = true;
-                    break;
-                }
-            }
-        }
-        if (!success) {
-            for (size_t j = 0; j < m_tensor_shape.size(); ++j) {
-                if (m_tensor_shape[j].m_universal) {
-                    TensorShape tensor_shape = m_tensor_shape[j];
-                    tensor_shape.m_backend = m_model_data[i].m_backend;
-                    m_tensor_shape.push_back(tensor_shape);
-                    break;
-                } 
-                assert((j < m_tensor_shape.size() - 1 && "No tensor shape provided for model."));
-            }
-        }
-    }
-    m_input_sizes.resize(m_tensor_shape[0].m_input_shape.size());
-    for(int i = 0; i < m_tensor_shape[0].m_input_shape.size(); ++i) {
-        m_input_sizes[i] = 1;
-        for(int j = 0; j < m_tensor_shape[0].m_input_shape[i].size(); ++j) {
-            m_input_sizes[i] *= (int) m_tensor_shape[0].m_input_shape[i][j];
-        }
-    }
-    m_output_sizes.resize(m_tensor_shape[0].m_output_shape.size());
-    for(int i = 0; i < m_tensor_shape[0].m_output_shape.size(); ++i) {
-        m_output_sizes[i] = 1;
-        for(int j = 0; j < m_tensor_shape[0].m_output_shape[i].size(); ++j) {
-            m_output_sizes[i] *= (int) m_tensor_shape[0].m_output_shape[i][j];
-        }
-    }
+    update_processing_spec();
+
     if (m_session_exclusive_processor) {
         m_num_parallel_processors = 1;
     }
@@ -74,14 +31,6 @@ InferenceConfig::InferenceConfig (
         m_num_parallel_processors = 1;
         LOG_INFO << "[WARNING] Number of parellel processors must be at least 1. Setting to 1." << std::endl;
     }
-}
-
-void InferenceConfig::set_input_sizes(const std::vector<size_t>& input_sizes) {
-    m_input_sizes = input_sizes;
-}
-
-void InferenceConfig::set_output_sizes(const std::vector<size_t>& output_sizes) {
-    m_output_sizes = output_sizes;
 }
 
 std::string InferenceConfig::get_model_path(InferenceBackend backend) {
@@ -92,6 +41,15 @@ std::string InferenceConfig::get_model_path(InferenceBackend backend) {
     }
     assert((false && "No model path found for backend."));
     return "";
+}
+
+std::string InferenceConfig::get_model_function(InferenceBackend backend) const {
+    for (const auto& model : m_model_data) {
+        if (model.m_backend == backend) {
+            return model.m_model_function;
+        }
+    }
+    return ""; // Return empty string if no model function is found
 }
 
 // Check if the model is binary
@@ -113,44 +71,128 @@ const ModelData* InferenceConfig::get_model_data(InferenceBackend backend) const
     return nullptr; // No model data found
 }
 
-TensorShapeList InferenceConfig::get_input_shape() {
-    for (int i = 0; i < m_tensor_shape.size(); ++i) {
-        if (m_tensor_shape[i].m_universal) {
-            return m_tensor_shape[i].m_input_shape;
+TensorShapeList InferenceConfig::get_tensor_input_shape() const {
+    TensorShapeList input_shapes;
+    for (const auto& shape : m_tensor_shape) {
+        if (shape.is_universal()) {
+            return shape.m_tensor_input_shape; // Return universal input shape if available
         }
     }
-    return m_tensor_shape[0].m_input_shape;
+    return m_tensor_shape[0].m_tensor_input_shape; // Fallback to the first tensor shape
 }
 
-TensorShapeList InferenceConfig::get_output_shape() {
-    for (int i = 0; i < m_tensor_shape.size(); ++i) {
-        if (m_tensor_shape[i].m_universal) {
-            return m_tensor_shape[i].m_output_shape;
+TensorShapeList InferenceConfig::get_tensor_output_shape() const {
+    TensorShapeList output_shapes;
+    for (const auto& shape : m_tensor_shape) {
+        if (shape.is_universal()) {
+            return shape.m_tensor_output_shape; // Return universal output shape if available
         }
     }
-    return m_tensor_shape[0].m_output_shape;
+    return m_tensor_shape[0].m_tensor_output_shape; // Fallback to the first tensor shape
 }
 
-TensorShapeList InferenceConfig::get_input_shape(InferenceBackend backend) {
-    for (int i = 0; i < m_tensor_shape.size(); ++i) {
-        if (m_tensor_shape[i].m_backend == backend) {
-            for (int j = 0; j < m_tensor_shape[i].m_input_shape[0].size(); ++j) {
-            }
-            return m_tensor_shape[i].m_input_shape;
-        }
-    }
-    assert((false && "No input shape found for backend."));
-    return {};
+TensorShapeList InferenceConfig::get_tensor_input_shape(InferenceBackend backend) const {
+    return get_tensor_shape(backend).m_tensor_input_shape;
 }
 
-TensorShapeList InferenceConfig::get_output_shape(InferenceBackend backend) {
-    for (int i = 0; i < m_tensor_shape.size(); ++i) {
-        if (m_tensor_shape[i].m_backend == backend) {
-            return m_tensor_shape[i].m_output_shape;
+TensorShapeList InferenceConfig::get_tensor_output_shape(InferenceBackend backend) const {
+    return get_tensor_shape(backend).m_tensor_output_shape;
+}
+
+std::vector<size_t> InferenceConfig::get_tensor_input_size() const {
+    return m_processing_spec.m_tensor_input_size;
+}
+
+std::vector<size_t> InferenceConfig::get_tensor_output_size() const {
+    return m_processing_spec.m_tensor_output_size;
+}
+
+std::vector<size_t> InferenceConfig::get_preprocess_input_channels() const {
+    return m_processing_spec.m_preprocess_input_channels;
+}
+
+std::vector<size_t> InferenceConfig::get_postprocess_output_channels() const {
+    return m_processing_spec.m_postprocess_output_channels;
+}
+
+std::vector<size_t> InferenceConfig::get_preprocess_input_size() const {
+    return m_processing_spec.m_preprocess_input_size;
+}
+
+std::vector<size_t> InferenceConfig::get_postprocess_output_size() const {
+    return m_processing_spec.m_postprocess_output_size;
+}
+
+std::vector<size_t> InferenceConfig::get_internal_model_latency() const {
+    return m_processing_spec.m_internal_model_latency;
+}
+
+void InferenceConfig::set_tensor_input_shape(const TensorShapeList& input_shape) {
+    for (TensorShape& shape : m_tensor_shape) {
+        shape.m_tensor_input_shape = input_shape;
+        m_processing_spec.m_tensor_input_size.clear();
+        m_processing_spec.m_preprocess_input_channels.clear();
+        m_processing_spec.m_preprocess_input_size.clear();
+    }
+    clear_processing_spec();
+    update_processing_spec();
+    return;
+}
+
+void InferenceConfig::set_tensor_output_shape(const TensorShapeList& output_shape) {
+    for (TensorShape& shape : m_tensor_shape) {
+        shape.m_tensor_output_shape = output_shape;
+        m_processing_spec.m_tensor_output_size.clear();
+        m_processing_spec.m_postprocess_output_channels.clear();
+        m_processing_spec.m_postprocess_output_size.clear();
+    }
+    clear_processing_spec();
+    update_processing_spec();
+    return;
+}
+
+void InferenceConfig::set_tensor_input_shape(const TensorShapeList& input_shape, InferenceBackend backend) {
+    for (TensorShape& shape : m_tensor_shape) {
+        if (shape.m_backend == backend) {
+            shape.m_tensor_input_shape = input_shape;
         }
     }
-    assert((false && "No output shape found for backend."));
-    return {};
+    return;
+}
+
+void InferenceConfig::set_tensor_output_shape(const TensorShapeList& output_shape, InferenceBackend backend) {
+    for (TensorShape& shape : m_tensor_shape) {
+        if (shape.m_backend == backend) {
+            shape.m_tensor_output_shape = output_shape;
+        }
+    }
+    return;
+}
+
+
+void InferenceConfig::set_preprocess_input_channels(const std::vector<size_t>& input_channels) {
+    m_processing_spec.m_preprocess_input_channels = input_channels;
+    return;
+}
+
+void InferenceConfig::set_preprocess_output_channels(const std::vector<size_t>& output_channels) {
+    m_processing_spec.m_postprocess_output_channels = output_channels;
+    return;
+}
+
+void InferenceConfig::set_preprocess_input_size(const std::vector<size_t>& preprocess_input_size) {
+    m_processing_spec.m_preprocess_input_size = preprocess_input_size;
+    return;
+}
+
+void InferenceConfig::set_postprocess_output_size(const std::vector<size_t>& postprocess_output_size) {
+    m_processing_spec.m_postprocess_output_size = postprocess_output_size;
+    return;
+}
+
+void InferenceConfig::set_internal_model_latency(const std::vector<size_t>& internal_model_latency) {
+    m_processing_spec.m_internal_model_latency = internal_model_latency;
+    return;
 }
 
 void InferenceConfig::set_model_path(const std::string& model_path, InferenceBackend backend) {
@@ -168,24 +210,176 @@ void InferenceConfig::set_model_path(const std::string& model_path, InferenceBac
     assert((false && "No model path found for backend."));
 }
 
-void InferenceConfig::set_input_shape(const TensorShapeList& input_shape, InferenceBackend backend) {
-    for (int i = 0; i < m_tensor_shape.size(); ++i) {
-        if (m_tensor_shape[i].m_backend == backend) {
-            m_tensor_shape[i].m_input_shape = input_shape;
-            return;
+const TensorShape& InferenceConfig::get_tensor_shape(InferenceBackend backend) const {
+    for (const TensorShape& shape : m_tensor_shape) {
+        if (shape.m_backend == backend) {
+            return shape;
         }
     }
-    assert((false && "No tensor shape found for backend."));
+    for (const TensorShape& shape : m_tensor_shape) {
+        if (shape.is_universal()) {
+            return shape;
+        }
+    }
+    LOG_ERROR << "No tensor shape found for backend: " << static_cast<int>(backend) << ". Returning the first tensor shape." << std::endl;
+    return m_tensor_shape[0]; // Fallback to the first tensor shape
 }
 
-void InferenceConfig::set_output_shape(const TensorShapeList& output_shape, InferenceBackend backend) {
-    for (int i = 0; i < m_tensor_shape.size(); ++i) {
-        if (m_tensor_shape[i].m_backend == backend) {
-            m_tensor_shape[i].m_output_shape = output_shape;
-            return;
+void InferenceConfig::clear_processing_spec() {
+    m_processing_spec.m_preprocess_input_channels.clear();
+    m_processing_spec.m_postprocess_output_channels.clear();
+    m_processing_spec.m_preprocess_input_size.clear();
+    m_processing_spec.m_postprocess_output_size.clear();
+    m_processing_spec.m_internal_model_latency.clear();
+    m_processing_spec.m_tensor_input_size.clear();
+    m_processing_spec.m_tensor_output_size.clear();
+}
+
+void InferenceConfig::update_processing_spec() {
+    assert((m_tensor_shape.size() > 0 && "At least one tensor shape must be provided."));
+    for (size_t i = 0; i < m_model_data.size(); ++i) {
+        bool success = false;
+        for (size_t j = 0; j < m_tensor_shape.size(); ++j) {
+            if (!m_tensor_shape[j].is_universal()) {
+                if (m_model_data[i].m_backend == m_tensor_shape[j].m_backend){
+                    success = true;
+                    break;
+                }
+            }
+        }
+        if (!success) {
+            for (size_t j = 0; j < m_tensor_shape.size(); ++j) {
+                if (m_tensor_shape[j].is_universal()) {
+                    TensorShape tensor_shape = m_tensor_shape[j];
+                    tensor_shape.m_backend = m_model_data[i].m_backend;
+                    m_tensor_shape.push_back(tensor_shape);
+                    break;
+                } 
+                assert((j < m_tensor_shape.size() - 1 && "No tensor shape provided for model."));
+            }
         }
     }
-    assert((false && "No tensor shape found for backend."));
+
+    m_processing_spec.m_tensor_input_size.clear();
+    m_processing_spec.m_tensor_output_size.clear();
+    for (int i = 0; i < m_tensor_shape.size(); ++i) {
+        TensorShape& shape = m_tensor_shape[i];
+        std::vector<size_t> input_size(m_tensor_shape[i].m_tensor_input_shape.size(), 1);
+        std::vector<size_t> output_size(m_tensor_shape[i].m_tensor_output_shape.size(), 1);
+        if (shape.m_tensor_input_shape.size() < 1) {
+            LOG_ERROR << "No input shape provided for backend: " << static_cast<int>(shape.m_backend) << ". At least one input shape must be provided." << std::endl;
+            throw std::invalid_argument("No input shape provided.");
+        }
+        if (shape.m_tensor_output_shape.size() < 1) {
+            LOG_ERROR << "No output shape provided for backend: " << static_cast<int>(shape.m_backend) << ". At least one output shape must be provided." << std::endl;
+            throw std::invalid_argument("No output shape provided.");
+        }
+        for (int j = 0; j < shape.m_tensor_input_shape.size(); ++j) {
+            for (auto& dim : shape.m_tensor_input_shape[j]) {
+                if (dim < 1) {
+                    LOG_ERROR << "Invalid dimension in input shape: " << dim << ". Input dimensions must be positive." << std::endl;
+                    throw std::invalid_argument("Invalid dimension in input shape.");
+                }
+                input_size[j] *= (size_t) dim;
+            }
+        }
+        for (int j = 0; j < shape.m_tensor_output_shape.size(); ++j) {
+            for (auto& dim : shape.m_tensor_output_shape[j]) {
+                if (dim < 1) {
+                    LOG_ERROR << "Invalid dimension in output shape: " << dim << ". Output dimensions must be positive." << std::endl;
+                    throw std::invalid_argument("Invalid dimension in output shape.");
+                }
+                output_size[j] *= (size_t) dim;
+            }
+        }
+        if (i == 0) {
+            m_processing_spec.m_tensor_input_size = input_size;
+            m_processing_spec.m_tensor_output_size = output_size;
+            if (m_processing_spec.m_preprocess_input_channels.size() != input_size.size()) {
+                m_processing_spec.m_preprocess_input_channels.clear();
+                for (size_t j = 0; j < input_size.size(); ++j) {
+                    m_processing_spec.m_preprocess_input_channels.push_back(1); // Default to 1 channel if not specified
+                }
+            }
+            if (m_processing_spec.m_postprocess_output_channels.size() != output_size.size()) {
+                m_processing_spec.m_postprocess_output_channels.clear();
+                for (size_t j = 0; j < output_size.size(); ++j) {
+                    m_processing_spec.m_postprocess_output_channels.push_back(1); // Default to 1 channel if not specified
+                }
+            }
+            if (m_processing_spec.m_preprocess_input_size.size() != input_size.size()) {
+                m_processing_spec.m_preprocess_input_size.clear();
+                for (size_t j = 0; j < input_size.size(); ++j) {
+                    size_t length = input_size[j];
+                    if (m_processing_spec.m_preprocess_input_channels.size() > j) {
+                        length /= m_processing_spec.m_preprocess_input_channels[j]; // Adjust length by number of channels
+                    }
+                    m_processing_spec.m_preprocess_input_size.push_back(length);
+                }
+            }
+            if (m_processing_spec.m_postprocess_output_size.size() != output_size.size()) {
+                m_processing_spec.m_postprocess_output_size.clear();
+                for (size_t j = 0; j < output_size.size(); ++j) {
+                    size_t length = output_size[j];
+                    if (m_processing_spec.m_postprocess_output_channels.size() > j) {
+                        length /= m_processing_spec.m_postprocess_output_channels[j]; // Adjust length by number of channels
+                    }
+                    m_processing_spec.m_postprocess_output_size.push_back(length);
+                }
+            }
+            if (m_processing_spec.m_internal_model_latency.size() != output_size.size()) {
+                m_processing_spec.m_internal_model_latency.clear();
+                for (size_t j = 0; j < output_size.size(); ++j) {
+                    m_processing_spec.m_internal_model_latency.push_back(0); // Default to 0 latency if not specified
+                }
+            }
+        } else {
+            if (m_processing_spec.m_tensor_input_size != input_size) {
+                LOG_ERROR << "Input size mismatch for backend: " << static_cast<int>(shape.m_backend) << ". All backends must have the same input size." << std::endl;
+                throw std::invalid_argument("Input size mismatch.");
+            }
+            if (m_processing_spec.m_tensor_output_size != output_size) {
+                LOG_ERROR << "Output size mismatch for backend: " << static_cast<int>(shape.m_backend) << ". All backends must have the same output size." << std::endl;
+                throw std::invalid_argument("Output size mismatch.");
+            }
+        }
+    }
+    if (m_processing_spec.m_preprocess_input_channels.size() != m_processing_spec.m_tensor_input_size.size()) {
+        LOG_ERROR << "Preprocess input channels size mismatch. Must match the number of input tensors." << std::endl;
+        throw std::invalid_argument("Preprocess input channels size mismatch.");
+    }
+    if (m_processing_spec.m_postprocess_output_channels.size() != m_processing_spec.m_tensor_output_size.size()) {
+        LOG_ERROR << "Postprocess output channels size mismatch. Must match the number of output tensors." << std::endl;
+        throw std::invalid_argument("Postprocess output channels size mismatch.");
+    }
+    if (m_processing_spec.m_preprocess_input_size.size() != m_processing_spec.m_tensor_input_size.size()) {
+        LOG_ERROR << "Preprocess input size mismatch. Must match the number of input tensors." << std::endl;
+        throw std::invalid_argument("Preprocess input size mismatch.");
+    }
+    if (m_processing_spec.m_postprocess_output_size.size() != m_processing_spec.m_tensor_output_size.size()) {
+        LOG_ERROR << "Postprocess output size mismatch. Must match the number of output tensors." << std::endl;
+        throw std::invalid_argument("Postprocess output size mismatch.");
+    }
+    if (m_processing_spec.m_internal_model_latency.size() != m_processing_spec.m_tensor_output_size.size()) {
+        LOG_ERROR << "Internal latency size mismatch. Must match the number of output tensors." << std::endl;
+        throw std::invalid_argument("Internal latency size mismatch.");
+    }
+    for (size_t i = 0; i < m_processing_spec.m_tensor_input_size.size(); ++i) {
+        if (m_processing_spec.m_preprocess_input_size[i] == 0) {
+            if (m_processing_spec.m_preprocess_input_channels[i] != 1) {
+                LOG_ERROR << "For non-streamable tensors (preprocess_input_size[" << i << "] == 0), the number of channels must be 1." << std::endl;
+                throw std::invalid_argument("Invalid number of channels for non-streamable tensor.");
+            }
+        }
+    }
+    for (size_t i = 0; i < m_processing_spec.m_tensor_output_size.size(); ++i) {
+        if (m_processing_spec.m_postprocess_output_size[i] == 0) {
+            if (m_processing_spec.m_postprocess_output_channels[i] != 1) {
+                LOG_ERROR << "For non-streamable tensors (postprocess_output_size[" << i << "] == 0), the number of channels must be 1." << std::endl;
+                throw std::invalid_argument("Invalid number of channels for non-streamable tensor.");
+            }
+        }
+    }
 }
 
 } // namespace anira

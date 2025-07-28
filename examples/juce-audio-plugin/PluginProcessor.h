@@ -6,15 +6,26 @@
 
 #include <anira/anira.h>
 
+#if MODEL_TO_USE == 1
 #include "../../extras/models/cnn/CNNConfig.h"
 #include "../../extras/models/cnn/CNNPrePostProcessor.h"
 #include "../../extras/models/cnn/CNNBypassProcessor.h" // This one is only needed for the round trip test, when selecting the Custom backend
+#elif MODEL_TO_USE == 2
 #include "../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h" // Only needed for round trip test
+#elif MODEL_TO_USE == 3
 #include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#elif MODEL_TO_USE == 4
 #include "../../extras/models/model-pool/SimpleGainConfig.h"
+#elif MODEL_TO_USE == 5
 #include "../../extras/models/model-pool/SimpleStereoGainConfig.h"
+#elif MODEL_TO_USE == 6
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfig.h"
+#elif MODEL_TO_USE == 7
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.h"
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigDecoder.h"
+#endif
 
 //==============================================================================
 class AudioPluginAudioProcessor  : public juce::AudioProcessor, private juce::AudioProcessorValueTreeState::Listener
@@ -57,7 +68,6 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     juce::AudioProcessorValueTreeState& getValueTreeState() { return parameters; }
-    anira::InferenceManager &get_inference_manager();
 
 private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
@@ -66,6 +76,10 @@ private:
 
 private:
     juce::AudioProcessorValueTreeState parameters;
+
+#if MODEL_TO_USE == 8
+    anira::JsonConfigLoader json_config_loader;
+#endif
 
     // Optional ContextConfig
     anira::ContextConfig anira_context_config;
@@ -87,9 +101,28 @@ private:
 #elif MODEL_TO_USE == 5
     anira::InferenceConfig inference_config = stereo_gain_config;
     anira::PrePostProcessor pp_processor;
+#elif MODEL_TO_USE == 6
+    anira::InferenceConfig inference_config = rave_funk_drum_config;
+    anira::PrePostProcessor pp_processor;
+#elif MODEL_TO_USE == 7
+    anira::InferenceConfig inference_config_encoder = rave_funk_drum_encoder_config;
+    anira::InferenceConfig inference_config_decoder = rave_funk_drum_decoder_config;
+    anira::PrePostProcessor pp_processor_encoder;
+    anira::PrePostProcessor pp_processor_decoder;
+#elif MODEL_TO_USE == 8
+    anira::InferenceConfig inference_config;
+    anira::PrePostProcessor pp_processor;
+#else
+    #error "MODEL_TO_USE must be defined to one of the available models."
 #endif
 
+#if MODEL_TO_USE != 7
     anira::InferenceHandler inference_handler;
+#else
+    anira::InferenceHandler inference_handler_encoder;
+    anira::InferenceHandler inference_handler_decoder;
+    int m_count_input_samples = 0;
+#endif
     juce::dsp::DryWetMixer<float> dry_wet_mixer;
 
     std::atomic<bool> non_realtime = false;

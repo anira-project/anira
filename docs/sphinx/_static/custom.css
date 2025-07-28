@@ -1,0 +1,260 @@
+/* Bigger class names and functions in the API docs */
+dt.sig {
+  position:relative;
+  font-size:1rem;
+  padding:.25rem .5rem .25rem 3rem;
+  text-indent:-2.4rem;
+  border-radius:6px
+}
+dt.sig:after {
+  content:"";
+  display:table;
+  clear:both
+}
+
+/* Get rid of annoying line breaks in the breathe documentation */
+dt.sig>a.internal {
+  /* Default Sphinx theme values */
+  font-size: 1em;
+  border: none;
+  color: inherit;
+}
+dt.sig>a.internal:before {
+  /* Default Sphinx theme values */
+  content: none;
+  white-space: normal;
+}
+
+/* Change the color of inline and block code elements */
+code,
+pre,
+.rst-content code,
+.rst-content pre,
+.highlight pre {
+  background-color: #161b22 !important;
+  color: #c9d1d9 !important;
+  padding: 0.2em 0.4em !important;
+  font-family: var(--sy-f-mono, 'Fira Mono', 'Consolas', 'Monaco', monospace) !important;
+  font-size: 0.95em !important;
+}
+
+/* Customize Shibuya's syntax highlighting to match github-dark */
+:root {
+    /* Override Shibuya's dark syntax colors to match github-dark exactly */
+    --syntax-dark-text: #c9d1d9;
+    --syntax-dark-comment: #8b949e;
+    --syntax-dark-keyword: #ff7b72;
+    --syntax-dark-string: #a5d6ff;
+    --syntax-dark-constant: #79c0ff;
+    --syntax-dark-builtin: #ffd34c;
+    --syntax-dark-variable: #ffa657;
+    --syntax-dark-entity: #47b0fa;
+    --syntax-dark-property: #d2a8ff;
+    --syntax-dark-tag: #7ee787;
+    --syntax-dark-definition: #c9d1d9;
+    --syntax-dark-exception: #da473c;
+    --syntax-dark-regexp: #ef954e;
+    
+    /* Override background colors */
+    --syntax-pre-bg: #0d1117;
+    --syntax-cap-bg: #21262d;
+    --syntax-highlight-bg: #264f78;
+    
+    /* Override Shibuya's light syntax colors to match github-dark exactly */
+    --syntax-light-text: #c9d1d9;
+    --syntax-light-comment: #8b949e;
+    --syntax-light-keyword: #ff7b72;
+    --syntax-light-string: #a5d6ff;
+    --syntax-light-constant: #79c0ff;
+    --syntax-light-builtin: #ffd34c;
+    --syntax-light-variable: #ffa657;
+    --syntax-light-entity: #47b0fa;
+    --syntax-light-property: #d2a8ff;
+    --syntax-light-tag: #7ee787;
+    --syntax-light-definition: #c9d1d9;
+    --syntax-light-exception: #da473c;
+    --syntax-light-regexp: #ef954e;
+}
+
+/* Comprehensive C++ Syntax Highlighting */
+
+/* Keywords - C++ specific keywords */
+.highlight .k,     /* Keyword */
+.highlight .kc,    /* Keyword.Constant */
+.highlight .kd,    /* Keyword.Declaration */
+.highlight .kn,    /* Keyword.Namespace */
+.highlight .kp,    /* Keyword.Pseudo */
+.highlight .kr,    /* Keyword.Reserved */
+.highlight .kt {   /* Keyword.Type */
+  color: #ff7b72 !important;
+  font-weight: normal !important;
+}
+
+/* C++ Type keywords (int, char, void, etc.) */
+.highlight .kt,
+.highlight .k + .n,  /* Keywords followed by names */
+.highlight .kt + .n { /* Type keywords followed by names */
+  color: #79c0ff !important;
+}
+
+/* Strings and characters */
+.highlight .s,     /* String */
+.highlight .s1,    /* String.Single */
+.highlight .s2,    /* String.Double */
+.highlight .sc,    /* String.Char */
+.highlight .se,    /* String.Escape */
+.highlight .si,    /* String.Interpol */
+.highlight .sx,    /* String.Other */
+.highlight .sb,    /* String.Backtick */
+.highlight .sd {   /* String.Doc */
+  color: #a5d6ff !important;
+}
+
+/* Raw strings (C++11) */
+.highlight .sr {   /* String.Regex - used for raw strings */
+  color: #a5d6ff !important;
+}
+
+/* Comments */
+.highlight .c,     /* Comment */
+.highlight .c1,    /* Comment.Single */
+.highlight .cm,    /* Comment.Multiline */
+.highlight .cs {   /* Comment.Special */
+  color: #8b949e !important;
+  font-style: italic !important;
+}
+
+/* Preprocessor directives */
+.highlight .cp,    /* Comment.Preproc */
+.highlight .cpf {  /* Comment.PreprocFile */
+  color: #d2a8ff !important;
+  font-weight: normal !important;
+}
+
+/* Numbers and constants */
+.highlight .m,     /* Number */
+.highlight .mi,    /* Number.Integer */
+.highlight .mf,    /* Number.Float */
+.highlight .mh,    /* Number.Hex */
+.highlight .mo,    /* Number.Oct */
+.highlight .mb,    /* Number.Bin */
+.highlight .il {   /* Number.Integer.Long */
+  color: #79c0ff !important;
+}
+
+/* Boolean literals */
+.highlight .kc {   /* Keyword.Constant (true, false, nullptr) */
+  color: #79c0ff !important;
+}
+
+/* Class names and user-defined types */
+.highlight .nc,    /* Name.Class */
+.highlight .nd,    /* Name.Decorator */
+.highlight .ne,    /* Name.Exception */
+.highlight .ni {   /* Name.Entity */
+  color: #ffd34c !important;
+  font-weight: normal !important;
+}
+
+/* Function names */
+.highlight .nf,    /* Name.Function */
+.highlight .fm {   /* Name.Function.Magic */
+  color: #d2a8ff !important;
+  font-weight: normal !important;
+}
+
+/* Variables and identifiers */
+.highlight .n,     /* Name */
+.highlight .na,    /* Name.Attribute */
+.highlight .nv,    /* Name.Variable */
+.highlight .vc,    /* Name.Variable.Class */
+.highlight .vg,    /* Name.Variable.Global */
+.highlight .vi {   /* Name.Variable.Instance */
+  color: #c9d1d9 !important;
+}
+
+/* Built-in functions and types */
+.highlight .nb,    /* Name.Builtin */
+.highlight .bp {   /* Name.Builtin.Pseudo */
+  color: #ffd34c !important;
+}
+
+/* Constants and enums */
+.highlight .no {   /* Name.Constant */
+  color: #79c0ff !important;
+  font-weight: normal !important;
+}
+
+/* Operators */
+.highlight .o,     /* Operator */
+.highlight .ow {   /* Operator.Word */
+  color: #ff7b72 !important;
+}
+
+/* Namespaces */
+.highlight .nn {   /* Name.Namespace */
+  color: #c9d1d9 !important;
+}
+
+/* Labels */
+.highlight .nl {   /* Name.Label */
+  color: #ffa657 !important;
+}
+
+/* Generic types and templates */
+.highlight .nt {   /* Name.Tag - used for templates */
+  color: #7ee787 !important;
+}
+
+/* Punctuation */
+.highlight .p {    /* Punctuation */
+  color: #c9d1d9 !important;
+}
+
+/* Whitespace */
+.highlight .w {    /* Text.Whitespace */
+  color: transparent !important;
+}
+
+/* Error highlighting */
+.highlight .err {  /* Error */
+  color: #f85149 !important;
+  background-color: rgba(248, 81, 73, 0.15) !important;
+}
+
+/* Generic highlighting */
+.highlight .g {    /* Generic */
+  color: #c9d1d9 !important;
+}
+
+/* Diff/Git related (for code examples showing changes) */
+.highlight .gd {   /* Generic.Deleted */
+  color: #ffdcd7 !important;
+  background-color: rgba(248, 81, 73, 0.15) !important;
+}
+
+.highlight .gi {   /* Generic.Inserted */
+  color: #aff5b4 !important;
+  background-color: rgba(46, 160, 67, 0.15) !important;
+}
+
+/* Line highlighting */
+.highlight .hll {  /* Highlight Line */
+  background-color: #264f78 !important;
+  display: block !important;
+}
+
+/* Line numbers */
+.highlight .linenos {
+  color: #6e7781 !important;
+  background-color: transparent !important;
+  user-select: none !important;
+}
+
+/* Code block captions */
+.yue .code-block-caption {
+  background-color: #21262d !important;
+  color: #c9d1d9 !important;
+  border-bottom: 1px solid #30363d !important;
+  font-family: var(--sy-f-mono) !important;
+}

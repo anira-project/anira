@@ -17,6 +17,7 @@ AniraClapPluginExample::AniraClapPluginExample(const clap_host *host)
                             clap::helpers::CheckingLevel::Maximal>(&m_desc, host),
       m_bypass_processor(m_inference_config),
       m_anira_context(static_cast<int>(std::thread::hardware_concurrency() / 2)),
+      m_pp_processor(m_inference_config),
       m_inference_handler(m_pp_processor, m_inference_config, m_bypass_processor, m_anira_context),
       m_plugin_latency(0)
 {
@@ -154,9 +155,13 @@ bool AniraClapPluginExample::audioPortsInfo(uint32_t index, bool isInput,
 bool AniraClapPluginExample::activate(double sampleRate, uint32_t minFrameCount,
                              uint32_t maxFrameCount) noexcept
 {
-    anira::HostAudioConfig config ((size_t) maxFrameCount, sampleRate);
+    anira::HostConfig host_config {
+        static_cast<float>(maxFrameCount),
+        static_cast<float>(sampleRate),
+        // true, // Allow smaller buffers? Introduces more latency
+    };
 
-    m_inference_handler.prepare(config);
+    m_inference_handler.prepare(host_config);
 
     m_plugin_latency = (uint32_t) m_inference_handler.get_latency();
     m_dry_wet_mixer.prepare(sampleRate, maxFrameCount, (size_t) m_plugin_latency);

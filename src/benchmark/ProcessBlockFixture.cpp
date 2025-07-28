@@ -13,10 +13,10 @@ ProcessBlockFixture::~ProcessBlockFixture() {
 }
 
 void ProcessBlockFixture::initialize_iteration() {
-    m_prev_num_received_samples = m_inference_handler->get_inference_manager().get_num_received_samples();
+    m_prev_num_received_samples = m_inference_handler->get_available_samples(0);
 }
 
-void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference_config, const HostAudioConfig& host_config, const InferenceBackend& inference_backend, bool sleep_after_repetition) {
+void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference_config, const HostConfig& host_config, const InferenceBackend& inference_backend, bool sleep_after_repetition) {
     m_sleep_after_repetition = sleep_after_repetition;
     if (m_sleep_after_repetition) {
         m_runtime_last_repetition = std::chrono::duration<double, std::milli>(0);
@@ -32,24 +32,24 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
             switch (m_inference_backend)
             {
 #ifdef USE_LIBTORCH
-            case anira::LIBTORCH:
+            case anira::InferenceBackend::LIBTORCH:
                 m_inference_backend_name = "libtorch";
                 path = m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH);
                 break;
 #endif
 #ifdef USE_ONNXRUNTIME
-            case anira::ONNX:
+            case anira::InferenceBackend::ONNX:
                 m_inference_backend_name = "onnx";
                 path = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
                 break;
 #endif
 #ifdef USE_TFLITE
-            case anira::TFLITE:
+            case anira::InferenceBackend::TFLITE:
                 m_inference_backend_name = "tflite";
                 path = m_inference_config.get_model_path(anira::InferenceBackend::TFLITE);
                 break;
 #endif
-            case anira::CUSTOM:
+            case anira::InferenceBackend::CUSTOM:
                 m_inference_backend_name = "custom";
                 path = "no_model";
                 break;
@@ -65,19 +65,19 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
             m_host_config = host_config;
         }
         std::cout << "\n----------------------------------------------------------------------------------------------------------------------------------------" << std::endl;
-        std::cout << "Model: " << m_model_name << " | Backend: " << m_inference_backend_name << " | Sample Rate: " << std::fixed << std::setprecision(0) << m_host_config.m_host_sample_rate << " Hz | Buffer Size: " << m_host_config.m_host_buffer_size << " = " << std::fixed << std::setprecision(4) << (float) m_host_config.m_host_buffer_size * 1000.f/m_host_config.m_host_sample_rate << " ms" << std::endl;
+        std::cout << "Model: " << m_model_name << " | Backend: " << m_inference_backend_name << " | Host Sample Rate: " << std::fixed << std::setprecision(0) << m_host_config.m_sample_rate << " Hz | Host Buffer Size: " << m_host_config.m_buffer_size << " = " << std::fixed << std::setprecision(4) << (float) m_host_config.m_buffer_size * 1000.f/m_host_config.m_sample_rate << " ms" << std::endl;
         std::cout << "----------------------------------------------------------------------------------------------------------------------------------------\n" << std::endl;
     }
 
 }
 
 bool ProcessBlockFixture::buffer_processed() {
-    return m_inference_handler->get_inference_manager().get_num_received_samples() >= m_prev_num_received_samples;
+    return m_inference_handler->get_available_samples(0) >= m_prev_num_received_samples;
 }
 
-void ProcessBlockFixture::push_random_samples_in_buffer(anira::HostAudioConfig host_config) {
-    for (size_t channel = 0; channel < m_inference_config.m_num_audio_channels[anira::Input]; channel++) {
-        for (size_t sample = 0; sample < host_config.m_host_buffer_size; sample++) {
+void ProcessBlockFixture::push_random_samples_in_buffer(anira::HostConfig host_config) {
+    for (size_t channel = 0; channel < m_inference_config.get_preprocess_input_channels()[0]; channel++) {
+        for (size_t sample = 0; sample < host_config.m_buffer_size; sample++) {
             m_buffer->set_sample(channel, sample, random_sample());
         }
     }

@@ -15,7 +15,7 @@ Licence: MIT
 #include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
 
 #include "../../../include/anira/utils/MemoryBlock.h"
-#include "../../../include/anira/utils/AudioBuffer.h"
+#include "../../../include/anira/utils/Buffer.h"
 
 void minimal_inference(anira::InferenceConfig m_inference_config) {
 
@@ -44,9 +44,9 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     Ort::Session m_session(m_env, m_inference_config.get_model_path(anira::InferenceBackend::ONNX).c_str(), Ort::SessionOptions{ nullptr });
 #endif
 
-    // Fill an AudioBuffer with some data
-    anira::AudioBufferF input(1, m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]);
-    for(int i = 0; i < m_inference_config.m_input_sizes[m_inference_config.m_index_audio_data[anira::Input]]; ++i) {
+    // Fill an Buffer with some data
+    anira::BufferF input(1, m_inference_config.get_tensor_input_size()[0]);
+    for(int i = 0; i < m_inference_config.get_tensor_input_size()[0]; ++i) {
         input.set_sample(0, i, i * 0.000001f);
     }
 
@@ -54,26 +54,26 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     std::vector<Ort::Value> m_inputs;
     std::vector<Ort::Value> m_outputs;
 
-    m_input_data.resize(m_inference_config.m_input_sizes.size());
+    m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
     m_inputs.clear();
-    for (size_t i = 0; i < m_inference_config.m_input_sizes.size(); i++) {
-        m_input_data[i].resize(m_inference_config.m_input_sizes[i]);
-        if (i != m_inference_config.m_index_audio_data[anira::Input]) {
+    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
+        m_input_data[i].resize(m_inference_config.get_tensor_input_size()[i]);
+        if (i != 0) {
             m_input_data[i].clear();
             m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
                 m_memory_info,
                 m_input_data[i].data(),
                 m_input_data[i].size(),
-                m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].data(),
-                m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].size()
+                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
+                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].size()
             ));
         } else {
             m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
                 m_memory_info,
                 input.data(),
                 input.get_num_samples(),
-                m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].data(),
-                m_inference_config.get_input_shape(anira::InferenceBackend::ONNX)[i].size()
+                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
+                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].size()
             ));
         }
     }
@@ -115,9 +115,9 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     for (size_t i = 0; i < m_outputs.size(); i++) {
         const auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();
-        m_output_data[i].resize(m_inference_config.m_output_sizes[i]);
+        m_output_data[i].resize(m_inference_config.get_tensor_output_size()[i]);
 
-        for (size_t j = 0; j < m_inference_config.m_output_sizes[i]; j++) {
+        for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
             std::cout << "Output data [" << i << "][" << j << "]: " << output_read_ptr[j] << std::endl;
             m_output_data[i][j] = output_read_ptr[j];
         }

@@ -10,6 +10,7 @@ option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" O
 option(ANIRA_WITH_EXAMPLES "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
 option(ANIRA_WITH_INSTALL "Add install targets" OFF)
 option(ANIRA_WITH_TESTS "Add Build Tests" OFF)
+option(ANIRA_WITH_DOCS "Add Build Documentation" OFF)
 
 # Select the backends for the inference engine, multiple backends can be selected
 option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
@@ -17,8 +18,8 @@ option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
 option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 
 # Shall the use of a controlled blocking operation for further reduction of latency be enabled?
-option(ANIRA_WITH_CONTROLLED_BLOCKING "Use of controlled blocking operation for further reduction of latency" OFF)
 option(ANIRA_WITH_LOGGING "Enable logging printouts" ON)
+option(ANIRA_WITH_RADSAN "Enable RealtimeSanitizer (RADSan) checks (requires RADSan clang)" OFF)
 
 # ==============================================================================
 # Get project version from git
@@ -109,10 +110,6 @@ if(ANIRA_WITH_TFLITE)
     list(APPEND BACKEND_SOURCES src/backends/TFLiteProcessor.cpp)
 endif()
 
-if(ANIRA_WITH_CONTROLLED_BLOCKING)
-    message(STATUS "Using controlled blocking operation for further reduction of latency.")
-endif()
-
 ## ==============================================================================
 # Fetch threadsafe queue
 # ==============================================================================
@@ -126,6 +123,14 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(concurrentqueue)
+
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.12.0
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json)
 
 # ==============================================================================
 # Build the library
@@ -153,7 +158,7 @@ target_sources(${PROJECT_NAME}
         src/scheduler/SessionElement.cpp
 
         # Utils
-        src/utils/AudioBuffer.cpp
+        src/utils/Buffer.cpp
         src/utils/RingBuffer.cpp
 
         # Interface
@@ -191,14 +196,17 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
-    # Controlled blocking option definition
-    $<$<BOOL:${ANIRA_WITH_CONTROLLED_BLOCKING}>:USE_CONTROLLED_BLOCKING>
     $<$<BOOL:${ANIRA_WITH_LOGGING}>:ENABLE_LOGGING>
     # Version number
     -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
 )
 
-target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue)
+if(ANIRA_WITH_RADSAN)
+    include(cmake/real-time-sanitizers.cmake)
+    anira_radsan_configure(${PROJECT_NAME})
+endif()
+
+target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json)
 
 if(ANIRA_WITH_LIBTORCH)
     # The find_package(Torch) adds the libraries libc10.so and libkineto.a as full paths to ${TORCH_LIBRARIES}. This is no problem when we add anira as a subdirectory to another project, but when we install the library, the torch libraries will be link targets of the anira library with full paths and hence not found on other systems. Therefore, we link those libs privately and only add the torch target publicly.
@@ -271,4 +279,8 @@ endif()
 
 if (ANIRA_WITH_TESTS)
     add_subdirectory(test)
+endif()
+
+if (ANIRA_WITH_DOCS)
+    add_subdirectory(docs)
 endif()

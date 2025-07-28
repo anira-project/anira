@@ -27,11 +27,18 @@ static std::vector<anira::TensorShape> tensor_shape_cnn_config = {
 #endif
 };
 
+static anira::ProcessingSpec processing_spec_cnn_config = {
+        {1}, // preprocess_input_channels
+        {1}, // postprocess_output_channels
+        {2048}, // preprocess_input_size
+        {2048} // postprocess_output_size
+};
+
 static anira::InferenceConfig cnn_config (
         model_data_cnn_config,
         tensor_shape_cnn_config,
+        processing_spec_cnn_config,
         42.66f,
-        0,
         2
 );
 

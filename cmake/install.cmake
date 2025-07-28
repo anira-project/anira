@@ -76,7 +76,7 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/anira
 )
 
 # install the target and create export-set
-install(TARGETS ${PROJECT_NAME}
+install(TARGETS ${PROJECT_NAME} concurrentqueue nlohmann_json
     EXPORT "aniraTargets"
     # these get default values from GNUInstallDirs
     RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR} # .dll files 

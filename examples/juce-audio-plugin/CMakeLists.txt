@@ -45,6 +45,8 @@ add_compile_definitions(MODEL_TO_USE=2) # GuitarLSTM
 # add_compile_definitions(MODEL_TO_USE=3) # stateful-LSTM
 # add_compile_definitions(MODEL_TO_USE=4) # simple-gain
 # add_compile_definitions(MODEL_TO_USE=5) # simple-stereo-gain
+# add_compile_definitions(MODEL_TO_USE=6) # RAVE
+# add_compile_definitions(MODEL_TO_USE=7) # RAVE encoder-decoder
 
 set (TARGET_NAME anira-juce-plugin-example)
 
@@ -106,6 +108,10 @@ target_compile_definitions(${TARGET_NAME}
     $<$<BOOL:${BACKEND_ONNXRUNTIME}>:USE_ONNXRUNTIME>
     $<$<BOOL:${BACKEND_TFLITE}>:USE_TFLITE>
 )
+
+if(UNIX AND NOT APPLE)
+	target_compile_definitions(${TARGET_NAME} PRIVATE JUCE_JACK=1)
+endif()
 
 target_link_libraries(${TARGET_NAME}
     PRIVATE

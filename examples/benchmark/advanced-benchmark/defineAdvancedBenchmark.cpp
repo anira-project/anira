@@ -23,15 +23,15 @@
 std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
 std::vector<anira::InferenceBackend> inference_backends = {
 #ifdef USE_LIBTORCH    
-    anira::LIBTORCH,
+    anira::InferenceBackend::LIBTORCH,
 #endif
 #ifdef USE_ONNXRUNTIME
-    anira::ONNX,
+    anira::InferenceBackend::ONNX,
 #endif
 #ifdef USE_TFLITE
-    anira::TFLITE,
+    anira::InferenceBackend::TFLITE,
 #endif    
-    anira::CUSTOM
+    anira::InferenceBackend::CUSTOM
 };
 std::vector<anira::InferenceConfig> inference_configs = {cnn_config, hybridnn_config, rnn_config};
 anira::InferenceConfig inference_config;
@@ -57,7 +57,7 @@ typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) {
 
     // The buffer size return in get_buffer_size() is populated by state.range(0) param of the google benchmark
-    anira::HostAudioConfig host_config = {(size_t) get_buffer_size(), SAMPLE_RATE};
+    anira::HostConfig host_config = {static_cast<float>(get_buffer_size()), SAMPLE_RATE};
 
     inference_config = inference_configs[state.range(1)];
 
@@ -66,13 +66,11 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     anira::PrePostProcessor *my_pp_processor;
 
     if (state.range(1) == 0) {
-        my_pp_processor = new CNNPrePostProcessor();
-        static_cast<CNNPrePostProcessor*>(my_pp_processor)->m_inference_config = inference_config;
+        my_pp_processor = new CNNPrePostProcessor(inference_config);
     } else if (state.range(1) == 1) {
-        my_pp_processor = new HybridNNPrePostProcessor();
-        static_cast<HybridNNPrePostProcessor*>(my_pp_processor)->m_inference_config = inference_config;
+        my_pp_processor = new HybridNNPrePostProcessor(inference_config);
     } else if (state.range(1) == 2) {
-        my_pp_processor = new anira::PrePostProcessor();
+        my_pp_processor = new anira::PrePostProcessor(inference_config);
     }
 
     ClearCustomProcessor clear_custom_processor(inference_config);
@@ -81,7 +79,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backends[state.range(2)]);
 
-    m_buffer = std::make_unique<anira::AudioBuffer<float>>(inference_config.m_num_audio_channels[anira::Input], host_config.m_host_buffer_size);
+    m_buffer = std::make_unique<anira::Buffer<float>>(inference_config.get_preprocess_input_channels()[0], host_config.m_buffer_size);
 
     initialize_repetition(inference_config, host_config, inference_backends[state.range(2)]);
 
@@ -131,54 +129,56 @@ void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int
         int output_size = buffer_size;
 
 #ifdef USE_LIBTORCH
-        inference_config.set_input_shape({{1, 1, input_size}}, anira::LIBTORCH);
-        inference_config.set_output_shape({{1, 1, output_size}}, anira::LIBTORCH);
+        inference_config.set_tensor_input_shape({{1, 1, input_size}}, anira::InferenceBackend::LIBTORCH);
+        inference_config.set_tensor_output_shape({{1, 1, output_size}}, anira::InferenceBackend::LIBTORCH);
 #endif
 #ifdef USE_ONNXRUNTIME
-        inference_config.set_input_shape({{1, 1, input_size}}, anira::ONNX);
-        inference_config.set_output_shape({{1, 1, output_size}}, anira::ONNX);
+        inference_config.set_tensor_input_shape({{1, 1, input_size}}, anira::InferenceBackend::ONNX);
+        inference_config.set_tensor_output_shape({{1, 1, output_size}}, anira::InferenceBackend::ONNX);
 #endif
 #ifdef USE_TFLITE
-        inference_config.set_input_shape({{1, input_size, 1}}, anira::TFLITE);
-        inference_config.set_output_shape({{1, output_size, 1}}, anira::TFLITE);
+        inference_config.set_tensor_input_shape({{1, input_size, 1}}, anira::InferenceBackend::TFLITE);
+        inference_config.set_tensor_output_shape({{1, output_size, 1}}, anira::InferenceBackend::TFLITE);
 #endif
-        inference_config.m_input_sizes[0] = input_size;
-        inference_config.m_output_sizes[0] = output_size;
+        inference_config.clear_processing_spec();
+        inference_config.update_processing_spec();
+        inference_config.set_preprocess_input_size(std::vector<size_t>{static_cast<size_t>(input_size - receptive_field)});
     } else if (model == 1) {
 #ifdef USE_LIBTORCH
-        inference_config.set_input_shape({{buffer_size, 1, 150}}, anira::LIBTORCH);
-        inference_config.set_output_shape({{buffer_size, 1}}, anira::LIBTORCH);
+        inference_config.set_tensor_input_shape({{buffer_size, 1, 150}}, anira::InferenceBackend::LIBTORCH);
+        inference_config.set_tensor_output_shape({{buffer_size, 1}}, anira::InferenceBackend::LIBTORCH);
 #endif
 #ifdef USE_ONNXRUNTIME
-        inference_config.set_input_shape({{buffer_size, 1, 150}}, anira::ONNX);
-        inference_config.set_output_shape({{buffer_size, 1}}, anira::ONNX);
+        inference_config.set_tensor_input_shape({{buffer_size, 1, 150}}, anira::InferenceBackend::ONNX);
+        inference_config.set_tensor_output_shape({{buffer_size, 1}}, anira::InferenceBackend::ONNX);
 #endif
 #ifdef USE_TFLITE
-        std::string model_data = inference_config.get_model_path(anira::TFLITE);
+        std::string model_data = inference_config.get_model_path(anira::InferenceBackend::TFLITE);
         size_t pos = model_data.find("256");
         if (pos != std::string::npos) {
             model_data.replace(pos, 3, std::to_string(buffer_size));
         }
-        inference_config.set_model_path(model_data, anira::TFLITE);
-        inference_config.set_input_shape({{buffer_size, 150, 1}}, anira::TFLITE);
-        inference_config.set_output_shape({{buffer_size, 1}}, anira::TFLITE);
+        inference_config.set_model_path(model_data, anira::InferenceBackend::TFLITE);
+        inference_config.set_tensor_input_shape({{buffer_size, 150, 1}}, anira::InferenceBackend::TFLITE);
+        inference_config.set_tensor_output_shape({{buffer_size, 1}}, anira::InferenceBackend::TFLITE);
 #endif
-        inference_config.m_input_sizes[0] = buffer_size * 150;
-        inference_config.m_output_sizes[0] = buffer_size;
+        inference_config.clear_processing_spec();
+        inference_config.update_processing_spec();
+        inference_config.set_preprocess_input_size(std::vector<size_t>{static_cast<size_t>(buffer_size)});
     } else if (model == 2) {
 #ifdef USE_LIBTORCH
-        inference_config.set_input_shape({{buffer_size, 1, 1}}, anira::LIBTORCH);
-        inference_config.set_output_shape({{buffer_size, 1, 1}}, anira::LIBTORCH);
+        inference_config.set_tensor_input_shape({{buffer_size, 1, 1}}, anira::InferenceBackend::LIBTORCH);
+        inference_config.set_tensor_output_shape({{buffer_size, 1, 1}}, anira::InferenceBackend::LIBTORCH);
 #endif
 #ifdef USE_ONNXRUNTIME
-        inference_config.set_input_shape({{buffer_size, 1, 1}}, anira::ONNX);
-        inference_config.set_output_shape({{buffer_size, 1, 1}}, anira::ONNX);
+        inference_config.set_tensor_input_shape({{buffer_size, 1, 1}}, anira::InferenceBackend::ONNX);
+        inference_config.set_tensor_output_shape({{buffer_size, 1, 1}}, anira::InferenceBackend::ONNX);
 #endif
 #ifdef USE_TFLITE
-        inference_config.set_input_shape({{1, buffer_size, 1}}, anira::TFLITE);
-        inference_config.set_output_shape({{1, buffer_size, 1}}, anira::TFLITE);
+        inference_config.set_tensor_input_shape({{1, buffer_size, 1}}, anira::InferenceBackend::TFLITE);
+        inference_config.set_tensor_output_shape({{1, buffer_size, 1}}, anira::InferenceBackend::TFLITE);
 #endif
-        inference_config.m_input_sizes[0] = buffer_size;
-        inference_config.m_output_sizes[0] = buffer_size;
+        inference_config.clear_processing_spec();
+        inference_config.update_processing_spec();
     }
 }

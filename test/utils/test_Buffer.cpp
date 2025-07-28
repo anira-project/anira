@@ -2,8 +2,8 @@
 #include <anira/anira.h>
 
 using namespace anira;
-TEST(AudioBuffer, SimpleWrite){
-    AudioBufferF buffer = AudioBufferF(1,10);
+TEST(Buffer, SimpleWrite){
+    BufferF buffer = BufferF(1,10);
     for (size_t i = 0; i < buffer.get_num_samples(); i++){
         EXPECT_FLOAT_EQ(0.f, buffer.get_sample(0,i));
     }
@@ -21,11 +21,11 @@ TEST(AudioBuffer, SimpleWrite){
     }
 }
 
-TEST(AudioBuffer, BlockSwap){
+TEST(Buffer, BlockSwap){
     int block_size = 10;
 
     MemoryBlock<int> block;
-    anira::AudioBuffer<int> buffer(1, block_size);
+    anira::Buffer<int> buffer(1, block_size);
 
     // fill blocks
     block.resize(block_size);
@@ -60,11 +60,11 @@ TEST(AudioBuffer, BlockSwap){
     }
 }
 
-TEST(AudioBuffer, BufferSwap){
+TEST(Buffer, BufferSwap){
     int block_size = 10;
 
-    anira::AudioBuffer<int> buffer1(1, block_size);
-    anira::AudioBuffer<int> buffer2(1, block_size);
+    anira::Buffer<int> buffer1(1, block_size);
+    anira::Buffer<int> buffer2(1, block_size);
 
     // fill buffers
     for (int i = 0; i < block_size; i++){
@@ -96,9 +96,9 @@ TEST(AudioBuffer, BufferSwap){
         ASSERT_EQ(buffer2.get_sample(0,i), i);
     }
 }
-TEST(AudioBuffer, InvalidSizeSwap){
-    anira::AudioBuffer<int> buffer1(1, 5);
-    anira::AudioBuffer<int> buffer2(1, 6);
+TEST(Buffer, InvalidSizeSwap){
+    anira::Buffer<int> buffer1(1, 5);
+    anira::Buffer<int> buffer2(1, 6);
     int* buffer1_ptr = buffer1.data();
     int* buffer2_ptr = buffer2.data();
     
@@ -113,9 +113,9 @@ TEST(AudioBuffer, InvalidSizeSwap){
     ASSERT_EQ(output, std::string("Cannot swap data, buffers have different number of channels or sizes!\n"));
 }
 
-TEST(AudioBuffer, InvalidChannelsSwap){
-    anira::AudioBuffer<int> buffer1(2, 5);
-    anira::AudioBuffer<int> buffer2(1, 5);
+TEST(Buffer, InvalidChannelsSwap){
+    anira::Buffer<int> buffer1(2, 5);
+    anira::Buffer<int> buffer2(1, 5);
     int* buffer1_ptr = buffer1.data();
     int* buffer2_ptr = buffer2.data();
     
@@ -129,15 +129,3 @@ TEST(AudioBuffer, InvalidChannelsSwap){
     ASSERT_EQ(buffer2_ptr, buffer2.data());
     ASSERT_EQ(output, std::string("Cannot swap data, buffers have different number of channels or sizes!\n"));
 }
-
-// TEST(AudioBuffer, BlockOfBlocks){
-//     int block_size = 10;
-//     MemoryBlock<std::atomic<int>> block_of_atomics(block_size);
-//     for (int i = 0; i < block_size; i++) {
-//         block_of_atomics[i].store(i);
-//     }
-//     std::atomic<int> const* block_ptr = block_of_atomics.data();
-
-//     // TODO assert something here?
-
-// }

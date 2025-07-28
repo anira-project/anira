@@ -61,7 +61,6 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 
 bool InferenceThread::execute() {
     if (m_next_inference.try_dequeue(m_inference_data)) {
-        // TODO: Is this enough to ensure that prepare works fine?
         if (m_inference_data.m_session->m_initialized.load(std::memory_order::acquire)) {
             do_inference(m_inference_data.m_session, m_inference_data.m_thread_safe_struct);
         }
@@ -72,18 +71,18 @@ bool InferenceThread::execute() {
 
 void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
     session->m_active_inferences.fetch_add(1, std::memory_order::release);
-    inference(session, thread_safe_struct->m_processed_model_input, thread_safe_struct->m_raw_model_output);
-#ifdef USE_CONTROLLED_BLOCKING
-    thread_safe_struct->m_done.release();
-#else
-    thread_safe_struct->m_done.store(true, std::memory_order::release);
-#endif
+    inference(session, thread_safe_struct->m_tensor_input_data, thread_safe_struct->m_tensor_output_data);
+    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+        thread_safe_struct->m_done_semaphore.release();
+    } else {
+        thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
+    }
     session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 }
 
-void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBufferF& input, AudioBufferF& output) {
+void InferenceThread::inference(std::shared_ptr<SessionElement> session, std::vector<BufferF>& input, std::vector<BufferF>& output) {
 #ifdef USE_LIBTORCH
-    if (session->m_currentBackend.load(std::memory_order_relaxed) == LIBTORCH) {
+    if (session->m_current_backend.load(std::memory_order_relaxed) == LIBTORCH) {
         if (session->m_libtorch_processor != nullptr) {
             session->m_libtorch_processor->process(input, output, session);
         }
@@ -94,7 +93,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBu
     }
 #endif
 #ifdef USE_ONNXRUNTIME
-    if (session->m_currentBackend.load(std::memory_order_relaxed) == ONNX) {
+    if (session->m_current_backend.load(std::memory_order_relaxed) == ONNX) {
         if (session->m_onnx_processor != nullptr) {
             session->m_onnx_processor->process(input, output, session);
         }
@@ -105,7 +104,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBu
     }
 #endif
 #ifdef USE_TFLITE
-    if (session->m_currentBackend.load(std::memory_order_relaxed) == TFLITE) {
+    if (session->m_current_backend.load(std::memory_order_relaxed) == TFLITE) {
         if (session->m_tflite_processor != nullptr) {
             session->m_tflite_processor->process(input, output, session);
         }
@@ -115,7 +114,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session, AudioBu
         }
     }
 #endif
-    if (session->m_currentBackend.load(std::memory_order_relaxed) == CUSTOM) {
+    if (session->m_current_backend.load(std::memory_order_relaxed) == CUSTOM) {
         session->m_custom_processor->process(input, output, session);
     }
 }

@@ -23,15 +23,9 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
         if (m_context->m_context_config.m_enabled_backends != context_config.m_enabled_backends) {
             LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!" << std::endl;
         }
-        if (m_context->m_context_config.m_use_controlled_blocking != context_config.m_use_controlled_blocking) {
-            LOG_ERROR << "[ERROR] Context already initialized with with different controlled blocking option!" << std::endl;
-        }
         if ((unsigned int) m_context->m_thread_pool.size() > context_config.m_num_threads) {
             m_context->new_num_threads(context_config.m_num_threads);
             m_context->m_context_config.m_num_threads = context_config.m_num_threads;
-        }
-        if (!context_config.m_use_host_threads && m_context->m_context_config.m_use_host_threads) {
-            m_context->m_context_config.m_use_host_threads = false; // Can only be set to true again if all sessions are released
         }
     }
     return m_context;
@@ -99,25 +93,9 @@ void Context::release_thread_pool() {
 }
 
 void Context::release_session(std::shared_ptr<SessionElement> session) {
-    session->m_initialized.store(false);
+    session->m_initialized.store(false, std::memory_order::release);
 
-    while (session->m_active_inferences.load(std::memory_order::acquire) != 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(50));
-    }
-
-    std::vector<InferenceData> inference_stack;
-    InferenceData inference_data;
-    while (m_next_inference.try_dequeue(inference_data)) {
-        if (inference_data.m_session != session) {
-            inference_stack.emplace_back(inference_data);
-        }
-    }
-
-    for (auto& inference_data : inference_stack) {
-        if (!m_next_inference.try_enqueue(inference_data)) {
-            LOG_ERROR << "[ERROR] Could not requeue inference data!" << std::endl;
-        }
-    }
+    drain_inference_queue(session);
 
     InferenceConfig inference_config = session->m_inference_config;
 #ifdef USE_LIBTORCH
@@ -155,114 +133,84 @@ void Context::release_session(std::shared_ptr<SessionElement> session) {
     }
 }
 
-void Context::prepare(std::shared_ptr<SessionElement> session, HostAudioConfig new_config) {
-    session->m_initialized.store(false);
+void Context::prepare_session(std::shared_ptr<SessionElement> session, HostConfig new_config, std::vector<long> custom_latency) {
+    session->m_initialized.store(false, std::memory_order::release);
 
-    while (session->m_active_inferences.load(std::memory_order::acquire) != 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(50));
-    }
+    drain_inference_queue(session);
 
-    std::vector<InferenceData> inference_stack;
-    InferenceData inference_data;
-    while (m_next_inference.try_dequeue(inference_data)) {
-        if (inference_data.m_session != session) {
-            inference_stack.emplace_back(inference_data);
-        }
-    }
-
-    for (auto& inference_data : inference_stack) {
-        if (!m_next_inference.try_enqueue(inference_data)) {
-            LOG_ERROR << "[ERROR] Could not requeue inference data!" << std::endl;
-        }
-    }
-
-    session->clear();
-    session->prepare(new_config);
-
-    if (!new_config.m_submit_task_to_host_thread) {
-        m_context_config.m_use_host_threads = false;
-    }
+    session->prepare(new_config, custom_latency);
 
     start_thread_pool();
 
-    session->m_initialized.store(true);
-
-    if (m_context_config.m_use_host_threads) {
-        m_host_threads_active.store(true);
-    } else {
-        m_host_threads_active.store(false);
-    }
+    session->m_initialized.store(true, std::memory_order::release);
 }
 
 void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
-    // TODO: We assume that the model_output_size gives us the amount of new samples that we need to process. This can differ from the model_input_size because we might need to add some padding or past samples. Find a better way to determine the amount of new samples.
-    int new_samples_needed_for_inference = session->m_inference_config.m_output_sizes[session->m_inference_config.m_index_audio_data[Output]] / session->m_inference_config.m_num_audio_channels[Output];
-    while (session->m_send_buffer.get_available_samples(0) >= (new_samples_needed_for_inference)) {
-        bool success = pre_process(session);
-
-        if (success && session->m_host_config.m_submit_task_to_host_thread && m_host_threads_active.load()) {
-            bool host_exec_success = session->m_host_config.m_submit_task_to_host_thread(1);
-
-            // !host_exec_success means that the host provided thread pool does not work anymore
-            // Since we cannot rely on it anymore we use as fallback our own thread pool
-            if (!host_exec_success) {
-                start_thread_pool();
-                m_host_threads_active.store(false);
+    while (true) {
+        for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_input_shape().size(); tensor_index++) {
+            if (session->m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
+                for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_input_channels()[tensor_index]; channel++) {
+                    if (session->m_send_buffer[tensor_index].get_available_samples(channel) < session->m_inference_config.get_preprocess_input_size()[tensor_index]) {
+                        return;
+                    }
+                }
             }
         }
-
-        // !success means that there is no free m_inference_queue
+        bool success = pre_process(session);
+        
         if (!success) {
-            for (size_t channel = 0; channel < session->m_inference_config.m_num_audio_channels[Input]; channel++) {
-                for (size_t i = 0; i < new_samples_needed_for_inference; i++) {
-                    session->m_send_buffer.pop_sample(channel);
+            for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_input_shape().size(); tensor_index++) {
+                for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_input_channels()[tensor_index]; channel++) {
+                    for (size_t i = 0; i < session->m_inference_config.get_preprocess_input_size()[tensor_index]; i++) { // Non-streamable parameters have no input size
+                        session->m_send_buffer[tensor_index].pop_sample(channel);
+                    }
                 }
             }
-            for (size_t channel = 0; channel < session->m_inference_config.m_num_audio_channels[Output]; channel++) {
-                for (size_t i = 0; i < new_samples_needed_for_inference; i++) {
-                    session->m_receive_buffer.push_sample(channel, 0.f);
+            for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_output_shape().size(); tensor_index++) {
+                for (size_t channel = 0; channel < session->m_inference_config.get_postprocess_output_channels()[tensor_index]; channel++) { 
+                    for (size_t i = 0; i < session->m_inference_config.get_postprocess_output_size()[tensor_index]; i++) { // Non-streamable parameters have no output size
+                        session->m_receive_buffer[tensor_index].push_sample(channel, 0.f);
+                    }
                 }
             }
+            LOG_INFO << "[WARNING] No free inference queue found in session: " << session->m_session_id << "!" << std::endl;
+            return;
         }
     }
 }
 
 void Context::new_data_request(std::shared_ptr<SessionElement> session, double buffer_size_in_sec) {
-#ifdef USE_CONTROLLED_BLOCKING
-    auto timeToProcess = std::chrono::microseconds(static_cast<long>(buffer_size_in_sec * 1e6 * session->m_inference_config.m_wait_in_process_block));
+    auto timeToProcess = std::chrono::microseconds(static_cast<long>(buffer_size_in_sec * 1e6 * session->m_inference_config.m_blocking_ratio));
     auto currentTime = std::chrono::system_clock::now();
-    auto waitUntil = currentTime + timeToProcess;
-#endif
+    auto waitUntil = currentTime + timeToProcess; // TODO: Not needed for session->m_inference_config.m_blocking_ratio = 0.f..
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
                 if (session->m_is_non_real_time) {
-                    while (!session->m_inference_queue[i]->m_done.load(std::memory_order_acquire)) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+                        session->m_inference_queue[i]->m_done_semaphore.acquire();
+                    } else {
+                        while (!session->m_inference_queue[i]->m_done_atomic.exchange(false, std::memory_order::acquire)) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        }
                     }
-                }
-#ifdef USE_CONTROLLED_BLOCKING
-                if (session->m_inference_queue[i]->m_done.try_acquire_until(waitUntil)) {
-#else
-                if (session->m_inference_queue[i]->m_done.exchange(false)) {
-#endif
-                    session->m_time_stamps.pop_back();
-                    post_process(session, session->m_inference_queue[i]);
                 } else {
-                    return;
+                    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+                        if (session->m_inference_queue[i]->m_done_semaphore.try_acquire_until(waitUntil)) {
+                            session->m_time_stamps.pop_back();
+                            post_process(session, session->m_inference_queue[i]);
+                        } else {
+                            return;
+                        }
+                    } else if (session->m_inference_queue[i]->m_done_atomic.exchange(false, std::memory_order::acquire)) {
+                        session->m_time_stamps.pop_back();
+                        post_process(session, session->m_inference_queue[i]);
+                    } else {
+                        return;
+                    }
                 }
                 break;
             }
-        }
-    }
-}
-
-void Context::exec_inference() {
-    assert(m_host_threads_active.load() && "exec_inference is only supported when providing a host thread pool");
-
-    if (m_host_threads_active.load()) {
-        while (!m_thread_pool[0]->execute()) {
-            // We do not need to iterate over m_thread_pool, since we ensure internally thread safety
         }
     }
 }
@@ -274,7 +222,7 @@ std::vector<std::shared_ptr<SessionElement>>& Context::get_sessions() {
 bool Context::pre_process(std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
         if (session->m_inference_queue[i]->m_free.exchange(false)) {
-            session->m_pp_processor.pre_process(session->m_send_buffer, session->m_inference_queue[i]->m_processed_model_input, session->m_currentBackend.load(std::memory_order_relaxed));
+            session->m_pp_processor.pre_process(session->m_send_buffer, session->m_inference_queue[i]->m_tensor_input_data, session->m_current_backend.load(std::memory_order_relaxed));
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
             InferenceData inference_data = {session, session->m_inference_queue[i]};
@@ -292,24 +240,41 @@ bool Context::pre_process(std::shared_ptr<SessionElement> session) {
             return true;
         }
     }
-    LOG_INFO << "[WARNING] No free inference queue found in session: " << session->m_session_id << "!" << std::endl;
     return false;
 }
 
 void Context::post_process(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
-    session->m_pp_processor.post_process(thread_safe_struct->m_raw_model_output, session->m_receive_buffer, session->m_currentBackend.load(std::memory_order_relaxed));
+    session->m_pp_processor.post_process(thread_safe_struct->m_tensor_output_data, session->m_receive_buffer, session->m_current_backend.load(std::memory_order_relaxed));
     thread_safe_struct->m_free.store(true, std::memory_order::release);
 }
 
 void Context::start_thread_pool() {
-    if (!m_context->m_context_config.m_use_host_threads) {
-        for (size_t i = 0; i < m_thread_pool.size(); ++i) {
-            if (!m_thread_pool[i]->is_running()) {
-                m_thread_pool[i]->start();
-            }
-            while (!m_thread_pool[i]->is_running()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(50));
-            }
+    for (size_t i = 0; i < m_thread_pool.size(); ++i) {
+        if (!m_thread_pool[i]->is_running()) {
+            m_thread_pool[i]->start();
+        }
+        while (!m_thread_pool[i]->is_running()) {
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+    }
+}
+
+void Context::drain_inference_queue(std::shared_ptr<SessionElement> session) {
+    while (session->m_active_inferences.load(std::memory_order::acquire) != 0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+    }
+
+    std::vector<InferenceData> inference_stack;
+    InferenceData inference_data;
+    while (m_next_inference.try_dequeue(inference_data)) {
+        if (inference_data.m_session != session) {
+            inference_stack.emplace_back(inference_data);
+        }
+    }
+
+    for (auto& inference_data : inference_stack) {
+        if (!m_next_inference.try_enqueue(inference_data)) {
+            LOG_ERROR << "[ERROR] Could not requeue inference data!" << std::endl;
         }
     }
 }
@@ -354,6 +319,17 @@ template <typename T> void Context::release_processor(InferenceConfig& inference
         }
     }
 }
+
+void Context::reset_session(std::shared_ptr<SessionElement> session) {
+    session->m_initialized.store(false, std::memory_order::release);
+
+    drain_inference_queue(session);
+
+    session->clear();
+
+    session->m_initialized.store(true, std::memory_order::release);
+}
+
 
 #ifdef USE_LIBTORCH
 template void Context::set_processor<LibtorchProcessor>(std::shared_ptr<SessionElement> session, InferenceConfig& inference_config, std::vector<std::shared_ptr<LibtorchProcessor>>& processors, InferenceBackend backend);

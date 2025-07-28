@@ -1,7 +1,27 @@
 # TODOs
 
-- [ ] Trigger `ldconfig` in the .deb package
+## Architecture
+
+- [ ] Model and context config should be also available as json file
+- [ ] InferenceConfig should return bool if correct
+- [ ] RTSan check in CI
+- [ ] RTSan is named RTSan not RADSan anymore!
+- [ ] Change model_path function
+- [ ] Make processBlockFixture could be more versatile with new shapes
+- [ ] Fix TFLite benchmark error
+
+## Documentation
+
+- [ ] Add more examples to the documentation
+
+## Testing
+
 - [ ] Run the examples as tests in CI
+- [ ] InferenceHandler tests with buffersizes that are not a multiple of the preprocess input size
+
+## Packaging
+
+- [ ] Trigger `ldconfig` in the .deb package
 - [ ] Artifacts should not be .zip as symlinks are not supported
 - [ ] Add qemu docker emulation for aarch64 and armv7l linux in CI
 - [ ] Build the .deb package in CI

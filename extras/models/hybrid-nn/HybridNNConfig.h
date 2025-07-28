@@ -27,12 +27,19 @@ static std::vector<anira::TensorShape> tensor_shape_hybridnn_config = {
 #endif
 };
 
+static anira::ProcessingSpec processing_spec_hybridnn_config = {
+        {1}, // preprocess_input_channels
+        {1}, // postprocess_output_channels
+        {256}, // preprocess_input_size
+        {256} // postprocess_output_size
+};
+
 static anira::InferenceConfig hybridnn_config (
         model_data_hybridnn_config,
         tensor_shape_hybridnn_config,
+        processing_spec_hybridnn_config,
         5.33f,
-        0,
-        2
+        3
 );
 
 #endif //ANIRA_HYBRIDNNCONFIG_H
