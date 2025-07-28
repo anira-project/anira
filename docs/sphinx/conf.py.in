@@ -20,7 +20,8 @@ extensions = [
         'sphinx.ext.intersphinx',
         'sphinx.ext.viewcode',
         'sphinx.ext.napoleon',
-        "sphinx.ext.graphviz"
+        'sphinx.ext.graphviz',
+        'myst_parser'
 ]
 
 # Breathe configuration

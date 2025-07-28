@@ -93,6 +93,7 @@ Documentation
     benchmarking
     latency
     troubleshooting
+    changelog
     contributing
 
 Citation
