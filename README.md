@@ -1,4 +1,4 @@
-![anira Logo](/docs/img/anira-logo.png)
+# ![anira Logo](https://raw.githubusercontent.com/anira-project/anira/main/docs/img/anira-logo.png)
 
 ![build_test](https://github.com/anira-project/anira/actions/workflows/build_test.yml/badge.svg)
 ![build_benchmark](https://github.com/anira-project/anira/actions/workflows/build_benchmark.yml/badge.svg)
@@ -13,6 +13,9 @@
 ## Documentation
 
 An extensive documentation of anira can be found at [https://anira-project.github.io/anira/](https://anira-project.github.io/anira/).
+
+<!-- Features -->
+
 ## Features
 
 - **Real-time Safe Execution**: Ensures deterministic runtimes suitable for real-time audio applications
@@ -132,10 +135,10 @@ Moreover, the following options are available:
 
 ### Build in examples
 
-- [Simple JUCE Audio Plugin](examples/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
-- [CLAP Plugin Example](examples/clap-audio-plugin/): Demonstrates how to use anira in a real-time clap plugin.
-- [Benchmark](examples/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
-- [Minimal Inference](examples/minimal-inference/): Demonstrates how minimal inference applications can be implemented in all three backends.
+- [Simple JUCE Audio Plugin](https://github.com/anira-project/anira/tree/main/examples/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
+- [CLAP Plugin Example](https://github.com/anira-project/anira/tree/main/examples/clap-audio-plugin/): Demonstrates how to use anira in a real-time clap plugin.
+- [Benchmark](https://github.com/anira-project/anira/tree/main/examples/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
+- [Minimal Inference](https://github.com/anira-project/anira/tree/main/examples/minimal-inference/): Demonstrates how minimal inference applications can be implemented in all three backends.
 
 ### Other examples
 
@@ -149,7 +152,7 @@ anira's real-time safety is checked in [this](https://github.com/anira-project/a
 
 If you use anira in your research or project, please cite either the [paper](https://doi.org/10.1109/IS262782.2024.10704099) or the software itself:
 
-```cite
+```bibtex
 @inproceedings{ackvaschulz2024anira,
     author={Ackva, Valentin and Schulz, Fares},
     booktitle={2024 IEEE 5th International Symposium on the Internet of Sounds (IS2)},
@@ -173,9 +176,9 @@ If you use anira in your research or project, please cite either the [paper](htt
 
 ## Contributors
 
-- [Valentin Ackva](https://github.com/vackva)
 - [Fares Schulz](https://github.com/faressc)
+- [Valentin Ackva](https://github.com/vackva)
 
 ## License
 
-This project is licensed under [Apache-2.0](LICENSE).
+This project is licensed under [Apache-2.0](https://github.com/anira-project/anira/tree/main/LICENSE).

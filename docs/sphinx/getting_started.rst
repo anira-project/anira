@@ -18,122 +18,18 @@ Before using anira, ensure you have:
 Installation
 ------------
 
-.. _installation:
-
-Anira can be easily integrated into your CMake project. Either add anira as a submodule, download the pre-built binaries from the `releases page <https://github.com/anira-project/anira/releases/latest>`_ or build from source.
-
-Option 1: Add as Git Submodule (Recommended)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-    # Add anira repo as a submodule
-    git submodule add https://github.com/anira-project/anira.git modules/anira
-
-In your CMakeLists.txt:
-
-.. code-block:: cmake
-
-    # Setup your project and target
-    project(your_project)
-    add_executable(your_target main.cpp ...)
-
-    # Add anira as a subdirectory
-    add_subdirectory(modules/anira)
-
-    # Link your target to the anira library
-    target_link_libraries(your_target anira::anira)
-
-Option 2: Use Pre-built Binaries
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Download pre-built binaries from the `releases page <https://github.com/anira-project/anira/releases/latest>`_.
-
-In your CMakeLists.txt:
-
-.. code-block:: cmake
-
-    # Setup your project and target
-    project(your_project)
-    add_executable(your_target main.cpp ...)
-
-    # Add the path to the anira library as cmake prefix path and find the package
-    list(APPEND CMAKE_PREFIX_PATH "path/to/anira")
-    find_package(anira REQUIRED)
-
-    # Link your target to the anira library
-    target_link_libraries(your_target anira::anira)
-
-Option 3: Build from Source
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-    git clone https://github.com/anira-project/anira.git
-    cd anira
-    cmake . -B build -DCMAKE_BUILD_TYPE=Release
-    cmake --build build --config Release --target anira
-    cmake --install build --prefix /path/to/install/directory
-
-Build options
-~~~~~~~~~~~~~
-
-By default, all three inference engines are installed. You can disable specific backends as needed:
-
-- LibTorch: ``-DANIRA_WITH_LIBTORCH=OFF``
-- OnnxRuntime: ``-DANIRA_WITH_ONNXRUNTIME=OFF``
-- Tensorflow Lite: ``-DANIRA_WITH_TFLITE=OFF``
-
-Moreover, the following options are available:
-
-- Build anira with benchmark capabilities: ``-DANIRA_WITH_BENCHMARK=ON``
-- Build example applications, plugins and populate example neural models: ``-DANIRA_WITH_EXAMPLES=ON``
-- Build anira with tests: ``-DANIRA_WITH_TESTS=ON``
-- Build anira with documentation: ``-DANIRA_WITH_DOCS=ON``
-- Disable the logging system: ``-DANIRA_WITH_LOGGING=OFF``
-
-.. _installation_end:
+.. include:: ../../README.md
+   :parser: myst_parser.sphinx_
+   :start-after: ## Installation
+   :end-before: ## Examples
 
 Basic Usage Example
 -------------------
 
-Here's a minimal example to get you started with anira:
-
-.. _basic-usage-example:
-
-.. code-block:: cpp
-    :linenos:
-
-    #include <anira/anira.h>
-
-    anira::InferenceConfig inference_config(
-            {{"path/to/your/model.onnx", anira::InferenceBackend::ONNX}}, // Model path
-            {{{256, 1, 1}}, {{256, 1}}},  // Input, Output shape
-            5.33f // Maximum inference time in ms
-    );
-
-    // Create a pre- and post-processor instance
-    anira::PrePostProcessor pp_processor(inference_config);
-
-    // Create an InferenceHandler instance
-    anira::InferenceHandler inference_handler(pp_processor, inference_config);
-
-    // Pass the host configuration and allocate memory for audio processing
-    inference_handler.prepare({buffer_size, sample_rate});
-
-    // Select the inference backend
-    inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
-
-    // Optionally get the latency of the inference process in samples
-    unsigned int latency_in_samples = inference_handler.get_latency();
-
-    // Real-time safe audio processing in process callback of your application
-    process(float** audio_data, int num_samples) {
-        inference_handler.process(audio_data, num_samples);
-    }
-    // audio_data now contains the processed audio samples
-
-.. _basic-usage-example_end:
+.. include:: ../../README.md
+   :parser: myst_parser.sphinx_
+   :start-after: ## Usage
+   :end-before: ## Installation
 
 Using Different Backends
 ------------------------
@@ -197,14 +93,18 @@ Here's how to configure and process multi-tensor models with anira:
     // Optionally get the latency of the inference process in samples
     std::vector<unsigned int> all_latencies = inference_handler.get_latency_vector();
 
-    // Input and output data structures
-    // audio_input: float** with shape [num_channels][num_samples] 
-    // audio_output: float** with shape [num_channels][num_samples]
-    // control_params: float* with 4 control values
-    // confidence_output: float* to receive confidence score
-    // num_samples: number of audio samples to process
+Next step is the real-time processing of audio data and control parameters. The following examples demonstrate how to set inputs, process the data, and retrieve outputs. We have the following inputs and outputs:
+    - ``audio_input``: A pointer to a pointer of floats (``float**``) with shape [num_channels][num_samples].
+    - ``audio_output``: A pointer to a pointer of floats (``float**``) with shape [num_channels][num_samples].
+    - ``control_params``: A pointer to float (``float*``) containing 4 control values.
+    - ``confidence_output``: A pointer to float (``float*``) used to receive the confidence score.
+    - ``num_samples``: The number of audio samples to process.
 
-    // =========== Method 1: Individual tensor processing ============
+Method 1: Individual Tensor Processing
+--------------------------------------
+
+.. code-block:: cpp
+    :linenos:
     
     // Step 1: Set non-streamable control parameters (tensor index 1)
     for (size_t i = 0; i < 4; ++i) {
@@ -213,11 +113,16 @@ Here's how to configure and process multi-tensor models with anira:
 
     // Step 2: Process streamable audio data (tensor index 0)
     inference_handler.process(audio_input, num_samples, 0); // Process audio data in tensor 0
+    // audio_input now contains processed audio data
 
     // Step 3: Retrieve non-streamable confidence output (tensor index 1)
     *confidence_output = pp_processor.get_output(1, 0);  // Get confidence from tensor 1, sample 0
 
-    // ============ Method 2: Simultaneous tensor processing ============
+Method 2: Multi-Tensor Processing
+---------------------------------
+
+.. code-block:: cpp
+    :linenos:
 
     // Allocate memory for input data and output data (not in the real-time callback)
     const float* const* const* input_data = new const float* const*[2];

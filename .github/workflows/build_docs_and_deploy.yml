@@ -46,7 +46,7 @@ jobs:
   # Deployment job
   deploy:
     needs: build_docs
-    # if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     permissions:
       pages: write
       id-token: write
