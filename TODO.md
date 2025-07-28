@@ -3,7 +3,7 @@
 ## Architecture
 
 - [ ] Model and context config should be also available as json file
-- [ ] InferenceConfig should return bool if correct
+- [ ] InferenceConfig check
 - [ ] RTSan check in CI
 - [ ] RTSan is named RTSan not RADSan anymore!
 - [ ] Change model_path function

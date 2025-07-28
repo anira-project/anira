@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - RTSan real-time safety CI checks and testing (not done yet)
 - JSON configuration loader with nlohmann_json dependency (not done yet)
+
+## [v2.0.0] - 2025-07-28
+
+### Added
+
 - New custom trained RAVE model in examples
 - Defaults struct inside InferenceConfig
 - Support for offline audio processing
@@ -56,33 +61,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [v1.0.3] - 2025-01-24
 
 ### Fixed
+
 - Fixed bug where version could not be detected when imported as a submodule
 
 ### Added
+
 - Possibility to package as .deb package
 - New checks and tests
 
 ## [v1.0.2] - 2024-12-06
 
 ### Added
+
 - Full support for armv7l platform on Linux
 - Benchmarks part of test suite when making pull requests
 - Multiple improvements in CMake build chain
 
 ### Changed
+
 - Bela examples now in separate repository
 
 ### Fixed
+
 - Fixed Windows test suite
 
 ## [v1.0.1] - 2024-11-20
 
 ### Fixed
+
 - Fixes #11: Issue where the concurrentqueue lib would not be found in the prebuilt binaries or installed lib
 
 ## [v1.0.0] - 2024-11-13
 
 ### Added
+
 - **Major update with API changes** (see anira usage guide or examples for more information)
 - Multichannel support
 - Support for input and output of multiple tensors including threadsafe methods to retrieve and pass their state in the anira::PrePostProcessor
@@ -93,15 +105,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [v0.1.3] - 2024-09-23
 
 ### Changed
+
 - Updated libtorch to 2.4.1
 
 ### Fixed
+
 - Fixes issue libomp not bundled with libtorch for macOS arm64
 - x86_64 macOS stays with 2.2.2 since new version binaries are not built by pytorch
 
 ## [v0.1.2] - 2024-09-14
 
 ### Added
+
 - New timestamps via counting inference buffers
 - Enhanced thread synchronization and data sharing between threads
 - Windows Ninja generator support
@@ -110,59 +125,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated documentation
 
 ### Changed
+
 - Default threadsafe structs switched to atomic
 - Port to new organization
 
 ### Fixed
+
 - Solved debug build issues with Windows
 
 ## [v0.1.1] - 2024-08-28
 
 ### Added
+
 - New Bela support and examples
 - New thread synchronisation option with raw atomics
 
 ## [v0.1.0] - 2024-05-20
 
 ### Changed
+
 - New anira::InferenceConfig layout
 
 ## [v0.0.8] - 2024-05-15
 
 ### Improved
+
 - Improved latency calculation
 
 ## [v0.0.7] - 2024-04-27
 
 ### Changed
+
 - Version 0.0.7 release
 
 ## [v0.0.6] - 2024-04-17
 
 ### Changed
+
 - Version 0.0.6 release
 
 ## [v0.0.5] - 2024-04-11
 
 ### Changed
+
 - Version 0.0.5 release
 
 ## [v0.0.4] - 2024-04-01
 
 ### Changed
+
 - Version 0.0.4 release
 
 ## [v0.0.3] - 2024-03-30
 
 ### Changed
+
 - Updated Windows CI workflow
 
 ## [v0.0.2] - 2024-03-27
 
 ### Changed
+
 - Version 0.0.2 release
 
 ## [v0.0.1] - 2024-03-23
 
 ### Added
+
 - Initial release (Version 0.0.1)
