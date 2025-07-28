@@ -101,7 +101,7 @@ Next step is the real-time processing of audio data and control parameters. The 
     - ``num_samples``: The number of audio samples to process.
 
 Method 1: Individual Tensor Processing
---------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: cpp
     :linenos:
@@ -119,7 +119,7 @@ Method 1: Individual Tensor Processing
     *confidence_output = pp_processor.get_output(1, 0);  // Get confidence from tensor 1, sample 0
 
 Method 2: Multi-Tensor Processing
----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: cpp
     :linenos:
