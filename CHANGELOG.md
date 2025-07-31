@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RTSan real-time safety CI checks and testing (not done yet)
 - JSON configuration loader with nlohmann_json dependency (not done yet)
 
+## [v2.0.1] - 2025-07-31
+
+### Changed
+
+- Updated CI to build anira without inference engines to avoid missing preprocessor flags
+
+### Fixed
+
+- Ensure missing preprocessor flags are set for disabled backends
+- Add virtual destructor to PrePostProcessor to avoid polymorphic cleanup issues
+
 ## [v2.0.0] - 2025-07-28
 
 ### Added
