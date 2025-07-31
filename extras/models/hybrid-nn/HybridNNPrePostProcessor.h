@@ -13,43 +13,21 @@ public:
         int64_t num_batches = 0;
         int64_t num_input_samples = 0;
         int64_t num_output_samples = 0;
-#ifdef USE_LIBTORCH
-        if (current_inference_backend == anira::InferenceBackend::LIBTORCH) {
-            num_batches = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[0][0];
-            num_input_samples = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[0][2];
-            num_output_samples = m_inference_config.get_tensor_output_shape(anira::InferenceBackend::LIBTORCH)[0][1];
-        }
-#endif
-#ifdef USE_ONNXRUNTIME
-        if (current_inference_backend == anira::InferenceBackend::ONNX) {
-            num_batches = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[0][0];
-            num_input_samples = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[0][2];
-            num_output_samples = m_inference_config.get_tensor_output_shape(anira::InferenceBackend::ONNX)[0][1];
-        }
-#endif
+
 #ifdef USE_TFLITE
         if (current_inference_backend == anira::InferenceBackend::TFLITE) {
             num_batches = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[0][0];
             num_input_samples = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[0][1];
             num_output_samples = m_inference_config.get_tensor_output_shape(anira::InferenceBackend::TFLITE)[0][1];
         }
-#endif 
-        else if (current_inference_backend == anira::InferenceBackend::CUSTOM) {
-#if USE_LIBTORCH
-            num_batches = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[0][0];
-            num_input_samples = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[0][2];
-            num_output_samples = m_inference_config.get_tensor_output_shape(anira::InferenceBackend::LIBTORCH)[0][1];
-#elif USE_ONNXRUNTIME
-            num_batches = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[0][0];
-            num_input_samples = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[0][2];
-            num_output_samples = m_inference_config.get_tensor_output_shape(anira::InferenceBackend::ONNX)[0][1];
-#elif USE_TFLITE
-            num_batches = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[0][0];
-            num_input_samples = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[0][1];
-            num_output_samples = m_inference_config.get_tensor_output_shape(anira::InferenceBackend::TFLITE)[0][1];
+        else {
 #endif
+            num_batches = m_inference_config.get_tensor_input_shape()[0][0];
+            num_input_samples = m_inference_config.get_tensor_input_shape()[0][2];
+            num_output_samples = m_inference_config.get_tensor_output_shape()[0][1];
+#ifdef USE_TFLITE
         }
-
+#endif
         if (
 #ifdef USE_LIBTORCH
             current_inference_backend != anira::InferenceBackend::LIBTORCH &&

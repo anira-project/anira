@@ -92,13 +92,25 @@ bool AniraClapPluginExample::paramsValueToText(clap_id paramId, double value, ch
             switch (newBackend)
             {
             case OnnxRuntime:
+                #if USE_ONNX
                 sValue = "OnnxRuntime";
+                #else
+                sValue = "OnnxRuntime (not available)";
+                #endif
                 break;
             case LibTorch:
+                #if USE_LIBTORCH
                 sValue = "LibTorch";
+                #else
+                sValue = "LibTorch (not available)";
+                #endif
                 break;
             case TensorFlowLite:
+                #if USE_LIBTORCH
                 sValue = "TensorFlowLite";
+                #else
+                sValue = "TensorFlowLite (not available)";
+                #endif
                 break;
             case Bypassed:
                 sValue = "Bypassed";
@@ -227,13 +239,25 @@ void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t *evt)
         if (m_param_to_value[v->param_id] == &m_param_backend) {
             switch ((Backend) m_param_backend) {
                 case OnnxRuntime:
+                    #if USE_ONNX
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
+                    #else
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
+                    #endif
                     break;
                 case LibTorch:
+                    #if USE_LIBTORCH
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
+                    #else
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
+                    #endif
                     break;
                 case TensorFlowLite:
+                    #if USE_TENSORFLOW
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
+                    #else
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
+                    #endif
                     break;
                 default:
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);

@@ -26,12 +26,19 @@ jobs:
         include:
           - name: Linux-x86_64
             os: ubuntu-latest
+            inference_engines: ON
+          - name: Linux-x86_64-no_inference_engines
+            os: ubuntu-latest
+            inference_engines: OFF
           - name: macOS-x86_64
             os: macOS-latest
+            inference_engines: ON
           - name: macOS-arm64
             os: macOS-latest
+            inference_engines: ON
           - name: Windows-x86_64
             os: windows-latest
+            inference_engines: ON
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -47,6 +54,6 @@ jobs:
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON"
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.inference_engines }} -DANIRA_WITH_TFLITE=${{ matrix.inference_engines }}"
       - name: test
         uses: ./.github/actions/test

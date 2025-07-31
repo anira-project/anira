@@ -10,15 +10,13 @@ public:
     void process(std::vector<anira::BufferF> &input, std::vector<anira::BufferF> &output, [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
         size_t num_batches;
         size_t num_input_samples;
-#if USE_LIBTORCH
-        num_batches = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[0][0];
-        num_input_samples = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[0][2];
-#elif USE_ONNXRUNTIME
-        num_batches = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[0][0];
-        num_input_samples = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[0][2];
-#elif USE_TFLITE
+
+#if USE_TFLITE
         num_batches = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[0][0];
         num_input_samples = (size_t) m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[0][1];
+#else
+        num_batches = (size_t) m_inference_config.get_tensor_input_shape()[0][0];
+        num_input_samples = (size_t) m_inference_config.get_tensor_input_shape()[0][2];
 #endif
 
         for (size_t channel = 0; channel < input[0].get_num_channels(); ++channel) {
