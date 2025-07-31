@@ -20,6 +20,15 @@ struct SessionElementTestParams {
     std::vector<size_t> expected_receive_buffer_sizes;
 };
 
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
+    os << "[ ";
+    for (const auto& item : vec)
+        os << item << " ";
+    os << "]";
+    return os;
+}
+
 std::ostream& operator<<(std::ostream& stream, const SessionElementTestParams& params)
 {
     stream << "{ ";

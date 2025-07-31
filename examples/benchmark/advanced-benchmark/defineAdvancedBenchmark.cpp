@@ -144,14 +144,8 @@ void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int
         inference_config.update_processing_spec();
         inference_config.set_preprocess_input_size(std::vector<size_t>{static_cast<size_t>(input_size - receptive_field)});
     } else if (model == 1) {
-#ifdef USE_LIBTORCH
-        inference_config.set_tensor_input_shape({{buffer_size, 1, 150}}, anira::InferenceBackend::LIBTORCH);
-        inference_config.set_tensor_output_shape({{buffer_size, 1}}, anira::InferenceBackend::LIBTORCH);
-#endif
-#ifdef USE_ONNXRUNTIME
-        inference_config.set_tensor_input_shape({{buffer_size, 1, 150}}, anira::InferenceBackend::ONNX);
-        inference_config.set_tensor_output_shape({{buffer_size, 1}}, anira::InferenceBackend::ONNX);
-#endif
+        inference_config.set_tensor_input_shape({{buffer_size, 1, 150}});
+        inference_config.set_tensor_output_shape({{buffer_size, 1}});
 #ifdef USE_TFLITE
         std::string model_data = inference_config.get_model_path(anira::InferenceBackend::TFLITE);
         size_t pos = model_data.find("256");
