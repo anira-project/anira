@@ -11,7 +11,7 @@
 
 namespace anira {
 
-class JsonConfigLoader {
+class ANIRA_API JsonConfigLoader {
 public:
     JsonConfigLoader(const std::string& file_path) {
         std::ifstream config_file(file_path);
@@ -170,11 +170,23 @@ private:
             const std::string model_backend = item.at("inference_backend").get<std::string>();
 
             if (model_backend == "ONNX") {
+                #if USE_ONNX
                 model_data.emplace_back(model_path, anira::InferenceBackend::ONNX);
+                #else
+                LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array entry : ONNX currently disabled in config." << std::endl;
+                #endif
             } else if (model_backend == "TFLITE") {
+                #if USE_TFLITE
                 model_data.emplace_back(model_path, anira::InferenceBackend::TFLITE);
+                #else
+                LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array entry : TFLITE currently disabled in config." << std::endl;
+                #endif
             } else if (model_backend == "LIBTORCH") {
+                #if USE_LIBTORCH
                 model_data.emplace_back(model_path, anira::InferenceBackend::LIBTORCH);
+                #else
+                LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array entry : LIBTORCH currently disabled in config." << std::endl;
+                #endif
             } else if (model_backend == "CUSTOM") {
                 model_data.emplace_back(model_path, anira::InferenceBackend::CUSTOM);
             } else {
@@ -222,11 +234,23 @@ private:
             }
 
             if (tensor_backend == "ONNX") {
+                #if USE_ONNX
                 tensor_shape.emplace_back(input_shape_list, output_shape_list, anira::InferenceBackend::ONNX);
+                #else
+                LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array entry : ONNX currently disabled in config." << std::endl;
+                #endif
             } else if (tensor_backend == "TFLITE") {
+                #if USE_TFLITE
                 tensor_shape.emplace_back(input_shape_list, output_shape_list, anira::InferenceBackend::TFLITE);
+                #else
+                LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array entry : TFLITE currently disabled in config." << std::endl;
+                #endif
             } else if (tensor_backend == "LIBTORCH") {
+                #if USE_LIBTORCH
                 tensor_shape.emplace_back(input_shape_list, output_shape_list, anira::InferenceBackend::LIBTORCH);
+                #else
+                LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array entry : LIBTORCH currently disabled in config." << std::endl;
+                #endif
             } else if (tensor_backend == "CUSTOM") {
                 tensor_shape.emplace_back(input_shape_list, output_shape_list, anira::InferenceBackend::CUSTOM);
             } else if (tensor_backend == "UNIVERSAL") {

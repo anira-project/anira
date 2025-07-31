@@ -8,6 +8,7 @@
 #include <iostream>
 #include <cassert>
 #include <cstring>
+#include <anira/utils/Logger.h>
 #include <anira/utils/InferenceBackend.h>
 #include "anira/system/AniraWinExports.h"
 
@@ -38,19 +39,26 @@ struct ANIRA_API ModelData {
         assert((m_size > 0 && "Model data size must be greater than zero."));
         assert((m_data != nullptr && "Model data pointer cannot be null."));
         if (!m_model_function.empty()) {
+            #ifdef USE_LIBTORCH
             if (backend == InferenceBackend::LIBTORCH) {
                 m_model_function = model_function; // For LIBTORCH, we can specify a function name
             } else {
-                std::cerr << "Model function is only applicable for LIBTORCH backend." << std::endl;
+                LOG_ERROR << "Model function is only applicable for LIBTORCH backend." << std::endl;
             }
+            #else
+            LOG_ERROR << "Model function is only applicable for LIBTORCH backend (LIBTORCH disabled in config)." << std::endl;
+            #endif
         }
         if (!is_binary) {
             m_data = malloc(sizeof(char) * size);
             memcpy(m_data, data, size);
         } else {
+            #ifdef USE_ONNX
             if (backend != InferenceBackend::ONNX) {
-                std::cerr << "Binary model is only supported for ONNX backend." << std::endl;
+                LOG_ERROR << "Binary model is only supported for ONNX backend." << std::endl;
             }
+            #endif
+            LOG_ERROR << "Binary model is only supported for ONNX backend (ONNX disabled in config)." << std::endl;
         }
     }
     
