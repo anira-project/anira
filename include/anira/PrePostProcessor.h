@@ -61,7 +61,7 @@ public:
     /**
      * @brief Default destructor
      */
-    ~PrePostProcessor() = default;
+    virtual ~PrePostProcessor() = default;
 
     /**
      * @brief Transforms input data from ring buffers to inference tensors
