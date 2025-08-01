@@ -36,8 +36,15 @@ void TFLiteProcessor::process(std::vector<BufferF>& input, std::vector<BufferF>&
 
 TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config)
 {
-    std::string modelpath = m_inference_config.get_model_path(anira::InferenceBackend::TFLITE);
-    m_model = TfLiteModelCreateFromFile(modelpath.c_str());
+    if (inference_config.is_model_binary(anira::InferenceBackend::TFLITE)) {
+        const anira::ModelData* model_data = m_inference_config.get_model_data(anira::InferenceBackend::TFLITE);
+        assert(model_data && "Model data not found for binary model!");
+        m_model = TfLiteModelCreate(model_data->m_data, model_data->m_size);
+    } else {
+        std::string modelpath = m_inference_config.get_model_path(anira::InferenceBackend::TFLITE);
+        m_model = TfLiteModelCreateFromFile(modelpath.c_str());
+    }
+
 
     m_options = TfLiteInterpreterOptionsCreate();
     TfLiteInterpreterOptionsSetNumThreads(m_options, 1);
