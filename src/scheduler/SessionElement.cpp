@@ -328,9 +328,10 @@ int SessionElement::calculate_inference_caused_latency(float max_possible_infere
             wait_time_left -= m_inference_config.m_max_inference_time;
         }
 
-        while (inference_time_left >= host_buffer_time_int && std::ceil(host_buffer_size_int) > 0) {
-            inference_caused_latency += host_buffer_size_int;
-            inference_time_left -= host_buffer_time_int;
+        if (host_buffer_time_int > 0) {
+            int iterations = inference_time_left / host_buffer_time_int;
+            inference_caused_latency += iterations * host_buffer_size_int;
+            inference_time_left -= iterations * host_buffer_time_int;
         }
     }
 
