@@ -312,23 +312,23 @@ int SessionElement::calculate_inference_caused_latency(float max_possible_infere
     // Calculate the host buffer time in ms
     float host_buffer_time = host_buffer_size * 1000.f / host_sample_rate;
     float inference_time_left = 0.f;
-    int host_buffer_size_int = static_cast<int>(std::floor(host_buffer_size));
+    float host_buffer_size_int = std::floor(host_buffer_size);
     float host_buffer_time_int = host_buffer_size_int * 1000.f / host_sample_rate;
-    int inference_caused_latency = 0;
+    float inference_caused_latency = 0;
 
-    unsigned int max_possible_inferences_parallel = static_cast<unsigned int>(std::ceil((max_possible_inferences) / static_cast<float>(m_inference_config.m_num_parallel_processors)));
-    int already_inferred = 0;
+    unsigned int max_inference_batches = static_cast<unsigned int>(std::ceil((max_possible_inferences) / static_cast<float>(m_inference_config.m_num_parallel_processors)));
+    float already_inferred = 0;
     float wait_time_left = wait_time;
 
-    for (unsigned int i = 0; i < max_possible_inferences_parallel; ++i) {
+    for (unsigned int i = 0; i < max_inference_batches; ++i) {
         inference_time_left += m_inference_config.m_max_inference_time;
 
         if (wait_time_left >= m_inference_config.m_max_inference_time) {
             already_inferred += m_inference_config.m_num_parallel_processors;
             wait_time_left -= m_inference_config.m_max_inference_time;
         }
-        
-        while (inference_time_left >= host_buffer_time_int && host_buffer_size_int > 0) {
+
+        while (inference_time_left >= host_buffer_time_int && std::ceil(host_buffer_size_int) > 0) {
             inference_caused_latency += host_buffer_size_int;
             inference_time_left -= host_buffer_time_int;
         }
@@ -345,7 +345,7 @@ int SessionElement::calculate_inference_caused_latency(float max_possible_infere
 
     inference_caused_latency -= already_inferred * postprocess_output_size;
 
-    return inference_caused_latency;
+    return static_cast<int>(inference_caused_latency);
 }
 
 float SessionElement::calculate_wait_time(float host_buffer_size, float host_sample_rate) const {

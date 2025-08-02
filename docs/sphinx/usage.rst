@@ -54,7 +54,7 @@ Pass the model data as binary information:
     {void* model_data, size_t model_size, anira::InferenceBackend backend}
 
 .. note::
-    Defining the model data as binary information is only possible for the ``anira::InferenceBackend::ONNX`` until now.
+    Defining the model data as binary information is only possible for the ``anira::InferenceBackend::ONNX`` and ``anira::InferenceBackend::TFLITE`` until now.
 
 The :cpp:struct:`anira::InferenceConfig` requires a vector of :cpp:struct:`anira::ModelData`.
 
@@ -451,6 +451,10 @@ The :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::Inferen
     // Clean up
     delete[] input_data;
     delete[] output_data;
+
+.. note::
+    The :cpp:func:`anira::InferenceHandler::pop_data` method supports a wait_until parameter for blocking until data is available or timeout occurs. Use with the ``blocking_ratio`` in :cpp:struct:`anira::InferenceConfig` for proper latency compensation. Note that this blocks the real-time thread and is not fully lock-free, but this enables you to further reduce latency by waiting for the next available data.
+
 
 5.3. Processing Non-Streamable Tensors
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
