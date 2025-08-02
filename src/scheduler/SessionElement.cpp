@@ -319,28 +319,27 @@ int SessionElement::calculate_inference_caused_latency(float max_possible_infere
     unsigned int max_possible_inferences_parallel = static_cast<unsigned int>(std::ceil((max_possible_inferences) / static_cast<float>(m_inference_config.m_num_parallel_processors)));
     int already_inferred = 0;
     float wait_time_left = wait_time;
+
     for (unsigned int i = 0; i < max_possible_inferences_parallel; ++i) {
         inference_time_left += m_inference_config.m_max_inference_time;
+
+        if (wait_time_left >= m_inference_config.m_max_inference_time) {
+            already_inferred += m_inference_config.m_num_parallel_processors;
+            wait_time_left -= m_inference_config.m_max_inference_time;
+        }
+        
         while (inference_time_left >= host_buffer_time_int && host_buffer_size_int > 0) {
             inference_caused_latency += host_buffer_size_int;
             inference_time_left -= host_buffer_time_int;
-            wait_time_left += host_buffer_time_int;
         }
     }
 
-    while (inference_time_left > 0) {
-        if (wait_time_left >= m_inference_config.m_max_inference_time) {
-            inference_time_left -= m_inference_config.m_max_inference_time;
-            already_inferred += m_inference_config.m_num_parallel_processors;
-            wait_time_left -= m_inference_config.m_max_inference_time;
-        } else {
+    if (inference_time_left > wait_time) {
+        if (host_buffer_time_int > 0) {
+            inference_time_left -= host_buffer_time_int;
             inference_caused_latency += host_buffer_size_int;
-            if (host_buffer_time_int > 0) {
-                inference_time_left -= host_buffer_time_int;
-            } else {
-                inference_caused_latency += 1;
-                break;
-            }
+        } else {
+            inference_caused_latency += 1;
         }
     }
 

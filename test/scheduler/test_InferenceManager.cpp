@@ -247,7 +247,7 @@ INSTANTIATE_TEST_SUITE_P(
                 0.5f,
                 2
             ),
-            { 6 }
+            { 5 }
         },
         InferenceManagerTestParams {
             HostConfig(2048, 48000, true),
@@ -261,7 +261,7 @@ INSTANTIATE_TEST_SUITE_P(
                 0.5f,
                 1
             ),
-            { 8 }
+            { 20 }
         },
         InferenceManagerTestParams {
             HostConfig(2048, 48000, true),
