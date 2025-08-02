@@ -57,15 +57,15 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
 
         initialize_iteration();
 
-        auto start = std::chrono::high_resolution_clock::now();
+        std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
         
         m_inference_handler->process(m_buffer->get_array_of_write_pointers(), get_buffer_size());
 
         while (!buffer_processed()) {
             std::this_thread::sleep_for(std::chrono::nanoseconds (10));
         }
-        
-        auto end = std::chrono::high_resolution_clock::now();
+
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
 
         interation_step(start, end, state);
     }

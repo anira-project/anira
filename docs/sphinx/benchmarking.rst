@@ -90,7 +90,7 @@ Implement the main measurement loop using the Google Benchmark framework's state
             initialize_iteration();
 
             // Begin timing measurement
-            auto start = std::chrono::high_resolution_clock::now();
+            std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
             
             // Process the buffer (this triggers inference)
             m_inference_handler->process(m_buffer->get_array_of_write_pointers(), get_buffer_size());
@@ -101,7 +101,7 @@ Implement the main measurement loop using the Google Benchmark framework's state
             }
             
             // End timing measurement
-            auto end = std::chrono::high_resolution_clock::now();
+            std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
 
             // Record the measured runtime
             interation_step(start, end, state);
