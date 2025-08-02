@@ -169,10 +169,10 @@ INSTANTIATE_TEST_SUITE_P(
                 false,
                 0.5f
             ),
-            {3967},
+            {3966},
             2,
             {4096}, // Expected send buffer sizes
-            {8063}  // Expected receive buffer sizes
+            {8062}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
             HostConfig(2048, 48000, true),
@@ -184,10 +184,10 @@ INSTANTIATE_TEST_SUITE_P(
                 false,
                 0.5f
             ),
-            {3007},
+            {3006},
             2,
             {4096}, // Expected send buffer sizes
-            {7103}  // Expected receive buffer sizes
+            {7102}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
             HostConfig(2048, 48000, true),
@@ -297,10 +297,10 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({16, 2}, {1, 3}),
                 50.f
             ),
-            {12288, 768},
+            {8192, 512},
             9,
             {3, 848}, // Expected send buffer sizes
-            {30720, 1920}  // Expected receive buffer sizes
+            {26624, 1664}  // Expected receive buffer sizes
         },
         // Non-power-of-two buffer size tests
         SessionElementTestParams {
@@ -351,10 +351,10 @@ INSTANTIATE_TEST_SUITE_P(
                 false,
                 0.5f
             ),
-            {1407},
+            {1406},
             6,
             {6}, // Expected send buffer sizes
-            {7551}  // Expected receive buffer sizes
+            {7550}  // Expected receive buffer sizes
         },
         SessionElementTestParams {
             HostConfig(2048, 48000, true),
@@ -390,10 +390,10 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
                 20.f
             ),
-            {8192},
+            {4096},
             12,
             {4096}, // Expected send buffer sizes
-            {20480}  // Expected receive buffer sizes
+            {16384}  // Expected receive buffer sizes
         },
         // Test with very short inference times
         SessionElementTestParams {
@@ -416,10 +416,10 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<TensorShape>{TensorShape({{1, 1, 256}}, {{1, 1, 256}})},
                 100.f
             ),
-            {9728},
+            {5120},
             40,
             {512}, // Expected send buffer sizes
-            {19968}  // Expected receive buffer sizes
+            {15360}  // Expected receive buffer sizes
         }
     ),
     build_test_name

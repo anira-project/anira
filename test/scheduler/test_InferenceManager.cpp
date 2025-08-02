@@ -222,13 +222,86 @@ INSTANTIATE_TEST_SUITE_P(
             { 4095 }
         },
         InferenceManagerTestParams {
+            HostConfig(2048, 48000, true),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
+                ProcessingSpec({1}, {2}, {160}, {1}),
+                3.f,
+                0,
+                false,
+                0.5f,
+                2
+            ),
+            { 1 }
+        },
+        InferenceManagerTestParams {
+            HostConfig(2048, 48000, true),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
+                ProcessingSpec({1}, {2}, {160}, {1}),
+                5.f,
+                0,
+                false,
+                0.5f,
+                2
+            ),
+            { 6 }
+        },
+        InferenceManagerTestParams {
+            HostConfig(2048, 48000, true),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
+                ProcessingSpec({1}, {2}, {160}, {1}),
+                4.9f,
+                0,
+                false,
+                0.5f,
+                1
+            ),
+            { 8 }
+        },
+        InferenceManagerTestParams {
+            HostConfig(2048, 48000, true),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
+                ProcessingSpec({1}, {2}, {160}, {1}),
+                4.f,
+                0,
+                false,
+                0.f
+            ),
+            { 12 }
+        },
+        InferenceManagerTestParams {
             HostConfig(1, 48000.0/2048, true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
                 40.f
             ),
-            { 5886 }
+            { 5885 }
+        },
+        InferenceManagerTestParams {
+            HostConfig(2048, 48000.0, true),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 1}})},
+                40.f
+            ),
+            { 1 }
+        },
+        InferenceManagerTestParams {
+            HostConfig(2048, 48000.0, false),
+            InferenceConfig(
+                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+                std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 1}})},
+                39.f
+            ),
+            { 1 }
         },
         InferenceManagerTestParams {
             HostConfig(1, 48000.0/2048),
@@ -247,7 +320,7 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({1}, {4}),
                 20.f
             ),
-            { 2 }
+            { 1 }
         },
         InferenceManagerTestParams {
             HostConfig(1./256., 48000./2048.),
@@ -356,7 +429,7 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({4, 2}, {1, 1}),
                 50.f
             ),
-            { 18944, 7104 }
+            { 6656, 2496 }
         },
         InferenceManagerTestParams {
             HostConfig(1500, 44100./8., true, 1),
@@ -366,7 +439,7 @@ INSTANTIATE_TEST_SUITE_P(
                 ProcessingSpec({4, 2, 1}, {1, 1}),
                 50.f
             ),
-            { 18944, 7104 }
+            { 6656, 2496 }
         },
         InferenceManagerTestParams {
             HostConfig(256., 48000./8, false, 1),

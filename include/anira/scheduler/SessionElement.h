@@ -274,9 +274,10 @@ private:
      * @param host_buffer_size Host audio buffer size
      * @param host_sample_rate Host audio sample rate
      * @param wait_time Expected wait time for inference completion
+     * @param postprocess_output_size Size of the model's postprocessed output in samples
      * @return Additional inference-caused latency in samples
      */
-    int calculate_inference_caused_latency(float max_possible_inferences, float host_buffer_size, float host_sample_rate, float wait_time) const;
+    int calculate_inference_caused_latency(float max_possible_inferences, float host_buffer_size, float host_sample_rate, float wait_time, size_t postprocess_output_size) const;
     
     /**
      * @brief Calculates expected wait time for inference completion
