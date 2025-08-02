@@ -137,7 +137,11 @@ INSTANTIATE_TEST_SUITE_P(
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                40.f
+                40.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {2048},
             2,
@@ -152,7 +156,8 @@ INSTANTIATE_TEST_SUITE_P(
                 17.f,
                 0,
                 false,
-                0.5f
+                0.5f,
+                2
             ),
             {0},
             2,
@@ -167,7 +172,8 @@ INSTANTIATE_TEST_SUITE_P(
                 20.f,
                 0,
                 false,
-                0.5f
+                0.5f,
+                2
             ),
             {3966},
             2,
@@ -182,7 +188,8 @@ INSTANTIATE_TEST_SUITE_P(
                 10.f,
                 0,
                 false,
-                0.5f
+                0.5f,
+                2
             ),
             {3006},
             2,
@@ -194,7 +201,11 @@ INSTANTIATE_TEST_SUITE_P(
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                19.f
+                19.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {4095},
             2,
@@ -206,7 +217,11 @@ INSTANTIATE_TEST_SUITE_P(
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
-                20.f
+                20.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {4095},
             2,
@@ -218,7 +233,11 @@ INSTANTIATE_TEST_SUITE_P(
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
-                50.f
+                50.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {4096},
             3,
@@ -230,7 +249,11 @@ INSTANTIATE_TEST_SUITE_P(
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
-                51.f
+                51.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {6143},
             3,
@@ -243,7 +266,11 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 4, 1}})},
                 ProcessingSpec({1}, {4}),
-                40.f
+                40.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {1},
             2,
@@ -256,7 +283,11 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 4, 1}}, {{1, 1, 2048}})},
                 ProcessingSpec({4}, {1}),
-                40.f
+                40.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {3972},
             2,
@@ -269,7 +300,11 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}}, {{1, 1, 2048}, {2, 256}})},
                 ProcessingSpec({16}, {1, 2}),
-                40.f
+                40.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {2048, 256},
             2,
@@ -282,7 +317,11 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
                 ProcessingSpec({16, 2}, {1, 3}),
-                5.f
+                5.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {4096, 256},
             2,
@@ -295,7 +334,11 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
                 ProcessingSpec({16, 2}, {1, 3}),
-                50.f
+                50.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {8192, 512},
             9,
@@ -308,7 +351,11 @@ INSTANTIATE_TEST_SUITE_P(
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                13.f
+                13.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {2759},
             2,
@@ -320,7 +367,11 @@ INSTANTIATE_TEST_SUITE_P(
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
-                40.f
+                40.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {2820},
             3,
@@ -333,7 +384,11 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
                 ProcessingSpec({8}, {1}),
-                12.f
+                12.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {3583},
             6,
@@ -349,7 +404,8 @@ INSTANTIATE_TEST_SUITE_P(
                 4.f,
                 0,
                 false,
-                0.5f
+                0.5f,
+                2
             ),
             {1406},
             6,
@@ -362,7 +418,11 @@ INSTANTIATE_TEST_SUITE_P(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 10000}}, {{1, 1, 2048}})},
                 ProcessingSpec({1}, {1}, {2048}, {2048}),
-                21.f
+                21.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {4095},
             2,
@@ -375,7 +435,11 @@ INSTANTIATE_TEST_SUITE_P(
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-                30.f
+                30.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {1834},
             4,
@@ -388,7 +452,11 @@ INSTANTIATE_TEST_SUITE_P(
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
-                20.f
+                20.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {4096},
             12,
@@ -401,7 +469,11 @@ INSTANTIATE_TEST_SUITE_P(
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 256}}, {{1, 1, 256}})},
-                1.f
+                1.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {767},
             4,
@@ -414,7 +486,11 @@ INSTANTIATE_TEST_SUITE_P(
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 1, 256}}, {{1, 1, 256}})},
-                100.f
+                100.f,
+                0,
+                false,
+                0.f,
+                2
             ),
             {5120},
             40,
