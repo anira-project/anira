@@ -104,29 +104,14 @@ public:
      * @brief Records timing information for a single benchmark iteration (Windows/macOS)
      * 
      * Measures and records the elapsed time for a single benchmark iteration using
-     * steady_clock for high precision timing on Windows and macOS platforms.
-     * Updates benchmark state and provides detailed logging of iteration results.
+     * steady_clock for timing. Updates benchmark state and provides detailed logging
+     * of iteration results.
      * 
      * @param start The start time point of the iteration
      * @param end The end time point of the iteration  
      * @param state Reference to the benchmark state for recording results
      */
-#if defined(_WIN32) || defined(__APPLE__)
         void interation_step(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end, ::benchmark::State& state);
-#else
-    /**
-     * @brief Records timing information for a single benchmark iteration (Linux/Unix)
-     * 
-     * Measures and records the elapsed time for a single benchmark iteration using
-     * system_clock for timing on Linux and Unix platforms. Updates benchmark state
-     * and provides detailed logging of iteration results.
-     * 
-     * @param start The start time point of the iteration
-     * @param end The end time point of the iteration
-     * @param state Reference to the benchmark state for recording results
-     */
-        void interation_step(const std::chrono::system_clock::time_point& start, const std::chrono::system_clock::time_point& end, ::benchmark::State& state);
-#endif
 
     /**
      * @brief Finalizes the current benchmark repetition

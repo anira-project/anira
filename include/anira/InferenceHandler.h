@@ -176,30 +176,66 @@ public:
     ANIRA_REALTIME void push_data(const float* const* const* input_data, size_t* num_input_samples);
     
     /**
-     * @brief Pops processed output data from the pipeline for a specific tensor
+     * @brief Pops processed output data from the pipeline for a specific tensor (non-blocking)
      * 
-     * This method retrieves processed data from the inference pipeline. Should be
-     * used in conjunction with push_data for decoupled processing.
+     * Retrieves processed data from the inference pipeline for a specific tensor.
+     * Should be used in conjunction with push_data for decoupled processing.
+     * This method is non-blocking and returns immediately with available samples.
      * 
      * @param output_data Output buffer organized as data[channel][sample]
      * @param num_output_samples Maximum number of samples the output buffer can hold
      * @param tensor_index Index of the tensor to retrieve data from (default: 0)
      * @return Number of samples actually written to the output buffer
      * 
-     * @note This method is real-time safe and should not allocate memory
+     * @note This method is real-time safe and does not allocate memory.
      */
     ANIRA_REALTIME size_t pop_data(float* const* output_data, size_t num_output_samples, size_t tensor_index = 0);
+
+    /**
+     * @brief Pops processed output data from the pipeline for a specific tensor (blocking with timeout)
+     * 
+     * Retrieves processed data from the inference pipeline for a specific tensor.
+     * This method blocks until data is available or until the specified timeout is reached.
+     * Should be used in conjunction with push_data for decoupled processing.
+     * 
+     * @param output_data Output buffer organized as data[channel][sample]
+     * @param num_output_samples Maximum number of samples the output buffer can hold
+     * @param wait_until Time point until which to wait for available data
+     * @param tensor_index Index of the tensor to retrieve data from (default: 0)
+     * @return Number of samples actually written to the output buffer
+     * 
+     * @note This method is not 100% real-time safe due to potential blocking.
+     */
+    size_t pop_data(float* const* output_data, size_t num_output_samples, std::chrono::steady_clock::time_point wait_until, size_t tensor_index = 0);
     
     /**
-     * @brief Pops processed output data for multiple tensors simultaneously
+     * @brief Pops processed output data for multiple tensors simultaneously (non-blocking)
+     * 
+     * Retrieves processed data for all tensors from the inference pipeline.
+     * This method is non-blocking and returns immediately with available samples for each tensor.
      * 
      * @param output_data Output buffers organized as data[tensor_index][channel][sample]
      * @param num_output_samples Array of maximum output sample counts for each tensor
      * @return Array of actual output sample counts for each tensor
      * 
-     * @note This method is real-time safe and should not allocate memory
+     * @note This method is real-time safe and does not allocate memory.
      */
     ANIRA_REALTIME size_t* pop_data(float* const* const* output_data, size_t* num_output_samples);
+
+    /**
+     * @brief Pops processed output data for multiple tensors simultaneously (blocking with timeout)
+     * 
+     * Retrieves processed data for all tensors from the inference pipeline.
+     * This method blocks until data is available for each tensor or until the specified timeout is reached.
+     * 
+     * @param output_data Output buffers organized as data[tensor_index][channel][sample]
+     * @param num_output_samples Array of maximum output sample counts for each tensor
+     * @param wait_until Time point until which to wait for available data
+     * @return Array of actual output sample counts for each tensor
+     * 
+     * @note This method is not 100% real-time safe due to potential blocking.
+     */
+    size_t* pop_data(float* const* const* output_data, size_t* num_output_samples, std::chrono::steady_clock::time_point wait_until);
 
     /**
      * @brief Gets the processing latency for a specific tensor

@@ -91,11 +91,7 @@ int ProcessBlockFixture::get_repetition() {
     return m_repetition;
 }
 
-#if defined(_WIN32) || defined(__APPLE__)
 void ProcessBlockFixture::interation_step(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end, ::benchmark::State& state) {
-#else
-void ProcessBlockFixture::interation_step(const std::chrono::system_clock::time_point& start, const std::chrono::system_clock::time_point& end, ::benchmark::State& state) {
-#endif
     auto elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(end - start);
 
     state.SetIterationTime(elapsed_seconds.count());

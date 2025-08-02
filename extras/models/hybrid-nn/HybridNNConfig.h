@@ -16,10 +16,10 @@ static std::vector<anira::ModelData> model_data_hybridnn_config = {
 };
 
 static std::vector<anira::TensorShape> tensor_shape_hybridnn_config = {
-        {{{256, 1, 150}}, {{256, 1}}},
 #ifdef USE_TFLITE
         {{{256, 150, 1}}, {{256, 1}}, anira::InferenceBackend::TFLITE},
 #endif
+        {{{256, 1, 150}}, {{256, 1}}}
 };
 
 static anira::ProcessingSpec processing_spec_hybridnn_config = {

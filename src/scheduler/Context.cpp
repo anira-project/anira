@@ -179,30 +179,38 @@ void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
     }
 }
 
-void Context::new_data_request(std::shared_ptr<SessionElement> session, double buffer_size_in_sec) {
-    auto timeToProcess = std::chrono::microseconds(static_cast<long>(buffer_size_in_sec * 1e6 * session->m_inference_config.m_blocking_ratio));
-    auto currentTime = std::chrono::system_clock::now();
-    auto waitUntil = currentTime + timeToProcess; // TODO: Not needed for session->m_inference_config.m_blocking_ratio = 0.f..
+void Context::new_data_request(std::shared_ptr<SessionElement> session) {
+    while (session->m_time_stamps.size() > 0) {
+        for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
+            if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
+                if (session->m_is_non_real_time) {
+                    while (!session->m_inference_queue[i]->m_done_atomic.exchange(false, std::memory_order::acquire)) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                } else {
+                    if (session->m_inference_queue[i]->m_done_atomic.exchange(false, std::memory_order::acquire)) {
+                        session->m_time_stamps.pop_back();
+                        post_process(session, session->m_inference_queue[i]);
+                    } else {
+                        return;
+                    }
+                }
+                break;
+            }
+        }
+    }
+}
+
+void Context::new_data_request(std::shared_ptr<SessionElement> session, std::chrono::steady_clock::time_point wait_until) {
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
                 if (session->m_is_non_real_time) {
                     if (session->m_inference_config.m_blocking_ratio > 0.f) {
                         session->m_inference_queue[i]->m_done_semaphore.acquire();
-                    } else {
-                        while (!session->m_inference_queue[i]->m_done_atomic.exchange(false, std::memory_order::acquire)) {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                        }
                     }
                 } else {
-                    if (session->m_inference_config.m_blocking_ratio > 0.f) {
-                        if (session->m_inference_queue[i]->m_done_semaphore.try_acquire_until(waitUntil)) {
-                            session->m_time_stamps.pop_back();
-                            post_process(session, session->m_inference_queue[i]);
-                        } else {
-                            return;
-                        }
-                    } else if (session->m_inference_queue[i]->m_done_atomic.exchange(false, std::memory_order::acquire)) {
+                    if (session->m_inference_queue[i]->m_done_semaphore.try_acquire_until(wait_until)) {
                         session->m_time_stamps.pop_back();
                         post_process(session, session->m_inference_queue[i]);
                     } else {
