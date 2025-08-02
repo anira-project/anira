@@ -346,7 +346,7 @@ int SessionElement::calculate_inference_caused_latency(float max_possible_infere
 
     inference_caused_latency -= already_inferred * postprocess_output_size;
 
-    return static_cast<int>(inference_caused_latency);
+    return std::max(static_cast<int>(std::ceil(inference_caused_latency)), 0);
 }
 
 float SessionElement::calculate_wait_time(float host_buffer_size, float host_sample_rate) const {

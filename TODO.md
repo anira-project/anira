@@ -19,6 +19,10 @@
 - [ ] Run the examples as tests in CI
 - [ ] InferenceHandler tests with buffersizes that are not a multiple of the preprocess input size
 
+## Bugs
+
+- [ ] When declaring the universal shape in HybridNNConfig.h first, tests fail on asahi linux system (tflite gets universal tensor shapes)
+
 ## Packaging
 
 - [ ] Trigger `ldconfig` in the .deb package
