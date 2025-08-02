@@ -109,20 +109,37 @@ public:
      * @note This method is real-time safe and should not allocate memory
      */
     void push_data(const float* const* const* input_data, size_t* num_input_samples);
-    
+
     /**
-     * @brief Pops processed output data from the inference pipeline
+     * @brief Pops processed output data from the inference pipeline (non-blocking)
      * 
-     * Retrieves processed data from the inference pipeline. Should be used in
-     * conjunction with push_data for decoupled processing patterns.
+     * Retrieves available processed data from the inference pipeline. Should be used in
+     * conjunction with push_data for decoupled processing patterns. This method does not block
+     * and returns immediately with any available output.
      * 
      * @param output_data Output buffers organized as data[tensor_index][channel][sample]
      * @param num_output_samples Array of maximum output sample counts for each tensor
      * @return Array of actual output sample counts for each tensor
      * 
-     * @note This method is real-time safe and should not allocate memory
+     * @note This method is real-time safe and should not allocate memory.
      */
     size_t* pop_data(float* const* const* output_data, size_t* num_output_samples);
+    
+    /**
+     * @brief Pops processed output data from the inference pipeline with timeout
+     * 
+     * Retrieves processed data from the inference pipeline, waiting until either data is available
+     * or the specified timeout expires. Should be used in conjunction with push_data for decoupled
+     * processing patterns. This method blocks until output is available or the wait_until time is reached.
+     * 
+     * @param output_data Output buffers organized as data[tensor_index][channel][sample]
+     * @param num_output_samples Array of maximum output sample counts for each tensor
+     * @param wait_until Time point until which the method will wait for output data to become available
+     * @return Array of actual output sample counts for each tensor
+     * 
+     * @note This method is not 100% real-time safe due to potential blocking.
+     */
+    size_t* pop_data(float* const* const* output_data, size_t* num_output_samples, std::chrono::steady_clock::time_point wait_until);
 
     /**
      * @brief Sets the inference backend to use for neural network processing

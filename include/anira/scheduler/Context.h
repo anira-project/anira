@@ -165,18 +165,28 @@ public:
      * @param session Shared pointer to the session that has new data available
      */
     void new_data_submitted(std::shared_ptr<SessionElement> session);
-    
+
     /**
-     * @brief Requests new data processing for a session with specified buffer duration
-     * 
-     * Requests that the inference system process data for the specified session
-     * with the given buffer duration in seconds. This is used for scheduling
-     * and managing inference operations.
-     * 
+     * @brief Requests new data processing for a session
+     *
+     * Requests that the inference system process data for the specified session.
+     * This is used for scheduling and managing inference operations. The request
+     * is processed immediately.
+     *
      * @param session Shared pointer to the session requesting data processing
-     * @param buffer_size_in_sec Duration of the buffer to process in seconds
      */
-    void new_data_request(std::shared_ptr<SessionElement> session, double buffer_size_in_sec);
+    void new_data_request(std::shared_ptr<SessionElement> session);
+
+    /**
+     * @brief Requests new data processing for a session at a specific time
+     *
+     * Requests that the inference system process data for the specified session,
+     * but waits for the data until the given time point before processing.
+     *
+     * @param session Shared pointer to the session requesting data processing
+     * @param wait_until Time point at which to begin processing the data request
+     */
+    void new_data_request(std::shared_ptr<SessionElement> session, std::chrono::steady_clock::time_point wait_until);
 
     /**
      * @brief Gets a reference to all active sessions

@@ -109,8 +109,26 @@ size_t InferenceHandler::pop_data(float* const* output_data, size_t num_output_s
     return received_samples[tensor_index];
 }
 
+size_t InferenceHandler::pop_data(float* const* output_data, size_t num_output_samples, std::chrono::steady_clock::time_point wait_until, size_t tensor_index) {
+    size_t num_output_tensors = m_inference_config.get_tensor_output_shape().size();
+    std::vector<float* const*> output_tensor_ptrs(num_output_tensors, nullptr);
+    std::vector<size_t> output_tensor_num_samples(num_output_tensors, 0);
+
+    if (tensor_index < num_output_tensors) {
+        output_tensor_ptrs[tensor_index] = output_data;
+        output_tensor_num_samples[tensor_index] = num_output_samples;
+    }
+
+    size_t* received_samples = m_inference_manager.pop_data(output_tensor_ptrs.data(), output_tensor_num_samples.data(), wait_until);
+    return received_samples[tensor_index];
+}
+
 size_t* InferenceHandler::pop_data(float* const* const* output_data, size_t* num_output_samples) {
     return m_inference_manager.pop_data(output_data, num_output_samples);
+}
+
+size_t* InferenceHandler::pop_data(float* const* const* output_data, size_t* num_output_samples, std::chrono::steady_clock::time_point wait_until) {
+    return m_inference_manager.pop_data(output_data, num_output_samples, wait_until);
 }
 
 void InferenceHandler::set_inference_backend(InferenceBackend inference_backend) {

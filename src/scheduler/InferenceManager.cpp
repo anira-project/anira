@@ -35,8 +35,15 @@ size_t* InferenceManager::process(const float* const* const* input_data, size_t*
     process_input(input_data, num_input_samples);
 
     m_context->new_data_submitted(m_session);
-    double time_in_sec = static_cast<double>(num_input_samples[m_host_config.m_tensor_index]) / m_host_config.m_sample_rate;
-    m_context->new_data_request(m_session, time_in_sec);
+    if (m_inference_config.m_blocking_ratio > 0.f) {
+        std::chrono::steady_clock::time_point wait_until = std::chrono::steady_clock::now();
+        auto buffer_size_in_sec = static_cast<float>(num_input_samples[m_host_config.m_tensor_index]) / m_host_config.m_sample_rate;
+        auto timeToProcess = std::chrono::microseconds(static_cast<long>(buffer_size_in_sec * 1e6 * m_inference_config.m_blocking_ratio));
+        wait_until += timeToProcess;
+        m_context->new_data_request(m_session, wait_until);
+    } else {
+        m_context->new_data_request(m_session);
+    }
 
     return process_output(output_data, num_output_samples);
 }
@@ -47,7 +54,12 @@ void InferenceManager::push_data(const float* const* const* input_data, size_t* 
 }
 
 size_t* InferenceManager::pop_data(float* const* const* output_data, size_t* num_output_samples) {
-    m_context->new_data_request(m_session, 0.0);
+    m_context->new_data_request(m_session);
+    return process_output(output_data, num_output_samples);
+}
+
+size_t* InferenceManager::pop_data(float* const* const* output_data, size_t* num_output_samples, std::chrono::steady_clock::time_point wait_until) {
+    m_context->new_data_request(m_session, wait_until);
     return process_output(output_data, num_output_samples);
 }
 
@@ -148,7 +160,7 @@ const Context& InferenceManager::get_context() const {
 }
 
 size_t InferenceManager::get_available_samples(size_t tensor_index, size_t channel) const {
-    m_context->new_data_request(m_session, 0.);
+    m_context->new_data_request(m_session);
     if (m_inference_config.get_postprocess_output_size()[tensor_index] > 0) {
         return m_session->m_receive_buffer[tensor_index].get_available_samples(channel);
     } else {
