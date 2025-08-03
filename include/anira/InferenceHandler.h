@@ -32,6 +32,26 @@ public:
     InferenceHandler() = delete;
     
     /**
+     * @brief Copy constructor is deleted to prevent copying
+     */
+    InferenceHandler(const InferenceHandler&) = delete;
+    
+    /**
+     * @brief Copy assignment is deleted to prevent copying
+     */
+    InferenceHandler& operator=(const InferenceHandler&) = delete;
+    
+    /**
+     * @brief Move constructor is deleted to prevent moving
+     */
+    InferenceHandler(InferenceHandler&&) = delete;
+    
+    /**
+     * @brief Move assignment is deleted to prevent moving
+     */
+    InferenceHandler& operator=(InferenceHandler&&) = delete;
+    
+    /**
      * @brief Constructs an InferenceHandler with pre/post processor and inference configuration
      * 
      * @param pp_processor Reference to the pre/post processor for data transformation
@@ -291,6 +311,14 @@ public:
 private:
     InferenceConfig& m_inference_config;    ///< Reference to the inference configuration
     InferenceManager m_inference_manager;   ///< Internal inference manager handling the processing pipeline
+
+    const float* const** m_input_tensor_ptrs;
+    size_t* m_input_tensor_num_samples;
+    float* const** m_output_tensor_ptrs;
+    size_t* m_output_tensor_num_samples;
+    
+    size_t m_num_input_tensors;
+    size_t m_num_output_tensors;
 };
 
 } // namespace anira
