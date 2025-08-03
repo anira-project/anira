@@ -70,7 +70,7 @@ size_t* InferenceManager::pop_data(float* const* const* output_data, size_t* num
     } else {
         LOG_ERROR << "[ERROR] InferenceConfig does not use blocking_ratio and does not use semaphores for data acquisition, cannot wait for data!" << std::endl;
     }
-    m_context->new_data_request(m_session, wait_until);
+
     return process_output(output_data, num_output_samples);
 }
 
