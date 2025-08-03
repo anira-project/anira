@@ -61,6 +61,10 @@ void Context::new_num_threads(unsigned int new_num_threads) {
 
 std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor) {
     int session_id = get_available_session_id();
+    if (m_producer_tokens.size() < MAX_NUM_INSTANCES) {
+        m_producer_tokens.emplace_back(std::make_unique<moodycamel::ProducerToken>(m_next_inference));
+    }
+
     if (inference_config.m_num_parallel_processors > (unsigned int) m_thread_pool.size()) {
         LOG_INFO << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in Context. Using number of threads as number of parallel processors." << std::endl;
         inference_config.m_num_parallel_processors = (unsigned int) m_thread_pool.size();
@@ -239,7 +243,8 @@ bool Context::pre_process(std::shared_ptr<SessionElement> session) {
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
             InferenceData inference_data = {session, session->m_inference_queue[i]};
-            if (!m_next_inference.try_enqueue(inference_data)) {
+            moodycamel::ProducerToken& producer_token = get_producer_token();
+            if (!m_next_inference.try_enqueue(producer_token, inference_data)) {
                 LOG_ERROR << "[ERROR] Could not enqueue next inference!" << std::endl;
                 session->m_inference_queue[i]->m_free.exchange(true);
                 session->m_time_stamps.pop_back();
@@ -341,6 +346,11 @@ void Context::reset_session(std::shared_ptr<SessionElement> session) {
     session->clear();
 
     session->m_initialized.store(true, std::memory_order::release);
+}
+
+moodycamel::ProducerToken& Context::get_producer_token() {
+    size_t index = m_next_producer_index.fetch_add(1) % m_producer_tokens.size();
+    return *m_producer_tokens[index];
 }
 
 

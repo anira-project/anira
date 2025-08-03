@@ -71,7 +71,7 @@ const ModelData* InferenceConfig::get_model_data(InferenceBackend backend) const
     return nullptr; // No model data found
 }
 
-TensorShapeList InferenceConfig::get_tensor_input_shape() const {
+const TensorShapeList& InferenceConfig::get_tensor_input_shape() const {
     for (const auto& shape : m_tensor_shape) {
         if (shape.is_universal()) {
             return shape.m_tensor_input_shape; // Return universal input shape if available
@@ -80,7 +80,7 @@ TensorShapeList InferenceConfig::get_tensor_input_shape() const {
     return m_tensor_shape[0].m_tensor_input_shape; // Fallback to the first tensor shape
 }
 
-TensorShapeList InferenceConfig::get_tensor_output_shape() const {
+const TensorShapeList& InferenceConfig::get_tensor_output_shape() const {
     for (const auto& shape : m_tensor_shape) {
         if (shape.is_universal()) {
             return shape.m_tensor_output_shape; // Return universal output shape if available
@@ -89,39 +89,39 @@ TensorShapeList InferenceConfig::get_tensor_output_shape() const {
     return m_tensor_shape[0].m_tensor_output_shape; // Fallback to the first tensor shape
 }
 
-TensorShapeList InferenceConfig::get_tensor_input_shape(InferenceBackend backend) const {
+const TensorShapeList& InferenceConfig::get_tensor_input_shape(InferenceBackend backend) const {
     return get_tensor_shape(backend).m_tensor_input_shape;
 }
 
-TensorShapeList InferenceConfig::get_tensor_output_shape(InferenceBackend backend) const {
+const TensorShapeList& InferenceConfig::get_tensor_output_shape(InferenceBackend backend) const {
     return get_tensor_shape(backend).m_tensor_output_shape;
 }
 
-std::vector<size_t> InferenceConfig::get_tensor_input_size() const {
+const std::vector<size_t>& InferenceConfig::get_tensor_input_size() const {
     return m_processing_spec.m_tensor_input_size;
 }
 
-std::vector<size_t> InferenceConfig::get_tensor_output_size() const {
+const std::vector<size_t>& InferenceConfig::get_tensor_output_size() const {
     return m_processing_spec.m_tensor_output_size;
 }
 
-std::vector<size_t> InferenceConfig::get_preprocess_input_channels() const {
+const std::vector<size_t>& InferenceConfig::get_preprocess_input_channels() const {
     return m_processing_spec.m_preprocess_input_channels;
 }
 
-std::vector<size_t> InferenceConfig::get_postprocess_output_channels() const {
+const std::vector<size_t>& InferenceConfig::get_postprocess_output_channels() const {
     return m_processing_spec.m_postprocess_output_channels;
 }
 
-std::vector<size_t> InferenceConfig::get_preprocess_input_size() const {
+const std::vector<size_t>& InferenceConfig::get_preprocess_input_size() const {
     return m_processing_spec.m_preprocess_input_size;
 }
 
-std::vector<size_t> InferenceConfig::get_postprocess_output_size() const {
+const std::vector<size_t>& InferenceConfig::get_postprocess_output_size() const {
     return m_processing_spec.m_postprocess_output_size;
 }
 
-std::vector<size_t> InferenceConfig::get_internal_model_latency() const {
+const std::vector<size_t>& InferenceConfig::get_internal_model_latency() const {
     return m_processing_spec.m_internal_model_latency;
 }
 

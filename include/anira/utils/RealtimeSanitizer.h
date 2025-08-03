@@ -1,10 +1,10 @@
-#ifndef REALTIMESANITIZER_H
-#define REALTIMESANITIZER_H
+#ifndef ANIRA_REALTIMESANITIZER_H
+#define ANIRA_REALTIMESANITIZER_H
 
-#ifdef ANIRA_RADSAN_ENABLED
-#define ANIRA_REALTIME [[clang::realtime]]
+#ifdef ANIRA_WITH_RTSAN
+#define ANIRA_REALTIME [[clang::nonblocking]]
 #else
 #define ANIRA_REALTIME
 #endif
 
-#endif //REALTIMESANITIZER_H
+#endif //ANIRA_REALTIMESANITIZER_H
