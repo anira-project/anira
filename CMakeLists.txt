@@ -18,7 +18,7 @@ option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
 option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 
 option(ANIRA_WITH_LOGGING "Enable logging printouts" ON)
-option(ANIRA_WITH_RADSAN "Enable RealtimeSanitizer (RADSan) checks (requires RADSan clang)" OFF)
+option(ANIRA_WITH_RTSAN "Enable RealtimeSanitizer (rtan) checks (requires clang 20)" OFF)
 
 # ==============================================================================
 # Get project version from git
@@ -200,9 +200,9 @@ target_compile_definitions(${PROJECT_NAME}
     -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
 )
 
-if(ANIRA_WITH_RADSAN)
+if(ANIRA_WITH_RTSAN)
     include(cmake/real-time-sanitizers.cmake)
-    anira_radsan_configure(${PROJECT_NAME})
+    anira_rtsan_configure(${PROJECT_NAME})
 endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json)

@@ -32,6 +32,26 @@ public:
     InferenceHandler() = delete;
     
     /**
+     * @brief Copy constructor is deleted to prevent copying
+     */
+    InferenceHandler(const InferenceHandler&) = delete;
+    
+    /**
+     * @brief Copy assignment is deleted to prevent copying
+     */
+    InferenceHandler& operator=(const InferenceHandler&) = delete;
+    
+    /**
+     * @brief Move constructor is deleted to prevent moving
+     */
+    InferenceHandler(InferenceHandler&&) = delete;
+    
+    /**
+     * @brief Move assignment is deleted to prevent moving
+     */
+    InferenceHandler& operator=(InferenceHandler&&) = delete;
+    
+    /**
      * @brief Constructs an InferenceHandler with pre/post processor and inference configuration
      * 
      * @param pp_processor Reference to the pre/post processor for data transformation
@@ -114,9 +134,12 @@ public:
      * @param tensor_index Index of the tensor to process (default: 0)
      * @return Number of samples actually processed
      * 
-     * @note This method is real-time safe and should not allocate memory
+     * @note This method is real-time safe and does not allocate memory. If the blocking_ratio
+     * in the inference configuration is > 0 (not default), this method introduces a controlled blocking
+     * operation to wait for processed data (semaphore.try_acquire_until()) in order to further
+     * reduce latency.
      */
-    ANIRA_REALTIME size_t process(float* const* data, size_t num_samples, size_t tensor_index = 0);
+    size_t process(float* const* data, size_t num_samples, size_t tensor_index = 0) ANIRA_REALTIME;
     
     /**
      * @brief Processes audio data with separate input and output buffers
@@ -131,9 +154,12 @@ public:
      * @param tensor_index Index of the tensor to process (default: 0)
      * @return Number of output samples actually written
      * 
-     * @note This method is real-time safe and should not allocate memory
+     * @note This method is real-time safe and does not allocate memory. If the blocking_ratio
+     * in the inference configuration is > 0 (not default), this method introduces a controlled blocking
+     * operation to wait for processed data (semaphore.try_acquire_until()) in order to further
+     * reduce latency.
      */
-    ANIRA_REALTIME size_t process(const float* const* input_data, size_t num_input_samples, float* const* output_data, size_t num_output_samples, size_t tensor_index = 0);
+    size_t process(const float* const* input_data, size_t num_input_samples, float* const* output_data, size_t num_output_samples, size_t tensor_index = 0) ANIRA_REALTIME;
     
     /**
      * @brief Processes multiple tensors simultaneously
@@ -147,9 +173,12 @@ public:
      * @param num_output_samples Array of maximum output sample counts for each tensor
      * @return Array of actual output sample counts for each tensor
      * 
-     * @note This method is real-time safe and should not allocate memory
+     * @note This method is real-time safe and does not allocate memory. If the blocking_ratio
+     * in the inference configuration is > 0 (not default), this method introduces a controlled blocking
+     * operation to wait for processed data (semaphore.try_acquire_until()) in order to further
+     * reduce latency.
      */
-    ANIRA_REALTIME size_t* process(const float* const* const* input_data, size_t* num_input_samples, float* const* const* output_data, size_t* num_output_samples);
+    size_t* process(const float* const* const* input_data, size_t* num_input_samples, float* const* const* output_data, size_t* num_output_samples) ANIRA_REALTIME;
 
     /**
      * @brief Pushes input data to the processing pipeline for a specific tensor
@@ -161,9 +190,9 @@ public:
      * @param num_input_samples Number of input samples to push
      * @param tensor_index Index of the tensor to receive the data (default: 0)
      * 
-     * @note This method is real-time safe and should not allocate memory
+     * @note This method is real-time safe and does not allocate memory.
      */
-    ANIRA_REALTIME void push_data(const float* const* input_data, size_t num_input_samples, size_t tensor_index = 0);
+    void push_data(const float* const* input_data, size_t num_input_samples, size_t tensor_index = 0) ANIRA_REALTIME;
     
     /**
      * @brief Pushes input data for multiple tensors simultaneously
@@ -171,9 +200,9 @@ public:
      * @param input_data Input data organized as data[tensor_index][channel][sample]
      * @param num_input_samples Array of input sample counts for each tensor
      * 
-     * @note This method is real-time safe and should not allocate memory
+     * @note This method is real-time safe and does not allocate memory.
      */
-    ANIRA_REALTIME void push_data(const float* const* const* input_data, size_t* num_input_samples);
+    void push_data(const float* const* const* input_data, size_t* num_input_samples) ANIRA_REALTIME;
     
     /**
      * @brief Pops processed output data from the pipeline for a specific tensor (non-blocking)
@@ -189,7 +218,7 @@ public:
      * 
      * @note This method is real-time safe and does not allocate memory.
      */
-    ANIRA_REALTIME size_t pop_data(float* const* output_data, size_t num_output_samples, size_t tensor_index = 0);
+    size_t pop_data(float* const* output_data, size_t num_output_samples, size_t tensor_index = 0) ANIRA_REALTIME;
 
     /**
      * @brief Pops processed output data from the pipeline for a specific tensor (blocking with timeout)
@@ -204,7 +233,7 @@ public:
      * @param tensor_index Index of the tensor to retrieve data from (default: 0)
      * @return Number of samples actually written to the output buffer
      * 
-     * @note This method is not 100% real-time safe due to potential blocking.
+     * @note This method is not 100% real-time safe due to potential blocking to wait for data.
      */
     size_t pop_data(float* const* output_data, size_t num_output_samples, std::chrono::steady_clock::time_point wait_until, size_t tensor_index = 0);
     
@@ -220,7 +249,7 @@ public:
      * 
      * @note This method is real-time safe and does not allocate memory.
      */
-    ANIRA_REALTIME size_t* pop_data(float* const* const* output_data, size_t* num_output_samples);
+    size_t* pop_data(float* const* const* output_data, size_t* num_output_samples) ANIRA_REALTIME;
 
     /**
      * @brief Pops processed output data for multiple tensors simultaneously (blocking with timeout)
@@ -233,7 +262,7 @@ public:
      * @param wait_until Time point until which to wait for available data
      * @return Array of actual output sample counts for each tensor
      * 
-     * @note This method is not 100% real-time safe due to potential blocking.
+     * @note This method is not 100% real-time safe due to potential blocking to wait for data.
      */
     size_t* pop_data(float* const* const* output_data, size_t* num_output_samples, std::chrono::steady_clock::time_point wait_until);
 
@@ -291,6 +320,14 @@ public:
 private:
     InferenceConfig& m_inference_config;    ///< Reference to the inference configuration
     InferenceManager m_inference_manager;   ///< Internal inference manager handling the processing pipeline
+
+    const float* const** m_input_tensor_ptrs;
+    size_t* m_input_tensor_num_samples;
+    float* const** m_output_tensor_ptrs;
+    size_t* m_output_tensor_num_samples;
+    
+    size_t m_num_input_tensors;
+    size_t m_num_output_tensors;
 };
 
 } // namespace anira

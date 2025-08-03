@@ -212,6 +212,16 @@ public:
      */
     void reset_session(std::shared_ptr<SessionElement> session);
 
+    /**
+     * @brief Get producer token for the next inference request
+     * Returns a producer token that can be used to enqueue inference requests
+     * into the concurrent queue.
+     * @return Shared pointer to the producer token
+     * @note The producer token is used to ensure thread-safe and non-blocking
+     * access to the concurrent queue for submitting inference requests.
+     */
+    static moodycamel::ProducerToken& get_producer_token();
+
 private:
     /**
      * @brief Gets the next available session ID
@@ -314,6 +324,9 @@ private:
     inline static bool m_thread_pool_should_exit = false;                       ///< Flag indicating whether the thread pool should shut down
 
     inline static std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;  ///< Vector of inference threads in the thread pool
+
+    inline static std::vector<std::unique_ptr<moodycamel::ProducerToken>> m_producer_tokens; ///< Vector of producer tokens for managing inference requests
+    inline static std::atomic<size_t> m_next_producer_index{0};                  ///< Thread-safe counter for generating unique producer indices
 
     /**
      * @brief Thread-safe concurrent queue for inference requests

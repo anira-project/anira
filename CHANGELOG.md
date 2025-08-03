@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Ringbuffer initialization now initializes the buffer with zero values
+- Fixed the realtime sanitizer build option
+- Fixed blocking operation in the InferenceHandler process method
 
 ## [v2.0.1] - 2025-07-31
 

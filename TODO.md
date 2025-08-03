@@ -5,7 +5,6 @@
 - [ ] Model and context config should be also available as json file
 - [ ] InferenceConfig check
 - [ ] RTSan check in CI
-- [ ] RTSan is named RTSan not RADSan anymore!
 - [ ] Change model_path function
 - [ ] Make processBlockFixture could be more versatile with new shapes
 - [ ] Fix TFLite benchmark error

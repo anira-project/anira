@@ -535,27 +535,27 @@ public:
      * @brief Gets universal input tensor shapes
      * @return List of input tensor shapes (universal across backends)
      */
-    TensorShapeList get_tensor_input_shape() const;
+    const TensorShapeList& get_tensor_input_shape() const;
     
     /**
      * @brief Gets universal output tensor shapes
      * @return List of output tensor shapes (universal across backends)
      */
-    TensorShapeList get_tensor_output_shape() const;
+    const TensorShapeList& get_tensor_output_shape() const;
     
     /**
      * @brief Gets input tensor shapes for a specific backend
      * @param backend The target inference backend
      * @return List of input tensor shapes for the specified backend
      */
-    TensorShapeList get_tensor_input_shape(InferenceBackend backend) const;
+    const TensorShapeList& get_tensor_input_shape(InferenceBackend backend) const;
     
     /**
      * @brief Gets output tensor shapes for a specific backend
      * @param backend The target inference backend
      * @return List of output tensor shapes for the specified backend
      */
-    TensorShapeList get_tensor_output_shape(InferenceBackend backend) const;
+    const TensorShapeList& get_tensor_output_shape(InferenceBackend backend) const;
 
     // ========================================
     // Processing Specification Access Methods
@@ -565,43 +565,43 @@ public:
      * @brief Gets total size (element count) for each input tensor
      * @return Vector of input tensor sizes
      */
-    std::vector<size_t> get_tensor_input_size() const;
+    const std::vector<size_t>& get_tensor_input_size() const;
     
     /**
      * @brief Gets total size (element count) for each output tensor
      * @return Vector of output tensor sizes
      */
-    std::vector<size_t> get_tensor_output_size() const;
+    const std::vector<size_t>& get_tensor_output_size() const;
     
     /**
      * @brief Gets number of input channels for each input tensor
      * @return Vector of input channel counts
      */
-    std::vector<size_t> get_preprocess_input_channels() const;
+    const std::vector<size_t>& get_preprocess_input_channels() const;
     
     /**
      * @brief Gets number of output channels for each output tensor
      * @return Vector of output channel counts
      */
-    std::vector<size_t> get_postprocess_output_channels() const;
+    const std::vector<size_t>& get_postprocess_output_channels() const;
     
     /**
      * @brief Gets samples count required for preprocessing for each input tensor
      * @return Vector of input buffer sizes (0 = non-streamable)
      */
-    std::vector<size_t> get_preprocess_input_size() const;
+    const std::vector<size_t>& get_preprocess_input_size() const;
     
     /**
      * @brief Gets samples count after the postprocessing for each output tensor
      * @return Vector of output buffer sizes (0 = non-streamable)
      */
-    std::vector<size_t> get_postprocess_output_size() const;
+    const std::vector<size_t>& get_postprocess_output_size() const;
     
     /**
      * @brief Gets internal model latency for each output tensor
      * @return Vector of latency values in samples
      */
-    std::vector<size_t> get_internal_model_latency() const;
+    const std::vector<size_t>& get_internal_model_latency() const;
 
     // ========================================
     // Configuration Modification Methods
