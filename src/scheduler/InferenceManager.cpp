@@ -54,11 +54,22 @@ void InferenceManager::push_data(const float* const* const* input_data, size_t* 
 }
 
 size_t* InferenceManager::pop_data(float* const* const* output_data, size_t* num_output_samples) {
-    m_context->new_data_request(m_session);
+    if (m_inference_config.m_blocking_ratio > 0.f) {
+        std::chrono::steady_clock::time_point wait_until;
+        m_context->new_data_request(m_session, wait_until);
+    } else {
+        m_context->new_data_request(m_session);
+    }
+
     return process_output(output_data, num_output_samples);
 }
 
 size_t* InferenceManager::pop_data(float* const* const* output_data, size_t* num_output_samples, std::chrono::steady_clock::time_point wait_until) {
+    if (m_inference_config.m_blocking_ratio > 0.f) {
+        m_context->new_data_request(m_session, wait_until);
+    } else {
+        LOG_ERROR << "[ERROR] InferenceConfig does not use blocking_ratio and does not use semaphores for data acquisition, cannot wait for data!" << std::endl;
+    }
     m_context->new_data_request(m_session, wait_until);
     return process_output(output_data, num_output_samples);
 }

@@ -189,12 +189,12 @@ void Context::new_data_request(std::shared_ptr<SessionElement> session) {
                     }
                 } else {
                     if (session->m_inference_queue[i]->m_done_atomic.exchange(false, std::memory_order::acquire)) {
-                        session->m_time_stamps.pop_back();
-                        post_process(session, session->m_inference_queue[i]);
                     } else {
                         return;
                     }
                 }
+                session->m_time_stamps.pop_back();
+                post_process(session, session->m_inference_queue[i]);
                 break;
             }
         }
@@ -209,14 +209,19 @@ void Context::new_data_request(std::shared_ptr<SessionElement> session, std::chr
                     if (session->m_inference_config.m_blocking_ratio > 0.f) {
                         session->m_inference_queue[i]->m_done_semaphore.acquire();
                     }
+                } else if (wait_until.time_since_epoch().count() == 0) {
+                    if (session->m_inference_queue[i]->m_done_semaphore.try_acquire()) {
+                    } else {
+                        return;
+                    }
                 } else {
                     if (session->m_inference_queue[i]->m_done_semaphore.try_acquire_until(wait_until)) {
-                        session->m_time_stamps.pop_back();
-                        post_process(session, session->m_inference_queue[i]);
                     } else {
                         return;
                     }
                 }
+                session->m_time_stamps.pop_back();
+                post_process(session, session->m_inference_queue[i]);
                 break;
             }
         }
