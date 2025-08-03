@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RTSan real-time safety CI checks and testing (not done yet)
 - JSON configuration loader with nlohmann_json dependency (not done yet)
 
-## [v2.0.2] - 2025-08-02
+## [v2.0.2] - 2025-08-03
 
 ### Added
 
@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved latency calculation to take parallel processing into account
 - All operating systems now use std::steady_clock for benchmarking
 - Tests for Inference Manager and Session Element now use fixed number of threads 2, which is available on all gh runners
+
+### Fixed
+
+- Ringbuffer initialization now initializes the buffer with zero values
 
 ## [v2.0.1] - 2025-07-31
 
