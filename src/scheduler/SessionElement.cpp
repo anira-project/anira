@@ -136,7 +136,8 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
                     int inference_caused_latency_min_buffer = calculate_inference_caused_latency(1, min_buffer_size, sample_rate, min_wait_time, m_inference_config.get_postprocess_output_size()[i]);
                     int inference_caused_latency_adjusted_buffer = calculate_inference_caused_latency(max_num_inferences(adjusted_config), adjusted_buffer_size, sample_rate, adjusted_wait_time, m_inference_config.get_postprocess_output_size()[i]);
 
-                    int inference_caused_latency = std::max({inference_caused_latency_max_buffer, inference_caused_latency_adjusted_buffer, inference_caused_latency_min_buffer});
+                    int inference_caused_latency = std::max(inference_caused_latency_max_buffer, inference_caused_latency_adjusted_buffer);
+                    inference_caused_latency = std::max(inference_caused_latency, inference_caused_latency_min_buffer);
 
                     adjusted_latency.push_back(inference_caused_latency + buffer_adaptation);
                 }

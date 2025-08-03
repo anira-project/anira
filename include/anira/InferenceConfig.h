@@ -53,12 +53,21 @@ struct ANIRA_API ModelData {
             m_data = malloc(sizeof(char) * size);
             memcpy(m_data, data, size);
         } else {
-            #ifdef USE_ONNX
+#if USE_ONNX && USE_TFLITE
+            if (backend != InferenceBackend::ONNX && backend != InferenceBackend::TFLITE) {
+                LOG_ERROR << "Binary model is only supported for ONNX or TFLITE backend." << std::endl;
+            }
+#elif USE_ONNX
             if (backend != InferenceBackend::ONNX) {
                 LOG_ERROR << "Binary model is only supported for ONNX backend." << std::endl;
             }
-            #endif
-            LOG_ERROR << "Binary model is only supported for ONNX backend (ONNX disabled in config)." << std::endl;
+#elif USE_TFLITE
+            if (backend != InferenceBackend::TFLITE) {
+                LOG_ERROR << "Binary model is only supported for TFLITE backend." << std::endl;
+            }
+#else
+            LOG_ERROR << "Binary model is only supported for ONNX or TFLITE backend (Both disabled in config)." << std::endl;
+#endif
         }
     }
     
