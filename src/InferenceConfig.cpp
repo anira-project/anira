@@ -72,7 +72,6 @@ const ModelData* InferenceConfig::get_model_data(InferenceBackend backend) const
 }
 
 TensorShapeList InferenceConfig::get_tensor_input_shape() const {
-    TensorShapeList input_shapes;
     for (const auto& shape : m_tensor_shape) {
         if (shape.is_universal()) {
             return shape.m_tensor_input_shape; // Return universal input shape if available
@@ -82,7 +81,6 @@ TensorShapeList InferenceConfig::get_tensor_input_shape() const {
 }
 
 TensorShapeList InferenceConfig::get_tensor_output_shape() const {
-    TensorShapeList output_shapes;
     for (const auto& shape : m_tensor_shape) {
         if (shape.is_universal()) {
             return shape.m_tensor_output_shape; // Return universal output shape if available
