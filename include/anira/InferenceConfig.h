@@ -137,12 +137,12 @@ struct ANIRA_API ModelData {
      * @return true if all members are equal, false otherwise
      */
     bool operator==(const ModelData& other) const {
-        return
-            m_data == other.m_data &&
-            m_size == other.m_size &&
-            m_backend == other.m_backend &&
-            m_model_function == other.m_model_function &&
-            m_is_binary == other.m_is_binary;
+        if (m_size != other.m_size) return false;
+        if (m_backend != other.m_backend) return false;
+        if (m_model_function != other.m_model_function) return false;
+        if (m_is_binary != other.m_is_binary) return false;
+
+        return std::memcmp(m_data, other.m_data, m_size) == 0;
     }
 
     /**

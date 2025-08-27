@@ -159,6 +159,7 @@ target_sources(${PROJECT_NAME}
         # Utils
         src/utils/Buffer.cpp
         src/utils/RingBuffer.cpp
+        src/utils/JsonConfigLoader.cpp
 
         # Interface
         src/InferenceHandler.cpp

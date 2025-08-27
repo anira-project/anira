@@ -14,6 +14,8 @@ add_compile_definitions(
         STEERABLENAFX_MODELS_PATH_PYTORCH="${STEERABLENAFX_MODELS_PATH_PYTORCH}"
         STATEFULLSTM_MODELS_PATH_TENSORFLOW="${STATEFULLSTM_MODELS_PATH_TENSORFLOW}"
         STATEFULLSTM_MODELS_PATH_PYTORCH="${STATEFULLSTM_MODELS_PATH_PYTORCH}"
+		RAVE_MODEL_FUNK_DRUM_JSON_CONFIG_PATH="${RAVE_MODEL_FUNK_DRUM_JSON_CONFIG_PATH}"
+		RAVE_MODEL_DIR="${RAVE_MODEL_DIR}"
 )
 
 add_executable(${PROJECT_NAME})
@@ -22,6 +24,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	test_InferenceHandler.cpp
     utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
+	utils/test_JsonConfigLoader.cpp
 	scheduler/test_InferenceManager.cpp
 	scheduler/test_SessionElement.cpp
 	test_WavReader.cpp

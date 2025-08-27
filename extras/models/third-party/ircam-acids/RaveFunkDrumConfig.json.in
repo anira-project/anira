@@ -16,6 +16,13 @@
         "inference_backend": "LIBTORCH"
       }
     ],
+    "processing_spec": {
+        "preprocess_input_channels": [1],
+        "postprocess_output_channels": [1],
+        "preprocess_input_size": [2048],
+        "postprocess_output_size": [2048],
+        "internal_model_latency": [2048]
+    },
     "max_inference_time": 42.66,
     "warm_up": 5,
     "session_exclusive_processor": true
