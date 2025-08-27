@@ -72,13 +72,17 @@ configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/models/third-party/ircam-acids/RaveFunkDrumConfigDecoder.json"
 )
 
-
 configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.json.in"
         "${CMAKE_CURRENT_SOURCE_DIR}/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.json"
 )
 
+configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/models/model-pool/SimpleGainConfig.json.in"
+        "${CMAKE_CURRENT_SOURCE_DIR}/models/model-pool/SimpleGainConfig.json"
+)
 
 set(RAVE_MODEL_FUNK_DRUM_JSON_CONFIG_PATH "${CMAKE_CURRENT_SOURCE_DIR}/models/third-party/ircam-acids/RaveFunkDrumConfig.json" CACHE PATH "Path to the RAVE json model config")
 set(RAVE_MODEL_FUNK_DRUM_DECODER_JSON_CONFIG_PATH "${CMAKE_CURRENT_SOURCE_DIR}/models/third-party/ircam-acids/RaveFunkDrumConfigDecoder.json" CACHE PATH "Path to the RAVE json model config")
 set(RAVE_MODEL_FUNK_DRUM_ENCODER_JSON_CONFIG_PATH "${CMAKE_CURRENT_SOURCE_DIR}/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.json" CACHE PATH "Path to the RAVE json model config")
+set(SIMPLE_GAIN_JSON_CONFIG_PATH "${CMAKE_CURRENT_SOURCE_DIR}/models/model-pool/SimpleGainConfig.json" CACHE PATH "Path to the RAVE json model config")

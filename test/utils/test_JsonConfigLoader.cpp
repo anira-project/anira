@@ -1,11 +1,10 @@
 #include "gtest/gtest.h"
 #include <anira/anira.h>
 
-#ifdef USE_LIBTORCH
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfig.h"
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.h"
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigDecoder.h"
-#endif
+#include "../../extras/models/model-pool/SimpleGainConfig.h"
 
 using namespace anira;
 
@@ -40,7 +39,11 @@ void expect_inference_config_eq(const InferenceConfig& a, const InferenceConfig&
         const auto& tensor_shape_b = b.m_tensor_shape[i];
 
         EXPECT_EQ(tensor_shape_a.m_universal, tensor_shape_b.m_universal) << "Mismatch in m_universal for tensor_shape[" << i << "]";
-        EXPECT_EQ(tensor_shape_a.m_backend, tensor_shape_b.m_backend) << "Mismatch in m_backend for tensor_shape[" << i << "]";
+
+        if (!tensor_shape_a.m_universal && !tensor_shape_b.m_universal) {
+            EXPECT_EQ(tensor_shape_a.m_backend, tensor_shape_b.m_backend) << "Mismatch in m_backend for tensor_shape[" << i << "]";
+        }
+
         EXPECT_EQ(tensor_shape_a.m_tensor_input_shape, tensor_shape_b.m_tensor_input_shape) << "Mismatch in m_tensor_input_shape for tensor_shape[" << i << "]";
         EXPECT_EQ(tensor_shape_a.m_tensor_output_shape, tensor_shape_b.m_tensor_output_shape) << "Mismatch in m_tensor_output_shape for tensor_shape[" << i << "]";
     }
@@ -63,7 +66,6 @@ void expect_inference_config_eq(const InferenceConfig& a, const InferenceConfig&
 TEST(JsonConfigLoader, EqualInferenceConfig) {
     std::vector<std::array<InferenceConfig, 2>> test_configs;
 
-#ifdef USE_LIBTORCH
     JsonConfigLoader funk_drum_json_loader(RAVE_MODEL_FUNK_DRUM_JSON_CONFIG_PATH);
     test_configs.push_back({*funk_drum_json_loader.get_inference_config(), rave_funk_drum_config});
 
@@ -72,7 +74,9 @@ TEST(JsonConfigLoader, EqualInferenceConfig) {
 
     JsonConfigLoader funk_drum_decode_json_loader(RAVE_MODEL_FUNK_DRUM_DECODER_JSON_CONFIG_PATH);
     test_configs.push_back({*funk_drum_decode_json_loader.get_inference_config(), rave_funk_drum_decoder_config});
-#endif
+
+    JsonConfigLoader gain_json_loader(SIMPLE_GAIN_JSON_CONFIG_PATH);
+    test_configs.push_back({*gain_json_loader.get_inference_config(), gain_config});
 
     for (const auto& config_pair : test_configs) {
         expect_inference_config_eq(config_pair[0], config_pair[1]);

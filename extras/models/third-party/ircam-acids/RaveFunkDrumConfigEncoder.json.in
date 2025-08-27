@@ -10,8 +10,7 @@
     "tensor_shape": [
       {
         "input_shape": [1, 1, 2048],
-        "output_shape": [1, 4, 1],
-        "inference_backend": "LIBTORCH"
+        "output_shape": [1, 4, 1]
       }
     ],
     "processing_spec": {

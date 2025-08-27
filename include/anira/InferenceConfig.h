@@ -232,11 +232,16 @@ struct ANIRA_API TensorShape {
      * @return true if all members are equal, false otherwise
      */
     bool operator==(const TensorShape& other) const {
-        return
-            m_tensor_input_shape == other.m_tensor_input_shape &&
-            m_tensor_output_shape == other.m_tensor_output_shape &&
-            m_backend == other.m_backend &&
-            m_universal == other.m_universal;
+        if (m_universal && other.m_universal) {
+            return m_tensor_input_shape == other.m_tensor_input_shape &&
+                   m_tensor_output_shape == other.m_tensor_output_shape;
+        }
+        if (!m_universal && !other.m_universal) {
+            return m_tensor_input_shape == other.m_tensor_input_shape &&
+                   m_tensor_output_shape == other.m_tensor_output_shape &&
+                   m_backend == other.m_backend;
+        }
+        return false;
     }
 
     /**

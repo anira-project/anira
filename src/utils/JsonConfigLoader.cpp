@@ -154,7 +154,7 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
         const std::string model_backend = item.at("inference_backend").get<std::string>();
 
         if (model_backend == "ONNX") {
-#if USE_ONNX
+#if USE_ONNXRUNTIME
                 model_data.emplace_back(model_path, anira::InferenceBackend::ONNX);
 #else
             LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array entry : ONNX currently disabled in config." << std::endl;
@@ -227,7 +227,7 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
         }
 
         if (tensor_backend == "ONNX") {
-#if USE_ONNX
+#if USE_ONNXRUNTIME
                 tensor_shape.emplace_back(input_shape_list, output_shape_list, anira::InferenceBackend::ONNX);
 #else
             LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array entry : ONNX currently disabled in config." << std::endl;

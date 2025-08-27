@@ -92,7 +92,7 @@ bool AniraClapPluginExample::paramsValueToText(clap_id paramId, double value, ch
             switch (newBackend)
             {
             case OnnxRuntime:
-                #if USE_ONNX
+                #if USE_ONNXRUNTIME
                 sValue = "OnnxRuntime";
                 #else
                 sValue = "OnnxRuntime (not available)";
@@ -239,7 +239,7 @@ void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t *evt)
         if (m_param_to_value[v->param_id] == &m_param_backend) {
             switch ((Backend) m_param_backend) {
                 case OnnxRuntime:
-                    #if USE_ONNX
+                    #if USE_ONNXRUNTIME
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
                     #else
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);

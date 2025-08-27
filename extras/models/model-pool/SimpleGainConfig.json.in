@@ -1,0 +1,35 @@
+{
+  "context_config": {
+    "num_threads": 1
+  },
+  "inference_config": {
+    "model_data": [
+      {
+        "model_path": "@SIMPLEGAIN_MODEL_PATH@/simple_gain_network_mono.pt",
+        "inference_backend": "LIBTORCH"
+      },
+      {
+        "model_path": "@SIMPLEGAIN_MODEL_PATH@/simple_gain_network_mono.onnx",
+        "inference_backend": "ONNX"
+      },
+      {
+        "model_path": "@SIMPLEGAIN_MODEL_PATH@/simple_gain_network_mono.tflite",
+        "inference_backend": "TFLITE"
+      }
+    ],
+    "tensor_shape": [
+      {
+        "input_shape": [[1, 1, 512],[1]],
+        "output_shape": [[1, 1, 512],[1]]
+      }
+    ],
+    "processing_spec": {
+        "preprocess_input_channels": [1, 1],
+        "postprocess_output_channels": [1, 1],
+        "preprocess_input_size": [512, 0],
+        "postprocess_output_size": [512, 0]
+    },
+    "max_inference_time": 5.0,
+    "warm_up": 1
+  }
+}
