@@ -59,6 +59,8 @@ void expect_inference_config_eq(const InferenceConfig& a, const InferenceConfig&
 TEST(JsonConfigLoader, EqualInferenceConfig) {
     anira::JsonConfigLoader json_config_loader(RAVE_MODEL_FUNK_DRUM_JSON_CONFIG_PATH);
     std::unique_ptr<anira::InferenceConfig> ptr = json_config_loader.get_inference_config();
-    anira::InferenceConfig inference_config_json = *ptr;
-    anira::InferenceConfig inference_config = rave_funk_drum_config;
+    anira::InferenceConfig funk_drum_inference_config_json = *ptr;
+    anira::InferenceConfig funk_drum_inference_config = rave_funk_drum_config;
+
+    expect_inference_config_eq(funk_drum_inference_config_json, funk_drum_inference_config);
 }
