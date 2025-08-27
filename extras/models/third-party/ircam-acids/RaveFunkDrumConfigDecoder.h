@@ -10,7 +10,9 @@ static std::vector<anira::ModelData> model_data_rave_funk_drum_decoder_config = 
 };
 
 static std::vector<anira::TensorShape> tensor_shape_rave_funk_drum_decoder_config = {
-    {{{1, 4, 1}}, {{1, 1, 2048}}, anira::InferenceBackend::LIBTORCH}
+#ifdef USE_LIBTORCH
+    {{{1, 4, 1}}, {{1, 1, 2048}}, anira::InferenceBackend::LIBTORCH},
+#endif
 };
 
 static anira::ProcessingSpec processing_spec_rave_funk_drum_decoder_config{

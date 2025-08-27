@@ -1,0 +1,25 @@
+{
+  "inference_config": {
+    "model_data": [
+      {
+        "model_path": "@RAVE_FUNK_DRUM_MODEL_PATH@",
+        "inference_backend": "LIBTORCH",
+        "model_function": "encode"
+      }
+    ],
+    "tensor_shape": [
+      {
+        "input_shape": [1, 1, 2048],
+        "output_shape": [1, 4, 1],
+        "inference_backend": "LIBTORCH"
+      }
+    ],
+    "processing_spec": {
+        "preprocess_input_channels": [1],
+        "postprocess_output_channels": [4]
+    },
+    "max_inference_time": 42.66,
+    "warm_up": 5,
+    "session_exclusive_processor": true
+  }
+}

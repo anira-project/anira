@@ -167,7 +167,16 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
 #endif
         } else if (model_backend == "LIBTORCH") {
 #if USE_LIBTORCH
-            model_data.emplace_back(model_path, anira::InferenceBackend::LIBTORCH);
+            if (item.contains("model_function")) {
+                if (!item.at("model_function").is_string()) {
+                    LOG_ERROR << "Invalid 'model_function' value in 'model_data' array entry: expected a string." << std::endl;
+                    continue;
+                }
+                const std::string model_function = item.at("model_function").get<std::string>();
+                model_data.emplace_back(model_path, anira::InferenceBackend::LIBTORCH, model_function);
+            } else {
+                model_data.emplace_back(model_path, anira::InferenceBackend::LIBTORCH);
+            }
 #else
                 LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array entry : LIBTORCH currently disabled in config." << std::endl;
 #endif

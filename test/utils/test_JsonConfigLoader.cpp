@@ -2,6 +2,8 @@
 #include <anira/anira.h>
 
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfig.h"
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.h"
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigDecoder.h"
 
 using namespace anira;
 
@@ -57,10 +59,20 @@ void expect_inference_config_eq(const InferenceConfig& a, const InferenceConfig&
 
 // Test basic initialization
 TEST(JsonConfigLoader, EqualInferenceConfig) {
-    anira::JsonConfigLoader json_config_loader(RAVE_MODEL_FUNK_DRUM_JSON_CONFIG_PATH);
-    std::unique_ptr<anira::InferenceConfig> ptr = json_config_loader.get_inference_config();
-    anira::InferenceConfig funk_drum_inference_config_json = *ptr;
-    anira::InferenceConfig funk_drum_inference_config = rave_funk_drum_config;
+    std::vector<std::array<InferenceConfig, 2>> test_configs;
 
-    expect_inference_config_eq(funk_drum_inference_config_json, funk_drum_inference_config);
+#ifdef USE_LIBTORCH
+    JsonConfigLoader funk_drum_json_loader(RAVE_MODEL_FUNK_DRUM_JSON_CONFIG_PATH);
+    test_configs.push_back({*funk_drum_json_loader.get_inference_config(), rave_funk_drum_config});
+
+    JsonConfigLoader funk_drum_encode_json_loader(RAVE_MODEL_FUNK_DRUM_ENCODER_JSON_CONFIG_PATH);
+    test_configs.push_back({*funk_drum_encode_json_loader.get_inference_config(), rave_funk_drum_encoder_config});
+
+    JsonConfigLoader funk_drum_decode_json_loader(RAVE_MODEL_FUNK_DRUM_DECODER_JSON_CONFIG_PATH);
+    test_configs.push_back({*funk_drum_decode_json_loader.get_inference_config(), rave_funk_drum_decoder_config});
+#endif
+
+    for (const auto& config_pair : test_configs) {
+        expect_inference_config_eq(config_pair[0], config_pair[1]);
+    }
 }
