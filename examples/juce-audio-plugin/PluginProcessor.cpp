@@ -24,7 +24,7 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
         pp_processor_encoder(inference_config_encoder),
         pp_processor_decoder(inference_config_decoder),
 #endif
-#if MODEL_TO_USE == 1 || MODEL_TO_USE == 2
+#if MODEL_TO_USE == 0 || MODEL_TO_USE == 1 || MODEL_TO_USE == 2
         // The bypass_processor is not needed for inference, but for the round trip test to output audio when selecting the CUSTOM backend. It must be customized when default pp_processor is replaced by a custom one.
         bypass_processor(inference_config),
         inference_handler(pp_processor, inference_config, bypass_processor, anira_context_config),

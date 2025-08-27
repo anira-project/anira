@@ -33,12 +33,27 @@ void LibtorchProcessor::process(std::vector<BufferF>& input, std::vector<BufferF
 }
 
 LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config) {
-    try {
-        m_module = torch::jit::load(m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
-    }
-    catch (const c10::Error& e) {
-        LOG_ERROR << "[ERROR] error loading the model\n";
-        LOG_ERROR << e.what() << std::endl;
+    if (m_inference_config.is_model_binary(anira::InferenceBackend::LIBTORCH)) {
+        try {
+            const anira::ModelData* model_data = m_inference_config.get_model_data(anira::InferenceBackend::LIBTORCH);
+            std::istringstream stream(std::string(
+                static_cast<const char*>(model_data->m_data),
+                model_data->m_size
+            ));
+            m_module = torch::jit::load(stream);
+        }
+        catch (const c10::Error& e) {
+            LOG_ERROR << "[ERROR] error loading the model\n";
+            LOG_ERROR << e.what() << std::endl;
+        }
+    } else {
+        try {
+            m_module = torch::jit::load(m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
+        }
+        catch (const c10::Error& e) {
+            LOG_ERROR << "[ERROR] error loading the model\n";
+            LOG_ERROR << e.what() << std::endl;
+        }
     }
     m_inputs.resize(m_inference_config.get_tensor_input_shape().size());
     m_input_data.resize(m_inference_config.get_tensor_input_shape().size());

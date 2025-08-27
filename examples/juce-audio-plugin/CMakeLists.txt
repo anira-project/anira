@@ -40,14 +40,19 @@ else()
 	set(FORMATS_TO_BUILD VST3 Standalone)
 endif()
 
-# add_compile_definitions(MODEL_TO_USE=1) # steerable-nafx
-# add_compile_definitions(MODEL_TO_USE=2) # GuitarLSTM
-# add_compile_definitions(MODEL_TO_USE=3) # stateful-LSTM
-# add_compile_definitions(MODEL_TO_USE=4) # simple-gain
-# add_compile_definitions(MODEL_TO_USE=5) # simple-stereo-gain
-# add_compile_definitions(MODEL_TO_USE=6) # RAVE
-# add_compile_definitions(MODEL_TO_USE=7) # RAVE encoder-decoder
-# add_compile_definitions(MODEL_TO_USE=8) # RAVE json
+# Model options:
+# 0 -> steerable-nafx
+# 1 -> steerable-nafx - models loaded via binary data
+# 2 -> GuitarLSTM
+# 3 -> stateful-LSTM
+# 4 -> simple-gain
+# 5 -> simple-stereo-gain
+# 6 -> RAVE
+# 7 -> RAVE encoder-decoder
+# 8 -> RAVE - inference config loaded via json
+
+set(MODEL_TO_USE 1)
+add_compile_definitions(MODEL_TO_USE=${MODEL_TO_USE})
 
 set (TARGET_NAME anira-juce-plugin-example)
 
@@ -125,6 +130,23 @@ target_link_libraries(${TARGET_NAME}
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+if(MODEL_TO_USE EQUAL 1)
+	juce_add_binary_data(BinaryData
+			HEADER_NAME "BinaryData.h"
+			NAMESPACE "BinaryData"
+			SOURCES
+
+			${STEERABLENAFX_MODELS_PATH_PYTORCH}/model_0/steerable-nafx-dynamic.pt
+			${STEERABLENAFX_MODELS_PATH_PYTORCH}/model_0/steerable-nafx-libtorch-dynamic.onnx
+			${STEERABLENAFX_MODELS_PATH_TENSORFLOW}/model_0/steerable-nafx-dynamic.tflite
+	)
+
+	target_link_libraries(${TARGET_NAME}
+			PRIVATE
+			BinaryData
+	)
+endif()
 
 if (MSVC)
 	foreach(FORMAT IN LISTS FORMATS_TO_BUILD)

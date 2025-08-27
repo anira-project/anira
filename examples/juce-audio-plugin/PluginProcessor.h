@@ -6,7 +6,10 @@
 
 #include <anira/anira.h>
 
+#if MODEL_TO_USE == 0 || MODEL_TO_USE == 1
 #if MODEL_TO_USE == 1
+#include <BinaryData.h>
+#endif
 #include "../../extras/models/cnn/CNNConfig.h"
 #include "../../extras/models/cnn/CNNPrePostProcessor.h"
 #include "../../extras/models/cnn/CNNBypassProcessor.h" // This one is only needed for the round trip test, when selecting the Custom backend
@@ -84,8 +87,29 @@ private:
     // Optional ContextConfig
     anira::ContextConfig anira_context_config;
 
-#if MODEL_TO_USE == 1
+#if MODEL_TO_USE == 0
     anira::InferenceConfig inference_config = cnn_config;
+    CNNPrePostProcessor pp_processor;
+    CNNBypassProcessor bypass_processor; // This one is only needed for the round trip test, when selecting the Custom backend
+#elif MODEL_TO_USE == 1
+    std::vector<anira::ModelData> model_data = {
+#ifdef USE_LIBTORCH
+        {(void*) BinaryData::steerablenafxdynamic_pt , BinaryData::steerablenafxdynamic_ptSize, anira::InferenceBackend::LIBTORCH},
+#endif
+#ifdef USE_ONNXRUNTIME
+        {(void*) BinaryData::steerablenafxlibtorchdynamic_onnx , BinaryData::steerablenafxlibtorchdynamic_onnxSize, anira::InferenceBackend::ONNX},
+#endif
+#ifdef USE_TFLITE
+        {(void*) BinaryData::steerablenafxdynamic_tflite , BinaryData::steerablenafxdynamic_tfliteSize, anira::InferenceBackend::TFLITE},
+#endif
+    };
+    anira::InferenceConfig inference_config = {
+        model_data,
+        tensor_shape_cnn_config,
+        processing_spec_cnn_config,
+        42.66f,
+        2
+    };
     CNNPrePostProcessor pp_processor;
     CNNBypassProcessor bypass_processor; // This one is only needed for the round trip test, when selecting the Custom backend
 #elif MODEL_TO_USE == 2
