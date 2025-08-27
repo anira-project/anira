@@ -1,9 +1,11 @@
 #include "gtest/gtest.h"
 #include <anira/anira.h>
 
+#ifdef USE_LIBTORCH
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfig.h"
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.h"
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigDecoder.h"
+#endif
 
 using namespace anira;
 
