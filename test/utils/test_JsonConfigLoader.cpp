@@ -1,6 +1,10 @@
 #include "gtest/gtest.h"
 #include <anira/anira.h>
 
+#ifdef USE_LIBTORCH
+#ifdef USE_TFLITE
+#ifdef USE_ONNXRUNTIME
+
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfig.h"
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.h"
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigDecoder.h"
@@ -82,3 +86,7 @@ TEST(JsonConfigLoader, EqualInferenceConfig) {
         expect_inference_config_eq(config_pair[0], config_pair[1]);
     }
 }
+
+#endif // USE_ONNXRUNTIME
+#endif // USE_TFLITE
+#endif // USE_LIBTORCH
