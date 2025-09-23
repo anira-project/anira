@@ -142,6 +142,7 @@ private:
 
         std::vector<c10::IValue> m_inputs;          ///< PyTorch input tensor values
         c10::IValue m_outputs;                      ///< PyTorch output tensor values
+        torch::TensorOptions m_tensor_options;      ///< Tensor options for device, dtype and grad settings
 
         InferenceConfig& m_inference_config;        ///< Reference to inference configuration
         std::atomic<bool> m_processing {false};     ///< Flag indicating if instance is currently processing

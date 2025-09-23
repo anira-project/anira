@@ -5,7 +5,7 @@ namespace anira {
 
 LibtorchProcessor::LibtorchProcessor(InferenceConfig& inference_config) : BackendBase(inference_config) {
     torch::set_num_threads(1);
-
+    
     for (unsigned int i = 0; i < m_inference_config.m_num_parallel_processors; ++i) {
         m_instances.emplace_back(std::make_shared<Instance>(m_inference_config));
     }
@@ -33,6 +33,8 @@ void LibtorchProcessor::process(std::vector<BufferF>& input, std::vector<BufferF
 }
 
 LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config) {
+    m_tensor_options = torch::TensorOptions().requires_grad(false);
+
     if (m_inference_config.is_model_binary(anira::InferenceBackend::LIBTORCH)) {
         try {
             const anira::ModelData* model_data = m_inference_config.get_model_data(anira::InferenceBackend::LIBTORCH);
@@ -55,13 +57,23 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inf
             LOG_ERROR << e.what() << std::endl;
         }
     }
+    m_module.eval();
+
     m_inputs.resize(m_inference_config.get_tensor_input_shape().size());
     m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
+
+    // Create tensors with requires_grad disabled from the start through tensor options
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_input_data[i].resize(m_inference_config.get_tensor_input_size()[i]);
-        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
+        m_inputs[i] = torch::from_blob(
+            m_input_data[i].data(), 
+            m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[i],
+            m_tensor_options
+        );
     }
 
+    // No gradient calculation for inference
+    torch::NoGradGuard no_grad;
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
         if (!m_inference_config.get_model_function(InferenceBackend::LIBTORCH).empty()) {
             auto method = m_module.get_method(m_inference_config.get_model_function(InferenceBackend::LIBTORCH));
@@ -80,11 +92,15 @@ void LibtorchProcessor::Instance::prepare() {
 }
 
 void LibtorchProcessor::Instance::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) {
+    // No gradient calculation for inference
+    torch::NoGradGuard no_grad;
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_input_data[i].swap_data(input[i].get_memory_block());
         input[i].reset_channel_ptr();
         // This is necessary because the tensor data pointers seem to change from inference to inference
-        m_inputs[i] = torch::from_blob(m_input_data[i].data(), m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[i]);
+        m_inputs[i] = torch::from_blob(m_input_data[i].data(),
+            m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[i],
+            m_tensor_options);
     }
 
     // Run inference
