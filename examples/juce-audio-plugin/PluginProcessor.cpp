@@ -286,6 +286,15 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String &parameterID
         if (paramString == "LIBTORCH") inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
 #endif
         if (paramString == "BYPASS") inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
+#elif MODEL_TO_USE == 6
+#ifdef USE_LIBTORCH
+        if (paramString == "LIBTORCH") {
+            inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
+        }
+#endif
+        if (paramString == "BYPASS") {
+            inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
+        }
 #else
 #ifdef USE_LIBTORCH
         if (paramString == "LIBTORCH") {
