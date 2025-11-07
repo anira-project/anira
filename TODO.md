@@ -7,7 +7,6 @@
 - [ ] InferenceConfig check
 - [ ] RTSan check in CI
 - [ ] Change model_path function
-- [ ] Add binary model support for Libtorch
 - [ ] Make processBlockFixture could be more versatile with new shapes
 - [ ] Fix TFLite benchmark error
 
@@ -17,6 +16,8 @@
 
 ## Documentation
 
+- [ ] Update Dokumentation for JSON example
+- [ ] Update Dokumentation for supporting all models now
 - [ ] Add more examples to the documentation
 
 ## Testing
@@ -27,7 +28,9 @@
 
 ## Bugs
 
+- [ ] Fix noise burst at the start of the plugin with the model 6 - this is really annoying and hurts ears!
 - [ ] When declaring the universal shape in HybridNNConfig.h first, tests fail on asahi linux system (tflite gets universal tensor shapes)
+- [ ] Calling reset in inference handler with blocking mechanism causes freeze
 
 ## Packaging
 
