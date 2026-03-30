@@ -30,7 +30,9 @@ void SessionElement::clear() {
         buffer.clear_with_positions();
     }
     m_time_stamps.clear();
-   
+    m_current_queue = 0;
+    m_next_expected_inference.store(0, std::memory_order_relaxed);
+
     for (auto& inference : m_inference_queue) {
         inference->m_free.store(true, std::memory_order_relaxed);
         if (m_inference_config.m_blocking_ratio > 0.f) {

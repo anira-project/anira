@@ -406,6 +406,7 @@ public:
         static constexpr unsigned int m_warm_up = 0;                        ///< Default number of warm-up inferences (0 = no warm-up)
         static constexpr bool m_session_exclusive_processor = false;        ///< Default session exclusivity (false = shared processors)
         static constexpr float m_blocking_ratio = 0.f;                     ///< Default blocking ratio (0.0 = non-blocking)
+        static constexpr bool m_stateful_model = false;                    ///< Default stateful model flag (false = no ordering enforcement)
         
         /// Default number of parallel processors (half of available hardware threads, minimum 1)
         inline static unsigned int m_num_parallel_processors =
@@ -446,7 +447,8 @@ public:
             unsigned int warm_up = Defaults::m_warm_up, // number of warm up inferences
             bool session_exclusive_processor = Defaults::m_session_exclusive_processor,
             float blocking_ratio = Defaults::m_blocking_ratio,
-            unsigned int num_parallel_processors = Defaults::m_num_parallel_processors
+            unsigned int num_parallel_processors = Defaults::m_num_parallel_processors,
+            bool stateful_model = Defaults::m_stateful_model
             );
     
     /**
@@ -471,7 +473,8 @@ public:
             unsigned int warm_up = Defaults::m_warm_up, // number of warm up inferences
             bool session_exclusive_processor = Defaults::m_session_exclusive_processor,
             float blocking_ratio = Defaults::m_blocking_ratio,
-            unsigned int num_parallel_processors = Defaults::m_num_parallel_processors
+            unsigned int num_parallel_processors = Defaults::m_num_parallel_processors,
+            bool stateful_model = Defaults::m_stateful_model
             ) :
         InferenceConfig(
             std::move(model_data),
@@ -481,7 +484,8 @@ public:
             warm_up,
             session_exclusive_processor,
             blocking_ratio,
-            num_parallel_processors
+            num_parallel_processors,
+            stateful_model
             ) {}
 
     // ========================================
@@ -671,6 +675,7 @@ public:
     bool m_session_exclusive_processor;            ///< Whether to use exclusive processor sessions
     float m_blocking_ratio;                        ///< Blocking ratio for real-time control (0.0-1.0)
     unsigned int m_num_parallel_processors;        ///< Number of parallel inference processors
+    bool m_stateful_model;                         ///< Whether the model has internal state requiring strict execution order
     
     /**
      * @brief Equality comparison operator
@@ -690,7 +695,8 @@ public:
             m_warm_up == other.m_warm_up &&
             m_session_exclusive_processor == other.m_session_exclusive_processor &&
             std::abs(m_blocking_ratio - other.m_blocking_ratio) < 1e-6 &&
-            m_num_parallel_processors == other.m_num_parallel_processors
+            m_num_parallel_processors == other.m_num_parallel_processors &&
+            m_stateful_model == other.m_stateful_model
             ;
     }
 

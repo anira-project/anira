@@ -205,6 +205,7 @@ public:
 
     std::atomic<bool> m_initialized{false};                            ///< Atomic flag indicating if the session is fully initialized
     std::atomic<int> m_active_inferences{0};                           ///< Atomic counter of currently active inference operations
+    std::atomic<unsigned long> m_next_expected_inference{0};            ///< Ensures inferences are processed in submission order
 
     PrePostProcessor& m_pp_processor;                                  ///< Reference to the preprocessing/postprocessing pipeline
     InferenceConfig& m_inference_config;                               ///< Reference to the inference configuration
