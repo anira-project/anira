@@ -154,6 +154,9 @@ export default defineConfig({
       targets: [
         { src: 'wasm/*.wasm', dest: 'wasm' },
         { src: 'wasm/*.js', dest: 'wasm' },
+        // Attribution for native deps statically linked into the WASM binary
+        // (populated by cmake/BuildWasm.cmake from the downloaded prebuilt).
+        { src: 'licenses/*', dest: 'licenses' },
       ],
     }),
     dts({

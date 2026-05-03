@@ -10,6 +10,8 @@ set(ANIRA_WASM_TARGET_NAME "AniraWeb")
 set(ANIRA_WASM_OUTPUT_FOLDER "${CMAKE_CURRENT_SOURCE_DIR}/web/wasm")
 message(STATUS "Building AniraWeb WASM module...")
 
+set(ANIRA_WEB_LICENSES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/web/licenses")
+
 # Set flags if Debug
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
   set(ANIRA_WASM_DEBUG_FLAGS "-O0 -gsource-map")
@@ -72,3 +74,43 @@ set_target_properties(${ANIRA_WASM_TARGET_NAME} PROPERTIES
   LINK_FLAGS "${ANIRA_WASM_DEBUG_FLAGS} ${ANIRA_WASM_LINK_FLAGS}"
   RUNTIME_OUTPUT_DIRECTORY ${ANIRA_WASM_OUTPUT_FOLDER}
 )
+
+# ==============================================================================
+# Bundle license files from native deps that get statically linked into the
+# WASM binary, so the anira-web npm package can ship them and downstream
+# consumers can satisfy their attribution obligations. Tied to the AniraWeb
+# build target so it runs as part of the actual wasm build (not at configure
+# time, where it would re-fire on every cmake configure regardless of whether
+# wasm is being built).
+# ==============================================================================
+if(ANIRA_WITH_ONNXRUNTIME)
+    set(_ort_license_dest "${ANIRA_WEB_LICENSES_DIR}/onnxruntime")
+    set(_ort_license_inputs "")
+    foreach(_f LICENSE ThirdPartyNotices.txt)
+        if(EXISTS "${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH}/${_f}")
+            list(APPEND _ort_license_inputs "${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH}/${_f}")
+        else()
+            message(WARNING "ONNX Runtime ${_f} not found at "
+                "${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH} — anira-web will ship "
+                "without it; downstream consumers won't see attribution.")
+        endif()
+    endforeach()
+
+    add_custom_command(TARGET ${ANIRA_WASM_TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_ort_license_dest}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_ort_license_dest}"
+        COMMAND ${CMAKE_COMMAND} -E copy ${_ort_license_inputs} "${_ort_license_dest}/"
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${CMAKE_CURRENT_BINARY_DIR}/onnxruntime-PACKAGE.txt"
+            "${_ort_license_dest}/PACKAGE.txt"
+        VERBATIM
+        COMMENT "Bundling ONNX Runtime ${LIBONNXRUNTIME_VERSION} license + ThirdPartyNotices into anira-web"
+    )
+
+    # PACKAGE.txt only depends on configure-time vars (version, etc.), so
+    # generating it at configure time is safe — it'll be regenerated whenever
+    # the wasm preset is reconfigured. The actual copy into web/licenses/
+    # happens at build time, alongside the heavy LICENSE/ThirdPartyNotices.
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/onnxruntime-PACKAGE.txt"
+        "name: onnxruntime\nversion: ${LIBONNXRUNTIME_VERSION}\nlicense: MIT\nhomepage: https://github.com/microsoft/onnxruntime\n")
+endif()

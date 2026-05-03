@@ -1,6 +1,13 @@
 {
   "name": "anira-web",
   "version": "0.0.1",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/anira-project/anira",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anira-project/anira.git",
+    "directory": "web"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

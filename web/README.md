@@ -99,4 +99,30 @@ To build `anira-web` from source — including cross-compiling the C++ library t
 
 ## License
 
-[Apache License 2.0](https://github.com/anira-project/anira/blob/main/LICENSE)
+`anira-web` itself is distributed under the [Apache License 2.0](https://github.com/anira-project/anira/blob/main/LICENSE).
+
+### Attribution requirements when redistributing
+
+The WebAssembly binary statically links **ONNX Runtime** (MIT, © Microsoft) and a number of native libraries (protobuf, abseil, Eigen, flatbuffers, mimalloc, …) whose code ends up in `dist/wasm/AniraWeb.wasm`. If you ship a product that includes `anira-web`, your distribution must reproduce the corresponding copyright notices and license texts.
+
+To make this straightforward, the package ships these files in known locations:
+
+```
+node_modules/anira-web/
+├── LICENSE                              # Apache-2.0 for anira / anira-web
+└── dist/licenses/
+    └── onnxruntime/
+        ├── LICENSE                      # MIT (ONNX Runtime)
+        ├── ThirdPartyNotices.txt        # ONNX Runtime's transitive deps
+        └── PACKAGE.txt                  # name / version / homepage / license
+```
+
+Each subdirectory under `dist/licenses/` represents one statically-linked native dep that needs attribution. `PACKAGE.txt` is a simple `key: value` manifest you can parse to drive an attribution generator.
+
+In practice the easiest path is to use a tool like [`rollup-plugin-license`](https://github.com/mjeanroy/rollup-plugin-license) or a similar webpack/esbuild plugin to auto-generate a `THIRD_PARTY_LICENSES.txt` and ship it alongside your build. If you do, point the plugin at:
+- the package's own `LICENSE` (already covered by the plugin's normal dep walk), and
+- each subdirectory under `node_modules/anira-web/dist/licenses/` (these aren't visible to npm-graph-based tools because they describe *native* code linked into the WASM, not JS deps).
+
+If you don't use such a tool, copy the files above into your distribution alongside whatever attribution you already do for your other open-source dependencies.
+
+There is currently no `NOTICE` file shipped by anira itself, so Apache-2.0's NOTICE-propagation clause has nothing to apply. If that ever changes upstream, the file will appear at the package root next to `LICENSE`.
