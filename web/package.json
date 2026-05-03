@@ -1,0 +1,44 @@
+{
+  "name": "anira-web",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./workers/inference-worker": {
+      "types": "./dist/workers/inference-worker.d.ts",
+      "import": "./dist/workers/inference-worker.js"
+    },
+    "./workers/audio-worklet": {
+      "types": "./dist/workers/audio-worklet.d.ts",
+      "import": "./dist/workers/audio-worklet.js"
+    },
+    "./workers/worklet-base": {
+      "types": "./dist/workers/worklet-base.d.ts",
+      "import": "./dist/workers/worklet-base.js"
+    },
+    "./wasm/*": "./dist/wasm/*"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && vite build",
+    "dev": "vite build --watch"
+  },
+  "devDependencies": {
+    "rollup": "^4.60.0",
+    "typescript": "~5.9.3",
+    "vite": "^8.0.8",
+    "vite-plugin-dts": "^4.5.4",
+    "vite-plugin-static-copy": "^3.2.0"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.24.2"
+  }
+}

@@ -66,8 +66,10 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
     }
 
     if (inference_config.m_num_parallel_processors > (unsigned int) m_thread_pool.size()) {
-        LOG_INFO << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in Context. Using number of threads as number of parallel processors." << std::endl;
-        inference_config.m_num_parallel_processors = (unsigned int) m_thread_pool.size();
+        if (!m_thread_pool.empty()) {
+            LOG_INFO << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in Context. Using number of threads as number of parallel processors." << std::endl;
+            inference_config.m_num_parallel_processors = (unsigned int) m_thread_pool.size();
+        }
     }
 
     std::shared_ptr<SessionElement> session = std::make_shared<SessionElement>(session_id, pp_processor, inference_config);
@@ -353,6 +355,13 @@ moodycamel::ProducerToken& Context::get_producer_token() {
     return *m_producer_tokens[index];
 }
 
+moodycamel::ConcurrentQueue<InferenceData>& Context::get_static_inference_queue() {
+    return m_next_inference;
+}
+
+std::unique_ptr<InferenceThread> Context::make_inference_thread() {
+    return std::make_unique<InferenceThread>(m_next_inference);
+}
 
 #ifdef USE_LIBTORCH
 template void Context::set_processor<LibtorchProcessor>(std::shared_ptr<SessionElement> session, InferenceConfig& inference_config, std::vector<std::shared_ptr<LibtorchProcessor>>& processors, InferenceBackend backend);

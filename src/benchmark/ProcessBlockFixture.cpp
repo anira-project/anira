@@ -51,7 +51,7 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
 #endif
             case anira::InferenceBackend::CUSTOM:
                 m_inference_backend_name = "custom";
-                path = "no_model";
+                path = m_inference_config.get_model_path(anira::InferenceBackend::CUSTOM);
                 break;
             default:
                 m_inference_backend_name = "unknown";

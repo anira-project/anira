@@ -653,7 +653,11 @@ INTERNAL_DOCS          = NO
 # Possible values are: SYSTEM, NO and YES.
 # The default value is: SYSTEM.
 
-CASE_SENSE_NAMES       = SYSTEM
+# Pinned to NO so generated filenames are deterministic across Linux, macOS and
+# Windows. With SYSTEM (the default), Linux produces PascalCase filenames while
+# macOS/Windows produce lowercase+underscore -- which causes duplicate stale
+# stubs to accumulate when docs are built on more than one platform.
+CASE_SENSE_NAMES       = NO
 
 # If the HIDE_SCOPE_NAMES tag is set to NO then Doxygen will show members with
 # their full class and namespace scopes in the documentation. If set to YES, the

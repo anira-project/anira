@@ -21,7 +21,8 @@ extensions = [
         'sphinx.ext.viewcode',
         'sphinx.ext.napoleon',
         'sphinx.ext.graphviz',
-        'myst_parser'
+        'myst_parser',
+        'sphinx_js',
 ]
 
 # Breathe configuration
@@ -32,6 +33,309 @@ breathe_default_members = ('members', 'undoc-members')
 # Configure Breathe to handle macros better
 breathe_domain_by_extension = {"h": "cpp", "hpp": "cpp"}
 breathe_implementation_filename_extensions = ['.c', '.cc', '.cpp']
+
+# sphinx-js: render the anira-web TypeScript API via TypeDoc.
+# sphinx-js shells out to the `typedoc` binary on PATH (made available by the
+# typedoc-json CMake target). It then parses the resulting JSON so that
+# `js:autoclass::` / `js:autofunction::` directives produce Sphinx js-domain
+# nodes -- visually matching the cpp-domain output styled by shibuya.
+js_language = 'typescript'
+js_source_path = '@CMAKE_SOURCE_DIR@/web/src/index.ts'
+root_for_relative_js_paths = '@CMAKE_SOURCE_DIR@/web/src'
+jsdoc_config_path = '@CMAKE_CURRENT_SOURCE_DIR@/typedoc/typedoc.json'
+primary_domain = None  # keep both cpp and js domains first-class
+
+# Monkey-patch sphinx-js so class members render under their short name
+# (`getLatency(...)`) instead of the parent-qualified form
+# (`InferenceHandler.getLatency(...)`). Upstream hardcodes use_short_name=False
+# for members and exposes no flag to override it. We intercept the single
+# call site where partial_path is a single element that already contains the
+# parent prefix and strip it.
+def _patch_sphinx_js_member_short_names():
+    """Strip parent-qualified prefixes from sphinx-js member directives.
+
+    sphinx-js emits things like `.. js:function:: InferenceHandler.destroy()`
+    for class members. We rewrite the partial_path so the directive name
+    becomes just `destroy`. (Sphinx still adds a visible class prefix on top
+    of this -- see the second patch below.)
+    """
+    from sphinx_js import renderers
+    _orig_rst = renderers.JsRenderer.rst
+
+    def rst(self, partial_path, obj, use_short_name=False):
+        if len(partial_path) == 1 and '.' in partial_path[0]:
+            partial_path = [partial_path[0].rsplit('.', 1)[-1]]
+        return _orig_rst(self, partial_path, obj, use_short_name)
+
+    renderers.JsRenderer.rst = rst
+
+_patch_sphinx_js_member_short_names()
+
+
+def _patch_js_domain_hide_class_prefix():
+    """Drop the auto-added `Class.` descclassname from JS member signatures.
+
+    Sphinx's `JSCallable.handle_signature` reads the enclosing js:class from
+    ref_context and prepends it as a `desc_addname` node, mirroring the
+    Python domain. We don't want that visual prefix on a per-class page where
+    the class header is already visible. We let upstream run (so signode
+    metadata and cross-reference targets stay correct via `fullname`) and
+    then strip the `desc_addname` children from the signature node.
+    """
+    from sphinx.domains.javascript import JSCallable
+    from sphinx import addnodes
+
+    _orig = JSCallable.handle_signature
+
+    def handle_signature(self, sig, signode):
+        result = _orig(self, sig, signode)
+        for node in list(signode.children):
+            if isinstance(node, addnodes.desc_addname):
+                signode.remove(node)
+        return result
+
+    JSCallable.handle_signature = handle_signature
+
+_patch_js_domain_hide_class_prefix()
+
+
+def _patch_sphinx_js_drop_exported_from():
+    """Suppress sphinx-js's "exported from <module>" line.
+
+    For a single-package barrel-export like anira-web the source-file path
+    TypeDoc reports (e.g. `wrappers.utils.HostConfig`) is meaningless to
+    users, who only ever import from the package root.
+    """
+    from sphinx_js import renderers
+
+    for cls_name in ('AutoClassRenderer', 'AutoFunctionRenderer', 'AutoAttributeRenderer'):
+        cls = getattr(renderers, cls_name)
+        _orig_tv = cls._template_vars
+        def make(orig):
+            def _template_vars(self, name, obj):
+                if hasattr(obj, 'exported_from'):
+                    try:
+                        obj.exported_from = None
+                    except Exception:
+                        pass
+                return orig(self, name, obj)
+            return _template_vars
+        cls._template_vars = make(_orig_tv)
+
+_patch_sphinx_js_drop_exported_from()
+
+
+def _patch_sphinx_js_render_overloads():
+    """Render TypeScript overload signatures in the docs.
+
+    sphinx-js (`convertTopLevel.ts`) drops every signature past the first when
+    converting TypeDoc output to its IR — see the comment block around
+    `const first_sig = func.signatures![0];`. The Python-side `Function` IR
+    only carries one params list, so the limitation is structural.
+
+    We work around it by reading `typedoc.json` directly, indexing every
+    callable that has more than one signature, and appending a fully rendered
+    ``.. js:function::`` block per extra signature after sphinx-js's
+    canonical rendering. Each extra block carries its own ``:param X:`` /
+    ``:type X:`` / ``:returns:`` field list, so every overload shows its own
+    Arguments / Returns sections in the rendered HTML.
+    """
+    import json
+    from pathlib import Path
+
+    typedoc_json = Path('@CMAKE_CURRENT_BINARY_DIR@/typedoc/typedoc.json')
+    if not typedoc_json.exists():
+        return
+
+    try:
+        data = json.loads(typedoc_json.read_text())
+    except Exception:
+        return
+
+    # ---- Type rendering helpers ----
+    # Mirror sphinx-js's render_type best-effort. We only need string-quality
+    # output here; cross-references aren't preserved.
+    def render_type_node(t):
+        if t is None:
+            return ''
+        if isinstance(t, str):
+            return t
+        if not isinstance(t, dict):
+            return str(t)
+        kind = t.get('type')
+        if kind == 'intrinsic':
+            return t.get('name', '')
+        if kind == 'reference':
+            base = t.get('name', '')
+            args = t.get('typeArguments') or []
+            if args:
+                return f"{base}<{', '.join(render_type_node(a) for a in args)}>"
+            return base
+        if kind == 'union':
+            return ' | '.join(render_type_node(x) for x in t.get('types') or [])
+        if kind == 'array':
+            return render_type_node(t.get('elementType')) + '[]'
+        if kind == 'literal':
+            v = t.get('value')
+            return repr(v) if isinstance(v, str) else str(v)
+        if kind == 'tuple':
+            return '[' + ', '.join(render_type_node(x) for x in t.get('elements') or []) + ']'
+        if kind == 'reflection':
+            # Function types and inline object types — fall back to a name if
+            # available, else a generic placeholder.
+            return t.get('name') or 'object'
+        return t.get('name') or kind or ''
+
+    # ---- Per-signature param/return extraction ----
+    def extract_description(comment):
+        # Reassemble TypeDoc's tokenised summary (mix of 'text' and 'code'
+        # parts) into a single RST string. Code spans are rendered with their
+        # original backticks intact so RST inline literals/roles survive.
+        if not isinstance(comment, dict):
+            return ''
+        parts = []
+        for p in comment.get('summary') or []:
+            kind = p.get('kind')
+            text = p.get('text', '')
+            if kind == 'code':
+                # `text` already includes the backticks (e.g. ``foo``).
+                parts.append(text)
+            else:
+                parts.append(text)
+        return ''.join(parts)
+
+    def extract_signature(sig):
+        params = []
+        for p in sig.get('parameters') or []:
+            params.append({
+                'name': p.get('name', ''),
+                'type': render_type_node(p.get('type')),
+                'optional': bool(p.get('flags', {}).get('isOptional')),
+                'rest': bool(p.get('flags', {}).get('isRest')),
+                'default': p.get('defaultValue'),
+            })
+        return {
+            'params': params,
+            'returns': render_type_node(sig.get('type')),
+            'description': extract_description(sig.get('comment')),
+        }
+
+    def fmt_formal_params(params):
+        # Match sphinx-js's `_formal_params`: bare names, `...` prefix for
+        # rest, `=default` suffix where a default value is present.
+        formals = []
+        for p in params:
+            name = p['name']
+            if p['rest']:
+                name = '...' + name
+            if p['default']:
+                name = f"{name}={p['default']}"
+            formals.append(name)
+        return '(' + ', '.join(formals) + ')'
+
+    # Map fully-qualified method names ("ClassName.methodName") to the list of
+    # *additional* signature dicts (everything past the first signature, since
+    # sphinx-js already renders signature 0 itself).
+    extra_overloads: dict[str, list[dict]] = {}
+
+    CONTAINER_KINDS = {128, 256, 2}      # Class, Interface, Module
+    CALLABLE_KINDS = {2048, 64, 512}     # Method, Function, Constructor
+
+    def walk(node, parent_name=None):
+        if isinstance(node, list):
+            for child in node:
+                walk(child, parent_name)
+            return
+        if not isinstance(node, dict):
+            return
+
+        name = node.get('name')
+        kind = node.get('kind')
+        sigs = node.get('signatures')
+
+        if (
+            sigs and isinstance(sigs, list) and len(sigs) > 1
+            and kind in CALLABLE_KINDS and parent_name and name
+        ):
+            key = f'{parent_name}.{name}'
+            extra_overloads[key] = [extract_signature(s) for s in sigs[1:]]
+
+        next_parent = name if kind in CONTAINER_KINDS else parent_name
+        walk(node.get('children') or [], next_parent)
+
+    walk(data, None)
+
+    if not extra_overloads:
+        return
+
+    # ---- Render an extra overload as a complete .. js:function:: block ----
+    # We wrap type strings in sphinx-js's custom `:sphinx_js_type:` role so the
+    # rendered HTML uses the same `<span class="sphinx_js-type">` element as
+    # the canonical signature — keeping bold/non-italic styling consistent.
+    def fmt_type(t: str) -> str:
+        # Backticks inside a role value have to be escaped to keep the role
+        # parser from terminating early. We don't expect them in our types.
+        return f':sphinx_js_type:`{t}`' if t else ''
+
+    def render_extra_block(method_name: str, sig: dict) -> str:
+        params = sig['params']
+        formal = fmt_formal_params(params)
+        lines = [f'.. js:function:: {method_name}{formal}', '']
+        description = sig.get('description') or ''
+        if description.strip():
+            # Indent every line into the directive body. Blank lines must
+            # stay blank (no indent) so RST treats them as paragraph breaks.
+            for line in description.splitlines():
+                lines.append(f'   {line}' if line.strip() else '')
+            lines.append('')
+        for p in params:
+            if p['type']:
+                lines.append(f'   :type {p["name"]}: {fmt_type(p["type"])}')
+            lines.append(f'   :param {p["name"]}: ')
+        if sig['returns'] and sig['returns'] != 'void':
+            lines.append(f'   :returns: {fmt_type(sig["returns"])}')
+        lines.append('')
+        return '\n'.join(lines)
+
+    # ---- Patch JsRenderer.rst to append the extra blocks ----
+    from sphinx_js import renderers
+
+    _orig_rst = renderers.JsRenderer.rst
+
+    def rst(self, partial_path, obj, use_short_name=False):
+        result = _orig_rst(self, partial_path, obj, use_short_name)
+        # Only augment Function IR objects (methods, ctors, free funcs).
+        from sphinx_js.ir import Function
+        if not isinstance(obj, Function):
+            return result
+
+        path = getattr(obj, 'path', None)
+        segments = list(getattr(path, 'segments', None) or [])
+        clean = [s.rstrip('.#') for s in segments if s.rstrip('.#')]
+        candidates = []
+        if len(clean) >= 2:
+            candidates.append(f'{clean[-2]}.{clean[-1]}')
+        if clean:
+            candidates.append(clean[-1])
+
+        extras = None
+        for key in candidates:
+            if key in extra_overloads:
+                extras = extra_overloads[key]
+                break
+        if not extras:
+            return result
+
+        # Use the short method name (last path segment) so the extra block
+        # matches the canonical one's display style.
+        method_name = clean[-1] if clean else partial_path[-1]
+        extra_blocks = [render_extra_block(method_name, sig) for sig in extras]
+        return result.rstrip() + '\n\n' + '\n'.join(extra_blocks) + '\n'
+
+    renderers.JsRenderer.rst = rst
+
+_patch_sphinx_js_render_overloads()
+
 
 templates_path = ['@SPHINX_SOURCE_DIR@/_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'venv']
@@ -64,6 +368,22 @@ html_theme_options = {
                 "title": "Usage Guide",
                 "url": "usage",
                 "summary": "Detailed usage instructions for Anira"
+            },
+            {
+                "title": "anira-web API",
+                "url": "web-api/index",
+                "children": [
+                        {
+                                "title": "Class List",
+                                "url": "web-api/reference/classlist",
+                                "summary": "List of all anira-web classes",
+                        },
+                        {
+                                "title": "Function List",
+                                "url": "web-api/reference/functionlist",
+                                "summary": "Module-level functions",
+                        },
+                ]
             },
             {
                 "title": "API Documentation",

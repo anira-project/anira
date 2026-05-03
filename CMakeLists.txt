@@ -17,9 +17,25 @@ option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
 option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
 option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
 
+option(ANIRA_BUILD_WASM "Build WebAssembly module (requires Emscripten toolchain)" OFF)
+
 option(ANIRA_WITH_LOGGING "Enable logging printouts" ON)
 option(ANIRA_WITH_RTSAN "Enable RealtimeSanitizer (rtan) checks (requires clang 20)" OFF)
 
+if(DEFINED EMSDK_VERSION)
+    set(DEFINED EMSDK_VERSION ON)
+    if(ANIRA_WITH_EXAMPLES)
+        message(FATAL_ERROR "WebAssembly support is not compatible with examples. Please disable ANIRA_WITH_EXAMPLES to build the library with WebAssembly support.")
+    elseif(ANIRA_WITH_TESTS)
+        message(FATAL_ERROR "WebAssembly support is not compatible with tests. Please disable ANIRA_WITH_TESTS to build the library with WebAssembly support.")
+    elseif(ANIRA_WITH_INSTALL)
+        message(FATAL_ERROR "WebAssembly support is not compatible with install targets. Please disable ANIRA_WITH_INSTALL to build the library with WebAssembly support.")
+    elseif(ANIRA_WITH_LIBTORCH)
+        message(FATAL_ERROR "Only the ONNX Runtime backend is supported for WebAssembly. Please set -DANIRA_WITH_LIBTORCH=OFF and enable ANIRA_WITH_ONNXRUNTIME to build the library with WebAssembly support.")
+    elseif(ANIRA_WITH_TFLITE)
+        message(FATAL_ERROR "Only the ONNX Runtime backend is supported for WebAssembly. Please set -DANIRA_WITH_TFLITE=OFF and enable ANIRA_WITH_ONNXRUNTIME to build the library with WebAssembly support.")
+    endif()
+endif()
 # ==============================================================================
 # Get project version from git
 # ==============================================================================
@@ -27,16 +43,23 @@ option(ANIRA_WITH_RTSAN "Enable RealtimeSanitizer (rtan) checks (requires clang 
 execute_process(COMMAND git describe --dirty
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                 OUTPUT_VARIABLE PROJECT_VERSION_FULL
-                OUTPUT_STRIP_TRAILING_WHITESPACE)
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE GIT_DESCRIBE_RESULT)
 
 execute_process(COMMAND git describe --tags --abbrev=0
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
                 OUTPUT_VARIABLE PROJECT_VERSION_SHORT
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-# Retrive the v from the short version string
-string(SUBSTRING ${PROJECT_VERSION_SHORT} 1 -1 PROJECT_VERSION_SHORT)
-string(SUBSTRING ${PROJECT_VERSION_FULL} 1 -1 PROJECT_VERSION_FULL)
+if(GIT_DESCRIBE_RESULT EQUAL 0 AND PROJECT_VERSION_SHORT)
+  # Retrieve the v from the short version string
+  string(SUBSTRING ${PROJECT_VERSION_SHORT} 1 -1 PROJECT_VERSION_SHORT)
+  string(SUBSTRING ${PROJECT_VERSION_FULL} 1 -1 PROJECT_VERSION_FULL)
+else()
+  set(PROJECT_VERSION_SHORT "0.0.0")
+  set(PROJECT_VERSION_FULL "0.0.0-unknown")
+  message(WARNING "git describe failed - no tags found. Using fallback version ${PROJECT_VERSION_SHORT}")
+endif()
 
 # ==============================================================================
 # Setup the project
@@ -85,6 +108,12 @@ endif ()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+
+# Detect Emscripten — must be after project() so CMAKE_CXX_COMPILER is set.
+# EMSDK_VERSION is needed by SetupOnnxRuntime.cmake below.
+if(ANIRA_BUILD_WASM)
+    include(cmake/DetectEmscripten.cmake)
+endif()
 
 # ==============================================================================
 # Download and install the selected inference engines
@@ -195,6 +224,7 @@ target_compile_definitions(${PROJECT_NAME}
     # Backend-specific definitions
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
+    $<$<BOOL:EMSDK_VERSION>:USE_ANIRA_WEB>
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
     $<$<BOOL:${ANIRA_WITH_LOGGING}>:ENABLE_LOGGING>
     # Version number
@@ -232,7 +262,12 @@ endif()
 
 # The onnxruntime library requires PUBLIC linking because otherwise "_OrtGetApiBase" symbol is not found
 if(ANIRA_WITH_ONNXRUNTIME)
-    target_link_libraries(${PROJECT_NAME} PUBLIC onnxruntime)
+    if(EMSDK_VERSION)
+        target_include_directories(${PROJECT_NAME} PUBLIC ${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH})
+        target_link_libraries(${PROJECT_NAME} PUBLIC ${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH}/libonnxruntime_webassembly.a)
+    else()
+        target_link_libraries(${PROJECT_NAME} PUBLIC onnxruntime)
+    endif()
 endif()
 
 if(ANIRA_WITH_TFLITE)
@@ -283,4 +318,12 @@ endif()
 
 if (ANIRA_WITH_DOCS)
     add_subdirectory(docs)
+endif()
+
+# ==============================================================================
+# Build WebAssembly module (optional, requires Emscripten)
+# ==============================================================================
+
+if(ANIRA_BUILD_WASM)
+    include(cmake/BuildWasm.cmake)
 endif()

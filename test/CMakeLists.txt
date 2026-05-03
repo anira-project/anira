@@ -31,6 +31,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	utils/test_JsonConfigLoader.cpp
 	scheduler/test_InferenceManager.cpp
 	scheduler/test_SessionElement.cpp
+	scheduler/test_UserManagedThread.cpp
 	test_WavReader.cpp
 )
 

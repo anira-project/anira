@@ -1,0 +1,120 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 15,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "desktop-debug",
+      "displayName": "Desktop Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/Desktop/Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "desktop-release",
+      "displayName": "Desktop Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/Desktop/Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "wasm-debug",
+      "displayName": "Wasm Debug",
+      "description": "Build AniraWeb WASM module (debug)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/Wasm/Debug",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": {
+        "ANIRA_BUILD_WASM": "ON",
+        "ANIRA_WITH_LIBTORCH": "OFF",
+        "ANIRA_WITH_TFLITE": "OFF",
+        "ANIRA_WITH_ONNXRUNTIME": "ON",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "wasm-release",
+      "displayName": "Wasm Release",
+      "description": "Build AniraWeb WASM module (release)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/Wasm/Release",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": {
+        "ANIRA_BUILD_WASM": "ON",
+        "ANIRA_WITH_LIBTORCH": "OFF",
+        "ANIRA_WITH_TFLITE": "OFF",
+        "ANIRA_WITH_ONNXRUNTIME": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "docs",
+      "displayName": "Documentation",
+      "description": "Build C++ (Doxygen+Breathe) and anira-web (TypeDoc+sphinx-js) docs via Sphinx",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/Docs",
+      "cacheVariables": {
+        "ANIRA_WITH_DOCS": "ON",
+        "ANIRA_WITH_LIBTORCH": "OFF",
+        "ANIRA_WITH_TFLITE": "OFF",
+        "ANIRA_WITH_ONNXRUNTIME": "OFF",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "desktop-debug",
+      "configurePreset": "desktop-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "desktop-release",
+      "configurePreset": "desktop-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "wasm-debug",
+      "configurePreset": "wasm-debug",
+      "configuration": "Debug",
+      "description": "Build AniraWeb WASM module (debug)"
+    },
+    {
+      "name": "wasm-release",
+      "configurePreset": "wasm-release",
+      "configuration": "Release",
+      "description": "Build AniraWeb WASM module (release)"
+    },
+    {
+      "name": "docs",
+      "configurePreset": "docs",
+      "description": "Build the full HTML documentation",
+      "targets": ["sphinx-docs"]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "desktop-debug",
+      "configurePreset": "desktop-debug",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "desktop-release",
+      "configurePreset": "desktop-release",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}
