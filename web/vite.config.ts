@@ -133,6 +133,19 @@ function bundleAudioWorklet(): Plugin {
 
 export default defineConfig({
   base: './',
+  resolve: {
+    alias: [
+      // onnxruntime-web 1.19.2 does not expose ort-wasm-simd-threaded.mjs
+      // in its package `exports`; resolve it directly from dist/.
+      {
+        find: 'onnxruntime-web/ort-wasm-simd-threaded.mjs',
+        replacement: path.resolve(
+          __dirname,
+          'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs'
+        ),
+      },
+    ],
+  },
   plugins: [
     preserveWorkerUrls(),
     bundleAudioWorklet(),

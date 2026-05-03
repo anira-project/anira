@@ -4,6 +4,9 @@ import { VectorBufferF } from '../wrappers/Vectors'
 import { InferenceConfig } from '../wrappers/InferenceConfig'
 import { ModelData } from '../wrappers/ModelData'
 
+// onnxruntime-web 1.19.2 doesn't expose this WASM module factory via its
+// package `exports` field. The Vite config aliases this specifier to
+// node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs.
 import ortWasmFactory from 'onnxruntime-web/ort-wasm-simd-threaded.mjs'
 import { createInferenceBackend } from '../wrappers'
 
