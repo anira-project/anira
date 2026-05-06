@@ -13,6 +13,10 @@ if(NOT EXISTS ${DOCS_VENV_DIR})
         COMMAND ${Python3_EXECUTABLE} -m venv ${DOCS_VENV_DIR}
         COMMAND ${DOCS_VENV_DIR}/bin/pip install --upgrade pip
         COMMAND ${DOCS_VENV_DIR}/bin/pip install --quiet sphinx breathe shibuya myst-parser sphinx-js
+        # Patch sphinx-js bug: redirectPrivateAliases.ts crashes on missing-export
+        # symbols whose `declarations` is undefined (occurs with TypeDoc >= 0.27).
+        # Replace `name.declarations![0]` with a guarded read. See pyodide/sphinx-js.
+        COMMAND bash -c "perl -i -pe 's{const decl = name\\.declarations!\\[0\\];}{const decl = name.declarations?.[0]; if (!decl) continue;}' ${DOCS_VENV_DIR}/lib/python*/site-packages/sphinx_js/js/redirectPrivateAliases.ts"
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         COMMENT "Creating virtual environment for Sphinx documentation"
         VERBATIM
