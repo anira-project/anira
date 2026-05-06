@@ -222,6 +222,18 @@ If you want to define a custom context configuration, you can do so by creating 
     // Create an InferenceHandler instance
     anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
 
+You can also opt out of the auto-managed thread pool entirely and supply your own threads. Pass ``0`` to :cpp:struct:`anira::ContextConfig` so the auto-pool stays empty, then create as many threads as you want via :cpp:func:`anira::Context::make_inference_thread`, call ``start()`` on each, and either call ``stop()`` or simply destroy the returned ``unique_ptr`` to tear them down.
+
+.. code-block:: cpp
+
+    anira::ContextConfig context_config { 0 }; // opt out of the auto-pool
+    anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
+
+    auto thread = anira::Context::make_inference_thread();
+    thread->start();
+    // ... process audio ...
+    thread->stop(); // or just let `thread` go out of scope
+
 4. Get ready for Processing
 ---------------------------
 

@@ -23,7 +23,12 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
         if (m_context->m_context_config.m_enabled_backends != context_config.m_enabled_backends) {
             LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!" << std::endl;
         }
-        if ((unsigned int) m_context->m_thread_pool.size() > context_config.m_num_threads) {
+        // num_threads == 0 means "I'm opting out of the auto-pool and bringing
+        // my own threads via Context::make_inference_thread()" — not "shrink
+        // any existing pool to zero." Skip the resize so a manual-threading
+        // caller doesn't tear down threads another caller is relying on.
+        if (context_config.m_num_threads > 0
+            && (unsigned int) m_context->m_thread_pool.size() > context_config.m_num_threads) {
             m_context->new_num_threads(context_config.m_num_threads);
             m_context->m_context_config.m_num_threads = context_config.m_num_threads;
         }

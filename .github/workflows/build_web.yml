@@ -1,20 +1,16 @@
-name: publish_web
+name: build_web
 
 on:
   push:
-    tags:
-      - 'v*.*.*'
+  pull_request:
 
 concurrency:
-  group: publish-web
-  cancel-in-progress: false
+  group: build-web-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -61,40 +57,6 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: derive version + dist-tag
-        id: meta
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          if [[ "$version" == *-* ]]; then
-            tag="next"
-          else
-            tag="latest"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "dist_tag=$tag"   >> "$GITHUB_OUTPUT"
-          echo "Publishing $version under dist-tag $tag"
-
-      - name: stamp package version
-        working-directory: web
-        run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version --allow-same-version
-
       - name: build js package
         working-directory: web
         run: npm run build
-
-      - name: npm publish
-        working-directory: web
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance --tag "${{ steps.meta.outputs.dist_tag }}"
-
-      - name: summary
-        shell: bash
-        run: |
-          {
-            echo "### anira-web published"
-            echo ""
-            echo "- **Version:** \`${{ steps.meta.outputs.version }}\`"
-            echo "- **dist-tag:** \`${{ steps.meta.outputs.dist_tag }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
