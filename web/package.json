@@ -47,5 +47,6 @@
   },
   "dependencies": {
     "onnxruntime-web": "^1.19.2"
-  }
+  },
+  "packageManager": "npm@11.6.2"
 }

@@ -53,6 +53,11 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
+      # Use the npm version pinned via "packageManager" in web/package.json
+      # so contributors and CI produce identical lockfile shapes.
+      - name: enable corepack
+        run: corepack enable
+
       - name: install js deps
         working-directory: web
         run: npm ci
