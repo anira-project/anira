@@ -98,7 +98,7 @@ jobs:
         shell: bash
         run: |
           {
-            echo "### anira-web published"
+            echo "### Anira Web published"
             echo ""
             echo "- **Version:** \`${{ steps.meta.outputs.version }}\`"
             echo "- **dist-tag:** \`${{ steps.meta.outputs.dist_tag }}\`"

@@ -1,7 +1,7 @@
 Custom Audio Worklets
 =====================
 
-The default worklet that ships with anira-web handles the common case:
+The default worklet that ships with Anira Web handles the common case:
 one streamable tensor, single audio I/O, default ``maxBufferSize``. As
 soon as your model wants something more — multiple tensors, a different
 processing buffer size, ``AudioParam`` integration, or a JS-side
@@ -36,7 +36,7 @@ A custom worklet file looks like this:
    import {
      AniraAudioWorkletBase,
      type AniraWorkletState,
-   } from 'anira-web/workers/worklet-base'
+   } from '@anira-project/anira/workers/worklet-base'
 
    class MyWorklet extends AniraAudioWorkletBase {
      protected async onConfigured(state: AniraWorkletState) {

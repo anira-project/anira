@@ -1,12 +1,15 @@
 {
-  "name": "anira-web",
-  "version": "0.0.1",
+  "name": "@anira-project/anira",
+  "version": "0.0.1-alpha.0",
   "license": "Apache-2.0",
   "homepage": "https://github.com/anira-project/anira",
   "repository": {
     "type": "git",
     "url": "https://github.com/anira-project/anira.git",
     "directory": "web"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "type": "module",
   "main": "./dist/index.js",
@@ -36,9 +39,11 @@
   ],
   "scripts": {
     "build": "tsc && vite build",
-    "dev": "vite build --watch"
+    "dev": "vite build --watch",
+    "format": "prettier ."
   },
   "devDependencies": {
+    "prettier": "^3.8.3",
     "rollup": "^4.60.0",
     "typescript": "~5.9.3",
     "vite": "^8.0.8",

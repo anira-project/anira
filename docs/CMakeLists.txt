@@ -68,7 +68,7 @@ add_custom_target(breathe-apidocs
     VERBATIM
 )
 
-# --- TypeDoc: generate JSON for the anira-web TypeScript API -----------------
+# --- TypeDoc: generate JSON for the Anira Web TypeScript API -----------------
 # sphinx-js consumes this JSON via the js: domain, producing rendering that
 # matches the C++ side (Sphinx domain directives styled by the shibuya theme).
 set(TYPEDOC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/typedoc)
@@ -97,13 +97,13 @@ if (NPM_EXECUTABLE)
                 --json ${TYPEDOC_JSON}
         DEPENDS ${TYPEDOC_NPM_STAMP} ${TYPEDOC_DIR}/typedoc.json
         WORKING_DIRECTORY ${TYPEDOC_DIR}
-        COMMENT "Generating TypeDoc JSON for anira-web"
+        COMMENT "Generating TypeDoc JSON for Anira Web"
         VERBATIM
     )
 
     add_custom_target(typedoc-json DEPENDS ${TYPEDOC_JSON})
 else()
-    message(WARNING "npm not found - anira-web API reference will be skipped. Install Node.js to enable it.")
+    message(WARNING "npm not found - Anira Web API reference will be skipped. Install Node.js to enable it.")
     add_custom_target(typedoc-json
         COMMAND ${CMAKE_COMMAND} -E echo "Skipping TypeDoc: npm not found"
     )

@@ -34,8 +34,8 @@ the same object:
    import {
      AniraAudioWorkletBase,
      type AniraWorkletState,
-   } from 'anira-web/workers/worklet-base'
-   import { JSPrePostProcessor } from 'anira-web'
+   } from '@anira-project/anira/workers/worklet-base'
+   import { JSPrePostProcessor } from '@anira-project/anira'
 
    class MyPrePostProcessor extends JSPrePostProcessor {
      // overrides go here
@@ -90,13 +90,13 @@ parameter to ``[0, 1]`` before passing it to the C++ pre-processing.
    import {
      AniraAudioWorkletBase,
      type AniraWorkletState,
-   } from 'anira-web/workers/worklet-base'
+   } from '@anira-project/anira/workers/worklet-base'
    import {
      JSPrePostProcessor,
      type PossiblePointer,
      type VectorBufferF,
      type VectorRingBuffer,
-   } from 'anira-web'
+   } from '@anira-project/anira'
 
    class GainClampPrePostProcessor extends JSPrePostProcessor {
      override preProcess(

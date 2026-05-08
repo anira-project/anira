@@ -1,7 +1,7 @@
 {
   "name": "anira-docs-typedoc",
   "private": true,
-  "description": "TypeDoc dependencies used to generate the anira-web API JSON consumed by sphinx-js. Kept separate from anira-web/package.json so docs tooling does not pollute the runtime package.",
+  "description": "TypeDoc dependencies used to generate the Anira Web API JSON consumed by sphinx-js. Kept separate from @anira-project/anira/package.json so docs tooling does not pollute the runtime package.",
   "devDependencies": {
     "typedoc": "~0.27.9",
     "typescript": "~5.7.3"

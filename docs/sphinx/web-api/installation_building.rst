@@ -1,7 +1,7 @@
 Installation / Building
 =======================
 
-``anira-web`` is the TypeScript / WebAssembly distribution of Anira. It is
+Anira Web is the TypeScript / WebAssembly distribution of Anira. It is
 made up of two parts:
 
 * a WebAssembly module (``AniraWeb.wasm`` + ``AniraWeb.js``) compiled from
@@ -20,12 +20,12 @@ Add the package to your project with the package manager of your choice:
 
 .. code-block:: bash
 
-   npm install anira-web
-   pnpm add anira-web
-   yarn add anira-web
-   bun add anira-web
+   npm install @anira-project/anira
+   pnpm add @anira-project/anira
+   yarn add @anira-project/anira
+   bun add @anira-project/anira
 
-The package ships its WebAssembly artifacts under ``anira-web/dist/wasm/``
+The package ships its WebAssembly artifacts under ``@anira-project/anira/dist/wasm/``
 (``AniraWeb.wasm`` and the Emscripten-generated ``AniraWeb.js`` glue
 file). When bundling, make sure the ``.wasm`` file is copied to a path
 your runtime can fetch — most modern bundlers (Vite, webpack 5, Rollup
@@ -45,14 +45,14 @@ the inference-worker handler):
    import {
      AniraWeb,
      // factories, wrappers, backends, helpers, ...
-   } from 'anira-web'
+   } from '@anira-project/anira'
 
 .. _building:
 
 Building from Source
 --------------------
 
-Building ``anira-web`` is a two-stage process:
+Building ``@anira-project/anira`` is a two-stage process:
 
 1. Cross-compile the Anira C++ library to WebAssembly with Emscripten.
    The build outputs ``AniraWeb.wasm``, ``AniraWeb.js`` and

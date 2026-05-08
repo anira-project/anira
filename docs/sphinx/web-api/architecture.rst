@@ -1,7 +1,7 @@
 Architecture
 ============
 
-``anira-web`` is the WebAssembly distribution of anira: the same C++
+``Anira Web`` is the WebAssembly distribution of anira: the same C++
 library, compiled to WASM and wrapped in a
 TypeScript API. The TypeScript layer's job is to spread that WASM
 module across the browser threads anira needs in order to run
@@ -57,7 +57,7 @@ what keeps the audio worklet's ``process`` callback real-time-safe
 even when a forward pass takes longer than one audio block.
 
 The worker hosts the inference engine itself, regardless of where that
-engine actually runs. ``anira-web`` ships with two built-in engines:
+engine actually runs. ``Anira Web`` ships with two built-in engines:
 ONNX Runtime compiled into the WASM module, and ``onnxruntime-web`` on
 the JavaScript side (:js:class:`ONNXRuntimeWebBackend`). User-written JS backends
 also run on this worker. See :doc:`custom_inference_backends`.

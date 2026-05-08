@@ -3,7 +3,7 @@ Class AniraAudioWorkletBase
 
 .. note::
    This class is exported from the package's audio-worklet subpath:
-   ``import { AniraAudioWorkletBase, type AniraWorkletState } from 'anira-web/workers/worklet-base'``.
+   ``import { AniraAudioWorkletBase, type AniraWorkletState } from '@anira-project/anira/workers/worklet-base'``.
    The subpath isolates the worklet bundle so the main entry point
    stays free of references to ``AudioWorkletProcessor``, which only
    exists in ``AudioWorkletGlobalScope``.

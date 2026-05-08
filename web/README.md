@@ -1,7 +1,7 @@
-# anira-web
+# Anira Web
 
 The WebAssembly + TypeScript distribution of [**anira**](https://github.com/anira-project/anira) — a real-time neural-network inference library for low-latency audio applications.
-`anira-web` ships the same C++ library compiled to WebAssembly, wrapped in a TypeScript API that integrates with the Web Audio API.
+Anira Web ships the same C++ library compiled to WebAssembly, wrapped in a TypeScript API that integrates with the Web Audio API.
 
 📚 **Full documentation:**
 [anira-project.github.io/anira/web-api](https://anira-project.github.io/anira/web-api/index.html)
@@ -9,11 +9,11 @@ The WebAssembly + TypeScript distribution of [**anira**](https://github.com/anir
 ## Install
 
 ```bash
-npm install anira-web
+npm install @anira-project/anira
 ```
 
 The package is published as ESM only and ships its WebAssembly
-artifacts under `anira-web/dist/wasm/`. Modern bundlers (Vite,
+artifacts under `@anira-project/anira/dist/wasm/`. Modern bundlers (Vite,
 webpack 5, Rollup, esbuild) already understand the
 `new URL('./file.wasm', import.meta.url)` references emitted by the
 package and will copy the asset automatically.
@@ -23,7 +23,7 @@ package and will copy the asset automatically.
 Loading an ONNX model and wiring it into a Web Audio graph:
 
 ```ts
-import { AniraWeb } from 'anira-web'
+import { AniraWeb } from '@anira-project/anira'
 
 const aniraWeb = await AniraWeb.create()
 await aniraWeb.spinUpInferenceWorker()
@@ -95,21 +95,21 @@ A list of demos is available [here].
 
 ## Building from source
 
-To build `anira-web` from source — including cross-compiling the C++ library to WebAssembly — follow the [Installation / Building](https://anira-project.github.io/anira/web-api/installation_building.html#building-from-source) guide.
+To build Anira Web from source — including cross-compiling the C++ library to WebAssembly — follow the [Installation / Building](https://anira-project.github.io/anira/web-api/installation_building.html#building-from-source) guide.
 
 ## License
 
-`anira-web` itself is distributed under the [Apache License 2.0](https://github.com/anira-project/anira/blob/main/LICENSE).
+Anira Web itself is distributed under the [Apache License 2.0](https://github.com/anira-project/anira/blob/main/LICENSE).
 
 ### Attribution requirements when redistributing
 
-The WebAssembly binary statically links **ONNX Runtime** (MIT, © Microsoft) and a number of native libraries (protobuf, abseil, Eigen, flatbuffers, mimalloc, …) whose code ends up in `dist/wasm/AniraWeb.wasm`. If you ship a product that includes `anira-web`, your distribution must reproduce the corresponding copyright notices and license texts.
+The WebAssembly binary statically links **ONNX Runtime** (MIT, © Microsoft) and a number of native libraries (protobuf, abseil, Eigen, flatbuffers, mimalloc, …) whose code ends up in `dist/wasm/AniraWeb.wasm`. If you ship a product that includes `@anira-project/anira`, your distribution must reproduce the corresponding copyright notices and license texts.
 
 To make this straightforward, the package ships these files in known locations:
 
 ```
-node_modules/anira-web/
-├── LICENSE                              # Apache-2.0 for anira / anira-web
+node_modules/@anira-project/anira/
+├── LICENSE                              # Apache-2.0 for anira / @anira-project/anira
 └── dist/licenses/
     └── onnxruntime/
         ├── LICENSE                      # MIT (ONNX Runtime)
@@ -121,7 +121,7 @@ Each subdirectory under `dist/licenses/` represents one statically-linked native
 
 In practice the easiest path is to use a tool like [`rollup-plugin-license`](https://github.com/mjeanroy/rollup-plugin-license) or a similar webpack/esbuild plugin to auto-generate a `THIRD_PARTY_LICENSES.txt` and ship it alongside your build. If you do, point the plugin at:
 - the package's own `LICENSE` (already covered by the plugin's normal dep walk), and
-- each subdirectory under `node_modules/anira-web/dist/licenses/` (these aren't visible to npm-graph-based tools because they describe *native* code linked into the WASM, not JS deps).
+- each subdirectory under `node_modules/@anira-project/anira/dist/licenses/` (these aren't visible to npm-graph-based tools because they describe *native* code linked into the WASM, not JS deps).
 
 If you don't use such a tool, copy the files above into your distribution alongside whatever attribution you already do for your other open-source dependencies.
 

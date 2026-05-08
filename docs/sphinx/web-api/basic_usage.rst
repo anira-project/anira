@@ -1,7 +1,7 @@
 Basic Usage
 ===========
 
-This guide walks through the smallest end-to-end ``anira-web`` setup: loading
+This guide walks through the smallest end-to-end ``Anira Web`` setup: loading
 an ONNX model, configuring inference, and wiring it into a Web Audio graph.
 The example mirrors ``anira-web-demo/src/simple-gain-stereo`` — a stereo
 gain plugin with one streamable audio tensor and one non-streamable scalar
@@ -20,7 +20,7 @@ work between threads.
 
 .. code-block:: typescript
 
-   import { AniraWeb } from 'anira-web'
+   import { AniraWeb } from '@anira-project/anira'
 
    const aniraWeb = await AniraWeb.create()
    await aniraWeb.spinUpInferenceWorker()
@@ -189,7 +189,7 @@ block.
 Cleanup
 -------
 
-Every anira-web wrapper exposes a ``destroy()`` method that frees the
+Every Anira Web wrapper exposes a ``destroy()`` method that frees the
 underlying C++ object. JavaScript's garbage collector does not call
 this for you — if you ``new`` a wrapper and never call ``destroy()``,
 the C++ memory leaks for the lifetime of the WebAssembly module. For
@@ -218,7 +218,7 @@ in.
 --------------------------------------
 
 The flow above runs the model through the WASM-side ONNX Runtime that
-ships in anira's WebAssembly module. ``anira-web`` also bundles a
+ships in anira's WebAssembly module. ``Anira Web`` also bundles a
 JavaScript-side engine, :js:class:`ONNXRuntimeWebBackend`, which runs
 the model through ``onnxruntime-web``. Two small changes flip the basic setup over to
 it:

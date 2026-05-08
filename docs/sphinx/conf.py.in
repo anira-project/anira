@@ -34,7 +34,7 @@ breathe_default_members = ('members', 'undoc-members')
 breathe_domain_by_extension = {"h": "cpp", "hpp": "cpp"}
 breathe_implementation_filename_extensions = ['.c', '.cc', '.cpp']
 
-# sphinx-js: render the anira-web TypeScript API via TypeDoc.
+# sphinx-js: render the Anira Web TypeScript API via TypeDoc.
 # sphinx-js shells out to the `typedoc` binary on PATH (made available by the
 # typedoc-json CMake target). It then parses the resulting JSON so that
 # `js:autoclass::` / `js:autofunction::` directives produce Sphinx js-domain
@@ -102,7 +102,7 @@ _patch_js_domain_hide_class_prefix()
 def _patch_sphinx_js_drop_exported_from():
     """Suppress sphinx-js's "exported from <module>" line.
 
-    For a single-package barrel-export like anira-web the source-file path
+    For a single-package barrel-export like @anira-project/anira the source-file path
     TypeDoc reports (e.g. `wrappers.utils.HostConfig`) is meaningless to
     users, who only ever import from the package root.
     """
@@ -370,13 +370,13 @@ html_theme_options = {
                 "summary": "Detailed usage instructions for Anira"
             },
             {
-                "title": "anira-web API",
+                "title": "Anira Web API",
                 "url": "web-api/index",
                 "children": [
                         {
                                 "title": "Class List",
                                 "url": "web-api/reference/classlist",
-                                "summary": "List of all anira-web classes",
+                                "summary": "List of all Anira Web classes",
                         },
                         {
                                 "title": "Function List",

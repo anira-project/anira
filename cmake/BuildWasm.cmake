@@ -77,7 +77,7 @@ set_target_properties(${ANIRA_WASM_TARGET_NAME} PROPERTIES
 
 # ==============================================================================
 # Bundle license files from native deps that get statically linked into the
-# WASM binary, so the anira-web npm package can ship them and downstream
+# WASM binary, so the @anira-project/anira npm package can ship them and downstream
 # consumers can satisfy their attribution obligations. Tied to the AniraWeb
 # build target so it runs as part of the actual wasm build (not at configure
 # time, where it would re-fire on every cmake configure regardless of whether
@@ -91,7 +91,7 @@ if(ANIRA_WITH_ONNXRUNTIME)
             list(APPEND _ort_license_inputs "${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH}/${_f}")
         else()
             message(WARNING "ONNX Runtime ${_f} not found at "
-                "${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH} — anira-web will ship "
+                "${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH} — Anira Web will ship "
                 "without it; downstream consumers won't see attribution.")
         endif()
     endforeach()
@@ -104,7 +104,7 @@ if(ANIRA_WITH_ONNXRUNTIME)
             "${CMAKE_CURRENT_BINARY_DIR}/onnxruntime-PACKAGE.txt"
             "${_ort_license_dest}/PACKAGE.txt"
         VERBATIM
-        COMMENT "Bundling ONNX Runtime ${LIBONNXRUNTIME_VERSION} license + ThirdPartyNotices into anira-web"
+        COMMENT "Bundling ONNX Runtime ${LIBONNXRUNTIME_VERSION} license + ThirdPartyNotices into Anira Web"
     )
 
     # PACKAGE.txt only depends on configure-time vars (version, etc.), so

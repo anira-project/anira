@@ -1,7 +1,7 @@
 Function list
 =============
 
-Module-level free functions exported by ``anira-web``.
+Module-level free functions exported by ``@anira-project/anira``.
 
 WASM bootstrap
 --------------

@@ -1,7 +1,7 @@
-anira-web (TypeScript / WASM)
+Anira Web (TypeScript / WASM)
 =============================
 
-The ``anira-web`` package is a TypeScript wrapper around the Anira C++
+The Anira Web package is a TypeScript wrapper around the Anira C++
 library compiled to WebAssembly via Emscripten. It exposes a large subset
 of classes and functions that can be used to run real time inference in the
 browser, both with and without the Web Audio API.
@@ -11,7 +11,7 @@ reference.
 
 .. toctree::
    :maxdepth: 2
-   :caption: anira-web
+   :caption: Anira Web
 
    installation_building
    basic_usage

@@ -1,7 +1,7 @@
 Custom Inference Backends
 =========================
 
-``anira-web`` covers most use cases with the two engines it ships:
+``Anira Web`` covers most use cases with the two engines it ships:
 the WASM-side ONNX Runtime (the default path in :doc:`basic_usage`)
 and ``onnxruntime-web`` on the JS side (see
 :ref:`run-inference-in-javascript`). Reach for a custom backend when
@@ -34,7 +34,7 @@ outputs — and expects you to populate the outputs in place. Use
 .. code-block:: typescript
 
    // misc/JSCopyBackend.ts
-   import { JSBackendBase, BufferF, VectorBufferF } from 'anira-web'
+   import { JSBackendBase, BufferF, VectorBufferF } from '@anira-project/anira'
 
    export class JSCopyBackend extends JSBackendBase {
      override process(inputVecPtr: number, outputVecPtr: number): void {
@@ -74,7 +74,7 @@ worker runtime:
 .. code-block:: typescript
 
    // customInferenceWorker.ts
-   import { setupInferenceWorker } from 'anira-web'
+   import { setupInferenceWorker } from '@anira-project/anira'
    import { JSCopyBackend } from '../misc/JSCopyBackend'
 
    setupInferenceWorker({ JSCopyBackend })

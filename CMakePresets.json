@@ -61,7 +61,7 @@
     {
       "name": "docs",
       "displayName": "Documentation",
-      "description": "Build C++ (Doxygen+Breathe) and anira-web (TypeDoc+sphinx-js) docs via Sphinx",
+      "description": "Build C++ (Doxygen+Breathe) and Anira Web (TypeDoc+sphinx-js) docs via Sphinx",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/Docs",
       "cacheVariables": {
