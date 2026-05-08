@@ -18,7 +18,7 @@ in place of the bundled engine. Writing one takes three steps:
 3. Spin up that custom worker and wire the backend into
    :js:class:`InferenceHandler` via ``InferenceBackend.CUSTOM``.
 
-The js-copying demo in ``anira-web-demo/src/`` walks through all three
+The `js-copying demo <https://anira-project.github.io/anira-web-example>`_ walks through all three
 with a passthrough ``JSCopyBackend``; we'll use it as the running
 example below.
 
@@ -168,4 +168,4 @@ need a custom inference worker:
    )
    inferenceHandler.setInferenceBackend(aniraWeb.InferenceBackend.CUSTOM)
 
-The js-callback demo in ``anira-web-demo/src/`` does exactly this.
+The `js-callback demo <https://anira-project.github.io/anira-web-example>`_ does exactly this.

@@ -3,9 +3,9 @@ Basic Usage
 
 This guide walks through the smallest end-to-end ``Anira Web`` setup: loading
 an ONNX model, configuring inference, and wiring it into a Web Audio graph.
-The example mirrors ``anira-web-demo/src/simple-gain-stereo`` — a stereo
+The code follows the `simple-gain-stereo demo <https://anira-project.github.io/anira-web-example>`_ — a stereo
 gain plugin with one streamable audio tensor and one non-streamable scalar
-tensor (the gain value).
+tensor (the gain value). You can run it live alongside this guide.
 
 The flow follows the same eight steps as the C++ :doc:`../usage` guide. Every
 configuration class you know from C++ has a TypeScript equivalent that is

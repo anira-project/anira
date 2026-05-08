@@ -4,7 +4,9 @@ Custom Pre- and Post-Processing
 When the default :js:class:`PrePostProcessor` doesn't cover what your
 model needs — windowing, normalization, parameter smoothing, custom
 multi-tensor packing — you subclass :js:class:`JSPrePostProcessor` and
-override ``preProcess`` and/or ``postProcess`` in JavaScript.
+override ``preProcess`` and/or ``postProcess`` in JavaScript. The
+`guitar-lstm and steerable-nafx demos <https://anira-project.github.io/anira-web-example>`_
+are live examples of this pattern that you can run in the browser.
 
 .. note::
    This page builds on :doc:`custom_audio_worklets`. A custom
@@ -160,8 +162,7 @@ arguments — either wrapper instances or raw WASM heap addresses. The
 functions on ``this.wasmInstance`` (e.g. ``_vector_ring_buffer_get``,
 ``_vector_buffer_f_get``,
 ``_prepostprocessor_pop_samples_from_buffer_window``) to manipulate
-buffers in place. The guitar-lstm and steerable-nafx demos in
-``anira-web-demo/src/`` show this pattern applied to real windowing
+buffers in place. The guitar-lstm and steerable-nafx demos show this pattern applied to real windowing
 logic.
 
 .. note::
