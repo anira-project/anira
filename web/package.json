@@ -40,7 +40,7 @@
   "scripts": {
     "build": "tsc && vite build",
     "dev": "vite build --watch",
-    "format": "prettier ."
+    "format": "prettier . --write"
   },
   "devDependencies": {
     "prettier": "^3.8.3",

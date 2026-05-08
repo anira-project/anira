@@ -120,8 +120,9 @@ node_modules/@anira-project/anira/
 Each subdirectory under `dist/licenses/` represents one statically-linked native dep that needs attribution. `PACKAGE.txt` is a simple `key: value` manifest you can parse to drive an attribution generator.
 
 In practice the easiest path is to use a tool like [`rollup-plugin-license`](https://github.com/mjeanroy/rollup-plugin-license) or a similar webpack/esbuild plugin to auto-generate a `THIRD_PARTY_LICENSES.txt` and ship it alongside your build. If you do, point the plugin at:
+
 - the package's own `LICENSE` (already covered by the plugin's normal dep walk), and
-- each subdirectory under `node_modules/@anira-project/anira/dist/licenses/` (these aren't visible to npm-graph-based tools because they describe *native* code linked into the WASM, not JS deps).
+- each subdirectory under `node_modules/@anira-project/anira/dist/licenses/` (these aren't visible to npm-graph-based tools because they describe _native_ code linked into the WASM, not JS deps).
 
 If you don't use such a tool, copy the files above into your distribution alongside whatever attribution you already do for your other open-source dependencies.
 
