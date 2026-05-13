@@ -10,6 +10,10 @@ import { ModelData } from '../wrappers/ModelData'
 import ortWasmFactory from 'onnxruntime-web/ort-wasm-simd-threaded.mjs'
 import { createInferenceBackend } from '../wrappers'
 
+// Shared ORT WASM module — loaded once and reused across all backend instances
+// to avoid accumulating WebAssembly.Memory allocations (causes OOM on Safari).
+let ortModulePromise: Promise<OrtWasmModule> | null = null
+
 /**
  * Minimal type for the ORT WASM Emscripten module instance.
  * We use the module directly for synchronous access to the C API.
@@ -159,8 +163,9 @@ export class ONNXRuntimeWebBackend extends JSBackendBase {
       modelBytes = new Uint8Array(await response.arrayBuffer())
     }
 
-    // --- Load ORT WASM module ---
-    this.ort = (await ortWasmFactory({ numThreads: 1 })) as OrtWasmModule
+    // --- Load ORT WASM module (shared singleton to avoid repeated memory allocs) ---
+    ortModulePromise ??= ortWasmFactory({ numThreads: 1 }) as Promise<OrtWasmModule>
+    this.ort = await ortModulePromise
     const ort = this.ort
 
     if (ort._OrtInit(1, 3) !== 0) {
@@ -368,6 +373,9 @@ export class ONNXRuntimeWebBackend extends JSBackendBase {
       this.ort._OrtReleaseSession(this.sessionHandle)
       this.sessionHandle = 0
     }
+    this.ort = null
+    this.inputMeta = []
+    this.outputMeta = []
     super.destroy()
   }
 

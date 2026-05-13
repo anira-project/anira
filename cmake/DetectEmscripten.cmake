@@ -10,5 +10,5 @@ if("${CMAKE_CXX_COMPILER}" MATCHES "em\\+\\+")
   message(STATUS "Using Emscripten compiler: ${CMAKE_CXX_COMPILER}")
   set(CMAKE_EXECUTABLE_SUFFIX ".js")
 
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -matomics -mbulk-memory -sNO_DISABLE_EXCEPTION_CATCHING")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -matomics -msimd128 -mbulk-memory -sNO_DISABLE_EXCEPTION_CATCHING")
 endif()
