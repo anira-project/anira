@@ -8,7 +8,7 @@ workers and audio worklet integration. Construct one per app via
 
 .. js:autoclass:: AniraWeb.AniraWeb
    :short-name:
-   :members: create, stackRestore, malloc, free, getMemory, getWasmInstance, allocWasmString, registerProcessor, unregisterProcessor, registerPrePostProcessor, unregisterPrePostProcessor, getActiveWorkers, spinUpInferenceWorker, registerAudioWorkletForContext, configureAudioWorklet
+   :members: create, stackRestore, malloc, free, getMemory, getWasmInstance, allocWasmString, registerProcessor, unregisterProcessor, getActiveWorkers, spinUpInferenceWorker, registerAudioWorkletForContext, configureAudioWorklet
 
 .. js:method:: AniraWeb.getHeapF32()
 

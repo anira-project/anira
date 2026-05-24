@@ -52,7 +52,7 @@ the same object:
          prePostProcessorPtr
        )
 
-       aniraWeb.registerPrePostProcessor(ppProcessor)
+       this.prePostRegistry.set(prePostProcessorPtr, ppProcessor)
      }
    }
 
@@ -119,7 +119,7 @@ parameter to ``[0, 1]`` before passing it to the C++ pre-processing.
          aniraWeb.getWasmInstance(),
          prePostProcessorPtr
        )
-       aniraWeb.registerPrePostProcessor(ppProcessor)
+       this.prePostRegistry.set(prePostProcessorPtr, ppProcessor)
      }
    }
 

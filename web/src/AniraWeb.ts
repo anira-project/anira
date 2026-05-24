@@ -75,7 +75,6 @@ export class AniraWeb {
   protected memory: WebAssembly.Memory
   protected wasmBinary: ArrayBuffer | null = null
   private registeredProcessors: ProcessorDescriptor[] = []
-  private registeredPrePostProcessors: Map<number, JSPrePostProcessor>
   private activeWorkers: InferenceWorker[] = []
 
   InferenceBackend: InferenceBackendValues
@@ -114,42 +113,8 @@ export class AniraWeb {
         maximum: 8192,
         shared: true,
       })
-    const prePostRegistry = new Map<number, JSPrePostProcessor>()
-    const { processPrePost: externalProcessPrePost, ...restConfig } = config ?? {}
-    const wasmInstance = await createAniraWasm(wasmMemory, {
-      ...restConfig,
-      processPrePost: (
-        prePostProcessorPtr: number,
-        inputPtr: number,
-        outputPtr: number,
-        backend: number,
-        phase: number
-      ) => {
-        const prePostProcessor = prePostRegistry.get(prePostProcessorPtr)
-        if (prePostProcessor) {
-          if (phase === 0) {
-            prePostProcessor.preProcess(inputPtr, outputPtr, backend)
-            return
-          }
-          if (phase === 1) {
-            prePostProcessor.postProcess(inputPtr, outputPtr, backend)
-            return
-          }
-          throw new Error(`Unknown pre/post phase: ${phase}`)
-        }
-
-        if (externalProcessPrePost) {
-          externalProcessPrePost(prePostProcessorPtr, inputPtr, outputPtr, backend, phase)
-          return
-        }
-
-        throw new Error(
-          `JSPrePostProcessor with pointer ${prePostProcessorPtr} is not registered. ` +
-            `Call registerPrePostProcessor() before processing.`
-        )
-      },
-    })
-    return { wasmInstance, wasmMemory, prePostRegistry }
+    const wasmInstance = await createAniraWasm(wasmMemory, config ?? {})
+    return { wasmInstance, wasmMemory }
   }
 
   /**
@@ -169,17 +134,12 @@ export class AniraWeb {
     memory?: WebAssembly.Memory
   ): Promise<AniraWeb> {
     const init = await AniraWeb.initWasm(config, memory)
-    return new AniraWeb(init.wasmInstance, init.wasmMemory, init.prePostRegistry)
+    return new AniraWeb(init.wasmInstance, init.wasmMemory)
   }
 
-  constructor(
-    module: AniraWasmInstance,
-    memory: WebAssembly.Memory,
-    prePostRegistry: Map<number, JSPrePostProcessor>
-  ) {
+  constructor(module: AniraWasmInstance, memory: WebAssembly.Memory) {
     this.wasmInstance = module
     this.memory = memory
-    this.registeredPrePostProcessors = prePostRegistry
 
     this.InferenceBackend = createInferenceBackend(module)
     this.Buffer = createFactory(module, BufferF)
@@ -312,28 +272,6 @@ export class AniraWeb {
     const idx = this.registeredProcessors.findIndex((d) => d.backend === backend)
     if (idx !== -1) this.registeredProcessors.splice(idx, 1)
     await Promise.all(this.activeWorkers.map((w) => w.unregisterProcessor(backend)))
-  }
-
-  /**
-   * Register a :js:class:`JSPrePostProcessor` subclass instance so
-   * that ``preProcess`` / ``postProcess`` callbacks fired from C++
-   * route to its overrides. Call this on the audio worklet thread
-   * after constructing the subclass with ``createFromPointer`` —
-   * see :doc:`../../custom_pre_post_processing`.
-   */
-  registerPrePostProcessor(prePostProcessor: JSPrePostProcessor): void {
-    this.registeredPrePostProcessors.set(prePostProcessor.getPointer(), prePostProcessor)
-  }
-
-  /**
-   * Inverse of :js:meth:`registerPrePostProcessor`. Removes the
-   * registration so the subclass no longer receives pre/post
-   * callbacks. Accepts either the wrapper instance or its raw pointer.
-   */
-  unregisterPrePostProcessor(
-    prePostProcessor: PossiblePointer<JSPrePostProcessor>
-  ): void {
-    this.registeredPrePostProcessors.delete(resolvePtr(prePostProcessor))
   }
 
   /**

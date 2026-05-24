@@ -17,9 +17,9 @@ import { InferenceThread } from '../wrappers/system/InferenceThread'
  * The handler uses this to instantiate the correct subclass when
  * `className` is provided in a `registerProcessor` message.
  */
-export type ProcessorClassMap = Record<string, typeof JSBackendBase>
+type ProcessorClassMap = Record<string, typeof JSBackendBase>
 
-export type AniraCreateFn = (
+type AniraCreateFn = (
   config?: AniraWasmConfig & Record<string, unknown>,
   memory?: WebAssembly.Memory
 ) => Promise<AniraWeb>
@@ -116,7 +116,9 @@ export const setupInferenceWorker = (
           instance.destroy()
           processorRegistry.delete(processorPtr)
         }
-        postMessage({ type: 'processorUnregistered' } satisfies ProcessorUnregisteredResponse)
+        postMessage({
+          type: 'processorUnregistered',
+        } satisfies ProcessorUnregisteredResponse)
         break
       }
 
