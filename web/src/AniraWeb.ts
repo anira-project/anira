@@ -175,12 +175,11 @@ export class AniraWeb {
   constructor(
     module: AniraWasmInstance,
     memory: WebAssembly.Memory,
-    prePostRegistry?: Map<number, JSPrePostProcessor>
+    prePostRegistry: Map<number, JSPrePostProcessor>
   ) {
     this.wasmInstance = module
     this.memory = memory
-    this.registeredPrePostProcessors =
-      prePostRegistry ?? new Map<number, JSPrePostProcessor>()
+    this.registeredPrePostProcessors = prePostRegistry
 
     this.InferenceBackend = createInferenceBackend(module)
     this.Buffer = createFactory(module, BufferF)
@@ -308,8 +307,6 @@ export class AniraWeb {
    * Inverse of :js:meth:`registerProcessor`. Removes the descriptor from the
    * main-thread registry and instructs all active inference workers to destroy
    * and deregister the backend (releasing any resources such as ORT sessions).
-   * Call this after :js:meth:`JSBackendBase.destroy` to ensure each rep of a
-   * benchmark gets a cold-start.
    */
   async unregisterProcessor(backend: JSBackendBase): Promise<void> {
     const idx = this.registeredProcessors.findIndex((d) => d.backend === backend)
