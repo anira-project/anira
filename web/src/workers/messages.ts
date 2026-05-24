@@ -54,9 +54,19 @@ export type ProcessorRegisteredResponse = {
   type: 'processorRegistered'
 }
 
+export type UnregisterProcessorMessage = {
+  type: 'unregisterProcessor'
+  processorPtr: number
+}
+
+export type ProcessorUnregisteredResponse = {
+  type: 'processorUnregistered'
+}
+
 export type InferenceWorkerMessage =
   | InitInferenceWorkerMessage
   | RegisterProcessorMessage
+  | UnregisterProcessorMessage
   | StartMessage
   | DestroyMessage
 

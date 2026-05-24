@@ -6,6 +6,7 @@ import type { JSBackendBase } from '../backends'
 import type {
   InferenceWorkerMessage,
   ProcessorRegisteredResponse,
+  ProcessorUnregisteredResponse,
   ReadyRespose,
   StoppedResponse,
 } from './messages'
@@ -105,6 +106,17 @@ export const setupInferenceWorker = (
         postMessage({
           type: 'processorRegistered',
         } satisfies ProcessorRegisteredResponse)
+        break
+      }
+
+      case 'unregisterProcessor': {
+        const { processorPtr } = e.data
+        const instance = processorRegistry.get(processorPtr)
+        if (instance) {
+          instance.destroy()
+          processorRegistry.delete(processorPtr)
+        }
+        postMessage({ type: 'processorUnregistered' } satisfies ProcessorUnregisteredResponse)
         break
       }
 

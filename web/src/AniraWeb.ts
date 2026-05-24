@@ -13,6 +13,7 @@ import type {
   DestroyMessage,
   InitInferenceWorkerMessage,
   RegisterProcessorMessage,
+  UnregisterProcessorMessage,
   StartMessage,
 } from './workers/messages'
 import { waitForWorkerMessage } from './workers/messages'
@@ -65,6 +66,7 @@ export type ProcessorDescriptor = {
 export type InferenceWorker = {
   worker: Worker
   registerProcessor: (descriptor: ProcessorDescriptor) => Promise<void>
+  unregisterProcessor: (backend: JSBackendBase) => Promise<void>
   stop: () => Promise<void>
 }
 
@@ -303,6 +305,19 @@ export class AniraWeb {
   }
 
   /**
+   * Inverse of :js:meth:`registerProcessor`. Removes the descriptor from the
+   * main-thread registry and instructs all active inference workers to destroy
+   * and deregister the backend (releasing any resources such as ORT sessions).
+   * Call this after :js:meth:`JSBackendBase.destroy` to ensure each rep of a
+   * benchmark gets a cold-start.
+   */
+  async unregisterProcessor(backend: JSBackendBase): Promise<void> {
+    const idx = this.registeredProcessors.findIndex((d) => d.backend === backend)
+    if (idx !== -1) this.registeredProcessors.splice(idx, 1)
+    await Promise.all(this.activeWorkers.map((w) => w.unregisterProcessor(backend)))
+  }
+
+  /**
    * Register a :js:class:`JSPrePostProcessor` subclass instance so
    * that ``preProcess`` / ``postProcess`` callbacks fired from C++
    * route to its overrides. Call this on the audio worklet thread
@@ -396,6 +411,19 @@ export class AniraWeb {
           inferenceConfigPtr: descriptor.backend.inferenceConfigPtr || undefined,
         } satisfies RegisterProcessorMessage)
         await waitForWorkerMessage(worker, 'processorRegistered')
+
+        inferenceThread.start()
+        worker.postMessage({ type: 'start' } satisfies StartMessage)
+      },
+      unregisterProcessor: async (backend: JSBackendBase) => {
+        inferenceThread.stop()
+        await waitForWorkerMessage(worker, 'stopped')
+
+        worker.postMessage({
+          type: 'unregisterProcessor',
+          processorPtr: backend.getPointer(),
+        } satisfies UnregisterProcessorMessage)
+        await waitForWorkerMessage(worker, 'processorUnregistered')
 
         inferenceThread.start()
         worker.postMessage({ type: 'start' } satisfies StartMessage)
