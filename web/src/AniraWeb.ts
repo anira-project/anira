@@ -243,11 +243,16 @@ export class AniraWeb {
     return this.wasmBinary
   }
 
+  protected static readonly WORKER_STACK_SIZE = 4194304 // 4 MB per worker stack
+
   protected allocateWorkerStack(): number {
-    const WORKER_STACK_SIZE = 4194304 // 4 MB per worker stack
-    const base = this.malloc(WORKER_STACK_SIZE)
+    const base = this.malloc(AniraWeb.WORKER_STACK_SIZE)
     if (!base) throw new Error('Failed to allocate worker stack')
-    return base + WORKER_STACK_SIZE
+    return base + AniraWeb.WORKER_STACK_SIZE
+  }
+
+  protected freeWorkerStack(stackTop: number): void {
+    this.free(stackTop - AniraWeb.WORKER_STACK_SIZE)
   }
 
   /**
@@ -367,6 +372,8 @@ export class AniraWeb {
         inferenceThread.stop()
         await waitForWorkerMessage(worker, 'stopped')
         worker.postMessage({ type: 'destroy' } satisfies DestroyMessage)
+        inferenceThread.destroy()
+        this.freeWorkerStack(inferenceStackPtr)
         const idx = this.activeWorkers.indexOf(inferenceWorker)
         if (idx !== -1) this.activeWorkers.splice(idx, 1)
       },
