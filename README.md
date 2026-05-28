@@ -180,7 +180,7 @@ If you use anira in your research or project, please cite either the [paper](htt
 - [Valentin Ackva](https://github.com/vackva)
 
 ## Sponsor
-<img src="docs/img/bmftr-funding.png" alt="Funded by the German Federal Ministry of Research, Technology and Space (BMFTR)" width="140">
+<img src="docs/img/bmftr-funding.png" alt="Funded by the German Federal Ministry of Research, Technology and Space (BMFTR)" width="200">
 
 ## License
 
