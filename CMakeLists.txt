@@ -47,7 +47,11 @@ set (PROJECT_NAME anira)
 project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
 
 if(APPLE)
-    if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+    # Allow universal binaries when no pre-built backends are used (e.g., custom CoreML backend)
+    if (NOT ANIRA_WITH_LIBTORCH AND NOT ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_WITH_TFLITE)
+        # Universal binary is allowed - keep CMAKE_OSX_ARCHITECTURES as-is
+        message(STATUS "Building anira without pre-built backends - universal binary supported")
+    elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
         set(CMAKE_SYSTEM_PROCESSOR "arm64")
     elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
         set(CMAKE_SYSTEM_PROCESSOR "x86_64")
