@@ -28,6 +28,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	test_InferenceHandler.cpp
     utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
+	utils/test_Semaphore.cpp
 	utils/test_JsonConfigLoader.cpp
 	scheduler/test_InferenceManager.cpp
 	scheduler/test_SessionElement.cpp
