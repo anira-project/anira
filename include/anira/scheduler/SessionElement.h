@@ -1,10 +1,10 @@
 #ifndef ANIRA_SESSIONELEMENT_H
 #define ANIRA_SESSIONELEMENT_H
 
-#include <semaphore>
 #include <atomic>
 #include <queue>
 
+#include "../utils/Semaphore.h"
 #include "../utils/Buffer.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/InferenceBackend.h"
@@ -187,7 +187,7 @@ public:
         ThreadSafeStruct(std::vector<size_t> tensor_input_size, std::vector<size_t> tensor_output_size);
         
         std::atomic<bool> m_free{true};                    ///< Atomic flag indicating if this structure is available for use
-        std::binary_semaphore m_done_semaphore{false};     ///< Semaphore for blocking wait on inference completion
+        anira::Semaphore m_done_semaphore{0};              ///< Semaphore for blocking wait on inference completion
         std::atomic<bool> m_done_atomic{false};            ///< Atomic flag for non-blocking completion checking
         
         unsigned long m_time_stamp;                        ///< Timestamp for latency tracking and debugging

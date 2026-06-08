@@ -79,12 +79,15 @@ endif()
 message(STATUS "Building ${PROJECT_NAME} for ${CMAKE_SYSTEM_NAME} on ${CMAKE_SYSTEM_PROCESSOR}")
 message(STATUS "Project version: ${PROJECT_VERSION_SHORT} (${PROJECT_VERSION_FULL})")
 
-# Sets the minimum macOS version, c++20 is only available from macOS 11.0
+# Sets the minimum macOS version. Defaults to 11.0 (the first release with full
+# C++20 <semaphore> support), but respects a user-provided value so the library
+# can target older systems (e.g. -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13). On targets
+# below 11.0, anira::Semaphore automatically falls back to a portable backend.
 if (APPLE)
-	set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum version of the target platform" FORCE) 
-	if(CMAKE_OSX_DEPLOYMENT_TARGET)
-		message("The minimum macOS version is set to " $CACHE{CMAKE_OSX_DEPLOYMENT_TARGET}.)
+	if (NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
+		set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum version of the target platform" FORCE)
 	endif()
+	message(STATUS "The minimum macOS version is set to ${CMAKE_OSX_DEPLOYMENT_TARGET}")
 endif ()
 
 set(CMAKE_CXX_STANDARD 20)

@@ -5,6 +5,12 @@
 # Define the export symbol for MSVC builds (shared library)
 target_compile_definitions(${PROJECT_NAME} PRIVATE ANIRA_EXPORTS)
 
+# When built statically, tell anira's export header (PUBLIC, so consumers see it
+# too) to skip dllexport/dllimport decoration — a static lib has no import stubs.
+if(NOT BUILD_SHARED_LIBS)
+    target_compile_definitions(${PROJECT_NAME} PUBLIC ANIRA_STATIC_DEFINE)
+endif()
+
 if(NOT CMAKE_BUILD_TYPE)
     message(FATAL_ERROR "You need to specify CMAKE_BUILD_TYPE")
 endif()
