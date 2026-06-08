@@ -31,7 +31,11 @@ void SessionElement::clear() {
     }
     m_time_stamps.clear();
     m_current_queue = 0;
-    m_next_expected_inference.store(0, std::memory_order_relaxed);
+
+    // Reset stateful dispatch state and drop any tasks that never got dispatched.
+    std::shared_ptr<ThreadSafeStruct> drained;
+    while (m_dispatch_pending.try_dequeue(drained)) {}
+    m_stateful_dispatch_busy.store(false, std::memory_order_relaxed);
 
     for (auto& inference : m_inference_queue) {
         inference->m_free.store(true, std::memory_order_relaxed);
@@ -59,6 +63,39 @@ void SessionElement::clear() {
             }
         }
     }
+}
+
+void SessionElement::enqueue_pending_dispatch(std::shared_ptr<ThreadSafeStruct> thread_safe_struct) {
+    // Single producer (the audio thread for this session), so insertion order
+    // equals submission order.
+    m_dispatch_pending.enqueue(std::move(thread_safe_struct));
+}
+
+std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_next_dispatch() {
+    // Only one task may be dispatched at a time. Whoever flips the busy flag from
+    // false to true owns the right to release the next pending task.
+    if (m_stateful_dispatch_busy.exchange(true, std::memory_order_acquire)) {
+        return nullptr;
+    }
+    while (true) {
+        std::shared_ptr<ThreadSafeStruct> next;
+        if (m_dispatch_pending.try_dequeue(next)) {
+            return next; // keep busy = true; the task is now in flight
+        }
+        // Nothing pending: release ownership. Re-check to avoid a lost task that
+        // was enqueued between the failed dequeue and the release.
+        m_stateful_dispatch_busy.store(false, std::memory_order_release);
+        if (m_dispatch_pending.size_approx() == 0) {
+            return nullptr;
+        }
+        if (m_stateful_dispatch_busy.exchange(true, std::memory_order_acquire)) {
+            return nullptr; // another caller re-acquired; it will handle dispatch
+        }
+    }
+}
+
+void SessionElement::release_dispatch() {
+    m_stateful_dispatch_busy.store(false, std::memory_order_release);
 }
 
 void SessionElement::prepare(const HostConfig& host_config, std::vector<long> custom_latency) {

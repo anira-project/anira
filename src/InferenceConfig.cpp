@@ -26,6 +26,13 @@ InferenceConfig::InferenceConfig (
 {
     update_processing_spec();
 
+    if (m_stateful_model && !m_session_exclusive_processor) {
+        // A stateful model keeps internal state in its processor, so it cannot be
+        // shared across sessions (e.g. multiple plugin instances) — each session
+        // needs its own processor instance with its own state.
+        m_session_exclusive_processor = true;
+        LOG_INFO << "[WARNING] Stateful model requires a per-session processor. Setting session_exclusive_processor = true." << std::endl;
+    }
     if (m_session_exclusive_processor) {
         m_num_parallel_processors = 1;
     }

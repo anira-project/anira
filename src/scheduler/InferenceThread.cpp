@@ -70,33 +70,28 @@ bool InferenceThread::execute() {
 }
 
 void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
-    // Stateful models require strict execution order. The moodycamel queue
-    // doesn't guarantee FIFO with multiple consumers, so we spin-wait until
-    // it's this inference's turn.
-    if (session->m_inference_config.m_stateful_model) {
-        while (session->m_next_expected_inference.load(std::memory_order_acquire) != thread_safe_struct->m_time_stamp) {
-            if (should_exit()) {
-                return;
-            }
-            std::this_thread::yield();
-        }
-    }
-
     session->m_active_inferences.fetch_add(1, std::memory_order::release);
     inference(session, thread_safe_struct->m_tensor_input_data, thread_safe_struct->m_tensor_output_data);
-
-    // Advance to next expected inference (matching m_current_queue wrapping logic)
-    if (session->m_inference_config.m_stateful_model) {
-        unsigned long next = thread_safe_struct->m_time_stamp >= UINT16_MAX ? 0 : thread_safe_struct->m_time_stamp + 1;
-        session->m_next_expected_inference.store(next, std::memory_order_release);
-    }
-
     if (session->m_inference_config.m_blocking_ratio > 0.f) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
         thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
     }
     session->m_active_inferences.fetch_sub(1, std::memory_order::release);
+
+    // Stateful models: this task is fully done (its state write has completed), so
+    // release the dispatch slot and hand the next pending task to the pool. Only
+    // one task per session is ever in flight, keeping execution in order and
+    // mutually exclusive with no spinning.
+    if (session->m_inference_config.m_stateful_model) {
+        session->release_dispatch();
+        if (auto next = session->try_acquire_next_dispatch()) {
+            if (!m_next_inference.try_enqueue(InferenceData{session, next})) {
+                LOG_ERROR << "[ERROR] Could not enqueue next inference!" << std::endl;
+                session->release_dispatch();
+            }
+        }
+    }
 }
 
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, std::vector<BufferF>& input, std::vector<BufferF>& output) {
