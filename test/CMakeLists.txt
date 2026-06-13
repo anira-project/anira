@@ -26,6 +26,7 @@ add_executable(${PROJECT_NAME})
 
 target_sources(${PROJECT_NAME} PRIVATE
 	test_InferenceHandler.cpp
+	test_StatefulOrdering.cpp
     utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
 	utils/test_Semaphore.cpp

@@ -11,7 +11,8 @@ InferenceConfig::InferenceConfig (
         unsigned int warm_up,
         bool session_exclusive_processor,
         float blocking_ratio,
-        unsigned int num_parallel_processors
+        unsigned int num_parallel_processors,
+        bool stateful_model
         ) :
         m_model_data(model_data),
         m_tensor_shape(tensor_shape),
@@ -20,10 +21,18 @@ InferenceConfig::InferenceConfig (
         m_warm_up(warm_up),
         m_session_exclusive_processor(session_exclusive_processor),
         m_blocking_ratio(blocking_ratio),
-        m_num_parallel_processors(num_parallel_processors)
+        m_num_parallel_processors(num_parallel_processors),
+        m_stateful_model(stateful_model)
 {
     update_processing_spec();
 
+    if (m_stateful_model && !m_session_exclusive_processor) {
+        // A stateful model keeps internal state in its processor, so it cannot be
+        // shared across sessions (e.g. multiple plugin instances) — each session
+        // needs its own processor instance with its own state.
+        m_session_exclusive_processor = true;
+        LOG_INFO << "[WARNING] Stateful model requires a per-session processor. Setting session_exclusive_processor = true." << std::endl;
+    }
     if (m_session_exclusive_processor) {
         m_num_parallel_processors = 1;
     }

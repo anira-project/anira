@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <queue>
+#include <concurrentqueue.h>
 
 #include "../utils/Semaphore.h"
 #include "../utils/Buffer.h"
@@ -205,6 +206,22 @@ public:
 
     std::atomic<bool> m_initialized{false};                            ///< Atomic flag indicating if the session is fully initialized
     std::atomic<int> m_active_inferences{0};                           ///< Atomic counter of currently active inference operations
+
+    // --- Stateful in-order dispatch ---
+    // For stateful models, only ONE of this session's tasks may be in the global
+    // inference queue (and therefore running) at a time. Prepared tasks wait here
+    // in submission order and are released one at a time as each completes, which
+    // guarantees in-order, mutually-exclusive execution without spinning. Other
+    // sessions are unaffected and keep using the shared thread pool in parallel.
+    std::atomic<bool> m_stateful_dispatch_busy{false};                 ///< True while a stateful task of this session is queued or running
+    moodycamel::ConcurrentQueue<std::shared_ptr<ThreadSafeStruct>> m_dispatch_pending; ///< Prepared-but-not-yet-dispatched stateful tasks, in submission order
+
+    /** @brief Queue a prepared stateful task awaiting dispatch (called in submission order). */
+    void enqueue_pending_dispatch(std::shared_ptr<ThreadSafeStruct> thread_safe_struct);
+    /** @brief Claim the next stateful task to dispatch, or nullptr if one is already in flight or none are pending. */
+    std::shared_ptr<ThreadSafeStruct> try_acquire_next_dispatch();
+    /** @brief Mark the in-flight stateful task finished, allowing the next to be dispatched. */
+    void release_dispatch();
 
     PrePostProcessor& m_pp_processor;                                  ///< Reference to the preprocessing/postprocessing pipeline
     InferenceConfig& m_inference_config;                               ///< Reference to the inference configuration
