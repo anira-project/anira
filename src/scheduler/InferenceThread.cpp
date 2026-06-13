@@ -4,7 +4,8 @@
 namespace anira {
 
 InferenceThread::InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& next_inference) :
-    m_next_inference(next_inference)
+    m_next_inference(next_inference),
+    m_consumer_token(next_inference)
 {
 }
 
@@ -12,7 +13,31 @@ InferenceThread::~InferenceThread() {
     stop();
 }
 
+#ifndef __EMSCRIPTEN__
 void InferenceThread::run() {
+    run_loop();
+}
+#else
+void InferenceThread::start() {
+    m_should_exit.store(false, std::memory_order::release);
+    m_is_running.store(true, std::memory_order::release);
+}
+
+void InferenceThread::stop() {
+    m_should_exit.store(true, std::memory_order::release);
+    m_is_running.store(false, std::memory_order::release);
+}
+
+bool InferenceThread::should_exit() const {
+    return m_should_exit.load(std::memory_order::acquire);
+}
+
+bool InferenceThread::is_running() const {
+    return m_is_running.load(std::memory_order::acquire);
+}
+#endif
+
+void InferenceThread::run_loop() {
     while (!should_exit()) {
         constexpr std::array<int, 2> iterations = {4, 32};
         // The times for the exponential backoff. The first loop is insteadly trying to acquire the atomic counter. The second loop is waiting for approximately 100ns. Beyond that, the thread will yield and sleep for 100us.
@@ -60,7 +85,7 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 
 
 bool InferenceThread::execute() {
-    if (m_next_inference.try_dequeue(m_inference_data)) {
+    if (m_next_inference.try_dequeue(m_consumer_token, m_inference_data)) {
         if (m_inference_data.m_session->m_initialized.load(std::memory_order::acquire)) {
             do_inference(m_inference_data.m_session, m_inference_data.m_thread_safe_struct);
         }

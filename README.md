@@ -63,9 +63,11 @@ process(float** audio_data, int num_samples) {
 
 ## Installation
 
+### C++ Library
+
 Anira can be easily integrated into your CMake project. You can either add anira as a submodule, download the pre-built binaries from the [releases page](https://github.com/anira-project/anira/releases/latest), or build from source.
 
-### Option 1: Add as Git Submodule (Recommended)
+#### Option 1: Add as Git Submodule (Recommended)
 
 ```bash
 # Add anira repo as a submodule
@@ -86,7 +88,7 @@ add_subdirectory(modules/anira)
 target_link_libraries(your_target anira::anira)
 ```
 
-### Option 2: Use Pre-built Binaries
+#### Option 2: Use Pre-built Binaries
 
 Download pre-built binaries from the [releases page](https://github.com/anira-project/anira/releases/latest).
 
@@ -105,7 +107,7 @@ find_package(anira REQUIRED)
 target_link_libraries(your_target anira::anira)
 ```
 
-### Option 3: Build from Source
+#### Option 3: Build from Source
 
 ```bash
 git clone https://github.com/anira-project/anira.git
@@ -115,7 +117,7 @@ cmake --build build --config Release --target anira
 cmake --install build --prefix /path/to/install/directory
 ```
 
-### Build options
+### C++ Build Options
 
 By default, all three inference engines are installed. You can disable specific backends as needed:
 
@@ -130,6 +132,55 @@ Moreover, the following options are available:
 - Build anira with tests: ``-DANIRA_WITH_TESTS=ON``
 - Build anira with documentation: ``-DANIRA_WITH_DOCS=ON``
 - Disable the logging system: ``-DANIRA_WITH_LOGGING=OFF``
+
+### Anira Web (Web / JavaScript)
+
+Anira is available as the `@anira-project/anira` package for use in web applications:
+
+```bash
+# npm
+npm install @anira-project/anira
+
+# pnpm
+pnpm add @anira-project/anira
+
+# yarn
+yarn add @anira-project/anira
+```
+
+#### Building @anira-project/anira from source
+
+If you want to build the WASM module and JavaScript bindings yourself, you need to provide your own [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html). The CMake presets expect the `EMSDK` environment variable to be set to the root of your emsdk installation.
+
+```bash
+git clone https://github.com/anira-project/anira.git
+cd anira
+
+export EMSDK=/path/to/your/emsdk
+
+# Configure and build the WASM module (release)
+cmake --preset web-prod
+cmake --build --preset web-prod
+
+# Build the JavaScript package
+cd web
+npm install
+npm run build
+```
+
+For packaging it locally, use
+```bash
+npm pack
+```
+in the `web` folder, which will create a `.tgz` file that can be installed with npm or yarn.
+
+Then install the package in your project:
+
+```bash
+npm install path/to/anira/web/anira-project-anira-x.x.x.tgz
+```
+
+A debug preset is also available via `cmake --preset web` / `cmake --build --preset web`.
 
 ## Examples
 

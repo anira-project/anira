@@ -1,15 +1,23 @@
 .idea*
 *.DS_Store
 /build/
+/out/
 modules/
 cmake-build*
 .vscode
 logs/
 results/
 venv/
+web/wasm/
+web/dist/
+**/node_modules/**
 extras/models/stateful-rnn/stateful-lstm/
 extras/models/hybrid-nn/GuitarLSTM/
 extras/models/cnn/steerable-nafx/
 extras/models/model-pool/example-models/
 extras/models/third-party/ircam-acids/RAVE/
 extras/**/*.json
+
+# Auto-generated TypeDoc artifacts for the Anira Web docs (consumed by sphinx-js).
+docs/typedoc/node_modules/
+docs/typedoc/package-lock.json

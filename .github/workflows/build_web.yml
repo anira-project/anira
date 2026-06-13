@@ -1,0 +1,67 @@
+name: build_web
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: build-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: install system deps
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: setup emsdk
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.23
+          actions-cache-folder: emsdk-cache-4.0.23
+
+      - name: verify EMSDK env
+        run: |
+          echo "EMSDK=$EMSDK"
+          test -n "$EMSDK"
+          emcc --version
+
+      - name: pin global typescript for emscripten --emit-tsd
+        run: |
+          sudo npm i -g typescript@5.9
+          which tsc
+          tsc --version
+
+      - name: configure wasm
+        run: cmake --preset wasm-release
+
+      - name: build wasm
+        run: cmake --build --preset wasm-release -j
+
+      - name: setup node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      # Use the npm version pinned via "packageManager" in web/package.json
+      # so contributors and CI produce identical lockfile shapes.
+      - name: enable corepack
+        run: corepack enable
+
+      - name: install js deps
+        working-directory: web
+        run: npm ci
+
+      - name: build js package
+        working-directory: web
+        run: npm run build
