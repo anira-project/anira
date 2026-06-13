@@ -22,9 +22,12 @@ private:
         bool m_max_inference_time_set = false;
         float m_max_inference_time = 0.f;
         unsigned int m_warm_up = anira::InferenceConfig::Defaults::m_warm_up;
-        bool m_session_exclusive_processor = anira::InferenceConfig::Defaults::m_session_exclusive_processor;
+        bool m_session_exclusive_processor =
+            anira::InferenceConfig::Defaults::m_session_exclusive_processor;
         float m_blocking_ratio = anira::InferenceConfig::Defaults::m_blocking_ratio;
-        unsigned int m_num_parallel_processors = anira::InferenceConfig::Defaults::m_num_parallel_processors;
+        unsigned int m_num_parallel_processors =
+            anira::InferenceConfig::Defaults::m_num_parallel_processors;
+        bool m_stateful_model = anira::InferenceConfig::Defaults::m_stateful_model;
     };
 
     void initialize_from_stream(std::istream& stream);
@@ -33,16 +36,23 @@ private:
     void parse_context_config(const nlohmann::json& config);
     void parse_inference_config(const nlohmann::json& config);
 
-    static std::vector<anira::ModelData> create_model_data_from_config(const nlohmann::basic_json<>& config);
-    static std::vector<anira::TensorShape> create_tensor_shape_from_config(const nlohmann::basic_json<>& config);
+    static std::vector<anira::ModelData> create_model_data_from_config(
+        const nlohmann::basic_json<>& config);
+    static std::vector<anira::TensorShape> create_tensor_shape_from_config(
+        const nlohmann::basic_json<>& config);
     static anira::TensorShapeList parse_tensor_json_shape(const nlohmann::json& shape_node);
-    static anira::ProcessingSpec create_processing_spec_from_config(const nlohmann::basic_json<>& config, bool& config_required);
-    static std::vector<size_t> parse_size_t_json_shape(const nlohmann::json& shape_node, std::string json_key_name);
-    static SingleParameterStruct create_single_parameters_from_config(const nlohmann::basic_json<>& config, bool& necessary_parameter_set);
+    static anira::ProcessingSpec create_processing_spec_from_config(
+        const nlohmann::basic_json<>& config,
+        bool& config_required);
+    static std::vector<size_t> parse_size_t_json_shape(const nlohmann::json& shape_node,
+                                                       std::string json_key_name);
+    static SingleParameterStruct create_single_parameters_from_config(
+        const nlohmann::basic_json<>& config,
+        bool& necessary_parameter_set);
 
     std::unique_ptr<anira::ContextConfig> m_context_config;
     std::unique_ptr<anira::InferenceConfig> m_inference_config;
 };
-} // namespace anira
+}  // namespace anira
 
-#endif //JSONCONFIGLOADER_H
+#endif  // JSONCONFIGLOADER_H
