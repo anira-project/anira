@@ -1,7 +1,9 @@
 .idea*
 *.DS_Store
-/build/
-modules/
+/build*/
+modules/libtorch*
+modules/onnxruntime*
+modules/tensorflow*
 cmake-build*
 .vscode
 logs/

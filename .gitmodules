@@ -1,0 +1,3 @@
+[submodule "modules/tanh-lib"]
+	path = modules/tanh-lib
+	url = https://github.com/tanh-lab/tanh-lib.git
