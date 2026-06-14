@@ -44,9 +44,14 @@ struct ANIRA_API ContextConfig {
      * and automatically populates the list of available backends based on compile-time
      * feature flags.
      * 
-     * @param num_threads Number of background inference threads to create
-     *                   Default: Half of available CPU cores (minimum 1)
-     * 
+     * @param num_threads Number of background inference threads to create.
+     *                   Default: half of available CPU cores (minimum 1).
+     *                   Pass 0 to opt out of the auto-managed pool and supply your
+     *                   own threads via Context::make_inference_thread() (required on
+     *                   WebAssembly, optional on native). When the Context singleton
+     *                   already exists, num_threads == 0 leaves any existing pool
+     *                   untouched — it signals "no preference," not "shrink to zero."
+     *
      * @note The constructor automatically detects and registers available inference
      * backends based on compile-time definitions (USE_LIBTORCH, USE_ONNXRUNTIME, USE_TFLITE)
      */

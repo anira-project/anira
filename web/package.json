@@ -1,0 +1,59 @@
+{
+  "name": "@anira-project/anira",
+  "version": "0.0.1-alpha.2",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/anira-project/anira",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anira-project/anira.git",
+    "directory": "web"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./workers/inference-worker": {
+      "types": "./dist/workers/inference-worker.d.ts",
+      "import": "./dist/workers/inference-worker.js"
+    },
+    "./workers/audio-worklet": {
+      "types": "./dist/workers/audio-worklet.d.ts",
+      "import": "./dist/workers/audio-worklet.js"
+    },
+    "./workers/worklet-base": {
+      "types": "./dist/workers/worklet-base.d.ts",
+      "import": "./dist/workers/worklet-base.js"
+    },
+    "./wasm/*": "./dist/wasm/*"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && vite build",
+    "dev": "vite build --watch",
+    "format": "prettier . --write"
+  },
+  "devDependencies": {
+    "@emnapi/core": "^1.10.0",
+    "@emnapi/runtime": "^1.10.0",
+    "prettier": "^3.8.3",
+    "rollup": "^4.60.0",
+    "typescript": "~5.9.3",
+    "vite": "^8.0.8",
+    "vite-plugin-dts": "^4.5.4",
+    "vite-plugin-static-copy": "^3.2.0"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.19.2"
+  },
+  "packageManager": "npm@11.6.2"
+}

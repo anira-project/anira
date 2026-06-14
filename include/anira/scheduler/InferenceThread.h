@@ -5,7 +5,9 @@
 #include <memory>
 #include <vector>
 
+#ifndef __EMSCRIPTEN__
 #include "../system/HighPriorityThread.h"
+#endif
 #include "../utils/Buffer.h"
 #include "SessionElement.h"
 #include <concurrentqueue.h>
@@ -16,17 +18,30 @@
 namespace anira {
 
 /**
- * @brief High-priority thread class for executing neural network inference operations
+ * @brief Thread class for executing neural network inference operations.
  * 
- * The InferenceThread class extends HighPriorityThread to provide a dedicated thread
+ * The InferenceThread class provides a dedicated thread
  * for executing neural network inference operations in real-time audio processing contexts.
  * It manages a concurrent queue of inference requests and processes them with minimal
  * latency while maintaining thread safety and real-time performance guarantees.
  * 
- * @note This class inherits from HighPriorityThread and automatically manages
- *       thread priority elevation for optimal real-time performance.
+ * On native builds, this inherits from HighPriorityThread and owns its own
+ * OS thread. Under Emscripten there is no owned OS thread — a JS Worker
+ * drives the loop externally by calling run_loop(), and start()/stop()
+ * simply flip an atomic flag. This is required because each WASM worker
+ * instance shares memory with the main instance; spawning OS threads from
+ * C++ inside a worker would interact badly with the shared allocator.
+ *
+ * A moodycamel::ConsumerToken is pre-allocated in the constructor (which
+ * must run on the thread that owns the allocator — the main WASM instance
+ * in browser builds). Using an explicit token makes execute() fully
+ * allocation-free.
  */
-class ANIRA_API InferenceThread : public HighPriorityThread {
+class ANIRA_API InferenceThread
+#ifndef __EMSCRIPTEN__
+    : public HighPriorityThread
+#endif
+{
 public:
     /**
      * @brief Constructor that initializes the inference thread with a task queue
@@ -49,15 +64,14 @@ public:
      *                      inference data structures to process
      */
     InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& next_inference);
-    
-    /**
-     * @brief Destructor that ensures proper cleanup of thread resources
-     * 
-     * Automatically stops the inference thread if it's still running and
-     * performs cleanup of any remaining inference data or resources.
-     */
-    ~InferenceThread() override;
 
+    ~InferenceThread()
+#ifndef __EMSCRIPTEN__
+        override
+#endif
+    ;
+
+    
     /**
      * @brief Executes a single iteration of inference processing
      * 
@@ -78,19 +92,31 @@ public:
      */
     bool execute();
 
-private:
     /**
-     * @brief Main thread execution loop (overrides HighPriorityThread::run)
-     * 
-     * Implements the main execution loop for the inference thread. This method
-     * runs continuously while the thread is active, calling execute() repeatedly
-     * to process inference requests. The loop includes proper exit condition
-     * checking and resource cleanup.
-     * 
-     * @note This method runs on the high-priority thread and should not be
-     *       called directly. Use start() to begin thread execution.
+     * @brief Run the main processing loop with exponential backoff.
+     *
+     * Natively, this is invoked by the inherited HighPriorityThread via the
+     * run() override. Under Emscripten, JS Workers call this directly.
+     * Returns when should_exit() becomes true.
+     */
+    void run_loop();
+
+#ifdef __EMSCRIPTEN__
+    // Externally driven lifecycle — the JS Worker owns the thread.
+    void start();
+    void stop();
+    bool should_exit() const;
+    bool is_running() const;
+#endif
+
+private:
+#ifndef __EMSCRIPTEN__
+    /**
+     * @brief HighPriorityThread entry point; simply delegates to run_loop().
      */
     void run() override;
+#endif
+
 
     /**
      * @brief Performs inference processing for a specific session
@@ -134,6 +160,12 @@ private:
 private:
     moodycamel::ConcurrentQueue<InferenceData>& m_next_inference;   ///< Reference to the thread-safe queue containing inference requests
     InferenceData m_inference_data;                                 ///< Current inference data being processed by this thread
+    moodycamel::ConsumerToken m_consumer_token;
+
+#ifdef __EMSCRIPTEN__
+    std::atomic<bool> m_should_exit{false};
+    std::atomic<bool> m_is_running{false};
+#endif
  };
 
 } // namespace anira

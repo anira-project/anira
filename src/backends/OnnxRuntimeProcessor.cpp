@@ -33,7 +33,27 @@ void OnnxRuntimeProcessor::process(std::vector<BufferF>& input, std::vector<Buff
 
 OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU)),
                                                                     m_inference_config(inference_config)
+#ifdef USE_ANIRA_WEB
+    , m_env(nullptr)
 {
+     // Create threading options
+     OrtThreadingOptions* threading_options = nullptr;
+     Ort::ThrowOnError(Ort::GetApi().CreateThreadingOptions(&threading_options));
+     Ort::ThrowOnError(Ort::GetApi().SetGlobalIntraOpNumThreads(threading_options, 1));
+ 
+     // Create environment with global threadpools
+     OrtEnv* raw_env = nullptr;
+     Ort::ThrowOnError(Ort::GetApi().CreateEnvWithGlobalThreadPools(
+         ORT_LOGGING_LEVEL_WARNING,  // Logging level
+         "Default",                  // Log ID
+         threading_options,          // Threading options
+         &raw_env                    // Out parameter for the raw environment
+     ));
+ 
+     m_env = Ort::Env(raw_env);  // Wrap the raw environment in a C++ object
+#else
+    {
+#endif
     m_session_options.SetIntraOpNumThreads(1);
 
     // Check if the model is binary

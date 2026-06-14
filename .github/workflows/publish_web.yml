@@ -1,0 +1,105 @@
+name: publish_web
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: publish-web
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: install system deps
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: setup emsdk
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.23
+          actions-cache-folder: emsdk-cache-4.0.23
+
+      - name: verify EMSDK env
+        run: |
+          echo "EMSDK=$EMSDK"
+          test -n "$EMSDK"
+          emcc --version
+
+      - name: pin global typescript for emscripten --emit-tsd
+        run: |
+          sudo npm i -g typescript@5.9
+          which tsc
+          tsc --version
+
+      - name: configure wasm
+        run: cmake --preset wasm-release
+
+      - name: build wasm
+        run: cmake --build --preset wasm-release -j
+
+      - name: setup node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      # Use the npm version pinned via "packageManager" in web/package.json
+      # so contributors and CI produce identical lockfile shapes.
+      - name: enable corepack
+        run: corepack enable
+
+      - name: install js deps
+        working-directory: web
+        run: npm ci
+
+      - name: derive version + dist-tag
+        id: meta
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" == *-* ]]; then
+            tag="next"
+          else
+            tag="latest"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$tag"   >> "$GITHUB_OUTPUT"
+          echo "Publishing $version under dist-tag $tag"
+
+      - name: stamp package version
+        working-directory: web
+        run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version --allow-same-version
+
+      - name: build js package
+        working-directory: web
+        run: npm run build
+
+      - name: npm publish
+        working-directory: web
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance --tag "${{ steps.meta.outputs.dist_tag }}"
+
+      - name: summary
+        shell: bash
+        run: |
+          {
+            echo "### Anira Web published"
+            echo ""
+            echo "- **Version:** \`${{ steps.meta.outputs.version }}\`"
+            echo "- **dist-tag:** \`${{ steps.meta.outputs.dist_tag }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
