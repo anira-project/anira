@@ -23,7 +23,12 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
         if (m_context->m_context_config.m_enabled_backends != context_config.m_enabled_backends) {
             LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!" << std::endl;
         }
-        if ((unsigned int) m_context->m_thread_pool.size() > context_config.m_num_threads) {
+        // num_threads == 0 means "I'm opting out of the auto-pool and bringing
+        // my own threads via Context::make_inference_thread()" — not "shrink
+        // any existing pool to zero." Skip the resize so a manual-threading
+        // caller doesn't tear down threads another caller is relying on.
+        if (context_config.m_num_threads > 0
+            && (unsigned int) m_context->m_thread_pool.size() > context_config.m_num_threads) {
             m_context->new_num_threads(context_config.m_num_threads);
             m_context->m_context_config.m_num_threads = context_config.m_num_threads;
         }
@@ -66,8 +71,10 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
     }
 
     if (inference_config.m_num_parallel_processors > (unsigned int) m_thread_pool.size()) {
-        LOG_INFO << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in Context. Using number of threads as number of parallel processors." << std::endl;
-        inference_config.m_num_parallel_processors = (unsigned int) m_thread_pool.size();
+        if (!m_thread_pool.empty()) {
+            LOG_INFO << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in Context. Using number of threads as number of parallel processors." << std::endl;
+            inference_config.m_num_parallel_processors = (unsigned int) m_thread_pool.size();
+        }
     }
 
     std::shared_ptr<SessionElement> session = std::make_shared<SessionElement>(session_id, pp_processor, inference_config);
@@ -368,6 +375,13 @@ moodycamel::ProducerToken& Context::get_producer_token() {
     return *m_producer_tokens[index];
 }
 
+moodycamel::ConcurrentQueue<InferenceData>& Context::get_static_inference_queue() {
+    return m_next_inference;
+}
+
+std::unique_ptr<InferenceThread> Context::make_inference_thread() {
+    return std::make_unique<InferenceThread>(m_next_inference);
+}
 
 #ifdef USE_LIBTORCH
 template void Context::set_processor<LibtorchProcessor>(std::shared_ptr<SessionElement> session, InferenceConfig& inference_config, std::vector<std::shared_ptr<LibtorchProcessor>>& processors, InferenceBackend backend);

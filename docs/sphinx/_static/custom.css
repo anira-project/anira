@@ -1,3 +1,14 @@
+/* Strip bullet markers from JS-domain Arguments / parameter lists so
+ * single-arg and multi-arg callables render with the same flat shape.
+ * Sphinx's TypedField only collapses single-item lists; the field-list
+ * cell always emits a <ul class="simple"> for >1 args. We hide the
+ * list affordances here. */
+dl.js > dd > dl.field-list > dd > ul.simple {
+  list-style: none;
+  padding-left: 0;
+  margin-left: 0;
+}
+
 /* Bigger class names and functions in the API docs */
 dt.sig {
   position:relative;

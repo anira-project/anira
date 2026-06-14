@@ -222,6 +222,37 @@ public:
      */
     static moodycamel::ProducerToken& get_producer_token();
 
+    /**
+     * @brief Get a reference to the static inference queue
+     * Returns a reference to the global concurrent queue used for inference requests.
+     * This is used by InferenceThread to pre-allocate a ConsumerToken on the
+     * main thread, enabling allocation-free dequeue from worker threads.
+     * @return Reference to the static inference queue
+     */
+    static moodycamel::ConcurrentQueue<InferenceData>& get_static_inference_queue();
+
+    /**
+     * @brief Factory for a user-owned InferenceThread bound to the static inference queue.
+     *
+     * Returns a new InferenceThread whose lifecycle is fully managed by the caller.
+     * The thread is not started automatically — call start() on the returned object
+     * to begin processing. The caller must also call stop() (or simply destroy the
+     * object) before program exit.
+     *
+     * This is purely additive: the auto-managed thread pool sized via
+     * ContextConfig::m_num_threads continues to work unchanged. Users who want full
+     * control over threading typically construct Context with ContextConfig(0) so
+     * that no auto-pool threads exist, then create and manage threads themselves
+     * via this factory.
+     *
+     * The returned thread references the static inference queue, which has static
+     * storage duration — so the thread remains valid even after all sessions and
+     * the Context singleton itself are released.
+     *
+     * @return Unique pointer to a new user-owned InferenceThread.
+     */
+    static std::unique_ptr<InferenceThread> make_inference_thread();
+
 private:
     /**
      * @brief Gets the next available session ID
