@@ -161,8 +161,11 @@ These are the other optional parameters that can be set in the :cpp:struct:`anir
 +-----------------------------+--------------------------------------------------------+
 | session_exclusive_processor | Type: ``bool``, default: ``false``. If set to          |
 |                             | ``true``, the session will use an exclusive processor  |
-|                             | for inference and therefore cannot be processed        |
-|                             | parallel. Necessary for e.g. stateful models.          |
+|                             | for inference and therefore cannot be processed in     |
+|                             | parallel. Tasks of the session then execute strictly   |
+|                             | in submission order and never concurrently, which is   |
+|                             | necessary for stateful models that carry internal      |
+|                             | state between inferences (e.g. RNNs/LSTMs).            |
 +-----------------------------+--------------------------------------------------------+
 | blocking_ratio              | Type: ``float``, default: ``0.0f``. Defines the        |
 |                             | proportion of available processing time (0.0-0.99)     |

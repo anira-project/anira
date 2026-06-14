@@ -230,6 +230,9 @@ If you use anira in your research or project, please cite either the [paper](htt
 - [Fares Schulz](https://github.com/faressc)
 - [Valentin Ackva](https://github.com/vackva)
 
+## Sponsor
+<img src="docs/img/bmftr-funding.png" alt="Funded by the German Federal Ministry of Research, Technology and Space (BMFTR)" width="200">
+
 ## License
 
 This project is licensed under [Apache-2.0](https://github.com/anira-project/anira/tree/main/LICENSE).

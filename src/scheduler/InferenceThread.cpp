@@ -103,6 +103,20 @@ void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std:
         thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
     }
     session->m_active_inferences.fetch_sub(1, std::memory_order::release);
+
+    // Session-exclusive processors: this task is fully done (its state write has
+    // completed), so release the dispatch slot and hand the next pending task to
+    // the pool. Only one task per session is ever in flight, keeping execution in
+    // order and mutually exclusive with no spinning.
+    if (session->m_inference_config.m_session_exclusive_processor) {
+        session->release_dispatch();
+        if (auto next = session->try_acquire_next_dispatch()) {
+            if (!m_next_inference.try_enqueue(InferenceData{session, next})) {
+                LOG_ERROR << "[ERROR] Could not enqueue next inference!" << std::endl;
+                session->release_dispatch();
+            }
+        }
+    }
 }
 
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, std::vector<BufferF>& input, std::vector<BufferF>& output) {

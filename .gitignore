@@ -2,7 +2,10 @@
 *.DS_Store
 /build/
 /out/
-modules/
+/build*/
+modules/libtorch*
+modules/onnxruntime*
+modules/tensorflow*
 cmake-build*
 .vscode
 logs/
