@@ -15,6 +15,7 @@
 #include "utils/HostConfig.h"
 #include "utils/InferenceBackend.h"
 #include "utils/RingBuffer.h"
+#include "utils/Semaphore.h"
 #include "system/HighPriorityThread.h"
 #include "utils/JsonConfigLoader.h"
 
