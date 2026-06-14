@@ -102,8 +102,7 @@ void anira::JsonConfigLoader::parse_inference_config(const nlohmann::json& confi
                 single_parameters.m_warm_up,
                 single_parameters.m_session_exclusive_processor,
                 single_parameters.m_blocking_ratio,
-                single_parameters.m_num_parallel_processors,
-                single_parameters.m_stateful_model);
+                single_parameters.m_num_parallel_processors);
         } else {
             m_inference_config = std::make_unique<anira::InferenceConfig>(
                 model_data,
@@ -112,8 +111,7 @@ void anira::JsonConfigLoader::parse_inference_config(const nlohmann::json& confi
                 single_parameters.m_warm_up,
                 single_parameters.m_session_exclusive_processor,
                 single_parameters.m_blocking_ratio,
-                single_parameters.m_num_parallel_processors,
-                single_parameters.m_stateful_model);
+                single_parameters.m_num_parallel_processors);
         }
     }
 }
@@ -443,13 +441,5 @@ anira::JsonConfigLoader::SingleParameterStruct
         }
     }
 
-    if (config.contains("stateful_model")) {
-        const auto& stateful_model_json = config.at("stateful_model");
-        if (stateful_model_json.is_boolean()) {
-            single_parameters.m_stateful_model = stateful_model_json.get<bool>();
-        } else {
-            LOG_ERROR << "Invalid 'stateful_model' value: expected a bool." << std::endl;
-        }
-    }
     return single_parameters;
 }

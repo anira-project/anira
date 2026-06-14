@@ -79,11 +79,11 @@ void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std:
     }
     session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 
-    // Stateful models: this task is fully done (its state write has completed), so
-    // release the dispatch slot and hand the next pending task to the pool. Only
-    // one task per session is ever in flight, keeping execution in order and
-    // mutually exclusive with no spinning.
-    if (session->m_inference_config.m_stateful_model) {
+    // Session-exclusive processors: this task is fully done (its state write has
+    // completed), so release the dispatch slot and hand the next pending task to
+    // the pool. Only one task per session is ever in flight, keeping execution in
+    // order and mutually exclusive with no spinning.
+    if (session->m_inference_config.m_session_exclusive_processor) {
         session->release_dispatch();
         if (auto next = session->try_acquire_next_dispatch()) {
             if (!m_next_inference.try_enqueue(InferenceData{session, next})) {

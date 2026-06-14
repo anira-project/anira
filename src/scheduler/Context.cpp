@@ -242,11 +242,12 @@ bool Context::pre_process(std::shared_ptr<SessionElement> session) {
             session->m_pp_processor.pre_process(session->m_send_buffer, session->m_inference_queue[i]->m_tensor_input_data, session->m_current_backend.load(std::memory_order_relaxed));
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
-            if (session->m_inference_config.m_stateful_model) {
-                // Stateful models must execute strictly in order and never
-                // concurrently. Defer dispatch so at most one of this session's
-                // tasks is ever in the global queue; the rest wait in submission
-                // order and are released one at a time as each completes.
+            if (session->m_inference_config.m_session_exclusive_processor) {
+                // A session-exclusive processor carries its state across calls, so
+                // its tasks must execute strictly in order and never concurrently.
+                // Defer dispatch so at most one of this session's tasks is ever in
+                // the global queue; the rest wait in submission order and are
+                // released one at a time as each completes.
                 session->enqueue_pending_dispatch(session->m_inference_queue[i]);
                 if (auto next = session->try_acquire_next_dispatch()) {
                     if (!m_next_inference.try_enqueue(InferenceData{session, next})) {

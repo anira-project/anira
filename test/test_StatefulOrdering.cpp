@@ -74,11 +74,11 @@ public:
 };
 
 // =============================================================================
-// Test: Verify that m_stateful_model enforces execution order
+// Test: Verify that a session-exclusive processor enforces execution order
 // =============================================================================
 
 struct StatefulTestParams {
-    bool stateful_flag;
+    bool session_exclusive;
     float host_buffer_size;
     float sample_rate;
     size_t hop_size;
@@ -92,7 +92,7 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
     // Config: hop_size samples in, hop_size samples out, 1 channel
     // Host buffer > hop_size to force multiple inferences per callback
     std::vector<ModelData> model_data = {
-        {nullptr, 0, InferenceBackend::CUSTOM}
+        ModelData("placeholder", InferenceBackend::CUSTOM)
     };
 
     std::vector<TensorShape> tensor_shape = {
@@ -113,10 +113,9 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
         processing_spec,
         5.f,                // max_inference_time ms
         0,                  // warm_up
-        true,               // session_exclusive_processor
-        0.0f,               // blocking_ratio
-        1,                  // num_parallel_processors
-        params.stateful_flag // stateful_model
+        params.session_exclusive,           // session_exclusive_processor
+        0.0f,                               // blocking_ratio
+        params.session_exclusive ? 1u : 4u  // num_parallel_processors
     );
 
     PassthroughPrePostProcessor pp_processor(config);
@@ -170,14 +169,14 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
         }
     }
 
-    if (params.stateful_flag) {
-        // With stateful_model=true, execution MUST be in order
+    if (params.session_exclusive) {
+        // With session_exclusive_processor=true, execution MUST be in order
         EXPECT_TRUE(in_order)
-            << "Stateful model flag is set but inferences executed out of order!"
+            << "Session-exclusive processor is set but inferences executed out of order!"
             << " (total inferences: " << backend.m_execution_order.size() << ")";
     } else {
         // Log whether out-of-order happened (for diagnostic purposes)
-        std::cout << "stateful=false: execution was "
+        std::cout << "session_exclusive=false: execution was "
                   << (in_order ? "IN ORDER (race not triggered)" : "OUT OF ORDER (race triggered)")
                   << " (" << backend.m_execution_order.size() << " inferences)" << std::endl;
     }
@@ -185,12 +184,12 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
 
 INSTANTIATE_TEST_SUITE_P(
     StatefulModel, StatefulOrderingTest, ::testing::Values(
-        // stateful=true, host_buffer > hop_size to force multiple inferences
+        // session_exclusive=true, host_buffer > hop_size to force multiple inferences
         StatefulTestParams{true, 1024.f, 48000.f, 480},
         StatefulTestParams{true, 512.f, 48000.f, 480},
         StatefulTestParams{true, 2048.f, 48000.f, 480},
         StatefulTestParams{true, 1024.f, 48000.f, 512},
-        // stateful=false (reference — not asserted, just for comparison)
+        // session_exclusive=false (reference — not asserted, just for comparison)
         StatefulTestParams{false, 1024.f, 48000.f, 480}
     )
 );

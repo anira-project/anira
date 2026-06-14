@@ -27,7 +27,6 @@ private:
         float m_blocking_ratio = anira::InferenceConfig::Defaults::m_blocking_ratio;
         unsigned int m_num_parallel_processors =
             anira::InferenceConfig::Defaults::m_num_parallel_processors;
-        bool m_stateful_model = anira::InferenceConfig::Defaults::m_stateful_model;
     };
 
     void initialize_from_stream(std::istream& stream);
