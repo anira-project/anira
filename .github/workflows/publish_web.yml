@@ -52,7 +52,10 @@ jobs:
       - name: setup node
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          # Node 24 ships npm >= 11 and is required for the npm OIDC
+          # trusted-publishing handshake; Node 22 (npm 10) authenticates
+          # anonymously and the publish fails with a misleading E404.
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
@@ -93,7 +96,10 @@ jobs:
       # for publish credentials and emits provenance automatically.
       - name: npm publish
         working-directory: web
-        run: npm publish --access public --tag "${{ steps.meta.outputs.dist_tag }}"
+        run: |
+          node --version
+          npm --version   # must be >= 11.5.1 for OIDC trusted publishing
+          npm publish --access public --tag "${{ steps.meta.outputs.dist_tag }}"
 
       - name: summary
         shell: bash
