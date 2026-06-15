@@ -88,11 +88,12 @@ jobs:
         working-directory: web
         run: npm run build
 
+      # Trusted Publishing (OIDC): no NPM_TOKEN needed. npm >= 11.5.1 (pinned
+      # via packageManager) exchanges the GitHub OIDC token (id-token: write)
+      # for publish credentials and emits provenance automatically.
       - name: npm publish
         working-directory: web
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance --tag "${{ steps.meta.outputs.dist_tag }}"
+        run: npm publish --access public --tag "${{ steps.meta.outputs.dist_tag }}"
 
       - name: summary
         shell: bash
