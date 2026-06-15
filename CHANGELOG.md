@@ -10,7 +10,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - RTSan real-time safety CI checks and testing (not done yet)
-- JSON configuration loader with nlohmann_json dependency (not done yet)
+
+## [v2.1.0] - 2026-06-14
+
+### Added
+
+- anira Web: the C++ library compiled to WebAssembly via Emscripten, published as the `@anira-project/anira` npm package
+  - Emscripten/embind C++ wrappers exposing the core API (InferenceHandler, InferenceConfig, PrePostProcessor, ProcessingSpec, InferenceThread, Buffer, RingBuffer, HostConfig) to JavaScript
+  - TypeScript API layer wrapping these bindings (`AniraWeb`, plus typed wrappers for InferenceHandler, InferenceConfig, ModelData, TensorShape, ProcessingSpec, BufferF, RingBuffer, HostConfig and the embind Vector types)
+  - New ONNXRuntimeWebBackend (onnxruntime-web), plus `JSBackendBase`/`JSPrePostProcessor` hooks for implementing custom inference backends and pre/post processing in JavaScript/TypeScript
+  - Web Audio API integration with an AudioWorklet base class and Web Worker–based off-thread inference
+  - WASM build tooling (BuildWasm.cmake, DetectEmscripten.cmake, CMake presets), npm publish workflows, and dedicated Web API documentation (Sphinx + TypeDoc)
+- `anira::Semaphore` wrapper for macOS 10.13 support
+- macOS universal binary support: anira can now be built as a universal binary (arm64 + x86_64) when no pre-built backends are enabled (e.g. for a custom CoreML backend)
+- tanh-lib submodule with clang-format and clang-tidy support
+- Unregistering of pre/post processors and a prePostRegistry
+- Validation that the maximum inference time must be greater than 0
+- Function for freeing the stack pointer
+- Sponsor information in the README
+
+### Changed
+
+- Enforce stateful model inference ordering via single-in-flight dispatch instead of spin-wait
+- MSVC: support static linking via `ANIRA_STATIC_DEFINE`
+- Refactored processPrePost
+- Improved GitHub Actions workflows (node24, new workflow versions, no env vars)
+- Added Prettier formatting
+
+### Fixed
+
+- Fixed a Windows build bug
+- Fixed the documentation build step
+- Fixed npm version drift (pinned onnxruntime-web to 1.19.2)
+
+## [v2.0.3] - 2025-11-07
+
+### Added
+
+- JSON configuration loader (JsonConfigLoader) with nlohmann_json dependency, including unit tests
+- Option to load LibTorch models as binary data
+- `model_function` argument for `model_data` in the JsonConfigLoader
+- JSON gain example config and JUCE plugin example with JSON inference config loading
+- no_grad options for torch tensors and the inference stage (Fixes #45)
+
+### Fixed
+
+- JUCE plugin example failing to compile when MODEL_TO_USE is set to 6
+- No-inference-engine CI build (JsonConfigLoader excluded from the no_inference_engine build)
+- Missing preprocessor flag in RaveFunkDrumConfig.h
 
 ## [v2.0.2] - 2025-08-03
 

@@ -50,11 +50,46 @@ else()
     endif()
     
     message(STATUS "Downloading: ${LIBONNXRUNTIME_URL}")
-    
+
     set(LIBONNXRUNTIME_PATH ${CMAKE_BINARY_DIR}/import/${LIB_ONNXRUNTIME_PRE_BUILD_LIB_NAME}.${LIB_ONNXRUNTIME_PRE_BUILD_LIB_TYPE})
 
     file(DOWNLOAD ${LIBONNXRUNTIME_URL} ${LIBONNXRUNTIME_PATH} STATUS LIBONNXRUNTIME_DOWNLOAD_STATUS SHOW_PROGRESS)
     list(GET LIBONNXRUNTIME_DOWNLOAD_STATUS 0 LIBONNXRUNTIME_DOWNLOAD_STATUS_NO)
+    list(GET LIBONNXRUNTIME_DOWNLOAD_STATUS 1 LIBONNXRUNTIME_DOWNLOAD_STATUS_MSG)
+
+    # file(DOWNLOAD) does not treat HTTP errors (e.g. a 404 for a missing release
+    # asset) as failures - GitHub returns a small "Not Found" body that libcurl
+    # reports as a successful transfer. Detect that case via the downloaded size:
+    # a real archive is far larger than any error page.
+    set(LIBONNXRUNTIME_DOWNLOAD_SIZE 0)
+    if(EXISTS ${LIBONNXRUNTIME_PATH})
+        file(SIZE ${LIBONNXRUNTIME_PATH} LIBONNXRUNTIME_DOWNLOAD_SIZE)
+    endif()
+
+    if(LIBONNXRUNTIME_DOWNLOAD_STATUS_NO OR LIBONNXRUNTIME_DOWNLOAD_SIZE LESS 1024)
+        file(REMOVE_RECURSE ${ONNXRUNTIME_ROOTDIR})
+        file(REMOVE ${LIBONNXRUNTIME_PATH})
+        if(EMSDK_VERSION)
+            message(FATAL_ERROR
+                "Incompatible Emscripten version: no pre-built ONNX Runtime "
+                "v${LIBONNXRUNTIME_VERSION} WebAssembly library is available for "
+                "Emscripten ${EMSDK_VERSION}.\n"
+                "  Download failed: ${LIBONNXRUNTIME_URL}\n"
+                "  Reason: ${LIBONNXRUNTIME_DOWNLOAD_STATUS_MSG}\n"
+                "Pre-built WASM libraries are published per Emscripten version at\n"
+                "  https://github.com/Andonvr/ONNXRuntime-Static-WASM-Builds/releases\n"
+                "Install and activate a supported Emscripten version (one with an "
+                "'emsdk-<version>-onnx-v${LIBONNXRUNTIME_VERSION}' release), e.g.:\n"
+                "  ./emsdk install <version> && ./emsdk activate <version>\n"
+                "then re-run CMake configure.")
+        else()
+            message(FATAL_ERROR
+                "Failed to download pre-built ONNX Runtime library.\n"
+                "  URL: ${LIBONNXRUNTIME_URL}\n"
+                "  Reason: ${LIBONNXRUNTIME_DOWNLOAD_STATUS_MSG}\n"
+                "Check your network connection and cmake/SetupOnnxRuntime.cmake.")
+        endif()
+    endif()
 
     if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
         execute_process(
@@ -69,15 +104,23 @@ else()
     if(EXISTS ${ONNXRUNTIME_ROOTDIR}/${LIB_ONNXRUNTIME_PRE_BUILD_LIB_NAME}/)
         file(COPY ${ONNXRUNTIME_ROOTDIR}/${LIB_ONNXRUNTIME_PRE_BUILD_LIB_NAME}/ DESTINATION ${ONNXRUNTIME_ROOTDIR}/)
         file(REMOVE_RECURSE ${ONNXRUNTIME_ROOTDIR}/${LIB_ONNXRUNTIME_PRE_BUILD_LIB_NAME})
-    endif()   
-        
-    if(LIBONNXRUNTIME_DOWNLOAD_STATUS_NO)
-        message(STATUS "Pre-built library not downloaded. Error occurred, try again and check cmake/SetupOnnxRuntime.cmake")
+    endif()
+
+    # Sanity-check that the archive actually contained the WebAssembly static lib
+    # that CMakeLists.txt links against. Guards against a valid-but-unexpected
+    # archive layout silently producing the cryptic "missing and no known rule" ninja error.
+    if(EMSDK_VERSION AND NOT EXISTS ${ONNXRUNTIME_ROOTDIR}/libonnxruntime_webassembly.a)
         file(REMOVE_RECURSE ${ONNXRUNTIME_ROOTDIR})
         file(REMOVE ${LIBONNXRUNTIME_PATH})
-    else()
-        message(STATUS "Linking downloaded ONNX-Runtime pre-built library.")
+        message(FATAL_ERROR
+            "Downloaded ONNX Runtime archive for Emscripten ${EMSDK_VERSION} did not "
+            "contain the expected 'libonnxruntime_webassembly.a'.\n"
+            "  URL: ${LIBONNXRUNTIME_URL}\n"
+            "The pre-built archive layout may have changed - check "
+            "cmake/SetupOnnxRuntime.cmake.")
     endif()
+
+    message(STATUS "Linking downloaded ONNX-Runtime pre-built library.")
 endif()
 
 set(ANIRA_ONNXRUNTIME_SHARED_LIB_PATH "${ONNXRUNTIME_ROOTDIR}")
