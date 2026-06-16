@@ -1,5 +1,18 @@
+#include <anira/ContextConfig.h>
+#include <anira/InferenceConfig.h>
+#include <anira/PrePostProcessor.h>
+#include <anira/backends/BackendBase.h>
+#include <anira/scheduler/Context.h>
 #include <anira/scheduler/InferenceManager.h>
+#include <anira/utils/HostConfig.h>
+#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <utility>
+#include <vector>
 
 namespace anira {
 
@@ -27,7 +40,7 @@ InferenceBackend InferenceManager::get_backend() const {
 void InferenceManager::prepare(HostConfig new_config, std::vector<long> custom_latency) {
     m_host_config = new_config;
 
-    m_context->prepare_session(m_session, m_host_config, custom_latency);
+    m_context->prepare_session(m_session, m_host_config, std::move(custom_latency));
 
     m_missing_samples.clear();
     m_missing_samples.resize(m_inference_config.get_tensor_output_shape().size(), 0);
@@ -45,9 +58,9 @@ size_t* InferenceManager::process(const float* const* const* input_data,
         auto buffer_size_in_sec =
             static_cast<float>(num_input_samples[m_host_config.m_tensor_index]) /
             m_host_config.m_sample_rate;
-        auto timeToProcess = std::chrono::microseconds(
+        auto time_to_process = std::chrono::microseconds(
             static_cast<long>(buffer_size_in_sec * 1e6 * m_inference_config.m_blocking_ratio));
-        wait_until += timeToProcess;
+        wait_until += time_to_process;
         m_context->new_data_request(m_session, wait_until);
     } else {
         m_context->new_data_request(m_session);
@@ -63,7 +76,7 @@ void InferenceManager::push_data(const float* const* const* input_data, size_t* 
 
 size_t* InferenceManager::pop_data(float* const* const* output_data, size_t* num_output_samples) {
     if (m_inference_config.m_blocking_ratio > 0.f) {
-        std::chrono::steady_clock::time_point wait_until;
+        std::chrono::steady_clock::time_point const wait_until;
         m_context->new_data_request(m_session, wait_until);
     } else {
         m_context->new_data_request(m_session);
@@ -80,7 +93,7 @@ size_t* InferenceManager::pop_data(float* const* const* output_data,
     } else {
         LOG_ERROR << "[ERROR] InferenceConfig does not use blocking_ratio and does not use "
                      "semaphores for data acquisition, cannot wait for data!"
-                  << std::endl;
+                  << '\n';
     }
 
     return process_output(output_data, num_output_samples);
@@ -113,7 +126,7 @@ void InferenceManager::process_input(const float* const* const* input_data, size
 size_t* InferenceManager::process_output(float* const* const* output_data, size_t* num_samples) {
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-            int missing_samples_before = m_missing_samples[i];
+            int const missing_samples_before = static_cast<int>(m_missing_samples[i]);
             while (m_missing_samples[i]) {
                 if (m_session->m_receive_buffer[i].get_available_samples(0) > num_samples[i]) {
                     for (size_t channel = 0;
@@ -130,7 +143,7 @@ size_t* InferenceManager::process_output(float* const* const* output_data, size_
                 LOG_INFO << "[WARNING] Catch up missing samples: "
                          << missing_samples_before - m_missing_samples[i]
                          << " in session: " << m_session->m_session_id << " for tensor index: " << i
-                         << "!" << std::endl;
+                         << "!" << '\n';
             }
         }
     }
@@ -173,7 +186,7 @@ size_t* InferenceManager::process_output(float* const* const* output_data, size_
                 m_missing_samples[i] += num_samples[i];
                 LOG_INFO << "[WARNING] Missing samples: " << m_missing_samples[i]
                          << " in session: " << m_session->m_session_id << " for tensor index: " << i
-                         << "!" << std::endl;
+                         << "!" << '\n';
             }
             num_samples[i] = 0;  // Set num_samples to 0 if not enough samples are available
         }

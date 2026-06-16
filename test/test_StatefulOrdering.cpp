@@ -1,7 +1,21 @@
-#include <anira/anira.h>
+
+#include <anira/ContextConfig.h>
+#include <anira/InferenceConfig.h>
+#include <anira/InferenceHandler.h>
+#include <anira/PrePostProcessor.h>
+#include <anira/backends/BackendBase.h>
+#include <anira/scheduler/SessionElement.h>
+#include <anira/utils/Buffer.h>
+#include <anira/utils/HostConfig.h>
+#include <anira/utils/InferenceBackend.h>
+#include <anira/utils/RingBuffer.h>
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -21,25 +35,25 @@ class StatefulCounterBackend : public BackendBase {
 public:
     StatefulCounterBackend(InferenceConfig& config) : BackendBase(config) {}
 
-    void process(std::vector<BufferF>& input,
+    void process([[maybe_unused]] std::vector<BufferF>& input,
                  std::vector<BufferF>& output,
                  [[maybe_unused]] std::shared_ptr<SessionElement> session) override {
         // Small delay to increase the window for out-of-order dequeuing
         std::this_thread::sleep_for(std::chrono::microseconds(100));
 
-        int counter_val = m_counter.fetch_add(1);
+        int const counter_val = m_counter.fetch_add(1);
 
         // Write the counter value to all output samples
         for (size_t ch = 0; ch < output[0].get_num_channels(); ++ch) {
             float* write_ptr = output[0].get_write_pointer(ch);
-            size_t num_samples = output[0].get_num_samples();
+            size_t const num_samples = output[0].get_num_samples();
             for (size_t s = 0; s < num_samples; ++s) {
                 write_ptr[s] = static_cast<float>(counter_val);
             }
         }
 
         // Record the actual execution order
-        std::lock_guard<std::mutex> lock(m_order_mutex);
+        std::lock_guard<std::mutex> const lock(m_order_mutex);
         m_execution_order.push_back(counter_val);
     }
 
@@ -56,10 +70,10 @@ public:
     void pre_process(std::vector<RingBuffer>& input,
                      std::vector<BufferF>& output,
                      [[maybe_unused]] InferenceBackend current_inference_backend) override {
-        size_t num_samples = m_inference_config.get_preprocess_input_size()[0];
+        size_t const num_samples = m_inference_config.get_preprocess_input_size()[0];
         for (size_t ch = 0; ch < m_inference_config.get_preprocess_input_channels()[0]; ++ch) {
             for (size_t s = 0; s < num_samples; ++s) {
-                float sample = input[0].pop_sample(ch);
+                float const sample = input[0].pop_sample(ch);
                 output[0].set_sample(ch, s, sample);
             }
         }
@@ -68,7 +82,7 @@ public:
     void post_process(std::vector<BufferF>& input,
                       std::vector<RingBuffer>& output,
                       [[maybe_unused]] InferenceBackend current_inference_backend) override {
-        size_t num_samples = m_inference_config.get_postprocess_output_size()[0];
+        size_t const num_samples = m_inference_config.get_postprocess_output_size()[0];
         for (size_t ch = 0; ch < m_inference_config.get_postprocess_output_channels()[0]; ++ch) {
             for (size_t s = 0; s < num_samples; ++s) {
                 output[0].push_sample(ch, input[0].get_sample(ch, s));
@@ -82,10 +96,10 @@ public:
 // =============================================================================
 
 struct StatefulTestParams {
-    bool session_exclusive;
-    float host_buffer_size;
-    float sample_rate;
-    size_t hop_size;
+    bool m_session_exclusive;
+    float m_host_buffer_size;
+    float m_sample_rate;
+    size_t m_hop_size;
 };
 
 class StatefulOrderingTest : public ::testing::TestWithParam<StatefulTestParams> {};
@@ -95,25 +109,26 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
 
     // Config: hop_size samples in, hop_size samples out, 1 channel
     // Host buffer > hop_size to force multiple inferences per callback
-    std::vector<ModelData> model_data = {ModelData("placeholder", InferenceBackend::CUSTOM)};
+    std::vector<ModelData> const model_data = {ModelData("placeholder", InferenceBackend::CUSTOM)};
 
-    std::vector<TensorShape> tensor_shape = {{{{1, 1, static_cast<int64_t>(params.hop_size)}},
-                                              {{1, 1, static_cast<int64_t>(params.hop_size)}}}};
+    std::vector<TensorShape> const tensor_shape = {
+        {{{1, 1, static_cast<int64_t>(params.m_hop_size)}},
+         {{1, 1, static_cast<int64_t>(params.m_hop_size)}}}};
 
-    ProcessingSpec processing_spec({1},                // preprocess_input_channels
-                                   {1},                // postprocess_output_channels
-                                   {params.hop_size},  // preprocess_input_size
-                                   {params.hop_size}   // postprocess_output_size
+    ProcessingSpec const processing_spec({1},                  // preprocess_input_channels
+                                         {1},                  // postprocess_output_channels
+                                         {params.m_hop_size},  // preprocess_input_size
+                                         {params.m_hop_size}   // postprocess_output_size
     );
 
     InferenceConfig config(model_data,
                            tensor_shape,
                            processing_spec,
-                           5.f,                                // max_inference_time ms
-                           0,                                  // warm_up
-                           params.session_exclusive,           // session_exclusive_processor
-                           0.0f,                               // blocking_ratio
-                           params.session_exclusive ? 1u : 4u  // num_parallel_processors
+                           5.f,                                  // max_inference_time ms
+                           0,                                    // warm_up
+                           params.m_session_exclusive,           // session_exclusive_processor
+                           0.0f,                                 // blocking_ratio
+                           params.m_session_exclusive ? 1u : 4u  // num_parallel_processors
     );
 
     PassthroughPrePostProcessor pp_processor(config);
@@ -125,21 +140,21 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
 
     InferenceHandler handler(pp_processor, config, backend, context_config);
 
-    HostConfig host_config(params.host_buffer_size, params.sample_rate);
+    HostConfig const host_config(params.m_host_buffer_size, params.m_sample_rate);
     handler.prepare(host_config);
     handler.set_inference_backend(InferenceBackend::CUSTOM);
 
-    size_t buffer_size = static_cast<size_t>(params.host_buffer_size);
+    auto const buffer_size = static_cast<size_t>(params.m_host_buffer_size);
     BufferF test_buffer(1, buffer_size);
 
     // Simulate real-time audio callbacks at the correct pace
     auto callback_interval = std::chrono::microseconds(
-        static_cast<long long>(params.host_buffer_size / params.sample_rate * 1e6));
+        static_cast<long long>(params.m_host_buffer_size / params.m_sample_rate * 1e6));
 
-    constexpr size_t num_iterations = 300;
+    constexpr size_t k_num_iterations = 300;
     auto next_callback = std::chrono::steady_clock::now();
 
-    for (size_t iter = 0; iter < num_iterations; ++iter) {
+    for (size_t iter = 0; iter < k_num_iterations; ++iter) {
         for (size_t s = 0; s < buffer_size; ++s) { test_buffer.set_sample(0, s, 0.f); }
         handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
 
@@ -151,7 +166,7 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     // Check execution order
-    std::lock_guard<std::mutex> lock(backend.m_order_mutex);
+    std::lock_guard<std::mutex> const lock(backend.m_order_mutex);
 
     ASSERT_GT(backend.m_execution_order.size(), 0u) << "No inferences were executed";
 
@@ -163,7 +178,7 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
         }
     }
 
-    if (params.session_exclusive) {
+    if (params.m_session_exclusive) {
         // With session_exclusive_processor=true, execution MUST be in order
         EXPECT_TRUE(in_order)
             << "Session-exclusive processor is set but inferences executed out of order!"
@@ -172,7 +187,7 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
         // Log whether out-of-order happened (for diagnostic purposes)
         std::cout << "session_exclusive=false: execution was "
                   << (in_order ? "IN ORDER (race not triggered)" : "OUT OF ORDER (race triggered)")
-                  << " (" << backend.m_execution_order.size() << " inferences)" << std::endl;
+                  << " (" << backend.m_execution_order.size() << " inferences)" << '\n';
     }
 }
 

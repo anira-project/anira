@@ -140,7 +140,7 @@ private:
          */
         void process(std::vector<BufferF>& input,
                      std::vector<BufferF>& output,
-                     std::shared_ptr<SessionElement> session);
+                     const std::shared_ptr<SessionElement>& session);
 
         torch::jit::script::Module m_module;  ///< Loaded TorchScript model for inference
 

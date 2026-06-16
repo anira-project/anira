@@ -1,4 +1,10 @@
+#include <anira/InferenceConfig.h>
 #include <anira/backends/BackendBase.h>
+#include <anira/utils/Buffer.h>
+
+#include <cstddef>
+#include <memory>
+#include <vector>
 
 namespace anira {
 
@@ -7,11 +13,14 @@ BackendBase::BackendBase(InferenceConfig& inference_config)
 
 void BackendBase::prepare() {}
 
+// The session parameter is passed by value to match the virtual signature declared in the header
+// (BackendBase.h), which is out of scope to change here.
 void BackendBase::process(std::vector<BufferF>& input,
                           std::vector<BufferF>& output,
-                          [[maybe_unused]] std::shared_ptr<SessionElement> session) {
+                          [[maybe_unused]] std::shared_ptr<SessionElement>
+                              session) {  // NOLINT(performance-unnecessary-value-param)
     for (size_t i = 0; i < input.size(); ++i) {
-        bool equal_channels = input[i].get_num_channels() == output[i].get_num_channels();
+        bool const equal_channels = input[i].get_num_channels() == output[i].get_num_channels();
         auto sample_diff = input[i].get_num_samples() - output[i].get_num_samples();
         if (equal_channels && sample_diff == 0) {
             for (int channel = 0; channel < input[i].get_num_channels(); ++channel) {

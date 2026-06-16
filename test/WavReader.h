@@ -20,13 +20,13 @@ struct ChunkInfo {
 };
 
 struct FmtChunk {
-    uint16_t audio_format;
-    uint16_t num_channels;
-    uint32_t sample_rate;
-    uint32_t byte_rate;
-    uint16_t block_align;
-    uint16_t bits_per_sample;
-    uint16_t extra_params_size;
+    uint16_t audio_format = 0;
+    uint16_t num_channels = 0;
+    uint32_t sample_rate = 0;
+    uint32_t byte_rate = 0;
+    uint16_t block_align = 0;
+    uint16_t bits_per_sample = 0;
+    uint16_t extra_params_size = 0;
     char* extra_params;
     FmtChunk() : extra_params{nullptr} {}
     FmtChunk(uint32_t chunk_size) : extra_params{new char[chunk_size - 18]} {}

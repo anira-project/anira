@@ -1,4 +1,5 @@
-#include <anira/anira.h>
+
+#include <anira/utils/Semaphore.h>
 
 #include <chrono>
 
@@ -44,16 +45,16 @@ TEST(SemaphoreTest, AcquireReturnsWhenPermitAvailable) {
 // for approximately the requested timeout before giving up.
 TEST(SemaphoreTest, TryAcquireUntilTimesOut) {
     Semaphore sem{0};
-    constexpr auto timeout = std::chrono::milliseconds(20);
+    constexpr auto k_timeout = std::chrono::milliseconds(20);
 
     const auto start = std::chrono::steady_clock::now();
-    const bool acquired = sem.try_acquire_until(start + timeout);
+    const bool acquired = sem.try_acquire_until(start + k_timeout);
     const auto elapsed = std::chrono::steady_clock::now() - start;
 
     EXPECT_FALSE(acquired);
     // It should have waited at least most of the timeout. Allow a small slack
     // to tolerate timer granularity / early wakeups across platforms.
-    EXPECT_GE(elapsed, timeout - std::chrono::milliseconds(5));
+    EXPECT_GE(elapsed, k_timeout - std::chrono::milliseconds(5));
 }
 
 // try_acquire_until succeeds immediately when a permit is available, well

@@ -1,5 +1,18 @@
+#include <anira/InferenceConfig.h>
+#include <anira/backends/BackendBase.h>
 #include <anira/backends/OnnxRuntimeProcessor.h>
+#include <anira/scheduler/SessionElement.h>
+#include <anira/utils/Buffer.h>
+#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+#include <onnxruntime_c_api.h>
+#include <onnxruntime_cxx_api.h>
+
+#include <cassert>
+#include <cstddef>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace anira {
 
@@ -10,7 +23,7 @@ OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& inference_config)
     }
 }
 
-OnnxRuntimeProcessor::~OnnxRuntimeProcessor() {}
+OnnxRuntimeProcessor::~OnnxRuntimeProcessor() = default;
 
 void OnnxRuntimeProcessor::prepare() {
     for (auto& instance : m_instances) { instance->prepare(); }
@@ -73,7 +86,8 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config)
             m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
         std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
 #else
-        std::string modelpath = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
+        std::string const modelpath =
+            m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
 #endif
         m_session = std::make_unique<Ort::Session>(m_env, modelpath.c_str(), m_session_options);
     }
@@ -112,7 +126,7 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config)
                                        m_input_names.size(),
                                        m_output_names.data(),
                                        m_output_names.size());
-        } catch (Ort::Exception& e) { LOG_ERROR << e.what() << std::endl; }
+        } catch (Ort::Exception& e) { LOG_ERROR << e.what() << '\n'; }
     }
 }
 
@@ -128,7 +142,7 @@ void OnnxRuntimeProcessor::Instance::prepare() {
 
 void OnnxRuntimeProcessor::Instance::process(std::vector<BufferF>& input,
                                              std::vector<BufferF>& output,
-                                             std::shared_ptr<SessionElement> session) {
+                                             const std::shared_ptr<SessionElement>&) {
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_inputs[i] = Ort::Value::CreateTensor<float>(
             m_memory_info,
@@ -145,7 +159,7 @@ void OnnxRuntimeProcessor::Instance::process(std::vector<BufferF>& input,
                                    m_input_names.size(),
                                    m_output_names.data(),
                                    m_output_names.size());
-    } catch (Ort::Exception& e) { LOG_ERROR << e.what() << std::endl; }
+    } catch (Ort::Exception& e) { LOG_ERROR << e.what() << '\n'; }
 
     for (size_t i = 0; i < m_outputs.size(); i++) {
         const auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();

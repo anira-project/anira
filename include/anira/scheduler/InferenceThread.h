@@ -127,8 +127,8 @@ private:
      * @param session Shared pointer to the SessionElement containing inference configuration
      * @param thread_safe_struct Shared pointer to thread-safe data structures for the session
      */
-    void do_inference(std::shared_ptr<SessionElement> session,
-                      std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct);
+    void do_inference(const std::shared_ptr<SessionElement>& session,
+                      const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct);
 
     /**
      * @brief Executes the core inference operation with input/output buffers
@@ -141,7 +141,7 @@ private:
      * @param input Vector of input buffers containing the audio data to process
      * @param output Vector of output buffers to receive the processed results
      */
-    void inference(std::shared_ptr<SessionElement> session,
+    void inference(const std::shared_ptr<SessionElement>& session,
                    std::vector<BufferF>& input,
                    std::vector<BufferF>& output);
 

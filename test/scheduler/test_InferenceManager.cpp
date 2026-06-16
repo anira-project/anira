@@ -1,81 +1,93 @@
-#include <anira/anira.h>
-#include <anira/utils/helperFunctions.h>
-#include <stdint.h>
 
-#include <chrono>
-#include <thread>
+#include <anira/ContextConfig.h>
+#include <anira/InferenceConfig.h>
+#include <anira/PrePostProcessor.h>
+#include <anira/backends/BackendBase.h>
+#include <anira/scheduler/InferenceManager.h>
+#include <anira/utils/HostConfig.h>
+#include <anira/utils/InferenceBackend.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <iomanip>
+#include <ios>
+#include <ostream>
+#include <sstream>
+#include <string>
+#include <vector>
 
 #include "gtest/gtest.h"
 
 using namespace anira;
 
 struct InferenceManagerTestParams {
-    HostConfig host_config;
-    InferenceConfig inference_config;
-    std::vector<unsigned int> expected_latency;
+    HostConfig m_host_config;
+    InferenceConfig m_inference_config;
+    std::vector<unsigned int> m_expected_latency;
 };
 
+namespace {
 std::ostream& operator<<(std::ostream& stream, const InferenceManagerTestParams& params) {
     stream << "{ ";
     stream << "Host Config: { ";
-    stream << "host_buffer_size = " << params.host_config.m_buffer_size;
-    stream << ", host_sample_rate = " << params.host_config.m_sample_rate;
+    stream << "host_buffer_size = " << params.m_host_config.m_buffer_size;
+    stream << ", host_sample_rate = " << params.m_host_config.m_sample_rate;
     stream << " }, Inference Config: { ";
-    stream << "max_inference_time = " << params.inference_config.m_max_inference_time << " ms";
+    stream << "max_inference_time = " << params.m_inference_config.m_max_inference_time << " ms";
     stream << " }";
 
     return stream;
 }
+}  // namespace
 
 // // Test fixture for paramterized inference tests
 class InferenceManagerTest : public ::testing::TestWithParam<InferenceManagerTestParams> {};
 
 TEST_P(InferenceManagerTest, Simple) {
     auto test_params = GetParam();
-    auto buffer_size = test_params.host_config.m_buffer_size;
-    auto sample_rate = test_params.host_config.m_sample_rate;
 
-    PrePostProcessor pp_processor(test_params.inference_config);
+    PrePostProcessor pp_processor(test_params.m_inference_config);
     BackendBase* custom_processor = nullptr;  // Use default processor
-    ContextConfig context_config(2);  // Use 2 threads for testing, gh runner max on macOS is 3
+    ContextConfig const context_config(2);  // Use 2 threads for testing, gh runner max on macOS is
+                                            // 3
 
     InferenceManager inference_manager(pp_processor,
-                                       test_params.inference_config,
+                                       test_params.m_inference_config,
                                        custom_processor,
                                        context_config);
 
-    inference_manager.prepare(test_params.host_config);
+    inference_manager.prepare(test_params.m_host_config);
 
     std::vector<unsigned int> latency = inference_manager.get_latency();
 
-    for (size_t i = 0; i < test_params.expected_latency.size(); ++i) {
-        ASSERT_EQ(latency[i], test_params.expected_latency[i])
+    for (size_t i = 0; i < test_params.m_expected_latency.size(); ++i) {
+        ASSERT_EQ(latency[i], test_params.m_expected_latency[i])
             << "Latency mismatch for tensor " << i;
     }
 }
 
 TEST_P(InferenceManagerTest, WithCustomLatency) {
     auto test_params = GetParam();
-    auto buffer_size = test_params.host_config.m_buffer_size;
-    auto sample_rate = test_params.host_config.m_sample_rate;
 
-    PrePostProcessor pp_processor(test_params.inference_config);
+    PrePostProcessor pp_processor(test_params.m_inference_config);
     BackendBase* custom_processor = nullptr;  // Use default processor
-    ContextConfig context_config(2);  // Use 2 threads for testing, gh runner max on macOS is 3
+    ContextConfig const context_config(2);  // Use 2 threads for testing, gh runner max on macOS is
+                                            // 3
 
     InferenceManager inference_manager(pp_processor,
-                                       test_params.inference_config,
+                                       test_params.m_inference_config,
                                        custom_processor,
                                        context_config);
 
     // Create custom latency values - double the expected values for testing
     std::vector<long> custom_latency;
-    for (const auto& latency : test_params.expected_latency) {
-        custom_latency.push_back(latency * 2);
+    custom_latency.reserve(test_params.m_expected_latency.size());
+    for (const auto& latency : test_params.m_expected_latency) {
+        custom_latency.push_back(static_cast<long>(latency) * 2);
     }
 
     // Prepare with custom latency
-    inference_manager.prepare(test_params.host_config, custom_latency);
+    inference_manager.prepare(test_params.m_host_config, custom_latency);
 
     // Verify that the latency values match our custom ones
     std::vector<unsigned int> actual_latency = inference_manager.get_latency();
@@ -91,30 +103,29 @@ TEST_P(InferenceManagerTest, WithCustomLatency) {
 // Test with empty custom latency (should fall back to calculated values)
 TEST_P(InferenceManagerTest, WithEmptyCustomLatency) {
     auto test_params = GetParam();
-    auto buffer_size = test_params.host_config.m_buffer_size;
-    auto sample_rate = test_params.host_config.m_sample_rate;
 
-    PrePostProcessor pp_processor(test_params.inference_config);
+    PrePostProcessor pp_processor(test_params.m_inference_config);
     BackendBase* custom_processor = nullptr;  // Use default processor
-    ContextConfig context_config(2);  // Use 2 threads for testing, gh runner max on macOS is 3
+    ContextConfig const context_config(2);  // Use 2 threads for testing, gh runner max on macOS is
+                                            // 3
 
     InferenceManager inference_manager(pp_processor,
-                                       test_params.inference_config,
+                                       test_params.m_inference_config,
                                        custom_processor,
                                        context_config);
 
     // Prepare with empty custom latency vector
-    std::vector<long> empty_custom_latency;
-    inference_manager.prepare(test_params.host_config, empty_custom_latency);
+    std::vector<long> const empty_custom_latency;
+    inference_manager.prepare(test_params.m_host_config, empty_custom_latency);
 
     // Verify that the latency values match the expected calculated ones
     std::vector<unsigned int> actual_latency = inference_manager.get_latency();
 
-    ASSERT_EQ(actual_latency.size(), test_params.expected_latency.size())
+    ASSERT_EQ(actual_latency.size(), test_params.m_expected_latency.size())
         << "Latency vector size mismatch";
 
-    for (size_t i = 0; i < test_params.expected_latency.size(); ++i) {
-        ASSERT_EQ(actual_latency[i], test_params.expected_latency[i])
+    for (size_t i = 0; i < test_params.m_expected_latency.size(); ++i) {
+        ASSERT_EQ(actual_latency[i], test_params.m_expected_latency[i])
             << "Latency did not fall back to calculated value for tensor " << i;
     }
 }
@@ -122,36 +133,35 @@ TEST_P(InferenceManagerTest, WithEmptyCustomLatency) {
 // Test with partial custom latency (should use provided values and calculate the rest)
 TEST_P(InferenceManagerTest, WithPartialCustomLatency) {
     auto test_params = GetParam();
-    auto buffer_size = test_params.host_config.m_buffer_size;
-    auto sample_rate = test_params.host_config.m_sample_rate;
 
     // Skip test if we don't have at least 2 tensors
-    if (test_params.expected_latency.size() < 2) {
+    if (test_params.m_expected_latency.size() < 2) {
         GTEST_SKIP() << "Test requires at least 2 tensors to test partial custom latency";
         return;
     }
 
-    PrePostProcessor pp_processor(test_params.inference_config);
+    PrePostProcessor pp_processor(test_params.m_inference_config);
     BackendBase* custom_processor = nullptr;  // Use default processor
-    ContextConfig context_config(2);  // Use 2 threads for testing, gh runner max on macOS is 3
+    ContextConfig const context_config(2);  // Use 2 threads for testing, gh runner max on macOS is
+                                            // 3
 
     InferenceManager inference_manager(pp_processor,
-                                       test_params.inference_config,
+                                       test_params.m_inference_config,
                                        custom_processor,
                                        context_config);
 
     // Create partial custom latency (only for the first tensor)
-    std::vector<long> partial_custom_latency(test_params.expected_latency.size(), -1);
+    std::vector<long> partial_custom_latency(test_params.m_expected_latency.size(), -1);
     // Set a custom value for the first tensor
-    partial_custom_latency[0] = test_params.expected_latency[0] * 3;
+    partial_custom_latency[0] = static_cast<long>(test_params.m_expected_latency[0]) * 3;
 
     // Prepare with partial custom latency
-    inference_manager.prepare(test_params.host_config, partial_custom_latency);
+    inference_manager.prepare(test_params.m_host_config, partial_custom_latency);
 
     // Verify latency values
     std::vector<unsigned int> actual_latency = inference_manager.get_latency();
 
-    ASSERT_EQ(actual_latency.size(), test_params.expected_latency.size())
+    ASSERT_EQ(actual_latency.size(), test_params.m_expected_latency.size())
         << "Latency vector size mismatch";
 
     // First latency should be our custom value
@@ -159,33 +169,34 @@ TEST_P(InferenceManagerTest, WithPartialCustomLatency) {
         << "Custom latency not applied correctly for first tensor";
 
     // Remaining latencies should be calculated values
-    for (size_t i = 1; i < test_params.expected_latency.size(); ++i) {
-        ASSERT_EQ(actual_latency[i], test_params.expected_latency[i])
+    for (size_t i = 1; i < test_params.m_expected_latency.size(); ++i) {
+        ASSERT_EQ(actual_latency[i], test_params.m_expected_latency[i])
             << "Latency calculation incorrect for tensor " << i;
     }
 }
 
+namespace {
 std::string build_test_name(const testing::TestParamInfo<InferenceManagerTest::ParamType>& info) {
     std::stringstream ss_sample_rate, ss_buffer_size, ss_max_inference_time;
     std::vector<std::stringstream> ss_tensor_input_size, ss_tensor_output_size;
 
     // Set precision to 4 decimal places for cleaner names
-    ss_sample_rate << std::fixed << std::setprecision(4) << info.param.host_config.m_sample_rate;
-    ss_buffer_size << std::fixed << std::setprecision(4) << info.param.host_config.m_buffer_size;
+    ss_sample_rate << std::fixed << std::setprecision(4) << info.param.m_host_config.m_sample_rate;
+    ss_buffer_size << std::fixed << std::setprecision(4) << info.param.m_host_config.m_buffer_size;
     ss_max_inference_time << std::fixed << std::setprecision(2)
-                          << info.param.inference_config.m_max_inference_time;
+                          << info.param.m_inference_config.m_max_inference_time;
 
     std::stringstream ss;
     ss << "__input_size_";
-    for (const auto& size : info.param.inference_config.get_tensor_input_size()) {
-        ss_tensor_input_size.push_back(std::stringstream());
+    for (const auto& size : info.param.m_inference_config.get_tensor_input_size()) {
+        ss_tensor_input_size.emplace_back();
         ss_tensor_input_size.back() << size;
         ss << ss_tensor_input_size.back().str() << "_";
     }
 
     ss << "_output_size_";
-    for (const auto& size : info.param.inference_config.get_tensor_output_size()) {
-        ss_tensor_output_size.push_back(std::stringstream());
+    for (const auto& size : info.param.m_inference_config.get_tensor_output_size()) {
+        ss_tensor_output_size.emplace_back();
         ss_tensor_output_size.back() << size;
         ss << ss_tensor_output_size.back().str() << "_";
     }
@@ -193,16 +204,17 @@ std::string build_test_name(const testing::TestParamInfo<InferenceManagerTest::P
     std::string sample_rate_str = ss_sample_rate.str();
     std::string buffer_size_str = ss_buffer_size.str();
     std::string max_inference_time_str = ss_max_inference_time.str();
-    std::string tensor_shape_str = ss.str();
+    std::string const tensor_shape_str = ss.str();
 
     // Replace decimal points with underscores to make valid test names
-    std::replace(sample_rate_str.begin(), sample_rate_str.end(), '.', '_');
-    std::replace(buffer_size_str.begin(), buffer_size_str.end(), '.', '_');
-    std::replace(max_inference_time_str.begin(), max_inference_time_str.end(), '.', '_');
+    std::ranges::replace(sample_rate_str, '.', '_');
+    std::ranges::replace(buffer_size_str, '.', '_');
+    std::ranges::replace(max_inference_time_str, '.', '_');
 
     return "host_config_" + buffer_size_str + "x" + sample_rate_str + tensor_shape_str +
            "_max_time_" + max_inference_time_str;
 }
+}  // namespace
 
 INSTANTIATE_TEST_SUITE_P(
     CalculateLatency,

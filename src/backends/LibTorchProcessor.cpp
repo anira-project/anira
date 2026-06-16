@@ -1,5 +1,19 @@
+#include <anira/InferenceConfig.h>
+#include <anira/backends/BackendBase.h>
 #include <anira/backends/LibTorchProcessor.h>
+#include <anira/scheduler/SessionElement.h>
+#include <anira/utils/Buffer.h>
+#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+#include <c10/util/Exception.h>
+#include <torch/csrc/autograd/generated/variable_factories.h>
+#include <torch/csrc/jit/serialization/import.h>
+#include <torch/utils.h>
+
+#include <cstddef>
+#include <memory>
+#include <sstream>
+#include <vector>
 
 namespace anira {
 
@@ -12,7 +26,7 @@ LibtorchProcessor::LibtorchProcessor(InferenceConfig& inference_config)
     }
 }
 
-LibtorchProcessor::~LibtorchProcessor() {}
+LibtorchProcessor::~LibtorchProcessor() = default;
 
 void LibtorchProcessor::prepare() {
     for (auto& instance : m_instances) { instance->prepare(); }
@@ -45,7 +59,7 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config)
             m_module = torch::jit::load(stream);
         } catch (const c10::Error& e) {
             LOG_ERROR << "[ERROR] error loading the model\n";
-            LOG_ERROR << e.what() << std::endl;
+            LOG_ERROR << e.what() << '\n';
         }
     } else {
         try {
@@ -53,7 +67,7 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config)
                 m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
         } catch (const c10::Error& e) {
             LOG_ERROR << "[ERROR] error loading the model\n";
-            LOG_ERROR << e.what() << std::endl;
+            LOG_ERROR << e.what() << '\n';
         }
     }
     m_module.eval();
@@ -71,7 +85,7 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config)
     }
 
     // No gradient calculation for inference
-    torch::NoGradGuard no_grad;
+    torch::NoGradGuard const no_grad;
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
         if (!m_inference_config.get_model_function(InferenceBackend::LIBTORCH).empty()) {
             auto method = m_module.get_method(
@@ -92,9 +106,9 @@ void LibtorchProcessor::Instance::prepare() {
 
 void LibtorchProcessor::Instance::process(std::vector<BufferF>& input,
                                           std::vector<BufferF>& output,
-                                          std::shared_ptr<SessionElement> session) {
+                                          const std::shared_ptr<SessionElement>&) {
     // No gradient calculation for inference
-    torch::NoGradGuard no_grad;
+    torch::NoGradGuard const no_grad;
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_input_data[i].swap_data(input[i].get_memory_block());
         input[i].reset_channel_ptr();

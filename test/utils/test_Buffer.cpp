@@ -1,4 +1,8 @@
-#include <anira/anira.h>
+#include <anira/utils/Buffer.h>
+#include <anira/utils/MemoryBlock.h>
+
+#include <cstddef>
+#include <string>
 
 #include "gtest/gtest.h"
 
@@ -12,7 +16,7 @@ TEST(Buffer, SimpleWrite) {
     buffer.set_sample(0, 5, 0.9f);
 
     for (size_t i = 0; i < buffer.get_num_samples(); i++) {
-        float expected = i == 5 ? 0.9f : 0.f;
+        float const expected = i == 5 ? 0.9f : 0.f;
         EXPECT_FLOAT_EQ(expected, buffer.get_sample(0, i));
     }
 
@@ -23,7 +27,7 @@ TEST(Buffer, SimpleWrite) {
 }
 
 TEST(Buffer, BlockSwap) {
-    int block_size = 10;
+    int const block_size = 10;
 
     MemoryBlock<int> block;
     anira::Buffer<int> buffer(1, block_size);
@@ -60,7 +64,7 @@ TEST(Buffer, BlockSwap) {
 }
 
 TEST(Buffer, BufferSwap) {
-    int block_size = 10;
+    int const block_size = 10;
 
     anira::Buffer<int> buffer1(1, block_size);
     anira::Buffer<int> buffer2(1, block_size);
@@ -102,7 +106,7 @@ TEST(Buffer, InvalidSizeSwap) {
     testing::internal::CaptureStderr();
     buffer1.swap_data(buffer2);
 
-    std::string output = testing::internal::GetCapturedStderr();
+    std::string const output = testing::internal::GetCapturedStderr();
 
     // check that the blocks were actually swapped
     ASSERT_EQ(buffer1_ptr, buffer1.data());
@@ -121,7 +125,7 @@ TEST(Buffer, InvalidChannelsSwap) {
     testing::internal::CaptureStderr();
     buffer1.swap_data(buffer2);
 
-    std::string output = testing::internal::GetCapturedStderr();
+    std::string const output = testing::internal::GetCapturedStderr();
 
     // check that the blocks were actually swapped
     ASSERT_EQ(buffer1_ptr, buffer1.data());

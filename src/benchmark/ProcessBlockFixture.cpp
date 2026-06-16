@@ -1,7 +1,20 @@
+#include <anira/InferenceConfig.h>
 #include <anira/benchmark/ProcessBlockFixture.h>
+#include <anira/utils/HostConfig.h>
+#include <anira/utils/InferenceBackend.h>
+#include <anira/utils/helperFunctions.h>
+#include <benchmark/benchmark.h>
 
-namespace anira {
-namespace benchmark {
+#include <chrono>
+#include <cstddef>
+#include <iomanip>
+#include <ios>
+#include <iostream>
+#include <ratio>
+#include <string>
+#include <thread>
+
+namespace anira::benchmark {
 
 ProcessBlockFixture::ProcessBlockFixture() {
     // A new instance of ProcessBlockFixture is created for each benchmark that has been defined and
@@ -10,10 +23,10 @@ ProcessBlockFixture::ProcessBlockFixture() {
     m_repetition = 0;
 }
 
-ProcessBlockFixture::~ProcessBlockFixture() {}
+ProcessBlockFixture::~ProcessBlockFixture() = default;
 
 void ProcessBlockFixture::initialize_iteration() {
-    m_prev_num_received_samples = m_inference_handler->get_available_samples(0);
+    m_prev_num_received_samples = static_cast<int>(m_inference_handler->get_available_samples(0));
 }
 
 void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference_config,
@@ -67,17 +80,17 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
         if (m_host_config != host_config) { m_host_config = host_config; }
         std::cout << "\n---------------------------------------------------------------------------"
                      "-------------------------------------------------------------"
-                  << std::endl;
+                  << '\n';
         std::cout << "Model: " << m_model_name << " | Backend: " << m_inference_backend_name
                   << " | Host Sample Rate: " << std::fixed << std::setprecision(0)
                   << m_host_config.m_sample_rate
                   << " Hz | Host Buffer Size: " << m_host_config.m_buffer_size << " = "
                   << std::fixed << std::setprecision(4)
                   << (float)m_host_config.m_buffer_size * 1000.f / m_host_config.m_sample_rate
-                  << " ms" << std::endl;
+                  << " ms" << '\n';
         std::cout << "-----------------------------------------------------------------------------"
                      "-----------------------------------------------------------\n"
-                  << std::endl;
+                  << '\n';
     }
 }
 
@@ -88,7 +101,7 @@ bool ProcessBlockFixture::buffer_processed() {
 void ProcessBlockFixture::push_random_samples_in_buffer(anira::HostConfig host_config) {
     for (size_t channel = 0; channel < m_inference_config.get_preprocess_input_channels()[0];
          channel++) {
-        for (size_t sample = 0; sample < host_config.m_buffer_size; sample++) {
+        for (size_t sample = 0; sample < static_cast<size_t>(host_config.m_buffer_size); sample++) {
             m_buffer->set_sample(channel, sample, random_sample());
         }
     }
@@ -117,7 +130,7 @@ void ProcessBlockFixture::interation_step(const std::chrono::steady_clock::time_
     std::cout << "SingleIteration/" << state.name() << "/" << m_model_name << "/"
               << m_inference_backend_name << "/" << state.range(0) << "/iteration:" << m_iteration
               << "/repetition:" << m_repetition << "\t\t\t" << std::fixed << std::setprecision(4)
-              << elapsed_time_ms.count() << " ms" << std::endl;
+              << elapsed_time_ms.count() << " ms" << '\n';
     m_iteration++;
 }
 
@@ -125,19 +138,18 @@ void ProcessBlockFixture::repetition_step() {
     m_repetition += 1;
     std::cout << "\n-------------------------------------------------------------------------------"
                  "---------------------------------------------------------\n"
-              << std::endl;
+              << '\n';
 }
 
 void ProcessBlockFixture::SetUp(const ::benchmark::State& state) {
     if (m_buffer_size != (int)state.range(0)) { m_buffer_size = (int)state.range(0); }
 }
 
-void ProcessBlockFixture::TearDown(const ::benchmark::State& state) {
+void ProcessBlockFixture::TearDown(const ::benchmark::State&) {
     m_buffer.reset();
     m_inference_handler.reset();
 
     if (m_sleep_after_repetition) { std::this_thread::sleep_for(m_runtime_last_repetition); }
 }
 
-}  // namespace benchmark
-}  // namespace anira
+}  // namespace anira::benchmark

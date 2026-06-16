@@ -113,7 +113,7 @@ struct ANIRA_API HostConfig {
     float get_relative_buffer_size(const InferenceConfig& inference_config,
                                    size_t tensor_index,
                                    bool input = true) const {
-        float ratio_buffer_size =
+        float const ratio_buffer_size =
             m_buffer_size /
             static_cast<float>(inference_config.get_preprocess_input_size()[m_tensor_index]);
         if (input) {
@@ -149,7 +149,7 @@ struct ANIRA_API HostConfig {
     float get_relative_sample_rate(const InferenceConfig& inference_config,
                                    size_t tensor_index,
                                    bool input = true) const {
-        float ratio_sample_rate =
+        float const ratio_sample_rate =
             m_sample_rate /
             static_cast<float>(inference_config.get_preprocess_input_size()[m_tensor_index]);
         if (input) {

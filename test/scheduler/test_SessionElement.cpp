@@ -1,26 +1,32 @@
-#include <anira/anira.h>
+#include <anira/InferenceConfig.h>
+#include <anira/PrePostProcessor.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/helperFunctions.h>
-#include <stdint.h>
+#include <anira/utils/HostConfig.h>
+#include <anira/utils/InferenceBackend.h>
 
-#include <chrono>
+#include <algorithm>
+#include <cstddef>
 #include <iomanip>
+#include <ios>
+#include <ostream>
 #include <sstream>
-#include <thread>
+#include <string>
+#include <vector>
 
 #include "gtest/gtest.h"
 
 using namespace anira;
 
 struct SessionElementTestParams {
-    HostConfig host_config;
-    InferenceConfig inference_config;
-    std::vector<unsigned int> expected_latency;
-    size_t expected_num_structs;
-    std::vector<size_t> expected_send_buffer_sizes;
-    std::vector<size_t> expected_receive_buffer_sizes;
+    HostConfig m_host_config;
+    InferenceConfig m_inference_config;
+    std::vector<unsigned int> m_expected_latency;
+    size_t m_expected_num_structs;
+    std::vector<size_t> m_expected_send_buffer_sizes;
+    std::vector<size_t> m_expected_receive_buffer_sizes;
 };
 
+namespace {
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
     os << "[ ";
@@ -32,19 +38,20 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
 std::ostream& operator<<(std::ostream& stream, const SessionElementTestParams& params) {
     stream << "{ ";
     stream << "Host Config: { ";
-    stream << "host_buffer_size = " << params.host_config.m_buffer_size;
-    stream << ", host_sample_rate = " << params.host_config.m_sample_rate;
-    stream << ", tensor_index = " << params.host_config.m_tensor_index;
+    stream << "host_buffer_size = " << params.m_host_config.m_buffer_size;
+    stream << ", host_sample_rate = " << params.m_host_config.m_sample_rate;
+    stream << ", tensor_index = " << params.m_host_config.m_tensor_index;
     stream << " }, Inference Config: { ";
-    stream << "max_inference_time = " << params.inference_config.m_max_inference_time << " ms";
-    stream << " }, Expected latency = " << params.expected_latency;
-    stream << ", Expected num_structs = " << params.expected_num_structs;
-    stream << ", Expected send buffer sizes = " << params.expected_send_buffer_sizes;
-    stream << ", Expected receive buffer sizes = " << params.expected_receive_buffer_sizes;
+    stream << "max_inference_time = " << params.m_inference_config.m_max_inference_time << " ms";
+    stream << " }, Expected latency = " << params.m_expected_latency;
+    stream << ", Expected num_structs = " << params.m_expected_num_structs;
+    stream << ", Expected send buffer sizes = " << params.m_expected_send_buffer_sizes;
+    stream << ", Expected receive buffer sizes = " << params.m_expected_receive_buffer_sizes;
     stream << " }";
 
     return stream;
 }
+}  // namespace
 
 // Test fixture for parameterized SessionElement tests
 class SessionElementTest : public ::testing::TestWithParam<SessionElementTestParams> {};
@@ -52,63 +59,65 @@ class SessionElementTest : public ::testing::TestWithParam<SessionElementTestPar
 TEST_P(SessionElementTest, LatencyStructAndRingbuffers) {
     auto test_params = GetParam();
 
-    PrePostProcessor pp_processor(test_params.inference_config);
+    PrePostProcessor pp_processor(test_params.m_inference_config);
 
     SessionElement session_element(0,  // session_id
                                    pp_processor,
-                                   test_params.inference_config);
+                                   test_params.m_inference_config);
 
-    session_element.prepare(test_params.host_config);
+    session_element.prepare(test_params.m_host_config);
 
-    for (size_t i = 0; i < test_params.expected_latency.size(); ++i) {
-        ASSERT_EQ(session_element.m_latency[i], test_params.expected_latency[i])
+    for (size_t i = 0; i < test_params.m_expected_latency.size(); ++i) {
+        ASSERT_EQ(session_element.m_latency[i], test_params.m_expected_latency[i])
             << "Latency mismatch at index " << i
-            << ". Expected: " << test_params.expected_latency[i]
+            << ". Expected: " << test_params.m_expected_latency[i]
             << ", Got: " << session_element.m_latency[i];
     }
 
-    ASSERT_EQ(session_element.m_num_structs, test_params.expected_num_structs)
-        << "Number of structs mismatch. Expected: " << test_params.expected_num_structs
+    ASSERT_EQ(session_element.m_num_structs, test_params.m_expected_num_structs)
+        << "Number of structs mismatch. Expected: " << test_params.m_expected_num_structs
         << ", Got: " << session_element.m_num_structs;
 
-    for (size_t i = 0; i < test_params.expected_send_buffer_sizes.size(); ++i) {
-        ASSERT_EQ(session_element.m_send_buffer_size[i], test_params.expected_send_buffer_sizes[i])
+    for (size_t i = 0; i < test_params.m_expected_send_buffer_sizes.size(); ++i) {
+        ASSERT_EQ(session_element.m_send_buffer_size[i],
+                  test_params.m_expected_send_buffer_sizes[i])
             << "Send buffer size mismatch at index " << i
-            << ". Expected: " << test_params.expected_send_buffer_sizes[i]
+            << ". Expected: " << test_params.m_expected_send_buffer_sizes[i]
             << ", Got: " << session_element.m_send_buffer_size[i];
     }
 
-    for (size_t i = 0; i < test_params.expected_receive_buffer_sizes.size(); ++i) {
+    for (size_t i = 0; i < test_params.m_expected_receive_buffer_sizes.size(); ++i) {
         ASSERT_EQ(session_element.m_receive_buffer_size[i],
-                  test_params.expected_receive_buffer_sizes[i])
+                  test_params.m_expected_receive_buffer_sizes[i])
             << "Receive buffer size mismatch at index " << i
-            << ". Expected: " << test_params.expected_receive_buffer_sizes[i]
+            << ". Expected: " << test_params.m_expected_receive_buffer_sizes[i]
             << ", Got: " << session_element.m_receive_buffer_size[i];
     }
 }
 
+namespace {
 std::string build_test_name(const testing::TestParamInfo<SessionElementTest::ParamType>& info) {
     std::stringstream ss_sample_rate, ss_buffer_size, ss_max_inference_time, ss_tensor_index;
     std::vector<std::stringstream> ss_tensor_input_size, ss_tensor_output_size;
 
     // Set precision to 4 decimal places for cleaner names
-    ss_sample_rate << std::fixed << std::setprecision(4) << info.param.host_config.m_sample_rate;
-    ss_buffer_size << std::fixed << std::setprecision(4) << info.param.host_config.m_buffer_size;
+    ss_sample_rate << std::fixed << std::setprecision(4) << info.param.m_host_config.m_sample_rate;
+    ss_buffer_size << std::fixed << std::setprecision(4) << info.param.m_host_config.m_buffer_size;
     ss_max_inference_time << std::fixed << std::setprecision(2)
-                          << info.param.inference_config.m_max_inference_time;
-    ss_tensor_index << info.param.host_config.m_tensor_index;
+                          << info.param.m_inference_config.m_max_inference_time;
+    ss_tensor_index << info.param.m_host_config.m_tensor_index;
 
     std::stringstream ss;
     ss << "__input_size_";
-    for (const auto& size : info.param.inference_config.get_tensor_input_size()) {
-        ss_tensor_input_size.push_back(std::stringstream());
+    for (const auto& size : info.param.m_inference_config.get_tensor_input_size()) {
+        ss_tensor_input_size.emplace_back();
         ss_tensor_input_size.back() << size;
         ss << ss_tensor_input_size.back().str() << "_";
     }
 
     ss << "_output_size_";
-    for (const auto& size : info.param.inference_config.get_tensor_output_size()) {
-        ss_tensor_output_size.push_back(std::stringstream());
+    for (const auto& size : info.param.m_inference_config.get_tensor_output_size()) {
+        ss_tensor_output_size.emplace_back();
         ss_tensor_output_size.back() << size;
         ss << ss_tensor_output_size.back().str() << "_";
     }
@@ -116,17 +125,18 @@ std::string build_test_name(const testing::TestParamInfo<SessionElementTest::Par
     std::string sample_rate_str = ss_sample_rate.str();
     std::string buffer_size_str = ss_buffer_size.str();
     std::string max_inference_time_str = ss_max_inference_time.str();
-    std::string tensor_index_str = ss_tensor_index.str();
-    std::string tensor_shape_str = ss.str();
+    std::string const tensor_index_str = ss_tensor_index.str();
+    std::string const tensor_shape_str = ss.str();
 
     // Replace decimal points with underscores to make valid test names
-    std::replace(sample_rate_str.begin(), sample_rate_str.end(), '.', '_');
-    std::replace(buffer_size_str.begin(), buffer_size_str.end(), '.', '_');
-    std::replace(max_inference_time_str.begin(), max_inference_time_str.end(), '.', '_');
+    std::ranges::replace(sample_rate_str, '.', '_');
+    std::ranges::replace(buffer_size_str, '.', '_');
+    std::ranges::replace(max_inference_time_str, '.', '_');
 
     return "host_config_" + buffer_size_str + "x" + sample_rate_str + "_tidx_" + tensor_index_str +
            tensor_shape_str + "_max_time_" + max_inference_time_str;
 }
+}  // namespace
 
 INSTANTIATE_TEST_SUITE_P(
     LatencyStructAndRingbuffers,
