@@ -1,6 +1,7 @@
 #ifndef ANIRA_MEMORYBLOCK_H
 #define ANIRA_MEMORYBLOCK_H
 
+#include <cstring>
 #include <iostream>
 #include <type_traits>
 
@@ -78,7 +79,7 @@ public:
         void* data = malloc(sizeof(T) * m_size);
         if (data != nullptr) {
             m_data = (T*) data;
-            memcpy(m_data, other.m_data, sizeof(T) * m_size);
+            std::memcpy(m_data, other.m_data, sizeof(T) * m_size);
         } else {
             LOG_ERROR << "Failed to allocate memory!" << std::endl;
         }
@@ -100,7 +101,7 @@ public:
             void* data = malloc(sizeof(T) * m_size);
             if (data != nullptr) {
                 m_data = (T*) data;
-                memcpy(m_data, other.m_data, sizeof(T) * m_size);
+                std::memcpy(m_data, other.m_data, sizeof(T) * m_size);
             } else {
                 LOG_ERROR << "Failed to allocate memory!" << std::endl;
             }
@@ -239,7 +240,7 @@ public:
      *       for all data types (e.g., types with non-trivial constructors).
      */
     void clear() {
-        memset(m_data, 0, sizeof(T) * m_size);
+        std::memset(m_data, 0, sizeof(T) * m_size);
     }
 
     /**

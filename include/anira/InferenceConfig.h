@@ -51,7 +51,7 @@ struct ANIRA_API ModelData {
         }
         if (!is_binary) {
             m_data = malloc(sizeof(char) * size);
-            memcpy(m_data, data, size);
+            std::memcpy(m_data, data, size);
         }
     }
     
@@ -81,7 +81,7 @@ struct ANIRA_API ModelData {
         : m_size(other.m_size), m_backend(other.m_backend), m_model_function(other.m_model_function), m_is_binary(other.m_is_binary) {
         if (!m_is_binary) {
             m_data = malloc(sizeof(char) * other.m_size);
-            memcpy(m_data, other.m_data, other.m_size);
+            std::memcpy(m_data, other.m_data, other.m_size);
         } else {
             m_data = other.m_data;
         }
@@ -101,7 +101,7 @@ struct ANIRA_API ModelData {
             if (!m_is_binary) {
                 free(m_data);
                 m_data = malloc(other.m_size);
-                memcpy(m_data, other.m_data, other.m_size);
+                std::memcpy(m_data, other.m_data, other.m_size);
             } else {
                 m_data = other.m_data;
             }

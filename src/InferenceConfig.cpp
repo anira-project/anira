@@ -1,4 +1,5 @@
 #include <anira/InferenceConfig.h>
+#include <cstring>
 #include <anira/utils/Logger.h>
 
 namespace anira {
@@ -194,7 +195,7 @@ void InferenceConfig::set_model_path(const std::string& model_path, InferenceBac
             if (!m_model_data[i].m_is_binary) {
                 free(m_model_data[i].m_data);
                 m_model_data[i].m_data = malloc(model_path.size() * sizeof(char));
-                memcpy(m_model_data[i].m_data, model_path.c_str(), model_path.size());
+                std::memcpy(m_model_data[i].m_data, model_path.c_str(), model_path.size());
                 m_model_data[i].m_size = model_path.size();
             }
             return;
