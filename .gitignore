@@ -20,6 +20,7 @@ extras/models/cnn/steerable-nafx/
 extras/models/model-pool/example-models/
 extras/models/third-party/ircam-acids/RAVE/
 extras/**/*.json
+.cache/
 
 # Auto-generated TypeDoc artifacts for the Anira Web docs (consumed by sphinx-js).
 docs/typedoc/node_modules/
