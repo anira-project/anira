@@ -1,7 +1,8 @@
-#include "gtest/gtest.h"
 #include <anira/anira.h>
 
 #include <chrono>
+
+#include "gtest/gtest.h"
 
 using namespace anira;
 
@@ -35,7 +36,7 @@ TEST(SemaphoreTest, InitialCountIsAcquirable) {
 TEST(SemaphoreTest, AcquireReturnsWhenPermitAvailable) {
     Semaphore sem{0};
     sem.release();
-    sem.acquire(); // must not deadlock
+    sem.acquire();  // must not deadlock
     SUCCEED();
 }
 

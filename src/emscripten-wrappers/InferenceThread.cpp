@@ -1,6 +1,8 @@
-#include <emscripten/emscripten.h>
-#include "anira/scheduler/Context.h"
 #include "anira/scheduler/InferenceThread.h"
+
+#include <emscripten/emscripten.h>
+
+#include "anira/scheduler/Context.h"
 
 /**
  * C API wrapper over anira::InferenceThread for the Emscripten build.
@@ -61,4 +63,4 @@ void inference_thread_destroy(uintptr_t ptr) {
     delete reinterpret_cast<anira::InferenceThread*>(ptr);
 }
 
-} // extern "C"
+}  // extern "C"

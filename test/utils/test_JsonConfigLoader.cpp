@@ -1,14 +1,15 @@
-#include "gtest/gtest.h"
 #include <anira/anira.h>
+
+#include "gtest/gtest.h"
 
 #ifdef USE_LIBTORCH
 #ifdef USE_TFLITE
 #ifdef USE_ONNXRUNTIME
 
-#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfig.h"
-#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.h"
-#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigDecoder.h"
 #include "../../extras/models/model-pool/SimpleGainConfig.h"
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfig.h"
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigDecoder.h"
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.h"
 
 using namespace anira;
 
@@ -27,14 +28,19 @@ void expect_inference_config_eq(const InferenceConfig& a, const InferenceConfig&
         const auto& model_data_a = a.m_model_data[i];
         const auto& model_data_b = b.m_model_data[i];
 
-        EXPECT_EQ(model_data_a.m_size, model_data_b.m_size) << "Mismatch in m_size for model_data[" << i << "]";
-        EXPECT_EQ(model_data_a.m_backend, model_data_b.m_backend) << "Mismatch in m_backend for model_data[" << i << "]";
-        EXPECT_EQ(model_data_a.m_model_function, model_data_b.m_model_function) << "Mismatch in m_model_function for model_data[" << i << "]";
-        EXPECT_EQ(model_data_a.m_is_binary, model_data_b.m_is_binary) << "Mismatch in m_is_binary for model_data[" << i << "]";
+        EXPECT_EQ(model_data_a.m_size, model_data_b.m_size)
+            << "Mismatch in m_size for model_data[" << i << "]";
+        EXPECT_EQ(model_data_a.m_backend, model_data_b.m_backend)
+            << "Mismatch in m_backend for model_data[" << i << "]";
+        EXPECT_EQ(model_data_a.m_model_function, model_data_b.m_model_function)
+            << "Mismatch in m_model_function for model_data[" << i << "]";
+        EXPECT_EQ(model_data_a.m_is_binary, model_data_b.m_is_binary)
+            << "Mismatch in m_is_binary for model_data[" << i << "]";
 
         ASSERT_NE(model_data_a.m_data, nullptr);
         ASSERT_NE(model_data_b.m_data, nullptr);
-        EXPECT_EQ(std::memcmp(model_data_a.m_data, model_data_b.m_data, model_data_a.m_size), 0) << "Mismatch in model data bytes for model_data[" << i << "]";
+        EXPECT_EQ(std::memcmp(model_data_a.m_data, model_data_b.m_data, model_data_a.m_size), 0)
+            << "Mismatch in model data bytes for model_data[" << i << "]";
     }
 
     // Tensor shape comparison
@@ -42,25 +48,33 @@ void expect_inference_config_eq(const InferenceConfig& a, const InferenceConfig&
         const auto& tensor_shape_a = a.m_tensor_shape[i];
         const auto& tensor_shape_b = b.m_tensor_shape[i];
 
-        EXPECT_EQ(tensor_shape_a.m_universal, tensor_shape_b.m_universal) << "Mismatch in m_universal for tensor_shape[" << i << "]";
+        EXPECT_EQ(tensor_shape_a.m_universal, tensor_shape_b.m_universal)
+            << "Mismatch in m_universal for tensor_shape[" << i << "]";
 
         if (!tensor_shape_a.m_universal && !tensor_shape_b.m_universal) {
-            EXPECT_EQ(tensor_shape_a.m_backend, tensor_shape_b.m_backend) << "Mismatch in m_backend for tensor_shape[" << i << "]";
+            EXPECT_EQ(tensor_shape_a.m_backend, tensor_shape_b.m_backend)
+                << "Mismatch in m_backend for tensor_shape[" << i << "]";
         }
 
-        EXPECT_EQ(tensor_shape_a.m_tensor_input_shape, tensor_shape_b.m_tensor_input_shape) << "Mismatch in m_tensor_input_shape for tensor_shape[" << i << "]";
-        EXPECT_EQ(tensor_shape_a.m_tensor_output_shape, tensor_shape_b.m_tensor_output_shape) << "Mismatch in m_tensor_output_shape for tensor_shape[" << i << "]";
+        EXPECT_EQ(tensor_shape_a.m_tensor_input_shape, tensor_shape_b.m_tensor_input_shape)
+            << "Mismatch in m_tensor_input_shape for tensor_shape[" << i << "]";
+        EXPECT_EQ(tensor_shape_a.m_tensor_output_shape, tensor_shape_b.m_tensor_output_shape)
+            << "Mismatch in m_tensor_output_shape for tensor_shape[" << i << "]";
     }
 
     // ProcessingSpec comparison
     const auto& processing_spec_a = a.m_processing_spec;
     const auto& processing_spec_b = b.m_processing_spec;
 
-    EXPECT_EQ(processing_spec_a.m_preprocess_input_channels, processing_spec_b.m_preprocess_input_channels);
-    EXPECT_EQ(processing_spec_a.m_postprocess_output_channels, processing_spec_b.m_postprocess_output_channels);
+    EXPECT_EQ(processing_spec_a.m_preprocess_input_channels,
+              processing_spec_b.m_preprocess_input_channels);
+    EXPECT_EQ(processing_spec_a.m_postprocess_output_channels,
+              processing_spec_b.m_postprocess_output_channels);
     EXPECT_EQ(processing_spec_a.m_preprocess_input_size, processing_spec_b.m_preprocess_input_size);
-    EXPECT_EQ(processing_spec_a.m_postprocess_output_size, processing_spec_b.m_postprocess_output_size);
-    EXPECT_EQ(processing_spec_a.m_internal_model_latency, processing_spec_b.m_internal_model_latency);
+    EXPECT_EQ(processing_spec_a.m_postprocess_output_size,
+              processing_spec_b.m_postprocess_output_size);
+    EXPECT_EQ(processing_spec_a.m_internal_model_latency,
+              processing_spec_b.m_internal_model_latency);
 
     // Final check using the equality operator
     EXPECT_EQ(a, b);
@@ -74,10 +88,12 @@ TEST(JsonConfigLoader, EqualInferenceConfig) {
     test_configs.push_back({*funk_drum_json_loader.get_inference_config(), rave_funk_drum_config});
 
     JsonConfigLoader funk_drum_encode_json_loader(RAVE_MODEL_FUNK_DRUM_ENCODER_JSON_CONFIG_PATH);
-    test_configs.push_back({*funk_drum_encode_json_loader.get_inference_config(), rave_funk_drum_encoder_config});
+    test_configs.push_back(
+        {*funk_drum_encode_json_loader.get_inference_config(), rave_funk_drum_encoder_config});
 
     JsonConfigLoader funk_drum_decode_json_loader(RAVE_MODEL_FUNK_DRUM_DECODER_JSON_CONFIG_PATH);
-    test_configs.push_back({*funk_drum_decode_json_loader.get_inference_config(), rave_funk_drum_decoder_config});
+    test_configs.push_back(
+        {*funk_drum_decode_json_loader.get_inference_config(), rave_funk_drum_decoder_config});
 
     JsonConfigLoader gain_json_loader(SIMPLE_GAIN_JSON_CONFIG_PATH);
     test_configs.push_back({*gain_json_loader.get_inference_config(), gain_config});
@@ -87,6 +103,6 @@ TEST(JsonConfigLoader, EqualInferenceConfig) {
     }
 }
 
-#endif // USE_ONNXRUNTIME
-#endif // USE_TFLITE
-#endif // USE_LIBTORCH
+#endif  // USE_ONNXRUNTIME
+#endif  // USE_TFLITE
+#endif  // USE_LIBTORCH

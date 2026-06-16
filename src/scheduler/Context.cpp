@@ -15,20 +15,21 @@ Context::~Context() {}
 std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_config) {
     if (m_context == nullptr) {
         m_context = std::make_shared<Context>(context_config);
-        LOG_INFO << "[INFO] Anira version: " << m_context->m_context_config.m_anira_version << std::endl;
+        LOG_INFO << "[INFO] Anira version: " << m_context->m_context_config.m_anira_version
+                 << std::endl;
     } else {
         // TODO: Better error handling
-        if (m_context->m_context_config.m_anira_version != context_config.m_anira_version) {
-        }
+        if (m_context->m_context_config.m_anira_version != context_config.m_anira_version) {}
         if (m_context->m_context_config.m_enabled_backends != context_config.m_enabled_backends) {
-            LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!" << std::endl;
+            LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!"
+                      << std::endl;
         }
         // num_threads == 0 means "I'm opting out of the auto-pool and bringing
         // my own threads via Context::make_inference_thread()" — not "shrink
         // any existing pool to zero." Skip the resize so a manual-threading
         // caller doesn't tear down threads another caller is relying on.
-        if (context_config.m_num_threads > 0
-            && (unsigned int) m_context->m_thread_pool.size() > context_config.m_num_threads) {
+        if (context_config.m_num_threads > 0 &&
+            (unsigned int)m_context->m_thread_pool.size() > context_config.m_num_threads) {
             m_context->new_num_threads(context_config.m_num_threads);
             m_context->m_context_config.m_num_threads = context_config.m_num_threads;
         }
@@ -47,7 +48,7 @@ int Context::get_available_session_id() {
 }
 
 void Context::new_num_threads(unsigned int new_num_threads) {
-    unsigned int current_num_threads = (unsigned int) m_thread_pool.size();
+    unsigned int current_num_threads = (unsigned int)m_thread_pool.size();
 
     if (new_num_threads > current_num_threads) {
         for (unsigned int i = current_num_threads; i < new_num_threads; ++i) {
@@ -64,20 +65,27 @@ void Context::new_num_threads(unsigned int new_num_threads) {
     }
 }
 
-std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_processor, InferenceConfig& inference_config, BackendBase* custom_processor) {
+std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_processor,
+                                                        InferenceConfig& inference_config,
+                                                        BackendBase* custom_processor) {
     int session_id = get_available_session_id();
     if (m_producer_tokens.size() < MAX_NUM_INSTANCES) {
-        m_producer_tokens.emplace_back(std::make_unique<moodycamel::ProducerToken>(m_next_inference));
+        m_producer_tokens.emplace_back(
+            std::make_unique<moodycamel::ProducerToken>(m_next_inference));
     }
 
-    if (inference_config.m_num_parallel_processors > (unsigned int) m_thread_pool.size()) {
+    if (inference_config.m_num_parallel_processors > (unsigned int)m_thread_pool.size()) {
         if (!m_thread_pool.empty()) {
-            LOG_INFO << "[WARNING] Session " << session_id << " requested more parallel processors than threads are available in Context. Using number of threads as number of parallel processors." << std::endl;
-            inference_config.m_num_parallel_processors = (unsigned int) m_thread_pool.size();
+            LOG_INFO << "[WARNING] Session " << session_id
+                     << " requested more parallel processors than threads are available in "
+                        "Context. Using number of threads as number of parallel processors."
+                     << std::endl;
+            inference_config.m_num_parallel_processors = (unsigned int)m_thread_pool.size();
         }
     }
 
-    std::shared_ptr<SessionElement> session = std::make_shared<SessionElement>(session_id, pp_processor, inference_config);
+    std::shared_ptr<SessionElement> session =
+        std::make_shared<SessionElement>(session_id, pp_processor, inference_config);
 
     if (custom_processor != nullptr) {
         custom_processor->prepare();
@@ -121,7 +129,7 @@ void Context::release_session(std::shared_ptr<SessionElement> session) {
 
     for (size_t i = 0; i < m_sessions.size(); ++i) {
         if (m_sessions[i] == session) {
-            m_sessions.erase(m_sessions.begin() + (ptrdiff_t) i);
+            m_sessions.erase(m_sessions.begin() + (ptrdiff_t)i);
             break;
         }
     }
@@ -144,7 +152,9 @@ void Context::release_session(std::shared_ptr<SessionElement> session) {
     }
 }
 
-void Context::prepare_session(std::shared_ptr<SessionElement> session, HostConfig new_config, std::vector<long> custom_latency) {
+void Context::prepare_session(std::shared_ptr<SessionElement> session,
+                              HostConfig new_config,
+                              std::vector<long> custom_latency) {
     session->m_initialized.store(false, std::memory_order::release);
 
     drain_inference_queue(session);
@@ -158,33 +168,55 @@ void Context::prepare_session(std::shared_ptr<SessionElement> session, HostConfi
 
 void Context::new_data_submitted(std::shared_ptr<SessionElement> session) {
     while (true) {
-        for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_input_shape().size(); tensor_index++) {
+        for (size_t tensor_index = 0;
+             tensor_index < session->m_inference_config.get_tensor_input_shape().size();
+             tensor_index++) {
             if (session->m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
-                for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_input_channels()[tensor_index]; channel++) {
-                    if (session->m_send_buffer[tensor_index].get_available_samples(channel) < session->m_inference_config.get_preprocess_input_size()[tensor_index]) {
+                for (size_t channel = 0;
+                     channel <
+                     session->m_inference_config.get_preprocess_input_channels()[tensor_index];
+                     channel++) {
+                    if (session->m_send_buffer[tensor_index].get_available_samples(channel) <
+                        session->m_inference_config.get_preprocess_input_size()[tensor_index]) {
                         return;
                     }
                 }
             }
         }
         bool success = pre_process(session);
-        
+
         if (!success) {
-            for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_input_shape().size(); tensor_index++) {
-                for (size_t channel = 0; channel < session->m_inference_config.get_preprocess_input_channels()[tensor_index]; channel++) {
-                    for (size_t i = 0; i < session->m_inference_config.get_preprocess_input_size()[tensor_index]; i++) { // Non-streamable parameters have no input size
+            for (size_t tensor_index = 0;
+                 tensor_index < session->m_inference_config.get_tensor_input_shape().size();
+                 tensor_index++) {
+                for (size_t channel = 0;
+                     channel <
+                     session->m_inference_config.get_preprocess_input_channels()[tensor_index];
+                     channel++) {
+                    for (size_t i = 0;
+                         i < session->m_inference_config.get_preprocess_input_size()[tensor_index];
+                         i++) {  // Non-streamable parameters have no input size
                         session->m_send_buffer[tensor_index].pop_sample(channel);
                     }
                 }
             }
-            for (size_t tensor_index = 0; tensor_index < session->m_inference_config.get_tensor_output_shape().size(); tensor_index++) {
-                for (size_t channel = 0; channel < session->m_inference_config.get_postprocess_output_channels()[tensor_index]; channel++) { 
-                    for (size_t i = 0; i < session->m_inference_config.get_postprocess_output_size()[tensor_index]; i++) { // Non-streamable parameters have no output size
+            for (size_t tensor_index = 0;
+                 tensor_index < session->m_inference_config.get_tensor_output_shape().size();
+                 tensor_index++) {
+                for (size_t channel = 0;
+                     channel <
+                     session->m_inference_config.get_postprocess_output_channels()[tensor_index];
+                     channel++) {
+                    for (size_t i = 0;
+                         i <
+                         session->m_inference_config.get_postprocess_output_size()[tensor_index];
+                         i++) {  // Non-streamable parameters have no output size
                         session->m_receive_buffer[tensor_index].push_sample(channel, 0.f);
                     }
                 }
             }
-            LOG_INFO << "[WARNING] No free inference queue found in session: " << session->m_session_id << "!" << std::endl;
+            LOG_INFO << "[WARNING] No free inference queue found in session: "
+                     << session->m_session_id << "!" << std::endl;
             return;
         }
     }
@@ -195,11 +227,15 @@ void Context::new_data_request(std::shared_ptr<SessionElement> session) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
                 if (session->m_is_non_real_time) {
-                    while (!session->m_inference_queue[i]->m_done_atomic.exchange(false, std::memory_order::acquire)) {
+                    while (!session->m_inference_queue[i]->m_done_atomic.exchange(
+                        false,
+                        std::memory_order::acquire)) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     }
                 } else {
-                    if (session->m_inference_queue[i]->m_done_atomic.exchange(false, std::memory_order::acquire)) {
+                    if (session->m_inference_queue[i]->m_done_atomic.exchange(
+                            false,
+                            std::memory_order::acquire)) {
                     } else {
                         return;
                     }
@@ -212,7 +248,8 @@ void Context::new_data_request(std::shared_ptr<SessionElement> session) {
     }
 }
 
-void Context::new_data_request(std::shared_ptr<SessionElement> session, std::chrono::steady_clock::time_point wait_until) {
+void Context::new_data_request(std::shared_ptr<SessionElement> session,
+                               std::chrono::steady_clock::time_point wait_until) {
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
@@ -226,7 +263,8 @@ void Context::new_data_request(std::shared_ptr<SessionElement> session, std::chr
                         return;
                     }
                 } else {
-                    if (session->m_inference_queue[i]->m_done_semaphore.try_acquire_until(wait_until)) {
+                    if (session->m_inference_queue[i]->m_done_semaphore.try_acquire_until(
+                            wait_until)) {
                     } else {
                         return;
                     }
@@ -246,7 +284,10 @@ std::vector<std::shared_ptr<SessionElement>>& Context::get_sessions() {
 bool Context::pre_process(std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
         if (session->m_inference_queue[i]->m_free.exchange(false)) {
-            session->m_pp_processor.pre_process(session->m_send_buffer, session->m_inference_queue[i]->m_tensor_input_data, session->m_current_backend.load(std::memory_order_relaxed));
+            session->m_pp_processor.pre_process(
+                session->m_send_buffer,
+                session->m_inference_queue[i]->m_tensor_input_data,
+                session->m_current_backend.load(std::memory_order_relaxed));
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
             if (session->m_inference_config.m_session_exclusive_processor) {
@@ -259,7 +300,7 @@ bool Context::pre_process(std::shared_ptr<SessionElement> session) {
                 if (auto next = session->try_acquire_next_dispatch()) {
                     if (!m_next_inference.try_enqueue(InferenceData{session, next})) {
                         LOG_ERROR << "[ERROR] Could not enqueue next inference!" << std::endl;
-                        session->release_dispatch(); // retried on the next submission/completion
+                        session->release_dispatch();  // retried on the next submission/completion
                     }
                 }
             } else {
@@ -283,16 +324,18 @@ bool Context::pre_process(std::shared_ptr<SessionElement> session) {
     return false;
 }
 
-void Context::post_process(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
-    session->m_pp_processor.post_process(thread_safe_struct->m_tensor_output_data, session->m_receive_buffer, session->m_current_backend.load(std::memory_order_relaxed));
+void Context::post_process(std::shared_ptr<SessionElement> session,
+                           std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
+    session->m_pp_processor.post_process(
+        thread_safe_struct->m_tensor_output_data,
+        session->m_receive_buffer,
+        session->m_current_backend.load(std::memory_order_relaxed));
     thread_safe_struct->m_free.store(true, std::memory_order::release);
 }
 
 void Context::start_thread_pool() {
     for (size_t i = 0; i < m_thread_pool.size(); ++i) {
-        if (!m_thread_pool[i]->is_running()) {
-            m_thread_pool[i]->start();
-        }
+        if (!m_thread_pool[i]->is_running()) { m_thread_pool[i]->start(); }
         while (!m_thread_pool[i]->is_running()) {
             std::this_thread::sleep_for(std::chrono::microseconds(50));
         }
@@ -307,9 +350,7 @@ void Context::drain_inference_queue(std::shared_ptr<SessionElement> session) {
     std::vector<InferenceData> inference_stack;
     InferenceData inference_data;
     while (m_next_inference.try_dequeue(inference_data)) {
-        if (inference_data.m_session != session) {
-            inference_stack.emplace_back(inference_data);
-        }
+        if (inference_data.m_session != session) { inference_stack.emplace_back(inference_data); }
     }
 
     for (auto& inference_data : inference_stack) {
@@ -323,7 +364,11 @@ int Context::get_num_sessions() {
     return m_active_sessions.load();
 }
 
-template <typename T> void Context::set_processor(std::shared_ptr<SessionElement> session, InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors, anira::InferenceBackend backend) {
+template <typename T>
+void Context::set_processor(std::shared_ptr<SessionElement> session,
+                            InferenceConfig& inference_config,
+                            std::vector<std::shared_ptr<T>>& processors,
+                            anira::InferenceBackend backend) {
     for (auto model_data : inference_config.m_model_data) {
         if (model_data.m_backend == backend) {
             if (!inference_config.m_session_exclusive_processor) {
@@ -341,20 +386,19 @@ template <typename T> void Context::set_processor(std::shared_ptr<SessionElement
     }
 }
 
-template <typename T> void Context::release_processor(InferenceConfig& inference_config, std::vector<std::shared_ptr<T>>& processors, std::shared_ptr<T>& processor) {
-    if (processor == nullptr) {
-        return;
-    }
+template <typename T>
+void Context::release_processor(InferenceConfig& inference_config,
+                                std::vector<std::shared_ptr<T>>& processors,
+                                std::shared_ptr<T>& processor) {
+    if (processor == nullptr) { return; }
     if (!inference_config.m_session_exclusive_processor) {
         for (auto session : m_sessions) {
-            if (session->m_inference_config == inference_config) {
-                return;
-            }
+            if (session->m_inference_config == inference_config) { return; }
         }
     }
     for (size_t i = 0; i < processors.size(); ++i) {
         if (processors[i] == processor) {
-            processors.erase(processors.begin() + (ptrdiff_t) i);
+            processors.erase(processors.begin() + (ptrdiff_t)i);
             return;
         }
     }
@@ -384,15 +428,36 @@ std::unique_ptr<InferenceThread> Context::make_inference_thread() {
 }
 
 #ifdef USE_LIBTORCH
-template void Context::set_processor<LibtorchProcessor>(std::shared_ptr<SessionElement> session, InferenceConfig& inference_config, std::vector<std::shared_ptr<LibtorchProcessor>>& processors, InferenceBackend backend);
-template void Context::release_processor<LibtorchProcessor>(InferenceConfig& inference_config, std::vector<std::shared_ptr<LibtorchProcessor>>& processors, std::shared_ptr<LibtorchProcessor>& processor);
+template void Context::set_processor<LibtorchProcessor>(
+    std::shared_ptr<SessionElement> session,
+    InferenceConfig& inference_config,
+    std::vector<std::shared_ptr<LibtorchProcessor>>& processors,
+    InferenceBackend backend);
+template void Context::release_processor<LibtorchProcessor>(
+    InferenceConfig& inference_config,
+    std::vector<std::shared_ptr<LibtorchProcessor>>& processors,
+    std::shared_ptr<LibtorchProcessor>& processor);
 #endif
 #ifdef USE_ONNXRUNTIME
-template void Context::set_processor<OnnxRuntimeProcessor>(std::shared_ptr<SessionElement> session, InferenceConfig& inference_config, std::vector<std::shared_ptr<OnnxRuntimeProcessor>>& processors, InferenceBackend backend);
-template void Context::release_processor<OnnxRuntimeProcessor>(InferenceConfig& inference_config, std::vector<std::shared_ptr<OnnxRuntimeProcessor>>& processors, std::shared_ptr<OnnxRuntimeProcessor>& processor);
+template void Context::set_processor<OnnxRuntimeProcessor>(
+    std::shared_ptr<SessionElement> session,
+    InferenceConfig& inference_config,
+    std::vector<std::shared_ptr<OnnxRuntimeProcessor>>& processors,
+    InferenceBackend backend);
+template void Context::release_processor<OnnxRuntimeProcessor>(
+    InferenceConfig& inference_config,
+    std::vector<std::shared_ptr<OnnxRuntimeProcessor>>& processors,
+    std::shared_ptr<OnnxRuntimeProcessor>& processor);
 #endif
 #ifdef USE_TFLITE
-template void Context::set_processor<TFLiteProcessor>(std::shared_ptr<SessionElement> session, InferenceConfig& inference_config, std::vector<std::shared_ptr<TFLiteProcessor>>& processors, InferenceBackend backend);
-template void Context::release_processor<TFLiteProcessor>(InferenceConfig& inference_config, std::vector<std::shared_ptr<TFLiteProcessor>>& processors, std::shared_ptr<TFLiteProcessor>& processor);
+template void Context::set_processor<TFLiteProcessor>(
+    std::shared_ptr<SessionElement> session,
+    InferenceConfig& inference_config,
+    std::vector<std::shared_ptr<TFLiteProcessor>>& processors,
+    InferenceBackend backend);
+template void Context::release_processor<TFLiteProcessor>(
+    InferenceConfig& inference_config,
+    std::vector<std::shared_ptr<TFLiteProcessor>>& processors,
+    std::shared_ptr<TFLiteProcessor>& processor);
 #endif
-} // namespace anira
+}  // namespace anira

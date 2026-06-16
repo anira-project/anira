@@ -3,25 +3,24 @@
 
 namespace anira {
 
-OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& inference_config) : BackendBase(inference_config)
-{
+OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& inference_config)
+    : BackendBase(inference_config) {
     for (unsigned int i = 0; i < m_inference_config.m_num_parallel_processors; ++i) {
         m_instances.emplace_back(std::make_shared<Instance>(m_inference_config));
     }
 }
 
-OnnxRuntimeProcessor::~OnnxRuntimeProcessor() {
-}
+OnnxRuntimeProcessor::~OnnxRuntimeProcessor() {}
 
 void OnnxRuntimeProcessor::prepare() {
-    for(auto& instance : m_instances) {
-        instance->prepare();
-    }
+    for (auto& instance : m_instances) { instance->prepare(); }
 }
 
-void OnnxRuntimeProcessor::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) {
+void OnnxRuntimeProcessor::process(std::vector<BufferF>& input,
+                                   std::vector<BufferF>& output,
+                                   std::shared_ptr<SessionElement> session) {
     while (true) {
-        for(auto& instance : m_instances) {
+        for (auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
                 instance->process(input, output, session);
                 instance->m_processing.exchange(false);
@@ -31,49 +30,54 @@ void OnnxRuntimeProcessor::process(std::vector<BufferF>& input, std::vector<Buff
     }
 }
 
-OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU)),
-                                                                    m_inference_config(inference_config)
+OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config)
+    : m_memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU))
+    , m_inference_config(inference_config)
 #ifdef USE_ANIRA_WEB
-    , m_env(nullptr)
-{
-     // Create threading options
-     OrtThreadingOptions* threading_options = nullptr;
-     Ort::ThrowOnError(Ort::GetApi().CreateThreadingOptions(&threading_options));
-     Ort::ThrowOnError(Ort::GetApi().SetGlobalIntraOpNumThreads(threading_options, 1));
- 
-     // Create environment with global threadpools
-     OrtEnv* raw_env = nullptr;
-     Ort::ThrowOnError(Ort::GetApi().CreateEnvWithGlobalThreadPools(
-         ORT_LOGGING_LEVEL_WARNING,  // Logging level
-         "Default",                  // Log ID
-         threading_options,          // Threading options
-         &raw_env                    // Out parameter for the raw environment
-     ));
- 
-     m_env = Ort::Env(raw_env);  // Wrap the raw environment in a C++ object
+    , m_env(nullptr) {
+    // Create threading options
+    OrtThreadingOptions* threading_options = nullptr;
+    Ort::ThrowOnError(Ort::GetApi().CreateThreadingOptions(&threading_options));
+    Ort::ThrowOnError(Ort::GetApi().SetGlobalIntraOpNumThreads(threading_options, 1));
+
+    // Create environment with global threadpools
+    OrtEnv* raw_env = nullptr;
+    Ort::ThrowOnError(Ort::GetApi().CreateEnvWithGlobalThreadPools(
+        ORT_LOGGING_LEVEL_WARNING,  // Logging level
+        "Default",                  // Log ID
+        threading_options,          // Threading options
+        &raw_env                    // Out parameter for the raw environment
+        ));
+
+    m_env = Ort::Env(raw_env);  // Wrap the raw environment in a C++ object
 #else
-    {
+{
 #endif
     m_session_options.SetIntraOpNumThreads(1);
 
     // Check if the model is binary
     if (m_inference_config.is_model_binary(anira::InferenceBackend::ONNX)) {
-        const anira::ModelData* model_data = m_inference_config.get_model_data(anira::InferenceBackend::ONNX);
+        const anira::ModelData* model_data =
+            m_inference_config.get_model_data(anira::InferenceBackend::ONNX);
         assert(model_data && "Model data not found for binary model!");
 
         // Load model from binary data
-        m_session = std::make_unique<Ort::Session>(m_env, model_data->m_data, model_data->m_size, m_session_options);
+        m_session = std::make_unique<Ort::Session>(m_env,
+                                                   model_data->m_data,
+                                                   model_data->m_size,
+                                                   m_session_options);
     } else {
         // Load model from file path
 #ifdef _WIN32
-        std::string modelpath_str = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
+        std::string modelpath_str =
+            m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
         std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
 #else
         std::string modelpath = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
 #endif
         m_session = std::make_unique<Ort::Session>(m_env, modelpath.c_str(), m_session_options);
     }
-    
+
     m_input_names.resize(m_session->GetInputCount());
     m_output_names.resize(m_session->GetOutputCount());
     m_input_name.clear();
@@ -93,50 +97,55 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config) : m_
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_input_data[i].resize(m_inference_config.get_tensor_input_size()[i]);
         m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
-                m_memory_info,
-                m_input_data[i].data(),
-                m_input_data[i].size(),
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].size()
-        ));
+            m_memory_info,
+            m_input_data[i].data(),
+            m_input_data[i].size(),
+            m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
+            m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].size()));
     }
 
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
         try {
-            m_outputs = m_session->Run(Ort::RunOptions{nullptr}, m_input_names.data(), m_inputs.data(), m_input_names.size(), m_output_names.data(), m_output_names.size());
-        } catch (Ort::Exception &e) {
-            LOG_ERROR << e.what() << std::endl;
-        }
+            m_outputs = m_session->Run(Ort::RunOptions{nullptr},
+                                       m_input_names.data(),
+                                       m_inputs.data(),
+                                       m_input_names.size(),
+                                       m_output_names.data(),
+                                       m_output_names.size());
+        } catch (Ort::Exception& e) { LOG_ERROR << e.what() << std::endl; }
     }
 }
 
 OnnxRuntimeProcessor::Instance::~Instance() {
-    // Reseting the session here is very important otherwise new models might not be loaded correctly
+    // Reseting the session here is very important otherwise new models might not be loaded
+    // correctly
     m_session.reset();
 }
 
 void OnnxRuntimeProcessor::Instance::prepare() {
-    for (auto & i : m_input_data) {
-        i.clear();
-    }
+    for (auto& i : m_input_data) { i.clear(); }
 }
 
-void OnnxRuntimeProcessor::Instance::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) {
+void OnnxRuntimeProcessor::Instance::process(std::vector<BufferF>& input,
+                                             std::vector<BufferF>& output,
+                                             std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_inputs[i] = Ort::Value::CreateTensor<float>(
-                m_memory_info,
-                input[i].data(),
-                input[i].get_num_samples() * input[i].get_num_channels(),
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].size()
-        );
+            m_memory_info,
+            input[i].data(),
+            input[i].get_num_samples() * input[i].get_num_channels(),
+            m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
+            m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].size());
     }
 
     try {
-        m_outputs = m_session->Run(Ort::RunOptions{nullptr}, m_input_names.data(), m_inputs.data(), m_input_names.size(), m_output_names.data(), m_output_names.size());
-    } catch (Ort::Exception &e) {
-        LOG_ERROR << e.what() << std::endl;
-    }
+        m_outputs = m_session->Run(Ort::RunOptions{nullptr},
+                                   m_input_names.data(),
+                                   m_inputs.data(),
+                                   m_input_names.size(),
+                                   m_output_names.data(),
+                                   m_output_names.size());
+    } catch (Ort::Exception& e) { LOG_ERROR << e.what() << std::endl; }
 
     for (size_t i = 0; i < m_outputs.size(); i++) {
         const auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();
@@ -146,4 +155,4 @@ void OnnxRuntimeProcessor::Instance::process(std::vector<BufferF>& input, std::v
     }
 }
 
-} // namespace anira
+}  // namespace anira

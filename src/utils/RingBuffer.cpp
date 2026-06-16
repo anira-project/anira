@@ -1,5 +1,5 @@
-#include <anira/utils/RingBuffer.h>
 #include <anira/utils/Logger.h>
+#include <anira/utils/RingBuffer.h>
 
 namespace anira {
 
@@ -31,12 +31,11 @@ void RingBuffer::clear_with_positions() {
 void RingBuffer::push_sample(size_t channel, float sample) {
     // Check if we're about to overwrite unread data (buffer overflow)
     if (m_is_full[channel]) {
-        LOG_ERROR << "RingBuffer: Buffer overflow detected for channel " << channel << ". Overwriting oldest sample." << std::endl;
+        LOG_ERROR << "RingBuffer: Buffer overflow detected for channel " << channel
+                  << ". Overwriting oldest sample." << std::endl;
         // Advance read position to make room (overwrite oldest sample)
         ++m_read_pos[channel];
-        if (m_read_pos[channel] >= get_num_samples()) {
-            m_read_pos[channel] = 0;
-        }
+        if (m_read_pos[channel] >= get_num_samples()) { m_read_pos[channel] = 0; }
     }
 
     // Write the sample at the current write position
@@ -44,9 +43,7 @@ void RingBuffer::push_sample(size_t channel, float sample) {
 
     // Advance write position
     ++m_write_pos[channel];
-    if (m_write_pos[channel] >= get_num_samples()) {
-        m_write_pos[channel] = 0;
-    }
+    if (m_write_pos[channel] >= get_num_samples()) { m_write_pos[channel] = 0; }
 
     // Update full flag - buffer is full when write position catches up to read position
     m_is_full[channel] = (m_write_pos[channel] == m_read_pos[channel]);
@@ -55,16 +52,15 @@ void RingBuffer::push_sample(size_t channel, float sample) {
 float RingBuffer::pop_sample(size_t channel) {
     // Check if buffer is empty
     if (!m_is_full[channel] && m_read_pos[channel] == m_write_pos[channel]) {
-        LOG_ERROR << "RingBuffer: Attempted to pop sample from empty buffer for channel " << channel << ". Returning silence (0.0f)." << std::endl;
+        LOG_ERROR << "RingBuffer: Attempted to pop sample from empty buffer for channel " << channel
+                  << ". Returning silence (0.0f)." << std::endl;
         return 0.0f;
     }
 
     auto sample = get_sample(channel, m_read_pos[channel]);
 
     ++m_read_pos[channel];
-    if (m_read_pos[channel] >= get_num_samples()) {
-        m_read_pos[channel] = 0;
-    }
+    if (m_read_pos[channel] >= get_num_samples()) { m_read_pos[channel] = 0; }
 
     // Buffer is no longer full after reading
     m_is_full[channel] = false;
@@ -74,7 +70,9 @@ float RingBuffer::pop_sample(size_t channel) {
 
 float RingBuffer::get_future_sample(size_t channel, size_t offset) {
     if (offset >= get_available_samples(channel)) {
-        LOG_ERROR << "RingBuffer: Attempted to get sample with offset " << offset << " for channel " << channel << ", but only " << get_available_samples(channel) << " samples are available. Returning silence (0.0f)." << std::endl;
+        LOG_ERROR << "RingBuffer: Attempted to get sample with offset " << offset << " for channel "
+                  << channel << ", but only " << get_available_samples(channel)
+                  << " samples are available. Returning silence (0.0f)." << std::endl;
         return 0.0f;
     }
 
@@ -86,7 +84,10 @@ float RingBuffer::get_future_sample(size_t channel, size_t offset) {
 float RingBuffer::get_past_sample(size_t channel, size_t offset) {
     // offset 0 = the most recently read sample, offset 1 = the sample before that, etc.
     if (offset > get_available_past_samples(channel)) {
-        LOG_ERROR << "RingBuffer: Attempted to get past sample with offset " << offset << " for channel " << channel << ", but only " << get_available_past_samples(channel) << " past samples are available. Returning silence (0.0f)." << std::endl;
+        LOG_ERROR << "RingBuffer: Attempted to get past sample with offset " << offset
+                  << " for channel " << channel << ", but only "
+                  << get_available_past_samples(channel)
+                  << " past samples are available. Returning silence (0.0f)." << std::endl;
         return 0.0f;
     }
 
@@ -123,4 +124,4 @@ size_t RingBuffer::get_available_past_samples(size_t channel) {
     }
 }
 
-} // namespace anira
+}  // namespace anira

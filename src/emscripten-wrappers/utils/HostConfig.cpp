@@ -1,5 +1,7 @@
-#include <emscripten/emscripten.h>
 #include "anira/utils/HostConfig.h"
+
+#include <emscripten/emscripten.h>
+
 #include "anira/InferenceConfig.h"
 
 // ------ HostConfig C API ----
@@ -13,8 +15,12 @@ uintptr_t hostconfig_create() {
 }
 
 EMSCRIPTEN_KEEPALIVE
-uintptr_t hostconfig_create_with_params(float buffer_size, float sample_rate, bool allow_smaller_buffers, size_t tensor_index) {
-    return reinterpret_cast<uintptr_t>(new anira::HostConfig(buffer_size, sample_rate, allow_smaller_buffers, tensor_index));
+uintptr_t hostconfig_create_with_params(float buffer_size,
+                                        float sample_rate,
+                                        bool allow_smaller_buffers,
+                                        size_t tensor_index) {
+    return reinterpret_cast<uintptr_t>(
+        new anira::HostConfig(buffer_size, sample_rate, allow_smaller_buffers, tensor_index));
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -67,31 +73,37 @@ void hostconfig_set_tensor_index(uintptr_t ptr, size_t tensor_index) {
 // Comparison
 EMSCRIPTEN_KEEPALIVE
 bool hostconfig_equals(uintptr_t ptr, uintptr_t other_ptr) {
-    return *reinterpret_cast<anira::HostConfig*>(ptr) == *reinterpret_cast<anira::HostConfig*>(other_ptr);
+    return *reinterpret_cast<anira::HostConfig*>(ptr) ==
+           *reinterpret_cast<anira::HostConfig*>(other_ptr);
 }
 
 EMSCRIPTEN_KEEPALIVE
 bool hostconfig_not_equals(uintptr_t ptr, uintptr_t other_ptr) {
-    return *reinterpret_cast<anira::HostConfig*>(ptr) != *reinterpret_cast<anira::HostConfig*>(other_ptr);
+    return *reinterpret_cast<anira::HostConfig*>(ptr) !=
+           *reinterpret_cast<anira::HostConfig*>(other_ptr);
 }
 
 // Methods
 EMSCRIPTEN_KEEPALIVE
-float hostconfig_get_relative_buffer_size(uintptr_t ptr, uintptr_t inference_config_ptr, size_t tensor_index, bool input) {
+float hostconfig_get_relative_buffer_size(uintptr_t ptr,
+                                          uintptr_t inference_config_ptr,
+                                          size_t tensor_index,
+                                          bool input) {
     return reinterpret_cast<anira::HostConfig*>(ptr)->get_relative_buffer_size(
         *reinterpret_cast<anira::InferenceConfig*>(inference_config_ptr),
         tensor_index,
-        input
-    );
+        input);
 }
 
 EMSCRIPTEN_KEEPALIVE
-float hostconfig_get_relative_sample_rate(uintptr_t ptr, uintptr_t inference_config_ptr, size_t tensor_index, bool input) {
+float hostconfig_get_relative_sample_rate(uintptr_t ptr,
+                                          uintptr_t inference_config_ptr,
+                                          size_t tensor_index,
+                                          bool input) {
     return reinterpret_cast<anira::HostConfig*>(ptr)->get_relative_sample_rate(
         *reinterpret_cast<anira::InferenceConfig*>(inference_config_ptr),
         tensor_index,
-        input
-    );
+        input);
 }
 
-} // extern "C"
+}  // extern "C"

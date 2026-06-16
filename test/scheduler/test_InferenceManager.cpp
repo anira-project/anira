@@ -1,10 +1,11 @@
-#include <thread>
-#include <stdint.h>
-#include <chrono>
-
-#include "gtest/gtest.h"
 #include <anira/anira.h>
 #include <anira/utils/helperFunctions.h>
+#include <stdint.h>
+
+#include <chrono>
+#include <thread>
+
+#include "gtest/gtest.h"
 
 using namespace anira;
 
@@ -14,9 +15,7 @@ struct InferenceManagerTestParams {
     std::vector<unsigned int> expected_latency;
 };
 
-std::ostream& operator<<(std::ostream& stream, const InferenceManagerTestParams& params)
-{
-   
+std::ostream& operator<<(std::ostream& stream, const InferenceManagerTestParams& params) {
     stream << "{ ";
     stream << "Host Config: { ";
     stream << "host_buffer_size = " << params.host_config.m_buffer_size;
@@ -29,32 +28,29 @@ std::ostream& operator<<(std::ostream& stream, const InferenceManagerTestParams&
 }
 
 // // Test fixture for paramterized inference tests
-class InferenceManagerTest: public ::testing::TestWithParam<InferenceManagerTestParams>{
-};
+class InferenceManagerTest : public ::testing::TestWithParam<InferenceManagerTestParams> {};
 
-TEST_P(InferenceManagerTest, Simple){
-
+TEST_P(InferenceManagerTest, Simple) {
     auto test_params = GetParam();
     auto buffer_size = test_params.host_config.m_buffer_size;
     auto sample_rate = test_params.host_config.m_sample_rate;
 
     PrePostProcessor pp_processor(test_params.inference_config);
-    BackendBase* custom_processor = nullptr; // Use default processor
-    ContextConfig context_config(2); // Use 2 threads for testing, gh runner max on macOS is 3
+    BackendBase* custom_processor = nullptr;  // Use default processor
+    ContextConfig context_config(2);  // Use 2 threads for testing, gh runner max on macOS is 3
 
-    InferenceManager inference_manager(
-        pp_processor,
-        test_params.inference_config,
-        custom_processor,
-        context_config
-    );
+    InferenceManager inference_manager(pp_processor,
+                                       test_params.inference_config,
+                                       custom_processor,
+                                       context_config);
 
     inference_manager.prepare(test_params.host_config);
 
     std::vector<unsigned int> latency = inference_manager.get_latency();
 
     for (size_t i = 0; i < test_params.expected_latency.size(); ++i) {
-        ASSERT_EQ(latency[i], test_params.expected_latency[i]) << "Latency mismatch for tensor " << i;
+        ASSERT_EQ(latency[i], test_params.expected_latency[i])
+            << "Latency mismatch for tensor " << i;
     }
 }
 
@@ -64,15 +60,13 @@ TEST_P(InferenceManagerTest, WithCustomLatency) {
     auto sample_rate = test_params.host_config.m_sample_rate;
 
     PrePostProcessor pp_processor(test_params.inference_config);
-    BackendBase* custom_processor = nullptr; // Use default processor
-    ContextConfig context_config(2); // Use 2 threads for testing, gh runner max on macOS is 3
+    BackendBase* custom_processor = nullptr;  // Use default processor
+    ContextConfig context_config(2);  // Use 2 threads for testing, gh runner max on macOS is 3
 
-    InferenceManager inference_manager(
-        pp_processor,
-        test_params.inference_config,
-        custom_processor,
-        context_config
-    );
+    InferenceManager inference_manager(pp_processor,
+                                       test_params.inference_config,
+                                       custom_processor,
+                                       context_config);
 
     // Create custom latency values - double the expected values for testing
     std::vector<long> custom_latency;
@@ -87,9 +81,9 @@ TEST_P(InferenceManagerTest, WithCustomLatency) {
     std::vector<unsigned int> actual_latency = inference_manager.get_latency();
 
     ASSERT_EQ(actual_latency.size(), custom_latency.size()) << "Latency vector size mismatch";
-    
+
     for (size_t i = 0; i < custom_latency.size(); ++i) {
-        ASSERT_EQ(actual_latency[i], custom_latency[i]) 
+        ASSERT_EQ(actual_latency[i], custom_latency[i])
             << "Custom latency not applied correctly for tensor " << i;
     }
 }
@@ -101,15 +95,13 @@ TEST_P(InferenceManagerTest, WithEmptyCustomLatency) {
     auto sample_rate = test_params.host_config.m_sample_rate;
 
     PrePostProcessor pp_processor(test_params.inference_config);
-    BackendBase* custom_processor = nullptr; // Use default processor
-    ContextConfig context_config(2); // Use 2 threads for testing, gh runner max on macOS is 3
+    BackendBase* custom_processor = nullptr;  // Use default processor
+    ContextConfig context_config(2);  // Use 2 threads for testing, gh runner max on macOS is 3
 
-    InferenceManager inference_manager(
-        pp_processor,
-        test_params.inference_config,
-        custom_processor,
-        context_config
-    );
+    InferenceManager inference_manager(pp_processor,
+                                       test_params.inference_config,
+                                       custom_processor,
+                                       context_config);
 
     // Prepare with empty custom latency vector
     std::vector<long> empty_custom_latency;
@@ -117,11 +109,12 @@ TEST_P(InferenceManagerTest, WithEmptyCustomLatency) {
 
     // Verify that the latency values match the expected calculated ones
     std::vector<unsigned int> actual_latency = inference_manager.get_latency();
-    
-    ASSERT_EQ(actual_latency.size(), test_params.expected_latency.size()) << "Latency vector size mismatch";
-    
+
+    ASSERT_EQ(actual_latency.size(), test_params.expected_latency.size())
+        << "Latency vector size mismatch";
+
     for (size_t i = 0; i < test_params.expected_latency.size(); ++i) {
-        ASSERT_EQ(actual_latency[i], test_params.expected_latency[i]) 
+        ASSERT_EQ(actual_latency[i], test_params.expected_latency[i])
             << "Latency did not fall back to calculated value for tensor " << i;
     }
 }
@@ -139,48 +132,48 @@ TEST_P(InferenceManagerTest, WithPartialCustomLatency) {
     }
 
     PrePostProcessor pp_processor(test_params.inference_config);
-    BackendBase* custom_processor = nullptr; // Use default processor
-    ContextConfig context_config(2); // Use 2 threads for testing, gh runner max on macOS is 3
+    BackendBase* custom_processor = nullptr;  // Use default processor
+    ContextConfig context_config(2);  // Use 2 threads for testing, gh runner max on macOS is 3
 
-    InferenceManager inference_manager(
-        pp_processor,
-        test_params.inference_config,
-        custom_processor,
-        context_config
-    );
+    InferenceManager inference_manager(pp_processor,
+                                       test_params.inference_config,
+                                       custom_processor,
+                                       context_config);
 
     // Create partial custom latency (only for the first tensor)
     std::vector<long> partial_custom_latency(test_params.expected_latency.size(), -1);
     // Set a custom value for the first tensor
     partial_custom_latency[0] = test_params.expected_latency[0] * 3;
-    
+
     // Prepare with partial custom latency
     inference_manager.prepare(test_params.host_config, partial_custom_latency);
-    
+
     // Verify latency values
     std::vector<unsigned int> actual_latency = inference_manager.get_latency();
-    
-    ASSERT_EQ(actual_latency.size(), test_params.expected_latency.size()) << "Latency vector size mismatch";
-    
+
+    ASSERT_EQ(actual_latency.size(), test_params.expected_latency.size())
+        << "Latency vector size mismatch";
+
     // First latency should be our custom value
-    ASSERT_EQ(actual_latency[0], partial_custom_latency[0]) 
+    ASSERT_EQ(actual_latency[0], partial_custom_latency[0])
         << "Custom latency not applied correctly for first tensor";
-        
+
     // Remaining latencies should be calculated values
     for (size_t i = 1; i < test_params.expected_latency.size(); ++i) {
-        ASSERT_EQ(actual_latency[i], test_params.expected_latency[i]) 
+        ASSERT_EQ(actual_latency[i], test_params.expected_latency[i])
             << "Latency calculation incorrect for tensor " << i;
     }
 }
 
-std::string build_test_name(const testing::TestParamInfo<InferenceManagerTest::ParamType>& info){
+std::string build_test_name(const testing::TestParamInfo<InferenceManagerTest::ParamType>& info) {
     std::stringstream ss_sample_rate, ss_buffer_size, ss_max_inference_time;
     std::vector<std::stringstream> ss_tensor_input_size, ss_tensor_output_size;
 
     // Set precision to 4 decimal places for cleaner names
     ss_sample_rate << std::fixed << std::setprecision(4) << info.param.host_config.m_sample_rate;
     ss_buffer_size << std::fixed << std::setprecision(4) << info.param.host_config.m_buffer_size;
-    ss_max_inference_time << std::fixed << std::setprecision(2) << info.param.inference_config.m_max_inference_time;
+    ss_max_inference_time << std::fixed << std::setprecision(2)
+                          << info.param.inference_config.m_max_inference_time;
 
     std::stringstream ss;
     ss << "__input_size_";
@@ -207,176 +200,156 @@ std::string build_test_name(const testing::TestParamInfo<InferenceManagerTest::P
     std::replace(buffer_size_str.begin(), buffer_size_str.end(), '.', '_');
     std::replace(max_inference_time_str.begin(), max_inference_time_str.end(), '.', '_');
 
-    return "host_config_" + buffer_size_str + "x" + sample_rate_str + tensor_shape_str + "_max_time_" + max_inference_time_str;
+    return "host_config_" + buffer_size_str + "x" + sample_rate_str + tensor_shape_str +
+           "_max_time_" + max_inference_time_str;
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    CalculateLatency, InferenceManagerTest, ::testing::Values(
-        InferenceManagerTestParams {
+    CalculateLatency,
+    InferenceManagerTest,
+    ::testing::Values(
+        InferenceManagerTestParams{
             HostConfig(2048, 48000, true),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                1.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 4095 }
-        },
-        InferenceManagerTestParams {
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+                            1.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {4095}},
+        InferenceManagerTestParams{
             HostConfig(2048, 48000, true),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
-                ProcessingSpec({1}, {2}, {160}, {1}),
-                3.f,
-                0,
-                false,
-                0.5f,
-                2
-            ),
-            { 1 }
-        },
-        InferenceManagerTestParams {
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
+                            ProcessingSpec({1}, {2}, {160}, {1}),
+                            3.f,
+                            0,
+                            false,
+                            0.5f,
+                            2),
+            {1}},
+        InferenceManagerTestParams{
             HostConfig(2048, 48000, true),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
-                ProcessingSpec({1}, {2}, {160}, {1}),
-                5.f,
-                0,
-                false,
-                0.5f,
-                2
-            ),
-            { 5 }
-        },
-        InferenceManagerTestParams {
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
+                            ProcessingSpec({1}, {2}, {160}, {1}),
+                            5.f,
+                            0,
+                            false,
+                            0.5f,
+                            2),
+            {5}},
+        InferenceManagerTestParams{
             HostConfig(2048, 48000, true),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
-                ProcessingSpec({1}, {2}, {160}, {1}),
-                4.9f,
-                0,
-                false,
-                0.5f,
-                1
-            ),
-            { 20 }
-        },
-        InferenceManagerTestParams {
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
+                            ProcessingSpec({1}, {2}, {160}, {1}),
+                            4.9f,
+                            0,
+                            false,
+                            0.5f,
+                            1),
+            {20}},
+        InferenceManagerTestParams{
             HostConfig(2048, 48000, true),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
-                ProcessingSpec({1}, {2}, {160}, {1}),
-                4.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 12 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(1, 48000.0/2048, true),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
-                40.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 5885 }
-        },
-        InferenceManagerTestParams {
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
+                            ProcessingSpec({1}, {2}, {160}, {1}),
+                            4.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {12}},
+        InferenceManagerTestParams{
+            HostConfig(1, 48000.0 / 2048, true),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
+                            40.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {5885}},
+        InferenceManagerTestParams{
             HostConfig(2048, 48000.0, true),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 1}})},
-                40.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 1 }
-        },
-        InferenceManagerTestParams {
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 1}})},
+                            40.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {1}},
+        InferenceManagerTestParams{
             HostConfig(2048, 48000.0, false),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 1}})},
-                39.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 1 }
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 1}})},
+                            39.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {1}},
+        InferenceManagerTestParams{
+            HostConfig(1, 48000.0 / 2048),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
+                            50.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {4096},
         },
-        InferenceManagerTestParams {
-            HostConfig(1, 48000.0/2048),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
-                50.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 4096 },
-        },
-        InferenceManagerTestParams {
+        InferenceManagerTestParams{
             HostConfig(256, 48000.0, true),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 4, 1}})},
-                ProcessingSpec({1}, {4}),
-                20.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 1 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(1./256., 48000./2048.),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 4, 1}}, {{1, 1, 2048}})},
-                ProcessingSpec({4}, {1}),
-                40.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 3960 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(1., 48000./2048.),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 16, 1}}, {{1, 1, 2048}})},
-                ProcessingSpec({16}, {1}),
-                40.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 2048 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(1., 48000./2048., true),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 4, 1}})},
+                            ProcessingSpec({1}, {4}),
+                            20.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {1}},
+        InferenceManagerTestParams{
+            HostConfig(1. / 256., 48000. / 2048.),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 4, 1}}, {{1, 1, 2048}})},
+                            ProcessingSpec({4}, {1}),
+                            40.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {3960}},
+        InferenceManagerTestParams{
+            HostConfig(1., 48000. / 2048.),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 16, 1}}, {{1, 1, 2048}})},
+                            ProcessingSpec({16}, {1}),
+                            40.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {2048}},
+        InferenceManagerTestParams{
+            HostConfig(1., 48000. / 2048., true),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}}, {{1, 1, 2048}, {2, 256}})},
@@ -385,40 +358,36 @@ INSTANTIATE_TEST_SUITE_P(
                 0,
                 false,
                 0.f,
-                2
-            ),
-            { 6144, 768 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(256., 48000./8, false, 1),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
-                ProcessingSpec({16, 2}, {1, 3}),
-                40.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 2048, 128 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(128., 48000./8, true, 1),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
-                ProcessingSpec({16, 2}, {1, 3}),
-                40.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 6144, 384 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(128., 48000./8, true, 1),
+                2),
+            {6144, 768}},
+        InferenceManagerTestParams{
+            HostConfig(256., 48000. / 8, false, 1),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{
+                                TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
+                            ProcessingSpec({16, 2}, {1, 3}),
+                            40.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {2048, 128}},
+        InferenceManagerTestParams{
+            HostConfig(128., 48000. / 8, true, 1),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{
+                                TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
+                            ProcessingSpec({16, 2}, {1, 3}),
+                            40.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {6144, 384}},
+        InferenceManagerTestParams{
+            HostConfig(128., 48000. / 8, true, 1),
             InferenceConfig(
                 std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
                 std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 2, 2048}})},
@@ -427,107 +396,92 @@ INSTANTIATE_TEST_SUITE_P(
                 0,
                 false,
                 0.f,
-                2
-            ),
-            { 4924 }
-        },
+                2),
+            {4924}},
         // Non-power-of-two buffer size tests
-        InferenceManagerTestParams {
+        InferenceManagerTestParams{
             HostConfig(100, 48000),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                13.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 2744 }
-        },
-        InferenceManagerTestParams {
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+                            13.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {2744}},
+        InferenceManagerTestParams{
             HostConfig(300, 44100),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
-                40.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 2820 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(2.5, 48000./2048.),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
-                ProcessingSpec({8}, {1}),
-                12.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 3072 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(2.5, 48000./2048., true),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
-                ProcessingSpec({8}, {1}),
-                13.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 3583 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(1500, 44100./8., false, 1),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 4, 1}, {2, 128}}, {{1, 1, 512}, {3, 64}})},
-                ProcessingSpec({4, 2}, {1, 1}),
-                50.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 12800, 4800 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(1500, 44100./8., true, 1),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 4, 1}, {2, 128}, {1, 2}}, {{1, 1, 512}, {3, 64}})},
-                ProcessingSpec({4, 2, 1}, {1, 1}),
-                50.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 12800, 4800 }
-        },
-        InferenceManagerTestParams {
-            HostConfig(256., 48000./8, false, 1),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 4, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
-                ProcessingSpec({1, 2}, {1, 1}, {0, 256}, {2048, 0}),
-                40.f,
-                0,
-                false,
-                0.f,
-                2
-            ),
-            { 2048, 0 }
-        }
-    ),
-    build_test_name
-);
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
+                            40.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {2820}},
+        InferenceManagerTestParams{
+            HostConfig(2.5, 48000. / 2048.),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
+                            ProcessingSpec({8}, {1}),
+                            12.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {3072}},
+        InferenceManagerTestParams{
+            HostConfig(2.5, 48000. / 2048., true),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
+                            ProcessingSpec({8}, {1}),
+                            13.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {3583}},
+        InferenceManagerTestParams{
+            HostConfig(1500, 44100. / 8., false, 1),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{
+                                TensorShape({{1, 4, 1}, {2, 128}}, {{1, 1, 512}, {3, 64}})},
+                            ProcessingSpec({4, 2}, {1, 1}),
+                            50.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {12800, 4800}},
+        InferenceManagerTestParams{
+            HostConfig(1500, 44100. / 8., true, 1),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{
+                                TensorShape({{1, 4, 1}, {2, 128}, {1, 2}}, {{1, 1, 512}, {3, 64}})},
+                            ProcessingSpec({4, 2, 1}, {1, 1}),
+                            50.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {12800, 4800}},
+        InferenceManagerTestParams{
+            HostConfig(256., 48000. / 8, false, 1),
+            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
+                                                             anira::InferenceBackend::CUSTOM)},
+                            std::vector<TensorShape>{
+                                TensorShape({{1, 4, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
+                            ProcessingSpec({1, 2}, {1, 1}, {0, 256}, {2048, 0}),
+                            40.f,
+                            0,
+                            false,
+                            0.f,
+                            2),
+            {2048, 0}}),
+    build_test_name);

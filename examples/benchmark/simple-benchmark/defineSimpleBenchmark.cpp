@@ -1,16 +1,15 @@
-#include <gtest/gtest.h>
-#include <benchmark/benchmark.h>
 #include <anira/anira.h>
 #include <anira/benchmark.h>
+#include <benchmark/benchmark.h>
+#include <gtest/gtest.h>
 
 #include "../../../extras/models/cnn/CNNConfig.h"
 #include "../../../extras/models/cnn/CNNPrePostProcessor.h"
 #include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../extras/models/model-pool/SimpleGainConfig.h"
 #include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
-
+#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 
 /* ============================================================ *
  * ========================= Configs ========================== *
@@ -39,16 +38,19 @@ HybridNNPrePostProcessor my_pp_processor(my_inference_config);
 // anira::PrePostProcessor my_pp_processor(my_inference_config);
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
-
-    // The buffer size return in get_buffer_size() is populated by state.range(0) param of the google benchmark
+    // The buffer size return in get_buffer_size() is populated by state.range(0) param of the
+    // google benchmark
     anira::HostConfig host_config = {static_cast<float>(get_buffer_size()), SAMPLE_RATE};
     anira::InferenceBackend inference_backend = anira::InferenceBackend::ONNX;
 
-    m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
+    m_inference_handler =
+        std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backend);
 
-    m_buffer = std::make_unique<anira::Buffer<float>>(my_inference_config.get_preprocess_input_channels()[0], host_config.m_buffer_size);
+    m_buffer = std::make_unique<anira::Buffer<float>>(
+        my_inference_config.get_preprocess_input_channels()[0],
+        host_config.m_buffer_size);
 
     initialize_repetition(my_inference_config, host_config, inference_backend);
 
@@ -58,12 +60,10 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
         initialize_iteration();
 
         std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-        
+
         m_inference_handler->process(m_buffer->get_array_of_write_pointers(), get_buffer_size());
 
-        while (!buffer_processed()) {
-            std::this_thread::sleep_for(std::chrono::nanoseconds (10));
-        }
+        while (!buffer_processed()) { std::this_thread::sleep_for(std::chrono::nanoseconds(10)); }
 
         std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
 
@@ -77,7 +77,8 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
 //  * ============================================================ */
 
 BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_SIMPLE)
-->Unit(benchmark::kMillisecond)
-->Iterations(NUM_ITERATIONS)->Repetitions(NUM_REPETITIONS)
-->Arg(BUFFER_SIZE)
-->UseManualTime();
+    ->Unit(benchmark::kMillisecond)
+    ->Iterations(NUM_ITERATIONS)
+    ->Repetitions(NUM_REPETITIONS)
+    ->Arg(BUFFER_SIZE)
+    ->UseManualTime();

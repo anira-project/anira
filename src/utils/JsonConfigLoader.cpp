@@ -1,6 +1,6 @@
 #include <anira/utils/JsonConfigLoader.h>
-
 #include <anira/utils/Logger.h>
+
 #include <iostream>
 
 anira::JsonConfigLoader::JsonConfigLoader(const std::string& file_path) {

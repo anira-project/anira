@@ -15,26 +15,26 @@
  * Define ANIRA_USE_LIGHTWEIGHT_SEMAPHORE=1 manually to force the fallback.
  */
 #if !defined(ANIRA_USE_LIGHTWEIGHT_SEMAPHORE)
-    #if defined(__APPLE__)
-        #include <Availability.h>
-        #if (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED < 110000) || \
-            (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && __IPHONE_OS_VERSION_MIN_REQUIRED < 140000)
-            #define ANIRA_USE_LIGHTWEIGHT_SEMAPHORE 1
-        #else
-            #define ANIRA_USE_LIGHTWEIGHT_SEMAPHORE 0
-        #endif
-    #else
-        #define ANIRA_USE_LIGHTWEIGHT_SEMAPHORE 0
-    #endif
+#if defined(__APPLE__)
+#include <Availability.h>
+#if (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED < 110000) || \
+    (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && __IPHONE_OS_VERSION_MIN_REQUIRED < 140000)
+#define ANIRA_USE_LIGHTWEIGHT_SEMAPHORE 1
+#else
+#define ANIRA_USE_LIGHTWEIGHT_SEMAPHORE 0
+#endif
+#else
+#define ANIRA_USE_LIGHTWEIGHT_SEMAPHORE 0
+#endif
 #endif
 
 #if ANIRA_USE_LIGHTWEIGHT_SEMAPHORE
-    // lightweightsemaphore.h is not standalone: it relies on <cassert> and the
-    // MOODYCAMEL_DELETE_FUNCTION macro that concurrentqueue.h pulls in first.
-    #include <concurrentqueue.h>
-    #include <lightweightsemaphore.h>
+// lightweightsemaphore.h is not standalone: it relies on <cassert> and the
+// MOODYCAMEL_DELETE_FUNCTION macro that concurrentqueue.h pulls in first.
+#include <concurrentqueue.h>
+#include <lightweightsemaphore.h>
 #else
-    #include <semaphore>
+#include <semaphore>
 #endif
 
 namespace anira {
@@ -86,9 +86,7 @@ public:
         auto usecs = std::chrono::duration_cast<std::chrono::microseconds>(
                          wait_until - std::chrono::steady_clock::now())
                          .count();
-        if (usecs < 0) {
-            usecs = 0;
-        }
+        if (usecs < 0) { usecs = 0; }
         return m_semaphore.wait(static_cast<std::int64_t>(usecs));
 #else
         return m_semaphore.try_acquire_until(wait_until);
@@ -103,6 +101,6 @@ private:
 #endif
 };
 
-} // namespace anira
+}  // namespace anira
 
-#endif // ANIRA_SEMAPHORE_H
+#endif  // ANIRA_SEMAPHORE_H

@@ -2,14 +2,14 @@
 
 namespace anira {
 
-BackendBase::BackendBase(InferenceConfig& inference_config) : m_inference_config(inference_config) {
-}
+BackendBase::BackendBase(InferenceConfig& inference_config)
+    : m_inference_config(inference_config) {}
 
-void BackendBase::prepare() {
+void BackendBase::prepare() {}
 
-}
-
-void BackendBase::process(std::vector<BufferF>& input, std::vector<BufferF>& output, [[maybe_unused]] std::shared_ptr<SessionElement> session) {
+void BackendBase::process(std::vector<BufferF>& input,
+                          std::vector<BufferF>& output,
+                          [[maybe_unused]] std::shared_ptr<SessionElement> session) {
     for (size_t i = 0; i < input.size(); ++i) {
         bool equal_channels = input[i].get_num_channels() == output[i].get_num_channels();
         auto sample_diff = input[i].get_num_samples() - output[i].get_num_samples();
@@ -28,4 +28,4 @@ void BackendBase::process(std::vector<BufferF>& input, std::vector<BufferF>& out
     }
 }
 
-} // namespace anira
+}  // namespace anira

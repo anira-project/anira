@@ -17,6 +17,4 @@ void backendbase_destroy(uintptr_t ptr) {
     delete reinterpret_cast<anira::BackendBase*>(ptr);
 }
 
-
-} // extern "C"
-
+}  // extern "C"

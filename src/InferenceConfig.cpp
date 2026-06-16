@@ -1,6 +1,7 @@
 #include <anira/InferenceConfig.h>
-#include <cstring>
 #include <anira/utils/Logger.h>
+
+#include <cstring>
 
 namespace anira {
 

@@ -1,11 +1,12 @@
-#include <thread>
+#include <anira/anira.h>
+
 #include <atomic>
-#include <vector>
 #include <chrono>
 #include <mutex>
+#include <thread>
+#include <vector>
 
 #include "gtest/gtest.h"
-#include <anira/anira.h>
 
 using namespace anira;
 
@@ -20,7 +21,8 @@ class StatefulCounterBackend : public BackendBase {
 public:
     StatefulCounterBackend(InferenceConfig& config) : BackendBase(config) {}
 
-    void process(std::vector<BufferF>& input, std::vector<BufferF>& output,
+    void process(std::vector<BufferF>& input,
+                 std::vector<BufferF>& output,
                  [[maybe_unused]] std::shared_ptr<SessionElement> session) override {
         // Small delay to increase the window for out-of-order dequeuing
         std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -51,7 +53,8 @@ class PassthroughPrePostProcessor : public PrePostProcessor {
 public:
     using PrePostProcessor::PrePostProcessor;
 
-    void pre_process(std::vector<RingBuffer>& input, std::vector<BufferF>& output,
+    void pre_process(std::vector<RingBuffer>& input,
+                     std::vector<BufferF>& output,
                      [[maybe_unused]] InferenceBackend current_inference_backend) override {
         size_t num_samples = m_inference_config.get_preprocess_input_size()[0];
         for (size_t ch = 0; ch < m_inference_config.get_preprocess_input_channels()[0]; ++ch) {
@@ -62,7 +65,8 @@ public:
         }
     }
 
-    void post_process(std::vector<BufferF>& input, std::vector<RingBuffer>& output,
+    void post_process(std::vector<BufferF>& input,
+                      std::vector<RingBuffer>& output,
                       [[maybe_unused]] InferenceBackend current_inference_backend) override {
         size_t num_samples = m_inference_config.get_postprocess_output_size()[0];
         for (size_t ch = 0; ch < m_inference_config.get_postprocess_output_channels()[0]; ++ch) {
@@ -91,31 +95,25 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
 
     // Config: hop_size samples in, hop_size samples out, 1 channel
     // Host buffer > hop_size to force multiple inferences per callback
-    std::vector<ModelData> model_data = {
-        ModelData("placeholder", InferenceBackend::CUSTOM)
-    };
+    std::vector<ModelData> model_data = {ModelData("placeholder", InferenceBackend::CUSTOM)};
 
-    std::vector<TensorShape> tensor_shape = {
-        {{{1, 1, static_cast<int64_t>(params.hop_size)}},
-         {{1, 1, static_cast<int64_t>(params.hop_size)}}}
-    };
+    std::vector<TensorShape> tensor_shape = {{{{1, 1, static_cast<int64_t>(params.hop_size)}},
+                                              {{1, 1, static_cast<int64_t>(params.hop_size)}}}};
 
-    ProcessingSpec processing_spec(
-        {1},                  // preprocess_input_channels
-        {1},                  // postprocess_output_channels
-        {params.hop_size},    // preprocess_input_size
-        {params.hop_size}     // postprocess_output_size
+    ProcessingSpec processing_spec({1},                // preprocess_input_channels
+                                   {1},                // postprocess_output_channels
+                                   {params.hop_size},  // preprocess_input_size
+                                   {params.hop_size}   // postprocess_output_size
     );
 
-    InferenceConfig config(
-        model_data,
-        tensor_shape,
-        processing_spec,
-        5.f,                // max_inference_time ms
-        0,                  // warm_up
-        params.session_exclusive,           // session_exclusive_processor
-        0.0f,                               // blocking_ratio
-        params.session_exclusive ? 1u : 4u  // num_parallel_processors
+    InferenceConfig config(model_data,
+                           tensor_shape,
+                           processing_spec,
+                           5.f,                                // max_inference_time ms
+                           0,                                  // warm_up
+                           params.session_exclusive,           // session_exclusive_processor
+                           0.0f,                               // blocking_ratio
+                           params.session_exclusive ? 1u : 4u  // num_parallel_processors
     );
 
     PassthroughPrePostProcessor pp_processor(config);
@@ -136,16 +134,13 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
 
     // Simulate real-time audio callbacks at the correct pace
     auto callback_interval = std::chrono::microseconds(
-        static_cast<long long>(params.host_buffer_size / params.sample_rate * 1e6)
-    );
+        static_cast<long long>(params.host_buffer_size / params.sample_rate * 1e6));
 
     constexpr size_t num_iterations = 300;
     auto next_callback = std::chrono::steady_clock::now();
 
     for (size_t iter = 0; iter < num_iterations; ++iter) {
-        for (size_t s = 0; s < buffer_size; ++s) {
-            test_buffer.set_sample(0, s, 0.f);
-        }
+        for (size_t s = 0; s < buffer_size; ++s) { test_buffer.set_sample(0, s, 0.f); }
         handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
 
         next_callback += callback_interval;
@@ -158,8 +153,7 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
     // Check execution order
     std::lock_guard<std::mutex> lock(backend.m_order_mutex);
 
-    ASSERT_GT(backend.m_execution_order.size(), 0u)
-        << "No inferences were executed";
+    ASSERT_GT(backend.m_execution_order.size(), 0u) << "No inferences were executed";
 
     bool in_order = true;
     for (size_t i = 1; i < backend.m_execution_order.size(); ++i) {
@@ -182,14 +176,15 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    StatefulModel, StatefulOrderingTest, ::testing::Values(
-        // session_exclusive=true, host_buffer > hop_size to force multiple inferences
-        StatefulTestParams{true, 1024.f, 48000.f, 480},
-        StatefulTestParams{true, 512.f, 48000.f, 480},
-        StatefulTestParams{true, 2048.f, 48000.f, 480},
-        StatefulTestParams{true, 1024.f, 48000.f, 512},
-        // session_exclusive=false (reference — not asserted, just for comparison)
-        StatefulTestParams{false, 1024.f, 48000.f, 480}
-    )
-);
+INSTANTIATE_TEST_SUITE_P(StatefulModel,
+                         StatefulOrderingTest,
+                         ::testing::Values(
+                             // session_exclusive=true, host_buffer > hop_size to force multiple
+                             // inferences
+                             StatefulTestParams{true, 1024.f, 48000.f, 480},
+                             StatefulTestParams{true, 512.f, 48000.f, 480},
+                             StatefulTestParams{true, 2048.f, 48000.f, 480},
+                             StatefulTestParams{true, 1024.f, 48000.f, 512},
+                             // session_exclusive=false (reference — not asserted, just for
+                             // comparison)
+                             StatefulTestParams{false, 1024.f, 48000.f, 480}));

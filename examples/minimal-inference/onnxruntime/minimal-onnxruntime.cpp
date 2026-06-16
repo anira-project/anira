@@ -5,23 +5,23 @@ Licence: MIT
 
 ========================================================================== */
 
-#include <iostream>
 #include <onnxruntime_cxx_api.h>
 
-#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include <iostream>
+
 #include "../../../extras/models/cnn/CNNConfig.h"
+#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../extras/models/model-pool/SimpleGainConfig.h"
 #include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
-
-#include "../../../include/anira/utils/MemoryBlock.h"
+#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../include/anira/utils/Buffer.h"
+#include "../../../include/anira/utils/MemoryBlock.h"
 
 void minimal_inference(anira::InferenceConfig m_inference_config) {
-
     std::cout << "Minimal OnnxRuntime example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Using model: " << m_inference_config.get_model_path(anira::InferenceBackend::ONNX) << std::endl;
+    std::cout << "Using model: " << m_inference_config.get_model_path(anira::InferenceBackend::ONNX)
+              << std::endl;
 
     // Define environment that holds logging state used by all other objects.
     // Note: One Env must be created before using any other OnnxRuntime functionality.
@@ -37,16 +37,20 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     // Load the model and create InferenceSession
 #ifdef _WIN32
-    std::wstring modelWideStr = std::wstring(m_inference_config.get_model_path(anira::InferenceBackend::ONNX).begin(), m_inference_config.get_model_path(anira::InferenceBackend::ONNX).end());
+    std::wstring modelWideStr =
+        std::wstring(m_inference_config.get_model_path(anira::InferenceBackend::ONNX).begin(),
+                     m_inference_config.get_model_path(anira::InferenceBackend::ONNX).end());
     const wchar_t* modelWideCStr = modelWideStr.c_str();
     Ort::Session m_session(m_env, modelWideCStr, m_session_options);
 #else
-    Ort::Session m_session(m_env, m_inference_config.get_model_path(anira::InferenceBackend::ONNX).c_str(), Ort::SessionOptions{ nullptr });
+    Ort::Session m_session(m_env,
+                           m_inference_config.get_model_path(anira::InferenceBackend::ONNX).c_str(),
+                           Ort::SessionOptions{nullptr});
 #endif
 
     // Fill an Buffer with some data
     anira::BufferF input(1, m_inference_config.get_tensor_input_size()[0]);
-    for(int i = 0; i < m_inference_config.get_tensor_input_size()[0]; ++i) {
+    for (int i = 0; i < m_inference_config.get_tensor_input_size()[0]; ++i) {
         input.set_sample(0, i, i * 0.000001f);
     }
 
@@ -65,28 +69,29 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
                 m_input_data[i].data(),
                 m_input_data[i].size(),
                 m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].size()
-            ));
+                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i]
+                    .size()));
         } else {
             m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
                 m_memory_info,
                 input.data(),
                 input.get_num_samples(),
                 m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].size()
-            ));
+                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i]
+                    .size()));
         }
     }
 
     for (int i = 0; i < m_inputs.size(); ++i) {
-        std::cout << "Input shape " << i << ": [" << m_inputs[i].GetTensorTypeAndShapeInfo().GetShape() << "]" << std::endl;
+        std::cout << "Input shape " << i << ": ["
+                  << m_inputs[i].GetTensorTypeAndShapeInfo().GetShape() << "]" << std::endl;
     }
 
     // Get input and output names from model
     std::vector<Ort::AllocatedStringPtr> m_input_name;
     std::vector<Ort::AllocatedStringPtr> m_output_name;
-    std::vector<const char *> m_input_names;
-    std::vector<const char *> m_output_names;
+    std::vector<const char*> m_input_names;
+    std::vector<const char*> m_output_names;
 
     m_input_names.resize(m_session.GetInputCount());
     m_output_names.resize(m_session.GetOutputCount());
@@ -101,13 +106,17 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     }
 
     try {
-        m_outputs = m_session.Run(Ort::RunOptions{nullptr}, m_input_names.data(), m_inputs.data(), m_input_names.size(), m_output_names.data(), m_output_names.size());
-    } catch (Ort::Exception &e) {
-        std::cerr << e.what() << std::endl;
-    }
+        m_outputs = m_session.Run(Ort::RunOptions{nullptr},
+                                  m_input_names.data(),
+                                  m_inputs.data(),
+                                  m_input_names.size(),
+                                  m_output_names.data(),
+                                  m_output_names.size());
+    } catch (Ort::Exception& e) { std::cerr << e.what() << std::endl; }
 
     for (int i = 0; i < m_outputs.size(); ++i) {
-        std::cout << "Output shape " << i << ": [" << m_outputs[i].GetTensorTypeAndShapeInfo().GetShape() << "]" << std::endl;
+        std::cout << "Output shape " << i << ": ["
+                  << m_outputs[i].GetTensorTypeAndShapeInfo().GetShape() << "]" << std::endl;
     }
 
     std::vector<anira::MemoryBlock<float>> m_output_data;
@@ -118,15 +127,19 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
         m_output_data[i].resize(m_inference_config.get_tensor_output_size()[i]);
 
         for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-            std::cout << "Output data [" << i << "][" << j << "]: " << output_read_ptr[j] << std::endl;
+            std::cout << "Output data [" << i << "][" << j << "]: " << output_read_ptr[j]
+                      << std::endl;
             m_output_data[i][j] = output_read_ptr[j];
         }
     }
 }
 
 int main(int argc, const char* argv[]) {
-
-    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config, gain_config, stereo_gain_config};
+    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config,
+                                                               cnn_config,
+                                                               rnn_config,
+                                                               gain_config,
+                                                               stereo_gain_config};
 
     for (int i = 0; i < models_to_inference.size(); ++i) {
         minimal_inference(models_to_inference[i]);

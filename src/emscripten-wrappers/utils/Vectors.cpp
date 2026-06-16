@@ -1,8 +1,9 @@
 #include <emscripten/emscripten.h>
+
 #include "anira/InferenceConfig.h"
+#include "anira/utils/Buffer.h"
 #include "anira/utils/HostConfig.h"
 #include "anira/utils/RingBuffer.h"
-#include "anira/utils/Buffer.h"
 
 // ------ Vector C API ----
 
@@ -126,8 +127,7 @@ void vector_vector_int64_destroy(uintptr_t ptr) {
 EMSCRIPTEN_KEEPALIVE
 void vector_vector_int64_push_back(uintptr_t ptr, uintptr_t inner_vector_ptr) {
     reinterpret_cast<std::vector<std::vector<int64_t>>*>(ptr)->push_back(
-        *reinterpret_cast<std::vector<int64_t>*>(inner_vector_ptr)
-    );
+        *reinterpret_cast<std::vector<int64_t>*>(inner_vector_ptr));
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -139,7 +139,8 @@ size_t vector_vector_int64_size(uintptr_t ptr) {
 // Valid only while the outer vector is alive and not resized.
 EMSCRIPTEN_KEEPALIVE
 uintptr_t vector_vector_int64_get(uintptr_t ptr, size_t index) {
-    return reinterpret_cast<uintptr_t>(&(*reinterpret_cast<std::vector<std::vector<int64_t>>*>(ptr))[index]);
+    return reinterpret_cast<uintptr_t>(
+        &(*reinterpret_cast<std::vector<std::vector<int64_t>>*>(ptr))[index]);
 }
 
 // ------ VectorModelData ----
@@ -156,8 +157,7 @@ void vector_model_data_destroy(uintptr_t ptr) {
 EMSCRIPTEN_KEEPALIVE
 void vector_model_data_push_back(uintptr_t ptr, uintptr_t model_data_ptr) {
     reinterpret_cast<std::vector<anira::ModelData>*>(ptr)->push_back(
-        *reinterpret_cast<anira::ModelData*>(model_data_ptr)
-    );
+        *reinterpret_cast<anira::ModelData*>(model_data_ptr));
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -179,8 +179,7 @@ void vector_tensor_shape_destroy(uintptr_t ptr) {
 EMSCRIPTEN_KEEPALIVE
 void vector_tensor_shape_push_back(uintptr_t ptr, uintptr_t tensor_shape_ptr) {
     reinterpret_cast<std::vector<anira::TensorShape>*>(ptr)->push_back(
-        *reinterpret_cast<anira::TensorShape*>(tensor_shape_ptr)
-    );
+        *reinterpret_cast<anira::TensorShape*>(tensor_shape_ptr));
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -202,8 +201,7 @@ void vector_ring_buffer_destroy(uintptr_t ptr) {
 EMSCRIPTEN_KEEPALIVE
 void vector_ring_buffer_push_back(uintptr_t ptr, uintptr_t ring_buffer_ptr) {
     reinterpret_cast<std::vector<anira::RingBuffer>*>(ptr)->push_back(
-        *reinterpret_cast<anira::RingBuffer*>(ring_buffer_ptr)
-    );
+        *reinterpret_cast<anira::RingBuffer*>(ring_buffer_ptr));
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -213,7 +211,8 @@ size_t vector_ring_buffer_size(uintptr_t ptr) {
 
 EMSCRIPTEN_KEEPALIVE
 uintptr_t vector_ring_buffer_get(uintptr_t ptr, size_t index) {
-    return reinterpret_cast<uintptr_t>(&(*reinterpret_cast<std::vector<anira::RingBuffer>*>(ptr))[index]);
+    return reinterpret_cast<uintptr_t>(
+        &(*reinterpret_cast<std::vector<anira::RingBuffer>*>(ptr))[index]);
 }
 
 // ------ VectorBufferF ----
@@ -230,8 +229,7 @@ void vector_buffer_f_destroy(uintptr_t ptr) {
 EMSCRIPTEN_KEEPALIVE
 void vector_buffer_f_push_back(uintptr_t ptr, uintptr_t buffer_ptr) {
     reinterpret_cast<std::vector<anira::BufferF>*>(ptr)->push_back(
-        *reinterpret_cast<anira::BufferF*>(buffer_ptr)
-    );
+        *reinterpret_cast<anira::BufferF*>(buffer_ptr));
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -241,7 +239,8 @@ size_t vector_buffer_f_size(uintptr_t ptr) {
 
 EMSCRIPTEN_KEEPALIVE
 uintptr_t vector_buffer_f_get(uintptr_t ptr, size_t index) {
-    return reinterpret_cast<uintptr_t>(&(*reinterpret_cast<std::vector<anira::BufferF>*>(ptr))[index]);
+    return reinterpret_cast<uintptr_t>(
+        &(*reinterpret_cast<std::vector<anira::BufferF>*>(ptr))[index]);
 }
 
 // ------ BufferF ----
@@ -257,12 +256,14 @@ size_t buffer_f_get_num_samples(uintptr_t ptr) {
 
 EMSCRIPTEN_KEEPALIVE
 uintptr_t buffer_f_get_read_pointer(uintptr_t ptr, size_t channel) {
-    return reinterpret_cast<uintptr_t>(reinterpret_cast<anira::BufferF*>(ptr)->get_read_pointer(channel));
+    return reinterpret_cast<uintptr_t>(
+        reinterpret_cast<anira::BufferF*>(ptr)->get_read_pointer(channel));
 }
 
 EMSCRIPTEN_KEEPALIVE
 uintptr_t buffer_f_get_write_pointer(uintptr_t ptr, size_t channel) {
-    return reinterpret_cast<uintptr_t>(reinterpret_cast<anira::BufferF*>(ptr)->get_write_pointer(channel));
+    return reinterpret_cast<uintptr_t>(
+        reinterpret_cast<anira::BufferF*>(ptr)->get_write_pointer(channel));
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -270,4 +271,4 @@ void buffer_f_clear(uintptr_t ptr) {
     reinterpret_cast<anira::BufferF*>(ptr)->clear();
 }
 
-} // extern "C"
+}  // extern "C"
