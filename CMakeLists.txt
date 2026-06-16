@@ -159,11 +159,15 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(concurrentqueue)
 
+# Fetch the release tarball instead of cloning the repo — the full git
+# history plus test suite is ~150MB while the release archive is a few MB, the
+# URL_HASH verifies integrity, and the tarball is content-addressable so CMake
+# reuses a cached copy across build folders.
 FetchContent_Declare(
     nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.12.0
-    GIT_SHALLOW TRUE
+    URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+    URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
+    SYSTEM
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
