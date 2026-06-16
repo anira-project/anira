@@ -5,8 +5,10 @@
 // global namespace. LibTorch's custom_function.h uses an unqualified loop
 // variable named `var`, and MSVC's two-phase template lookup then reports it as
 // an ambiguous symbol (error C2872). Parsing LibTorch first avoids the clash.
-#include <JuceHeader.h>
+// clang-format off
 #include <anira/anira.h>
+#include <JuceHeader.h>
+// clang-format on
 
 #include "PluginParameters.h"
 
