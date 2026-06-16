@@ -10,13 +10,14 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "anira/system/AniraWinExports.h"
 
 namespace anira {
 
-typedef std::vector<std::vector<int64_t>> TensorShapeList;
+using TensorShapeList = std::vector<std::vector<int64_t>>;
 
 /**
  * @brief Container for neural network model data and metadata
@@ -45,7 +46,7 @@ struct ANIRA_API ModelData {
         : m_data(data)
         , m_size(size)
         , m_backend(backend)
-        , m_model_function(std::move(model_function))
+        , m_model_function(model_function)
         , m_is_binary(is_binary) {
         assert((m_size > 0 && "Model data size must be greater than zero."));
         assert((m_data != nullptr && "Model data pointer cannot be null."));
@@ -54,7 +55,7 @@ struct ANIRA_API ModelData {
             if (backend == InferenceBackend::LIBTORCH) {
                 m_model_function = model_function;  // For LIBTORCH, we can specify a function name
             } else {
-                LOG_ERROR << "Model function is only applicable for LIBTORCH backend." << std::endl;
+                LOG_ERROR << "Model function is only applicable for LIBTORCH backend." << '\n';
             }
 #else
             LOG_ERROR << "Model function is only applicable for LIBTORCH backend (LIBTORCH "
@@ -86,7 +87,7 @@ struct ANIRA_API ModelData {
         : ModelData((void*)model_path.data(),
                     model_path.size(),
                     backend,
-                    std::move(model_function),
+                    model_function,
                     is_binary) {}
 
     /**
@@ -216,7 +217,8 @@ struct ANIRA_API TensorShape {
      * @param output_shape List of output tensor shapes, where each shape is a vector of dimensions
      */
     TensorShape(TensorShapeList input_shape, TensorShapeList output_shape)
-        : m_tensor_input_shape(input_shape), m_tensor_output_shape(output_shape) {
+        : m_tensor_input_shape(std::move(std::move(input_shape)))
+        , m_tensor_output_shape(std::move(std::move(output_shape))) {
         assert((m_tensor_input_shape.size() > 0 && "At least one input shape must be provided."));
         assert((m_tensor_output_shape.size() > 0 && "At least one output shape must be provided."));
         m_universal = true;
@@ -234,8 +236,8 @@ struct ANIRA_API TensorShape {
      * @param backend The specific inference backend this shape configuration targets
      */
     TensorShape(TensorShapeList input_shape, TensorShapeList output_shape, InferenceBackend backend)
-        : m_tensor_input_shape(input_shape)
-        , m_tensor_output_shape(output_shape)
+        : m_tensor_input_shape(std::move(std::move(input_shape)))
+        , m_tensor_output_shape(std::move(std::move(output_shape)))
         , m_backend(backend) {
         assert((m_tensor_input_shape.size() > 0 && "At least one input shape must be provided."));
         assert((m_tensor_output_shape.size() > 0 && "At least one output shape must be provided."));
@@ -435,12 +437,12 @@ public:
      * parameters, ensuring consistent behavior across different usage scenarios.
      */
     struct Defaults {
-        static constexpr unsigned int m_warm_up = 0;  ///< Default number of warm-up inferences (0 =
+        static constexpr unsigned int k_warm_up = 0;  ///< Default number of warm-up inferences (0 =
                                                       ///< no warm-up)
-        static constexpr bool m_session_exclusive_processor = false;  ///< Default session
+        static constexpr bool k_session_exclusive_processor = false;  ///< Default session
                                                                       ///< exclusivity (false =
                                                                       ///< shared processors)
-        static constexpr float m_blocking_ratio = 0.f;  ///< Default blocking ratio (0.0 =
+        static constexpr float k_blocking_ratio = 0.f;  ///< Default blocking ratio (0.0 =
                                                         ///< non-blocking)
 
         /// Default number of parallel processors (half of available hardware threads, minimum 1)
@@ -477,9 +479,9 @@ public:
                     std::vector<TensorShape> tensor_shape,
                     ProcessingSpec processing_spec,
                     float max_inference_time,                    // in ms per inference
-                    unsigned int warm_up = Defaults::m_warm_up,  // number of warm up inferences
-                    bool session_exclusive_processor = Defaults::m_session_exclusive_processor,
-                    float blocking_ratio = Defaults::m_blocking_ratio,
+                    unsigned int warm_up = Defaults::k_warm_up,  // number of warm up inferences
+                    bool session_exclusive_processor = Defaults::k_session_exclusive_processor,
+                    float blocking_ratio = Defaults::k_blocking_ratio,
                     unsigned int num_parallel_processors = Defaults::m_num_parallel_processors);
 
     /**
@@ -500,9 +502,9 @@ public:
     InferenceConfig(std::vector<ModelData> model_data,
                     std::vector<TensorShape> tensor_shape,
                     float max_inference_time,                    // in ms per inference
-                    unsigned int warm_up = Defaults::m_warm_up,  // number of warm up inferences
-                    bool session_exclusive_processor = Defaults::m_session_exclusive_processor,
-                    float blocking_ratio = Defaults::m_blocking_ratio,
+                    unsigned int warm_up = Defaults::k_warm_up,  // number of warm up inferences
+                    bool session_exclusive_processor = Defaults::k_session_exclusive_processor,
+                    float blocking_ratio = Defaults::k_blocking_ratio,
                     unsigned int num_parallel_processors = Defaults::m_num_parallel_processors)
         : InferenceConfig(std::move(model_data),
                           std::move(tensor_shape),

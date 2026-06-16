@@ -1,12 +1,24 @@
-#include <anira/anira.h>
-#include <anira/utils/helperFunctions.h>
-#include <stdint.h>
+
+#include <anira/ContextConfig.h>
+#include <anira/InferenceConfig.h>
+#include <anira/InferenceHandler.h>
+#include <anira/utils/Buffer.h>
+#include <anira/utils/HostConfig.h>
+#include <anira/utils/InferenceBackend.h>
+#include <anira/utils/RingBuffer.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <chrono>
+#include <cstddef>
+#include <cstdlib>
 #include <iomanip>
+#include <ios>
+#include <ostream>
 #include <sstream>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "../extras/models/hybrid-nn/HybridNNBypassProcessor.h"  // Only needed for round trip test
 #include "../extras/models/hybrid-nn/HybridNNConfig.h"
@@ -14,22 +26,23 @@
 #include "WavReader.h"
 #include "gtest/gtest.h"
 
-#define INFERENCE_TIMEOUT_S 2
+constexpr int k_inference_timeout_s = 2;
 using namespace anira;
 
 struct InferenceTestParams {
-    InferenceBackend backend;
-    HostConfig host_config;
-    std::string input_data_path;
-    std::string reference_data_path;
-    size_t reference_data_offset;
-    float epsilon_rel = 1e-6f;
-    float epsilon_abs = 1e-7f;
+    InferenceBackend m_backend;
+    HostConfig m_host_config;
+    std::string m_input_data_path;
+    std::string m_reference_data_path;
+    size_t m_reference_data_offset;
+    float m_epsilon_rel = 1e-6f;
+    float m_epsilon_abs = 1e-7f;
 };
 
+namespace {
 std::ostream& operator<<(std::ostream& stream, const InferenceTestParams& params) {
     std::string backend;
-    switch (params.backend) {
+    switch (params.m_backend) {
 #ifdef USE_LIBTORCH
         case anira::InferenceBackend::LIBTORCH: backend = "libtorch"; break;
 #endif
@@ -46,33 +59,34 @@ std::ostream& operator<<(std::ostream& stream, const InferenceTestParams& params
 
     stream << "{ ";
     stream << "backend = " << backend;
-    stream << ", host_buffer_size = " << params.host_config.m_buffer_size;
-    stream << ", host_sample_rate = " << params.host_config.m_sample_rate;
+    stream << ", host_buffer_size = " << params.m_host_config.m_buffer_size;
+    stream << ", host_sample_rate = " << params.m_host_config.m_sample_rate;
     stream << " }";
 
     return stream;
 }
+}  // namespace
 
 // Test fixture for paramterized inference tests
 class InferenceTest : public ::testing::TestWithParam<InferenceTestParams> {};
 
 TEST_P(InferenceTest, Simple) {
     auto const& test_params = GetParam();
-    auto const& buffer_size = test_params.host_config.m_buffer_size;
-    auto const& reference_offset = test_params.reference_data_offset;
+    auto const buffer_size = static_cast<size_t>(test_params.m_host_config.m_buffer_size);
+    auto const& reference_offset = test_params.m_reference_data_offset;
 
     // read reference data
     std::vector<float> data_input;
     std::vector<float> data_reference;
 
-    read_wav(test_params.input_data_path, data_input);
-    read_wav(test_params.reference_data_path, data_reference);
+    read_wav(test_params.m_input_data_path, data_input);
+    read_wav(test_params.m_reference_data_path, data_reference);
 
     ASSERT_TRUE(data_input.size() > 0);
     ASSERT_TRUE(data_reference.size() > 0);
 
     // setup inference
-    ContextConfig anira_context_config;
+    ContextConfig const anira_context_config;
     InferenceConfig inference_config = hybridnn_config;
     HybridNNPrePostProcessor pp_processor(inference_config);
     HybridNNBypassProcessor bypass_processor(inference_config);
@@ -91,13 +105,17 @@ TEST_P(InferenceTest, Simple) {
                                        anira_context_config);
 
     // Allocate memory for audio processing
-    inference_handler.prepare(test_params.host_config);
+    inference_handler.prepare(test_params.m_host_config);
     // Select the inference backend
-    inference_handler.set_inference_backend(test_params.backend);
+    inference_handler.set_inference_backend(test_params.m_backend);
 
-    int latency_offset = inference_handler.get_latency();  // The 0th tensor is the audio data
-                                                           // tensor, so we only need the first
-                                                           // element of the latency vector
+    int const latency_offset = static_cast<int>(inference_handler.get_latency());  // The 0th tensor
+                                                                                   // is the audio
+                                                                                   // data tensor,
+                                                                                   // so we only
+                                                                                   // need the first
+                                                                                   // element of the
+                                                                                   // latency vector
 
     BufferF test_buffer(1, buffer_size);
     RingBuffer ring_buffer;
@@ -115,7 +133,7 @@ TEST_P(InferenceTest, Simple) {
             ring_buffer.push_sample(0, data_reference.at((repeat * buffer_size) + i));
         }
 
-        size_t prev_samples = inference_handler.get_available_samples(0);
+        size_t const prev_samples = inference_handler.get_available_samples(0);
 
         inference_handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
 
@@ -123,25 +141,26 @@ TEST_P(InferenceTest, Simple) {
         auto start = std::chrono::system_clock::now();
         while (inference_handler.get_available_samples(0) != prev_samples) {
             if (std::chrono::system_clock::now() >
-                start + std::chrono::duration<long int>(INFERENCE_TIMEOUT_S)) {
+                start + std::chrono::duration<long int>(k_inference_timeout_s)) {
                 FAIL() << "Timeout while waiting for block to be processed";
             }
             std::this_thread::sleep_for(std::chrono::nanoseconds(10));
         }
 
         for (size_t i = 0; i < buffer_size; i++) {
-            float reference = ring_buffer.pop_sample(0);
-            float processed = test_buffer.get_sample(0, i);
+            float const reference = ring_buffer.pop_sample(0);
+            float const processed = test_buffer.get_sample(0, i);
 
             if (repeat * buffer_size + i < latency_offset + reference_offset) {
                 ASSERT_FLOAT_EQ(reference, 0);
             } else {
                 // calculate epsilon on the fly
-                float epsilon = max(abs(reference), abs(processed)) * test_params.epsilon_rel +
-                                test_params.epsilon_abs;
+                float const epsilon =
+                    max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "repeat=" << repeat << ", i=" << i
-                    << ", total sample nr: " << repeat * buffer_size + i << std::endl;
+                    << ", total sample nr: " << repeat * buffer_size + i << '\n';
             }
         }
     }
@@ -149,21 +168,21 @@ TEST_P(InferenceTest, Simple) {
 
 TEST_P(InferenceTest, WithCustomLatency) {
     auto const& test_params = GetParam();
-    auto const& buffer_size = test_params.host_config.m_buffer_size;
-    auto const& reference_offset = test_params.reference_data_offset;
+    auto const buffer_size = static_cast<size_t>(test_params.m_host_config.m_buffer_size);
+    auto const& reference_offset = test_params.m_reference_data_offset;
 
     // read reference data
     std::vector<float> data_input;
     std::vector<float> data_reference;
 
-    read_wav(test_params.input_data_path, data_input);
-    read_wav(test_params.reference_data_path, data_reference);
+    read_wav(test_params.m_input_data_path, data_input);
+    read_wav(test_params.m_reference_data_path, data_reference);
 
     ASSERT_TRUE(data_input.size() > 0);
     ASSERT_TRUE(data_reference.size() > 0);
 
     // setup inference
-    ContextConfig anira_context_config;
+    ContextConfig const anira_context_config;
     InferenceConfig inference_config = hybridnn_config;
     HybridNNPrePostProcessor pp_processor(inference_config);
     HybridNNBypassProcessor bypass_processor(inference_config);
@@ -182,13 +201,15 @@ TEST_P(InferenceTest, WithCustomLatency) {
                                        anira_context_config);
 
     // Allocate memory for audio processing
-    inference_handler.prepare(test_params.host_config, 0);
+    inference_handler.prepare(test_params.m_host_config, 0);
     // Select the inference backend
-    inference_handler.set_inference_backend(test_params.backend);
+    inference_handler.set_inference_backend(test_params.m_backend);
 
-    int latency = inference_handler.get_latency();  // The 0th tensor is the audio data tensor, so
-                                                    // we only need the first element of the latency
-                                                    // vector
+    int const latency = static_cast<int>(inference_handler.get_latency());  // The 0th tensor is the
+                                                                            // audio data tensor, so
+                                                                            // we only need the
+                                                                            // first element of the
+                                                                            // latency vector
 
     ASSERT_EQ(latency, 0) << "Custom latency should be set to 0 for this test";
 
@@ -206,7 +227,7 @@ TEST_P(InferenceTest, WithCustomLatency) {
             ring_buffer.push_sample(0, data_reference.at((repeat * buffer_size) + i));
         }
 
-        size_t prev_samples = inference_handler.get_available_samples(0);
+        size_t const prev_samples = inference_handler.get_available_samples(0);
 
         inference_handler.push_data(test_buffer.get_array_of_read_pointers(), buffer_size);
 
@@ -214,7 +235,7 @@ TEST_P(InferenceTest, WithCustomLatency) {
         auto start = std::chrono::system_clock::now();
         while (inference_handler.get_available_samples(0) != prev_samples + buffer_size) {
             if (std::chrono::system_clock::now() >
-                start + std::chrono::duration<long int>(INFERENCE_TIMEOUT_S)) {
+                start + std::chrono::duration<long int>(k_inference_timeout_s)) {
                 FAIL() << "Timeout while waiting for block to be processed";
             }
             std::this_thread::sleep_for(std::chrono::nanoseconds(10));
@@ -223,18 +244,19 @@ TEST_P(InferenceTest, WithCustomLatency) {
         inference_handler.pop_data(test_buffer.get_array_of_write_pointers(), buffer_size);
 
         for (size_t i = 0; i < buffer_size; i++) {
-            float reference = ring_buffer.pop_sample(0);
-            float processed = test_buffer.get_sample(0, i);
+            float const reference = ring_buffer.pop_sample(0);
+            float const processed = test_buffer.get_sample(0, i);
 
             if (repeat * buffer_size + i < reference_offset) {
                 ASSERT_FLOAT_EQ(reference, 0);
             } else {
                 // calculate epsilon on the fly
-                float epsilon = max(abs(reference), abs(processed)) * test_params.epsilon_rel +
-                                test_params.epsilon_abs;
+                float const epsilon =
+                    max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "repeat=" << repeat << ", i=" << i
-                    << ", total sample nr: " << repeat * buffer_size + i << std::endl;
+                    << ", total sample nr: " << repeat * buffer_size + i << '\n';
             }
         }
     }
@@ -242,21 +264,21 @@ TEST_P(InferenceTest, WithCustomLatency) {
 
 TEST_P(InferenceTest, Reset) {
     auto const& test_params = GetParam();
-    auto const& buffer_size = test_params.host_config.m_buffer_size;
-    auto const& reference_offset = test_params.reference_data_offset;
+    auto const buffer_size = static_cast<size_t>(test_params.m_host_config.m_buffer_size);
+    auto const& reference_offset = test_params.m_reference_data_offset;
 
     // read reference data
     std::vector<float> data_input;
     std::vector<float> data_reference;
 
-    read_wav(test_params.input_data_path, data_input);
-    read_wav(test_params.reference_data_path, data_reference);
+    read_wav(test_params.m_input_data_path, data_input);
+    read_wav(test_params.m_reference_data_path, data_reference);
 
     ASSERT_TRUE(data_input.size() > 0);
     ASSERT_TRUE(data_reference.size() > 0);
 
     // setup inference
-    ContextConfig anira_context_config;
+    ContextConfig const anira_context_config;
     InferenceConfig inference_config = hybridnn_config;
     HybridNNPrePostProcessor pp_processor(inference_config);
     HybridNNBypassProcessor bypass_processor(inference_config);
@@ -275,13 +297,17 @@ TEST_P(InferenceTest, Reset) {
                                        anira_context_config);
 
     // Allocate memory for audio processing
-    inference_handler.prepare(test_params.host_config);
+    inference_handler.prepare(test_params.m_host_config);
     // Select the inference backend
-    inference_handler.set_inference_backend(test_params.backend);
+    inference_handler.set_inference_backend(test_params.m_backend);
 
-    int latency_offset = inference_handler.get_latency();  // The 0th tensor is the audio data
-                                                           // tensor, so we only need the first
-                                                           // element of the latency vector
+    int const latency_offset = static_cast<int>(inference_handler.get_latency());  // The 0th tensor
+                                                                                   // is the audio
+                                                                                   // data tensor,
+                                                                                   // so we only
+                                                                                   // need the first
+                                                                                   // element of the
+                                                                                   // latency vector
 
     BufferF test_buffer(1, buffer_size);
     RingBuffer ring_buffer;
@@ -299,32 +325,33 @@ TEST_P(InferenceTest, Reset) {
             ring_buffer.push_sample(0, data_reference.at((repeat * buffer_size) + i));
         }
 
-        size_t prev_samples = inference_handler.get_available_samples(0);
+        size_t const prev_samples = inference_handler.get_available_samples(0);
         inference_handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
 
         // wait until the block was properly processed
         auto start = std::chrono::system_clock::now();
         while (inference_handler.get_available_samples(0) != prev_samples) {
             if (std::chrono::system_clock::now() >
-                start + std::chrono::duration<long int>(INFERENCE_TIMEOUT_S)) {
+                start + std::chrono::duration<long int>(k_inference_timeout_s)) {
                 FAIL() << "Timeout while waiting for block to be processed";
             }
             std::this_thread::sleep_for(std::chrono::nanoseconds(10));
         }
 
         for (size_t i = 0; i < buffer_size; i++) {
-            float reference = ring_buffer.pop_sample(0);
-            float processed = test_buffer.get_sample(0, i);
+            float const reference = ring_buffer.pop_sample(0);
+            float const processed = test_buffer.get_sample(0, i);
 
             if (repeat * buffer_size + i < latency_offset + reference_offset) {
                 ASSERT_FLOAT_EQ(reference, 0);
             } else {
                 // calculate epsilon on the fly
-                float epsilon = max(abs(reference), abs(processed)) * test_params.epsilon_rel +
-                                test_params.epsilon_abs;
+                float const epsilon =
+                    max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "repeat=" << repeat << ", i=" << i
-                    << ", total sample nr: " << repeat * buffer_size + i << std::endl;
+                    << ", total sample nr: " << repeat * buffer_size + i << '\n';
             }
         }
     }
@@ -352,7 +379,7 @@ TEST_P(InferenceTest, Reset) {
             ring_buffer.push_sample(0, data_reference.at((repeat * buffer_size) + i));
         }
 
-        size_t prev_samples = inference_handler.get_available_samples(0);
+        size_t const prev_samples = inference_handler.get_available_samples(0);
 
         inference_handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
 
@@ -360,46 +387,49 @@ TEST_P(InferenceTest, Reset) {
         auto start = std::chrono::system_clock::now();
         while (inference_handler.get_available_samples(0) != prev_samples) {
             if (std::chrono::system_clock::now() >
-                start + std::chrono::duration<long int>(INFERENCE_TIMEOUT_S)) {
+                start + std::chrono::duration<long int>(k_inference_timeout_s)) {
                 FAIL() << "Timeout while waiting for block to be processed";
             }
             std::this_thread::sleep_for(std::chrono::nanoseconds(10));
         }
 
         for (size_t i = 0; i < buffer_size; i++) {
-            float reference = ring_buffer.pop_sample(0);
-            float processed = test_buffer.get_sample(0, i);
+            float const reference = ring_buffer.pop_sample(0);
+            float const processed = test_buffer.get_sample(0, i);
 
             if (repeat * buffer_size + i < latency_offset + reference_offset) {
                 ASSERT_FLOAT_EQ(reference, 0);
             } else {
                 // calculate epsilon on the fly
-                float epsilon = max(abs(reference), abs(processed)) * test_params.epsilon_rel +
-                                test_params.epsilon_abs;
+                float const epsilon =
+                    max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "After reset: repeat=" << repeat << ", i=" << i
-                    << ", total sample nr: " << repeat * buffer_size + i << std::endl;
+                    << ", total sample nr: " << repeat * buffer_size + i << '\n';
             }
         }
     }
 }
 
+namespace {
 std::string build_test_name(const testing::TestParamInfo<InferenceTest::ParamType>& info) {
     std::stringstream ss_sample_rate, ss_buffer_size;
 
     // Set precision to 4 decimal places for cleaner names
-    ss_sample_rate << std::fixed << std::setprecision(4) << info.param.host_config.m_sample_rate;
-    ss_buffer_size << std::fixed << std::setprecision(4) << info.param.host_config.m_buffer_size;
+    ss_sample_rate << std::fixed << std::setprecision(4) << info.param.m_host_config.m_sample_rate;
+    ss_buffer_size << std::fixed << std::setprecision(4) << info.param.m_host_config.m_buffer_size;
 
     std::string sample_rate_str = ss_sample_rate.str();
     std::string buffer_size_str = ss_buffer_size.str();
 
     // Replace decimal points with underscores to make valid test names
-    std::replace(sample_rate_str.begin(), sample_rate_str.end(), '.', '_');
-    std::replace(buffer_size_str.begin(), buffer_size_str.end(), '.', '_');
+    std::ranges::replace(sample_rate_str, '.', '_');
+    std::ranges::replace(buffer_size_str, '.', '_');
 
     return sample_rate_str + "x" + buffer_size_str;
 }
+}  // namespace
 
 INSTANTIATE_TEST_SUITE_P(
     InferenceBypass,

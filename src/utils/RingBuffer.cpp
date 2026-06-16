@@ -1,6 +1,8 @@
 #include <anira/utils/Logger.h>
 #include <anira/utils/RingBuffer.h>
 
+#include <cstddef>
+
 namespace anira {
 
 RingBuffer::RingBuffer() = default;
@@ -32,7 +34,7 @@ void RingBuffer::push_sample(size_t channel, float sample) {
     // Check if we're about to overwrite unread data (buffer overflow)
     if (m_is_full[channel]) {
         LOG_ERROR << "RingBuffer: Buffer overflow detected for channel " << channel
-                  << ". Overwriting oldest sample." << std::endl;
+                  << ". Overwriting oldest sample." << '\n';
         // Advance read position to make room (overwrite oldest sample)
         ++m_read_pos[channel];
         if (m_read_pos[channel] >= get_num_samples()) { m_read_pos[channel] = 0; }
@@ -53,7 +55,7 @@ float RingBuffer::pop_sample(size_t channel) {
     // Check if buffer is empty
     if (!m_is_full[channel] && m_read_pos[channel] == m_write_pos[channel]) {
         LOG_ERROR << "RingBuffer: Attempted to pop sample from empty buffer for channel " << channel
-                  << ". Returning silence (0.0f)." << std::endl;
+                  << ". Returning silence (0.0f)." << '\n';
         return 0.0f;
     }
 
@@ -72,12 +74,12 @@ float RingBuffer::get_future_sample(size_t channel, size_t offset) {
     if (offset >= get_available_samples(channel)) {
         LOG_ERROR << "RingBuffer: Attempted to get sample with offset " << offset << " for channel "
                   << channel << ", but only " << get_available_samples(channel)
-                  << " samples are available. Returning silence (0.0f)." << std::endl;
+                  << " samples are available. Returning silence (0.0f)." << '\n';
         return 0.0f;
     }
 
     // Calculate the actual position in the buffer
-    size_t sample_pos = (m_read_pos[channel] + offset) % get_num_samples();
+    size_t const sample_pos = (m_read_pos[channel] + offset) % get_num_samples();
     return get_sample(channel, sample_pos);
 }
 
@@ -87,7 +89,7 @@ float RingBuffer::get_past_sample(size_t channel, size_t offset) {
         LOG_ERROR << "RingBuffer: Attempted to get past sample with offset " << offset
                   << " for channel " << channel << ", but only "
                   << get_available_past_samples(channel)
-                  << " past samples are available. Returning silence (0.0f)." << std::endl;
+                  << " past samples are available. Returning silence (0.0f)." << '\n';
         return 0.0f;
     }
 

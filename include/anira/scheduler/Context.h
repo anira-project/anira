@@ -23,9 +23,6 @@
 #include "../backends/TFLiteProcessor.h"
 #endif
 
-#define MIN_CAPACITY_INFERENCE_QUEUE 10000
-#define MAX_NUM_INSTANCES 1000
-
 namespace anira {
 
 /**
@@ -74,7 +71,7 @@ public:
      * Properly shuts down the thread pool, releases all backend processors,
      * and cleans up any remaining sessions or inference data.
      */
-    ~Context();
+    ~Context() = default;
     /**
      * @brief Gets or creates the singleton context instance
      *
@@ -115,7 +112,7 @@ public:
      *
      * @param session Shared pointer to the session to release
      */
-    static void release_session(std::shared_ptr<SessionElement> session);
+    static void release_session(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Releases the singleton context instance
@@ -145,7 +142,7 @@ public:
      * @param new_config New host configuration with audio settings
      * @param custom_latency Optional vector of custom latency values for each tensor
      */
-    void prepare_session(std::shared_ptr<SessionElement> session,
+    void prepare_session(const std::shared_ptr<SessionElement>& session,
                          HostConfig new_config,
                          std::vector<long> custom_latency = {});
 
@@ -168,7 +165,7 @@ public:
      *
      * @param session Shared pointer to the session that has new data available
      */
-    void new_data_submitted(std::shared_ptr<SessionElement> session);
+    void new_data_submitted(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Requests new data processing for a session
@@ -179,7 +176,7 @@ public:
      *
      * @param session Shared pointer to the session requesting data processing
      */
-    void new_data_request(std::shared_ptr<SessionElement> session);
+    void new_data_request(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Requests new data processing for a session at a specific time
@@ -190,7 +187,7 @@ public:
      * @param session Shared pointer to the session requesting data processing
      * @param wait_until Time point at which to begin processing the data request
      */
-    void new_data_request(std::shared_ptr<SessionElement> session,
+    void new_data_request(const std::shared_ptr<SessionElement>& session,
                           std::chrono::steady_clock::time_point wait_until);
 
     /**
@@ -215,7 +212,7 @@ public:
      *
      * @param session Shared pointer to the session to reset
      */
-    void reset_session(std::shared_ptr<SessionElement> session);
+    void reset_session(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Get producer token for the next inference request
@@ -288,7 +285,7 @@ private:
      * @param session Shared pointer to the session to preprocess
      * @return True if preprocessing was successful, false otherwise
      */
-    static bool pre_process(std::shared_ptr<SessionElement> session);
+    static bool pre_process(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Performs postprocessing for a session
@@ -299,8 +296,8 @@ private:
      * @param session Shared pointer to the session to postprocess
      * @param next_buffer Shared pointer to thread-safe data structures for the session
      */
-    static void post_process(std::shared_ptr<SessionElement> session,
-                             std::shared_ptr<SessionElement::ThreadSafeStruct> next_buffer);
+    static void post_process(const std::shared_ptr<SessionElement>& session,
+                             const std::shared_ptr<SessionElement::ThreadSafeStruct>& next_buffer);
 
     /**
      * @brief Starts the inference thread pool
@@ -321,7 +318,7 @@ private:
      *
      * @warning Make sure to uninitialize the session before calling this method.
      */
-    static void drain_inference_queue(std::shared_ptr<SessionElement> session);
+    static void drain_inference_queue(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Template method for setting backend processors
@@ -337,7 +334,7 @@ private:
      * @param backend Backend type identifier
      */
     template <typename T>
-    static void set_processor(std::shared_ptr<SessionElement> session,
+    static void set_processor(const std::shared_ptr<SessionElement>& session,
                               InferenceConfig& inference_config,
                               std::vector<std::shared_ptr<T>>& processors,
                               InferenceBackend backend);
@@ -384,6 +381,12 @@ private:
                                                                  ///< generating unique producer
                                                                  ///< indices
 
+    static constexpr size_t k_min_capacity_inference_queue = 10000;  ///< Minimum pre-allocated
+                                                                     ///< capacity of the inference
+                                                                     ///< queue
+    static constexpr size_t k_max_num_instances = 1000;  ///< Maximum number of explicit producers
+                                                         ///< for the inference queue
+
     /**
      * @brief Thread-safe concurrent queue for inference requests
      *
@@ -392,9 +395,9 @@ private:
      * to ensure efficient memory usage and prevent resource exhaustion.
      */
     inline static moodycamel::ConcurrentQueue<InferenceData> m_next_inference =
-        moodycamel::ConcurrentQueue<InferenceData>(MIN_CAPACITY_INFERENCE_QUEUE,
+        moodycamel::ConcurrentQueue<InferenceData>(k_min_capacity_inference_queue,
                                                    0,
-                                                   MAX_NUM_INSTANCES);
+                                                   k_max_num_instances);
 
 #ifdef USE_LIBTORCH
     inline static std::vector<std::shared_ptr<LibtorchProcessor>>

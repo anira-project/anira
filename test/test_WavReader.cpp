@@ -1,3 +1,7 @@
+#include <cstddef>
+#include <string>
+#include <vector>
+
 #include "WavReader.h"
 #include "gtest/gtest.h"
 

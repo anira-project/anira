@@ -49,11 +49,13 @@ public:
      *       using appropriate initialization after construction.
      */
     MemoryBlock(std::size_t size = 0) : m_size(size) {
+        // A size of 0 is a valid empty block; malloc(0) is intentional here.
+        // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI)
         void* data = malloc(sizeof(T) * m_size);
         if (data != nullptr) {
             m_data = (T*)data;
         } else {
-            LOG_ERROR << "Failed to allocate memory!" << std::endl;
+            LOG_ERROR << "Failed to allocate memory!" << '\n';
         }
     }
 
@@ -79,7 +81,7 @@ public:
             m_data = (T*)data;
             std::memcpy(m_data, other.m_data, sizeof(T) * m_size);
         } else {
-            LOG_ERROR << "Failed to allocate memory!" << std::endl;
+            LOG_ERROR << "Failed to allocate memory!" << '\n';
         }
     }
 
@@ -101,7 +103,7 @@ public:
                 m_data = (T*)data;
                 std::memcpy(m_data, other.m_data, sizeof(T) * m_size);
             } else {
-                LOG_ERROR << "Failed to allocate memory!" << std::endl;
+                LOG_ERROR << "Failed to allocate memory!" << '\n';
             }
         }
         return *this;
@@ -209,13 +211,15 @@ public:
             data = realloc(m_data, sizeof(T) * size);
         } else {
             free(m_data);
+            // A size of 0 is a valid empty block; malloc(0) is intentional here.
+            // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI)
             data = malloc(sizeof(T) * size);
         }
 
         if (data != nullptr) {
             m_data = (T*)data;
         } else {
-            LOG_ERROR << "Failed to reallocate memory!" << std::endl;
+            LOG_ERROR << "Failed to reallocate memory!" << '\n';
         }
     }
 
@@ -229,7 +233,9 @@ public:
      * @note This operation sets all bytes to zero, which may not be appropriate
      *       for all data types (e.g., types with non-trivial constructors).
      */
-    void clear() { std::memset(m_data, 0, sizeof(T) * m_size); }
+    void clear() {
+        if (m_data != nullptr) { std::memset(m_data, 0, sizeof(T) * m_size); }
+    }
 
     /**
      * @brief Swaps data with another memory block without copying (for trivially copyable types)
@@ -248,13 +254,15 @@ public:
      * @note Both blocks must have identical sizes for the swap to succeed.
      *       This function is only available for trivially copyable types.
      */
-    template <typename U = T, std::enable_if_t<std::is_trivially_copyable_v<U>, bool> = true>
-    void swap_data(MemoryBlock& other) {
+    template <typename U = T>
+    void swap_data(MemoryBlock& other)
+        requires(std::is_trivially_copyable_v<U>)
+    {
         if (this != &other) {
             if (m_size == other.m_size) {
                 std::swap(m_data, other.m_data);
             } else {
-                LOG_ERROR << "Cannot swap data with different sizes!" << std::endl;
+                LOG_ERROR << "Cannot swap data with different sizes!" << '\n';
             }
         }
     }
@@ -275,7 +283,7 @@ public:
         if (m_size == size) {
             std::swap(m_data, data);
         } else {
-            LOG_ERROR << "Cannot swap data with different sizes!" << std::endl;
+            LOG_ERROR << "Cannot swap data with different sizes!" << '\n';
         }
     }
 

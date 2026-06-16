@@ -56,11 +56,11 @@ static double calculate_percentile(const std::vector<double>& v, double percenti
 
     // Sort the data in ascending order
     std::vector<double> sorted_data = v;
-    std::sort(sorted_data.begin(), sorted_data.end());
+    std::ranges::sort(sorted_data);
 
     // Calculate the index for the 99th percentile
-    size_t n = sorted_data.size();
-    size_t percentile_index = (size_t)(percentile * (n - 1));
+    size_t const n = sorted_data.size();
+    auto const percentile_index = static_cast<size_t>(percentile * static_cast<double>(n - 1));
 
     // Check if the index is an integer
     if (percentile_index == static_cast<size_t>(percentile_index)) {
@@ -68,9 +68,9 @@ static double calculate_percentile(const std::vector<double>& v, double percenti
         return sorted_data[static_cast<size_t>(percentile_index)];
     } else {
         // Interpolate between the two nearest values
-        size_t lower_index = static_cast<size_t>(percentile_index);
-        size_t upper_index = lower_index + 1;
-        double fraction = percentile_index - lower_index;
+        auto const lower_index = static_cast<size_t>(percentile_index);
+        size_t const upper_index = lower_index + 1;
+        auto const fraction = static_cast<double>(percentile_index - lower_index);
         return (1.0 - fraction) * sorted_data[lower_index] + fraction * sorted_data[upper_index];
     }
 }
@@ -87,7 +87,7 @@ static double calculate_percentile(const std::vector<double>& v, double percenti
 static void fill_buffer(BufferF& buffer) {
     for (size_t i = 0; i < buffer.get_num_channels(); i++) {
         for (size_t j = 0; j < buffer.get_num_samples(); j++) {
-            float new_val = random_sample();
+            float const new_val = random_sample();
             buffer.set_sample(i, j, new_val);
         }
     }
@@ -121,38 +121,30 @@ static void push_buffer_to_ringbuffer(BufferF const& buffer, RingBuffer& ringbuf
 }
 
 /**
- * @brief Lambda function to calculate the minimum value in a dataset
+ * @brief Calculates the minimum value in a dataset
  *
- * A constant lambda expression that finds and returns the smallest value
- * in a vector of double values. This function uses std::min_element for
- * efficient minimum value computation.
+ * Finds and returns the smallest value in a vector of double values, using
+ * std::ranges::min_element for efficient minimum value computation.
  *
  * @param v Vector of double values to find the minimum from
  * @return The minimum value in the vector
- *
- * @note This is a lambda function stored as a const auto variable for
- *       convenient reuse throughout the codebase.
  */
-const auto calculate_min = [](const std::vector<double>& v) -> double {
-    return *(std::min_element(std::begin(v), std::end(v)));
-};
+inline double calculate_min(const std::vector<double>& v) {
+    return *(std::ranges::min_element(v));
+}
 
 /**
- * @brief Lambda function to calculate the maximum value in a dataset
+ * @brief Calculates the maximum value in a dataset
  *
- * A constant lambda expression that finds and returns the largest value
- * in a vector of double values. This function uses std::max_element for
- * efficient maximum value computation.
+ * Finds and returns the largest value in a vector of double values, using
+ * std::ranges::max_element for efficient maximum value computation.
  *
  * @param v Vector of double values to find the maximum from
  * @return The maximum value in the vector
- *
- * @note This is a lambda function stored as a const auto variable for
- *       convenient reuse throughout the codebase.
  */
-const auto calculate_max = [](const std::vector<double>& v) -> double {
-    return *(std::max_element(std::begin(v), std::end(v)));
-};
+inline double calculate_max(const std::vector<double>& v) {
+    return *(std::ranges::max_element(v));
+}
 
 }  // namespace anira
 

@@ -8,8 +8,7 @@
 #include "../anira.h"
 #include "../utils/helperFunctions.h"
 
-namespace anira {
-namespace benchmark {
+namespace anira::benchmark {
 
 /**
  * @brief Benchmark fixture class for testing neural network inference performance in audio
@@ -44,7 +43,7 @@ public:
     /**
      * @brief Destructor that cleans up benchmark resources
      */
-    ~ProcessBlockFixture();
+    ~ProcessBlockFixture() override;
 
     /**
      * @brief Initializes the current benchmark iteration
@@ -171,7 +170,8 @@ private:
      *
      * @param state The benchmark state containing runtime parameters
      */
-    void SetUp(const ::benchmark::State& state);
+    // NOLINTNEXTLINE(readability-identifier-naming) - overrides ::benchmark::Fixture::SetUp
+    void SetUp(const ::benchmark::State& state) override;
 
     /**
      * @brief Cleans up the benchmark fixture after each benchmark run
@@ -182,10 +182,10 @@ private:
      *
      * @param state The benchmark state containing runtime parameters
      */
-    void TearDown(const ::benchmark::State& state);
+    // NOLINTNEXTLINE(readability-identifier-naming) - overrides ::benchmark::Fixture::TearDown
+    void TearDown(const ::benchmark::State& state) override;
 };
 
-}  // namespace benchmark
-}  // namespace anira
+}  // namespace anira::benchmark
 
 #endif  // ANIRA_BENCHMARK_PROCESSBLOCKFIXTURE_H

@@ -109,7 +109,7 @@ private:
          */
         void process(std::vector<BufferF>& input,
                      std::vector<BufferF>& output,
-                     std::shared_ptr<SessionElement> session);
+                     const std::shared_ptr<SessionElement>& session);
 
         Ort::MemoryInfo m_memory_info;                 ///< Memory information for tensor allocation
         Ort::Env m_env;                                ///< ONNX Runtime environment

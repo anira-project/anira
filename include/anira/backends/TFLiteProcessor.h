@@ -112,7 +112,7 @@ private:
          */
         void process(std::vector<BufferF>& input,
                      std::vector<BufferF>& output,
-                     std::shared_ptr<SessionElement> session);
+                     const std::shared_ptr<SessionElement>& session);
 
         TfLiteModel* m_model;                 ///< TensorFlow Lite model loaded from file
         TfLiteInterpreterOptions* m_options;  ///< Interpreter configuration options

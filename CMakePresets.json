@@ -29,6 +29,24 @@
       }
     },
     {
+      "name": "clang-tidy",
+      "displayName": "Clang-Tidy",
+      "description": "Library + tests + benchmark build with all backends, used for clang-tidy analysis (exports compile_commands.json)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/clang-tidy",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ANIRA_WITH_TESTS": "ON",
+        "ANIRA_WITH_BENCHMARK": "ON",
+        "ANIRA_WITH_LIBTORCH": "ON",
+        "ANIRA_WITH_ONNXRUNTIME": "ON",
+        "ANIRA_WITH_TFLITE": "ON"
+      }
+    },
+    {
       "name": "wasm-debug",
       "displayName": "Wasm Debug",
       "description": "Build AniraWeb WASM module (debug)",
@@ -83,6 +101,11 @@
       "name": "desktop-release",
       "configurePreset": "desktop-release",
       "configuration": "Release"
+    },
+    {
+      "name": "clang-tidy",
+      "configurePreset": "clang-tidy",
+      "configuration": "Debug"
     },
     {
       "name": "wasm-debug",

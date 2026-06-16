@@ -1,5 +1,27 @@
 #include <anira/scheduler/InferenceThread.h>
+#include <anira/scheduler/SessionElement.h>
+#include <anira/utils/Buffer.h>
+#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+#include <concurrentqueue.h>
+
+// IWYU pragma: keep - processor methods are called through SessionElement's shared_ptr members
+#ifdef USE_LIBTORCH
+#include <anira/backends/LibTorchProcessor.h>  // IWYU pragma: keep
+#endif
+#ifdef USE_ONNXRUNTIME
+#include <anira/backends/OnnxRuntimeProcessor.h>  // IWYU pragma: keep
+#endif
+#ifdef USE_TFLITE
+#include <anira/backends/TFLiteProcessor.h>  // IWYU pragma: keep
+#endif
+
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <memory>
+#include <thread>
+#include <vector>
 
 namespace anira {
 
@@ -36,11 +58,11 @@ bool InferenceThread::is_running() const {
 
 void InferenceThread::run_loop() {
     while (!should_exit()) {
-        constexpr std::array<int, 2> iterations = {4, 32};
+        constexpr std::array<int, 2> k_iterations = {4, 32};
         // The times for the exponential backoff. The first loop is insteadly trying to acquire the
         // atomic counter. The second loop is waiting for approximately 100ns. Beyond that, the
         // thread will yield and sleep for 100us.
-        exponential_backoff(iterations);
+        exponential_backoff(k_iterations);
     }
 }
 
@@ -97,8 +119,8 @@ bool InferenceThread::execute() {
 }
 
 void InferenceThread::do_inference(
-    std::shared_ptr<SessionElement> session,
-    std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
+    const std::shared_ptr<SessionElement>& session,
+    const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct) {
     session->m_active_inferences.fetch_add(1, std::memory_order::release);
     inference(session,
               thread_safe_struct->m_tensor_input_data,
@@ -117,15 +139,16 @@ void InferenceThread::do_inference(
     if (session->m_inference_config.m_session_exclusive_processor) {
         session->release_dispatch();
         if (auto next = session->try_acquire_next_dispatch()) {
-            if (!m_next_inference.try_enqueue(InferenceData{session, next})) {
-                LOG_ERROR << "[ERROR] Could not enqueue next inference!" << std::endl;
+            if (!m_next_inference.try_enqueue(
+                    InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
+                LOG_ERROR << "[ERROR] Could not enqueue next inference!" << '\n';
                 session->release_dispatch();
             }
         }
     }
 }
 
-void InferenceThread::inference(std::shared_ptr<SessionElement> session,
+void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
                                 std::vector<BufferF>& input,
                                 std::vector<BufferF>& output) {
 #ifdef USE_LIBTORCH
@@ -135,7 +158,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session,
         } else {
             session->m_default_processor.process(input, output, session);
             LOG_ERROR << "[ERROR] LibTorch model has not been provided. Using default processor."
-                      << std::endl;
+                      << '\n';
         }
     }
 #endif
@@ -146,7 +169,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session,
         } else {
             session->m_default_processor.process(input, output, session);
             LOG_ERROR << "[ERROR] OnnxRuntime model has not been provided. Using default processor."
-                      << std::endl;
+                      << '\n';
         }
     }
 #endif
@@ -157,7 +180,7 @@ void InferenceThread::inference(std::shared_ptr<SessionElement> session,
         } else {
             session->m_default_processor.process(input, output, session);
             LOG_ERROR << "[ERROR] TFLite model has not been provided. Using default processor."
-                      << std::endl;
+                      << '\n';
         }
     }
 #endif

@@ -3,7 +3,7 @@
 
 #include <iostream>
 
-inline bool isLoggingEnabled() {
+inline bool is_logging_enabled() {
 #ifdef ENABLE_LOGGING
     return true;
 #else
@@ -12,8 +12,8 @@ inline bool isLoggingEnabled() {
 }
 
 #define LOG_INFO \
-    if (isLoggingEnabled()) (std::cout)
+    if (is_logging_enabled()) (std::cout)
 #define LOG_ERROR \
-    if (isLoggingEnabled()) (std::cerr)
+    if (is_logging_enabled()) (std::cerr)
 
 #endif  // ANIRA_LOGGER_H

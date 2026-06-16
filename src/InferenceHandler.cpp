@@ -1,7 +1,15 @@
+#include <anira/ContextConfig.h>
+#include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
+#include <anira/PrePostProcessor.h>
+#include <anira/backends/BackendBase.h>
+#include <anira/utils/HostConfig.h>
+#include <anira/utils/InferenceBackend.h>
 
 #include <cassert>
+#include <chrono>
 #include <cstdlib>
+#include <vector>
 
 namespace anira {
 
@@ -24,9 +32,9 @@ InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor,
     if (!m_input_tensor_ptrs || !m_input_tensor_num_samples || !m_output_tensor_ptrs ||
         !m_output_tensor_num_samples) {
         // Clean up on allocation failure
-        free(m_input_tensor_ptrs);
+        free(reinterpret_cast<void*>(m_input_tensor_ptrs));
         free(m_input_tensor_num_samples);
-        free(m_output_tensor_ptrs);
+        free(reinterpret_cast<void*>(m_output_tensor_ptrs));
         free(m_output_tensor_num_samples);
         throw std::bad_alloc();
     }
@@ -52,18 +60,18 @@ InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor,
     if (!m_input_tensor_ptrs || !m_input_tensor_num_samples || !m_output_tensor_ptrs ||
         !m_output_tensor_num_samples) {
         // Clean up on allocation failure
-        free(m_input_tensor_ptrs);
+        free(reinterpret_cast<void*>(m_input_tensor_ptrs));
         free(m_input_tensor_num_samples);
-        free(m_output_tensor_ptrs);
+        free(reinterpret_cast<void*>(m_output_tensor_ptrs));
         free(m_output_tensor_num_samples);
         throw std::bad_alloc();
     }
 }
 
 InferenceHandler::~InferenceHandler() {
-    free(m_input_tensor_ptrs);
+    free(reinterpret_cast<void*>(m_input_tensor_ptrs));
     free(m_input_tensor_num_samples);
-    free(m_output_tensor_ptrs);
+    free(reinterpret_cast<void*>(m_output_tensor_ptrs));
     free(m_output_tensor_num_samples);
 }
 
@@ -114,8 +122,8 @@ size_t InferenceHandler::process(const float* const* input_data,
                                  size_t num_output_samples,
                                  size_t tensor_index) {
     // Get the number of input and output tensors from the inference config
-    size_t num_input_tensors = m_inference_config.get_tensor_input_shape().size();
-    size_t num_output_tensors = m_inference_config.get_tensor_output_shape().size();
+    size_t const num_input_tensors = m_inference_config.get_tensor_input_shape().size();
+    size_t const num_output_tensors = m_inference_config.get_tensor_output_shape().size();
 
     // Set the input and output tensor pointers and sample counts
     if (tensor_index < num_input_tensors) {

@@ -15,23 +15,14 @@
 #include "../utils/RingBuffer.h"
 #include "../utils/Semaphore.h"
 
-#ifdef USE_LIBTORCH
-#include "../backends/LibTorchProcessor.h"
-#endif
-#ifdef USE_ONNXRUNTIME
-#include "../backends/OnnxRuntimeProcessor.h"
-#endif
-#ifdef USE_TFLITE
-#include "../backends/TFLiteProcessor.h"
-#endif
-
 namespace anira {
 
 /**
  * @brief Forward declarations to resolve circular dependencies
  *
- * These forward declarations are necessary due to circular dependencies between
- * SessionElement and the various backend processor classes.
+ * The backend processor classes include SessionElement.h, so SessionElement only
+ * forward-declares them here and holds them via std::shared_ptr (which does not
+ * require a complete type). This breaks the otherwise circular include dependency.
  */
 class BackendBase;
 #ifdef USE_LIBTORCH
@@ -77,11 +68,11 @@ public:
      * the provided preprocessing/postprocessing pipeline and inference configuration.
      * The session is not fully initialized until prepare() is called.
      *
-     * @param newSessionID Unique identifier for this session
+     * @param new_session_id Unique identifier for this session
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration containing model settings
      */
-    SessionElement(int newSessionID,
+    SessionElement(int new_session_id,
                    PrePostProcessor& pp_processor,
                    InferenceConfig& inference_config);
 
@@ -191,8 +182,8 @@ public:
          * @param tensor_input_size Vector of input tensor sizes
          * @param tensor_output_size Vector of output tensor sizes
          */
-        ThreadSafeStruct(std::vector<size_t> tensor_input_size,
-                         std::vector<size_t> tensor_output_size);
+        ThreadSafeStruct(const std::vector<size_t>& tensor_input_size,
+                         const std::vector<size_t>& tensor_output_size);
 
         std::atomic<bool> m_free{true};  ///< Atomic flag indicating if this structure is available
                                          ///< for use

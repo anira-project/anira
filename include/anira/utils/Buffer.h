@@ -106,7 +106,7 @@ public:
      * Automatically frees the memory allocated for channel pointers. The underlying
      * audio data memory is managed by the MemoryBlock and cleaned up automatically.
      */
-    ~Buffer() { free(m_channels); }
+    ~Buffer() { free(static_cast<void*>(m_channels)); }
 
     /**
      * @brief Copy assignment operator that replaces this buffer's content with another buffer's
@@ -120,7 +120,7 @@ public:
      */
     Buffer& operator=(const Buffer& other) {
         if (this != &other) {
-            free(m_channels);
+            free(static_cast<void*>(m_channels));
             m_num_channels = other.m_num_channels;
             m_size = other.m_size;
             m_data = other.m_data;
@@ -142,7 +142,7 @@ public:
      */
     Buffer& operator=(Buffer&& other) noexcept {
         if (this != &other) {
-            free(m_channels);
+            free(static_cast<void*>(m_channels));
             m_num_channels = other.m_num_channels;
             m_size = other.m_size;
             m_data = std::move(other.m_data);
@@ -171,7 +171,7 @@ public:
         m_num_channels = num_channels;
         m_size = size;
         m_data.resize(num_channels * size);
-        free(m_channels);
+        free(static_cast<void*>(m_channels));
         malloc_channels();
     }
 
@@ -301,7 +301,7 @@ public:
                 other.m_channels = temp_channels;
             } else {
                 LOG_ERROR << "Cannot swap data, buffers have different number of channels or sizes!"
-                          << std::endl;
+                          << '\n';
             }
         }
     }
@@ -322,7 +322,7 @@ public:
             m_data.swap_data(other);
             reset_channel_ptr();
         } else {
-            LOG_ERROR << "Cannot swap data, MemoryBlock has a different size!" << std::endl;
+            LOG_ERROR << "Cannot swap data, MemoryBlock has a different size!" << '\n';
         }
     }
 
@@ -343,7 +343,7 @@ public:
             m_data.swap_data(data, size);
             reset_channel_ptr();
         } else {
-            LOG_ERROR << "Cannot swap data, MemoryBlock has a different size!" << std::endl;
+            LOG_ERROR << "Cannot swap data, MemoryBlock has a different size!" << '\n';
         }
     }
 
@@ -406,10 +406,13 @@ private:
         void* channels = malloc(m_num_channels * sizeof(T*));
         if (channels != nullptr) {
             m_channels = (T**)channels;
+            for (size_t i = 0; i < m_num_channels; i++) {
+                m_channels[i] = m_data.data() + i * m_size;
+            }
         } else {
-            LOG_ERROR << "Failed to allocate memory!" << std::endl;
+            m_channels = nullptr;
+            LOG_ERROR << "Failed to allocate memory!" << '\n';
         }
-        for (size_t i = 0; i < m_num_channels; i++) { m_channels[i] = m_data.data() + i * m_size; }
     }
 
     size_t m_num_channels = 0;  ///< Number of audio channels in the buffer

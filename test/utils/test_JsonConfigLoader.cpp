@@ -1,4 +1,10 @@
-#include <anira/anira.h>
+#include <anira/InferenceConfig.h>
+#include <anira/utils/JsonConfigLoader.h>
+
+#include <array>
+#include <cstddef>
+#include <cstring>
+#include <vector>
 
 #include "gtest/gtest.h"
 
@@ -12,6 +18,8 @@
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.h"
 
 using namespace anira;
+
+namespace {
 
 void expect_inference_config_eq(const InferenceConfig& a, const InferenceConfig& b) {
     // High level comparison
@@ -79,6 +87,8 @@ void expect_inference_config_eq(const InferenceConfig& a, const InferenceConfig&
     // Final check using the equality operator
     EXPECT_EQ(a, b);
 }
+
+}  // namespace
 
 // Test basic initialization
 TEST(JsonConfigLoader, EqualInferenceConfig) {

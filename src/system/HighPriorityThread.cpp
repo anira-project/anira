@@ -1,6 +1,18 @@
 #include <anira/system/HighPriorityThread.h>
 #include <anira/utils/Logger.h>
 
+#include <cerrno>
+
+// POSIX threading/scheduling headers are only available (and only used) on the
+// non-Windows code paths below.
+#if defined(__linux__) || defined(__APPLE__)
+#include <pthread.h>
+#endif
+#if defined(__linux__)
+#include <sched.h>
+#include <sys/resource.h>
+#endif
+
 namespace anira {
 
 HighPriorityThread::HighPriorityThread() : m_should_exit(false) {}
@@ -13,6 +25,8 @@ void HighPriorityThread::start() {
     if (!m_thread.joinable()) {
         m_should_exit = false;
 #if __linux__
+        // pthread_attr_t comes portably from <pthread.h>, not the glibc-internal <bits/...>
+        // NOLINTNEXTLINE(misc-include-cleaner)
         pthread_attr_t thread_attr;
         pthread_attr_init(&thread_attr);
         pthread_attr_setinheritsched(&thread_attr, PTHREAD_EXPLICIT_SCHED);
@@ -64,28 +78,32 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
 
     if (!is_main_process) {
         int attr_inheritsched;
+        // pthread_attr_t comes portably from <pthread.h>, not the glibc-internal <bits/...>
+        // NOLINTNEXTLINE(misc-include-cleaner)
         pthread_attr_t thread_attr;
-        ret = pthread_getattr_np(thread_native_handle, &thread_attr);
+        pthread_getattr_np(thread_native_handle, &thread_attr);
         ret = pthread_attr_getinheritsched(&thread_attr, &attr_inheritsched);
         if (ret != 0) {
             LOG_ERROR << "[ERROR] Failed to get Thread scheduling policy and params : " << errno
-                      << std::endl;
+                      << '\n';
         }
         if (attr_inheritsched != PTHREAD_EXPLICIT_SCHED) {
             LOG_ERROR << "[ERROR] Thread scheduling policy is not PTHREAD_EXPLICIT_SCHED. Possibly "
                          "thread attributes get inherited from the main process."
-                      << std::endl;
+                      << '\n';
         }
         pthread_attr_destroy(&thread_attr);
     }
 
     int sch_policy;
+    // sched_param comes portably from <sched.h>, not the glibc-internal <bits/...>
+    // NOLINTNEXTLINE(misc-include-cleaner)
     struct sched_param sch_params;
 
     ret = pthread_getschedparam(thread_native_handle, &sch_policy, &sch_params);
     if (ret != 0) {
         LOG_ERROR << "[ERROR] Failed to get Thread scheduling policy and params : " << errno
-                  << std::endl;
+                  << '\n';
     }
 
     // Pipewire uses SCHED_FIFO 60 and juce plugin host uses SCHED_FIFO 55 better stay below
@@ -95,19 +113,18 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
     if (ret != 0) {
         LOG_ERROR << "[ERROR] Failed to set Thread scheduling policy to SCHED_FIFO and increase "
                      "the sched_priority to "
-                  << sch_params.sched_priority << ". Error : " << errno << std::endl;
+                  << sch_params.sched_priority << ". Error : " << errno << '\n';
         LOG_INFO << "[WARNING] Give rtprio privileges to the user by adding the user to the "
                     "realtime/audio group. Or run the application as root."
-                 << std::endl;
+                 << '\n';
         LOG_INFO << "[WARNING] Instead, trying to set increased nice value for SCHED_OTHER..."
-                 << std::endl;
+                 << '\n';
 
         ret = setpriority(PRIO_PROCESS, 0, -10);
         if (ret != 0) {
-            LOG_ERROR << "[ERROR] Failed to set increased nice value. Error : " << errno
-                      << std::endl;
+            LOG_ERROR << "[ERROR] Failed to set increased nice value. Error : " << errno << '\n';
             LOG_INFO << "[WARNING] Using default nice value: " << getpriority(PRIO_PROCESS, 0)
-                     << std::endl;
+                     << '\n';
         }
     }
 

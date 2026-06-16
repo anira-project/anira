@@ -21,10 +21,10 @@ private:
     struct SingleParameterStruct {
         bool m_max_inference_time_set = false;
         float m_max_inference_time = 0.f;
-        unsigned int m_warm_up = anira::InferenceConfig::Defaults::m_warm_up;
+        unsigned int m_warm_up = anira::InferenceConfig::Defaults::k_warm_up;
         bool m_session_exclusive_processor =
-            anira::InferenceConfig::Defaults::m_session_exclusive_processor;
-        float m_blocking_ratio = anira::InferenceConfig::Defaults::m_blocking_ratio;
+            anira::InferenceConfig::Defaults::k_session_exclusive_processor;
+        float m_blocking_ratio = anira::InferenceConfig::Defaults::k_blocking_ratio;
         unsigned int m_num_parallel_processors =
             anira::InferenceConfig::Defaults::m_num_parallel_processors;
     };
@@ -44,7 +44,7 @@ private:
         const nlohmann::basic_json<>& config,
         bool& config_required);
     static std::vector<size_t> parse_size_t_json_shape(const nlohmann::json& shape_node,
-                                                       std::string json_key_name);
+                                                       const std::string& json_key_name);
     static SingleParameterStruct create_single_parameters_from_config(
         const nlohmann::basic_json<>& config,
         bool& necessary_parameter_set);

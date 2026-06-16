@@ -1,0 +1,41 @@
+name: clang_tidy
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tidy:
+    name: clang-tidy
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - name: Linux-x86_64
+            os: ubuntu-24.04
+    steps:
+      # submodules: true is required because .clang-tidy is a symlink into
+      # modules/tanh-lib; without it the symlink dangles and clang-tidy
+      # silently falls back to the default checks.
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: tanh-lab/ci-actions/setup-cpp-build-tools@main
+      # clang-tidy needs a compile_commands.json, so the library is configured
+      # and built first. The clang-tidy preset enables tests, the benchmark
+      # fixture and all backends so every analysed translation unit compiles.
+      - uses: tanh-lab/ci-actions/cmake-build@main
+        with:
+          PRESET: clang-tidy
+      # SOURCES excludes src/emscripten-wrappers/ because those translation
+      # units are only built by the wasm presets (Emscripten toolchain) and are
+      # therefore absent from this build's compilation database.
+      - uses: tanh-lab/ci-actions/clang-tidy-check@main
+        with:
+          PRESET: clang-tidy
+          SOURCES: "src/backends/ src/benchmark/ src/scheduler/ src/system/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/"
