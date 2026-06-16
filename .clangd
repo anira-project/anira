@@ -1,5 +1,1 @@
-CompileFlags:
-  CompilationDatabase: build/
-
-Index:
-  Background: Build
+modules/tanh-lib/.clangd
