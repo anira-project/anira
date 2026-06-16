@@ -11,7 +11,9 @@ inline bool isLoggingEnabled() {
 #endif
 }
 
-#define LOG_INFO  if (isLoggingEnabled()) (std::cout)
-#define LOG_ERROR if (isLoggingEnabled()) (std::cerr)
+#define LOG_INFO \
+    if (isLoggingEnabled()) (std::cout)
+#define LOG_ERROR \
+    if (isLoggingEnabled()) (std::cerr)
 
-#endif //ANIRA_LOGGER_H
+#endif  // ANIRA_LOGGER_H

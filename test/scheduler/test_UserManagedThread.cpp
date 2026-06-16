@@ -1,12 +1,12 @@
+#include <anira/anira.h>
+
 #include <chrono>
 #include <thread>
-
-#include "gtest/gtest.h"
-#include <anira/anira.h>
 
 #include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h"
 #include "../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "gtest/gtest.h"
 
 #define USER_THREAD_TIMEOUT_S 2
 
@@ -27,8 +27,10 @@ TEST(UserManagedInferenceThread, ProcessesAudioWithoutAutoPool) {
     // Zero auto-pool threads — the user owns the threading.
     ContextConfig context_config(0);
 
-    InferenceHandler inference_handler(
-        pp_processor, inference_config, bypass_processor, context_config);
+    InferenceHandler inference_handler(pp_processor,
+                                       inference_config,
+                                       bypass_processor,
+                                       context_config);
 
     auto user_thread = Context::make_inference_thread();
     ASSERT_NE(user_thread, nullptr);

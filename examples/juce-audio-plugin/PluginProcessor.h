@@ -5,9 +5,10 @@
 // global namespace. LibTorch's custom_function.h uses an unqualified loop
 // variable named `var`, and MSVC's two-phase template lookup then reports it as
 // an ambiguous symbol (error C2872). Parsing LibTorch first avoids the clash.
+// clang-format off
 #include <anira/anira.h>
-
 #include <JuceHeader.h>
+// clang-format on
 
 #include "PluginParameters.h"
 
@@ -15,13 +16,13 @@
 #if MODEL_TO_USE == 1
 #include <BinaryData.h>
 #endif
+#include "../../extras/models/cnn/CNNBypassProcessor.h"  // This one is only needed for the round trip test, when selecting the Custom backend
 #include "../../extras/models/cnn/CNNConfig.h"
 #include "../../extras/models/cnn/CNNPrePostProcessor.h"
-#include "../../extras/models/cnn/CNNBypassProcessor.h"  // This one is only needed for the round trip test, when selecting the Custom backend
 #elif MODEL_TO_USE == 2
+#include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h"  // Only needed for round trip test
 #include "../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h"  // Only needed for round trip test
 #elif MODEL_TO_USE == 3
 #include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #elif MODEL_TO_USE == 4
@@ -31,8 +32,8 @@
 #elif MODEL_TO_USE == 6
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfig.h"
 #elif MODEL_TO_USE == 7
-#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.h"
 #include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigDecoder.h"
+#include "../../extras/models/third-party/ircam-acids/RaveFunkDrumConfigEncoder.h"
 #endif
 
 //==============================================================================

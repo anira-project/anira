@@ -1,11 +1,11 @@
 #ifndef JSONCONFIGLOADER_H
 #define JSONCONFIGLOADER_H
 
-#include <fstream>
-#include <nlohmann/json.hpp>
-
 #include <anira/ContextConfig.h>
 #include <anira/InferenceConfig.h>
+
+#include <fstream>
+#include <nlohmann/json.hpp>
 
 namespace anira {
 

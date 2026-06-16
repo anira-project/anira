@@ -1,48 +1,45 @@
 #include "anira-clap-demo.h"
-#include <iostream>
-#include <cmath>
-#include <cstring>
 
-#include <clap/helpers/plugin.hh>
-#include <clap/helpers/plugin.hxx>
 #include <clap/helpers/host-proxy.hh>
 #include <clap/helpers/host-proxy.hxx>
+#include <clap/helpers/plugin.hh>
+#include <clap/helpers/plugin.hxx>
+#include <cmath>
+#include <cstring>
 #include <iomanip>
+#include <iostream>
 
-namespace clap_plugin_example
-{
+namespace clap_plugin_example {
 
-AniraClapPluginExample::AniraClapPluginExample(const clap_host *host)
+AniraClapPluginExample::AniraClapPluginExample(const clap_host* host)
     : clap::helpers::Plugin<clap::helpers::MisbehaviourHandler::Terminate,
-                            clap::helpers::CheckingLevel::Maximal>(&m_desc, host),
-      m_bypass_processor(m_inference_config),
-      m_anira_context(static_cast<int>(std::thread::hardware_concurrency() / 2)),
-      m_pp_processor(m_inference_config),
-      m_inference_handler(m_pp_processor, m_inference_config, m_bypass_processor, m_anira_context),
-      m_plugin_latency(0)
-{
+                            clap::helpers::CheckingLevel::Maximal>(&m_desc, host)
+    , m_bypass_processor(m_inference_config)
+    , m_anira_context(static_cast<int>(std::thread::hardware_concurrency() / 2))
+    , m_pp_processor(m_inference_config)
+    , m_inference_handler(m_pp_processor, m_inference_config, m_bypass_processor, m_anira_context)
+    , m_plugin_latency(0) {
     m_param_to_value[pmDryWet] = &m_param_dry_wet;
     m_param_to_value[pmBackend] = &m_param_backend;
 }
 
 AniraClapPluginExample::~AniraClapPluginExample() = default;
 
-const char *features[] = {CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, nullptr};
-clap_plugin_descriptor AniraClapPluginExample::m_desc = {CLAP_VERSION,
-                                            "org.anira-project.anira-clap-plugin-example",
-                                            "Anira Clap Plugin Example",
-                                            "Anira Project",
-                                            "https://github.com/anira-project/anira",
-                                            "",
-                                            "",
-                                            "0.0.1",
-                                            "A demo to show how to use CLAP with anira.",
-                                            features};
+const char* features[] = {CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, nullptr};
+clap_plugin_descriptor AniraClapPluginExample::m_desc = {
+    CLAP_VERSION,
+    "org.anira-project.anira-clap-plugin-example",
+    "Anira Clap Plugin Example",
+    "Anira Project",
+    "https://github.com/anira-project/anira",
+    "",
+    "",
+    "0.0.1",
+    "A demo to show how to use CLAP with anira.",
+    features};
 
-bool AniraClapPluginExample::paramsInfo(uint32_t paramIndex, clap_param_info *info) const noexcept
-{
-    if (paramIndex >= m_number_params)
-        return false;
+bool AniraClapPluginExample::paramsInfo(uint32_t paramIndex, clap_param_info* info) const noexcept {
+    if (paramIndex >= m_number_params) { return false; }
 
     info->flags = CLAP_PARAM_IS_AUTOMATABLE;
 
@@ -64,57 +61,51 @@ bool AniraClapPluginExample::paramsInfo(uint32_t paramIndex, clap_param_info *in
             info->default_value = 3;
             info->flags |= CLAP_PARAM_IS_STEPPED;
             break;
-        default:
-            return false;
+        default: return false;
     }
     return true;
 }
 
-bool AniraClapPluginExample::paramsValueToText(clap_id paramId, double value, char *display,
-                                    uint32_t size) noexcept
-{
+bool AniraClapPluginExample::paramsValueToText(clap_id paramId,
+                                               double value,
+                                               char* display,
+                                               uint32_t size) noexcept {
     auto pid = (ParamIds)paramId;
     std::string sValue{"ERROR"};
 
     auto n2s = [](auto n) {
         std::ostringstream oss;
-        oss <<  std::round(n);
+        oss << std::round(n);
         return oss.str();
     };
 
     switch (pid) {
-        case pmDryWet:
-            sValue = n2s(value) + " %";
-            break;
-        case pmBackend:
-        {
+        case pmDryWet: sValue = n2s(value) + " %"; break;
+        case pmBackend: {
             auto newBackend = (Backend) static_cast<int>(value);
-            switch (newBackend)
-            {
-            case OnnxRuntime:
-                #if USE_ONNXRUNTIME
-                sValue = "OnnxRuntime";
-                #else
-                sValue = "OnnxRuntime (not available)";
-                #endif
-                break;
-            case LibTorch:
-                #if USE_LIBTORCH
-                sValue = "LibTorch";
-                #else
-                sValue = "LibTorch (not available)";
-                #endif
-                break;
-            case TensorFlowLite:
-                #if USE_LIBTORCH
-                sValue = "TensorFlowLite";
-                #else
-                sValue = "TensorFlowLite (not available)";
-                #endif
-                break;
-            case Bypassed:
-                sValue = "Bypassed";
-                break;
+            switch (newBackend) {
+                case OnnxRuntime:
+#if USE_ONNXRUNTIME
+                    sValue = "OnnxRuntime";
+#else
+                    sValue = "OnnxRuntime (not available)";
+#endif
+                    break;
+                case LibTorch:
+#if USE_LIBTORCH
+                    sValue = "LibTorch";
+#else
+                    sValue = "LibTorch (not available)";
+#endif
+                    break;
+                case TensorFlowLite:
+#if USE_LIBTORCH
+                    sValue = "TensorFlowLite";
+#else
+                    sValue = "TensorFlowLite (not available)";
+#endif
+                    break;
+                case Bypassed: sValue = "Bypassed"; break;
             }
             break;
         }
@@ -125,12 +116,11 @@ bool AniraClapPluginExample::paramsValueToText(clap_id paramId, double value, ch
     return true;
 }
 
-bool AniraClapPluginExample::paramsTextToValue(clap_id paramId, const char *display, double *value) noexcept
-{
+bool AniraClapPluginExample::paramsTextToValue(clap_id paramId,
+                                               const char* display,
+                                               double* value) noexcept {
     switch (paramId) {
-        case pmDryWet:
-            *value = std::clamp(std::atof(display), 0., 100.);
-            return true;
+        case pmDryWet: *value = std::clamp(std::atof(display), 0., 100.); return true;
         case pmBackend:
             if (strcmp(display, "OnnxRuntime") == 0) {
                 *value = static_cast<double>(OnnxRuntime);
@@ -145,16 +135,14 @@ bool AniraClapPluginExample::paramsTextToValue(clap_id paramId, const char *disp
                 *value = static_cast<double>(Bypassed);
                 return true;
             }
-        default:
-            return false;
+        default: return false;
     }
 }
 
-bool AniraClapPluginExample::audioPortsInfo(uint32_t index, bool isInput,
-                                 clap_audio_port_info *info) const noexcept
-{
-    if (index > 0)
-        return false;
+bool AniraClapPluginExample::audioPortsInfo(uint32_t index,
+                                            bool isInput,
+                                            clap_audio_port_info* info) const noexcept {
+    if (index > 0) { return false; }
     info->id = 0;
     snprintf(info->name, sizeof(info->name), "%s", "My Port Name");
     info->channel_count = 1;
@@ -164,10 +152,10 @@ bool AniraClapPluginExample::audioPortsInfo(uint32_t index, bool isInput,
     return true;
 }
 
-bool AniraClapPluginExample::activate(double sampleRate, uint32_t minFrameCount,
-                             uint32_t maxFrameCount) noexcept
-{
-    anira::HostConfig host_config {
+bool AniraClapPluginExample::activate(double sampleRate,
+                                      uint32_t minFrameCount,
+                                      uint32_t maxFrameCount) noexcept {
+    anira::HostConfig host_config{
         static_cast<float>(maxFrameCount),
         static_cast<float>(sampleRate),
         // true, // Allow smaller buffers? Introduces more latency
@@ -175,18 +163,17 @@ bool AniraClapPluginExample::activate(double sampleRate, uint32_t minFrameCount,
 
     m_inference_handler.prepare(host_config);
 
-    m_plugin_latency = (uint32_t) m_inference_handler.get_latency();
-    m_dry_wet_mixer.prepare(sampleRate, maxFrameCount, (size_t) m_plugin_latency);
+    m_plugin_latency = (uint32_t)m_inference_handler.get_latency();
+    m_dry_wet_mixer.prepare(sampleRate, maxFrameCount, (size_t)m_plugin_latency);
 
     return true;
 }
 
-clap_process_status AniraClapPluginExample::process(const clap_process *process) noexcept
-{
+clap_process_status AniraClapPluginExample::process(const clap_process* process) noexcept {
     checkForEvents(process);
 
-    float **in = process->audio_inputs[0].data32;
-    float **out = process->audio_outputs[0].data32;
+    float** in = process->audio_inputs[0].data32;
+    float** out = process->audio_outputs[0].data32;
 
     for (int channel = 0; channel < 1; ++channel) {
         for (int sample = 0; sample < process->frames_count; ++sample) {
@@ -194,7 +181,7 @@ clap_process_status AniraClapPluginExample::process(const clap_process *process)
         }
     }
 
-    m_inference_handler.process(in, (size_t) process->frames_count);
+    m_inference_handler.process(in, (size_t)process->frames_count);
 
     for (int channel = 0; channel < 1; ++channel) {
         for (int sample = 0; sample < process->frames_count; ++sample) {
@@ -205,73 +192,70 @@ clap_process_status AniraClapPluginExample::process(const clap_process *process)
     return CLAP_PROCESS_SLEEP;
 }
 
-void AniraClapPluginExample::checkForEvents(const clap_process *process) {
+void AniraClapPluginExample::checkForEvents(const clap_process* process) {
     auto ev = process->in_events;
     auto sz = ev->size(ev);
 
-    const clap_event_header_t *nextEvent{nullptr};
+    const clap_event_header_t* nextEvent{nullptr};
     uint32_t nextEventIndex{0};
-    if (sz != 0) {
-        nextEvent = ev->get(ev, nextEventIndex);
-    }
+    if (sz != 0) { nextEvent = ev->get(ev, nextEventIndex); }
 
     for (int i = 0; i < process->frames_count; ++i) {
         while (nextEvent && nextEvent->time == i) {
             handleInboundEvent(nextEvent);
             nextEventIndex++;
-            if (nextEventIndex >= sz)
+            if (nextEventIndex >= sz) {
                 nextEvent = nullptr;
-            else
+            } else {
                 nextEvent = ev->get(ev, nextEventIndex);
+            }
         }
     }
 }
 
-void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t *evt)
-{
-    if (evt->space_id != CLAP_CORE_EVENT_SPACE_ID)
-        return;
+void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t* evt) {
+    if (evt->space_id != CLAP_CORE_EVENT_SPACE_ID) { return; }
 
     if (evt->type == CLAP_EVENT_PARAM_VALUE) {
-        auto v = reinterpret_cast<const clap_event_param_value *>(evt);
+        auto v = reinterpret_cast<const clap_event_param_value*>(evt);
         *m_param_to_value[v->param_id] = v->value;
 
         if (m_param_to_value[v->param_id] == &m_param_backend) {
-            switch ((Backend) m_param_backend) {
+            switch ((Backend)m_param_backend) {
                 case OnnxRuntime:
-                    #if USE_ONNXRUNTIME
+#if USE_ONNXRUNTIME
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
-                    #else
+#else
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-                    #endif
+#endif
                     break;
                 case LibTorch:
-                    #if USE_LIBTORCH
+#if USE_LIBTORCH
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
-                    #else
+#else
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-                    #endif
+#endif
                     break;
                 case TensorFlowLite:
-                    #if USE_TENSORFLOW
+#if USE_TENSORFLOW
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
-                    #else
+#else
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-                    #endif
+#endif
                     break;
                 default:
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
                     break;
             }
         } else if (m_param_to_value[v->param_id] == &m_param_dry_wet) {
-            auto new_mix = static_cast<float> (m_param_dry_wet / 100.0);
+            auto new_mix = static_cast<float>(m_param_dry_wet / 100.0);
             m_dry_wet_mixer.set_mix(new_mix);
         }
     }
 }
 
-void AniraClapPluginExample::paramsFlush(const clap_input_events *in, const clap_output_events *out) noexcept
-{
+void AniraClapPluginExample::paramsFlush(const clap_input_events* in,
+                                         const clap_output_events* out) noexcept {
     auto sz = in->size(in);
 
     for (auto e = 0U; e < sz; ++e) {
@@ -280,13 +264,11 @@ void AniraClapPluginExample::paramsFlush(const clap_input_events *in, const clap
     }
 }
 
-bool AniraClapPluginExample::isValidParamId(clap_id paramId) const noexcept
-{
+bool AniraClapPluginExample::isValidParamId(clap_id paramId) const noexcept {
     return m_param_to_value.find(paramId) != m_param_to_value.end();
 }
 
-bool AniraClapPluginExample::paramsValue(clap_id paramId, double *value) noexcept
-{
+bool AniraClapPluginExample::paramsValue(clap_id paramId, double* value) noexcept {
     *value = *m_param_to_value[paramId];
     return true;
 }
@@ -307,4 +289,4 @@ uint32_t AniraClapPluginExample::latencyGet() const noexcept {
     return m_plugin_latency;
 }
 
-} // namespace anira::clap_plugin_example
+}  // namespace clap_plugin_example

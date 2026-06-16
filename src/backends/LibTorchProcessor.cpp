@@ -3,26 +3,26 @@
 
 namespace anira {
 
-LibtorchProcessor::LibtorchProcessor(InferenceConfig& inference_config) : BackendBase(inference_config) {
+LibtorchProcessor::LibtorchProcessor(InferenceConfig& inference_config)
+    : BackendBase(inference_config) {
     torch::set_num_threads(1);
-    
+
     for (unsigned int i = 0; i < m_inference_config.m_num_parallel_processors; ++i) {
         m_instances.emplace_back(std::make_shared<Instance>(m_inference_config));
     }
 }
 
-LibtorchProcessor::~LibtorchProcessor() {
-}
+LibtorchProcessor::~LibtorchProcessor() {}
 
 void LibtorchProcessor::prepare() {
-    for(auto& instance : m_instances) {
-        instance->prepare();
-    }
+    for (auto& instance : m_instances) { instance->prepare(); }
 }
 
-void LibtorchProcessor::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) { 
+void LibtorchProcessor::process(std::vector<BufferF>& input,
+                                std::vector<BufferF>& output,
+                                std::shared_ptr<SessionElement> session) {
     while (true) {
-        for(auto& instance : m_instances) {
+        for (auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
                 instance->process(input, output, session);
                 instance->m_processing.exchange(false);
@@ -32,27 +32,26 @@ void LibtorchProcessor::process(std::vector<BufferF>& input, std::vector<BufferF
     }
 }
 
-LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inference_config(inference_config) {
+LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config)
+    : m_inference_config(inference_config) {
     m_tensor_options = torch::TensorOptions().requires_grad(false);
 
     if (m_inference_config.is_model_binary(anira::InferenceBackend::LIBTORCH)) {
         try {
-            const anira::ModelData* model_data = m_inference_config.get_model_data(anira::InferenceBackend::LIBTORCH);
-            std::istringstream stream(std::string(
-                static_cast<const char*>(model_data->m_data),
-                model_data->m_size
-            ));
+            const anira::ModelData* model_data =
+                m_inference_config.get_model_data(anira::InferenceBackend::LIBTORCH);
+            std::istringstream stream(
+                std::string(static_cast<const char*>(model_data->m_data), model_data->m_size));
             m_module = torch::jit::load(stream);
-        }
-        catch (const c10::Error& e) {
+        } catch (const c10::Error& e) {
             LOG_ERROR << "[ERROR] error loading the model\n";
             LOG_ERROR << e.what() << std::endl;
         }
     } else {
         try {
-            m_module = torch::jit::load(m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
-        }
-        catch (const c10::Error& e) {
+            m_module = torch::jit::load(
+                m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
+        } catch (const c10::Error& e) {
             LOG_ERROR << "[ERROR] error loading the model\n";
             LOG_ERROR << e.what() << std::endl;
         }
@@ -66,17 +65,17 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config) : m_inf
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_input_data[i].resize(m_inference_config.get_tensor_input_size()[i]);
         m_inputs[i] = torch::from_blob(
-            m_input_data[i].data(), 
+            m_input_data[i].data(),
             m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[i],
-            m_tensor_options
-        );
+            m_tensor_options);
     }
 
     // No gradient calculation for inference
     torch::NoGradGuard no_grad;
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
         if (!m_inference_config.get_model_function(InferenceBackend::LIBTORCH).empty()) {
-            auto method = m_module.get_method(m_inference_config.get_model_function(InferenceBackend::LIBTORCH));
+            auto method = m_module.get_method(
+                m_inference_config.get_model_function(InferenceBackend::LIBTORCH));
             m_outputs = method(m_inputs);
         } else {
             // Run inference
@@ -91,37 +90,44 @@ void LibtorchProcessor::Instance::prepare() {
     }
 }
 
-void LibtorchProcessor::Instance::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) {
+void LibtorchProcessor::Instance::process(std::vector<BufferF>& input,
+                                          std::vector<BufferF>& output,
+                                          std::shared_ptr<SessionElement> session) {
     // No gradient calculation for inference
     torch::NoGradGuard no_grad;
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_input_data[i].swap_data(input[i].get_memory_block());
         input[i].reset_channel_ptr();
-        // This is necessary because the tensor data pointers seem to change from inference to inference
-        m_inputs[i] = torch::from_blob(m_input_data[i].data(),
+        // This is necessary because the tensor data pointers seem to change from inference to
+        // inference
+        m_inputs[i] = torch::from_blob(
+            m_input_data[i].data(),
             m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LIBTORCH)[i],
             m_tensor_options);
     }
 
     // Run inference
     if (!m_inference_config.get_model_function(InferenceBackend::LIBTORCH).empty()) {
-        auto method = m_module.get_method(m_inference_config.get_model_function(InferenceBackend::LIBTORCH));
+        auto method =
+            m_module.get_method(m_inference_config.get_model_function(InferenceBackend::LIBTORCH));
         m_outputs = method(m_inputs);
     } else {
         m_outputs = m_module.forward(m_inputs);
     }
 
     // We need to copy the data because we cannot access the data pointer ref of the tensor directly
-    if(m_outputs.isTuple()) {
+    if (m_outputs.isTuple()) {
         for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
             for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-                output[i].get_memory_block()[j] = m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j];
+                output[i].get_memory_block()[j] =
+                    m_outputs.toTuple()->elements()[i].toTensor().view({-1}).data_ptr<float>()[j];
             }
         }
-    } else if(m_outputs.isTensorList()) {
+    } else if (m_outputs.isTensorList()) {
         for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
             for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-                output[i].get_memory_block()[j] = m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j];
+                output[i].get_memory_block()[j] =
+                    m_outputs.toTensorList().get(i).view({-1}).data_ptr<float>()[j];
             }
         }
     } else if (m_outputs.isTensor()) {
@@ -131,4 +137,4 @@ void LibtorchProcessor::Instance::process(std::vector<BufferF>& input, std::vect
     }
 }
 
-} // namespace anira
+}  // namespace anira

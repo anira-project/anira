@@ -10,7 +10,7 @@
       "name": "desktop-debug",
       "displayName": "Desktop Debug",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/Desktop/Debug",
+      "binaryDir": "${sourceDir}/build/desktop/Debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_C_COMPILER": "clang",
@@ -21,7 +21,7 @@
       "name": "desktop-release",
       "displayName": "Desktop Release",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/Desktop/Release",
+      "binaryDir": "${sourceDir}/build/desktop/Release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_C_COMPILER": "clang",
@@ -33,7 +33,7 @@
       "displayName": "Wasm Debug",
       "description": "Build AniraWeb WASM module (debug)",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/Wasm/Debug",
+      "binaryDir": "${sourceDir}/build/wasm/Debug",
       "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
       "cacheVariables": {
         "ANIRA_BUILD_WASM": "ON",
@@ -48,7 +48,7 @@
       "displayName": "Wasm Release",
       "description": "Build AniraWeb WASM module (release)",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/Wasm/Release",
+      "binaryDir": "${sourceDir}/build/wasm/Release",
       "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
       "cacheVariables": {
         "ANIRA_BUILD_WASM": "ON",

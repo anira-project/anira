@@ -1,5 +1,6 @@
-#include <emscripten/emscripten.h>
 #include "anira/utils/RingBuffer.h"
+
+#include <emscripten/emscripten.h>
 
 // ------ RingBuffer C API ----
 
@@ -59,5 +60,4 @@ size_t ringbuffer_get_available_past_samples(uintptr_t ptr, size_t channel) {
     return reinterpret_cast<anira::RingBuffer*>(ptr)->get_available_past_samples(channel);
 }
 
-} // extern "C"
-
+}  // extern "C"
