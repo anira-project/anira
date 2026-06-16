@@ -19,12 +19,7 @@ jobs:
           - name: Linux-x86_64
             os: ubuntu-24.04
     steps:
-      # submodules: true is required because .clang-format is a symlink into
-      # modules/tanh-lib; without it the symlink dangles and clang-format
-      # silently falls back to the default LLVM style.
       - uses: actions/checkout@v4
-        with:
-          submodules: true
       - uses: tanh-lab/ci-actions/setup-cpp-build-tools@main
       - uses: tanh-lab/ci-actions/clang-format-check@main
         with:

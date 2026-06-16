@@ -1,24 +1,11 @@
 {
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/format.sh",
-            "statusMessage": "Formatting..."
-          },
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/tidy.sh",
-            "statusMessage": "Running clang-tidy..."
-          }
-        ]
-      }
-    ]
+  "extraKnownMarketplaces": {
+    "tanh-tooling": {
+      "source": { "source": "github", "repo": "tanh-lab/tanh-tooling" }
+    }
   },
   "enabledPlugins": {
+    "tanh-tools@tanh-tooling": true,
     "clangd-lsp@claude-plugins-official": true
   }
 }

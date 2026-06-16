@@ -1,0 +1,19 @@
+name: clang_check
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Verifies the committed .clang-format / .clang-tidy / .clangd still match the
+  # pinned tanh-tooling release. Bumping the pin means re-running install.sh and
+  # committing the result (https://github.com/tanh-lab/tanh-tooling).
+  clang-config:
+    uses: tanh-lab/tanh-tooling/.github/workflows/clang-check.yml@v0.1.4
+    with:
+      ref: v0.1.4

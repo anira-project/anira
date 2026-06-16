@@ -19,12 +19,7 @@ jobs:
           - name: Linux-x86_64
             os: ubuntu-24.04
     steps:
-      # submodules: true is required because .clang-tidy is a symlink into
-      # modules/tanh-lib; without it the symlink dangles and clang-tidy
-      # silently falls back to the default checks.
       - uses: actions/checkout@v4
-        with:
-          submodules: true
       - uses: tanh-lab/ci-actions/setup-cpp-build-tools@main
       # clang-tidy needs a compile_commands.json, so the library is configured
       # and built first. The clang-tidy preset enables tests, the benchmark
