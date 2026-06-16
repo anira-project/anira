@@ -1,1 +1,32 @@
-modules/tanh-lib/.clang-format
+---
+BasedOnStyle: Google
+SortIncludes: true
+AlignEscapedNewlines: Left
+AllowShortBlocksOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: true
+AllowShortLoopsOnASingleLine: true
+InsertBraces: true
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowAllArgumentsOnNextLine: false
+ColumnLimit: 100
+IndentWidth: 4
+SpacesInAngles: false
+SpaceInEmptyParentheses: false
+SpacesInContainerLiterals: false
+IndentFunctionDeclarationAfterType: true
+PenaltyBreakComment: 0
+BreakBeforeBraces: Attach
+UseTab: Never
+AlignAfterOpenBracket: Align
+BinPackArguments: false
+BinPackParameters: false
+BreakConstructorInitializersBeforeComma: true
+BreakConstructorInitializers: BeforeComma
+IndentAccessModifiers: false
+AccessModifierOffset: -4
+NamespaceIndentation: None
+ObjCBlockIndentWidth: 4
+
+...
