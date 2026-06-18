@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+# Use the dynamic MSVC runtime (/MD), matching anira (which uses the CMake default).
+# A static anira is linked into this plugin, so a /MT plugin would clash with anira's
+# /MD objects (LNK2038 "RuntimeLibrary mismatch").
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 set(CMAKE_OSX_DEPLOYMENT_TARGET 10.11 CACHE STRING "Build for 10.1")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 

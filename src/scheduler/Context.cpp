@@ -2,10 +2,18 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/backends/BackendBase.h>
+#ifdef USE_LIBTORCH
 #include <anira/backends/LibTorchProcessor.h>
+#endif
+#ifdef USE_LITERT
 #include <anira/backends/LiteRtProcessor.h>
+#endif
+#ifdef USE_ONNXRUNTIME
 #include <anira/backends/OnnxRuntimeProcessor.h>
+#endif
+#ifdef USE_TFLITE
 #include <anira/backends/TFLiteProcessor.h>
+#endif
 #include <anira/scheduler/Context.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
