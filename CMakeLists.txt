@@ -211,6 +211,14 @@ FetchContent_Declare(
     GIT_TAG v3.12.0
     GIT_SHALLOW TRUE
 )
+# When installing anira, also install nlohmann_json's headers + CMake config so the
+# installed aniraConfig.cmake can resolve find_package(nlohmann_json). As a subproject
+# nlohmann_json defaults JSON_Install=OFF (unlike concurrentqueue, which installs by
+# default), which previously left the installed package referencing a config that was
+# never shipped.
+if(ANIRA_WITH_INSTALL)
+    set(JSON_Install ON)
+endif()
 FetchContent_MakeAvailable(nlohmann_json)
 
 # ==============================================================================
