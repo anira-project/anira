@@ -1,3 +1,5 @@
+#ifdef USE_LITERT
+
 #include <anira/InferenceConfig.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/backends/LiteRtProcessor.h>
@@ -229,3 +231,5 @@ void LiteRtProcessor::Instance::process(std::vector<BufferF>& input,
 }
 
 }  // namespace anira
+
+#endif  // USE_LITERT

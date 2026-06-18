@@ -1,3 +1,5 @@
+#ifdef USE_TFLITE
+
 #include <anira/InferenceConfig.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/backends/TFLiteProcessor.h>
@@ -133,3 +135,5 @@ void TFLiteProcessor::Instance::process(std::vector<BufferF>& input,
 }
 
 }  // namespace anira
+
+#endif  // USE_TFLITE
