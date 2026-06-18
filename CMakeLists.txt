@@ -15,8 +15,27 @@ option(ANIRA_WITH_DOCS "Add Build Documentation" OFF)
 # Select the backends for the inference engine, multiple backends can be selected
 option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
 option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
-option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend (TfLite* C API)" ON)
+# LiteRT (LiteRt* C API) is the default TensorFlow-family backend; TFLite (legacy
+# TfLite* C API) is the same underlying runtime, so the two are mutually exclusive
+# (LiteRt's library bundles the TfLite* symbols -> they collide when linked together).
 option(ANIRA_WITH_LITERT "Build with LiteRT backend (LiteRt* C API, runs .tflite via the CompiledModel runtime)" ON)
+option(ANIRA_WITH_TFLITE "Build with the legacy TensorFlow Lite backend (TfLite* C API); mutually exclusive with ANIRA_WITH_LITERT" OFF)
+
+if(ANIRA_WITH_TFLITE AND ANIRA_WITH_LITERT)
+    message(FATAL_ERROR
+        "ANIRA_WITH_TFLITE and ANIRA_WITH_LITERT are the same TensorFlow Lite runtime exposed "
+        "through two C APIs and cannot be enabled together (their static libraries export the "
+        "same TfLite* symbols). LiteRT is the default; TFLite is legacy. To use the legacy "
+        "TFLite backend, set -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON.")
+endif()
+
+# LibTorch ships shared-only upstream, so it cannot be part of a fully static build (and its
+# bundled XNNPACK collides with static LiteRT). Disable it automatically when building static.
+if(NOT BUILD_SHARED_LIBS AND ANIRA_WITH_LIBTORCH)
+    message(WARNING "LibTorch is shared-only and cannot be linked into a fully static anira build "
+                    "(BUILD_SHARED_LIBS=OFF); disabling ANIRA_WITH_LIBTORCH. Build shared to use LibTorch.")
+    set(ANIRA_WITH_LIBTORCH OFF)
+endif()
 
 # Pre-built backends are downloaded from the anira-project/backends release with
 # this tag (and verified against cmake/backends_lock.cmake). Defaults to the

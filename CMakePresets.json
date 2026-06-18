@@ -43,7 +43,7 @@
         "ANIRA_WITH_BENCHMARK": "ON",
         "ANIRA_WITH_LIBTORCH": "ON",
         "ANIRA_WITH_ONNXRUNTIME": "ON",
-        "ANIRA_WITH_TFLITE": "ON",
+        "ANIRA_WITH_TFLITE": "OFF",
         "ANIRA_WITH_LITERT": "ON"
       }
     },

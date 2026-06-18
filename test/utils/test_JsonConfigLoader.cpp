@@ -9,7 +9,7 @@
 #include "gtest/gtest.h"
 
 #ifdef USE_LIBTORCH
-#ifdef USE_TFLITE
+#ifdef USE_LITERT
 #ifdef USE_ONNXRUNTIME
 
 #include "../../extras/models/model-pool/SimpleGainConfig.h"
@@ -114,5 +114,5 @@ TEST(JsonConfigLoader, EqualInferenceConfig) {
 }
 
 #endif  // USE_ONNXRUNTIME
-#endif  // USE_TFLITE
+#endif  // USE_LITERT
 #endif  // USE_LIBTORCH

@@ -449,9 +449,11 @@ function(anira_target_link_static_backend target libpath)
         target_link_libraries(${target} PUBLIC "${libpath}")
     elseif(APPLE)
         # Static onnxruntime/tflite/litert pull in absl/CoreFoundation time-zone +
-        # Apple logging code, so the system frameworks must be linked.
+        # Apple logging code (Foundation/CoreFoundation), and static LiteRT references
+        # Metal (LiteRtCreateMetalInfo -> MTLCreateSystemDefaultDevice), so link those
+        # system frameworks.
         target_link_libraries(${target} PUBLIC
-            "${libpath}" "-framework Foundation" "-framework CoreFoundation")
+            "${libpath}" "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
     else() # Linux / other ELF
         find_package(Threads REQUIRED)
         target_link_libraries(${target} PUBLIC

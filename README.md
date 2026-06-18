@@ -119,12 +119,12 @@ cmake --install build --prefix /path/to/install/directory
 
 ### C++ Build Options
 
-By default, LibTorch, ONNXRuntime and TensorFlow Lite are enabled. You can disable specific backends as needed:
+By default, LibTorch, ONNXRuntime and LiteRT are enabled. You can disable specific backends as needed:
 
 - LibTorch: ``-DANIRA_WITH_LIBTORCH=OFF``
 - OnnxRuntime: ``-DANIRA_WITH_ONNXRUNTIME=OFF``
-- Tensorflow Lite: ``-DANIRA_WITH_TFLITE=OFF``
-- LiteRT (`LiteRt*` C API): ``-DANIRA_WITH_LITERT=ON`` — runs `.tflite` models through LiteRT's native CompiledModel runtime (the modern successor to the TFLite C API). Off by default; enable it to use the `LiteRt*` API instead of, or alongside, the legacy `TfLite*` backend.
+- LiteRT (`LiteRt*` C API): ``-DANIRA_WITH_LITERT=OFF`` — runs `.tflite` models through LiteRT's native CompiledModel runtime. Enabled by default; it is the modern TensorFlow-Lite-family backend.
+- TensorFlow Lite (legacy `TfLite*` C API): ``-DANIRA_WITH_TFLITE=ON`` — the **same runtime** as LiteRT exposed through the older C API, so the two are **mutually exclusive**. To use it, disable LiteRT: ``-DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON``.
 
 Pre-built backend binaries are downloaded at configure time from the
 [anira-project/backends](https://github.com/anira-project/backends) release pinned by

@@ -15,13 +15,16 @@ if(NOT CMAKE_BUILD_TYPE)
     message(FATAL_ERROR "You need to specify CMAKE_BUILD_TYPE")
 endif()
 
-if(CMAKE_GENERATOR MATCHES "Visual Studio")
-    set(ANIRA_DLL "${anira_BINARY_DIR}/${CMAKE_BUILD_TYPE}/anira.dll")
-else()
-    set(ANIRA_DLL "${anira_BINARY_DIR}/anira.dll")
+# anira.dll only exists for a shared build; a static anira (.lib) is baked into the
+# consumer, so there is nothing to copy.
+if(BUILD_SHARED_LIBS)
+    if(CMAKE_GENERATOR MATCHES "Visual Studio")
+        set(ANIRA_DLL "${anira_BINARY_DIR}/${CMAKE_BUILD_TYPE}/anira.dll")
+    else()
+        set(ANIRA_DLL "${anira_BINARY_DIR}/anira.dll")
+    endif()
+    list(APPEND ANIRA_SHARED_LIBS_WIN ${ANIRA_DLL})
 endif()
-
-list(APPEND ANIRA_SHARED_LIBS_WIN ${ANIRA_DLL})
 
 # Add all necessary DLLs to a list for later copying. Only shared backends ship a
 # runtime DLL; statically-linked backends are baked into anira.dll, so skip them.
@@ -42,8 +45,9 @@ if (ANIRA_WITH_LIBTORCH)
     list(APPEND ANIRA_SHARED_LIBS_WIN ${INFERENCE_ENGINE_DLLS_LIBTORCH})
 endif(ANIRA_WITH_LIBTORCH)
 
-# Google Benchmark and Google Test DLLs
-if (ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK)
+# Google Benchmark and Google Test DLLs (only built as DLLs in a shared build; with
+# BUILD_SHARED_LIBS=OFF gtest/benchmark are static and there is no .dll to copy).
+if ((ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK) AND BUILD_SHARED_LIBS)
     if(CMAKE_GENERATOR MATCHES "Visual Studio")
         list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}/gtest.dll")
         list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}/gtest_main.dll")
@@ -53,7 +57,7 @@ if (ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK)
     endif()
 endif()
 
-if (ANIRA_WITH_BENCHMARK)
+if (ANIRA_WITH_BENCHMARK AND BUILD_SHARED_LIBS)
     if(CMAKE_GENERATOR MATCHES "Visual Studio")
         list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/_deps/benchmark-build/src/${CMAKE_BUILD_TYPE}/benchmark.dll")
     else()
