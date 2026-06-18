@@ -109,11 +109,14 @@ LiteRtProcessor::Instance::Instance(InferenceConfig& inference_config)
                  "LiteRtSetOptionsHardwareAccelerators");
 
     LiteRtOpaqueOptions cpu_opaque = nullptr;
-    char* cpu_payload = strdup("num_threads = 1\n");  // freed by the deleter below
+    const char* const cpu_opts_toml = "num_threads = 1\n";  // freed by the deleter below
+    const size_t cpu_opts_len = std::strlen(cpu_opts_toml) + 1;
+    char* cpu_payload = static_cast<char*>(std::malloc(cpu_opts_len));
+    std::memcpy(cpu_payload, cpu_opts_toml, cpu_opts_len);
     litert_check(LiteRtCreateOpaqueOptions(
                      "xnnpack",
                      cpu_payload,
-                     [](void* p) { free(p); },
+                     [](void* p) { std::free(p); },
                      &cpu_opaque),
                  "LiteRtCreateOpaqueOptions");
     litert_check(LiteRtAddOpaqueOptions(m_options, cpu_opaque), "LiteRtAddOpaqueOptions");
