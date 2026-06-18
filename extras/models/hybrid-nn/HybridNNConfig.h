@@ -16,11 +16,19 @@ static std::vector<anira::ModelData> model_data_hybridnn_config = {
     {GUITARLSTM_MODELS_PATH_TENSORFLOW + std::string("/model_0/GuitarLSTM-256.tflite"),
      anira::InferenceBackend::TFLITE},
 #endif
+#ifdef USE_LITERT
+    // LiteRT loads the same .tflite flatbuffer as the TFLite backend.
+    {GUITARLSTM_MODELS_PATH_TENSORFLOW + std::string("/model_0/GuitarLSTM-256.tflite"),
+     anira::InferenceBackend::LITERT},
+#endif
 };
 
 static std::vector<anira::TensorShape> tensor_shape_hybridnn_config = {
 #ifdef USE_TFLITE
     {{{256, 150, 1}}, {{256, 1}}, anira::InferenceBackend::TFLITE},
+#endif
+#ifdef USE_LITERT
+    {{{256, 150, 1}}, {{256, 1}}, anira::InferenceBackend::LITERT},
 #endif
     {{{256, 1, 150}}, {{256, 1}}}};
 

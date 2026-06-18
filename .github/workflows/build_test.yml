@@ -56,6 +56,6 @@ jobs:
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.inference_engines }} -DANIRA_WITH_TFLITE=${{ matrix.inference_engines }}"
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.inference_engines }} -DANIRA_WITH_TFLITE=${{ matrix.inference_engines }} -DANIRA_WITH_LITERT=${{ matrix.inference_engines }}"
       - name: test
         uses: ./.github/actions/test

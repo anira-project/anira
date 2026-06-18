@@ -5,6 +5,7 @@
 #include "InferenceHandler.h"
 #include "PrePostProcessor.h"
 #include "backends/LibTorchProcessor.h"
+#include "backends/LiteRtProcessor.h"
 #include "backends/OnnxRuntimeProcessor.h"
 #include "backends/TFLiteProcessor.h"
 #include "scheduler/Context.h"

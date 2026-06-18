@@ -62,6 +62,20 @@ enum InferenceBackend {
      */
     TFLITE,
 #endif
+#ifdef USE_LITERT
+    /**
+     * @brief LiteRT inference backend
+     *
+     * Uses Google's LiteRT (the rebranded TensorFlow Lite) via its newer native
+     * `LiteRt*` C API. Runs the same `.tflite` models as the TFLITE backend but
+     * through the LiteRT CompiledModel runtime. Requires LiteRT to be linked at
+     * build time.
+     *
+     * Model format: .tflite
+     * Platform support: Windows, Linux, macOS, Android, iOS
+     */
+    LITERT,
+#endif
     /**
      * @brief Custom user-defined inference backend
      *

@@ -17,22 +17,32 @@ public:
         int64_t num_input_samples = 0;
         int64_t num_output_samples = 0;
 
+        // TFLite and LiteRT use the same .tflite model with channels-last shape
+        // ({batch, samples, 1}); LibTorch/ONNX use channels-first ({batch, 1, samples}).
+        bool channels_last = false;
+        anira::InferenceBackend channels_last_backend = anira::InferenceBackend::CUSTOM;
 #ifdef USE_TFLITE
         if (current_inference_backend == anira::InferenceBackend::TFLITE) {
-            num_batches =
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[0][0];
-            num_input_samples =
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[0][1];
-            num_output_samples =
-                m_inference_config.get_tensor_output_shape(anira::InferenceBackend::TFLITE)[0][1];
-        } else {
+            channels_last = true;
+            channels_last_backend = anira::InferenceBackend::TFLITE;
+        }
 #endif
+#ifdef USE_LITERT
+        if (current_inference_backend == anira::InferenceBackend::LITERT) {
+            channels_last = true;
+            channels_last_backend = anira::InferenceBackend::LITERT;
+        }
+#endif
+        if (channels_last) {
+            num_batches = m_inference_config.get_tensor_input_shape(channels_last_backend)[0][0];
+            num_input_samples = m_inference_config.get_tensor_input_shape(channels_last_backend)[0][1];
+            num_output_samples =
+                m_inference_config.get_tensor_output_shape(channels_last_backend)[0][1];
+        } else {
             num_batches = m_inference_config.get_tensor_input_shape()[0][0];
             num_input_samples = m_inference_config.get_tensor_input_shape()[0][2];
             num_output_samples = m_inference_config.get_tensor_output_shape()[0][1];
-#ifdef USE_TFLITE
         }
-#endif
         if (
 #ifdef USE_LIBTORCH
             current_inference_backend != anira::InferenceBackend::LIBTORCH &&
@@ -42,6 +52,9 @@ public:
 #endif
 #ifdef USE_TFLITE
             current_inference_backend != anira::InferenceBackend::TFLITE &&
+#endif
+#ifdef USE_LITERT
+            current_inference_backend != anira::InferenceBackend::LITERT &&
 #endif
             current_inference_backend != anira::InferenceBackend::CUSTOM) {
             throw std::runtime_error("Invalid inference backend");

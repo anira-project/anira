@@ -52,6 +52,9 @@ std::ostream& operator<<(std::ostream& stream, const InferenceTestParams& params
 #ifdef USE_TFLITE
         case anira::InferenceBackend::TFLITE: backend = "TFlite"; break;
 #endif
+#ifdef USE_LITERT
+        case anira::InferenceBackend::LITERT: backend = "LiteRt"; break;
+#endif
         case anira::InferenceBackend::CUSTOM: backend = "custom"; break;
 
         default: backend = "unknown"; break;
@@ -597,6 +600,56 @@ INSTANTIATE_TEST_SUITE_P(
             2e-7f},
         InferenceTestParams{
             anira::InferenceBackend::TFLITE,
+            HostConfig(300, 44100),
+            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
+            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
+            149,
+            1e-6f,
+            2e-7f}),
+    build_test_name);
+#endif
+
+// LiteRT loads the same GuitarLSTM .tflite flatbuffer as the TFLite backend, so it
+// reuses the y_pred_tflite.wav reference. Mirrors InferenceTflite above.
+#ifdef USE_LITERT
+INSTANTIATE_TEST_SUITE_P(
+    InferenceLiteRt,
+    InferenceTest,
+    ::testing::Values(
+        InferenceTestParams{
+            anira::InferenceBackend::LITERT,
+            HostConfig(1024, 44100),
+            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
+            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
+            149,
+            1e-6f,
+            2e-7f},
+        InferenceTestParams{
+            anira::InferenceBackend::LITERT,
+            HostConfig(2048, 44100),
+            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
+            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
+            149,
+            1e-6f,
+            2e-7f},
+        InferenceTestParams{
+            anira::InferenceBackend::LITERT,
+            HostConfig(512, 44100),
+            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
+            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
+            149,
+            1e-6f,
+            2e-7f},
+        InferenceTestParams{
+            anira::InferenceBackend::LITERT,
+            HostConfig(256, 44100),
+            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
+            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
+            149,
+            1e-6f,
+            2e-7f},
+        InferenceTestParams{
+            anira::InferenceBackend::LITERT,
             HostConfig(300, 44100),
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
             std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",

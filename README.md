@@ -119,11 +119,20 @@ cmake --install build --prefix /path/to/install/directory
 
 ### C++ Build Options
 
-By default, all three inference engines are installed. You can disable specific backends as needed:
+By default, LibTorch, ONNXRuntime and TensorFlow Lite are enabled. You can disable specific backends as needed:
 
 - LibTorch: ``-DANIRA_WITH_LIBTORCH=OFF``
 - OnnxRuntime: ``-DANIRA_WITH_ONNXRUNTIME=OFF``
 - Tensorflow Lite: ``-DANIRA_WITH_TFLITE=OFF``
+- LiteRT (`LiteRt*` C API): ``-DANIRA_WITH_LITERT=ON`` — runs `.tflite` models through LiteRT's native CompiledModel runtime (the modern successor to the TFLite C API). Off by default; enable it to use the `LiteRt*` API instead of, or alongside, the legacy `TfLite*` backend.
+
+Pre-built backend binaries are downloaded at configure time from the
+[anira-project/backends](https://github.com/anira-project/backends) release pinned by
+`ANIRA_BACKENDS_VERSION` and verified against `cmake/backends_lock.cmake`. Linkage and source are configurable:
+
+- Linkage: ``-DANIRA_BACKEND_LINKAGE=auto|shared|static`` (``auto`` follows ``BUILD_SHARED_LIBS``; static anira → static backends). Per-engine override: ``-DANIRA_<ENGINE>_LINKAGE=...`` where `<ENGINE>` is `LIBTORCH|ONNXRUNTIME|TFLITE|LITERT`. LibTorch is shared-only.
+- Backends release tag: ``-DANIRA_BACKENDS_VERSION=v2.1.1`` (regenerate the lockfile when bumping: ``cmake -DTAG=<tag> -P cmake/UpdateBackendsLock.cmake``).
+- Bring your own backend (no fork): ``-DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt`` (a tree with `include/` + `lib/`), or a custom source via ``-DANIRA_<ENGINE>_URL=... -DANIRA_<ENGINE>_SHA256=...``.
 
 Moreover, the following options are available:
 

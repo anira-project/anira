@@ -69,6 +69,9 @@ struct ANIRA_API ContextConfig {
 #ifdef USE_TFLITE
         m_enabled_backends.push_back(InferenceBackend::TFLITE);
 #endif
+#ifdef USE_LITERT
+        m_enabled_backends.push_back(InferenceBackend::LITERT);
+#endif
     }
 
     /**
