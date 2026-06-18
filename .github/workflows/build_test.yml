@@ -29,18 +29,48 @@ jobs:
           - name: Linux-x86_64
             os: ubuntu-latest
             inference_engines: ON
+            shared: ON
           - name: Linux-x86_64-no_inference_engines
             os: ubuntu-latest
             inference_engines: OFF
+            shared: ON
           - name: macOS-x86_64
             os: macOS-latest
             inference_engines: ON
+            shared: ON
           - name: macOS-arm64
             os: macOS-latest
             inference_engines: ON
+            shared: ON
           - name: Windows-x86_64
             os: windows-latest
             inference_engines: ON
+            shared: ON
+          # Cross-platform arm64 + macOS universal, each built shared and static
+          - name: Linux-arm64-shared
+            os: ubuntu-24.04-arm
+            inference_engines: ON
+            shared: ON
+          - name: Linux-arm64-static
+            os: ubuntu-24.04-arm
+            inference_engines: ON
+            shared: OFF
+          - name: Windows-arm64-shared
+            os: windows-11-arm
+            inference_engines: ON
+            shared: ON
+          - name: Windows-arm64-static
+            os: windows-11-arm
+            inference_engines: ON
+            shared: OFF
+          - name: macOS-universal-shared
+            os: macOS-latest
+            inference_engines: ON
+            shared: ON
+          - name: macOS-universal-static
+            os: macOS-latest
+            inference_engines: ON
+            shared: OFF
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -56,6 +86,6 @@ jobs:
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.inference_engines }} -DANIRA_WITH_TFLITE=${{ matrix.inference_engines }} -DANIRA_WITH_LITERT=${{ matrix.inference_engines }}"
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.inference_engines }} -DANIRA_WITH_TFLITE=${{ matrix.inference_engines }} -DANIRA_WITH_LITERT=${{ matrix.inference_engines }}"
       - name: test
         uses: ./.github/actions/test

@@ -89,6 +89,11 @@ if(APPLE)
     if (NOT ANIRA_WITH_LIBTORCH AND NOT ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_WITH_TFLITE AND NOT ANIRA_WITH_LITERT)
         # Universal binary is allowed - keep CMAKE_OSX_ARCHITECTURES as-is
         message(STATUS "Building anira without pre-built backends - universal binary supported")
+    elseif (CMAKE_OSX_ARCHITECTURES MATCHES "arm64" AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+        # Universal binary with pre-built backends: the anira-project/backends release ships
+        # macOS-universal archives, so this is supported. AniraBackends.cmake maps the
+        # arm64;x86_64 selection to the "universal" asset token.
+        message(STATUS "Building anira as a macOS universal binary (arm64;x86_64)")
     elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
         set(CMAKE_SYSTEM_PROCESSOR "arm64")
     elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
