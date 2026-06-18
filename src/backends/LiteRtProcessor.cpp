@@ -8,11 +8,23 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include "litert/c/litert_common.h"
+#include "litert/c/litert_compiled_model.h"
+#include "litert/c/litert_environment.h"
+#include "litert/c/litert_layout.h"
+#include "litert/c/litert_model.h"
+#include "litert/c/litert_model_types.h"
+#include "litert/c/litert_opaque_options.h"
+#include "litert/c/litert_options.h"
+#include "litert/c/litert_tensor_buffer.h"
+#include "litert/c/litert_tensor_buffer_types.h"
 
 namespace anira {
 
@@ -77,8 +89,9 @@ LiteRtProcessor::Instance::Instance(InferenceConfig& inference_config)
         const anira::ModelData* model_data =
             m_inference_config.get_model_data(anira::InferenceBackend::LITERT);
         assert(model_data && "Model data not found for binary model!");
-        litert_check(LiteRtCreateModelFromBuffer(m_env, model_data->m_data, model_data->m_size, &m_model),
-                     "LiteRtCreateModelFromBuffer");
+        litert_check(
+            LiteRtCreateModelFromBuffer(m_env, model_data->m_data, model_data->m_size, &m_model),
+            "LiteRtCreateModelFromBuffer");
     } else {
         std::string const modelpath =
             m_inference_config.get_model_path(anira::InferenceBackend::LITERT);
@@ -86,11 +99,24 @@ LiteRtProcessor::Instance::Instance(InferenceConfig& inference_config)
                      "LiteRtCreateModelFromFile");
     }
 
-    // CPU compilation. anira parallelism comes from running multiple instances, so each
-    // compiled model is single-purpose; we ask LiteRT for the CPU accelerator explicitly.
+    // CPU compilation, pinned to a single thread to match the other backends (anira gets
+    // its parallelism from running multiple processor instances). The prebuilt LiteRt
+    // runtime does not export the LrtCpuOptions helper symbols, so we build the payload it
+    // would emit directly: an "xnnpack"-identified opaque-options blob carrying num_threads.
+    // This depends only on the core exported API (LiteRtCreateOpaqueOptions / AddOpaqueOptions).
     litert_check(LiteRtCreateOptions(&m_options), "LiteRtCreateOptions");
     litert_check(LiteRtSetOptionsHardwareAccelerators(m_options, kLiteRtHwAcceleratorCpu),
                  "LiteRtSetOptionsHardwareAccelerators");
+
+    LiteRtOpaqueOptions cpu_opaque = nullptr;
+    char* cpu_payload = strdup("num_threads = 1\n");  // freed by the deleter below
+    litert_check(LiteRtCreateOpaqueOptions(
+                     "xnnpack",
+                     cpu_payload,
+                     [](void* p) { free(p); },
+                     &cpu_opaque),
+                 "LiteRtCreateOpaqueOptions");
+    litert_check(LiteRtAddOpaqueOptions(m_options, cpu_opaque), "LiteRtAddOpaqueOptions");
 
     litert_check(LiteRtCreateCompiledModel(m_env, m_model, m_options, &m_compiled_model),
                  "LiteRtCreateCompiledModel");
@@ -101,7 +127,7 @@ LiteRtProcessor::Instance::Instance(InferenceConfig& inference_config)
     for (size_t i = 0; i < num_inputs; ++i) {
         const std::vector<int64_t>& shape =
             m_inference_config.get_tensor_input_shape(anira::InferenceBackend::LITERT)[i];
-        LiteRtRankedTensorType type = make_float32_type(shape);
+        const LiteRtRankedTensorType type = make_float32_type(shape);
         const size_t bytes = m_inference_config.get_tensor_input_size()[i] * sizeof(float);
         litert_check(LiteRtCreateManagedTensorBuffer(m_env,
                                                      kLiteRtTensorBufferTypeHostMemory,
@@ -116,7 +142,7 @@ LiteRtProcessor::Instance::Instance(InferenceConfig& inference_config)
     for (size_t i = 0; i < num_outputs; ++i) {
         const std::vector<int64_t>& shape =
             m_inference_config.get_tensor_output_shape(anira::InferenceBackend::LITERT)[i];
-        LiteRtRankedTensorType type = make_float32_type(shape);
+        const LiteRtRankedTensorType type = make_float32_type(shape);
         const size_t bytes = m_inference_config.get_tensor_output_size()[i] * sizeof(float);
         litert_check(LiteRtCreateManagedTensorBuffer(m_env,
                                                      kLiteRtTensorBufferTypeHostMemory,
@@ -154,10 +180,9 @@ void LiteRtProcessor::Instance::prepare() {
     // Reset input buffers to a known (zero) state between sessions.
     for (size_t i = 0; i < m_input_buffers.size(); ++i) {
         void* host = nullptr;
-        litert_check(LiteRtLockTensorBuffer(m_input_buffers[i],
-                                            &host,
-                                            kLiteRtTensorBufferLockModeWrite),
-                     "LiteRtLockTensorBuffer (prepare)");
+        litert_check(
+            LiteRtLockTensorBuffer(m_input_buffers[i], &host, kLiteRtTensorBufferLockModeWrite),
+            "LiteRtLockTensorBuffer (prepare)");
         std::memset(host, 0, m_inference_config.get_tensor_input_size()[i] * sizeof(float));
         litert_check(LiteRtUnlockTensorBuffer(m_input_buffers[i]),
                      "LiteRtUnlockTensorBuffer (prepare)");
@@ -169,10 +194,9 @@ void LiteRtProcessor::Instance::process(std::vector<BufferF>& input,
                                         const std::shared_ptr<SessionElement>&) {
     for (size_t i = 0; i < m_input_buffers.size(); ++i) {
         void* host = nullptr;
-        litert_check(LiteRtLockTensorBuffer(m_input_buffers[i],
-                                            &host,
-                                            kLiteRtTensorBufferLockModeWrite),
-                     "LiteRtLockTensorBuffer (input)");
+        litert_check(
+            LiteRtLockTensorBuffer(m_input_buffers[i], &host, kLiteRtTensorBufferLockModeWrite),
+            "LiteRtLockTensorBuffer (input)");
         std::memcpy(host,
                     input[i].get_memory_block().data(),
                     m_inference_config.get_tensor_input_size()[i] * sizeof(float));
@@ -190,10 +214,9 @@ void LiteRtProcessor::Instance::process(std::vector<BufferF>& input,
 
     for (size_t i = 0; i < m_output_buffers.size(); ++i) {
         void* host = nullptr;
-        litert_check(LiteRtLockTensorBuffer(m_output_buffers[i],
-                                            &host,
-                                            kLiteRtTensorBufferLockModeRead),
-                     "LiteRtLockTensorBuffer (output)");
+        litert_check(
+            LiteRtLockTensorBuffer(m_output_buffers[i], &host, kLiteRtTensorBufferLockModeRead),
+            "LiteRtLockTensorBuffer (output)");
         std::memcpy(output[i].get_memory_block().data(),
                     host,
                     m_inference_config.get_tensor_output_size()[i] * sizeof(float));

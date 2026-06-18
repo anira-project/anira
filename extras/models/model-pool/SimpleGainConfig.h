@@ -16,6 +16,10 @@ static std::vector<anira::ModelData> model_data_gain_config = {
     {SIMPLEGAIN_MODEL_PATH + std::string("/simple_gain_network_mono.tflite"),
      anira::InferenceBackend::TFLITE},
 #endif
+#ifdef USE_LITERT
+    {SIMPLEGAIN_MODEL_PATH + std::string("/simple_gain_network_mono.tflite"),
+     anira::InferenceBackend::LITERT},
+#endif
 };
 
 static std::vector<anira::TensorShape> tensor_shape_gain_config = {

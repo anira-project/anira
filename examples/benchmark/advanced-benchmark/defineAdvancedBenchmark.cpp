@@ -30,6 +30,9 @@ std::vector<anira::InferenceBackend> inference_backends = {
 #ifdef USE_TFLITE
     anira::InferenceBackend::TFLITE,
 #endif
+#ifdef USE_LITERT
+    anira::InferenceBackend::LITERT,
+#endif
     anira::InferenceBackend::CUSTOM};
 std::vector<anira::InferenceConfig> inference_configs = {cnn_config, hybridnn_config, rnn_config};
 anira::InferenceConfig inference_config;
@@ -150,6 +153,12 @@ void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int
         inference_config.set_tensor_output_shape({{1, output_size, 1}},
                                                  anira::InferenceBackend::TFLITE);
 #endif
+#ifdef USE_LITERT
+        inference_config.set_tensor_input_shape({{1, input_size, 1}},
+                                                anira::InferenceBackend::LITERT);
+        inference_config.set_tensor_output_shape({{1, output_size, 1}},
+                                                 anira::InferenceBackend::LITERT);
+#endif
         inference_config.clear_processing_spec();
         inference_config.update_processing_spec();
         inference_config.set_preprocess_input_size(
@@ -166,6 +175,19 @@ void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int
                                                 anira::InferenceBackend::TFLITE);
         inference_config.set_tensor_output_shape({{buffer_size, 1}},
                                                  anira::InferenceBackend::TFLITE);
+#endif
+#ifdef USE_LITERT
+        std::string litert_model_path =
+            inference_config.get_model_path(anira::InferenceBackend::LITERT);
+        size_t litert_pos = litert_model_path.find("256");
+        if (litert_pos != std::string::npos) {
+            litert_model_path.replace(litert_pos, 3, std::to_string(buffer_size));
+        }
+        inference_config.set_model_path(litert_model_path, anira::InferenceBackend::LITERT);
+        inference_config.set_tensor_input_shape({{buffer_size, 150, 1}},
+                                                anira::InferenceBackend::LITERT);
+        inference_config.set_tensor_output_shape({{buffer_size, 1}},
+                                                 anira::InferenceBackend::LITERT);
 #endif
         inference_config.clear_processing_spec();
         inference_config.update_processing_spec();
@@ -189,6 +211,12 @@ void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int
                                                 anira::InferenceBackend::TFLITE);
         inference_config.set_tensor_output_shape({{1, buffer_size, 1}},
                                                  anira::InferenceBackend::TFLITE);
+#endif
+#ifdef USE_LITERT
+        inference_config.set_tensor_input_shape({{1, buffer_size, 1}},
+                                                anira::InferenceBackend::LITERT);
+        inference_config.set_tensor_output_shape({{1, buffer_size, 1}},
+                                                 anira::InferenceBackend::LITERT);
 #endif
         inference_config.clear_processing_spec();
         inference_config.update_processing_spec();

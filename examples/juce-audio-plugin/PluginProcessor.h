@@ -115,6 +115,11 @@ private:
          BinaryData::steerablenafxdynamic_tfliteSize,
          anira::InferenceBackend::TFLITE},
 #endif
+#ifdef USE_LITERT
+        {(void*)BinaryData::steerablenafxdynamic_tflite,
+         BinaryData::steerablenafxdynamic_tfliteSize,
+         anira::InferenceBackend::LITERT},
+#endif
     };
     anira::InferenceConfig inference_config = {model_data,
                                                tensor_shape_cnn_config,

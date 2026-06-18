@@ -3,13 +3,6 @@
 
 #ifdef USE_LITERT
 
-#include "litert/c/litert_common.h"
-#include "litert/c/litert_compiled_model.h"
-#include "litert/c/litert_environment.h"
-#include "litert/c/litert_model.h"
-#include "litert/c/litert_options.h"
-#include "litert/c/litert_tensor_buffer.h"
-
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -18,6 +11,12 @@
 #include "../scheduler/SessionElement.h"
 #include "../utils/Buffer.h"
 #include "BackendBase.h"
+#include "litert/c/litert_common.h"
+#include "litert/c/litert_compiled_model.h"
+#include "litert/c/litert_environment.h"
+#include "litert/c/litert_model.h"
+#include "litert/c/litert_options.h"
+#include "litert/c/litert_tensor_buffer.h"
 
 namespace anira {
 
@@ -105,9 +104,9 @@ private:
                      std::vector<BufferF>& output,
                      const std::shared_ptr<SessionElement>& session);
 
-        LiteRtEnvironment m_env = nullptr;             ///< LiteRT runtime environment
-        LiteRtModel m_model = nullptr;                 ///< Model loaded from file or buffer
-        LiteRtOptions m_options = nullptr;             ///< Compilation options (CPU)
+        LiteRtEnvironment m_env = nullptr;               ///< LiteRT runtime environment
+        LiteRtModel m_model = nullptr;                   ///< Model loaded from file or buffer
+        LiteRtOptions m_options = nullptr;               ///< Compilation options (CPU)
         LiteRtCompiledModel m_compiled_model = nullptr;  ///< Compiled (executable) model
 
         std::vector<LiteRtTensorBuffer> m_input_buffers;   ///< Managed input tensor buffers

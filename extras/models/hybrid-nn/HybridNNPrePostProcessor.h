@@ -17,8 +17,6 @@ public:
         int64_t num_input_samples = 0;
         int64_t num_output_samples = 0;
 
-        // TFLite and LiteRT use the same .tflite model with channels-last shape
-        // ({batch, samples, 1}); LibTorch/ONNX use channels-first ({batch, 1, samples}).
         bool channels_last = false;
         anira::InferenceBackend channels_last_backend = anira::InferenceBackend::CUSTOM;
 #ifdef USE_TFLITE
