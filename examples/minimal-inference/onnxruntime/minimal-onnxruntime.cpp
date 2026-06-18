@@ -101,7 +101,8 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     for (int i = 0; i < m_inputs.size(); ++i) {
         std::cout << "Input shape " << i << ": ["
-                  << shape_to_string(m_inputs[i].GetTensorTypeAndShapeInfo().GetShape()) << "]" << std::endl;
+                  << shape_to_string(m_inputs[i].GetTensorTypeAndShapeInfo().GetShape()) << "]"
+                  << std::endl;
     }
 
     // Get input and output names from model
@@ -133,7 +134,8 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     for (int i = 0; i < m_outputs.size(); ++i) {
         std::cout << "Output shape " << i << ": ["
-                  << shape_to_string(m_outputs[i].GetTensorTypeAndShapeInfo().GetShape()) << "]" << std::endl;
+                  << shape_to_string(m_outputs[i].GetTensorTypeAndShapeInfo().GetShape()) << "]"
+                  << std::endl;
     }
 
     std::vector<anira::MemoryBlock<float>> m_output_data;
