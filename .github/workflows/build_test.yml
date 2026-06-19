@@ -28,10 +28,8 @@ jobs:
         include:
           # Every platform/arch is built both shared and static as its own runner. libtorch is
           # shared-only, so anira's CMake auto-disables it for static builds (BUILD_SHARED_LIBS=OFF).
-          # `libtorch` is a separate flag from `inference_engines` (ONNXRuntime + LiteRT) only so
-          # we can keep it OFF on Linux-arm64: the backends release ships an aarch64 libtorch built
-          # from source that does not yet bundle its Arm Compute Library / OpenBLAS dependencies
-          # (tracked in anira-project/backends). Re-enable once that package is rebuilt.
+          # `libtorch` is a separate flag from `inference_engines` (ONNXRuntime + LiteRT) so it can
+          # be toggled per-leg; it is enabled everywhere it is supported.
           - name: Linux-x86_64-no_inference_engines
             os: ubuntu-latest
             inference_engines: OFF
@@ -50,7 +48,7 @@ jobs:
           - name: Linux-arm64-shared
             os: ubuntu-24.04-arm
             inference_engines: ON
-            libtorch: OFF
+            libtorch: ON
             shared: ON
           - name: Linux-arm64-static
             os: ubuntu-24.04-arm
