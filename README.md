@@ -128,10 +128,14 @@ By default, LibTorch, ONNXRuntime and LiteRT are enabled. You can disable specif
 
 Pre-built backend binaries are downloaded at configure time from the
 [anira-project/backends](https://github.com/anira-project/backends) release pinned by
-`ANIRA_BACKENDS_VERSION` and verified against `cmake/backends_lock.cmake`. Linkage and source are configurable:
+`ANIRA_BACKENDS_VERSION`. Integrity is checked live: when GitHub is reachable, anira fetches each
+asset's published SHA256 and re-downloads any backend whose archive changed upstream or downloaded
+incompletely (the download is verified against that hash). Nothing is pinned in-repo. Linkage and
+source are configurable:
 
 - Linkage: ``-DANIRA_BACKEND_LINKAGE=auto|shared|static`` (``auto`` follows ``BUILD_SHARED_LIBS``; static anira → static backends). Per-engine override: ``-DANIRA_<ENGINE>_LINKAGE=...`` where `<ENGINE>` is `LIBTORCH|ONNXRUNTIME|TFLITE|LITERT`. LibTorch is shared-only.
-- Backends release tag: ``-DANIRA_BACKENDS_VERSION=v2.1.1`` (regenerate the lockfile when bumping: ``cmake -DTAG=<tag> -P cmake/UpdateBackendsLock.cmake``).
+- Backends release tag: ``-DANIRA_BACKENDS_VERSION=v2.1.1``.
+- Offline / reproducible builds: ``-DANIRA_BACKENDS_SKIP_REMOTE_CHECK=ON`` skips the GitHub query and reuses whatever is already in `modules/`.
 - Bring your own backend (no fork): ``-DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt`` (a tree with `include/` + `lib/`), or a custom source via ``-DANIRA_<ENGINE>_URL=... -DANIRA_<ENGINE>_SHA256=...``.
 
 Moreover, the following options are available:

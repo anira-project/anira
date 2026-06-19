@@ -38,9 +38,15 @@ if(NOT BUILD_SHARED_LIBS AND ANIRA_WITH_LIBTORCH)
 endif()
 
 # Pre-built backends are downloaded from the anira-project/backends release with
-# this tag (and verified against cmake/backends_lock.cmake). Defaults to the
-# lockfile tag; bump together with the lock (cmake -DTAG=<tag> -P cmake/UpdateBackendsLock.cmake).
-set(ANIRA_BACKENDS_VERSION "" CACHE STRING "anira-project/backends release tag to download (default: lockfile tag)")
+# this tag. Integrity is checked live: anira fetches each asset's published sha256
+# from GitHub at configure (when reachable) and re-downloads anything that changed
+# upstream or downloaded incompletely — nothing is pinned in-repo. Empty -> the
+# default tag baked into cmake/AniraBackends.cmake.
+set(ANIRA_BACKENDS_VERSION "" CACHE STRING "anira-project/backends release tag to download (default: built-in)")
+
+# Skip the live integrity check (no GitHub query at configure). Use for fully
+# offline / reproducible builds; a backend already in modules/ is then reused as-is.
+option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for backend integrity at configure" OFF)
 
 # How to link the pre-built backends: auto follows BUILD_SHARED_LIBS (shared anira
 # -> shared backends, static anira -> static backends). Override globally here or

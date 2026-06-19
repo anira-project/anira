@@ -32,6 +32,10 @@ runs:
     # With DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" we can build universal binaries for apple computers, but this is not supported by the inference engines
     - name: cmake configure
       shell: bash
+      # Lets anira's backend integrity check query the GitHub release API with auth
+      # (avoids unauthenticated rate limits). The check degrades gracefully if unset.
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         if [[ "${{ matrix.name }}" == Linux* ]]; then
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.BUILD_TYPE }} -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache ${{ inputs.CMAKE_BUILD_ARGS }}
