@@ -15,7 +15,10 @@
 #include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "gtest/gtest.h"
 
-constexpr int k_user_thread_timeout_s = 2;
+// Generous hang-guard, not a performance bound: the loop below exits as soon as the
+// block is processed, so a large timeout only affects the (failing) hang case. 2s was
+// too tight and flaked on busy CI runners that starve the inference thread briefly.
+constexpr int k_user_thread_timeout_s = 30;
 
 using namespace anira;
 
