@@ -19,6 +19,11 @@ public:
             anira::InferenceBackend::TFLITE)[0][0];
         num_input_samples = (size_t)m_inference_config.get_tensor_input_shape(
             anira::InferenceBackend::TFLITE)[0][1];
+#elif USE_LITERT
+        num_batches = (size_t)m_inference_config.get_tensor_input_shape(
+            anira::InferenceBackend::LITERT)[0][0];
+        num_input_samples = (size_t)m_inference_config.get_tensor_input_shape(
+            anira::InferenceBackend::LITERT)[0][1];
 #else
         num_batches = (size_t)m_inference_config.get_tensor_input_shape()[0][0];
         num_input_samples = (size_t)m_inference_config.get_tensor_input_shape()[0][2];

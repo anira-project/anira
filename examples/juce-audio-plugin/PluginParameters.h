@@ -29,7 +29,7 @@ public:
     inline static juce::StringArray backendTypes{"LIBTORCH", "BYPASS"};
     inline static juce::String defaultBackend = "LIBTORCH";
 #else
-    inline static juce::StringArray backendTypes{"TFLITE", "LIBTORCH", "ONNX", "BYPASS"};
+    inline static juce::StringArray backendTypes{"TFLITE", "LITERT", "LIBTORCH", "ONNX", "BYPASS"};
     inline static juce::String defaultBackend = "BYPASS";
 #endif
 

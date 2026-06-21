@@ -34,6 +34,9 @@ class OnnxRuntimeProcessor;
 #ifdef USE_TFLITE
 class TFLiteProcessor;
 #endif
+#ifdef USE_LITERT
+class LiteRtProcessor;
+#endif
 
 /**
  * @brief Core session management class for individual inference instances
@@ -266,6 +269,11 @@ public:
     std::shared_ptr<TFLiteProcessor> m_tflite_processor = nullptr;  ///< Shared pointer to
                                                                     ///< TensorFlow Lite backend
                                                                     ///< processor (if available)
+#endif
+#ifdef USE_LITERT
+    std::shared_ptr<LiteRtProcessor> m_litert_processor = nullptr;  ///< Shared pointer to LiteRT
+                                                                    ///< backend processor
+                                                                    ///< (if available)
 #endif
 
 private:

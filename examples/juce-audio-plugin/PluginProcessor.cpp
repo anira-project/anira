@@ -284,6 +284,11 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String& parameterID
             inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
         }
 #endif
+#ifdef USE_LITERT
+        if (paramString == "LITERT") {
+            inference_handler.set_inference_backend(anira::InferenceBackend::LITERT);
+        }
+#endif
 #ifdef USE_ONNXRUNTIME
         if (paramString == "ONNX") {
             inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);

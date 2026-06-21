@@ -2,9 +2,18 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/backends/BackendBase.h>
+#ifdef USE_LIBTORCH
 #include <anira/backends/LibTorchProcessor.h>
+#endif
+#ifdef USE_LITERT
+#include <anira/backends/LiteRtProcessor.h>
+#endif
+#ifdef USE_ONNXRUNTIME
 #include <anira/backends/OnnxRuntimeProcessor.h>
+#endif
+#ifdef USE_TFLITE
 #include <anira/backends/TFLiteProcessor.h>
+#endif
 #include <anira/scheduler/Context.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
@@ -119,6 +128,9 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
 #ifdef USE_TFLITE
     set_processor(session, inference_config, m_tflite_processors, InferenceBackend::TFLITE);
 #endif
+#ifdef USE_LITERT
+    set_processor(session, inference_config, m_litert_processors, InferenceBackend::LITERT);
+#endif
 
     m_sessions.emplace_back(session);
 
@@ -144,6 +156,9 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
 #ifdef USE_TFLITE
     std::shared_ptr<TFLiteProcessor> tflite_processor = session->m_tflite_processor;
 #endif
+#ifdef USE_LITERT
+    std::shared_ptr<LiteRtProcessor> litert_processor = session->m_litert_processor;
+#endif
 
     for (size_t i = 0; i < m_sessions.size(); ++i) {
         if (m_sessions[i] == session) {
@@ -160,6 +175,9 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
 #endif
 #ifdef USE_TFLITE
     release_processor(inference_config, m_tflite_processors, tflite_processor);
+#endif
+#ifdef USE_LITERT
+    release_processor(inference_config, m_litert_processors, litert_processor);
 #endif
 
     m_active_sessions.fetch_sub(1);
@@ -479,5 +497,16 @@ template void Context::release_processor<TFLiteProcessor>(
     InferenceConfig& inference_config,
     std::vector<std::shared_ptr<TFLiteProcessor>>& processors,
     std::shared_ptr<TFLiteProcessor>& processor);
+#endif
+#ifdef USE_LITERT
+template void Context::set_processor<LiteRtProcessor>(
+    const std::shared_ptr<SessionElement>& session,
+    InferenceConfig& inference_config,
+    std::vector<std::shared_ptr<LiteRtProcessor>>& processors,
+    InferenceBackend backend);
+template void Context::release_processor<LiteRtProcessor>(
+    InferenceConfig& inference_config,
+    std::vector<std::shared_ptr<LiteRtProcessor>>& processors,
+    std::shared_ptr<LiteRtProcessor>& processor);
 #endif
 }  // namespace anira

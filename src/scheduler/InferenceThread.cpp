@@ -15,6 +15,9 @@
 #ifdef USE_TFLITE
 #include <anira/backends/TFLiteProcessor.h>  // IWYU pragma: keep
 #endif
+#ifdef USE_LITERT
+#include <anira/backends/LiteRtProcessor.h>  // IWYU pragma: keep
+#endif
 
 #include <array>
 #include <atomic>
@@ -180,6 +183,17 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
         } else {
             session->m_default_processor.process(input, output, session);
             LOG_ERROR << "[ERROR] TFLite model has not been provided. Using default processor."
+                      << '\n';
+        }
+    }
+#endif
+#ifdef USE_LITERT
+    if (session->m_current_backend.load(std::memory_order_relaxed) == LITERT) {
+        if (session->m_litert_processor != nullptr) {
+            session->m_litert_processor->process(input, output, session);
+        } else {
+            session->m_default_processor.process(input, output, session);
+            LOG_ERROR << "[ERROR] LiteRT model has not been provided. Using default processor."
                       << '\n';
         }
     }

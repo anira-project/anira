@@ -12,6 +12,9 @@
 #ifdef USE_TFLITE
 #include <anira/backends/TFLiteProcessor.h>
 #endif
+#ifdef USE_LITERT
+#include <anira/backends/LiteRtProcessor.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -352,6 +355,11 @@ void SessionElement::set_processor(std::shared_ptr<T>& processor) {
         m_tflite_processor = std::dynamic_pointer_cast<TFLiteProcessor>(processor);
     }
 #endif
+#ifdef USE_LITERT
+    if (std::is_same_v<T, LiteRtProcessor>) {
+        m_litert_processor = std::dynamic_pointer_cast<LiteRtProcessor>(processor);
+    }
+#endif
 }
 
 size_t SessionElement::calculate_num_structs(const HostConfig& host_config) const {
@@ -611,6 +619,10 @@ template void SessionElement::set_processor<OnnxRuntimeProcessor>(
 #ifdef USE_TFLITE
 template void SessionElement::set_processor<TFLiteProcessor>(
     std::shared_ptr<TFLiteProcessor>& processor);
+#endif
+#ifdef USE_LITERT
+template void SessionElement::set_processor<LiteRtProcessor>(
+    std::shared_ptr<LiteRtProcessor>& processor);
 #endif
 
 }  // namespace anira

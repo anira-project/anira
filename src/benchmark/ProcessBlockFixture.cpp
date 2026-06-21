@@ -65,6 +65,12 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
                     path = m_inference_config.get_model_path(anira::InferenceBackend::TFLITE);
                     break;
 #endif
+#ifdef USE_LITERT
+                case anira::InferenceBackend::LITERT:
+                    m_inference_backend_name = "litert";
+                    path = m_inference_config.get_model_path(anira::InferenceBackend::LITERT);
+                    break;
+#endif
                 case anira::InferenceBackend::CUSTOM:
                     m_inference_backend_name = "custom";
                     path = m_inference_config.get_model_path(anira::InferenceBackend::CUSTOM);

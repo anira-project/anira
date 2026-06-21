@@ -22,6 +22,9 @@
 #ifdef USE_TFLITE
 #include "../backends/TFLiteProcessor.h"
 #endif
+#ifdef USE_LITERT
+#include "../backends/LiteRtProcessor.h"
+#endif
 
 namespace anira {
 
@@ -410,6 +413,10 @@ private:
 #ifdef USE_TFLITE
     inline static std::vector<std::shared_ptr<TFLiteProcessor>>
         m_tflite_processors;  ///< Pool of TensorFlow Lite backend processors
+#endif
+#ifdef USE_LITERT
+    inline static std::vector<std::shared_ptr<LiteRtProcessor>>
+        m_litert_processors;  ///< Pool of LiteRT backend processors
 #endif
 
 #if DOXYGEN

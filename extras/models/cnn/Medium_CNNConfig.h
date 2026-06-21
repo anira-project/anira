@@ -18,6 +18,11 @@ static std::vector<anira::ModelData> model_data_medium_cnn_config = {
          std::string("/model_0/steerable-nafx-3_blocks-dynamic.tflite"),
      anira::InferenceBackend::TFLITE},
 #endif
+#ifdef USE_LITERT
+    {STEERABLENAFX_MODELS_PATH_TENSORFLOW +
+         std::string("/model_0/steerable-nafx-3_blocks-dynamic.tflite"),
+     anira::InferenceBackend::LITERT},
+#endif
 };
 
 static std::vector<anira::TensorShape> tensor_shape_medium_cnn_config = {
@@ -29,6 +34,9 @@ static std::vector<anira::TensorShape> tensor_shape_medium_cnn_config = {
 #endif
 #ifdef USE_TFLITE
     {{{1, 3380, 1}}, {{1, 2048, 1}}, anira::InferenceBackend::TFLITE},
+#endif
+#ifdef USE_LITERT
+    {{{1, 3380, 1}}, {{1, 2048, 1}}, anira::InferenceBackend::LITERT},
 #endif
 };
 

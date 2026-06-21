@@ -96,15 +96,23 @@ if(ANIRA_WITH_ONNXRUNTIME)
         endif()
     endforeach()
 
+    # The backends WASM archive currently ships only include/ + lib/, so the
+    # heavy LICENSE/ThirdPartyNotices may be absent; only copy them if present
+    # (an empty `cmake -E copy` would fail the build). PACKAGE.txt is always written.
+    set(_ort_license_copy "")
+    if(_ort_license_inputs)
+        set(_ort_license_copy COMMAND ${CMAKE_COMMAND} -E copy ${_ort_license_inputs} "${_ort_license_dest}/")
+    endif()
+
     add_custom_command(TARGET ${ANIRA_WASM_TARGET_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E rm -rf "${_ort_license_dest}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${_ort_license_dest}"
-        COMMAND ${CMAKE_COMMAND} -E copy ${_ort_license_inputs} "${_ort_license_dest}/"
+        ${_ort_license_copy}
         COMMAND ${CMAKE_COMMAND} -E copy
             "${CMAKE_CURRENT_BINARY_DIR}/onnxruntime-PACKAGE.txt"
             "${_ort_license_dest}/PACKAGE.txt"
         VERBATIM
-        COMMENT "Bundling ONNX Runtime ${LIBONNXRUNTIME_VERSION} license + ThirdPartyNotices into Anira Web"
+        COMMENT "Bundling ONNX Runtime ${ANIRA_ONNXRUNTIME_VERSION} license + ThirdPartyNotices into Anira Web"
     )
 
     # PACKAGE.txt only depends on configure-time vars (version, etc.), so
@@ -112,5 +120,5 @@ if(ANIRA_WITH_ONNXRUNTIME)
     # the wasm preset is reconfigured. The actual copy into web/licenses/
     # happens at build time, alongside the heavy LICENSE/ThirdPartyNotices.
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/onnxruntime-PACKAGE.txt"
-        "name: onnxruntime\nversion: ${LIBONNXRUNTIME_VERSION}\nlicense: MIT\nhomepage: https://github.com/microsoft/onnxruntime\n")
+        "name: onnxruntime\nversion: ${ANIRA_ONNXRUNTIME_VERSION}\nlicense: MIT\nhomepage: https://github.com/microsoft/onnxruntime\n")
 endif()

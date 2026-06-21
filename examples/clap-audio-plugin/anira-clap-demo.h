@@ -78,7 +78,7 @@ private:
 
     utils::DryWetMixer m_dry_wet_mixer;
 
-    enum Backend { OnnxRuntime, LibTorch, TensorFlowLite, Bypassed };
+    enum Backend { OnnxRuntime, LibTorch, TensorFlowLite, Bypassed, LiteRt };
 };
 
 }  // namespace clap_plugin_example

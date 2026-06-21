@@ -169,7 +169,7 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
 #else
             LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
                          "entry : ONNX currently disabled in config."
-                      << std::endl;
+                      << '\n';
 #endif
         } else if (model_backend == "TFLITE") {
 #if USE_TFLITE
@@ -177,7 +177,15 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
 #else
             LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
                          "entry : TFLITE currently disabled in config."
-                      << std::endl;
+                      << '\n';
+#endif
+        } else if (model_backend == "LITERT") {
+#if USE_LITERT
+            model_data.emplace_back(model_path, anira::InferenceBackend::LITERT);
+#else
+            LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
+                         "entry : LITERT currently disabled in config."
+                      << '\n';
 #endif
         } else if (model_backend == "LIBTORCH") {
 #if USE_LIBTORCH
@@ -198,14 +206,14 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
 #else
             LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
                          "entry : LIBTORCH currently disabled in config."
-                      << std::endl;
+                      << '\n';
 #endif
         } else if (model_backend == "CUSTOM") {
             model_data.emplace_back(model_path, anira::InferenceBackend::CUSTOM);
         } else {
             LOG_ERROR << "Invalid 'inference_backend' value in 'model_data' array "
                          "entry : expected a string of the following list ['ONNX', "
-                         "'TFLITE', 'LIBTORCH', 'CUSTOM']."
+                         "'TFLITE', 'LITERT', 'LIBTORCH', 'CUSTOM']."
                       << '\n';
         }
     }
@@ -261,7 +269,7 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
 #else
             LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array "
                          "entry : ONNX currently disabled in config."
-                      << std::endl;
+                      << '\n';
 #endif
         } else if (tensor_backend == "TFLITE") {
 #if USE_TFLITE
@@ -271,7 +279,17 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
 #else
             LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array "
                          "entry : TFLITE currently disabled in config."
-                      << std::endl;
+                      << '\n';
+#endif
+        } else if (tensor_backend == "LITERT") {
+#if USE_LITERT
+            tensor_shape.emplace_back(input_shape_list,
+                                      output_shape_list,
+                                      anira::InferenceBackend::LITERT);
+#else
+            LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array "
+                         "entry : LITERT currently disabled in config."
+                      << '\n';
 #endif
         } else if (tensor_backend == "LIBTORCH") {
 #if USE_LIBTORCH
@@ -281,7 +299,7 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
 #else
             LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array "
                          "entry : LIBTORCH currently disabled in config."
-                      << std::endl;
+                      << '\n';
 #endif
         } else if (tensor_backend == "CUSTOM") {
             tensor_shape.emplace_back(input_shape_list,
@@ -292,7 +310,7 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
         } else {
             LOG_ERROR << "Invalid 'inference_backend' value in 'tensor_shape' array "
                          "entry : expected a string of the following list ['ONNX', "
-                         "'TFLITE', 'LIBTORCH']."
+                         "'TFLITE', 'LITERT', 'LIBTORCH']."
                       << '\n';
         }
     }

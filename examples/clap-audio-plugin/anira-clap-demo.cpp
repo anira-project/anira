@@ -57,7 +57,7 @@ bool AniraClapPluginExample::paramsInfo(uint32_t paramIndex, clap_param_info* in
             strncpy(info->name, "Backend", CLAP_NAME_SIZE);
             strncpy(info->module, "Demo", CLAP_NAME_SIZE);
             info->min_value = 0;
-            info->max_value = 3;
+            info->max_value = 4;
             info->default_value = 3;
             info->flags |= CLAP_PARAM_IS_STEPPED;
             break;
@@ -106,6 +106,13 @@ bool AniraClapPluginExample::paramsValueToText(clap_id paramId,
 #endif
                     break;
                 case Bypassed: sValue = "Bypassed"; break;
+                case LiteRt:
+#if USE_LITERT
+                    sValue = "LiteRt";
+#else
+                    sValue = "LiteRt (not available)";
+#endif
+                    break;
             }
             break;
         }
@@ -133,6 +140,9 @@ bool AniraClapPluginExample::paramsTextToValue(clap_id paramId,
                 return true;
             } else if (strcmp(display, "Bypassed") == 0) {
                 *value = static_cast<double>(Bypassed);
+                return true;
+            } else if (strcmp(display, "LiteRt") == 0) {
+                *value = static_cast<double>(LiteRt);
                 return true;
             }
         default: return false;
@@ -239,6 +249,13 @@ void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t* evt) 
                 case TensorFlowLite:
 #if USE_TENSORFLOW
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
+#else
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
+#endif
+                    break;
+                case LiteRt:
+#if USE_LITERT
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::LITERT);
 #else
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
 #endif

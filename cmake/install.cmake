@@ -103,31 +103,44 @@ if(ANIRA_WITH_LIBTORCH)
     )
 endif()
 
-# the other ones don't have cmake config files so we have to install them manually
+# The other engines have no cmake config files, so install their include/ + lib/
+# trees manually. This copies whatever the linkage produced (shared .so/.dylib/.dll
+# or static .a/.lib). ANIRA_<ID>_ROOTDIR is set by anira_setup_backend().
 if(ANIRA_WITH_ONNXRUNTIME)
     if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
-        install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/include/onnxruntime/"
+        install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/include/onnxruntime/"
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
             COMPONENT deps-backends
         )
     else()
-        install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/include/"
+        install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/include/"
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
             COMPONENT deps-backends
         )
     endif()
-    install(DIRECTORY "${ONNXRUNTIME_ROOTDIR}/lib/"
+    install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/lib/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         COMPONENT deps-backends
     )
 endif()
 
 if(ANIRA_WITH_TFLITE)
-    install(DIRECTORY "${TENSORFLOWLITE_ROOTDIR}/include/"
+    install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/include/"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
         COMPONENT deps-backends
     )
-    install(DIRECTORY "${TENSORFLOWLITE_ROOTDIR}/lib/"
+    install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/lib/"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        COMPONENT deps-backends
+    )
+endif()
+
+if(ANIRA_WITH_LITERT)
+    install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/include/"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+        COMPONENT deps-backends
+    )
+    install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/lib/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         COMPONENT deps-backends
     )

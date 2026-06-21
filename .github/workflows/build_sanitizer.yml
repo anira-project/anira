@@ -20,9 +20,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build_and_test_radsan:
-    if: false  # Skip this job for now
-    name: Check real-time safety with RADSan
+  build_and_test_rtsan:
+    # Parked until the real-time-safety violations RTSan currently flags are fixed.
+    # As of now, with -DANIRA_WITH_RTSAN=ON the suite aborts on genuine issues:
+    #   1. moodycamel ConcurrentQueue allocates on the audio thread on first enqueue
+    #      (lazy implicit-producer creation) — both the dispatch and InferenceData
+    #      queues. Fix: explicit ProducerToken per session + a prepare-time block warm-up.
+    #   2. RingBuffer overflow logging runs in the realtime path (RingBuffer.cpp: LOG_ERROR
+    #      -> std::cerr -> fwrite/flockfile/mutex). Fix: don't log from the audio thread.
+    # The job below is otherwise ready (RTSan via clang-20); flip `if: false` once fixed.
+    if: false
+    name: Check real-time safety with RTSan
     strategy:
       matrix:
         name: [Linux-x86_64]
@@ -30,32 +38,28 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
-    container:
-      image: realtimesanitizer/radsan-clang:latest
-
     steps:
-      - name: Install required tools
-        run: apt-get update && apt-get install -y git cmake ninja-build sudo
       - name: get repo and submodules
         uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 0
           fetch-tags: true
-      - name: Allow safe Git directory
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Verify workspace
-        run: |
-          echo "Current directory: $(pwd)"
-          ls -la
+      # RTSan (-fsanitize=realtime) instruments the ANIRA_REALTIME ([[clang::nonblocking]])
+      # hot path and requires clang >= 20, so install it before configuring.
+      - name: install clang 20
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@main
+        with:
+          CLANG_VERSION: "20"
       - name: setup
         uses: ./.github/actions/setup
       - name: build
         uses: ./.github/actions/build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_RADSAN=ON"
+          CMAKE_BUILD_ARGS: "-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_RTSAN=ON"
       - name: test
         uses: ./.github/actions/test

@@ -7,7 +7,10 @@ Licence: MIT
 
 #include <onnxruntime_cxx_api.h>
 
+#include <cstdint>
 #include <iostream>
+#include <string>
+#include <vector>
 
 #include "../../../extras/models/cnn/CNNConfig.h"
 #include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
@@ -16,6 +19,20 @@ Licence: MIT
 #include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../include/anira/utils/Buffer.h"
 #include "../../../include/anira/utils/MemoryBlock.h"
+
+namespace {
+// Render a tensor shape as "d0, d1, ...". std::vector has no operator<< of its own;
+// relying on one only works when another dependency (e.g. libtorch) happens to pull
+// one in, which is not the case for every backend configuration.
+std::string shape_to_string(const std::vector<int64_t>& shape) {
+    std::string result;
+    for (size_t i = 0; i < shape.size(); ++i) {
+        result += std::to_string(shape[i]);
+        if (i + 1 < shape.size()) { result += ", "; }
+    }
+    return result;
+}
+}  // namespace
 
 void minimal_inference(anira::InferenceConfig m_inference_config) {
     std::cout << "Minimal OnnxRuntime example:" << std::endl;
@@ -84,7 +101,8 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     for (int i = 0; i < m_inputs.size(); ++i) {
         std::cout << "Input shape " << i << ": ["
-                  << m_inputs[i].GetTensorTypeAndShapeInfo().GetShape() << "]" << std::endl;
+                  << shape_to_string(m_inputs[i].GetTensorTypeAndShapeInfo().GetShape()) << "]"
+                  << std::endl;
     }
 
     // Get input and output names from model
@@ -116,7 +134,8 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     for (int i = 0; i < m_outputs.size(); ++i) {
         std::cout << "Output shape " << i << ": ["
-                  << m_outputs[i].GetTensorTypeAndShapeInfo().GetShape() << "]" << std::endl;
+                  << shape_to_string(m_outputs[i].GetTensorTypeAndShapeInfo().GetShape()) << "]"
+                  << std::endl;
     }
 
     std::vector<anira::MemoryBlock<float>> m_output_data;

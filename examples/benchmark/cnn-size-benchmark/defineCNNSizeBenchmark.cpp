@@ -28,6 +28,9 @@ std::vector<anira::InferenceBackend> inference_backends = {
 #ifdef USE_TFLITE
     anira::InferenceBackend::TFLITE,
 #endif
+#ifdef USE_LITERT
+    anira::InferenceBackend::LITERT,
+#endif
     anira::InferenceBackend::CUSTOM};
 std::vector<anira::InferenceConfig> inference_configs = {cnn_config,
                                                          medium_cnn_config,
@@ -142,6 +145,11 @@ void adapt_cnn_config(anira::InferenceConfig& inference_config, int buffer_size,
     inference_config.set_tensor_input_shape({{1, input_size, 1}}, anira::InferenceBackend::TFLITE);
     inference_config.set_tensor_output_shape({{1, output_size, 1}},
                                              anira::InferenceBackend::TFLITE);
+#endif
+#ifdef USE_LITERT
+    inference_config.set_tensor_input_shape({{1, input_size, 1}}, anira::InferenceBackend::LITERT);
+    inference_config.set_tensor_output_shape({{1, output_size, 1}},
+                                             anira::InferenceBackend::LITERT);
 #endif
     inference_config.clear_processing_spec();
     inference_config.update_processing_spec();

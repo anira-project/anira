@@ -16,6 +16,10 @@ static std::vector<anira::ModelData> model_data_rnn_config = {
     {STATEFULLSTM_MODELS_PATH_TENSORFLOW + std::string("/model_0/stateful-lstm-dynamic.tflite"),
      anira::InferenceBackend::TFLITE},
 #endif
+#ifdef USE_LITERT
+    {STATEFULLSTM_MODELS_PATH_TENSORFLOW + std::string("/model_0/stateful-lstm-dynamic.tflite"),
+     anira::InferenceBackend::LITERT},
+#endif
 };
 
 static std::vector<anira::TensorShape> tensor_shape_rnn_config = {
@@ -27,6 +31,9 @@ static std::vector<anira::TensorShape> tensor_shape_rnn_config = {
 #endif
 #ifdef USE_TFLITE
     {{{1, 2048, 1}}, {{1, 2048, 1}}, anira::InferenceBackend::TFLITE},
+#endif
+#ifdef USE_LITERT
+    {{{1, 2048, 1}}, {{1, 2048, 1}}, anira::InferenceBackend::LITERT},
 #endif
 };
 

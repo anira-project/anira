@@ -1,41 +1,52 @@
 cmake_minimum_required(VERSION 3.15)
 
 # ==============================================================================
-# Define the options for the anira library
+# Build options — every user-facing option lives here. Cross-option validation
+# (mutual exclusivity, libtorch auto-disable, WASM guards) is in
+# cmake/AniraValidate.cmake, included after project() / Emscripten detection.
 # ==============================================================================
 
-# Shall the library be built as a shared library?
-option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
+# --- Library type --------------------------------------------------------------
+option(BUILD_SHARED_LIBS "Build anira as a shared library" ON)
+
+# --- Components ----------------------------------------------------------------
 option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
-option(ANIRA_WITH_EXAMPLES "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
-option(ANIRA_WITH_INSTALL "Add install targets" OFF)
-option(ANIRA_WITH_TESTS "Add Build Tests" OFF)
-option(ANIRA_WITH_DOCS "Add Build Documentation" OFF)
+option(ANIRA_WITH_EXAMPLES  "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
+option(ANIRA_WITH_INSTALL   "Add install targets" OFF)
+option(ANIRA_WITH_TESTS     "Add build tests" OFF)
+option(ANIRA_WITH_DOCS      "Build documentation" OFF)
+option(ANIRA_WITH_LOGGING   "Enable logging printouts" ON)
+option(ANIRA_WITH_RTSAN     "Enable RealtimeSanitizer (rtsan) checks (requires clang 20)" OFF)
+option(ANIRA_BUILD_WASM     "Build WebAssembly module (requires Emscripten toolchain)" OFF)
 
-# Select the backends for the inference engine, multiple backends can be selected
-option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
-option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
-option(ANIRA_WITH_TFLITE "Build with TensorFlow Lite backend" ON)
+# --- Inference backends --------------------------------------------------------
+# Multiple backends can be enabled. LiteRT (LiteRt* C API) is the default
+# TensorFlow-family backend; TFLite (legacy TfLite* C API) is the SAME underlying
+# runtime through the older API, so the two are mutually exclusive (their static
+# libraries export the same TfLite* symbols). Enforced in cmake/AniraValidate.cmake.
+option(ANIRA_WITH_LIBTORCH    "Build with the LibTorch backend" ON)
+option(ANIRA_WITH_ONNXRUNTIME "Build with the ONNX Runtime backend" ON)
+option(ANIRA_WITH_LITERT      "Build with the LiteRT backend (LiteRt* C API; runs .tflite via the CompiledModel runtime)" ON)
+option(ANIRA_WITH_TFLITE      "Build with the legacy TensorFlow Lite backend (TfLite* C API); mutually exclusive with ANIRA_WITH_LITERT" OFF)
 
-option(ANIRA_BUILD_WASM "Build WebAssembly module (requires Emscripten toolchain)" OFF)
+# --- Pre-built backend download ------------------------------------------------
+# Backends are downloaded from the anira-project/backends release with this tag.
+# Integrity is checked live: anira fetches each asset's published sha256 from GitHub
+# at configure (when reachable) and re-downloads anything that changed upstream or
+# downloaded incompletely — nothing is pinned in-repo. Empty -> built-in default tag.
+set(ANIRA_BACKENDS_VERSION "" CACHE STRING "anira-project/backends release tag to download (default: built-in)")
 
-option(ANIRA_WITH_LOGGING "Enable logging printouts" ON)
-option(ANIRA_WITH_RTSAN "Enable RealtimeSanitizer (rtan) checks (requires clang 20)" OFF)
+# Skip the live integrity check (no GitHub query at configure). For fully offline /
+# reproducible builds; a backend already in modules/ is then reused as-is.
+option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for backend integrity at configure" OFF)
 
-if(DEFINED EMSDK_VERSION)
-    set(DEFINED EMSDK_VERSION ON)
-    if(ANIRA_WITH_EXAMPLES)
-        message(FATAL_ERROR "WebAssembly support is not compatible with examples. Please disable ANIRA_WITH_EXAMPLES to build the library with WebAssembly support.")
-    elseif(ANIRA_WITH_TESTS)
-        message(FATAL_ERROR "WebAssembly support is not compatible with tests. Please disable ANIRA_WITH_TESTS to build the library with WebAssembly support.")
-    elseif(ANIRA_WITH_INSTALL)
-        message(FATAL_ERROR "WebAssembly support is not compatible with install targets. Please disable ANIRA_WITH_INSTALL to build the library with WebAssembly support.")
-    elseif(ANIRA_WITH_LIBTORCH)
-        message(FATAL_ERROR "Only the ONNX Runtime backend is supported for WebAssembly. Please set -DANIRA_WITH_LIBTORCH=OFF and enable ANIRA_WITH_ONNXRUNTIME to build the library with WebAssembly support.")
-    elseif(ANIRA_WITH_TFLITE)
-        message(FATAL_ERROR "Only the ONNX Runtime backend is supported for WebAssembly. Please set -DANIRA_WITH_TFLITE=OFF and enable ANIRA_WITH_ONNXRUNTIME to build the library with WebAssembly support.")
-    endif()
-endif()
+# Backend linkage follows BUILD_SHARED_LIBS (shared anira -> shared backends, static
+# anira -> static backends). Decouple a single engine, bring your own, or use a custom
+# source via the per-engine variables (<ENGINE> = LIBTORCH | ONNXRUNTIME | TFLITE | LITERT):
+#   -DANIRA_<ENGINE>_LINKAGE=shared|static
+#   -DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt   (a tree with include/ + lib/)
+#   -DANIRA_<ENGINE>_URL=...  [-DANIRA_<ENGINE>_SHA256=...]
+
 # ==============================================================================
 # Get project version from git
 # ==============================================================================
@@ -71,9 +82,14 @@ project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
 
 if(APPLE)
     # Allow universal binaries when no pre-built backends are used (e.g., custom CoreML backend)
-    if (NOT ANIRA_WITH_LIBTORCH AND NOT ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_WITH_TFLITE)
+    if (NOT ANIRA_WITH_LIBTORCH AND NOT ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_WITH_TFLITE AND NOT ANIRA_WITH_LITERT)
         # Universal binary is allowed - keep CMAKE_OSX_ARCHITECTURES as-is
         message(STATUS "Building anira without pre-built backends - universal binary supported")
+    elseif (CMAKE_OSX_ARCHITECTURES MATCHES "arm64" AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+        # Universal binary with pre-built backends: the anira-project/backends release ships
+        # macOS-universal archives, so this is supported. AniraBackends.cmake maps the
+        # arm64;x86_64 selection to the "universal" asset token.
+        message(STATUS "Building anira as a macOS universal binary (arm64;x86_64)")
     elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
         set(CMAKE_SYSTEM_PROCESSOR "arm64")
     elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
@@ -117,10 +133,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Detect Emscripten — must be after project() so CMAKE_CXX_COMPILER is set.
-# EMSDK_VERSION is needed by SetupOnnxRuntime.cmake below.
+# EMSDK_VERSION is needed by AniraBackends.cmake (WASM target selection) below.
 if(ANIRA_BUILD_WASM)
     include(cmake/DetectEmscripten.cmake)
 endif()
+
+# Validate the option combination (mutual exclusivity, libtorch auto-disable, WASM
+# guards). After Emscripten detection so EMSDK_VERSION is known; before the backends
+# are set up so the libtorch auto-disable takes effect.
+include(cmake/AniraValidate.cmake)
 
 # ==============================================================================
 # Download and install the selected inference engines
@@ -130,19 +151,26 @@ set(BACKEND_SOURCES)
 set(BACKEND_BUILD_HEADER_DIRS)
 set(BACKEND_BUILD_LIBRARY_DIRS)
 
+include(cmake/AniraBackends.cmake)
+
 if(ANIRA_WITH_LIBTORCH)
-    include(cmake/SetupLibTorch.cmake)
+    anira_setup_backend(libtorch)
     list(APPEND BACKEND_SOURCES src/backends/LibTorchProcessor.cpp)
 endif()
 
 if(ANIRA_WITH_ONNXRUNTIME)
-    include(cmake/SetupOnnxRuntime.cmake)
+    anira_setup_backend(onnxruntime)
     list(APPEND BACKEND_SOURCES src/backends/OnnxRuntimeProcessor.cpp)
 endif()
 
 if(ANIRA_WITH_TFLITE)
-    include(cmake/SetupTensorflowLite.cmake)
+    anira_setup_backend(tflite)
     list(APPEND BACKEND_SOURCES src/backends/TFLiteProcessor.cpp)
+endif()
+
+if(ANIRA_WITH_LITERT)
+    anira_setup_backend(litert)
+    list(APPEND BACKEND_SOURCES src/backends/LiteRtProcessor.cpp)
 endif()
 
 ## ==============================================================================
@@ -159,12 +187,24 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(concurrentqueue)
 
+# Fetch the release tarball instead of cloning the repo — the full git
+# history plus test suite is ~150MB while the release archive is a few MB, the
+# URL_HASH verifies integrity, and the tarball is content-addressable so CMake
+# reuses a cached copy across build folders.
 FetchContent_Declare(
     nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.12.0
-    GIT_SHALLOW TRUE
+    URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+    URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
+    SYSTEM
 )
+# When installing anira, also install nlohmann_json's headers + CMake config so the
+# installed aniraConfig.cmake can resolve find_package(nlohmann_json). As a subproject
+# nlohmann_json defaults JSON_Install=OFF (unlike concurrentqueue, which installs by
+# default), which previously left the installed package referencing a config that was
+# never shipped.
+if(ANIRA_WITH_INSTALL)
+    set(JSON_Install ON)
+endif()
 FetchContent_MakeAvailable(nlohmann_json)
 
 # ==============================================================================
@@ -233,6 +273,7 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
     $<$<BOOL:EMSDK_VERSION>:USE_ANIRA_WEB>
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
+    $<$<BOOL:${ANIRA_WITH_LITERT}>:USE_LITERT>
     $<$<BOOL:${ANIRA_WITH_LOGGING}>:ENABLE_LOGGING>
     # Version number
     -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
@@ -267,18 +308,32 @@ if(ANIRA_WITH_LIBTORCH)
     endif()
 endif()
 
-# The onnxruntime library requires PUBLIC linking because otherwise "_OrtGetApiBase" symbol is not found
+# Backends link PUBLIC: anira's public headers include the backend headers, and
+# (onnxruntime) "_OrtGetApiBase" is otherwise dropped. Static archives are linked
+# whole so C API entry points + static self-registration survive (see
+# anira_target_link_static_backend in cmake/AniraBackends.cmake).
 if(ANIRA_WITH_ONNXRUNTIME)
-    if(EMSDK_VERSION)
-        target_include_directories(${PROJECT_NAME} PUBLIC ${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH})
-        target_link_libraries(${PROJECT_NAME} PUBLIC ${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH}/libonnxruntime_webassembly.a)
+    if(ANIRA_ONNXRUNTIME_IS_STATIC)
+        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_ONNXRUNTIME_STATIC_LIB}")
     else()
         target_link_libraries(${PROJECT_NAME} PUBLIC onnxruntime)
     endif()
 endif()
 
 if(ANIRA_WITH_TFLITE)
-    target_link_libraries(${PROJECT_NAME} PUBLIC tensorflowlite_c)
+    if(ANIRA_TFLITE_IS_STATIC)
+        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_TFLITE_STATIC_LIB}")
+    else()
+        target_link_libraries(${PROJECT_NAME} PUBLIC tensorflowlite_c)
+    endif()
+endif()
+
+if(ANIRA_WITH_LITERT)
+    if(ANIRA_LITERT_IS_STATIC)
+        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_LITERT_STATIC_LIB}")
+    else()
+        target_link_libraries(${PROJECT_NAME} PUBLIC LiteRt)
+    endif()
 endif()
 
 if(ANIRA_WITH_BENCHMARK OR ANIRA_WITH_TESTS)

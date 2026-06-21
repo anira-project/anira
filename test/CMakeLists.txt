@@ -42,11 +42,28 @@ target_link_libraries(${PROJECT_NAME} anira::anira)
 # gtest_discover_tests will register a CTest test for each gtest and run them all in parallel with the rest of the Test.
 gtest_discover_tests(${PROJECT_NAME} DISCOVERY_TIMEOUT 90)
 
-if (MSVC)
+# Installed-package smoke test: install anira to a throwaway prefix and build +
+# run a downstream find_package(anira) consumer against it. Only meaningful when
+# install targets exist, so gate on ANIRA_WITH_INSTALL (needs both that and
+# ANIRA_WITH_TESTS). This is the only coverage for the install/export path.
+if(ANIRA_WITH_INSTALL)
+    add_test(NAME InstallConsumer
+        COMMAND ${CMAKE_COMMAND}
+            -DANIRA_BUILD_DIR=${CMAKE_BINARY_DIR}
+            -DCONSUMER_SRC=${CMAKE_CURRENT_SOURCE_DIR}/install/consumer
+            -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/install-test
+            -DGENERATOR=${CMAKE_GENERATOR}
+            -DBUILD_TYPE=$<CONFIG>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/install/run_install_test.cmake)
+    set_tests_properties(InstallConsumer PROPERTIES TIMEOUT 600)
+endif()
+
+# Only copy runtime DLLs when there are any (a fully static build has none).
+if (MSVC AND ANIRA_SHARED_LIBS_WIN)
 	add_custom_command(TARGET ${PROJECT_NAME}
 			PRE_BUILD
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
 			${ANIRA_SHARED_LIBS_WIN}
 			$<TARGET_FILE_DIR:${PROJECT_NAME}>
 	)
-endif (MSVC)
+endif ()
