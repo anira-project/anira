@@ -131,16 +131,16 @@ By default, LibTorch, ONNXRuntime and LiteRT are enabled. You can disable specif
 anira builds on the targets below; the pre-built backends it downloads ship per target as `shared`
 and/or `static` (anira's linkage follows `BUILD_SHARED_LIBS`):
 
-| Target            | LibTorch | ONNXRuntime     | LiteRT          | TFLite (legacy) |
-| ----------------- | -------- | --------------- | --------------- | --------------- |
-| macOS x86_64      | shared   | shared · static | shared · static | shared · static |
-| macOS arm64       | shared   | shared · static | shared · static | shared · static |
-| macOS universal   | shared   | shared · static | shared · static | shared · static |
-| Linux x86_64      | shared   | shared · static | shared · static | shared · static |
-| Linux aarch64     | shared   | shared · static | shared · static | shared · static |
-| Windows x86_64    | shared   | shared · static | shared · static | shared · static |
-| Windows arm64     | shared   | shared · static | shared · static | shared · static |
-| WASM (Emscripten) | —        | static          | —               | —               |
+| Target                  | LibTorch | ONNXRuntime     | LiteRT          | TFLite (legacy) |
+| ----------------------- | -------- | --------------- | --------------- | --------------- |
+| macOS `x86_64`          | shared   | shared · static | shared · static | shared · static |
+| macOS `arm64`           | shared   | shared · static | shared · static | shared · static |
+| macOS `universal`       | shared   | shared · static | shared · static | shared · static |
+| Linux `x86_64`          | shared   | shared · static | shared · static | shared · static |
+| Linux `aarch64`         | shared   | shared · static | shared · static | shared · static |
+| Windows `x86_64`        | shared   | shared · static | shared · static | shared · static |
+| Windows `arm64`         | shared   | shared · static | shared · static | shared · static |
+| `WASM` (Emscripten)     | —        | static          | —               | —               |
 
 LibTorch is shared-only (auto-disabled for fully static anira builds). LiteRT and TFLite are the
 same runtime via two C APIs and are mutually exclusive (LiteRT is the default). On WebAssembly only
