@@ -26,84 +26,68 @@ jobs:
       fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
       matrix:
         include:
-          # Every platform/arch is built both shared and static as its own runner. libtorch is
-          # shared-only, so anira's CMake auto-disables it for static builds (BUILD_SHARED_LIBS=OFF).
-          # `libtorch` is a separate flag from `inference_engines` (ONNXRuntime + LiteRT) so it can
-          # be toggled per-leg; it is enabled everywhere it is supported.
+          # Every platform/arch is built both shared and static as its own runner.
+          # `inference_engines` toggles all backends (LibTorch + ONNXRuntime + LiteRT) together.
+          # LibTorch is shared-only, so anira's CMake auto-disables it for static builds.
           - name: Linux-x86_64-no_inference_engines
             os: ubuntu-latest
             inference_engines: OFF
-            libtorch: OFF
             shared: ON
           - name: Linux-x86_64-shared
             os: ubuntu-latest
             inference_engines: ON
-            libtorch: ON
             shared: ON
           - name: Linux-x86_64-static
             os: ubuntu-latest
             inference_engines: ON
-            libtorch: ON
             shared: OFF
           - name: Linux-arm64-shared
             os: ubuntu-24.04-arm
             inference_engines: ON
-            libtorch: ON
             shared: ON
           - name: Linux-arm64-static
             os: ubuntu-24.04-arm
             inference_engines: ON
-            libtorch: ON
             shared: OFF
           - name: Windows-x86_64-shared
             os: windows-latest
             inference_engines: ON
-            libtorch: ON
             shared: ON
           - name: Windows-x86_64-static
             os: windows-latest
             inference_engines: ON
-            libtorch: ON
             shared: OFF
           - name: Windows-arm64-shared
             os: windows-11-arm
             inference_engines: ON
-            libtorch: ON
             shared: ON
           - name: Windows-arm64-static
             os: windows-11-arm
             inference_engines: ON
-            libtorch: ON
             shared: OFF
           - name: macOS-x86_64-shared
             os: macOS-latest
             inference_engines: ON
-            libtorch: ON
             shared: ON
           - name: macOS-x86_64-static
             os: macOS-latest
             inference_engines: ON
-            libtorch: ON
             shared: OFF
           - name: macOS-arm64-shared
             os: macOS-latest
             inference_engines: ON
-            libtorch: ON
             shared: ON
           - name: macOS-arm64-static
             os: macOS-latest
             inference_engines: ON
-            libtorch: ON
             shared: OFF
           - name: macOS-universal-shared
             os: macOS-latest
             inference_engines: ON
-            libtorch: ON
             shared: ON
           - name: macOS-universal-static
             os: macOS-latest
             inference_engines: ON
-            libtorch: ON
             shared: OFF
 
     runs-on: ${{ matrix.os }}
@@ -120,6 +104,6 @@ jobs:
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.libtorch }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.inference_engines }} -DANIRA_WITH_LITERT=${{ matrix.inference_engines }}"
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.inference_engines }} -DANIRA_WITH_LITERT=${{ matrix.inference_engines }}"
       - name: test
         uses: ./.github/actions/test
