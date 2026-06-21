@@ -24,8 +24,7 @@
 # Configurable cache variables (see CMakeLists.txt for the user-facing options):
 #   ANIRA_BACKENDS_VERSION          release tag to download from (default v2.1.1)
 #   ANIRA_BACKENDS_SKIP_REMOTE_CHECK  skip the live integrity check (offline/reproducible)
-#   ANIRA_BACKEND_LINKAGE           auto|shared|static (auto follows BUILD_SHARED_LIBS)
-#   ANIRA_<ENGINE>_LINKAGE          per-engine linkage override
+#   ANIRA_<ENGINE>_LINKAGE          per-engine linkage override (else follows BUILD_SHARED_LIBS)
 #   ANIRA_<ENGINE>_ROOTDIR          bring-your-own: use this prebuilt tree, skip download
 #   ANIRA_<ENGINE>_URL              override the download URL (custom mirror/build)
 #   ANIRA_<ENGINE>_SHA256           expected hash for ANIRA_<ENGINE>_URL
@@ -213,17 +212,11 @@ function(_anira_resolve_linkage id supported out)
     string(TOUPPER "${id}" _ID)
 
     if(DEFINED ANIRA_${_ID}_LINKAGE AND NOT ANIRA_${_ID}_LINKAGE STREQUAL "")
-        set(_linkage "${ANIRA_${_ID}_LINKAGE}")
-    elseif(ANIRA_BACKEND_LINKAGE STREQUAL "shared")
+        set(_linkage "${ANIRA_${_ID}_LINKAGE}") # per-engine override
+    elseif(BUILD_SHARED_LIBS)                   # else follow the anira library type
         set(_linkage "shared")
-    elseif(ANIRA_BACKEND_LINKAGE STREQUAL "static")
+    else()
         set(_linkage "static")
-    else() # auto
-        if(BUILD_SHARED_LIBS)
-            set(_linkage "shared")
-        else()
-            set(_linkage "static")
-        endif()
     endif()
 
     # WASM only ships static.

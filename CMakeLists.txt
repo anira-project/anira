@@ -1,81 +1,11 @@
 cmake_minimum_required(VERSION 3.15)
 
 # ==============================================================================
-# Define the options for the anira library
+# Build options (all user-facing options live in cmake/AniraOptions.cmake;
+# cross-option validation in cmake/AniraValidate.cmake, included after project()).
 # ==============================================================================
 
-# Shall the library be built as a shared library?
-option(BUILD_SHARED_LIBS "Build the library as a shared library" ON)
-option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
-option(ANIRA_WITH_EXAMPLES "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
-option(ANIRA_WITH_INSTALL "Add install targets" OFF)
-option(ANIRA_WITH_TESTS "Add Build Tests" OFF)
-option(ANIRA_WITH_DOCS "Add Build Documentation" OFF)
-
-# Select the backends for the inference engine, multiple backends can be selected
-option(ANIRA_WITH_LIBTORCH "Build with LibTorch backend" ON)
-option(ANIRA_WITH_ONNXRUNTIME "Build with ONNX Runtime backend" ON)
-# LiteRT (LiteRt* C API) is the default TensorFlow-family backend; TFLite (legacy
-# TfLite* C API) is the same underlying runtime, so the two are mutually exclusive
-# (LiteRt's library bundles the TfLite* symbols -> they collide when linked together).
-option(ANIRA_WITH_LITERT "Build with LiteRT backend (LiteRt* C API, runs .tflite via the CompiledModel runtime)" ON)
-option(ANIRA_WITH_TFLITE "Build with the legacy TensorFlow Lite backend (TfLite* C API); mutually exclusive with ANIRA_WITH_LITERT" OFF)
-
-if(ANIRA_WITH_TFLITE AND ANIRA_WITH_LITERT)
-    message(FATAL_ERROR
-        "ANIRA_WITH_TFLITE and ANIRA_WITH_LITERT are the same TensorFlow Lite runtime exposed "
-        "through two C APIs and cannot be enabled together (their static libraries export the "
-        "same TfLite* symbols). LiteRT is the default; TFLite is legacy. To use the legacy "
-        "TFLite backend, set -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON.")
-endif()
-
-# LibTorch ships shared-only upstream, so it cannot be part of a fully static build (and its
-# bundled XNNPACK collides with static LiteRT). Disable it automatically when building static.
-if(NOT BUILD_SHARED_LIBS AND ANIRA_WITH_LIBTORCH)
-    message(WARNING "LibTorch is shared-only and cannot be linked into a fully static anira build "
-                    "(BUILD_SHARED_LIBS=OFF); disabling ANIRA_WITH_LIBTORCH. Build shared to use LibTorch.")
-    set(ANIRA_WITH_LIBTORCH OFF)
-endif()
-
-# Pre-built backends are downloaded from the anira-project/backends release with
-# this tag. Integrity is checked live: anira fetches each asset's published sha256
-# from GitHub at configure (when reachable) and re-downloads anything that changed
-# upstream or downloaded incompletely — nothing is pinned in-repo. Empty -> the
-# default tag baked into cmake/AniraBackends.cmake.
-set(ANIRA_BACKENDS_VERSION "" CACHE STRING "anira-project/backends release tag to download (default: built-in)")
-
-# Skip the live integrity check (no GitHub query at configure). Use for fully
-# offline / reproducible builds; a backend already in modules/ is then reused as-is.
-option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for backend integrity at configure" OFF)
-
-# How to link the pre-built backends: auto follows BUILD_SHARED_LIBS (shared anira
-# -> shared backends, static anira -> static backends). Override globally here or
-# per-engine via ANIRA_<ENGINE>_LINKAGE. Per-engine bring-your-own / custom source:
-# ANIRA_<ENGINE>_ROOTDIR | ANIRA_<ENGINE>_URL + ANIRA_<ENGINE>_SHA256.
-set(ANIRA_BACKEND_LINKAGE "auto" CACHE STRING "Backend linkage: auto|shared|static")
-set_property(CACHE ANIRA_BACKEND_LINKAGE PROPERTY STRINGS auto shared static)
-
-option(ANIRA_BUILD_WASM "Build WebAssembly module (requires Emscripten toolchain)" OFF)
-
-option(ANIRA_WITH_LOGGING "Enable logging printouts" ON)
-option(ANIRA_WITH_RTSAN "Enable RealtimeSanitizer (rtan) checks (requires clang 20)" OFF)
-
-if(DEFINED EMSDK_VERSION)
-    set(DEFINED EMSDK_VERSION ON)
-    if(ANIRA_WITH_EXAMPLES)
-        message(FATAL_ERROR "WebAssembly support is not compatible with examples. Please disable ANIRA_WITH_EXAMPLES to build the library with WebAssembly support.")
-    elseif(ANIRA_WITH_TESTS)
-        message(FATAL_ERROR "WebAssembly support is not compatible with tests. Please disable ANIRA_WITH_TESTS to build the library with WebAssembly support.")
-    elseif(ANIRA_WITH_INSTALL)
-        message(FATAL_ERROR "WebAssembly support is not compatible with install targets. Please disable ANIRA_WITH_INSTALL to build the library with WebAssembly support.")
-    elseif(ANIRA_WITH_LIBTORCH)
-        message(FATAL_ERROR "Only the ONNX Runtime backend is supported for WebAssembly. Please set -DANIRA_WITH_LIBTORCH=OFF and enable ANIRA_WITH_ONNXRUNTIME to build the library with WebAssembly support.")
-    elseif(ANIRA_WITH_TFLITE)
-        message(FATAL_ERROR "Only the ONNX Runtime backend is supported for WebAssembly. Please set -DANIRA_WITH_TFLITE=OFF and enable ANIRA_WITH_ONNXRUNTIME to build the library with WebAssembly support.")
-    elseif(ANIRA_WITH_LITERT)
-        message(FATAL_ERROR "Only the ONNX Runtime backend is supported for WebAssembly. Please set -DANIRA_WITH_LITERT=OFF and enable ANIRA_WITH_ONNXRUNTIME to build the library with WebAssembly support.")
-    endif()
-endif()
+include(cmake/AniraOptions.cmake)
 # ==============================================================================
 # Get project version from git
 # ==============================================================================
@@ -166,6 +96,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 if(ANIRA_BUILD_WASM)
     include(cmake/DetectEmscripten.cmake)
 endif()
+
+# Validate the option combination (mutual exclusivity, libtorch auto-disable, WASM
+# guards). After Emscripten detection so EMSDK_VERSION is known; before the backends
+# are set up so the libtorch auto-disable takes effect.
+include(cmake/AniraValidate.cmake)
 
 # ==============================================================================
 # Download and install the selected inference engines
