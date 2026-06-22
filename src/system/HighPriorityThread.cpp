@@ -24,7 +24,11 @@ HighPriorityThread::~HighPriorityThread() {
 void HighPriorityThread::start() {
     if (!m_thread.joinable()) {
         m_should_exit = false;
-#if __linux__
+// glibc-only: set the process-default thread attributes so spawned threads use
+// explicit (non-inherited) scheduling. Android's bionic libc lacks
+// pthread_setattr_default_np / pthread_attr_setinheritsched, so this is skipped
+// there — elevate_priority() still raises the thread to SCHED_FIFO below.
+#if defined(__linux__) && !defined(__ANDROID__)
         // pthread_attr_t comes portably from <pthread.h>, not the glibc-internal <bits/...>
         // NOLINTNEXTLINE(misc-include-cleaner)
         pthread_attr_t thread_attr;
@@ -35,7 +39,7 @@ void HighPriorityThread::start() {
 
         m_thread = std::thread(&HighPriorityThread::run, this);
 
-#if __linux__
+#if defined(__linux__) && !defined(__ANDROID__)
         pthread_attr_destroy(&thread_attr);
 #endif
 
@@ -76,6 +80,11 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
 #elif __linux__
     int ret;
 
+    // The inherit-scheduling sanity check relies on glibc-only APIs
+    // (pthread_attr_getinheritsched, PTHREAD_EXPLICIT_SCHED) that bionic doesn't
+    // provide, so it's compiled out on Android. The SCHED_FIFO elevation below
+    // uses portable POSIX calls and runs on Android too.
+#if !defined(__ANDROID__)
     if (!is_main_process) {
         int attr_inheritsched;
         // pthread_attr_t comes portably from <pthread.h>, not the glibc-internal <bits/...>
@@ -94,6 +103,9 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
         }
         pthread_attr_destroy(&thread_attr);
     }
+#else
+    (void) is_main_process;
+#endif
 
     int sch_policy;
     // sched_param comes portably from <sched.h>, not the glibc-internal <bits/...>
