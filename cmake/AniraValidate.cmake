@@ -26,6 +26,14 @@ if(NOT BUILD_SHARED_LIBS AND ANIRA_WITH_LIBTORCH)
     set(ANIRA_WITH_LIBTORCH OFF)
 endif()
 
+# Android / iOS: the anira backends release ships no LibTorch mobile build (LibTorch
+# is desktop-only upstream; the mobile path is ExecuTorch, not yet integrated here).
+# LibTorch defaults ON, so a mobile build must opt out of it explicitly.
+if((CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS") AND ANIRA_WITH_LIBTORCH)
+    message(FATAL_ERROR "LibTorch has no Android/iOS build in the anira backends release. Disable it "
+                        "(-DANIRA_WITH_LIBTORCH=OFF) and use the ONNX Runtime or LiteRT backend on mobile.")
+endif()
+
 # WebAssembly (Emscripten): only the ONNX Runtime backend is supported and the
 # component targets do not apply. EMSDK_VERSION is set by cmake/DetectEmscripten.cmake.
 if(DEFINED EMSDK_VERSION)

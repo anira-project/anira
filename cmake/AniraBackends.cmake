@@ -162,6 +162,22 @@ function(_anira_target_tokens out_os out_arch)
         return()
     endif()
 
+    if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+        # One archive per linkage bundles every ABI under lib/<abi>/; the ABI is
+        # picked at wiring time from CMAKE_ANDROID_ARCH_ABI, so there is no arch token.
+        set(${out_os} "Android" PARENT_SCOPE)
+        set(${out_arch} "" PARENT_SCOPE)
+        return()
+    endif()
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # The backends ship a single iOS xcframework (device + simulator slices); the
+        # slice is selected at wiring time, so there is no arch token here either.
+        set(${out_os} "iOS" PARENT_SCOPE)
+        set(${out_arch} "" PARENT_SCOPE)
+        return()
+    endif()
+
     if(APPLE)
         # Prefer the explicit OSX architecture selection; supports universal.
         if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64" AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
@@ -221,6 +237,11 @@ function(_anira_resolve_linkage id supported out)
 
     # WASM only ships static.
     if(EMSDK_VERSION)
+        set(_linkage "static")
+    endif()
+
+    # iOS ships a single static xcframework regardless of BUILD_SHARED_LIBS.
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
         set(_linkage "static")
     endif()
 
@@ -466,9 +487,16 @@ macro(anira_setup_backend id)
             set(_ab_linktoken "static-debug")
         endif()
 
-        # Asset name: <libname>-<version>-<OS>[-<arch>]-<linktoken>  (WASM has no arch token).
+        # Asset name: <libname>-<version>-<OS>[-<arch>]-<linktoken>. The mobile OSes
+        # bundle their architectures inside one archive: Android has no arch token
+        # (every ABI lives under lib/<abi>/) and iOS is a single -xcframework asset
+        # (device + simulator slices, always static), so neither carries an arch.
         if(_ab_os STREQUAL "WASM")
             set(_ab_asset "${_ab_libname}-${_ab_version}-WASM-${_ab_linktoken}")
+        elseif(_ab_os STREQUAL "Android")
+            set(_ab_asset "${_ab_libname}-${_ab_version}-Android-${_ab_linktoken}")
+        elseif(_ab_os STREQUAL "iOS")
+            set(_ab_asset "${_ab_libname}-${_ab_version}-iOS-xcframework")
         else()
             set(_ab_asset "${_ab_libname}-${_ab_version}-${_ab_os}-${_ab_arch}-${_ab_linktoken}")
         endif()
@@ -512,7 +540,8 @@ macro(anira_setup_backend id)
         # legacy macro already populated header/lib dirs + ANIRA_<ID>_* vars
         set(ANIRA_${_ab_ID}_LINKAGE "${_ab_linkage}")
     else()
-        # onnxruntime / tflite / litert: uniform include/ + lib/.
+        # onnxruntime / tflite / litert: uniform include/ + lib/ on desktop/WASM,
+        # with per-ABI (Android) and per-xcframework-slice (iOS) layouts handled below.
         if(_ab_linkage STREQUAL "static")
             set(ANIRA_${_ab_ID}_IS_STATIC TRUE)
         else()
@@ -523,17 +552,65 @@ macro(anira_setup_backend id)
         set(ANIRA_${_ab_ID}_LIB_BASENAME "${_ab_libname}")
         # legacy shared-lib-path var consumed by msvc-support / BuildWasm / examples
         set(ANIRA_${_ab_ID}_SHARED_LIB_PATH "${_ab_rootdir}")
-        list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_rootdir}/include")
-        list(APPEND BACKEND_BUILD_LIBRARY_DIRS "${_ab_rootdir}/lib")
 
-        # Full path to the static archive (for whole-archive linking in CMakeLists).
-        if(_ab_linkage STREQUAL "static")
-            if(WIN32)
-                set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_rootdir}/lib/${_ab_libname}.lib")
+        if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+            # One archive holds every ABI under lib/<abi>/; select this build's ABI.
+            set(_ab_incdir "${_ab_rootdir}/include")
+            set(_ab_libdir "${_ab_rootdir}/lib/${CMAKE_ANDROID_ARCH_ABI}")
+            if(_ab_linkage STREQUAL "static")
+                set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/lib${_ab_libname}.a")
+            endif()
+        elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            # Pick the xcframework slice matching the active SDK (device vs simulator).
+            if(_ab_id STREQUAL "tflite")
+                # TFLite ships a TensorFlowLiteC.framework xcframework: a static
+                # (pre-linked Mach-O) framework binary plus flat module headers, and a
+                # fat arm64+x86_64 simulator slice. anira includes the headers by their
+                # canonical <tensorflow/lite/...c_api.h> paths, which the flat Headers/
+                # don't provide, so generate a tiny shim tree that forwards onto the
+                # framework's flat c_api.h and add Headers/ for its (quote-included)
+                # siblings.
+                if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+                    set(_ab_slice "ios-arm64_x86_64-simulator")
+                else()
+                    set(_ab_slice "ios-arm64")
+                endif()
+                set(_ab_fwk "${_ab_rootdir}/TensorFlowLiteC.xcframework/${_ab_slice}/TensorFlowLiteC.framework")
+                set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_fwk}/TensorFlowLiteC")
+                set(_ab_shim "${CMAKE_BINARY_DIR}/anira-tflite-ios-shim")
+                file(WRITE "${_ab_shim}/tensorflow/lite/c_api.h" "#include <c_api.h>\n")
+                file(WRITE "${_ab_shim}/tensorflow/lite/core/c/c_api.h" "#include <c_api.h>\n")
+                set(_ab_incdir "${_ab_shim}")
+                list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_fwk}/Headers")
+                set(_ab_libdir "${_ab_fwk}")
             else()
-                set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_rootdir}/lib/lib${_ab_libname}.a")
+                # onnxruntime / LiteRT: xcframework named after the lib (onnxruntime /
+                # LiteRt) with a plain static .a plus a flat Headers/ dir per slice.
+                if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+                    set(_ab_slice "ios-arm64-simulator")
+                else()
+                    set(_ab_slice "ios-arm64")
+                endif()
+                set(_ab_xcfwk "${_ab_rootdir}/${_ab_libname}.xcframework/${_ab_slice}")
+                set(_ab_incdir "${_ab_xcfwk}/Headers")
+                set(_ab_libdir "${_ab_xcfwk}")
+                set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_xcfwk}/lib${_ab_libname}.a")
+            endif()
+        else()
+            # Desktop / WASM: flat include/ + lib/.
+            set(_ab_incdir "${_ab_rootdir}/include")
+            set(_ab_libdir "${_ab_rootdir}/lib")
+            if(_ab_linkage STREQUAL "static")
+                if(WIN32)
+                    set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/${_ab_libname}.lib")
+                else()
+                    set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/lib${_ab_libname}.a")
+                endif()
             endif()
         endif()
+
+        list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_incdir}")
+        list(APPEND BACKEND_BUILD_LIBRARY_DIRS "${_ab_libdir}")
     endif()
 
     message(STATUS "anira: ${id} ready (${_ab_linkage}) at ${_ab_rootdir}")

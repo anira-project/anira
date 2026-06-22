@@ -81,6 +81,14 @@ set (PROJECT_NAME anira)
 project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
 
 if(APPLE)
+    # iOS builds target a single architecture per slice; default to arm64 (device and,
+    # on Apple Silicon, simulator) when the caller didn't pick one, so the backend
+    # arch-selection below resolves instead of hitting the universal-binary guard.
+    # Pass -DCMAKE_OSX_ARCHITECTURES=x86_64 explicitly for an Intel simulator slice.
+    if (CMAKE_SYSTEM_NAME STREQUAL "iOS" AND (NOT DEFINED CMAKE_OSX_ARCHITECTURES OR CMAKE_OSX_ARCHITECTURES STREQUAL ""))
+        set(CMAKE_OSX_ARCHITECTURES "arm64")
+    endif()
+
     # Allow universal binaries when no pre-built backends are used (e.g., custom CoreML backend)
     if (NOT ANIRA_WITH_LIBTORCH AND NOT ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_WITH_TFLITE AND NOT ANIRA_WITH_LITERT)
         # Universal binary is allowed - keep CMAKE_OSX_ARCHITECTURES as-is
