@@ -1,0 +1,177 @@
+name: build_test_mobile
+
+# Mobile build + test. The desktop matrix lives in build_test.yml; mobile is split
+# out because it cross-compiles and runs the suite on a simulator/emulator rather
+# than natively. The whole gtest binary is launched once per target (see the single
+# CTest entry registered for Android/iOS in test/CMakeLists.txt) instead of one
+# launch per case, so a run is one simctl/adb invocation.
+#
+# Backend coverage on mobile:
+#   - Android: ONNX Runtime + LiteRT (both run; arm64-v8a + x86_64 built).
+#   - iOS:     ONNX Runtime runs on the simulator. LiteRT is excluded from the iOS
+#              test build because the backends v2.1.1 LiteRt iOS xcframework is
+#              missing the signpost-profiler object and fails to link (tracked
+#              upstream in anira-project/backends); the iOS *library* still builds
+#              with it. LibTorch has no mobile build at all.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # iOS: build the suite for the simulator and run it; also build the library for
+  # a real device (arm64) to keep the device wiring honest.
+  # ---------------------------------------------------------------------------
+  ios:
+    name: iOS
+    runs-on: macos-latest # Apple Silicon -> arm64 device + arm64 simulator slices
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # lets anira's backend integrity check avoid API rate limits
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: install deps
+        run: brew install ninja
+
+      - name: cache the build
+        uses: mozilla-actions/sccache-action@v0.0.8
+
+      # Device (arm64) — library only. ONNX + LiteRT verify the backend wiring
+      # compiles for iphoneos; no executable is linked, so the LiteRt signpost gap
+      # (which only bites when an executable links the archive) does not apply here.
+      - name: build device library (onnx + litert)
+        run: |
+          cmake -B build-ios-device -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF
+          cmake --build build-ios-device --parallel 4
+
+      # Simulator — full test executable (ONNX), then run the whole suite once.
+      - name: build simulator tests (onnx)
+        run: |
+          cmake -B build-ios-sim -G Ninja \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF \
+            -DANIRA_WITH_TESTS=ON
+          cmake --build build-ios-sim --parallel 4
+
+      - name: run tests on the simulator
+        run: |
+          UDID=$(xcrun simctl list devices available | grep "iPhone" \
+                 | grep -oE "[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}" | head -1)
+          echo "Booting simulator $UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          # The simulator shares the host filesystem, so the model paths baked into
+          # the binary resolve as-is — one spawn runs the whole bundled suite.
+          xcrun simctl spawn "$UDID" "$PWD/build-ios-sim/test/tests.app/tests" --gtest_brief=1
+
+  # ---------------------------------------------------------------------------
+  # Android: build arm64-v8a (build-only; no accelerated arm emulator on x86 CI)
+  # and x86_64, then run the x86_64 suite on a hardware-accelerated emulator.
+  # ---------------------------------------------------------------------------
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      ANDROID_PLATFORM: android-24
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: install deps
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: cache the build
+        uses: mozilla-actions/sccache-action@v0.0.8
+
+      # arm64-v8a: build the full test executable to verify it compiles + links for
+      # the ABI we ship most. It is not run here (no accelerated arm emulator on an
+      # x86 host); the x86_64 emulator below provides the actual execution coverage.
+      - name: build arm64-v8a (onnx + litert)
+        run: |
+          cmake -B build-arm64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=$ANDROID_PLATFORM \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DBUILD_SHARED_LIBS=ON \
+            -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF \
+            -DANIRA_WITH_TESTS=ON
+          cmake --build build-arm64 --parallel 4
+
+      # x86_64: build with the model paths pointed at the on-device staging dir so
+      # the binary + JSON configs reference where we push the model tree below.
+      - name: build x86_64 (onnx + litert)
+        run: |
+          cmake -B build-x86_64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=x86_64 -DANDROID_PLATFORM=$ANDROID_PLATFORM \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DBUILD_SHARED_LIBS=ON \
+            -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF \
+            -DANIRA_WITH_TESTS=ON \
+            -DANIRA_EXTRAS_MODELS_DIR=/data/local/tmp/anira/models
+          cmake --build build-x86_64 --parallel 4
+
+      - name: enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: run x86_64 suite on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            set -e
+            DEV=/data/local/tmp/anira
+            NDK_SYSROOT_LIB=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android
+            ONNX_SO=$(find modules -path '*x86_64/libonnxruntime.so' | head -1)
+            LITERT_SO=$(find modules -path '*x86_64/libLiteRt.so' | head -1)
+            adb shell "rm -rf $DEV && mkdir -p $DEV"
+            # binary + every shared dependency next to it, reached via LD_LIBRARY_PATH
+            adb push build-x86_64/test/tests "$DEV/tests"
+            adb push build-x86_64/libanira.so "$DEV/"
+            adb push build-x86_64/lib/libgtest.so build-x86_64/lib/libgtest_main.so "$DEV/"
+            adb push "$ONNX_SO" "$DEV/"
+            adb push "$LITERT_SO" "$DEV/"
+            adb push "$NDK_SYSROOT_LIB/libc++_shared.so" "$DEV/"
+            # model tree staged to the path baked into the build (ANIRA_EXTRAS_MODELS_DIR)
+            adb push extras/models "$DEV/models"
+            adb shell "chmod 755 $DEV/tests"
+            # one launch runs the whole bundled suite; its exit code is the job result
+            adb shell "cd $DEV && LD_LIBRARY_PATH=$DEV ./tests --gtest_brief=1; echo ANIRA_EXIT=\$?" | tee /tmp/out.txt
+            grep -q "ANIRA_EXIT=0" /tmp/out.txt
