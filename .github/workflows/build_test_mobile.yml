@@ -152,23 +152,7 @@ jobs:
           target: google_apis
           emulator-options: -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
-          script: |
-            set -e
-            DEV=/data/local/tmp/anira
-            NDK_SYSROOT_LIB=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android
-            ONNX_SO=$(find modules -path '*x86_64/libonnxruntime.so' | head -1)
-            LITERT_SO=$(find modules -path '*x86_64/libLiteRt.so' | head -1)
-            adb shell "rm -rf $DEV && mkdir -p $DEV"
-            # binary + every shared dependency next to it, reached via LD_LIBRARY_PATH
-            adb push build-x86_64/test/tests "$DEV/tests"
-            adb push build-x86_64/libanira.so "$DEV/"
-            adb push build-x86_64/lib/libgtest.so build-x86_64/lib/libgtest_main.so "$DEV/"
-            adb push "$ONNX_SO" "$DEV/"
-            adb push "$LITERT_SO" "$DEV/"
-            adb push "$NDK_SYSROOT_LIB/libc++_shared.so" "$DEV/"
-            # model tree staged to the path baked into the build (ANIRA_EXTRAS_MODELS_DIR)
-            adb push extras/models "$DEV/models"
-            adb shell "chmod 755 $DEV/tests"
-            # one launch runs the whole bundled suite; its exit code is the job result
-            adb shell "cd $DEV && LD_LIBRARY_PATH=$DEV ./tests --gtest_brief=1; echo ANIRA_EXIT=\$?" | tee /tmp/out.txt
-            grep -q "ANIRA_EXIT=0" /tmp/out.txt
+          # android-emulator-runner runs each line of an inline script in its own
+          # shell, so the staging + run logic lives in one committed script where the
+          # variables persist.
+          script: bash .github/scripts/android_emulator_test.sh

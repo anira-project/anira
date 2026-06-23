@@ -104,7 +104,7 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
         pthread_attr_destroy(&thread_attr);
     }
 #else
-    (void) is_main_process;
+    (void)is_main_process;
 #endif
 
     int sch_policy;
