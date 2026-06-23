@@ -13,8 +13,13 @@ jobs:
   build_test:
     uses: ./.github/workflows/build_test.yml
     secrets: inherit
+  # Gate releases on the mobile suites too: a tag now runs the iOS simulator and
+  # Android emulator test runs before any artifact is published.
+  build_test_mobile:
+    uses: ./.github/workflows/build_test_mobile.yml
+    secrets: inherit
   build_release:
-    needs: build_test
+    needs: [build_test, build_test_mobile]
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
@@ -51,12 +56,115 @@ jobs:
           PROJECT_NAME: anira
           DEV_ID_APP_CERT: ${{ secrets.DEV_ID_APP_CERT }}
           DEV_ID_APP_PWD: ${{ secrets.DEV_ID_APP_PWD }}
-          DEV_ID_APP: ${{ secrets.DEV_ID_APP }}   
+          DEV_ID_APP: ${{ secrets.DEV_ID_APP }}
+
+  # iOS ships as a code-signed xcframework rather than the find_package install tree
+  # (an .xcframework links from both CMake and Xcode). anira links the backends in
+  # statically, so the consumer also needs their iOS xcframeworks — they are bundled
+  # alongside. The zip is published with the other release assets via the */*.zip glob.
+  build_release_ios:
+    needs: [build_test, build_test_mobile]
+    name: iOS-xcframework
+    runs-on: macos-latest
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # lets anira's backend integrity check avoid API rate limits
+    steps:
+      - name: get repo and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - name: install deps
+        run: brew install ninja
+      - name: import certificate
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.DEV_ID_APP_CERT }}
+          p12-password: ${{ secrets.DEV_ID_APP_PWD }}
+      - name: build + sign anira.xcframework
+        id: xcf
+        run: |
+          VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+          [ -z "$VERSION" ] && VERSION="0.0.0"
+          PRODUCT="anira-${VERSION}-iOS-xcframework"
+          OUT="artefacts/${PRODUCT}"
+          # A published xcframework must be Developer-ID signed; fail loudly rather than
+          # let the script fall back to an ad-hoc signature on a missing/empty secret.
+          IDENTITY="${{ secrets.DEV_ID_APP }}"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::DEV_ID_APP secret is empty — refusing to publish an ad-hoc-signed xcframework"; exit 1
+          fi
+          ANIRA_CODESIGN_IDENTITY="$IDENTITY" bash .github/scripts/build_ios_xcframework.sh "$OUT"
+          # Bundle the backend iOS xcframeworks anira's static build links against, and
+          # assert at least one was copied (a static anira.xcframework alone won't link).
+          find modules -type d -path '*iOS-xcframework/*.xcframework' -prune -exec cp -R {} "$OUT/" \;
+          count=$(find "$OUT" -maxdepth 1 -name '*.xcframework' | grep -vc 'anira.xcframework' || true)
+          if [ "$count" -lt 1 ]; then
+            echo "::error::no backend xcframeworks bundled into $OUT — consumers could not link"; exit 1
+          fi
+          (cd artefacts && zip -vr "${PRODUCT}.zip" "${PRODUCT}/" -x "*.DS_Store")
+          echo "PRODUCT=${PRODUCT}" >> "$GITHUB_OUTPUT"
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.xcf.outputs.PRODUCT }}.zip
+          path: artefacts/${{ steps.xcf.outputs.PRODUCT }}.zip
+
+  # Android ships ONE bundle covering every ABI — the CMake/NDK parallel to the iOS
+  # xcframework. Each ABI is a complete relocatable find_package tree (.a + headers +
+  # aniraConfig.cmake) under <abi>/; a consumer points find_package at
+  # <bundle>/${ANDROID_ABI}, so it auto-selects via the NDK's own variable (no Gradle,
+  # no prefab). Static, like the iOS slices.
+  build_release_android:
+    needs: [build_test, build_test_mobile]
+    name: Android
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # lets anira's backend integrity check avoid API rate limits
+      ANDROID_PLATFORM: android-24
+    steps:
+      - name: get repo and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - name: install deps
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: build + install all ABIs into one bundle
+        id: pkg
+        run: |
+          VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+          [ -z "$VERSION" ] && VERSION="0.0.0"
+          PRODUCT="anira-${VERSION}-Android"
+          for ABI in arm64-v8a x86_64; do
+            cmake -B "build-${ABI}" -G Ninja \
+              -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+              -DANDROID_ABI="${ABI}" -DANDROID_PLATFORM=$ANDROID_PLATFORM \
+              -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+              -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF \
+              -DANIRA_WITH_INSTALL=ON -DCMAKE_INSTALL_PREFIX="artefacts/${PRODUCT}/${ABI}"
+            cmake --build "build-${ABI}" --target install --parallel 4
+            # The backend archives ship every ABI; drop the sibling ABIs from this
+            # tree's lib/ (by exact ABI name, so lib/cmake and libanira.a are untouched).
+            for OTHER in arm64-v8a armeabi-v7a x86 x86_64; do
+              [ "$OTHER" != "$ABI" ] && rm -rf "artefacts/${PRODUCT}/${ABI}/lib/${OTHER}"
+            done
+          done
+          (cd artefacts && zip -qr "${PRODUCT}.zip" "${PRODUCT}/")
+          echo "PRODUCT=${PRODUCT}" >> "$GITHUB_OUTPUT"
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.PRODUCT }}.zip
+          path: artefacts/${{ steps.pkg.outputs.PRODUCT }}.zip
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     needs:
       - build_release
+      - build_release_ios
+      - build_release_android
     steps:
     - name: Get Artifacts
       uses: actions/download-artifact@v4

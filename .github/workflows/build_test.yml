@@ -27,8 +27,10 @@ jobs:
       matrix:
         include:
           # Every platform/arch is built both shared and static as its own runner.
-          # `inference_engines` toggles all backends (LibTorch + ONNXRuntime + LiteRT) together.
+          # `inference_engines` toggles LibTorch + ONNX Runtime + LiteRT together;
           # LibTorch is shared-only, so anira's CMake auto-disables it for static builds.
+          # Per-leg `onnxruntime` / `litert` / `tflite` overrides cover the legacy TFLite
+          # backend (mutually exclusive with LiteRT) — see the *-tflite-* legs below.
           - name: Linux-x86_64-no_inference_engines
             os: ubuntu-latest
             inference_engines: OFF
@@ -89,6 +91,44 @@ jobs:
             os: macOS-latest
             inference_engines: ON
             shared: OFF
+          # Legacy TFLite backend (ONNX + TFLite; LiteRT/LibTorch off since TFLite is
+          # mutually exclusive with LiteRT). One x86_64 leg per desktop OS, shared+static.
+          - name: Linux-x86_64-tflite-shared
+            os: ubuntu-latest
+            inference_engines: OFF
+            onnxruntime: ON
+            tflite: ON
+            shared: ON
+          - name: Linux-x86_64-tflite-static
+            os: ubuntu-latest
+            inference_engines: OFF
+            onnxruntime: ON
+            tflite: ON
+            shared: OFF
+          - name: macOS-arm64-tflite-shared
+            os: macOS-latest
+            inference_engines: OFF
+            onnxruntime: ON
+            tflite: ON
+            shared: ON
+          - name: macOS-arm64-tflite-static
+            os: macOS-latest
+            inference_engines: OFF
+            onnxruntime: ON
+            tflite: ON
+            shared: OFF
+          - name: Windows-x86_64-tflite-shared
+            os: windows-latest
+            inference_engines: OFF
+            onnxruntime: ON
+            tflite: ON
+            shared: ON
+          - name: Windows-x86_64-tflite-static
+            os: windows-latest
+            inference_engines: OFF
+            onnxruntime: ON
+            tflite: ON
+            shared: OFF
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -104,6 +144,8 @@ jobs:
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.inference_engines }} -DANIRA_WITH_LITERT=${{ matrix.inference_engines }}"
+          # Backends resolve per-leg: explicit matrix override first, else the shared
+          # `inference_engines` toggle, else OFF (TFLite defaults OFF — legacy, opt-in).
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.onnxruntime || matrix.inference_engines }} -DANIRA_WITH_LITERT=${{ matrix.litert || matrix.inference_engines }} -DANIRA_WITH_TFLITE=${{ matrix.tflite || 'OFF' }}"
       - name: test
         uses: ./.github/actions/test

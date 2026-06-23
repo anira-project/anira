@@ -26,6 +26,26 @@ if(NOT BUILD_SHARED_LIBS AND ANIRA_WITH_LIBTORCH)
     set(ANIRA_WITH_LIBTORCH OFF)
 endif()
 
+# Android / iOS: the anira backends release ships no LibTorch mobile build (LibTorch
+# is desktop-only upstream; the mobile path is ExecuTorch, not yet integrated here).
+# LibTorch defaults ON, so a mobile build must opt out of it explicitly.
+if((CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS") AND ANIRA_WITH_LIBTORCH)
+    message(FATAL_ERROR "LibTorch has no Android/iOS build in the anira backends release. Disable it "
+                        "(-DANIRA_WITH_LIBTORCH=OFF) and use the ONNX Runtime or LiteRT backend on mobile.")
+endif()
+
+# iOS: the ONNX Runtime xcframework vendors its own copy of the TfLite C API symbols,
+# and the TFLite backend is a single pre-linked framework binary whose symbols all
+# load unconditionally — so enabling both on iOS collides (duplicate TfLite* symbols
+# at link time). Each works on its own; pair ONNX with LiteRT (the default TF-family
+# backend, same .tflite models) instead of the legacy TFLite backend.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND ANIRA_WITH_TFLITE AND ANIRA_WITH_ONNXRUNTIME)
+    message(FATAL_ERROR "On iOS, ANIRA_WITH_TFLITE and ANIRA_WITH_ONNXRUNTIME cannot be combined: the "
+                        "ONNX Runtime xcframework vendors the TfLite C API symbols, which collide with the "
+                        "TFLite framework. Use LiteRT alongside ONNX (-DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_LITERT=ON), "
+                        "or build TFLite on its own.")
+endif()
+
 # WebAssembly (Emscripten): only the ONNX Runtime backend is supported and the
 # component targets do not apply. EMSDK_VERSION is set by cmake/DetectEmscripten.cmake.
 if(DEFINED EMSDK_VERSION)

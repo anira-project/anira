@@ -39,8 +39,17 @@ target_sources(${PROJECT_NAME} PRIVATE
 
 target_link_libraries(${PROJECT_NAME} anira::anira)
 
-# gtest_discover_tests will register a CTest test for each gtest and run them all in parallel with the rest of the Test.
-gtest_discover_tests(${PROJECT_NAME} DISCOVERY_TIMEOUT 90)
+if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    # On mobile the test binary runs on a device/emulator/simulator, reached over a
+    # single adb/simctl invocation. Per-test registration is wrong here: gtest_discover_tests
+    # would have to run the cross-built binary on the host just to enumerate the cases
+    # (impossible), and even if it could, each case would re-spawn the target. Register
+    # one CTest entry that runs the whole bundled binary in a single on-device launch.
+    add_test(NAME ${PROJECT_NAME} COMMAND ${PROJECT_NAME})
+else()
+    # gtest_discover_tests will register a CTest test for each gtest and run them all in parallel with the rest of the Test.
+    gtest_discover_tests(${PROJECT_NAME} DISCOVERY_TIMEOUT 90)
+endif()
 
 # Installed-package smoke test: install anira to a throwaway prefix and build +
 # run a downstream find_package(anira) consumer against it. Only meaningful when

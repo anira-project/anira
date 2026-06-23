@@ -104,6 +104,13 @@ private:
                      std::vector<BufferF>& output,
                      const std::shared_ptr<SessionElement>& session);
 
+        /**
+         * @brief Destroys every LiteRT C-API handle this instance owns (no-op on
+         * nulls). Called by the destructor and on a throw during construction so a
+         * partially-built instance does not leak native runtime objects.
+         */
+        void release() noexcept;
+
         LiteRtEnvironment m_env = nullptr;               ///< LiteRT runtime environment
         LiteRtModel m_model = nullptr;                   ///< Model loaded from file or buffer
         LiteRtOptions m_options = nullptr;               ///< Compilation options (CPU)

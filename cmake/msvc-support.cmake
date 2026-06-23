@@ -11,6 +11,16 @@ if(NOT BUILD_SHARED_LIBS)
     target_compile_definitions(${PROJECT_NAME} PUBLIC ANIRA_STATIC_DEFINE)
 endif()
 
+# The TFLite C API headers default to __declspec(dllimport) on Windows; linking the
+# static TFLite lib then leaves __imp_TfLite* unresolved (no import stubs). Defining
+# TFL_COMPILE_LIBRARY switches the decoration to a direct (static) reference. PUBLIC
+# so a consumer including anira's TFLite processor header agrees. (ONNX uses a
+# function-pointer table and LiteRT's static lib ships import stubs, so only the
+# legacy TFLite backend needs this.)
+if(ANIRA_WITH_TFLITE AND ANIRA_TFLITE_IS_STATIC)
+    target_compile_definitions(${PROJECT_NAME} PUBLIC TFL_COMPILE_LIBRARY)
+endif()
+
 if(NOT CMAKE_BUILD_TYPE)
     message(FATAL_ERROR "You need to specify CMAKE_BUILD_TYPE")
 endif()
@@ -33,7 +43,7 @@ if(ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_ONNXRUNTIME_IS_STATIC)
     list(APPEND ANIRA_SHARED_LIBS_WIN ${INFERENCE_ENGINE_DLLS_ONNX})
 endif()
 if (ANIRA_WITH_TFLITE AND NOT ANIRA_TFLITE_IS_STATIC)
-    file(GLOB_RECURSE INFERENCE_ENGINE_DLLS_TFLITE "${ANIRA_TENSORFLOWLITE_SHARED_LIB_PATH}/*.dll")
+    file(GLOB_RECURSE INFERENCE_ENGINE_DLLS_TFLITE "${ANIRA_TFLITE_SHARED_LIB_PATH}/*.dll")
     list(APPEND ANIRA_SHARED_LIBS_WIN ${INFERENCE_ENGINE_DLLS_TFLITE})
 endif()
 if (ANIRA_WITH_LITERT AND NOT ANIRA_LITERT_IS_STATIC)

@@ -81,26 +81,24 @@ set (PROJECT_NAME anira)
 project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
 
 if(APPLE)
-    # Allow universal binaries when no pre-built backends are used (e.g., custom CoreML backend)
-    if (NOT ANIRA_WITH_LIBTORCH AND NOT ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_WITH_TFLITE AND NOT ANIRA_WITH_LITERT)
-        # Universal binary is allowed - keep CMAKE_OSX_ARCHITECTURES as-is
-        message(STATUS "Building anira without pre-built backends - universal binary supported")
-    elseif (CMAKE_OSX_ARCHITECTURES MATCHES "arm64" AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
-        # Universal binary with pre-built backends: the anira-project/backends release ships
-        # macOS-universal archives, so this is supported. AniraBackends.cmake maps the
-        # arm64;x86_64 selection to the "universal" asset token.
-        message(STATUS "Building anira as a macOS universal binary (arm64;x86_64)")
-    elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-        set(CMAKE_SYSTEM_PROCESSOR "arm64")
-    elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-        set(CMAKE_SYSTEM_PROCESSOR "x86_64")
-    else()
-        if (CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # iOS targets a single architecture per xcframework slice; default to arm64
+        # (device and, on Apple Silicon, simulator) when the caller didn't pick one.
+        # Note: the prebuilt ONNX/LiteRT iOS xcframeworks ship an arm64-only simulator
+        # slice, so an x86_64 (Intel) simulator build is only viable with no backend
+        # (or the TFLite framework, which ships a fat simulator slice).
+        if(NOT CMAKE_OSX_ARCHITECTURES)
             set(CMAKE_OSX_ARCHITECTURES "arm64")
-        elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
-            set(CMAKE_OSX_ARCHITECTURES "x86_64")
-        else()
-            message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES not set to arm64 or x86_64. Please select one of the architectures as universal binaries are not supported by all backends.")
+        endif()
+    else()
+        # macOS: default to the host architecture when unset. A single-arch selection is
+        # mirrored into CMAKE_SYSTEM_PROCESSOR for the backend asset picker; a universal
+        # (arm64;x86_64) selection is left as-is and maps to the universal backend archives.
+        if(NOT CMAKE_OSX_ARCHITECTURES)
+            set(CMAKE_OSX_ARCHITECTURES "${CMAKE_SYSTEM_PROCESSOR}")
+        endif()
+        if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+            set(CMAKE_SYSTEM_PROCESSOR "${CMAKE_OSX_ARCHITECTURES}")
         endif()
     endif()
 endif()
@@ -310,8 +308,10 @@ endif()
 
 # Backends link PUBLIC: anira's public headers include the backend headers, and
 # (onnxruntime) "_OrtGetApiBase" is otherwise dropped. Static archives are linked
-# whole so C API entry points + static self-registration survive (see
-# anira_target_link_static_backend in cmake/AniraBackends.cmake).
+# on-demand (NOT whole-archive — the onnxruntime/tflite archives carry duplicate
+# protobuf/absl symbols that force-loading would clash; anira only needs the C API,
+# which the linker resolves on demand) — see anira_target_link_static_backend in
+# cmake/AniraBackends.cmake.
 if(ANIRA_WITH_ONNXRUNTIME)
     if(ANIRA_ONNXRUNTIME_IS_STATIC)
         anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_ONNXRUNTIME_STATIC_LIB}")
