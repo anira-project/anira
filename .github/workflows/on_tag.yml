@@ -13,8 +13,13 @@ jobs:
   build_test:
     uses: ./.github/workflows/build_test.yml
     secrets: inherit
+  # Gate releases on the mobile suites too: a tag now runs the iOS simulator and
+  # Android emulator test runs before any artifact is published.
+  build_test_mobile:
+    uses: ./.github/workflows/build_test_mobile.yml
+    secrets: inherit
   build_release:
-    needs: build_test
+    needs: [build_test, build_test_mobile]
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
