@@ -107,43 +107,74 @@ endif()
 # trees manually. This copies whatever the linkage produced (shared .so/.dylib/.dll
 # or static .a/.lib). ANIRA_<ID>_ROOTDIR is set by anira_setup_backend().
 if(ANIRA_WITH_ONNXRUNTIME)
-    if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
-        install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/include/onnxruntime/"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-            COMPONENT deps-backends
-        )
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # iOS ships an xcframework: install it whole (the static .a then sits at the
+        # SUBPATH the install-interface link expects) plus the active slice's headers.
+        install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/onnxruntime.xcframework"
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
+        install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/onnxruntime.xcframework/${ANIRA_ONNXRUNTIME_IOS_SLICE}/Headers/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT deps-backends)
     else()
-        install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/include/"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+        if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
+            install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/include/onnxruntime/"
+                DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+                COMPONENT deps-backends
+            )
+        else()
+            install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/include/"
+                DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+                COMPONENT deps-backends
+            )
+        endif()
+        install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/lib/"
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}"
             COMPONENT deps-backends
         )
     endif()
-    install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/lib/"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-        COMPONENT deps-backends
-    )
 endif()
 
 if(ANIRA_WITH_TFLITE)
-    install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/include/"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-        COMPONENT deps-backends
-    )
-    install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/lib/"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-        COMPONENT deps-backends
-    )
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # iOS TFLite is a TensorFlowLiteC.framework xcframework: install it whole, plus
+        # the framework's flat headers AND the generated <tensorflow/lite/...> shim that
+        # forwards onto them (so the canonical include paths resolve for a consumer).
+        install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/TensorFlowLiteC.xcframework"
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
+        install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/TensorFlowLiteC.xcframework/${ANIRA_TFLITE_IOS_SLICE}/TensorFlowLiteC.framework/Headers/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT deps-backends)
+        if(NOT ANIRA_TFLITE_IOS_SHIM)
+            message(FATAL_ERROR "ANIRA_TFLITE_IOS_SHIM is empty — refusing to install (would copy the filesystem root).")
+        endif()
+        install(DIRECTORY "${ANIRA_TFLITE_IOS_SHIM}/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT deps-backends)
+    else()
+        install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/include/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+            COMPONENT deps-backends
+        )
+        install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/lib/"
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+            COMPONENT deps-backends
+        )
+    endif()
 endif()
 
 if(ANIRA_WITH_LITERT)
-    install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/include/"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-        COMPONENT deps-backends
-    )
-    install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/lib/"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-        COMPONENT deps-backends
-    )
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/LiteRt.xcframework"
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
+        install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/LiteRt.xcframework/${ANIRA_LITERT_IOS_SLICE}/Headers/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT deps-backends)
+    else()
+        install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/include/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+            COMPONENT deps-backends
+        )
+        install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/lib/"
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+            COMPONENT deps-backends
+        )
+    endif()
 endif()
 
 # Relocatable static-backend linkage. anira_target_link_static_backend() linked each
