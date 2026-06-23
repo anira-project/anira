@@ -81,34 +81,22 @@ set (PROJECT_NAME anira)
 project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
 
 if(APPLE)
-    # iOS builds target a single architecture per slice; default to arm64 (device and,
-    # on Apple Silicon, simulator) when the caller didn't pick one, so the backend
-    # arch-selection below resolves instead of hitting the universal-binary guard.
-    # Pass -DCMAKE_OSX_ARCHITECTURES=x86_64 explicitly for an Intel simulator slice.
-    if (CMAKE_SYSTEM_NAME STREQUAL "iOS" AND (NOT DEFINED CMAKE_OSX_ARCHITECTURES OR CMAKE_OSX_ARCHITECTURES STREQUAL ""))
-        set(CMAKE_OSX_ARCHITECTURES "arm64")
-    endif()
-
-    # Allow universal binaries when no pre-built backends are used (e.g., custom CoreML backend)
-    if (NOT ANIRA_WITH_LIBTORCH AND NOT ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_WITH_TFLITE AND NOT ANIRA_WITH_LITERT)
-        # Universal binary is allowed - keep CMAKE_OSX_ARCHITECTURES as-is
-        message(STATUS "Building anira without pre-built backends - universal binary supported")
-    elseif (CMAKE_OSX_ARCHITECTURES MATCHES "arm64" AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
-        # Universal binary with pre-built backends: the anira-project/backends release ships
-        # macOS-universal archives, so this is supported. AniraBackends.cmake maps the
-        # arm64;x86_64 selection to the "universal" asset token.
-        message(STATUS "Building anira as a macOS universal binary (arm64;x86_64)")
-    elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-        set(CMAKE_SYSTEM_PROCESSOR "arm64")
-    elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-        set(CMAKE_SYSTEM_PROCESSOR "x86_64")
-    else()
-        if (CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # iOS targets a single architecture per xcframework slice; default to arm64
+        # (device and, on Apple Silicon, simulator) when the caller didn't pick one.
+        # Pass -DCMAKE_OSX_ARCHITECTURES=x86_64 explicitly for an Intel simulator slice.
+        if(NOT CMAKE_OSX_ARCHITECTURES)
             set(CMAKE_OSX_ARCHITECTURES "arm64")
-        elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
-            set(CMAKE_OSX_ARCHITECTURES "x86_64")
-        else()
-            message(FATAL_ERROR "CMAKE_OSX_ARCHITECTURES not set to arm64 or x86_64. Please select one of the architectures as universal binaries are not supported by all backends.")
+        endif()
+    else()
+        # macOS: default to the host architecture when unset. A single-arch selection is
+        # mirrored into CMAKE_SYSTEM_PROCESSOR for the backend asset picker; a universal
+        # (arm64;x86_64) selection is left as-is and maps to the universal backend archives.
+        if(NOT CMAKE_OSX_ARCHITECTURES)
+            set(CMAKE_OSX_ARCHITECTURES "${CMAKE_SYSTEM_PROCESSOR}")
+        endif()
+        if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+            set(CMAKE_SYSTEM_PROCESSOR "${CMAKE_OSX_ARCHITECTURES}")
         endif()
     endif()
 endif()
