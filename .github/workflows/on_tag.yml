@@ -100,17 +100,15 @@ jobs:
           name: ${{ steps.xcf.outputs.PRODUCT }}.zip
           path: artefacts/${{ steps.xcf.outputs.PRODUCT }}.zip
 
-  # Android ships per-ABI relocatable find_package install trees (.a + headers +
-  # aniraConfig.cmake) — the CMake/NDK parallel to the iOS xcframework. Static, like
-  # the iOS slices; one zip per ABI, matching the per-arch desktop release legs.
+  # Android ships ONE bundle covering every ABI — the CMake/NDK parallel to the iOS
+  # xcframework. Each ABI is a complete relocatable find_package tree (.a + headers +
+  # aniraConfig.cmake) under <abi>/; a consumer points find_package at
+  # <bundle>/${ANDROID_ABI}, so it auto-selects via the NDK's own variable (no Gradle,
+  # no prefab). Static, like the iOS slices.
   build_release_android:
     needs: [build_test, build_test_mobile]
-    name: Android-${{ matrix.abi }}
+    name: Android
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        abi: [arm64-v8a, x86_64]
     env:
       GITHUB_TOKEN: ${{ github.token }} # lets anira's backend integrity check avoid API rate limits
       ANDROID_PLATFORM: android-24
@@ -122,22 +120,26 @@ jobs:
           fetch-depth: 0
       - name: install deps
         run: sudo apt-get update && sudo apt-get install -y ninja-build
-      - name: build + install + package
+      - name: build + install all ABIs into one bundle
         id: pkg
         run: |
           VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
           [ -z "$VERSION" ] && VERSION="0.0.0"
-          PRODUCT="anira-${VERSION}-Android-${{ matrix.abi }}"
-          cmake -B build -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=$ANDROID_PLATFORM \
-            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF \
-            -DANIRA_WITH_INSTALL=ON -DCMAKE_INSTALL_PREFIX="artefacts/${PRODUCT}"
-          cmake --build build --target install --parallel 4
-          # The backend archives ship every ABI; keep only this leg's so the tree is a
-          # clean single-ABI package (the find_package config references lib/<abi>/).
-          find "artefacts/${PRODUCT}/lib" -mindepth 1 -maxdepth 1 -type d ! -name "${{ matrix.abi }}" -exec rm -rf {} +
+          PRODUCT="anira-${VERSION}-Android"
+          for ABI in arm64-v8a x86_64; do
+            cmake -B "build-${ABI}" -G Ninja \
+              -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+              -DANDROID_ABI="${ABI}" -DANDROID_PLATFORM=$ANDROID_PLATFORM \
+              -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+              -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF \
+              -DANIRA_WITH_INSTALL=ON -DCMAKE_INSTALL_PREFIX="artefacts/${PRODUCT}/${ABI}"
+            cmake --build "build-${ABI}" --target install --parallel 4
+            # The backend archives ship every ABI; drop the sibling ABIs from this
+            # tree's lib/ (by exact ABI name, so lib/cmake and libanira.a are untouched).
+            for OTHER in arm64-v8a armeabi-v7a x86 x86_64; do
+              [ "$OTHER" != "$ABI" ] && rm -rf "artefacts/${PRODUCT}/${ABI}/lib/${OTHER}"
+            done
+          done
           (cd artefacts && zip -qr "${PRODUCT}.zip" "${PRODUCT}/")
           echo "PRODUCT=${PRODUCT}" >> "$GITHUB_OUTPUT"
       - name: upload artifact
