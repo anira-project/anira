@@ -68,6 +68,12 @@ jobs:
     runs-on: macos-latest
     env:
       GITHUB_TOKEN: ${{ github.token }} # lets anira's backend integrity check avoid API rate limits
+      # Notarization credentials (optional). When NOTARY_TEAM_ID is set, the signed
+      # xcframework zip is submitted to Apple's notary service. Set NOTARY_APPLE_ID
+      # (Apple ID), NOTARY_PASSWORD (an app-specific password), NOTARY_TEAM_ID.
+      NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+      NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+      NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
     steps:
       - name: get repo and submodules
         uses: actions/checkout@v4
@@ -94,6 +100,17 @@ jobs:
           find modules -type d -path '*iOS-xcframework/*.xcframework' -prune -exec cp -R {} "$OUT/" \;
           (cd artefacts && zip -vr "${PRODUCT}.zip" "${PRODUCT}/" -x "*.DS_Store")
           echo "PRODUCT=${PRODUCT}" >> "$GITHUB_OUTPUT"
+      # Submit the signed zip to Apple's notary service. Skipped unless the notary
+      # secrets are set. An xcframework can't be `stapler staple`d (Apple doesn't
+      # support stapling it), so the notarization ticket stays server-side; for a
+      # static library this is largely a formality (it isn't run / Gatekeeper-checked),
+      # but it's here for teams that notarize every distributed binary.
+      - name: notarize
+        if: ${{ env.NOTARY_TEAM_ID != '' }}
+        run: |
+          xcrun notarytool submit "artefacts/${{ steps.xcf.outputs.PRODUCT }}.zip" \
+            --apple-id "$NOTARY_APPLE_ID" --password "$NOTARY_PASSWORD" --team-id "$NOTARY_TEAM_ID" \
+            --wait
       - name: upload artifact
         uses: actions/upload-artifact@v4
         with:
