@@ -6,10 +6,13 @@ name: build_test_mobile
 # CTest entry registered for Android/iOS in test/CMakeLists.txt) instead of one
 # launch per case, so a run is one simctl/adb invocation.
 #
-# Backend coverage on mobile:
-#   - Android: ONNX Runtime + LiteRT (both run; arm64-v8a + x86_64 built).
-#   - iOS:     ONNX Runtime + LiteRT both run on the simulator. LibTorch has no
-#              mobile build at all.
+# Backend coverage (LibTorch has no mobile build, so it is never enabled here):
+#   - ONNX Runtime + LiteRT (the default pairing)
+#   - TFLite (legacy) on its own — it is mutually exclusive with LiteRT, and on iOS
+#     it also collides with ONNX, so it is built alone
+#   - no backend (core only)
+# Android additionally covers both shared and static linkage (iOS is static-only:
+# the backend xcframeworks ship static).
 
 on:
   workflow_call:
@@ -30,12 +33,22 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # iOS: build the suite for the simulator and run it; also build the library for
-  # a real device (arm64) to keep the device wiring honest.
+  # iOS: per backend set, build the device library (wiring check) and the simulator
+  # test executable, then run the whole suite once on the simulator.
   # ---------------------------------------------------------------------------
   ios:
-    name: iOS
+    name: iOS-${{ matrix.name }}
     runs-on: macos-latest # Apple Silicon -> arm64 device + arm64 simulator slices
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: onnx-litert
+            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF"
+          - name: tflite
+            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON"
+          - name: no-backend
+            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF"
     env:
       GITHUB_TOKEN: ${{ github.token }} # lets anira's backend integrity check avoid API rate limits
     steps:
@@ -50,28 +63,25 @@ jobs:
       - name: cache the build
         uses: mozilla-actions/sccache-action@v0.0.8
 
-      # Device (arm64) — library only. ONNX + LiteRT verify the backend wiring
-      # compiles for iphoneos; no executable is linked, so the LiteRt signpost gap
-      # (which only bites when an executable links the archive) does not apply here.
-      - name: build device library (onnx + litert)
+      # Device (arm64) — library only: verifies the backend wiring compiles for
+      # iphoneos. No executable is linked, so it is build-coverage, not a run.
+      - name: build device library
         run: |
           cmake -B build-ios-device -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF
+            -DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=OFF ${{ matrix.backends }}
           cmake --build build-ios-device --parallel 4
 
-      # Simulator — full test executable (ONNX + LiteRT), then run the whole suite once.
-      - name: build simulator tests (onnx + litert)
+      # Simulator — full test executable, then run the whole bundled suite once.
+      - name: build simulator tests
         run: |
           cmake -B build-ios-sim -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF \
+            -DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=OFF ${{ matrix.backends }} \
             -DANIRA_WITH_TESTS=ON
           cmake --build build-ios-sim --parallel 4
 
@@ -87,12 +97,29 @@ jobs:
           xcrun simctl spawn "$UDID" "$PWD/build-ios-sim/test/tests.app/tests" --gtest_brief=1
 
   # ---------------------------------------------------------------------------
-  # Android: build arm64-v8a (build-only; no accelerated arm emulator on x86 CI)
-  # and x86_64, then run the x86_64 suite on a hardware-accelerated emulator.
+  # Android: per backend set + linkage, build arm64-v8a (build-only; no accelerated
+  # arm emulator on x86 CI) and x86_64, then run the x86_64 suite on a hardware-
+  # accelerated emulator.
   # ---------------------------------------------------------------------------
   android:
-    name: Android
+    name: Android-${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: onnx-litert-shared
+            shared: ON
+            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF"
+          - name: onnx-litert-static
+            shared: OFF
+            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF"
+          - name: tflite-shared
+            shared: ON
+            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON"
+          - name: no-backend-shared
+            shared: ON
+            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF"
     env:
       GITHUB_TOKEN: ${{ github.token }}
       ANDROID_PLATFORM: android-24
@@ -109,31 +136,29 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.8
 
       # arm64-v8a: build the full test executable to verify it compiles + links for
-      # the ABI we ship most. It is not run here (no accelerated arm emulator on an
-      # x86 host); the x86_64 emulator below provides the actual execution coverage.
-      - name: build arm64-v8a (onnx + litert)
+      # the ABI we ship most. Not run here (no accelerated arm emulator on an x86
+      # host); the x86_64 emulator below provides the actual execution coverage.
+      - name: build arm64-v8a
         run: |
           cmake -B build-arm64 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=$ANDROID_PLATFORM \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -DBUILD_SHARED_LIBS=ON \
-            -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF \
+            -DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_LIBTORCH=OFF ${{ matrix.backends }} \
             -DANIRA_WITH_TESTS=ON
           cmake --build build-arm64 --parallel 4
 
       # x86_64: build with the model paths pointed at the on-device staging dir so
-      # the binary + JSON configs reference where we push the model tree below.
-      - name: build x86_64 (onnx + litert)
+      # the binary + JSON configs reference where the model tree is pushed.
+      - name: build x86_64
         run: |
           cmake -B build-x86_64 -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=x86_64 -DANDROID_PLATFORM=$ANDROID_PLATFORM \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -DBUILD_SHARED_LIBS=ON \
-            -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF \
+            -DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_LIBTORCH=OFF ${{ matrix.backends }} \
             -DANIRA_WITH_TESTS=ON \
             -DANIRA_EXTRAS_MODELS_DIR=/data/local/tmp/anira/models
           cmake --build build-x86_64 --parallel 4
