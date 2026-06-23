@@ -15,8 +15,12 @@ env:
   SCCACHE_GHA_ENABLED: "true"
 
 # When pushing new commits, cancel any workflows with the same name on that branch
+# Hardcode the workflow name (not ${{ github.workflow }}): when on_tag.yml calls this
+# as a reusable workflow, github.workflow becomes "on_tag" — shared with the other
+# reusable test workflow, so cancel-in-progress would cancel one of them. A literal
+# keeps the group distinct in both the standalone (PR/push) and reused (tag) cases.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: build_test-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

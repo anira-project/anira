@@ -27,8 +27,12 @@ on:
 env:
   SCCACHE_GHA_ENABLED: "true"
 
+# Hardcode the workflow name (not ${{ github.workflow }}): when on_tag.yml calls this
+# as a reusable workflow, github.workflow becomes "on_tag" — shared with build_test,
+# so cancel-in-progress would cancel one of them. A literal keeps the group distinct
+# in both the standalone (PR/push) and reused (tag) cases.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: build_test_mobile-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
