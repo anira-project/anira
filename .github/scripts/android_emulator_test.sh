@@ -20,9 +20,10 @@ adb shell "rm -rf $DEV && mkdir -p $DEV"
 adb push build-x86_64/test/tests "$DEV/tests"
 
 # Shared libs the build emitted (libanira.so, libgtest*.so for a shared build; none
-# for a static build) plus the enabled backend libs for this ABI (none when static).
+# for a static build) plus the enabled backend libs for this ABI (none when static,
+# and modules/ is absent entirely for a no-backend build).
 find build-x86_64 -name '*.so' -exec adb push {} "$DEV/" \;
-find modules -path '*x86_64/*.so' -exec adb push {} "$DEV/" \;
+[ -d modules ] && find modules -path '*x86_64/*.so' -exec adb push {} "$DEV/" \; || true
 
 # The NDK C++ runtime the binary links against (needed even for static anira builds).
 adb push "$NDK_SYSROOT_LIB/libc++_shared.so" "$DEV/"
