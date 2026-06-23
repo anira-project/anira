@@ -8,11 +8,8 @@ name: build_test_mobile
 #
 # Backend coverage on mobile:
 #   - Android: ONNX Runtime + LiteRT (both run; arm64-v8a + x86_64 built).
-#   - iOS:     ONNX Runtime runs on the simulator. LiteRT is excluded from the iOS
-#              test build because the backends v2.1.1 LiteRt iOS xcframework is
-#              missing the signpost-profiler object and fails to link (tracked
-#              upstream in anira-project/backends); the iOS *library* still builds
-#              with it. LibTorch has no mobile build at all.
+#   - iOS:     ONNX Runtime + LiteRT both run on the simulator. LibTorch has no
+#              mobile build at all.
 
 on:
   workflow_call:
@@ -66,15 +63,15 @@ jobs:
             -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF
           cmake --build build-ios-device --parallel 4
 
-      # Simulator — full test executable (ONNX), then run the whole suite once.
-      - name: build simulator tests (onnx)
+      # Simulator — full test executable (ONNX + LiteRT), then run the whole suite once.
+      - name: build simulator tests (onnx + litert)
         run: |
           cmake -B build-ios-sim -G Ninja \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DBUILD_SHARED_LIBS=OFF \
-            -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF \
+            -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF \
             -DANIRA_WITH_TESTS=ON
           cmake --build build-ios-sim --parallel 4
 
