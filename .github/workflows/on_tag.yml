@@ -24,15 +24,26 @@ jobs:
     strategy:
       fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
       matrix:
+        # Every desktop platform/arch, both shared and static — mirroring what
+        # build_test validates, so the published artifacts == the tested set. Arch
+        # tokens match the anira-project/backends naming (Linux=aarch64, Win/mac=arm64,
+        # plus macOS-universal). Static auto-disables LibTorch (shared-only upstream),
+        # so a *-static zip ships ONNX Runtime + LiteRT only.
         include:
-          - name: Linux-x86_64
-            os: ubuntu-latest
-          - name: macOS-x86_64
-            os: macOS-latest
-          - name: macOS-arm64
-            os: macOS-latest
-          - name: Windows-x86_64
-            os: windows-latest
+          - { name: Linux-x86_64-shared,      os: ubuntu-latest,    shared: ON }
+          - { name: Linux-x86_64-static,      os: ubuntu-latest,    shared: OFF }
+          - { name: Linux-aarch64-shared,     os: ubuntu-24.04-arm, shared: ON }
+          - { name: Linux-aarch64-static,     os: ubuntu-24.04-arm, shared: OFF }
+          - { name: Windows-x86_64-shared,    os: windows-latest,   shared: ON }
+          - { name: Windows-x86_64-static,    os: windows-latest,   shared: OFF }
+          - { name: Windows-arm64-shared,     os: windows-11-arm,   shared: ON }
+          - { name: Windows-arm64-static,     os: windows-11-arm,   shared: OFF }
+          - { name: macOS-x86_64-shared,      os: macOS-latest,     shared: ON }
+          - { name: macOS-x86_64-static,      os: macOS-latest,     shared: OFF }
+          - { name: macOS-arm64-shared,       os: macOS-latest,     shared: ON }
+          - { name: macOS-arm64-static,       os: macOS-latest,     shared: OFF }
+          - { name: macOS-universal-shared,   os: macOS-latest,     shared: ON }
+          - { name: macOS-universal-static,   os: macOS-latest,     shared: OFF }
     runs-on: ${{ matrix.os }}
     steps:
       - name: get repo and submodules
@@ -47,7 +58,7 @@ jobs:
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_INSTALL=ON"
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_INSTALL=ON"
       - name: install
         id: install
         uses: ./.github/actions/install
@@ -135,7 +146,7 @@ jobs:
         run: |
           VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
           [ -z "$VERSION" ] && VERSION="0.0.0"
-          PRODUCT="anira-${VERSION}-Android"
+          PRODUCT="anira-${VERSION}-Android-static"  # static find_package trees per ABI
           for ABI in arm64-v8a x86_64; do
             cmake -B "build-${ABI}" -G Ninja \
               -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
