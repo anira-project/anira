@@ -88,10 +88,20 @@ jobs:
           [ -z "$VERSION" ] && VERSION="0.0.0"
           PRODUCT="anira-${VERSION}-iOS-xcframework"
           OUT="artefacts/${PRODUCT}"
-          ANIRA_CODESIGN_IDENTITY="${{ secrets.DEV_ID_APP }}" \
-            bash .github/scripts/build_ios_xcframework.sh "$OUT"
-          # Bundle the backend iOS xcframeworks anira's static build links against.
+          # A published xcframework must be Developer-ID signed; fail loudly rather than
+          # let the script fall back to an ad-hoc signature on a missing/empty secret.
+          IDENTITY="${{ secrets.DEV_ID_APP }}"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::DEV_ID_APP secret is empty — refusing to publish an ad-hoc-signed xcframework"; exit 1
+          fi
+          ANIRA_CODESIGN_IDENTITY="$IDENTITY" bash .github/scripts/build_ios_xcframework.sh "$OUT"
+          # Bundle the backend iOS xcframeworks anira's static build links against, and
+          # assert at least one was copied (a static anira.xcframework alone won't link).
           find modules -type d -path '*iOS-xcframework/*.xcframework' -prune -exec cp -R {} "$OUT/" \;
+          count=$(find "$OUT" -maxdepth 1 -name '*.xcframework' | grep -vc 'anira.xcframework' || true)
+          if [ "$count" -lt 1 ]; then
+            echo "::error::no backend xcframeworks bundled into $OUT — consumers could not link"; exit 1
+          fi
           (cd artefacts && zip -vr "${PRODUCT}.zip" "${PRODUCT}/" -x "*.DS_Store")
           echo "PRODUCT=${PRODUCT}" >> "$GITHUB_OUTPUT"
       - name: upload artifact

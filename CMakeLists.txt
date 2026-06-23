@@ -84,7 +84,9 @@ if(APPLE)
     if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
         # iOS targets a single architecture per xcframework slice; default to arm64
         # (device and, on Apple Silicon, simulator) when the caller didn't pick one.
-        # Pass -DCMAKE_OSX_ARCHITECTURES=x86_64 explicitly for an Intel simulator slice.
+        # Note: the prebuilt ONNX/LiteRT iOS xcframeworks ship an arm64-only simulator
+        # slice, so an x86_64 (Intel) simulator build is only viable with no backend
+        # (or the TFLite framework, which ships a fat simulator slice).
         if(NOT CMAKE_OSX_ARCHITECTURES)
             set(CMAKE_OSX_ARCHITECTURES "arm64")
         endif()
@@ -306,8 +308,10 @@ endif()
 
 # Backends link PUBLIC: anira's public headers include the backend headers, and
 # (onnxruntime) "_OrtGetApiBase" is otherwise dropped. Static archives are linked
-# whole so C API entry points + static self-registration survive (see
-# anira_target_link_static_backend in cmake/AniraBackends.cmake).
+# on-demand (NOT whole-archive — the onnxruntime/tflite archives carry duplicate
+# protobuf/absl symbols that force-loading would clash; anira only needs the C API,
+# which the linker resolves on demand) — see anira_target_link_static_backend in
+# cmake/AniraBackends.cmake.
 if(ANIRA_WITH_ONNXRUNTIME)
     if(ANIRA_ONNXRUNTIME_IS_STATIC)
         anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_ONNXRUNTIME_STATIC_LIB}")

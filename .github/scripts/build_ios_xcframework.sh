@@ -43,7 +43,13 @@ xcodebuild -create-xcframework \
 
 IDENTITY="${ANIRA_CODESIGN_IDENTITY:--}"  # "-" = ad-hoc
 echo "Signing anira.xcframework with identity: ${IDENTITY}"
-codesign --sign "$IDENTITY" --force --timestamp "$OUT_DIR/anira.xcframework" \
-    || codesign --sign "$IDENTITY" --force --timestamp=none "$OUT_DIR/anira.xcframework"
+if [ "$IDENTITY" = "-" ]; then
+    # Ad-hoc (local/dev, no cert): no secure timestamp available.
+    codesign --sign - --force --timestamp=none "$OUT_DIR/anira.xcframework"
+else
+    # Real Developer ID: require the secure timestamp — do NOT silently fall back to
+    # an un-timestamped signature, which would weaken a published artifact.
+    codesign --sign "$IDENTITY" --force --timestamp "$OUT_DIR/anira.xcframework"
+fi
 codesign --verify --verbose "$OUT_DIR/anira.xcframework"
 echo "anira.xcframework ready at $OUT_DIR/anira.xcframework"
