@@ -559,6 +559,8 @@ macro(anira_setup_backend id)
             set(_ab_libdir "${_ab_rootdir}/lib/${CMAKE_ANDROID_ARCH_ABI}")
             if(_ab_linkage STREQUAL "static")
                 set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/lib${_ab_libname}.a")
+                # Path under the install libdir (install.cmake copies lib/<abi>/ as-is).
+                set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${CMAKE_ANDROID_ARCH_ABI}/lib${_ab_libname}.a")
             endif()
         elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
             # Pick the xcframework slice matching the active SDK (device vs simulator).
@@ -577,6 +579,7 @@ macro(anira_setup_backend id)
                 endif()
                 set(_ab_fwk "${_ab_rootdir}/TensorFlowLiteC.xcframework/${_ab_slice}/TensorFlowLiteC.framework")
                 set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_fwk}/TensorFlowLiteC")
+                set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "TensorFlowLiteC.xcframework/${_ab_slice}/TensorFlowLiteC.framework/TensorFlowLiteC")
                 set(_ab_shim "${CMAKE_BINARY_DIR}/anira-tflite-ios-shim")
                 file(WRITE "${_ab_shim}/tensorflow/lite/c_api.h" "#include <c_api.h>\n")
                 file(WRITE "${_ab_shim}/tensorflow/lite/core/c/c_api.h" "#include <c_api.h>\n")
@@ -595,6 +598,7 @@ macro(anira_setup_backend id)
                 set(_ab_incdir "${_ab_xcfwk}/Headers")
                 set(_ab_libdir "${_ab_xcfwk}")
                 set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_xcfwk}/lib${_ab_libname}.a")
+                set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${_ab_libname}.xcframework/${_ab_slice}/lib${_ab_libname}.a")
             endif()
         else()
             # Desktop / WASM: flat include/ + lib/.
@@ -603,8 +607,10 @@ macro(anira_setup_backend id)
             if(_ab_linkage STREQUAL "static")
                 if(WIN32)
                     set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/${_ab_libname}.lib")
+                    set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${_ab_libname}.lib")
                 else()
                     set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/lib${_ab_libname}.a")
+                    set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "lib${_ab_libname}.a")
                 endif()
             endif()
         endif()
@@ -626,27 +632,33 @@ endmacro()
 # members defining the same symbols (resolved on demand during a normal link);
 # force-loading them produces thousands of duplicate-symbol errors. anira drives
 # the engines through their C API, which the linker resolves on demand.
+#
+# The archive is linked through $<BUILD_INTERFACE> only — its absolute build-tree
+# path must not leak into the installed export. install.cmake adds the matching
+# $<INSTALL_INTERFACE> entry (relative to the consumer's install prefix) so the
+# installed package is relocatable. The system libs are unconditional (PUBLIC),
+# so they propagate to both the build tree and the installed package.
 # ------------------------------------------------------------------------------
 function(anira_target_link_static_backend target libpath)
     if(EMSDK_VERSION)
-        target_link_libraries(${target} PUBLIC "${libpath}")
+        target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>")
     elseif(MSVC)
-        target_link_libraries(${target} PUBLIC "${libpath}")
+        target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>")
     elseif(APPLE)
         # Static onnxruntime/tflite/litert pull in absl/CoreFoundation time-zone +
         # Apple logging code (Foundation/CoreFoundation), and static LiteRT references
         # Metal (LiteRtCreateMetalInfo -> MTLCreateSystemDefaultDevice), so link those
         # system frameworks.
         target_link_libraries(${target} PUBLIC
-            "${libpath}" "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
+            "$<BUILD_INTERFACE:${libpath}>" "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
     elseif(ANDROID)
         # Android's bionic folds pthread/dl/libm into libc, but the static LiteRT/TFLite
         # archives vendor the GPU (GL ES) delegate and use Android logging, whose symbols
         # (glClear, EGL*, __android_log_*) live in NDK system libs that must be linked.
-        target_link_libraries(${target} PUBLIC "${libpath}" EGL GLESv2 android log)
+        target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>" EGL GLESv2 android log)
     else() # Linux / other ELF
         find_package(Threads REQUIRED)
         target_link_libraries(${target} PUBLIC
-            "${libpath}" Threads::Threads ${CMAKE_DL_LIBS} m)
+            "$<BUILD_INTERFACE:${libpath}>" Threads::Threads ${CMAKE_DL_LIBS} m)
     endif()
 endfunction()
