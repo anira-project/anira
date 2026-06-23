@@ -639,6 +639,11 @@ function(anira_target_link_static_backend target libpath)
         # system frameworks.
         target_link_libraries(${target} PUBLIC
             "${libpath}" "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
+    elseif(ANDROID)
+        # Android's bionic folds pthread/dl/libm into libc, but the static LiteRT/TFLite
+        # archives vendor the GPU (GL ES) delegate and use Android logging, whose symbols
+        # (glClear, EGL*, __android_log_*) live in NDK system libs that must be linked.
+        target_link_libraries(${target} PUBLIC "${libpath}" EGL GLESv2 android log)
     else() # Linux / other ELF
         find_package(Threads REQUIRED)
         target_link_libraries(${target} PUBLIC
