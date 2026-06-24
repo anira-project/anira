@@ -25,11 +25,19 @@ public:
     /**
      * @brief Constructs a BackendBase with the given inference configuration
      *
-     * Initializes the backend processor with a reference to the inference configuration
+     * Initializes the backend processor with its own copy of the inference configuration
      * that contains all necessary parameters for model loading and processing.
      *
-     * @param inference_config Reference to the inference configuration containing
-     *                        model data, tensor shapes, and processing specifications
+     * The configuration is copied (not referenced) so that the processor's lifetime is
+     * fully decoupled from the session that created it. Processors are pooled and shared
+     * between sessions whose configs compare equal (see Context::set_processor); a shared
+     * processor can outlive the session that first created it. If it held a reference into
+     * that session's InferenceConfig, releasing the session while another session still
+     * shares the pooled processor would leave the reference dangling, causing a
+     * use-after-free on the next inference. Owning a copy removes that lifetime coupling.
+     *
+     * @param inference_config Reference to the inference configuration to copy from,
+     *                        containing model data, tensor shapes, and processing specifications
      */
     BackendBase(InferenceConfig& inference_config);
 
@@ -76,8 +84,10 @@ public:
                          std::vector<BufferF>& output,
                          [[maybe_unused]] std::shared_ptr<SessionElement> session);
 
-    InferenceConfig& m_inference_config;  ///< Reference to inference configuration containing model
-                                          ///< and processing parameters
+    InferenceConfig m_inference_config;  ///< Owned copy of the inference configuration containing
+                                         ///< model and processing parameters. Owned (not a
+                                         ///< reference) so a pooled processor shared across
+                                         ///< sessions never outlives the config it reads.
 };
 
 }  // namespace anira
