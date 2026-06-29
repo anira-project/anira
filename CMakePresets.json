@@ -84,14 +84,15 @@
       "displayName": "Documentation",
       "description": "Build C++ (Doxygen+Breathe) and Anira Web (TypeDoc+sphinx-js) docs via Sphinx",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/Docs",
+      "binaryDir": "${sourceDir}/build/docs",
       "cacheVariables": {
         "ANIRA_WITH_DOCS": "ON",
         "ANIRA_WITH_LIBTORCH": "OFF",
         "ANIRA_WITH_TFLITE": "OFF",
         "ANIRA_WITH_LITERT": "OFF",
         "ANIRA_WITH_ONNXRUNTIME": "OFF",
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "Python3_EXECUTABLE": "/usr/bin/python3"
       }
     }
   ],

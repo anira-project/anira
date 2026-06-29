@@ -42,10 +42,14 @@ Anira supports multiple backends that can be selected at runtime. Use the :cpp:f
     // Set the inference backend to ONNX
     inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
 
-    // Set the inference backend to PyTorch
-    inference_handler.set_inference_backend(anira::InferenceBackend::PYTORCH);
+    // Set the inference backend to LibTorch (PyTorch)
+    inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
 
-    // Set the inference backend to TensorFlow Lite
+    // Set the inference backend to LiteRT (default TensorFlow Lite family backend)
+    inference_handler.set_inference_backend(anira::InferenceBackend::LITERT);
+
+    // Set the inference backend to the legacy TensorFlow Lite backend
+    // (only available when built with -DANIRA_WITH_TFLITE=ON; mutually exclusive with LiteRT)
     inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
 
     // You can also provide and select a custom backend if needed

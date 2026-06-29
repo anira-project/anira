@@ -17,11 +17,14 @@ namespace anira {
  * Performance and compatibility considerations:
  * - LIBTORCH: PyTorch models, larger memory footprint
  * - ONNX: Cross-platform ONNX models, optimized for CPU inference
- * - TFLITE: TensorFlow Lite models, optimized for mobile and embedded devices
+ * - LITERT: TensorFlow Lite (.tflite) models via the native LiteRt* C API, the default
+ *   TensorFlow-Lite-family backend
+ * - TFLITE: TensorFlow Lite models via the legacy TfLite* C API (same runtime as LITERT,
+ *   mutually exclusive with it)
  * - CUSTOM: User-defined backends for specialized inference implementations
  *
  * @note Backend availability depends on compile-time flags (USE_LIBTORCH, USE_ONNXRUNTIME,
- * USE_TFLITE) and the presence of corresponding dependencies in the build system.
+ * USE_TFLITE, USE_LITERT) and the presence of corresponding dependencies in the build system.
  */
 enum InferenceBackend {
 #ifdef USE_LIBTORCH
