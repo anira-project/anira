@@ -3,7 +3,7 @@
 ## Architecture
 
 - [ ] Make moodycamel producer structs with session id and delete them when the session removed
-- [ ] Model and context config should be also available as json file
+- [x] Model and context config should be also available as json file
 - [ ] InferenceConfig check
 - [ ] RTSan check in CI
 - [ ] Change model_path function
