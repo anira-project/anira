@@ -22,9 +22,9 @@ An extensive documentation of anira can be found at [https://anira-project.githu
 - **Thread Pool Management**: Utilizes a static thread pool to avoid oversubscription and enables efficient parallel inference
 - **Minimal Latency**: Designed to minimize latency while maintaining real-time safety
 - **Built-in Benchmarking**: Includes tools for evaluating the real-time performance of neural networks
-- **Comprehensive Inference Engine Support**: Integrates common inference engines, LibTorch, ONNXRuntime, and TensorFlow Lite
+- **Comprehensive Inference Engine Support**: Integrates common inference engines, LibTorch, ONNXRuntime, LiteRT and TensorFlow Lite
 - **Flexible Neural Network Integration**: Supports a variety of neural network models, including stateful and stateless models
-- **Cross-Platform Compatibility**: Works seamlessly on macOS, Linux, and Windows
+- **Cross-Platform Compatibility**: Works seamlessly on macOS, Linux, Windows, Android and iOS, and in the browser via WebAssembly
 
 ## Usage
 
