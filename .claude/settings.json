@@ -1,0 +1,11 @@
+{
+  "extraKnownMarketplaces": {
+    "tanh-tooling": {
+      "source": { "source": "github", "repo": "tanh-lab/tanh-tooling" }
+    }
+  },
+  "enabledPlugins": {
+    "tanh-tools@tanh-tooling": true,
+    "clangd-lsp@claude-plugins-official": true
+  }
+}

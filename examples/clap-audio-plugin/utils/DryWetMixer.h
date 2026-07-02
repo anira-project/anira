@@ -1,9 +1,9 @@
 #ifndef ANIRA_DRYWETMIXER_H
 #define ANIRA_DRYWETMIXER_H
 
-#include <vector>
-#include <cmath>
 #include <algorithm>
+#include <cmath>
+#include <vector>
 
 namespace clap_plugin_example::utils {
 
@@ -31,6 +31,6 @@ private:
     size_t m_read_index;
 };
 
-}
+}  // namespace clap_plugin_example::utils
 
-#endif //ANIRA_DRYWETMIXER_H
+#endif  // ANIRA_DRYWETMIXER_H

@@ -69,28 +69,33 @@ runs:
         p12-file-base64: ${{ inputs.DEV_ID_APP_CERT }}
         p12-password: ${{ inputs.DEV_ID_APP_PWD }}
     
-    # Codesigning all the libraries
+    # Codesigning the shared libraries. A static build ships no .dylib (anira is a .a),
+    # so glob with nullglob and skip when there is nothing to sign.
     - name: codesign (macOS)
       shell: bash
-      if: ${{ matrix.os == 'macOS-latest' }}
+      if: ${{ startsWith(matrix.os, 'macOS') }}
       run: |
-        # codesign all libs
-        codesign --force -s "${{ inputs.DEV_ID_APP }}" -v ${{ steps.declare_artefact_variables.outputs.PACKAGE_DIR }}/lib/*.dylib --deep --strict --options=runtime --timestamp;
-    
-    # Zip the artefact
+        shopt -s nullglob
+        dylibs=(${{ steps.declare_artefact_variables.outputs.PACKAGE_DIR }}/lib/*.dylib)
+        if [ ${#dylibs[@]} -gt 0 ]; then
+          codesign --force -s "${{ inputs.DEV_ID_APP }}" -v "${dylibs[@]}" --deep --strict --options=runtime --timestamp
+        else
+          echo "static build — no .dylib to codesign"
+        fi
+
+    # Zip the artefact (keyed on the runner OS, so every arch/linkage leg packages).
     - name: zip artefacts
       working-directory: ${{github.workspace}}/artefacts
       shell: bash
       run: |
-        if [ "${{ matrix.name }}" == "Linux-x86_64" ]; then
-        zip -r ${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}.zip ${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}/
-        elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
-        zip -vr ${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}.zip ${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}/ -x "*.DS_Store"
-        elif [ "${{ matrix.name }}" == "Windows-x86_64" ]; then
-        pwsh -command "Compress-Archive -Path '${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}/' -DestinationPath '${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}.zip'"
+        P="${{ steps.declare_artefact_variables.outputs.PRODUCT_NAME }}"
+        if [[ "${{ matrix.os }}" == windows* ]]; then
+          pwsh -command "Compress-Archive -Path '$P/' -DestinationPath '$P.zip'"
+        elif [[ "${{ matrix.os }}" == macOS* ]]; then
+          zip -vr "$P.zip" "$P/" -x "*.DS_Store"
         else
-        echo "Unknown OS";
-        fi;
+          zip -r "$P.zip" "$P/"
+        fi
     
     - name: upload artifact
       uses: actions/upload-artifact@v4

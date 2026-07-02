@@ -5,22 +5,22 @@ Licence: Apache 2.0
 
 ========================================================================== */
 
-#include <cstdio>
-#include <iostream>
-#include <array>
 #include <tensorflow/lite/c_api.h>
 
-#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include <array>
+#include <cstdio>
+#include <iostream>
+
 #include "../../../extras/models/cnn/CNNConfig.h"
+#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../extras/models/model-pool/SimpleGainConfig.h"
 #include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
-
-#include "../../../include/anira/utils/MemoryBlock.h"
+#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../../../include/anira/utils/Buffer.h"
+#include "../../../include/anira/utils/MemoryBlock.h"
 
-#define TFLITE_MINIMAL_CHECK(x)                              \
-    if (!(x)) {                                                \
+#define TFLITE_MINIMAL_CHECK(x)                                  \
+    if (!(x)) {                                                  \
         fprintf(stderr, "Error at %s:%d\n", __FILE__, __LINE__); \
         exit(1);                                                 \
     }
@@ -28,11 +28,13 @@ Licence: Apache 2.0
 void minimal_inference(anira::InferenceConfig m_inference_config) {
     std::cout << "Minimal TensorFlow-Lite example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Using model: " << m_inference_config.get_model_path(anira::InferenceBackend::TFLITE) << std::endl;
+    std::cout << "Using model: "
+              << m_inference_config.get_model_path(anira::InferenceBackend::TFLITE) << std::endl;
 
     // Load model
     TfLiteModel* m_model;
-    m_model = TfLiteModelCreateFromFile(m_inference_config.get_model_path(anira::InferenceBackend::TFLITE).c_str());
+    m_model = TfLiteModelCreateFromFile(
+        m_inference_config.get_model_path(anira::InferenceBackend::TFLITE).c_str());
 
     // Create the interpreter
     TfLiteInterpreterOptions* m_options;
@@ -41,14 +43,19 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     TfLiteInterpreterOptionsSetNumThreads(m_options, 1);
     m_interpreter = TfLiteInterpreterCreate(m_model, m_options);
 
-    // This is necessary when we have dynamic input shapes, it should be done before allocating tensors obviously
+    // This is necessary when we have dynamic input shapes, it should be done before allocating
+    // tensors obviously
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         std::vector<int> input_shape;
-        std::vector<int64_t> input_shape64 = m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[i];
+        std::vector<int64_t> input_shape64 =
+            m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[i];
         for (size_t j = 0; j < input_shape64.size(); j++) {
-            input_shape.push_back((int) input_shape64[j]);
+            input_shape.push_back((int)input_shape64[j]);
         }
-        TfLiteInterpreterResizeInputTensor(m_interpreter, i, input_shape.data(), static_cast<int32_t>(input_shape.size()));
+        TfLiteInterpreterResizeInputTensor(m_interpreter,
+                                           i,
+                                           input_shape.data(),
+                                           static_cast<int32_t>(input_shape.size()));
     }
 
     // Allocate memory for all tensors
@@ -56,7 +63,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     // Fill an Buffer with some data
     anira::BufferF input(1, m_inference_config.get_tensor_input_size()[0]);
-    for(int i = 0; i < m_inference_config.get_tensor_input_size()[0]; ++i) {
+    for (int i = 0; i < m_inference_config.get_tensor_input_size()[0]; ++i) {
         input.set_sample(0, i, i * 0.000001f);
     }
 
@@ -75,16 +82,16 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
             m_input_data[i].swap_data(input.get_memory_block());
             input.reset_channel_ptr();
         }
-        TfLiteTensorCopyFromBuffer(m_inputs[i], m_input_data[i].data(), m_inference_config.get_tensor_input_size()[i] * sizeof(float));
+        TfLiteTensorCopyFromBuffer(m_inputs[i],
+                                   m_input_data[i].data(),
+                                   m_inference_config.get_tensor_input_size()[i] * sizeof(float));
     }
 
     for (int i = 0; i < m_inputs.size(); ++i) {
-        std::cout << "Input shape " << i << ": ["; 
+        std::cout << "Input shape " << i << ": [";
         for (int j = 0; j < TfLiteTensorNumDims(m_inputs[i]); ++j) {
             std::cout << TfLiteTensorDim(m_inputs[i], j);
-            if (j < TfLiteTensorNumDims(m_inputs[i]) - 1) {
-                std::cout << ", ";
-            }
+            if (j < TfLiteTensorNumDims(m_inputs[i]) - 1) { std::cout << ", "; }
         }
         std::cout << "]" << std::endl;
     }
@@ -101,12 +108,10 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     }
 
     for (int i = 0; i < m_outputs.size(); ++i) {
-        std::cout << "Output shape " << i << ": ["; 
+        std::cout << "Output shape " << i << ": [";
         for (int j = 0; j < TfLiteTensorNumDims(m_outputs[i]); ++j) {
             std::cout << TfLiteTensorDim(m_outputs[i], j);
-            if (j < TfLiteTensorNumDims(m_outputs[i]) - 1) {
-                std::cout << ", ";
-            }
+            if (j < TfLiteTensorNumDims(m_outputs[i]) - 1) { std::cout << ", "; }
         }
         std::cout << "]" << std::endl;
     }
@@ -116,7 +121,7 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     m_output_data.resize(m_inference_config.get_tensor_output_shape().size());
 
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
-        float* output_data = (float*) TfLiteTensorData(m_outputs[i]);
+        float* output_data = (float*)TfLiteTensorData(m_outputs[i]);
         for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
             m_output_data[i].resize(m_inference_config.get_tensor_output_size()[i]);
             for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
@@ -128,7 +133,8 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     // Print output data
     for (int i = 0; i < m_output_data.size(); i++) {
         for (int j = 0; j < m_output_data[i].size(); j++) {
-            std::cout << "Output data [" << i << "][" << j << "]: " << m_output_data[i][j] << std::endl;
+            std::cout << "Output data [" << i << "][" << j << "]: " << m_output_data[i][j]
+                      << std::endl;
         }
     }
 
@@ -139,8 +145,11 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 }
 
 int main(int argc, const char* argv[]) {
-
-    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config, cnn_config, rnn_config, gain_config, stereo_gain_config};
+    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config,
+                                                               cnn_config,
+                                                               rnn_config,
+                                                               gain_config,
+                                                               stereo_gain_config};
 
     for (int i = 0; i < models_to_inference.size(); ++i) {
         minimal_inference(models_to_inference[i]);

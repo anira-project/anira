@@ -148,7 +148,8 @@ if(MODEL_TO_USE EQUAL 1)
 	)
 endif()
 
-if (MSVC)
+# Only copy runtime DLLs when there are any (a fully static build has none).
+if (MSVC AND ANIRA_SHARED_LIBS_WIN)
 	foreach(FORMAT IN LISTS FORMATS_TO_BUILD)
 		string(CONCAT CONCATENATED_TARGET ${TARGET_NAME}_${FORMAT})
 		add_custom_command(TARGET ${CONCATENATED_TARGET}
@@ -167,7 +168,7 @@ if (MSVC)
 			${ANIRA_SHARED_LIBS_WIN}
 			${JUCE_MANIFEST_GENERATOR_PATH}
 	)
-endif (MSVC)
+endif ()
 
 if(ANIRA_WITH_INSTALL)
     include(${CMAKE_CURRENT_LIST_DIR}/install.cmake)

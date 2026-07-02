@@ -161,8 +161,11 @@ These are the other optional parameters that can be set in the :cpp:struct:`anir
 +-----------------------------+--------------------------------------------------------+
 | session_exclusive_processor | Type: ``bool``, default: ``false``. If set to          |
 |                             | ``true``, the session will use an exclusive processor  |
-|                             | for inference and therefore cannot be processed        |
-|                             | parallel. Necessary for e.g. stateful models.          |
+|                             | for inference and therefore cannot be processed in     |
+|                             | parallel. Tasks of the session then execute strictly   |
+|                             | in submission order and never concurrently, which is   |
+|                             | necessary for stateful models that carry internal      |
+|                             | state between inferences (e.g. RNNs/LSTMs).            |
 +-----------------------------+--------------------------------------------------------+
 | blocking_ratio              | Type: ``float``, default: ``0.0f``. Defines the        |
 |                             | proportion of available processing time (0.0-0.99)     |
@@ -175,6 +178,70 @@ These are the other optional parameters that can be set in the :cpp:struct:`anir
 |                             | the number of parallel processors that can be used     |
 |                             | for the inference.                                     |
 +-----------------------------+--------------------------------------------------------+
+
+1.5. (Optional) Loading the Configuration from JSON
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Instead of constructing the :cpp:struct:`anira::InferenceConfig` (and the optional :cpp:struct:`anira::ContextConfig`) in C++, you can describe them in a JSON file and load them at runtime with :cpp:class:`anira::JsonConfigLoader`. This keeps model paths, tensor shapes and processing parameters out of the compiled binary, so you can swap models without recompiling.
+
+The JSON mirrors the two configuration structs — a ``context_config`` object and an ``inference_config`` object:
+
+.. code-block:: json
+
+    {
+      "context_config": {
+        "num_threads": 1
+      },
+      "inference_config": {
+        "model_data": [
+          { "model_path": ".../simple_gain_network_mono.pt",     "inference_backend": "LIBTORCH" },
+          { "model_path": ".../simple_gain_network_mono.onnx",   "inference_backend": "ONNX" },
+          { "model_path": ".../simple_gain_network_mono.tflite", "inference_backend": "TFLITE" }
+        ],
+        "tensor_shape": [
+          {
+            "input_shape":  [[1, 1, 512], [1]],
+            "output_shape": [[1, 1, 512], [1]]
+          }
+        ],
+        "processing_spec": {
+          "preprocess_input_channels":   [1, 1],
+          "postprocess_output_channels": [1, 1],
+          "preprocess_input_size":       [512, 0],
+          "postprocess_output_size":     [512, 0]
+        },
+        "max_inference_time": 5.0,
+        "warm_up": 1
+      }
+    }
+
+The keys map directly onto the fields described above:
+
+- ``context_config`` → :cpp:struct:`anira::ContextConfig` (e.g. ``num_threads``). The whole block is optional.
+- ``inference_config.model_data`` → the vector of :cpp:struct:`anira::ModelData`; each entry needs a ``model_path`` and an ``inference_backend`` (one of ``LIBTORCH``, ``ONNX``, ``TFLITE``, ``LITERT``), and optionally a ``model_function`` for LibTorch.
+- ``inference_config.tensor_shape`` → the vector of :cpp:struct:`anira::TensorShape`. For a single-tensor model the shapes may be given as a flat array (``[1, 1, 2048]``); for multi-tensor models use a list of per-tensor shapes (``[[1, 1, 512], [1]]``).
+- ``inference_config.processing_spec`` → the optional :cpp:struct:`anira::ProcessingSpec` (``preprocess_input_channels``, ``postprocess_output_channels``, ``preprocess_input_size``, ``postprocess_output_size`` and the optional ``internal_model_latency``).
+- ``max_inference_time``, ``warm_up``, ``session_exclusive_processor``, ``blocking_ratio`` and ``num_parallel_processors`` → the InferenceConfig parameters from the table above.
+
+Then load the file and move the configurations out of the loader:
+
+.. code-block:: cpp
+
+    #include <anira/anira.h>
+
+    anira::JsonConfigLoader json_config_loader("path/to/Config.json");
+
+    anira::ContextConfig context_config = std::move(*json_config_loader.get_context_config());
+    anira::InferenceConfig inference_config = std::move(*json_config_loader.get_inference_config());
+
+    anira::PrePostProcessor pp_processor(inference_config);
+    anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
+
+.. note::
+    :cpp:func:`anira::JsonConfigLoader::get_context_config` and :cpp:func:`anira::JsonConfigLoader::get_inference_config` each return a ``std::unique_ptr``; move the value out (as above) before using it. The loader also accepts a ``std::istream``, so the configuration can be loaded from an embedded resource instead of a file on disk.
+
+.. tip::
+    See the JUCE plugin example (``MODEL_TO_USE == 8``), which loads the RAVE model entirely from ``RaveFunkDrumConfig.json`` via :cpp:class:`anira::JsonConfigLoader`.
 
 2. Pre and Post Processing
 --------------------------
@@ -221,6 +288,18 @@ If you want to define a custom context configuration, you can do so by creating 
 
     // Create an InferenceHandler instance
     anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
+
+You can also opt out of the auto-managed thread pool entirely and supply your own threads. Pass ``0`` to :cpp:struct:`anira::ContextConfig` so the auto-pool stays empty, then create as many threads as you want via :cpp:func:`anira::Context::make_inference_thread`, call ``start()`` on each, and either call ``stop()`` or simply destroy the returned ``unique_ptr`` to tear them down.
+
+.. code-block:: cpp
+
+    anira::ContextConfig context_config { 0 }; // opt out of the auto-pool
+    anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
+
+    auto thread = anira::Context::make_inference_thread();
+    thread->start();
+    // ... process audio ...
+    thread->stop(); // or just let `thread` go out of scope
 
 4. Get ready for Processing
 ---------------------------

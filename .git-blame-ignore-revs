@@ -1,0 +1,6 @@
+# Commits ignored by git blame (see .git-blame-ignore-revs).
+# Enable locally: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (GitHub honors this file automatically.)
+
+# style: apply clang-format to the entire codebase
+237fa4112547d76163f20aa371372db433a6af7b

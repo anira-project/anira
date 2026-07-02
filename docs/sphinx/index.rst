@@ -21,6 +21,7 @@ Anira Documentation
     custom_backends
     examples
     api/index
+    web-api/index
     architecture
     benchmarking
     latency

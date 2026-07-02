@@ -1,0 +1,4 @@
+name: onnxruntime
+version: 1.19.2
+license: MIT
+homepage: https://github.com/microsoft/onnxruntime

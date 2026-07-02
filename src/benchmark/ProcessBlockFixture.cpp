@@ -1,74 +1,103 @@
+#include <anira/InferenceConfig.h>
 #include <anira/benchmark/ProcessBlockFixture.h>
+#include <anira/utils/HostConfig.h>
+#include <anira/utils/InferenceBackend.h>
+#include <anira/utils/helperFunctions.h>
+#include <benchmark/benchmark.h>
 
-namespace anira {
-namespace benchmark {
+#include <chrono>
+#include <cstddef>
+#include <iomanip>
+#include <ios>
+#include <iostream>
+#include <ratio>
+#include <string>
+#include <thread>
+
+namespace anira::benchmark {
 
 ProcessBlockFixture::ProcessBlockFixture() {
-    // A new instance of ProcessBlockFixture is created for each benchmark that has been defined and registered
+    // A new instance of ProcessBlockFixture is created for each benchmark that has been defined and
+    // registered
     m_buffer_size = 0;
     m_repetition = 0;
 }
 
-ProcessBlockFixture::~ProcessBlockFixture() {
-}
+ProcessBlockFixture::~ProcessBlockFixture() = default;
 
 void ProcessBlockFixture::initialize_iteration() {
-    m_prev_num_received_samples = m_inference_handler->get_available_samples(0);
+    m_prev_num_received_samples = static_cast<int>(m_inference_handler->get_available_samples(0));
 }
 
-void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference_config, const HostConfig& host_config, const InferenceBackend& inference_backend, bool sleep_after_repetition) {
+void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference_config,
+                                                const HostConfig& host_config,
+                                                const InferenceBackend& inference_backend,
+                                                bool sleep_after_repetition) {
     m_sleep_after_repetition = sleep_after_repetition;
     if (m_sleep_after_repetition) {
         m_runtime_last_repetition = std::chrono::duration<double, std::milli>(0);
     }
     m_iteration = 0;
 
-    if (m_inference_backend != inference_backend || m_inference_config != inference_config || m_host_config != host_config) {
+    if (m_inference_backend != inference_backend || m_inference_config != inference_config ||
+        m_host_config != host_config) {
         m_repetition = 0;
         if (m_inference_backend != inference_backend || m_inference_config != inference_config) {
             m_inference_backend = inference_backend;
             m_inference_config = inference_config;
             std::string path;
-            switch (m_inference_backend)
-            {
+            switch (m_inference_backend) {
 #ifdef USE_LIBTORCH
-            case anira::InferenceBackend::LIBTORCH:
-                m_inference_backend_name = "libtorch";
-                path = m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH);
-                break;
+                case anira::InferenceBackend::LIBTORCH:
+                    m_inference_backend_name = "libtorch";
+                    path = m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH);
+                    break;
 #endif
 #ifdef USE_ONNXRUNTIME
-            case anira::InferenceBackend::ONNX:
-                m_inference_backend_name = "onnx";
-                path = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
-                break;
+                case anira::InferenceBackend::ONNX:
+                    m_inference_backend_name = "onnx";
+                    path = m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
+                    break;
 #endif
 #ifdef USE_TFLITE
-            case anira::InferenceBackend::TFLITE:
-                m_inference_backend_name = "tflite";
-                path = m_inference_config.get_model_path(anira::InferenceBackend::TFLITE);
-                break;
+                case anira::InferenceBackend::TFLITE:
+                    m_inference_backend_name = "tflite";
+                    path = m_inference_config.get_model_path(anira::InferenceBackend::TFLITE);
+                    break;
 #endif
-            case anira::InferenceBackend::CUSTOM:
-                m_inference_backend_name = "custom";
-                path = "no_model";
-                break;
-            default:
-                m_inference_backend_name = "unknown";
-                path = "unknown_model_path";
-                break;
+#ifdef USE_LITERT
+                case anira::InferenceBackend::LITERT:
+                    m_inference_backend_name = "litert";
+                    path = m_inference_config.get_model_path(anira::InferenceBackend::LITERT);
+                    break;
+#endif
+                case anira::InferenceBackend::CUSTOM:
+                    m_inference_backend_name = "custom";
+                    path = m_inference_config.get_model_path(anira::InferenceBackend::CUSTOM);
+                    break;
+                default:
+                    m_inference_backend_name = "unknown";
+                    path = "unknown_model_path";
+                    break;
             }
             // find the last of any instance of / or \ and take the substring from there to the end
             m_model_name = path.substr(path.find_last_of("/\\") + 1);
         }
-        if (m_host_config != host_config) {
-            m_host_config = host_config;
-        }
-        std::cout << "\n----------------------------------------------------------------------------------------------------------------------------------------" << std::endl;
-        std::cout << "Model: " << m_model_name << " | Backend: " << m_inference_backend_name << " | Host Sample Rate: " << std::fixed << std::setprecision(0) << m_host_config.m_sample_rate << " Hz | Host Buffer Size: " << m_host_config.m_buffer_size << " = " << std::fixed << std::setprecision(4) << (float) m_host_config.m_buffer_size * 1000.f/m_host_config.m_sample_rate << " ms" << std::endl;
-        std::cout << "----------------------------------------------------------------------------------------------------------------------------------------\n" << std::endl;
+        if (m_host_config != host_config) { m_host_config = host_config; }
+        std::cout << "\n---------------------------------------------------------------------------"
+                     "-------------------------------------------------------------"
+                  << '\n';
+        std::cout << "Model: " << m_model_name << " | Backend: " << m_inference_backend_name
+                  << " | Host Sample Rate: " << std::fixed << std::setprecision(0)
+                  << m_host_config.m_sample_rate
+                  << " Hz | Host Buffer Size: " << m_host_config.m_buffer_size << " = "
+                  << std::fixed << std::setprecision(4)
+                  << (float)m_host_config.m_buffer_size * 1000.f / m_host_config.m_sample_rate
+                  << " ms" << '\n';
+        std::cout << "-----------------------------------------------------------------------------"
+                     "-----------------------------------------------------------\n"
+                  << '\n';
     }
-
 }
 
 bool ProcessBlockFixture::buffer_processed() {
@@ -76,8 +105,9 @@ bool ProcessBlockFixture::buffer_processed() {
 }
 
 void ProcessBlockFixture::push_random_samples_in_buffer(anira::HostConfig host_config) {
-    for (size_t channel = 0; channel < m_inference_config.get_preprocess_input_channels()[0]; channel++) {
-        for (size_t sample = 0; sample < host_config.m_buffer_size; sample++) {
+    for (size_t channel = 0; channel < m_inference_config.get_preprocess_input_channels()[0];
+         channel++) {
+        for (size_t sample = 0; sample < static_cast<size_t>(host_config.m_buffer_size); sample++) {
             m_buffer->set_sample(channel, sample, random_sample());
         }
     }
@@ -91,38 +121,41 @@ int ProcessBlockFixture::get_repetition() {
     return m_repetition;
 }
 
-void ProcessBlockFixture::interation_step(const std::chrono::steady_clock::time_point& start, const std::chrono::steady_clock::time_point& end, ::benchmark::State& state) {
+void ProcessBlockFixture::interation_step(const std::chrono::steady_clock::time_point& start,
+                                          const std::chrono::steady_clock::time_point& end,
+                                          ::benchmark::State& state) {
     auto elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(end - start);
 
     state.SetIterationTime(elapsed_seconds.count());
 
-    auto elapsed_time_ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start);
+    auto elapsed_time_ms =
+        std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(end - start);
 
     m_runtime_last_repetition += elapsed_time_ms;
 
-    std::cout << "SingleIteration/" << state.name() << "/" << m_model_name << "/" << m_inference_backend_name << "/" << state.range(0) << "/iteration:" << m_iteration << "/repetition:" << m_repetition << "\t\t\t" << std::fixed << std::setprecision(4) << elapsed_time_ms.count() << " ms" << std::endl;
+    std::cout << "SingleIteration/" << state.name() << "/" << m_model_name << "/"
+              << m_inference_backend_name << "/" << state.range(0) << "/iteration:" << m_iteration
+              << "/repetition:" << m_repetition << "\t\t\t" << std::fixed << std::setprecision(4)
+              << elapsed_time_ms.count() << " ms" << '\n';
     m_iteration++;
 }
 
 void ProcessBlockFixture::repetition_step() {
     m_repetition += 1;
-    std::cout << "\n----------------------------------------------------------------------------------------------------------------------------------------\n" << std::endl;
+    std::cout << "\n-------------------------------------------------------------------------------"
+                 "---------------------------------------------------------\n"
+              << '\n';
 }
 
 void ProcessBlockFixture::SetUp(const ::benchmark::State& state) {
-    if (m_buffer_size != (int) state.range(0)) {
-        m_buffer_size = (int) state.range(0);
-    }
+    if (m_buffer_size != (int)state.range(0)) { m_buffer_size = (int)state.range(0); }
 }
 
-void ProcessBlockFixture::TearDown(const ::benchmark::State& state) {
+void ProcessBlockFixture::TearDown(const ::benchmark::State&) {
     m_buffer.reset();
     m_inference_handler.reset();
 
-    if (m_sleep_after_repetition) {
-        std::this_thread::sleep_for(m_runtime_last_repetition);
-    }
+    if (m_sleep_after_repetition) { std::this_thread::sleep_for(m_runtime_last_repetition); }
 }
 
-} // namespace benchmark
-} // namespace anira
+}  // namespace anira::benchmark

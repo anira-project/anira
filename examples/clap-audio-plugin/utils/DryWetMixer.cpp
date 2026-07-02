@@ -4,14 +4,15 @@
 
 #include "DryWetMixer.h"
 
-namespace clap_plugin_example::utils
-{
+namespace clap_plugin_example::utils {
 
-DryWetMixer::DryWetMixer() : m_sample_rate(0.0), m_buffer_size(0), m_latency_samples(0), m_write_index(0), m_read_index(0),
-                             m_mix(1.0f)
-{
-
-}
+DryWetMixer::DryWetMixer()
+    : m_sample_rate(0.0)
+    , m_buffer_size(0)
+    , m_latency_samples(0)
+    , m_write_index(0)
+    , m_read_index(0)
+    , m_mix(1.0f) {}
 
 void DryWetMixer::prepare(double sample_rate, size_t buffer_size, size_t latency_samples) {
     m_sample_rate = sample_rate;
@@ -43,4 +44,4 @@ void DryWetMixer::set_mix(float new_mix) {
     m_mix = std::clamp(new_mix, 0.0f, 1.0f);
 }
 
-}
+}  // namespace clap_plugin_example::utils

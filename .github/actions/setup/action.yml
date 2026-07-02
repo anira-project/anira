@@ -21,16 +21,16 @@ runs:
       - name: install deps
         shell: bash
         run: |
-          if [ "${{ matrix.name }}" == "Linux-x86_64" ]; then
-            sudo apt-get update && sudo apt install ninja-build
-          elif [ "${{ matrix.name }}" == "macOS-x86_64" ]; then
-            brew install osxutils ninja
-            echo "brew prefix: $(brew --prefix)"
-          elif [ "${{ matrix.name }}" == "macOS-arm64" ]; then
-            brew install osxutils ninja
-            echo "brew prefix: $(brew --prefix)"
-          elif [ "${{ matrix.name }}" == "Windows-x86_64" ]; then
-            choco install ninja
-          else
-            echo "Unknown OS";
-          fi;
+          case "${{ matrix.name }}" in
+            Linux-*)
+              sudo apt-get update && sudo apt install -y ninja-build ;;
+            macOS-*)
+              brew install osxutils ninja
+              echo "brew prefix: $(brew --prefix)" ;;
+            Windows-x86_64*)
+              choco install ninja ;;
+            Windows-arm64*)
+              : ;;  # native MSVC (default generator) build; ninja not required
+            *)
+              echo "Unknown OS" ;;
+          esac

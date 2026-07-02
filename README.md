@@ -22,9 +22,9 @@ An extensive documentation of anira can be found at [https://anira-project.githu
 - **Thread Pool Management**: Utilizes a static thread pool to avoid oversubscription and enables efficient parallel inference
 - **Minimal Latency**: Designed to minimize latency while maintaining real-time safety
 - **Built-in Benchmarking**: Includes tools for evaluating the real-time performance of neural networks
-- **Comprehensive Inference Engine Support**: Integrates common inference engines, LibTorch, ONNXRuntime, and TensorFlow Lite
+- **Comprehensive Inference Engine Support**: Integrates common inference engines, LibTorch, ONNXRuntime, LiteRT and TensorFlow Lite
 - **Flexible Neural Network Integration**: Supports a variety of neural network models, including stateful and stateless models
-- **Cross-Platform Compatibility**: Works seamlessly on macOS, Linux, and Windows
+- **Cross-Platform Compatibility**: Works seamlessly on macOS, Linux, Windows, Android and iOS, and in the browser via WebAssembly
 
 ## Usage
 
@@ -63,9 +63,11 @@ process(float** audio_data, int num_samples) {
 
 ## Installation
 
+### C++ Library
+
 Anira can be easily integrated into your CMake project. You can either add anira as a submodule, download the pre-built binaries from the [releases page](https://github.com/anira-project/anira/releases/latest), or build from source.
 
-### Option 1: Add as Git Submodule (Recommended)
+#### Option 1: Add as Git Submodule (Recommended)
 
 ```bash
 # Add anira repo as a submodule
@@ -86,7 +88,7 @@ add_subdirectory(modules/anira)
 target_link_libraries(your_target anira::anira)
 ```
 
-### Option 2: Use Pre-built Binaries
+#### Option 2: Use Pre-built Binaries
 
 Download pre-built binaries from the [releases page](https://github.com/anira-project/anira/releases/latest).
 
@@ -105,7 +107,7 @@ find_package(anira REQUIRED)
 target_link_libraries(your_target anira::anira)
 ```
 
-### Option 3: Build from Source
+#### Option 3: Build from Source
 
 ```bash
 git clone https://github.com/anira-project/anira.git
@@ -115,13 +117,48 @@ cmake --build build --config Release --target anira
 cmake --install build --prefix /path/to/install/directory
 ```
 
-### Build options
+### C++ Build Options
 
-By default, all three inference engines are installed. You can disable specific backends as needed:
+By default, LibTorch, ONNXRuntime and LiteRT are enabled. You can disable specific backends as needed:
 
 - LibTorch: ``-DANIRA_WITH_LIBTORCH=OFF``
 - OnnxRuntime: ``-DANIRA_WITH_ONNXRUNTIME=OFF``
-- Tensorflow Lite: ``-DANIRA_WITH_TFLITE=OFF``
+- LiteRT (`LiteRt*` C API): ``-DANIRA_WITH_LITERT=OFF`` — runs `.tflite` models through LiteRT's native CompiledModel runtime. Enabled by default; it is the modern TensorFlow-Lite-family backend.
+- TensorFlow Lite (legacy `TfLite*` C API): ``-DANIRA_WITH_TFLITE=ON`` — the **same runtime** as LiteRT exposed through the older C API, so the two are **mutually exclusive**. To use it, disable LiteRT: ``-DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON``.
+
+#### Platform / backend support
+
+anira builds on the targets below; the pre-built backends it downloads ship per target as `shared`
+and/or `static` (anira's linkage follows `BUILD_SHARED_LIBS`):
+
+| Target                  | LibTorch | ONNXRuntime     | LiteRT          | TFLite (legacy) |
+| ----------------------- | -------- | --------------- | --------------- | --------------- |
+| macOS `x86_64`          | shared   | shared · static | shared · static | shared · static |
+| macOS `arm64`           | shared   | shared · static | shared · static | shared · static |
+| macOS `universal`       | shared   | shared · static | shared · static | shared · static |
+| Linux `x86_64`          | shared   | shared · static | shared · static | shared · static |
+| Linux `aarch64`         | shared   | shared · static | shared · static | shared · static |
+| Windows `x86_64`        | shared   | shared · static | shared · static | shared · static |
+| Windows `arm64`         | shared   | shared · static | shared · static | shared · static |
+| `WASM` (Emscripten)     | —        | static          | —               | —               |
+
+LibTorch is shared-only (auto-disabled for fully static anira builds). LiteRT and TFLite are the
+same runtime via two C APIs and are mutually exclusive (LiteRT is the default). On WebAssembly only
+ONNX Runtime is supported. Backends for Android and iOS are also published in the
+[anira-project/backends](https://github.com/anira-project/backends) release for cross-builds.
+`—` = not provided.
+
+Pre-built backend binaries are downloaded at configure time from the
+[anira-project/backends](https://github.com/anira-project/backends) release pinned by
+`ANIRA_BACKENDS_VERSION`. Integrity is checked live: when GitHub is reachable, anira fetches each
+asset's published SHA256 and re-downloads any backend whose archive changed upstream or downloaded
+incompletely (the download is verified against that hash). Nothing is pinned in-repo. Linkage and
+source are configurable:
+
+- Linkage follows ``BUILD_SHARED_LIBS`` (shared anira → shared backends, static → static). Decouple a single engine with ``-DANIRA_<ENGINE>_LINKAGE=shared|static`` where `<ENGINE>` is `LIBTORCH|ONNXRUNTIME|TFLITE|LITERT`. LibTorch is shared-only.
+- Backends release tag: ``-DANIRA_BACKENDS_VERSION=v2.1.1``.
+- Offline / reproducible builds: ``-DANIRA_BACKENDS_SKIP_REMOTE_CHECK=ON`` skips the GitHub query and reuses whatever is already in `modules/`.
+- Bring your own backend (no fork): ``-DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt`` (a tree with `include/` + `lib/`), or a custom source via ``-DANIRA_<ENGINE>_URL=... -DANIRA_<ENGINE>_SHA256=...``.
 
 Moreover, the following options are available:
 
@@ -130,6 +167,55 @@ Moreover, the following options are available:
 - Build anira with tests: ``-DANIRA_WITH_TESTS=ON``
 - Build anira with documentation: ``-DANIRA_WITH_DOCS=ON``
 - Disable the logging system: ``-DANIRA_WITH_LOGGING=OFF``
+
+### Anira Web (Web / JavaScript)
+
+Anira is available as the `@anira-project/anira` package for use in web applications:
+
+```bash
+# npm
+npm install @anira-project/anira
+
+# pnpm
+pnpm add @anira-project/anira
+
+# yarn
+yarn add @anira-project/anira
+```
+
+#### Building @anira-project/anira from source
+
+If you want to build the WASM module and JavaScript bindings yourself, you need to provide your own [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html). The CMake presets expect the `EMSDK` environment variable to be set to the root of your emsdk installation.
+
+```bash
+git clone https://github.com/anira-project/anira.git
+cd anira
+
+export EMSDK=/path/to/your/emsdk
+
+# Configure and build the WASM module (release)
+cmake --preset web-prod
+cmake --build --preset web-prod
+
+# Build the JavaScript package
+cd web
+npm install
+npm run build
+```
+
+For packaging it locally, use
+```bash
+npm pack
+```
+in the `web` folder, which will create a `.tgz` file that can be installed with npm or yarn.
+
+Then install the package in your project:
+
+```bash
+npm install path/to/anira/web/anira-project-anira-x.x.x.tgz
+```
+
+A debug preset is also available via `cmake --preset web` / `cmake --build --preset web`.
 
 ## Examples
 
