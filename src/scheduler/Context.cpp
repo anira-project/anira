@@ -383,9 +383,7 @@ void Context::start_thread_pool() {
 }
 
 void Context::drain_inference_queue(const std::shared_ptr<SessionElement>& session) {
-    // seq_cst pairs with the worker's seq_cst fetch_add-before-initialized-check
-    // (InferenceThread::execute): guarantees we either see a dequeued job's
-    // increment here, or the worker sees m_initialized == false and skips.
+    // seq_cst pairs with the worker's register-before-check (anira #87).
     while (session->m_active_inferences.load(std::memory_order::seq_cst) != 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
