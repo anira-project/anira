@@ -61,23 +61,31 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 
 bool InferenceThread::execute() {
     if (m_next_inference.try_dequeue(m_inference_data)) {
-        if (m_inference_data.m_session->m_initialized.load(std::memory_order::acquire)) {
-            do_inference(m_inference_data.m_session, m_inference_data.m_thread_safe_struct);
+        auto& session = m_inference_data.m_session;
+        // anira #87 hardening: register as active BEFORE checking m_initialized
+        // (seq_cst pairs with the seq_cst store/load in reset/drain). This closes
+        // the window where a worker between dequeue and increment is invisible to
+        // drain_inference_queue(): either this thread observes the reset and skips,
+        // or the drain observes the increment and waits for the inference.
+        session->m_active_inferences.fetch_add(1, std::memory_order::seq_cst);
+        if (session->m_initialized.load(std::memory_order::seq_cst)) {
+            do_inference(session, m_inference_data.m_thread_safe_struct);
         }
+        session->m_active_inferences.fetch_sub(1, std::memory_order::release);
         return true;
     }
     return false;
 }
 
 void InferenceThread::do_inference(std::shared_ptr<SessionElement> session, std::shared_ptr<SessionElement::ThreadSafeStruct> thread_safe_struct) {
-    session->m_active_inferences.fetch_add(1, std::memory_order::release);
+    // Active-inference accounting lives in execute() (before the m_initialized
+    // check) so a resetting thread can never miss an in-flight job.
     inference(session, thread_safe_struct->m_tensor_input_data, thread_safe_struct->m_tensor_output_data);
     if (session->m_inference_config.m_blocking_ratio > 0.f) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
         thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
     }
-    session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 }
 
 void InferenceThread::inference(std::shared_ptr<SessionElement> session, std::vector<BufferF>& input, std::vector<BufferF>& output) {

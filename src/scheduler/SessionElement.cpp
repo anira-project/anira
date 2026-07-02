@@ -34,7 +34,15 @@ void SessionElement::clear() {
     for (auto& inference : m_inference_queue) {
         inference->m_free.store(true, std::memory_order_relaxed);
         if (m_inference_config.m_blocking_ratio > 0.f) {
-            inference->m_done_semaphore.acquire();
+            // anira #87: drain any pending semaphore releases without blocking. The
+            // blocking acquire() here deadlocked reset() whenever a queued inference
+            // was skipped (m_initialized == false) and thus never released the
+            // semaphore. By the time clear() runs, drain_inference_queue() has waited
+            // for every registered job (workers register BEFORE checking
+            // m_initialized, seq_cst — see InferenceThread::execute) and flushed the
+            // queue, so this drain deterministically removes exactly the counts of
+            // completed inferences and never needs to wait.
+            while (inference->m_done_semaphore.try_acquire()) {}
         } else {
             inference->m_done_atomic.store(false, std::memory_order_relaxed);
         }

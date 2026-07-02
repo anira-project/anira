@@ -97,7 +97,7 @@ void Context::release_thread_pool() {
 }
 
 void Context::release_session(std::shared_ptr<SessionElement> session) {
-    session->m_initialized.store(false, std::memory_order::release);
+    session->m_initialized.store(false, std::memory_order::seq_cst);
 
     drain_inference_queue(session);
 
@@ -138,7 +138,7 @@ void Context::release_session(std::shared_ptr<SessionElement> session) {
 }
 
 void Context::prepare_session(std::shared_ptr<SessionElement> session, HostConfig new_config, std::vector<long> custom_latency) {
-    session->m_initialized.store(false, std::memory_order::release);
+    session->m_initialized.store(false, std::memory_order::seq_cst);
 
     drain_inference_queue(session);
 
@@ -278,7 +278,10 @@ void Context::start_thread_pool() {
 }
 
 void Context::drain_inference_queue(std::shared_ptr<SessionElement> session) {
-    while (session->m_active_inferences.load(std::memory_order::acquire) != 0) {
+    // seq_cst pairs with the worker's seq_cst fetch_add-before-initialized-check
+    // (InferenceThread::execute): guarantees we either see a dequeued job's
+    // increment here, or the worker sees m_initialized == false and skips.
+    while (session->m_active_inferences.load(std::memory_order::seq_cst) != 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
 
@@ -339,7 +342,7 @@ template <typename T> void Context::release_processor(InferenceConfig& inference
 }
 
 void Context::reset_session(std::shared_ptr<SessionElement> session) {
-    session->m_initialized.store(false, std::memory_order::release);
+    session->m_initialized.store(false, std::memory_order::seq_cst);
 
     drain_inference_queue(session);
 
