@@ -1,9 +1,13 @@
+#include <anira/ContextConfig.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <concurrentqueue.h>
+#ifndef __EMSCRIPTEN__
+#include <blockingconcurrentqueue.h>
+#endif
 
 // IWYU pragma: keep - processor methods are called through SessionElement's shared_ptr members
 #ifdef USE_LIBTORCH
@@ -22,14 +26,17 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <thread>
 #include <vector>
 
 namespace anira {
 
-InferenceThread::InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& next_inference)
-    : m_next_inference(next_inference), m_consumer_token(next_inference) {}
+InferenceThread::InferenceThread(InferenceQueue& next_inference, WaitStrategy wait_strategy)
+    : m_next_inference(next_inference)
+    , m_consumer_token(next_inference)
+    , m_wait_strategy(wait_strategy) {}
 
 InferenceThread::~InferenceThread() {
     stop();
@@ -60,6 +67,12 @@ bool InferenceThread::is_running() const {
 #endif
 
 void InferenceThread::run_loop() {
+#ifndef __EMSCRIPTEN__
+    if (m_wait_strategy == WaitStrategy::Blocking) {
+        run_loop_blocking();
+        return;
+    }
+#endif
     while (!should_exit()) {
         constexpr std::array<int, 2> k_iterations = {4, 32};
         // The times for the exponential backoff. The first loop is insteadly trying to acquire the
@@ -68,6 +81,21 @@ void InferenceThread::run_loop() {
         exponential_backoff(k_iterations);
     }
 }
+
+#ifndef __EMSCRIPTEN__
+void InferenceThread::run_loop_blocking() {
+    // Bounds shutdown latency only: an enqueue wakes the thread immediately via
+    // the queue's semaphore, so the timeout is never on the work pickup path.
+    constexpr std::int64_t k_exit_check_interval_us = 5000;
+    while (!should_exit()) {
+        if (m_next_inference.wait_dequeue_timed(m_consumer_token,
+                                                m_inference_data,
+                                                k_exit_check_interval_us)) {
+            process_dequeued_inference();
+        }
+    }
+}
+#endif
 
 void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
     for (int i = 0; i < iterations[0]; i++) {
@@ -113,12 +141,16 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 
 bool InferenceThread::execute() {
     if (m_next_inference.try_dequeue(m_consumer_token, m_inference_data)) {
-        if (m_inference_data.m_session->m_initialized.load(std::memory_order::acquire)) {
-            do_inference(m_inference_data.m_session, m_inference_data.m_thread_safe_struct);
-        }
+        process_dequeued_inference();
         return true;
     }
     return false;
+}
+
+void InferenceThread::process_dequeued_inference() {
+    if (m_inference_data.m_session->m_initialized.load(std::memory_order::acquire)) {
+        do_inference(m_inference_data.m_session, m_inference_data.m_thread_safe_struct);
+    }
 }
 
 void InferenceThread::do_inference(

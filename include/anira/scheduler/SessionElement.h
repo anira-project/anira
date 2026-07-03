@@ -2,6 +2,9 @@
 #define ANIRA_SESSIONELEMENT_H
 
 #include <concurrentqueue.h>
+#ifndef __EMSCRIPTEN__
+#include <blockingconcurrentqueue.h>
+#endif
 
 #include <atomic>
 #include <queue>
@@ -406,6 +409,28 @@ struct InferenceData {
                                                                              ///< and
                                                                              ///< synchronization
 };
+
+/**
+ * @brief Queue type used for passing InferenceData to the inference threads
+ *
+ * On native builds this is a moodycamel::BlockingConcurrentQueue so that
+ * inference threads can optionally block on the queue's semaphore instead of
+ * polling (see WaitStrategy). The blocking queue is a strict superset of the
+ * plain ConcurrentQueue API, and as long as no consumer ever blocks, its
+ * enqueue never makes a syscall — so ContextConfigs using
+ * WaitStrategy::SpinBackoff keep the exact lock-free behavior of the plain
+ * queue, at the cost of one extra atomic operation per enqueue/dequeue.
+ *
+ * On WebAssembly builds the plain ConcurrentQueue is used: inference loops
+ * are driven cooperatively by JS Workers across WASM instances that share
+ * memory via postMessage, so there is no pthreads runtime to block on, and a
+ * blocked worker could not service its JS event loop anyway.
+ */
+#ifdef __EMSCRIPTEN__
+using InferenceQueue = moodycamel::ConcurrentQueue<InferenceData>;
+#else
+using InferenceQueue = moodycamel::BlockingConcurrentQueue<InferenceData>;
+#endif
 
 }  // namespace anira
 

@@ -234,7 +234,7 @@ public:
      * main thread, enabling allocation-free dequeue from worker threads.
      * @return Reference to the static inference queue
      */
-    static moodycamel::ConcurrentQueue<InferenceData>& get_static_inference_queue();
+    static InferenceQueue& get_static_inference_queue();
 
     /**
      * @brief Factory for a user-owned InferenceThread bound to the static inference queue.
@@ -428,11 +428,11 @@ private:
      * Lock-free concurrent queue that manages inference requests from all sessions.
      * The queue is initialized with minimum capacity and maximum instance limits
      * to ensure efficient memory usage and prevent resource exhaustion.
+     * See InferenceQueue for the type choice per platform and the WaitStrategy
+     * interaction.
      */
-    inline static moodycamel::ConcurrentQueue<InferenceData> m_next_inference =
-        moodycamel::ConcurrentQueue<InferenceData>(k_min_capacity_inference_queue,
-                                                   0,
-                                                   k_max_num_instances);
+    inline static InferenceQueue m_next_inference =
+        InferenceQueue(k_min_capacity_inference_queue, 0, k_max_num_instances);
 
 #ifdef USE_LIBTORCH
     inline static std::vector<std::shared_ptr<LibtorchProcessor>>

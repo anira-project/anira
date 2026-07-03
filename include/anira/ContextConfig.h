@@ -13,6 +13,40 @@
 namespace anira {
 
 /**
+ * @brief Idle-wait strategy of the inference threads
+ *
+ * Controls how inference threads wait for new work when the global inference
+ * queue is empty:
+ *
+ * - SpinBackoff: Exponential backoff — a short hot-spin phase, then a
+ *   yield/sleep polling loop (~100 us period). Lowest possible pickup latency
+ *   when work arrives within microseconds of the thread going idle, at the
+ *   cost of continuous polling syscalls and CPU wakeups while idle.
+ * - Blocking: Threads block on the queue's semaphore (futex) and are woken
+ *   directly by the enqueue. No idle CPU usage and immediate wakeup, at the
+ *   cost of one semaphore signal on the submitting thread (a bounded,
+ *   non-blocking syscall when a consumer is asleep) and a scheduler wakeup
+ *   latency of typically a few microseconds.
+ *
+ * @note Blocking is not available on WebAssembly builds, where inference loops
+ * are driven cooperatively by JS Workers and blocking is not possible. There,
+ * Context::get_instance and the JSON config loader coerce Blocking to
+ * SpinBackoff and log a warning.
+ *
+ * @note All sessions in a process share one inference thread pool, so all
+ * ContextConfigs must agree on this value; a mismatch is reported as an error
+ * and the strategy of the first-created context stays in effect.
+ */
+enum class WaitStrategy { SpinBackoff, Blocking };
+
+/**
+ * @brief Returns a human-readable name for a WaitStrategy value
+ */
+inline const char* to_string(WaitStrategy wait_strategy) {
+    return wait_strategy == WaitStrategy::Blocking ? "blocking" : "spin_backoff";
+}
+
+/**
  * @brief Configuration structure for the inference context and threading behavior
  *
  * The ContextConfig struct controls global settings for the anira inference system,
@@ -52,14 +86,19 @@ struct ANIRA_API ContextConfig {
      *                   WebAssembly, optional on native). When the Context singleton
      *                   already exists, num_threads == 0 leaves any existing pool
      *                   untouched — it signals "no preference," not "shrink to zero."
+     * @param wait_strategy How idle inference threads wait for new work.
+     *                   Default: WaitStrategy::SpinBackoff (see WaitStrategy for the
+     *                   trade-offs). Must be identical across all ContextConfigs in
+     *                   a process, since all sessions share one thread pool.
      *
      * @note The constructor automatically detects and registers available inference
      * backends based on compile-time definitions (USE_LIBTORCH, USE_ONNXRUNTIME, USE_TFLITE)
      */
     ContextConfig(unsigned int num_threads = (std::thread::hardware_concurrency() / 2 > 0)
                                                  ? std::thread::hardware_concurrency() / 2
-                                                 : 1)
-        : m_num_threads(num_threads) {
+                                                 : 1,
+                  WaitStrategy wait_strategy = WaitStrategy::SpinBackoff)
+        : m_num_threads(num_threads), m_wait_strategy(wait_strategy) {
 #ifdef USE_LIBTORCH
         m_enabled_backends.push_back(InferenceBackend::LIBTORCH);
 #endif
@@ -86,6 +125,21 @@ struct ANIRA_API ContextConfig {
      * share the same thread pool.
      */
     unsigned int m_num_threads;
+
+    /**
+     * @brief Idle-wait strategy of the inference threads
+     *
+     * Determines whether idle inference threads poll the inference queue with
+     * an exponential-backoff spin loop or block on the queue's semaphore until
+     * work is enqueued. See WaitStrategy for the trade-offs.
+     *
+     * @note All sessions in a process share one inference thread pool, so all
+     * ContextConfigs must agree on this value. A mismatch when creating a new
+     * session is reported as an error and the strategy of the first-created
+     * context stays in effect. On WebAssembly builds, Blocking is coerced to
+     * SpinBackoff with a warning (see WaitStrategy).
+     */
+    WaitStrategy m_wait_strategy = WaitStrategy::SpinBackoff;
 
     /**
      * @brief Version string of the anira library
@@ -128,7 +182,8 @@ private:
      * @return true if all configuration parameters match, false otherwise
      **/
     bool operator==(const ContextConfig& other) const {
-        return m_num_threads == other.m_num_threads && m_anira_version == other.m_anira_version &&
+        return m_num_threads == other.m_num_threads && m_wait_strategy == other.m_wait_strategy &&
+               m_anira_version == other.m_anira_version &&
                m_enabled_backends == other.m_enabled_backends;
     }
 

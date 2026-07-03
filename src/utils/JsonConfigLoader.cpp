@@ -49,24 +49,43 @@ void anira::JsonConfigLoader::parse(const nlohmann::json& config) {
 }
 
 void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config) {
-    if (config.contains("context_config")) {
-        const auto& context_json = config.at("context_config");
+    m_context_config = std::make_unique<anira::ContextConfig>();
 
-        if (!context_json.contains("num_threads")) {
-            m_context_config = std::make_unique<anira::ContextConfig>();
-            return;
-        }
+    if (!config.contains("context_config")) { return; }
+    const auto& context_json = config.at("context_config");
 
+    if (context_json.contains("num_threads")) {
         if (context_json.at("num_threads").is_number_unsigned()) {
-            unsigned int const num_threads = context_json.at("num_threads").get<unsigned int>();
-            m_context_config = std::make_unique<anira::ContextConfig>(num_threads);
-            return;
+            m_context_config->m_num_threads = context_json.at("num_threads").get<unsigned int>();
         } else {
             LOG_ERROR << "Invalid 'num_threads' value: expected an unsigned integer." << '\n';
         }
     }
 
-    m_context_config = std::make_unique<anira::ContextConfig>();
+    if (context_json.contains("wait_strategy")) {
+        const auto& strategy_json = context_json.at("wait_strategy");
+        std::string const strategy =
+            strategy_json.is_string() ? strategy_json.get<std::string>() : std::string();
+        if (strategy == "spin_backoff") {
+            m_context_config->m_wait_strategy = anira::WaitStrategy::SpinBackoff;
+        } else if (strategy == "blocking") {
+#ifdef __EMSCRIPTEN__
+            // Blocking waits are impossible on WebAssembly: inference loops are
+            // driven cooperatively by JS Workers, and there is no pthreads
+            // runtime to block on. Accept the (valid) value so shared config
+            // files keep working, but coerce it.
+            LOG_INFO << "[WARNING] wait_strategy 'blocking' is not supported on WebAssembly "
+                        "builds. Using 'spin_backoff'."
+                     << '\n';
+#else
+            m_context_config->m_wait_strategy = anira::WaitStrategy::Blocking;
+#endif
+        } else {
+            LOG_ERROR << "Invalid 'wait_strategy' value: expected \"spin_backoff\" or "
+                         "\"blocking\". Defaulting to \"spin_backoff\"."
+                      << '\n';
+        }
+    }
 }
 
 void anira::JsonConfigLoader::parse_inference_config(const nlohmann::json& config) {

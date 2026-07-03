@@ -36,29 +36,56 @@ namespace anira {
 Context::Context(const ContextConfig& context_config) {
     m_context_config = context_config;
     for (unsigned int i = 0; i < m_context_config.m_num_threads; ++i) {
-        m_thread_pool.emplace_back(std::make_unique<InferenceThread>(m_next_inference));
+        m_thread_pool.emplace_back(
+            std::make_unique<InferenceThread>(m_next_inference, m_context_config.m_wait_strategy));
     }
 }
 
 std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_config) {
+#ifdef __EMSCRIPTEN__
+    // Blocking waits are impossible on WebAssembly: inference loops are driven
+    // cooperatively by JS Workers, and there is no pthreads runtime to block on.
+    // Coerce before the config is stored or compared, so the strategy that takes
+    // effect and the mismatch check below stay meaningful.
+    ContextConfig sanitized_config = context_config;
+    if (sanitized_config.m_wait_strategy == WaitStrategy::Blocking) {
+        LOG_INFO << "[WARNING] WaitStrategy::Blocking is not supported on WebAssembly builds. "
+                    "Using WaitStrategy::SpinBackoff."
+                 << '\n';
+        sanitized_config.m_wait_strategy = WaitStrategy::SpinBackoff;
+    }
+#else
+    const ContextConfig& sanitized_config = context_config;
+#endif
     if (m_context == nullptr) {
-        m_context = std::make_shared<Context>(context_config);
+        m_context = std::make_shared<Context>(sanitized_config);
         LOG_INFO << "[INFO] Anira version: " << m_context->m_context_config.m_anira_version << '\n';
     } else {
         // TODO: Better error handling
-        if (m_context->m_context_config.m_anira_version != context_config.m_anira_version) {}
-        if (m_context->m_context_config.m_enabled_backends != context_config.m_enabled_backends) {
+        if (m_context->m_context_config.m_anira_version != sanitized_config.m_anira_version) {}
+        if (m_context->m_context_config.m_enabled_backends != sanitized_config.m_enabled_backends) {
             LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!"
                       << '\n';
+        }
+        if (m_context->m_context_config.m_wait_strategy != sanitized_config.m_wait_strategy) {
+            LOG_ERROR
+                << "[ERROR] ContextConfig wait strategy mismatch! The context was created with "
+                   "wait_strategy '"
+                << to_string(m_context->m_context_config.m_wait_strategy)
+                << "' but a new session requested '" << to_string(sanitized_config.m_wait_strategy)
+                << "'. All sessions in this process share one inference thread pool, so the "
+                   "originally configured strategy stays in effect. Align the ContextConfig of "
+                   "all sessions to silence this error."
+                << '\n';
         }
         // num_threads == 0 means "I'm opting out of the auto-pool and bringing
         // my own threads via Context::make_inference_thread()" — not "shrink
         // any existing pool to zero." Skip the resize so a manual-threading
         // caller doesn't tear down threads another caller is relying on.
-        if (context_config.m_num_threads > 0 &&
-            (unsigned int)m_context->m_thread_pool.size() > context_config.m_num_threads) {
-            m_context->new_num_threads(context_config.m_num_threads);
-            m_context->m_context_config.m_num_threads = context_config.m_num_threads;
+        if (sanitized_config.m_num_threads > 0 &&
+            (unsigned int)m_context->m_thread_pool.size() > sanitized_config.m_num_threads) {
+            m_context->new_num_threads(sanitized_config.m_num_threads);
+            m_context->m_context_config.m_num_threads = sanitized_config.m_num_threads;
         }
     }
     return m_context;
@@ -79,7 +106,9 @@ void Context::new_num_threads(unsigned int new_num_threads) {
 
     if (new_num_threads > current_num_threads) {
         for (unsigned int i = current_num_threads; i < new_num_threads; ++i) {
-            m_thread_pool.emplace_back(std::make_unique<InferenceThread>(m_next_inference));
+            m_thread_pool.emplace_back(
+                std::make_unique<InferenceThread>(m_next_inference,
+                                                  m_context_config.m_wait_strategy));
         }
     } else if (new_num_threads < current_num_threads) {
         for (unsigned int i = current_num_threads - 1; i >= new_num_threads; --i) {
@@ -489,12 +518,12 @@ moodycamel::ProducerToken& Context::get_producer_token() {
     return *m_producer_tokens[index];
 }
 
-moodycamel::ConcurrentQueue<InferenceData>& Context::get_static_inference_queue() {
+InferenceQueue& Context::get_static_inference_queue() {
     return m_next_inference;
 }
 
 std::unique_ptr<InferenceThread> Context::make_inference_thread() {
-    return std::make_unique<InferenceThread>(m_next_inference);
+    return std::make_unique<InferenceThread>(m_next_inference, m_context_config.m_wait_strategy);
 }
 
 #ifdef USE_LIBTORCH
