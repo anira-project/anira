@@ -30,8 +30,7 @@
 namespace anira {
 
 InferenceThread::InferenceThread(InferenceQueue& next_inference, WaitStrategy wait_strategy)
-    : m_next_inference(next_inference)
-    , m_wait_strategy(wait_strategy) {}
+    : m_next_inference(next_inference), m_wait_strategy(wait_strategy) {}
 
 InferenceThread::~InferenceThread() {
     stop();
