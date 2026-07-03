@@ -29,6 +29,45 @@
       }
     },
     {
+      "name": "desktop-tests",
+      "displayName": "Desktop Tests",
+      "description": "Debug build with ANIRA_WITH_TESTS enabled",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/desktop/Tests",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "ANIRA_WITH_TESTS": "ON"
+      }
+    },
+    {
+      "name": "desktop-benchmark",
+      "displayName": "Desktop Benchmark",
+      "description": "Release build with ANIRA_WITH_BENCHMARK enabled",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/desktop/Benchmark",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "ANIRA_WITH_BENCHMARK": "ON"
+      }
+    },
+    {
+      "name": "desktop-examples",
+      "displayName": "Desktop Examples",
+      "description": "Release build with ANIRA_WITH_EXAMPLES enabled",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/desktop/Examples",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "ANIRA_WITH_EXAMPLES": "ON"
+      }
+    },
+    {
       "name": "clang-tidy",
       "displayName": "Clang-Tidy",
       "description": "Library + tests + benchmark build with all backends, used for clang-tidy analysis (exports compile_commands.json)",
@@ -108,6 +147,21 @@
       "configuration": "Release"
     },
     {
+      "name": "desktop-tests",
+      "configurePreset": "desktop-tests",
+      "configuration": "Debug"
+    },
+    {
+      "name": "desktop-benchmark",
+      "configurePreset": "desktop-benchmark",
+      "configuration": "Release"
+    },
+    {
+      "name": "desktop-examples",
+      "configurePreset": "desktop-examples",
+      "configuration": "Release"
+    },
+    {
       "name": "clang-tidy",
       "configurePreset": "clang-tidy",
       "configuration": "Debug"
@@ -142,6 +196,12 @@
       "name": "desktop-release",
       "configurePreset": "desktop-release",
       "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "desktop-tests",
+      "configurePreset": "desktop-tests",
+      "configuration": "Debug",
       "output": { "outputOnFailure": true }
     }
   ]
