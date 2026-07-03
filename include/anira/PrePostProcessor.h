@@ -104,6 +104,45 @@ public:
                               [[maybe_unused]] InferenceBackend current_inference_backend);
 
     /**
+     * @brief Hook called on the inference thread immediately before the backend runs
+     *
+     * Override this to patch input tensors with data that must reflect the result of the
+     * previous inference (e.g. recurrent state feedback). This is necessary because
+     * pre_process() is called at submission time: when more than one inference is queued,
+     * all their input tensors have already been filled before the first one runs, so any
+     * state written there is stale. With session_exclusive_processor = true inferences
+     * execute strictly in submission order and never concurrently, which makes this hook
+     * the only safe place to splice in cross-inference state.
+     *
+     * @param input Vector of input tensors about to be fed to the inference engine
+     * @param current_inference_backend Currently active inference backend
+     *
+     * @note Called on the inference thread, not the audio thread. The default implementation
+     * does nothing.
+     * @see after_inference()
+     */
+    virtual void before_inference([[maybe_unused]] std::vector<BufferF>& input,
+                                  [[maybe_unused]] InferenceBackend current_inference_backend) {}
+
+    /**
+     * @brief Hook called on the inference thread immediately after the backend runs
+     *
+     * Override this to capture output tensors that must be fed into the next inference
+     * (e.g. recurrent state feedback). Runs before the inference is marked done and before
+     * the next session-exclusive inference can be dispatched, so the state captured here is
+     * guaranteed to be visible to the next before_inference() call.
+     *
+     * @param output Vector of output tensors produced by the inference engine
+     * @param current_inference_backend Currently active inference backend
+     *
+     * @note Called on the inference thread, not the audio thread. The default implementation
+     * does nothing.
+     * @see before_inference()
+     */
+    virtual void after_inference([[maybe_unused]] std::vector<BufferF>& output,
+                                 [[maybe_unused]] InferenceBackend current_inference_backend) {}
+
+    /**
      * @brief Sets a non-streamable input value in thread-safe storage
      *
      * Used to store control parameters or static values that don't change sample-by-sample.

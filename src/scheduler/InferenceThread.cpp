@@ -125,9 +125,12 @@ void InferenceThread::do_inference(
     const std::shared_ptr<SessionElement>& session,
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct) {
     session->m_active_inferences.fetch_add(1, std::memory_order::release);
+    InferenceBackend const backend = session->m_current_backend.load(std::memory_order_relaxed);
+    session->m_pp_processor.before_inference(thread_safe_struct->m_tensor_input_data, backend);
     inference(session,
               thread_safe_struct->m_tensor_input_data,
               thread_safe_struct->m_tensor_output_data);
+    session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data, backend);
     if (session->m_inference_config.m_blocking_ratio > 0.f) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
