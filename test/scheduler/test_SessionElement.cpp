@@ -3,6 +3,7 @@
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
+#include <concurrentqueue.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -61,9 +62,11 @@ TEST_P(SessionElementTest, LatencyStructAndRingbuffers) {
 
     PrePostProcessor pp_processor(test_params.m_inference_config);
 
+    InferenceQueue inference_queue;
     SessionElement session_element(0,  // session_id
                                    pp_processor,
-                                   test_params.m_inference_config);
+                                   test_params.m_inference_config,
+                                   moodycamel::ProducerToken(inference_queue));
 
     session_element.prepare(test_params.m_host_config);
 

@@ -13,11 +13,11 @@
  * just flip an atomic flag inside the class.
  *
  * inference_thread_create_from_context() MUST be called from the main WASM
- * instance (the one that owns the allocator) because the constructor
- * pre-allocates a moodycamel::ConsumerToken. Once created, the object
- * pointer can be shared with worker instances via postMessage — execute()
- * and run_loop() are fully allocation-free and safe to invoke from any
- * WASM instance.
+ * instance (the one that owns the allocator) because it heap-allocates the
+ * InferenceThread object. Once created, the object pointer can be shared
+ * with worker instances via postMessage — execute() and run_loop() use a
+ * non-tokenized dequeue that never allocates, so they are safe to invoke
+ * from any WASM instance.
  */
 
 extern "C" {

@@ -218,20 +218,11 @@ public:
     void reset_session(const std::shared_ptr<SessionElement>& session);
 
     /**
-     * @brief Get producer token for the next inference request
-     * Returns a producer token that can be used to enqueue inference requests
-     * into the concurrent queue.
-     * @return Shared pointer to the producer token
-     * @note The producer token is used to ensure thread-safe and non-blocking
-     * access to the concurrent queue for submitting inference requests.
-     */
-    static moodycamel::ProducerToken& get_producer_token();
-
-    /**
      * @brief Get a reference to the static inference queue
      * Returns a reference to the global concurrent queue used for inference requests.
-     * This is used by InferenceThread to pre-allocate a ConsumerToken on the
-     * main thread, enabling allocation-free dequeue from worker threads.
+     * This is used to construct InferenceThreads (user-managed or WASM
+     * worker-driven) that consume from the global queue; dequeueing is
+     * non-tokenized and allocation-free.
      * @return Reference to the static inference queue
      */
     static InferenceQueue& get_static_inference_queue();
@@ -311,16 +302,17 @@ private:
      * with zeroed output at its stream position (its struct and timestamp stay claimed
      * until the output side consumes it), so the output remains time-aligned.
      *
+     * The enqueue always uses the session's own producer token
+     * (SessionElement::m_producer_token), which keeps it allocation-free and
+     * real-time safe on the calling (audio) thread.
+     *
      * @param session Shared pointer to the session that owns the task
      * @param thread_safe_struct The prepared task to enqueue
-     * @param producer_token Optional producer token for the enqueue (nullptr uses the
-     * calling thread's implicit producer)
      * @return True if the task was enqueued, false if it was dropped
      */
     static bool enqueue_inference_or_drop(
         const std::shared_ptr<SessionElement>& session,
-        const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
-        const moodycamel::ProducerToken* producer_token = nullptr);
+        const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct);
 
     /**
      * @brief Performs postprocessing for a session
@@ -410,29 +402,32 @@ private:
                                                                                 ///< threads in the
                                                                                 ///< thread pool
 
-    inline static std::vector<std::unique_ptr<moodycamel::ProducerToken>>
-        m_producer_tokens;  ///< Vector of producer tokens for managing inference requests
-    inline static std::atomic<size_t> m_next_producer_index{0};  ///< Thread-safe counter for
-                                                                 ///< generating unique producer
-                                                                 ///< indices
-
     static constexpr size_t k_min_capacity_inference_queue = 10000;  ///< Minimum pre-allocated
                                                                      ///< capacity of the inference
                                                                      ///< queue
-    static constexpr size_t k_max_num_instances = 1000;  ///< Maximum number of explicit producers
-                                                         ///< for the inference queue
+    static constexpr size_t k_max_num_instances = 1000;  ///< Pre-allocation hint for explicit
+                                                         ///< producers (one per concurrently
+                                                         ///< live session, see
+                                                         ///< SessionElement::m_producer_token)
+    static constexpr size_t k_max_num_implicit_producers = 8;  ///< Pre-allocation hint for
+                                                               ///< implicit producers (tokenless
+                                                               ///< enqueues from off-RT control
+                                                               ///< threads, e.g. requeueing in
+                                                               ///< drain_inference_queue)
 
     /**
      * @brief Thread-safe concurrent queue for inference requests
      *
      * Lock-free concurrent queue that manages inference requests from all sessions.
-     * The queue is initialized with minimum capacity and maximum instance limits
-     * to ensure efficient memory usage and prevent resource exhaustion.
+     * The queue is initialized with minimum capacity and pre-allocation hints for
+     * explicit and implicit producers (moodycamel signature: minCapacity,
+     * maxExplicitProducers, maxImplicitProducers).
      * See InferenceQueue for the type choice per platform and the WaitStrategy
      * interaction.
      */
-    inline static InferenceQueue m_next_inference =
-        InferenceQueue(k_min_capacity_inference_queue, 0, k_max_num_instances);
+    inline static InferenceQueue m_next_inference = InferenceQueue(k_min_capacity_inference_queue,
+                                                                   k_max_num_instances,
+                                                                   k_max_num_implicit_producers);
 
 #ifdef USE_LIBTORCH
     inline static std::vector<std::shared_ptr<LibtorchProcessor>>

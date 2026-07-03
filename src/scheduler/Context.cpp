@@ -125,10 +125,6 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
                                                         InferenceConfig& inference_config,
                                                         BackendBase* custom_processor) {
     int const session_id = get_available_session_id();
-    if (m_producer_tokens.size() < k_max_num_instances) {
-        m_producer_tokens.emplace_back(
-            std::make_unique<moodycamel::ProducerToken>(m_next_inference));
-    }
 
     if (inference_config.m_num_parallel_processors > (unsigned int)m_thread_pool.size()) {
         if (!m_thread_pool.empty()) {
@@ -140,8 +136,14 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
         }
     }
 
+    // Each session owns one explicit producer token for the global inference
+    // queue (created here, off the audio thread; destroyed with the session,
+    // which recycles the underlying producer slot).
     std::shared_ptr<SessionElement> const session =
-        std::make_shared<SessionElement>(session_id, pp_processor, inference_config);
+        std::make_shared<SessionElement>(session_id,
+                                         pp_processor,
+                                         inference_config,
+                                         moodycamel::ProducerToken(m_next_inference));
 
     if (custom_processor != nullptr) {
         custom_processor->prepare();
@@ -381,9 +383,7 @@ bool Context::pre_process(const std::shared_ptr<SessionElement>& session) {
                 // to return true.
                 try_dispatch_stateful(session);
             } else {
-                enqueue_inference_or_drop(session,
-                                          session->m_inference_queue[i],
-                                          &get_producer_token());
+                enqueue_inference_or_drop(session, session->m_inference_queue[i]);
             }
             if (session->m_current_queue >= UINT16_MAX) {
                 session->m_current_queue = 0;
@@ -405,13 +405,13 @@ void Context::try_dispatch_stateful(const std::shared_ptr<SessionElement>& sessi
 
 bool Context::enqueue_inference_or_drop(
     const std::shared_ptr<SessionElement>& session,
-    const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
-    const moodycamel::ProducerToken* producer_token) {
+    const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct) {
     InferenceData const inference_data = {.m_session = session,
                                           .m_thread_safe_struct = thread_safe_struct};
-    bool const enqueued = producer_token != nullptr
-                              ? m_next_inference.try_enqueue(*producer_token, inference_data)
-                              : m_next_inference.try_enqueue(inference_data);
+    // The session's own producer token keeps this allocation-free and safe:
+    // per-session enqueues are serialized (single driving thread, and the
+    // stateful path additionally holds the dispatch gate).
+    bool const enqueued = m_next_inference.try_enqueue(session->m_producer_token, inference_data);
     if (!enqueued) {
         // The task keeps its struct and timestamp and completes as zeros at its
         // stream position, so the output stays time-aligned: exactly one chunk
@@ -511,11 +511,6 @@ void Context::reset_session(const std::shared_ptr<SessionElement>& session) {
     session->clear();
 
     session->m_initialized.store(true, std::memory_order::release);
-}
-
-moodycamel::ProducerToken& Context::get_producer_token() {
-    size_t const index = m_next_producer_index.fetch_add(1) % m_producer_tokens.size();
-    return *m_producer_tokens[index];
 }
 
 InferenceQueue& Context::get_static_inference_queue() {

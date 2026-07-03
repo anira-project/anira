@@ -77,10 +77,13 @@ public:
      * @param new_session_id Unique identifier for this session
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration containing model settings
+     * @param producer_token Producer token bound to the global inference queue, moved into the
+     * session (see m_producer_token)
      */
     SessionElement(int new_session_id,
                    PrePostProcessor& pp_processor,
-                   InferenceConfig& inference_config);
+                   InferenceConfig& inference_config,
+                   moodycamel::ProducerToken&& producer_token);
 
     /**
      * @brief Clears all session data and resets to initial state
@@ -218,6 +221,19 @@ public:
                                               ///< initialized
     std::atomic<int> m_active_inferences{0};  ///< Atomic counter of currently active inference
                                               ///< operations
+
+    // This session's explicit producer token for the global inference queue.
+    // Pinning one token per session keeps enqueue allocation-free on the audio
+    // thread (no implicit-producer registration) and gives the token RAII
+    // lifetime: the underlying producer slot is recycled when the session is
+    // destroyed. A ProducerToken must never be used by two threads at once —
+    // this holds here because all enqueues of a session are serialized: the
+    // non-stateful path enqueues only from the session's single driving thread,
+    // and the stateful path enqueues only while holding the
+    // m_stateful_dispatch_busy gate (whose acquire/release ordering also makes
+    // the token's state visible when ownership migrates between threads).
+    moodycamel::ProducerToken m_producer_token;  ///< Per-session producer token for the global
+                                                 ///< inference queue
 
     // --- Stateful in-order dispatch ---
     // For stateful models, only ONE of this session's tasks may be in the global

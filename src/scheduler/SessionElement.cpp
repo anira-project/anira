@@ -2,6 +2,7 @@
 #include <anira/PrePostProcessor.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
+#include <concurrentqueue.h>
 
 #ifdef USE_LIBTORCH
 #include <anira/backends/LibTorchProcessor.h>
@@ -28,8 +29,10 @@ namespace anira {
 
 SessionElement::SessionElement(int new_session_id,
                                PrePostProcessor& pp_processor,
-                               InferenceConfig& inference_config)
+                               InferenceConfig& inference_config,
+                               moodycamel::ProducerToken&& producer_token)
     : m_session_id(new_session_id)
+    , m_producer_token(std::move(producer_token))
     , m_pp_processor(pp_processor)
     , m_inference_config(inference_config)
     , m_default_processor(m_inference_config)

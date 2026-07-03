@@ -4,10 +4,6 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
-#include <concurrentqueue.h>
-#ifndef __EMSCRIPTEN__
-#include <blockingconcurrentqueue.h>
-#endif
 
 // IWYU pragma: keep - processor methods are called through SessionElement's shared_ptr members
 #ifdef USE_LIBTORCH
@@ -35,7 +31,6 @@ namespace anira {
 
 InferenceThread::InferenceThread(InferenceQueue& next_inference, WaitStrategy wait_strategy)
     : m_next_inference(next_inference)
-    , m_consumer_token(next_inference)
     , m_wait_strategy(wait_strategy) {}
 
 InferenceThread::~InferenceThread() {
@@ -88,9 +83,7 @@ void InferenceThread::run_loop_blocking() {
     // the queue's semaphore, so the timeout is never on the work pickup path.
     constexpr std::int64_t k_exit_check_interval_us = 5000;
     while (!should_exit()) {
-        if (m_next_inference.wait_dequeue_timed(m_consumer_token,
-                                                m_inference_data,
-                                                k_exit_check_interval_us)) {
+        if (m_next_inference.wait_dequeue_timed(m_inference_data, k_exit_check_interval_us)) {
             process_dequeued_inference();
         }
     }
@@ -140,7 +133,10 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
 }
 
 bool InferenceThread::execute() {
-    if (m_next_inference.try_dequeue(m_consumer_token, m_inference_data)) {
+    // Non-tokenized dequeue: scans all producer sub-queues, so a task enqueued
+    // via any producer token is reliably found even by a single consumer, and
+    // it never allocates (see issue #77).
+    if (m_next_inference.try_dequeue(m_inference_data)) {
         process_dequeued_inference();
         return true;
     }
@@ -177,7 +173,11 @@ void InferenceThread::do_inference(
     if (session->m_inference_config.m_session_exclusive_processor) {
         session->release_dispatch();
         if (auto next = session->try_acquire_next_dispatch()) {
+            // Safe to use the session's producer token here: the dispatch gate
+            // guarantees only one thread at a time enqueues for this session,
+            // and its acquire/release ordering publishes the token's state.
             if (!m_next_inference.try_enqueue(
+                    session->m_producer_token,
                     InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
                 // The task completes as zeros at its stream position, keeping
                 // the output time-aligned instead of stalling the session.

@@ -8,7 +8,6 @@
 #ifndef __EMSCRIPTEN__
 #include "../system/HighPriorityThread.h"
 #endif
-#include <concurrentqueue.h>
 
 #include "../ContextConfig.h"
 #include "../utils/Buffer.h"
@@ -34,10 +33,13 @@ namespace anira {
  * instance shares memory with the main instance; spawning OS threads from
  * C++ inside a worker would interact badly with the shared allocator.
  *
- * A moodycamel::ConsumerToken is pre-allocated in the constructor (which
- * must run on the thread that owns the allocator — the main WASM instance
- * in browser builds). Using an explicit token makes execute() fully
- * allocation-free.
+ * Dequeueing is deliberately done without a moodycamel::ConsumerToken: the
+ * non-tokenized try_dequeue scans all producer sub-queues, so any enqueued
+ * task is reliably picked up even by a single consumer, and it never
+ * allocates — execute() and run_loop() stay fully allocation-free. A
+ * ConsumerToken's sticky sub-queue rotation is a many-consumer throughput
+ * optimization that can intermittently miss items enqueued via producer
+ * tokens (lost inference tasks, see issue #77).
  */
 class ANIRA_API InferenceThread
 #ifndef __EMSCRIPTEN__
@@ -182,7 +184,6 @@ private:
                                        ///< queue containing inference
                                        ///< requests
     InferenceData m_inference_data;    ///< Current inference data being processed by this thread
-    moodycamel::ConsumerToken m_consumer_token;
     WaitStrategy m_wait_strategy;  ///< How run_loop() waits for new work when the queue is empty
 
 #ifdef __EMSCRIPTEN__
