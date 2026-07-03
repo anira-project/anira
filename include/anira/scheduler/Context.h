@@ -291,6 +291,38 @@ private:
     static bool pre_process(const std::shared_ptr<SessionElement>& session);
 
     /**
+     * @brief Dispatches the next stateful task of a session-exclusive session
+     *
+     * Claims the session's next task awaiting dispatch and enqueues it into the
+     * global inference queue. If the queue is momentarily full, the inference
+     * is dropped: the task completes with zeroed output at its stream position,
+     * so the output remains time-aligned. No-op for sessions without a
+     * session-exclusive processor or while one of the session's tasks is
+     * already in flight.
+     *
+     * @param session Shared pointer to the session whose task to dispatch
+     */
+    static void try_dispatch_stateful(const std::shared_ptr<SessionElement>& session);
+
+    /**
+     * @brief Enqueues a prepared task into the global inference queue, dropping it on failure
+     *
+     * If the queue is momentarily full, the inference is dropped: the task completes
+     * with zeroed output at its stream position (its struct and timestamp stay claimed
+     * until the output side consumes it), so the output remains time-aligned.
+     *
+     * @param session Shared pointer to the session that owns the task
+     * @param thread_safe_struct The prepared task to enqueue
+     * @param producer_token Optional producer token for the enqueue (nullptr uses the
+     * calling thread's implicit producer)
+     * @return True if the task was enqueued, false if it was dropped
+     */
+    static bool enqueue_inference_or_drop(
+        const std::shared_ptr<SessionElement>& session,
+        const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
+        const moodycamel::ProducerToken* producer_token = nullptr);
+
+    /**
      * @brief Performs postprocessing for a session
      *
      * Executes the postprocessing pipeline for the specified session, transforming

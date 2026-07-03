@@ -258,11 +258,17 @@ void Context::new_data_submitted(const std::shared_ptr<SessionElement>& session)
     }
 }
 
+// Full realtime safe path
 void Context::new_data_request(const std::shared_ptr<SessionElement>& session) {
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
                 if (session->m_is_non_real_time) {
+                    // A stateful task may still be awaiting dispatch with none in
+                    // flight (a previous dispatch attempt found the global queue
+                    // full and dropped its task). No further submission may be
+                    // coming to restart the chain, so kick it before waiting.
+                    try_dispatch_stateful(session);
                     while (!session->m_inference_queue[i]->m_done_atomic.exchange(
                         false,
                         std::memory_order::acquire)) {
@@ -284,6 +290,7 @@ void Context::new_data_request(const std::shared_ptr<SessionElement>& session) {
     }
 }
 
+// With blocking ratio > 0, the semaphore is used to wait for data. This is not 100% realtime safe.
 void Context::new_data_request(const std::shared_ptr<SessionElement>& session,
                                std::chrono::steady_clock::time_point wait_until) {
     while (session->m_time_stamps.size() > 0) {
@@ -291,6 +298,12 @@ void Context::new_data_request(const std::shared_ptr<SessionElement>& session,
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
                 if (session->m_is_non_real_time) {
                     if (session->m_inference_config.m_blocking_ratio > 0.f) {
+                        // A stateful task may still be awaiting dispatch with none
+                        // in flight (a previous dispatch attempt found the global
+                        // queue full and dropped its task). No further submission
+                        // may be coming to restart the chain, so kick it before
+                        // blocking.
+                        try_dispatch_stateful(session);
                         session->m_inference_queue[i]->m_done_semaphore.acquire();
                     }
                 } else if (wait_until.time_since_epoch().count() == 0) {
@@ -333,24 +346,15 @@ bool Context::pre_process(const std::shared_ptr<SessionElement>& session) {
                 // the global queue; the rest wait in submission order and are
                 // released one at a time as each completes.
                 session->enqueue_pending_dispatch(session->m_inference_queue[i]);
-                if (auto next = session->try_acquire_next_dispatch()) {
-                    if (!m_next_inference.try_enqueue(
-                            InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
-                        LOG_ERROR << "[ERROR] Could not enqueue next inference!" << '\n';
-                        session->release_dispatch();  // retried on the next submission/completion
-                    }
-                }
+                // If the global queue is full, the claimed task (possibly an
+                // older chunk) is dropped and completes as zeros at its stream
+                // position — either way this submission stands, so fall through
+                // to return true.
+                try_dispatch_stateful(session);
             } else {
-                InferenceData const inference_data = {
-                    .m_session = session,
-                    .m_thread_safe_struct = session->m_inference_queue[i]};
-                moodycamel::ProducerToken const& producer_token = get_producer_token();
-                if (!m_next_inference.try_enqueue(producer_token, inference_data)) {
-                    LOG_ERROR << "[ERROR] Could not enqueue next inference!" << '\n';
-                    session->m_inference_queue[i]->m_free.exchange(true);
-                    session->m_time_stamps.pop_back();
-                    return false;
-                }
+                enqueue_inference_or_drop(session,
+                                          session->m_inference_queue[i],
+                                          &get_producer_token());
             }
             if (session->m_current_queue >= UINT16_MAX) {
                 session->m_current_queue = 0;
@@ -361,6 +365,34 @@ bool Context::pre_process(const std::shared_ptr<SessionElement>& session) {
         }
     }
     return false;
+}
+
+void Context::try_dispatch_stateful(const std::shared_ptr<SessionElement>& session) {
+    if (!session->m_inference_config.m_session_exclusive_processor) { return; }
+    if (auto next = session->try_acquire_next_dispatch()) {
+        if (!enqueue_inference_or_drop(session, next)) { session->release_dispatch(); }
+    }
+}
+
+bool Context::enqueue_inference_or_drop(
+    const std::shared_ptr<SessionElement>& session,
+    const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
+    const moodycamel::ProducerToken* producer_token) {
+    InferenceData const inference_data = {.m_session = session,
+                                          .m_thread_safe_struct = thread_safe_struct};
+    bool const enqueued = producer_token != nullptr
+                              ? m_next_inference.try_enqueue(*producer_token, inference_data)
+                              : m_next_inference.try_enqueue(inference_data);
+    if (!enqueued) {
+        // The task keeps its struct and timestamp and completes as zeros at its
+        // stream position, so the output stays time-aligned: exactly one chunk
+        // was consumed and exactly one (silent) chunk will be produced.
+        LOG_ERROR << "[ERROR] Could not enqueue next inference to global context job queue! "
+                     "Dropping the inference and zero-filling its output."
+                  << '\n';
+        session->complete_with_zeros(thread_safe_struct);
+    }
+    return enqueued;
 }
 
 void Context::post_process(

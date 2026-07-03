@@ -144,7 +144,12 @@ void InferenceThread::do_inference(
         if (auto next = session->try_acquire_next_dispatch()) {
             if (!m_next_inference.try_enqueue(
                     InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
-                LOG_ERROR << "[ERROR] Could not enqueue next inference!" << '\n';
+                // The task completes as zeros at its stream position, keeping
+                // the output time-aligned instead of stalling the session.
+                LOG_ERROR << "[ERROR] Could not enqueue next inference! "
+                             "Dropping the inference and zero-filling its output."
+                          << '\n';
+                session->complete_with_zeros(next);
                 session->release_dispatch();
             }
         }

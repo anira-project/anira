@@ -110,6 +110,20 @@ void SessionElement::release_dispatch() {
     m_stateful_dispatch_busy.store(false, std::memory_order_release);
 }
 
+void SessionElement::complete_with_zeros(
+    const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct) {
+    // The global queue rejected the task (momentarily full), so this inference is
+    // dropped. Completing it with zeroed output keeps the stream time-aligned:
+    // the output side consumes the task at its correct position like any other
+    // and frees the struct, it just yields silence for this chunk.
+    for (auto& output_data : thread_safe_struct->m_tensor_output_data) { output_data.clear(); }
+    if (m_inference_config.m_blocking_ratio > 0.f) {
+        thread_safe_struct->m_done_semaphore.release();
+    } else {
+        thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
+    }
+}
+
 void SessionElement::prepare(const HostConfig& host_config, std::vector<long> custom_latency) {
     m_host_config = host_config;
 

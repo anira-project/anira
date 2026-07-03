@@ -239,6 +239,10 @@ public:
     std::shared_ptr<ThreadSafeStruct> try_acquire_next_dispatch();
     /** @brief Mark the in-flight stateful task finished, allowing the next to be dispatched. */
     void release_dispatch();
+    /** @brief Complete a task without running inference: zero its output tensors and signal
+     * completion. Used when the global queue rejects a task, so the dropped inference still
+     * yields (silent) output at its correct stream position and the struct is freed normally. */
+    void complete_with_zeros(const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct);
 
     PrePostProcessor& m_pp_processor;  ///< Reference to the preprocessing/postprocessing pipeline
     InferenceConfig& m_inference_config;  ///< Reference to the inference configuration
