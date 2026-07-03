@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - RTSan real-time safety CI checks and testing (not done yet)
+- Configurable inference-thread wait strategy: `anira::WaitStrategy { SpinBackoff, Blocking }` in `ContextConfig` (second constructor argument, member `m_wait_strategy`, JSON key `context_config.wait_strategy` with values `"spin_backoff"` / `"blocking"`). With `Blocking`, idle inference threads block on the shared inference queue's semaphore (the queue is now `anira::InferenceQueue`, a `moodycamel::BlockingConcurrentQueue` on native builds) and are woken directly by the enqueue, instead of polling with the exponential-backoff spin loop. This eliminates idle CPU usage (~2 syscalls per 100 µs per idle thread with `SpinBackoff`) at the cost of one bounded, non-blocking semaphore signal on the submitting thread per submission; round-trip throughput is identical within measurement noise when inference time dominates. Only one strategy can be in effect per process — the first-created context's; a later `ContextConfig` requesting a different strategy is ignored and reported with a warning. On WebAssembly builds, where inference loops are driven cooperatively by JS Workers, `Blocking` is coerced to `SpinBackoff` with a warning (by both `JsonConfigLoader` and `Context::get_instance`), and the queue remains a plain `ConcurrentQueue`.
 
 ### Fixed
 

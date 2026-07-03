@@ -33,9 +33,11 @@ namespace anira {
  * Context::get_instance and the JSON config loader coerce Blocking to
  * SpinBackoff and log a warning.
  *
- * @note All sessions in a process share one inference thread pool, so all
- * ContextConfigs must agree on this value; a mismatch is reported as an error
- * and the strategy of the first-created context stays in effect.
+ * @note All sessions in a process share one inference thread pool, so only one
+ * strategy can be in effect per process: the one of the first-created context.
+ * A later ContextConfig requesting a different strategy is ignored and
+ * reported with a warning. Both strategies produce identical results — they
+ * differ only in idle CPU usage and work-pickup latency.
  */
 enum class WaitStrategy { SpinBackoff, Blocking };
 
@@ -133,11 +135,11 @@ struct ANIRA_API ContextConfig {
      * an exponential-backoff spin loop or block on the queue's semaphore until
      * work is enqueued. See WaitStrategy for the trade-offs.
      *
-     * @note All sessions in a process share one inference thread pool, so all
-     * ContextConfigs must agree on this value. A mismatch when creating a new
-     * session is reported as an error and the strategy of the first-created
-     * context stays in effect. On WebAssembly builds, Blocking is coerced to
-     * SpinBackoff with a warning (see WaitStrategy).
+     * @note All sessions in a process share one inference thread pool, so only
+     * one strategy can be in effect per process: the one of the first-created
+     * context. A later ContextConfig requesting a different strategy is
+     * ignored and reported with a warning. On WebAssembly builds, Blocking is
+     * coerced to SpinBackoff with a warning (see WaitStrategy).
      */
     WaitStrategy m_wait_strategy = WaitStrategy::SpinBackoff;
 

@@ -68,14 +68,14 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
                       << '\n';
         }
         if (m_context->m_context_config.m_wait_strategy != sanitized_config.m_wait_strategy) {
-            LOG_ERROR
-                << "[ERROR] ContextConfig wait strategy mismatch! The context was created with "
+            LOG_INFO
+                << "[WARNING] ContextConfig wait strategy mismatch: the context was created with "
                    "wait_strategy '"
                 << to_string(m_context->m_context_config.m_wait_strategy)
                 << "' but a new session requested '" << to_string(sanitized_config.m_wait_strategy)
-                << "'. All sessions in this process share one inference thread pool, so the "
-                   "originally configured strategy stays in effect. Align the ContextConfig of "
-                   "all sessions to silence this error."
+                << "'. All sessions in this process share one inference thread pool, so only one "
+                   "strategy can be in effect and the originally configured one stays active. "
+                   "Align the ContextConfig of all sessions to silence this warning."
                 << '\n';
         }
         // num_threads == 0 means "I'm opting out of the auto-pool and bringing
