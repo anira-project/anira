@@ -7,6 +7,8 @@ The :cpp:func:`anira::PrePostProcessor::pre_process` method receives input data 
 
 The :cpp:func:`anira::PrePostProcessor::post_process` method receives inference results through a vector of :cpp:type:`anira::BufferF` instances and writes them to output ring buffers (a vector of :cpp:class:`anira::RingBuffer`). The :cpp:class:`anira::InferenceHandler` then retrieves samples from these ring buffers and returns them to the audio application.
 
+In addition to :cpp:func:`anira::PrePostProcessor::pre_process` and :cpp:func:`anira::PrePostProcessor::post_process`, the :cpp:class:`anira::PrePostProcessor` provides two optional hooks, :cpp:func:`anira::PrePostProcessor::before_inference` and :cpp:func:`anira::PrePostProcessor::after_inference`, which are called on the inference thread immediately before and after the backend runs. See `Inference Thread Hooks`_ below.
+
 Non-streamable tensors, such as control parameters or static values, can be handled using the :cpp:func:`anira::PrePostProcessor::get_input` and :cpp:func:`anira::PrePostProcessor::set_input` methods for input data, and :cpp:func:`anira::PrePostProcessor::get_output` and :cpp:func:`anira::PrePostProcessor::set_output` methods for output data. These methods allow you to store and retrieve non-streamable tensor values in a thread-safe manner.
 
 Understanding Streamable vs Non-Streamable Tensors
@@ -103,6 +105,37 @@ The :cpp:class:`anira::PrePostProcessor` provides several helper methods to faci
 | :cpp:func:`anira::PrePostProcessor::set_output`                       | Sets non-streamable output values to internal  |
 |                                                                       | storage (thread-safe).                         |
 +-----------------------------------------------------------------------+------------------------------------------------+
+
+Inference Thread Hooks
+----------------------
+
+The :cpp:class:`anira::PrePostProcessor` provides two additional virtual methods that can be overridden: :cpp:func:`anira::PrePostProcessor::before_inference` and :cpp:func:`anira::PrePostProcessor::after_inference`. Unlike :cpp:func:`anira::PrePostProcessor::pre_process` and :cpp:func:`anira::PrePostProcessor::post_process`, which are called on the audio thread, these hooks are called on the inference thread — immediately before and immediately after the inference engine runs. Their default implementations do nothing.
+
+:cpp:func:`anira::PrePostProcessor::before_inference` receives the input tensors (a vector of :cpp:type:`anira::BufferF`) right before they are fed to the backend. :cpp:func:`anira::PrePostProcessor::after_inference` receives the output tensors right after the backend has produced them.
+
+These hooks are the correct place to handle state that must flow from one inference to the next, such as recurrent (hidden) state feedback in stateful models. This cannot be done reliably in :cpp:func:`anira::PrePostProcessor::pre_process`, because it is called at submission time: when more than one inference is queued, all of their input tensors have already been filled before the first inference runs, so any cross-inference state written there would be stale. In contrast, :cpp:func:`anira::PrePostProcessor::after_inference` runs before the inference is marked as done and before the next session-exclusive inference can be dispatched, so state captured there is guaranteed to be visible to the next :cpp:func:`anira::PrePostProcessor::before_inference` call.
+
+.. code-block:: cpp
+
+    class StatefulPrePostProcessor : public anira::PrePostProcessor {
+    public:
+        using anira::PrePostProcessor::PrePostProcessor;
+
+        virtual void before_inference(std::vector<anira::BufferF>& input,
+                                      [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
+            // Splice the hidden state captured from the previous inference
+            // into the corresponding input tensor, e.g. input[1]
+        }
+
+        virtual void after_inference(std::vector<anira::BufferF>& output,
+                                     [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
+            // Capture the updated hidden state from the corresponding
+            // output tensor, e.g. output[1], for the next inference
+        }
+    };
+
+.. note::
+    For stateful models, set ``session_exclusive_processor = true`` in the :cpp:class:`anira::InferenceConfig`. This guarantees that inferences execute strictly in submission order and never concurrently, which makes these hooks the only safe place to splice in cross-inference state.
 
 Integration with InferenceHandler
 ---------------------------------
