@@ -94,12 +94,30 @@ export class PrePostProcessor extends BaseWrapper {
     numOldSamples: number,
     offset: number
   ): void
+  /**
+   * Batched overlapping-window extraction: runs the offset extraction
+   * `numBatches` times in native code, striding the output offset by the window
+   * size (`numNewSamples + numOldSamples`) each batch. Prefer this over a JS
+   * loop for large batches — it crosses the JS↔Wasm boundary once instead of
+   * once per batch element.
+   *
+   * Mirrors :cpp:func:`anira::PrePostProcessor::pop_samples_from_buffer() <void anira::PrePostProcessor::pop_samples_from_buffer(RingBuffer&, BufferF&, size_t, size_t, size_t, size_t)>`.
+   */
+  popSamplesFromBuffer(
+    ringBuffer: PossiblePointer<RingBuffer>,
+    buffer: PossiblePointer<BufferF>,
+    numNewSamples: number,
+    numOldSamples: number,
+    offset: number,
+    numBatches: number
+  ): void
   popSamplesFromBuffer(
     ringBuffer: PossiblePointer<RingBuffer>,
     buffer: PossiblePointer<BufferF>,
     a: number,
     b?: number,
-    c?: number
+    c?: number,
+    d?: number
   ): void {
     const rbPtr = resolvePtr(ringBuffer)
     const bufPtr = resolvePtr(buffer)
@@ -122,13 +140,25 @@ export class PrePostProcessor extends BaseWrapper {
       )
       return
     }
-    this.wasmInstance._prepostprocessor_pop_samples_from_buffer_window_offset(
+    if (d === undefined) {
+      this.wasmInstance._prepostprocessor_pop_samples_from_buffer_window_offset(
+        this.ptr,
+        rbPtr,
+        bufPtr,
+        a,
+        b,
+        c
+      )
+      return
+    }
+    this.wasmInstance._prepostprocessor_pop_samples_from_buffer_batched(
       this.ptr,
       rbPtr,
       bufPtr,
       a,
       b,
-      c
+      c,
+      d
     )
   }
 

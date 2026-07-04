@@ -110,6 +110,23 @@ void prepostprocessor_pop_samples_from_buffer_window_offset(uintptr_t ptr,
 }
 
 EMSCRIPTEN_KEEPALIVE
+void prepostprocessor_pop_samples_from_buffer_batched(uintptr_t ptr,
+                                                      uintptr_t ring_buffer_ptr,
+                                                      uintptr_t buffer_ptr,
+                                                      size_t num_samples,
+                                                      size_t window_size,
+                                                      size_t offset,
+                                                      size_t num_batches) {
+    reinterpret_cast<anira::PrePostProcessor*>(ptr)->pop_samples_from_buffer(
+        *reinterpret_cast<anira::RingBuffer*>(ring_buffer_ptr),
+        *reinterpret_cast<anira::BufferF*>(buffer_ptr),
+        num_samples,
+        window_size,
+        offset,
+        num_batches);
+}
+
+EMSCRIPTEN_KEEPALIVE
 void prepostprocessor_push_samples_to_buffer(uintptr_t ptr,
                                              uintptr_t buffer_ptr,
                                              uintptr_t ring_buffer_ptr,

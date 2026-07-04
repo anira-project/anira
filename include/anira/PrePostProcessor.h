@@ -256,6 +256,39 @@ public:
                                  size_t offset);
 
     /**
+     * @brief Extracts a batch of overlapping windows in a single call
+     *
+     * Repeats the offset overload @p num_batches times, advancing the output
+     * offset by the window size (@p num_new_samples + @p num_old_samples) for
+     * each batch. This produces a contiguously laid-out batched tensor — batch
+     * @c b occupies <tt>[offset + b * window_size, offset + (b + 1) *
+     * window_size)</tt> — as required by models whose input shape is
+     * <tt>[num_batches, ..., window_size]</tt> (e.g. the HybridNN/GuitarLSTM
+     * windowing).
+     *
+     * Equivalent to calling the offset overload in a loop, but keeps the loop
+     * in native code. This matters for the WebAssembly build, where doing the
+     * loop in JavaScript incurs one JS↔Wasm boundary crossing per batch element
+     * and can dominate the audio-thread budget for large batches.
+     *
+     * @param input Source ring buffer
+     * @param output Destination tensor buffer
+     * @param num_new_samples Number of new samples to extract per channel and batch
+     * @param num_old_samples Number of past samples to retain per channel and batch
+     * @param offset Starting position in the output buffer for the first batch
+     * @param num_batches Number of consecutive windows to extract
+     *
+     * @note Real-time safe operation
+     * @see pop_samples_from_buffer(RingBuffer&, BufferF&, size_t, size_t, size_t)
+     */
+    void pop_samples_from_buffer(RingBuffer& input,
+                                 BufferF& output,
+                                 size_t num_new_samples,
+                                 size_t num_old_samples,
+                                 size_t offset,
+                                 size_t num_batches);
+
+    /**
      * @brief Writes samples from a tensor to a ring buffer
      *
      * Pushes samples from the input tensor to the ring buffer. For multi-channel outputs,

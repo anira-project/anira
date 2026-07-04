@@ -114,6 +114,22 @@ void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input,
     }
 }
 
+void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input,
+                                               BufferF& output,
+                                               size_t num_new_samples,
+                                               size_t num_old_samples,
+                                               size_t offset,
+                                               size_t num_batches) {
+    size_t const window_size = num_new_samples + num_old_samples;
+    for (size_t batch = 0; batch < num_batches; ++batch) {
+        pop_samples_from_buffer(input,
+                                output,
+                                num_new_samples,
+                                num_old_samples,
+                                offset + batch * window_size);
+    }
+}
+
 void PrePostProcessor::push_samples_to_buffer(const BufferF& input,
                                               RingBuffer& output,
                                               size_t num_samples) {

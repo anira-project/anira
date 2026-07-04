@@ -174,3 +174,23 @@ logic.
    audio block. The raw exports skip the wrapper entirely, at the
    cost of dealing in numeric pointers. Reach for them in real-time
    paths; stick with the wrappers everywhere else.
+
+.. warning::
+   When a model needs one overlapping window **per batch element**
+   (input shape ``[num_batches, ..., window_size]``, as in the
+   guitar-lstm/HybridNN demo), do **not** loop in JavaScript calling
+   ``_prepostprocessor_pop_samples_from_buffer_window_offset`` once per
+   batch. Each call crosses the JS↔WASM boundary, and for large batches
+   that per-element overhead runs on the audio render thread and can blow
+   the render-quantum budget, underrunning the whole ``AudioContext``.
+   Use the batched export instead, which runs the loop in native code in
+   a single call::
+
+     // offset stride is (numNewSamples + numOldSamples) per batch
+     this.wasmInstance._prepostprocessor_pop_samples_from_buffer_batched(
+       this.getPointer(), ringBuffer0, buffer0,
+       numNewSamples, numOldSamples, /*offset*/ 0, numBatches)
+
+   or, off the real-time path, the wrapper overload
+   ``ppProcessor.popSamplesFromBuffer(ringBuffer, buffer, numNewSamples,
+   numOldSamples, offset, numBatches)``.
