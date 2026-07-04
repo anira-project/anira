@@ -173,7 +173,9 @@ void Context::release_thread_pool() {
 }
 
 void Context::release_session(const std::shared_ptr<SessionElement>& session) {
-    session->m_initialized.store(false, std::memory_order::release);
+    // seq_cst: pairs with the worker's register-before-check in
+    // InferenceThread::process_dequeued_inference().
+    session->m_initialized.store(false, std::memory_order::seq_cst);
 
     drain_inference_queue(session);
 
@@ -222,7 +224,9 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
 void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
                               HostConfig new_config,
                               std::vector<long> custom_latency) {
-    session->m_initialized.store(false, std::memory_order::release);
+    // seq_cst: pairs with the worker's register-before-check in
+    // InferenceThread::process_dequeued_inference().
+    session->m_initialized.store(false, std::memory_order::seq_cst);
 
     drain_inference_queue(session);
 
@@ -442,7 +446,10 @@ void Context::start_thread_pool() {
 }
 
 void Context::drain_inference_queue(const std::shared_ptr<SessionElement>& session) {
-    while (session->m_active_inferences.load(std::memory_order::acquire) != 0) {
+    // seq_cst: pairs with the worker's register-before-check in
+    // InferenceThread::process_dequeued_inference() — either the worker sees
+    // m_initialized == false and skips, or this load sees its increment and waits.
+    while (session->m_active_inferences.load(std::memory_order::seq_cst) != 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
 
@@ -504,7 +511,9 @@ void Context::release_processor(InferenceConfig& inference_config,
 }
 
 void Context::reset_session(const std::shared_ptr<SessionElement>& session) {
-    session->m_initialized.store(false, std::memory_order::release);
+    // seq_cst: pairs with the worker's register-before-check in
+    // InferenceThread::process_dequeued_inference().
+    session->m_initialized.store(false, std::memory_order::seq_cst);
 
     drain_inference_queue(session);
 

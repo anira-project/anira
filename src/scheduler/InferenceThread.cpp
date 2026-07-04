@@ -143,15 +143,24 @@ bool InferenceThread::execute() {
 }
 
 void InferenceThread::process_dequeued_inference() {
-    if (m_inference_data.m_session->m_initialized.load(std::memory_order::acquire)) {
-        do_inference(m_inference_data.m_session, m_inference_data.m_thread_safe_struct);
+    auto& session = m_inference_data.m_session;
+    // Register the job BEFORE checking m_initialized, so a concurrent
+    // drain_inference_queue() can never miss it: either this thread observes the
+    // reset and skips, or the drain observes the increment and waits. Both sides
+    // do store-then-load on the two variables (store-buffering pattern), so the
+    // paired accesses must be seq_cst — with release/acquire alone the store-load
+    // reordering lets both sides read stale values and a "ghost" inference could
+    // run concurrently with SessionElement::clear().
+    session->m_active_inferences.fetch_add(1, std::memory_order::seq_cst);
+    if (session->m_initialized.load(std::memory_order::seq_cst)) {
+        do_inference(session, m_inference_data.m_thread_safe_struct);
     }
+    session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 }
 
 void InferenceThread::do_inference(
     const std::shared_ptr<SessionElement>& session,
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct) {
-    session->m_active_inferences.fetch_add(1, std::memory_order::release);
     InferenceBackend const backend = session->m_current_backend.load(std::memory_order_relaxed);
     session->m_pp_processor.before_inference(thread_safe_struct->m_tensor_input_data, backend);
     inference(session,
