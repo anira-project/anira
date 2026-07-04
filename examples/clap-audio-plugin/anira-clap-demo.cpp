@@ -306,4 +306,13 @@ uint32_t AniraClapPluginExample::latencyGet() const noexcept {
     return m_plugin_latency;
 }
 
+bool AniraClapPluginExample::renderSetMode(clap_plugin_render_mode mode) noexcept {
+    // Called on the main thread when the host switches the plugin between realtime and
+    // offline (bounce) rendering. Forward it to anira so process() above blocks until
+    // inference actually completes in offline mode, instead of returning a possibly
+    // incomplete block.
+    m_inference_handler.set_non_realtime(mode == CLAP_RENDER_OFFLINE);
+    return true;
+}
+
 }  // namespace clap_plugin_example

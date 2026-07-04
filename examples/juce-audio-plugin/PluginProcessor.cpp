@@ -202,6 +202,20 @@ void AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     juce::ScopedNoDenormals noDenormals;
 
+    // When the host bounces offline, isNonRealtime() becomes true and processBlock() is no
+    // longer paced to wall-clock time. Forward that to anira so process()/pop_data() below
+    // block until inference actually completes, instead of faking real-time pacing with a
+    // sleep that still risks an incomplete (dropped/zero-filled) block under load.
+    const bool host_is_non_realtime = isNonRealtime();
+    if (host_is_non_realtime != non_realtime.exchange(host_is_non_realtime)) {
+#if MODEL_TO_USE != 7
+        inference_handler.set_non_realtime(host_is_non_realtime);
+#else
+        inference_handler_encoder.set_non_realtime(host_is_non_realtime);
+        inference_handler_decoder.set_non_realtime(host_is_non_realtime);
+#endif
+    }
+
     dry_wet_mixer.pushDrySamples(buffer);
 
 #if MODEL_TO_USE != 7
@@ -246,7 +260,6 @@ void AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // the post-processor. float peak_gain = pp_processor.get_output(1, 0); std::cout << "peak_gain:
     // " << peak_gain << std::endl;
 #endif
-    if (isNonRealtime()) { processesNonRealtime(buffer); }
 }
 
 //==============================================================================
@@ -328,13 +341,6 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String& parameterID
         pp_processor.set_input(newValue, 1, 0);
 #endif
     }
-}
-
-void AudioPluginAudioProcessor::processesNonRealtime(const juce::AudioBuffer<float>& buffer) const {
-    double durationInSeconds = static_cast<double>(buffer.getNumSamples()) / getSampleRate();
-    auto durationInMilliseconds =
-        std::chrono::duration<double, std::milli>(durationInSeconds * 1000);
-    std::this_thread::sleep_for(durationInMilliseconds);
 }
 
 //==============================================================================

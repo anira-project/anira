@@ -81,8 +81,6 @@ public:
 private:
     void parameterChanged(const juce::String& parameterID, float newValue) override;
 
-    void processesNonRealtime(const juce::AudioBuffer<float>& buffer) const;
-
 private:
     juce::AudioProcessorValueTreeState parameters;
 
@@ -167,6 +165,8 @@ private:
 #endif
     juce::dsp::DryWetMixer<float> dry_wet_mixer;
 
+    // Tracks the host's offline-bounce state so set_non_realtime() is only toggled when
+    // isNonRealtime() actually changes, rather than on every processBlock() call.
     std::atomic<bool> non_realtime = false;
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)

@@ -63,6 +63,9 @@ public:
     bool implementsLatency() const noexcept override;
     uint32_t latencyGet() const noexcept override;
 
+    bool implementsRender() const noexcept override { return true; }
+    bool renderSetMode(clap_plugin_render_mode mode) noexcept override;
+
 private:
     double m_param_dry_wet{100.0}, m_param_backend{3};
     std::unordered_map<clap_id, double*> m_param_to_value;

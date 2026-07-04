@@ -8,7 +8,6 @@ modules/onnxruntime*
 modules/tensorflow*
 modules/LiteRt*
 cmake-build*
-.vscode
 logs/
 results/
 venv/

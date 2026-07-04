@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The JUCE and CLAP example plugins now call `InferenceHandler::set_non_realtime()` when the host switches to offline/bounce rendering (JUCE's `isNonRealtime()`, CLAP's `clap.render` extension) so `process()`/`pop_data()` block until inference genuinely completes. Previously the JUCE example only faked offline pacing by sleeping for the buffer's wall-clock duration -- which does not guarantee complete output -- and the CLAP example did not implement the render extension at all.
+
 ## [v2.2.1] - 2026-07-04
 
 ### Added
