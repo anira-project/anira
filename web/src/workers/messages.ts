@@ -63,10 +63,31 @@ export type ProcessorUnregisteredResponse = {
   type: 'processorUnregistered'
 }
 
+export type RegisterPrePostProcessorMessage = {
+  type: 'registerPrePostProcessor'
+  prePostProcessorPtr: number
+  className?: string
+}
+
+export type PrePostProcessorRegisteredResponse = {
+  type: 'prePostProcessorRegistered'
+}
+
+export type UnregisterPrePostProcessorMessage = {
+  type: 'unregisterPrePostProcessor'
+  prePostProcessorPtr: number
+}
+
+export type PrePostProcessorUnregisteredResponse = {
+  type: 'prePostProcessorUnregistered'
+}
+
 export type InferenceWorkerMessage =
   | InitInferenceWorkerMessage
   | RegisterProcessorMessage
   | UnregisterProcessorMessage
+  | RegisterPrePostProcessorMessage
+  | UnregisterPrePostProcessorMessage
   | StartMessage
   | DestroyMessage
 

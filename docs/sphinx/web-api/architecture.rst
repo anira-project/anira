@@ -99,9 +99,14 @@ you provide a custom worklet file. See :doc:`custom_audio_worklets`.
 
 .. note::
    :js:class:`JSPrePostProcessor` subclasses are constructed on the
-   audio worklet thread, not on the main thread. Pre- and
-   post-processing run in the real-time callback, so the JS object that
-   implements them must live where that callback runs.
+   thread where their hooks run, not on the main thread. ``preProcess`` /
+   ``postProcess`` run in the audio worklet's real-time callback, so a
+   subclass overriding them is constructed on the audio worklet thread.
+   ``beforeInference`` / ``afterInference`` run on the inference worker
+   instead, so a subclass overriding those is constructed there — via
+   :js:meth:`AniraWeb.registerPrePostProcessor`, see
+   :doc:`custom_pre_post_processing`. A subclass that does both is
+   constructed on both threads over the one shared C++ object.
 
 Three Customization Axes
 ------------------------
@@ -121,9 +126,13 @@ each with its own page:
    (:js:class:`JSBackendBase`, :js:class:`ONNXRuntimeWebBackend`) and
    user-written backends both run on the inference worker.
 
-Custom pre/post processing **requires** a custom worklet (because the
-subclass must be instantiated on the audio thread); custom worklets and
-custom backends are otherwise independent and can be combined freely.
+Customizing ``preProcess`` / ``postProcess`` **requires** a custom
+worklet (the subclass must be instantiated on the audio thread);
+customizing ``beforeInference`` / ``afterInference`` likewise **requires**
+a custom inference worker (the subclass must be instantiated there, see
+:doc:`custom_pre_post_processing`). Custom worklets, custom inference
+workers, and custom backends are otherwise independent and can be combined
+freely.
 
 The JS ↔ WASM Bridge
 --------------------

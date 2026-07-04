@@ -64,15 +64,26 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
           ) => {
             const prePostProcessor = this.prePostRegistry.get(prePostProcessorPtr)
             if (prePostProcessor) {
-              if (phase === 0) {
-                prePostProcessor.preProcess(inputPtr, outputPtr, backend)
-                return
+              // pre/post_process (phases 0/1) fire here on the audio worklet.
+              // before/after_inference (phases 2/3) fire on the inference
+              // worker instead, but are dispatched for symmetry with the
+              // inference worker's handler.
+              switch (phase) {
+                case 0:
+                  prePostProcessor.preProcess(inputPtr, outputPtr, backend)
+                  return
+                case 1:
+                  prePostProcessor.postProcess(inputPtr, outputPtr, backend)
+                  return
+                case 2:
+                  prePostProcessor.beforeInference(inputPtr, backend)
+                  return
+                case 3:
+                  prePostProcessor.afterInference(outputPtr, backend)
+                  return
+                default:
+                  throw new Error(`Unknown pre/post phase: ${phase}`)
               }
-              if (phase === 1) {
-                prePostProcessor.postProcess(inputPtr, outputPtr, backend)
-                return
-              }
-              throw new Error(`Unknown pre/post phase: ${phase}`)
             }
 
             throw new Error(

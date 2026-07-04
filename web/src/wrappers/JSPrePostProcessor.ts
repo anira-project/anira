@@ -56,4 +56,47 @@ export class JSPrePostProcessor extends PrePostProcessor {
       backend
     )
   }
+
+  /**
+   * Called on the **inference worker** immediately before the backend runs.
+   * Override in a subclass to patch the model's input tensors with data that
+   * must reflect the previous inference (e.g. recurrent state feedback) — see
+   * :cpp:func:`anira::PrePostProcessor::before_inference`. The default forwards
+   * to the C++ base (a no-op). Only fires once the subclass is registered on
+   * the inference worker via :js:meth:`AniraWeb.registerPrePostProcessor`.
+   */
+  override beforeInference(buffers: PossiblePointer<VectorBufferF>, backend: number): void {
+    this.wasmInstance._jsprepostprocessor_wasm_before_inference(
+      this.ptr,
+      resolvePtr(buffers),
+      backend
+    )
+  }
+
+  /**
+   * Called on the **inference worker** immediately after the backend runs.
+   * Override in a subclass to capture the model's output tensors that must feed
+   * the next inference (e.g. recurrent state feedback) — see
+   * :cpp:func:`anira::PrePostProcessor::after_inference`. The default forwards
+   * to the C++ base (a no-op).
+   */
+  override afterInference(buffers: PossiblePointer<VectorBufferF>, backend: number): void {
+    this.wasmInstance._jsprepostprocessor_wasm_after_inference(
+      this.ptr,
+      resolvePtr(buffers),
+      backend
+    )
+  }
+
+  /**
+   * Enable or disable the C++ ``before_inference`` / ``after_inference`` JS
+   * callbacks for this processor. When disabled (the default) the C++ hooks
+   * short-circuit to the base no-op without crossing into JS, so
+   * :js:class:`JSPrePostProcessor` instances used only for pre/post-processing
+   * pay nothing on the inference thread. The inference worker flips this on when
+   * the processor is registered there (:js:meth:`AniraWeb.registerPrePostProcessor`).
+   */
+  setInferenceHooks(enabled: boolean): void {
+    this.wasmInstance._jsprepostprocessor_set_inference_hooks(this.ptr, enabled ? 1 : 0)
+  }
 }

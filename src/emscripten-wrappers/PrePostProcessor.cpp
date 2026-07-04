@@ -48,6 +48,24 @@ void prepostprocessor_post_process(uintptr_t ptr,
         static_cast<anira::InferenceBackend>(backend));
 }
 
+// Inference-thread hooks: each takes a single tensor buffer vector (input
+// tensors for before_inference, output tensors for after_inference). The base
+// implementations are no-ops; these exports exist for API symmetry with
+// pre/post_process and let JS drive the default (base-class) behavior.
+EMSCRIPTEN_KEEPALIVE
+void prepostprocessor_before_inference(uintptr_t ptr, uintptr_t buffers_ptr, int backend) {
+    reinterpret_cast<anira::PrePostProcessor*>(ptr)->before_inference(
+        *reinterpret_cast<std::vector<anira::BufferF>*>(buffers_ptr),
+        static_cast<anira::InferenceBackend>(backend));
+}
+
+EMSCRIPTEN_KEEPALIVE
+void prepostprocessor_after_inference(uintptr_t ptr, uintptr_t buffers_ptr, int backend) {
+    reinterpret_cast<anira::PrePostProcessor*>(ptr)->after_inference(
+        *reinterpret_cast<std::vector<anira::BufferF>*>(buffers_ptr),
+        static_cast<anira::InferenceBackend>(backend));
+}
+
 // Input/Output configuration
 EMSCRIPTEN_KEEPALIVE
 void prepostprocessor_set_input(uintptr_t ptr, float value, size_t channel, size_t tensor_index) {

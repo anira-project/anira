@@ -53,6 +53,32 @@ export class PrePostProcessor extends BaseWrapper {
     )
   }
 
+  /**
+   * Mirrors :cpp:func:`anira::PrePostProcessor::before_inference`. Receives the
+   * model's input tensors (a ``VectorBufferF``) about to be fed to the backend.
+   * Runs on the inference worker, not the audio worklet.
+   */
+  beforeInference(buffers: PossiblePointer<VectorBufferF>, backend: number): void {
+    this.wasmInstance._prepostprocessor_before_inference(
+      this.ptr,
+      resolvePtr(buffers),
+      backend
+    )
+  }
+
+  /**
+   * Mirrors :cpp:func:`anira::PrePostProcessor::after_inference`. Receives the
+   * model's output tensors (a ``VectorBufferF``) produced by the backend.
+   * Runs on the inference worker, not the audio worklet.
+   */
+  afterInference(buffers: PossiblePointer<VectorBufferF>, backend: number): void {
+    this.wasmInstance._prepostprocessor_after_inference(
+      this.ptr,
+      resolvePtr(buffers),
+      backend
+    )
+  }
+
   /** Mirrors :cpp:func:`anira::PrePostProcessor::set_input`. */
   setInput(value: number, channel: number, tensorIndex: number): void {
     this.wasmInstance._prepostprocessor_set_input(this.ptr, value, channel, tensorIndex)

@@ -13,8 +13,12 @@ export type {
   DoneResponse,
   InferenceWorkerMessage,
   InitInferenceWorkerMessage,
+  PrePostProcessorRegisteredResponse,
+  PrePostProcessorUnregisteredResponse,
   ReadyRespose,
+  RegisterPrePostProcessorMessage,
   RegisterProcessorMessage,
   StartMessage,
   StoppedResponse,
+  UnregisterPrePostProcessorMessage,
 } from './workers/messages'

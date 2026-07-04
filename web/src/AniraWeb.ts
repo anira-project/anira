@@ -12,7 +12,9 @@ import type {
   AudioWorkletIOConfig,
   DestroyMessage,
   InitInferenceWorkerMessage,
+  RegisterPrePostProcessorMessage,
   RegisterProcessorMessage,
+  UnregisterPrePostProcessorMessage,
   UnregisterProcessorMessage,
   StartMessage,
 } from './workers/messages'
@@ -63,10 +65,17 @@ export type ProcessorDescriptor = {
   className: string
 }
 
+export type PrePostProcessorDescriptor = {
+  prePostProcessor: JSPrePostProcessor
+  className: string
+}
+
 export type InferenceWorker = {
   worker: Worker
   registerProcessor: (descriptor: ProcessorDescriptor) => Promise<void>
   unregisterProcessor: (backend: JSBackendBase) => Promise<void>
+  registerPrePostProcessor: (descriptor: PrePostProcessorDescriptor) => Promise<void>
+  unregisterPrePostProcessor: (prePostProcessor: JSPrePostProcessor) => Promise<void>
   stop: () => Promise<void>
 }
 
@@ -75,6 +84,7 @@ export class AniraWeb {
   protected memory: WebAssembly.Memory
   protected wasmBinary: ArrayBuffer | null = null
   private registeredProcessors: ProcessorDescriptor[] = []
+  private registeredPrePostProcessors: PrePostProcessorDescriptor[] = []
   private activeWorkers: InferenceWorker[] = []
 
   InferenceBackend: InferenceBackendValues
@@ -280,6 +290,43 @@ export class AniraWeb {
   }
 
   /**
+   * Register a :js:class:`JSPrePostProcessor` subclass so its
+   * ``beforeInference`` / ``afterInference`` hooks run on the inference
+   * worker(s). These hooks fire on the inference thread — not the audio
+   * worklet where ``preProcess`` / ``postProcess`` run — so the subclass has
+   * to be reconstructed there; ``className`` must match a key passed to
+   * ``setupInferenceWorker(processorClasses, prePostProcessorClasses)`` in the
+   * worker file. The descriptor is forwarded to all currently-running inference
+   * workers and replayed on any spun up later. Needed only for stateful models
+   * that splice cross-inference state (e.g. recurrent hidden state); pure
+   * pre/post customization does not require it.
+   */
+  async registerPrePostProcessor(
+    prePostProcessor: JSPrePostProcessor,
+    className: string
+  ): Promise<void> {
+    const descriptor: PrePostProcessorDescriptor = { prePostProcessor, className }
+    this.registeredPrePostProcessors.push(descriptor)
+    await Promise.all(this.activeWorkers.map((w) => w.registerPrePostProcessor(descriptor)))
+  }
+
+  /**
+   * Inverse of :js:meth:`registerPrePostProcessor`. Removes the descriptor from
+   * the main-thread registry and instructs all active inference workers to stop
+   * running the JS inference hooks for this processor (the C++ object itself is
+   * owned by the caller and is not freed here — see the lifecycle docs).
+   */
+  async unregisterPrePostProcessor(prePostProcessor: JSPrePostProcessor): Promise<void> {
+    const idx = this.registeredPrePostProcessors.findIndex(
+      (d) => d.prePostProcessor === prePostProcessor
+    )
+    if (idx !== -1) this.registeredPrePostProcessors.splice(idx, 1)
+    await Promise.all(
+      this.activeWorkers.map((w) => w.unregisterPrePostProcessor(prePostProcessor))
+    )
+  }
+
+  /**
    * Return the inference workers currently spawned by this
    * ``AniraWeb``. The list is updated automatically when
    * :js:meth:`spinUpInferenceWorker` adds a worker or
@@ -335,6 +382,15 @@ export class AniraWeb {
       await waitForWorkerMessage(worker, 'processorRegistered')
     }
 
+    for (const { prePostProcessor, className } of this.registeredPrePostProcessors) {
+      worker.postMessage({
+        type: 'registerPrePostProcessor',
+        prePostProcessorPtr: prePostProcessor.getPointer(),
+        className,
+      } satisfies RegisterPrePostProcessorMessage)
+      await waitForWorkerMessage(worker, 'prePostProcessorRegistered')
+    }
+
     inferenceThread.start()
     worker.postMessage({ type: 'start' } satisfies StartMessage)
 
@@ -364,6 +420,33 @@ export class AniraWeb {
           processorPtr: backend.getPointer(),
         } satisfies UnregisterProcessorMessage)
         await waitForWorkerMessage(worker, 'processorUnregistered')
+
+        inferenceThread.start()
+        worker.postMessage({ type: 'start' } satisfies StartMessage)
+      },
+      registerPrePostProcessor: async (descriptor: PrePostProcessorDescriptor) => {
+        inferenceThread.stop()
+        await waitForWorkerMessage(worker, 'stopped')
+
+        worker.postMessage({
+          type: 'registerPrePostProcessor',
+          prePostProcessorPtr: descriptor.prePostProcessor.getPointer(),
+          className: descriptor.className,
+        } satisfies RegisterPrePostProcessorMessage)
+        await waitForWorkerMessage(worker, 'prePostProcessorRegistered')
+
+        inferenceThread.start()
+        worker.postMessage({ type: 'start' } satisfies StartMessage)
+      },
+      unregisterPrePostProcessor: async (prePostProcessor: JSPrePostProcessor) => {
+        inferenceThread.stop()
+        await waitForWorkerMessage(worker, 'stopped')
+
+        worker.postMessage({
+          type: 'unregisterPrePostProcessor',
+          prePostProcessorPtr: prePostProcessor.getPointer(),
+        } satisfies UnregisterPrePostProcessorMessage)
+        await waitForWorkerMessage(worker, 'prePostProcessorUnregistered')
 
         inferenceThread.start()
         worker.postMessage({ type: 'start' } satisfies StartMessage)
