@@ -161,13 +161,13 @@ void ProcessBlockFixture::repetition_step(int total_repetitions) {
                  "---------------------------------------------------------\n"
               << '\n';
     if (total_repetitions > 0 && m_repetition == total_repetitions && m_num_iterations_total > 0) {
-        std::cout << "\n\033[31mSummary/" << m_benchmark_name << "/" << m_model_name << "/"
+        std::cout << "\033[31mSummary/" << m_benchmark_name << "/" << m_model_name << "/"
                   << m_inference_backend_name << "/" << m_buffer_size << "\t\t\t" << std::fixed
                   << std::setprecision(4) << "rtf_mean: " << m_rtf_sum / m_num_iterations_total
                   << " | rtf_max: " << m_rtf_max << " | underruns: " << m_num_underruns << "/"
                   << m_num_iterations_total << "\033[0m" << '\n';
         std::cout
-            << "-------------------------------------------------------------------------------"
+            << "\n-------------------------------------------------------------------------------"
                "---------------------------------------------------------\n"
             << '\n';
     }

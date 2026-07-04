@@ -127,16 +127,16 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
                      "the sched_priority to "
                   << sch_params.sched_priority << ". Error : " << errno << '\n';
         LOG_WARNING << "[WARNING] Give rtprio privileges to the user by adding the user to the "
-                    "realtime/audio group. Or run the application as root."
-                 << '\n';
+                       "realtime/audio group. Or run the application as root."
+                    << '\n';
         LOG_WARNING << "[WARNING] Instead, trying to set increased nice value for SCHED_OTHER..."
-                 << '\n';
+                    << '\n';
 
         ret = setpriority(PRIO_PROCESS, 0, -10);
         if (ret != 0) {
             LOG_ERROR << "[ERROR] Failed to set increased nice value. Error : " << errno << '\n';
             LOG_WARNING << "[WARNING] Using default nice value: " << getpriority(PRIO_PROCESS, 0)
-                     << '\n';
+                        << '\n';
         }
     }
 
@@ -161,7 +161,7 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
     pthread_get_qos_class_np(pthread_self(), &qos_class, &relative_priority);
 
     LOG_WARNING << "[WARNING] Fallback to default QOS class and relative priority: " << qos_class
-             << " " << relative_priority << std::endl;
+                << " " << relative_priority << std::endl;
     return;
 #endif
 }

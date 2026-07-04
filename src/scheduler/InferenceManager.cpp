@@ -141,9 +141,9 @@ size_t* InferenceManager::process_output(float* const* const* output_data, size_
             }
             if (missing_samples_before - m_missing_samples[i] > 0) {
                 LOG_WARNING << "[WARNING] Catch up missing samples: "
-                         << missing_samples_before - m_missing_samples[i]
-                         << " in session: " << m_session->m_session_id << " for tensor index: " << i
-                         << "!" << '\n';
+                            << missing_samples_before - m_missing_samples[i]
+                            << " in session: " << m_session->m_session_id
+                            << " for tensor index: " << i << "!" << '\n';
             }
         }
     }
@@ -185,8 +185,8 @@ size_t* InferenceManager::process_output(float* const* const* output_data, size_
             if (m_inference_config.get_postprocess_output_size()[i] > 0) {
                 m_missing_samples[i] += num_samples[i];
                 LOG_WARNING << "[WARNING] Missing samples: " << m_missing_samples[i]
-                         << " in session: " << m_session->m_session_id << " for tensor index: " << i
-                         << "!" << '\n';
+                            << " in session: " << m_session->m_session_id
+                            << " for tensor index: " << i << "!" << '\n';
             }
             num_samples[i] = 0;  // Set num_samples to 0 if not enough samples are available
         }
