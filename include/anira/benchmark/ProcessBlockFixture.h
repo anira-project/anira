@@ -126,8 +126,14 @@ public:
      *
      * Performs cleanup and logging tasks at the end of a benchmark repetition.
      * Increments the repetition counter and provides visual separation in the output.
+     * When total_repetitions is given and the final repetition just finished, prints a
+     * summary line with the real-time factor and underrun count over all iterations of
+     * all repetitions of the current benchmark instance.
+     *
+     * @param total_repetitions Total number of repetitions of this benchmark, 0 disables
+     * the summary line
      */
-    void repetition_step();
+    void repetition_step(int total_repetitions = 0);
 
     /**
      * @brief Static shared pointer to the inference handler used across benchmark instances
@@ -156,6 +162,16 @@ private:
         std::chrono::duration<double, std::milli>(0);  ///< Runtime of the last repetition
     int m_prev_num_received_samples = 0;   ///< Number of samples received at the start of current
                                            ///< iteration
+    double m_rtf_sum = 0.0;                ///< Sum of the real-time factors of all iterations of
+                                           ///< the current benchmark instance
+    double m_rtf_max = 0.0;                ///< Largest real-time factor of all iterations of the
+                                           ///< current benchmark instance
+    int m_num_underruns = 0;               ///< Number of iterations of the current benchmark
+                                           ///< instance that took longer than the host buffer
+                                           ///< period
+    int m_num_iterations_total = 0;        ///< Number of iterations of the current benchmark
+                                           ///< instance across all repetitions
+    std::string m_benchmark_name;          ///< Name of the currently running benchmark
     std::string m_model_name;              ///< Name of the model being benchmarked
     std::string m_inference_backend_name;  ///< Name of the inference backend being used
     InferenceBackend m_inference_backend;  ///< Current inference backend configuration

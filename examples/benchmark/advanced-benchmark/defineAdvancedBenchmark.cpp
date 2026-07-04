@@ -106,7 +106,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
 
         interation_step(start, end, state);
     }
-    repetition_step();
+    repetition_step(NUM_REPETITIONS);
 
     delete my_pp_processor;
 }

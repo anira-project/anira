@@ -69,7 +69,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
 
         interation_step(start, end, state);
     }
-    repetition_step();
+    repetition_step(NUM_REPETITIONS);
 }
 
 // /* ============================================================ *

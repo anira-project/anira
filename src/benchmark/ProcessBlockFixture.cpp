@@ -5,6 +5,7 @@
 #include <anira/utils/helperFunctions.h>
 #include <benchmark/benchmark.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <iomanip>
@@ -42,6 +43,10 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
     if (m_inference_backend != inference_backend || m_inference_config != inference_config ||
         m_host_config != host_config) {
         m_repetition = 0;
+        m_rtf_sum = 0.0;
+        m_rtf_max = 0.0;
+        m_num_underruns = 0;
+        m_num_iterations_total = 0;
         if (m_inference_backend != inference_backend || m_inference_config != inference_config) {
             m_inference_backend = inference_backend;
             m_inference_config = inference_config;
@@ -133,15 +138,32 @@ void ProcessBlockFixture::interation_step(const std::chrono::steady_clock::time_
 
     m_runtime_last_repetition += elapsed_time_ms;
 
+    double const buffer_period_seconds =
+        (double)m_host_config.m_buffer_size / (double)m_host_config.m_sample_rate;
+    double const rtf = elapsed_seconds.count() / buffer_period_seconds;
+    m_benchmark_name = state.name();
+    m_rtf_sum += rtf;
+    m_rtf_max = std::max(m_rtf_max, rtf);
+    m_num_iterations_total++;
+    if (rtf > 1.0) { m_num_underruns++; }
+
     std::cout << "SingleIteration/" << state.name() << "/" << m_model_name << "/"
               << m_inference_backend_name << "/" << state.range(0) << "/iteration:" << m_iteration
               << "/repetition:" << m_repetition << "\t\t\t" << std::fixed << std::setprecision(4)
-              << elapsed_time_ms.count() << " ms" << '\n';
+              << elapsed_time_ms.count() << " ms | RTF: " << rtf << (rtf > 1.0 ? " [underrun]" : "")
+              << '\n';
     m_iteration++;
 }
 
-void ProcessBlockFixture::repetition_step() {
+void ProcessBlockFixture::repetition_step(int total_repetitions) {
     m_repetition += 1;
+    if (total_repetitions > 0 && m_repetition == total_repetitions && m_num_iterations_total > 0) {
+        std::cout << "\nSummary/" << m_benchmark_name << "/" << m_model_name << "/"
+                  << m_inference_backend_name << "/" << m_buffer_size << "\t\t\t" << std::fixed
+                  << std::setprecision(4) << "rtf_mean: " << m_rtf_sum / m_num_iterations_total
+                  << " | rtf_max: " << m_rtf_max << " | underruns: " << m_num_underruns << "/"
+                  << m_num_iterations_total << '\n';
+    }
     std::cout << "\n-------------------------------------------------------------------------------"
                  "---------------------------------------------------------\n"
               << '\n';
