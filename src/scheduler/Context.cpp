@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -72,8 +73,31 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
         m_context = std::make_shared<Context>(sanitized_config);
         LOG_INFO << "[INFO] Anira version: " << m_context->m_context_config.m_anira_version << '\n';
     } else {
-        // TODO: Better error handling
-        if (m_context->m_context_config.m_anira_version != sanitized_config.m_anira_version) {}
+        if (m_context->m_context_config.m_anira_version != sanitized_config.m_anira_version) {
+            const std::string& context_version = m_context->m_context_config.m_anira_version;
+            const std::string& session_version = sanitized_config.m_anira_version;
+            // Major version differences imply API/ABI incompatibility; anything
+            // below that is only worth a warning.
+            if (context_version.substr(0, context_version.find('.')) !=
+                session_version.substr(0, session_version.find('.'))) {
+                LOG_ERROR << "[ERROR] Anira version mismatch: the context was created by anira "
+                             "version '"
+                          << context_version << "' but a new session was compiled against '"
+                          << session_version
+                          << "'. The major versions differ, so the API/ABI is likely "
+                             "incompatible. Make sure all components in this process use the "
+                             "same anira version."
+                          << '\n';
+            } else {
+                LOG_WARNING << "[WARNING] Anira version mismatch: the context was created by "
+                               "anira version '"
+                            << context_version << "' but a new session was compiled against '"
+                            << session_version
+                            << "'. The major versions match, so this is likely compatible, but "
+                               "aligning the anira versions is recommended."
+                            << '\n';
+            }
+        }
         if (m_context->m_context_config.m_enabled_backends != sanitized_config.m_enabled_backends) {
             LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!"
                       << '\n';
