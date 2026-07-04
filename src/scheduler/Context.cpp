@@ -111,8 +111,9 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
                         << "'. The log level is process-global and the lowest (most verbose) "
                            "requested level wins, so '"
                         << to_string(log_level)
-                        << "' is now in effect. Align the ContextConfig of all sessions to "
-                           "silence this warning."
+                        << "' is now in effect. Note that the inference backends were already "
+                           "initialized with the first context's log level and keep it. Align "
+                           "the ContextConfig of all sessions to silence this warning."
                         << '\n';
         }
         // Keep the stored config in sync with the level actually in effect (the
