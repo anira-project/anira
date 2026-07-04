@@ -24,6 +24,8 @@ namespace anira::benchmark {
  * Custom)
  * - Benchmarking with various audio buffer sizes and sample rates
  * - Detailed timing measurements and reporting for each iteration and repetition
+ * - Real-time factor (RTF) and underrun reporting per iteration, with an optional summary
+ * line per benchmark instance after the final repetition
  * - Automated test data generation and buffer management
  * - Cross-platform timing precision handling
  *

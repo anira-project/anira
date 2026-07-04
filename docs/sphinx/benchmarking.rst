@@ -106,13 +106,16 @@ Implement the main measurement loop using the Google Benchmark framework's state
             // Record the measured runtime
             interation_step(start, end, state);
         }
-        
+
         // Clean up after all iterations complete
-        repetition_step();
+        repetition_step(NUM_REPETITIONS);
     }
 
 .. note::
     The :cpp:func:`anira::InferenceHandler::process` method operates asynchronously. To ensure accurate timing measurements, you must wait for the :cpp:func:`buffer_processed` method to return ``true`` before stopping the timer. This guarantees that the measured time includes the complete processing duration, not just the time to initiate processing.
+
+.. note::
+    Each recorded iteration also prints its real-time factor (RTF) — the measured runtime divided by the host buffer period — and marks iterations that exceeded the buffer period with ``[underrun]``. When the total number of repetitions is passed to :cpp:func:`repetition_step`, the fixture additionally prints a ``Summary/...`` line after the final repetition, reporting ``rtf_mean``, ``rtf_max`` and the underrun count over all iterations of all repetitions of the current benchmark instance. Calling :cpp:func:`repetition_step` without an argument disables the summary line.
 
 3. Register the Benchmark
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -395,9 +398,11 @@ Interpreting Results
 Benchmark results include:
 
 - **Mean Processing Time**: Average time per process call
-- **Standard Deviation**: Timing variability indicator  
+- **Standard Deviation**: Timing variability indicator
 - **Min/Max Times**: Best and worst case performance
 - **Iterations/Repetitions**: Statistical confidence measures
+- **Real-Time Factor (RTF)**: Measured runtime divided by the host buffer period, printed per iteration. An RTF above ``1.0`` means the block took longer to process than the audio it represents — such iterations are marked ``[underrun]``.
+- **Underruns**: Number of iterations that exceeded the buffer period, reported in the ``Summary/...`` line per benchmark instance (see above).
 
 Use these metrics to:
 
@@ -405,4 +410,7 @@ Use these metrics to:
 - Compare backend performance
 - Identify optimal buffer sizes
 - Detect performance regressions
+
+.. note::
+    The RTF compares a single blocking round-trip (``process()`` call plus waiting for the result) against one buffer period. This is the strictest real-time criterion: anira's scheduler tolerates inference latencies of multiple buffer periods in exchange for added latency, so an RTF above ``1.0`` does not necessarily mean audible dropouts in a real host — see :doc:`latency` for details.
 
