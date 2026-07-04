@@ -47,6 +47,11 @@ SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<size_t>& te
 }
 
 void SessionElement::clear() {
+    // Precondition: no task of this session is executing or queued — every caller
+    // (Context::prepare_session/release_session/reset_session) runs
+    // Context::drain_inference_queue() first. So no new completion signal can
+    // arrive while we reset the structs below; stale signals are drained, never
+    // waited on.
     for (auto& buffer : m_send_buffer) { buffer.clear_with_positions(); }
     for (auto& buffer : m_receive_buffer) { buffer.clear_with_positions(); }
     m_time_stamps.clear();
@@ -60,7 +65,10 @@ void SessionElement::clear() {
     for (auto& inference : m_inference_queue) {
         inference->m_free.store(true, std::memory_order_relaxed);
         if (m_inference_config.m_blocking_ratio > 0.f) {
-            inference->m_done_semaphore.acquire();
+            // Drain stale completion signals without blocking: a struct that has no
+            // unconsumed signal (the common case) has a semaphore count of 0, and a
+            // blocking acquire() would deadlock here.
+            while (inference->m_done_semaphore.try_acquire()) {}
         } else {
             inference->m_done_atomic.store(false, std::memory_order_relaxed);
         }
