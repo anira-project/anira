@@ -73,8 +73,7 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
     // supplied externally (JS Workers via AniraWeb.spinUpInferenceWorker(),
     // backed by Context::make_inference_thread()).
     if (sanitized_config.m_num_threads > 0) {
-        LOG_WARNING << "[WARNING] ContextConfig::m_num_threads = "
-                    << sanitized_config.m_num_threads
+        LOG_WARNING << "[WARNING] ContextConfig::m_num_threads = " << sanitized_config.m_num_threads
                     << " is not supported on WebAssembly builds: the context cannot run "
                        "inference threads; they must be supplied externally (e.g. "
                        "AniraWeb.spinUpInferenceWorker()). Using num_threads = 0."

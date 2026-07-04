@@ -2,6 +2,12 @@
 #define ANIRA_SYSTEM_HIGHPRIORITYTHREAD_H
 
 #if WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #elif __linux__
 #include <pthread.h>
