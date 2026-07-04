@@ -157,16 +157,20 @@ void ProcessBlockFixture::interation_step(const std::chrono::steady_clock::time_
 
 void ProcessBlockFixture::repetition_step(int total_repetitions) {
     m_repetition += 1;
-    if (total_repetitions > 0 && m_repetition == total_repetitions && m_num_iterations_total > 0) {
-        std::cout << "\nSummary/" << m_benchmark_name << "/" << m_model_name << "/"
-                  << m_inference_backend_name << "/" << m_buffer_size << "\t\t\t" << std::fixed
-                  << std::setprecision(4) << "rtf_mean: " << m_rtf_sum / m_num_iterations_total
-                  << " | rtf_max: " << m_rtf_max << " | underruns: " << m_num_underruns << "/"
-                  << m_num_iterations_total << '\n';
-    }
     std::cout << "\n-------------------------------------------------------------------------------"
                  "---------------------------------------------------------\n"
               << '\n';
+    if (total_repetitions > 0 && m_repetition == total_repetitions && m_num_iterations_total > 0) {
+        std::cout << "\n\033[31mSummary/" << m_benchmark_name << "/" << m_model_name << "/"
+                  << m_inference_backend_name << "/" << m_buffer_size << "\t\t\t" << std::fixed
+                  << std::setprecision(4) << "rtf_mean: " << m_rtf_sum / m_num_iterations_total
+                  << " | rtf_max: " << m_rtf_max << " | underruns: " << m_num_underruns << "/"
+                  << m_num_iterations_total << "\033[0m" << '\n';
+        std::cout
+            << "-------------------------------------------------------------------------------"
+               "---------------------------------------------------------\n"
+            << '\n';
+    }
 }
 
 void ProcessBlockFixture::SetUp(const ::benchmark::State& state) {
