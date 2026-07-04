@@ -56,7 +56,20 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
 
     if (context_json.contains("num_threads")) {
         if (context_json.at("num_threads").is_number_unsigned()) {
+#ifdef __EMSCRIPTEN__
+            // The context cannot run inference threads on WebAssembly — they are
+            // always supplied externally (e.g. AniraWeb.spinUpInferenceWorker()).
+            // Accept the (valid) value so shared config files keep working, but
+            // coerce it.
+            if (context_json.at("num_threads").get<unsigned int>() > 0) {
+                LOG_WARNING << "[WARNING] 'num_threads' > 0 is not supported on WebAssembly "
+                               "builds: inference threads must be supplied externally (e.g. "
+                               "AniraWeb.spinUpInferenceWorker()). Using num_threads = 0."
+                            << '\n';
+            }
+#else
             m_context_config->m_num_threads = context_json.at("num_threads").get<unsigned int>();
+#endif
         } else {
             LOG_ERROR << "Invalid 'num_threads' value: expected an unsigned integer." << '\n';
         }

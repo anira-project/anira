@@ -66,6 +66,21 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
                     << '\n';
         sanitized_config.m_wait_strategy = WaitStrategy::SpinBackoff;
     }
+    // The auto-managed thread pool cannot exist on WebAssembly either: an
+    // InferenceThread owns no OS thread here, so pool entries would be inert
+    // objects that never run, and the parallel-processor clamp in
+    // create_session() would measure phantom capacity. Threads are always
+    // supplied externally (JS Workers via AniraWeb.spinUpInferenceWorker(),
+    // backed by Context::make_inference_thread()).
+    if (sanitized_config.m_num_threads > 0) {
+        LOG_WARNING << "[WARNING] ContextConfig::m_num_threads = "
+                    << sanitized_config.m_num_threads
+                    << " is not supported on WebAssembly builds: the context cannot run "
+                       "inference threads; they must be supplied externally (e.g. "
+                       "AniraWeb.spinUpInferenceWorker()). Using num_threads = 0."
+                    << '\n';
+        sanitized_config.m_num_threads = 0;
+    }
 #else
     const ContextConfig& sanitized_config = context_config;
 #endif
@@ -350,17 +365,8 @@ void Context::new_data_request(const std::shared_ptr<SessionElement>& session) {
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
-                if (session->m_is_non_real_time) {
-                    // A stateful task may still be awaiting dispatch with none in
-                    // flight (a previous dispatch attempt found the global queue
-                    // full and dropped its task). No further submission may be
-                    // coming to restart the chain, so kick it before waiting.
-                    try_dispatch_stateful(session);
-                    while (!session->m_inference_queue[i]->m_done_atomic.exchange(
-                        false,
-                        std::memory_order::acquire)) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    }
+                if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
+                    wait_for_completion(session, i);
                 } else {
                     if (session->m_inference_queue[i]->m_done_atomic.exchange(
                             false,
@@ -383,16 +389,8 @@ void Context::new_data_request(const std::shared_ptr<SessionElement>& session,
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
-                if (session->m_is_non_real_time) {
-                    if (session->m_inference_config.m_blocking_ratio > 0.f) {
-                        // A stateful task may still be awaiting dispatch with none
-                        // in flight (a previous dispatch attempt found the global
-                        // queue full and dropped its task). No further submission
-                        // may be coming to restart the chain, so kick it before
-                        // blocking.
-                        try_dispatch_stateful(session);
-                        session->m_inference_queue[i]->m_done_semaphore.acquire();
-                    }
+                if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
+                    wait_for_completion(session, i);
                 } else if (wait_until.time_since_epoch().count() == 0) {
                     if (session->m_inference_queue[i]->m_done_semaphore.try_acquire()) {
                     } else {
@@ -409,6 +407,27 @@ void Context::new_data_request(const std::shared_ptr<SessionElement>& session,
                 post_process(session, session->m_inference_queue[i]);
                 break;
             }
+        }
+    }
+}
+
+// Mirrors the completion signal InferenceThread::do_inference() uses for this
+// session (semaphore when blocking_ratio > 0.f, atomic otherwise) so both
+// new_data_request() overloads above wait correctly in non-real-time mode
+// regardless of which one is called.
+void Context::wait_for_completion(const std::shared_ptr<SessionElement>& session, size_t index) {
+    // A stateful task may still be awaiting dispatch with none in flight (a
+    // previous dispatch attempt found the global queue full and dropped its
+    // task). No further submission may be coming to restart the chain, so kick
+    // it before blocking.
+    try_dispatch_stateful(session);
+    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+        session->m_inference_queue[index]->m_done_semaphore.acquire();
+    } else {
+        while (!session->m_inference_queue[index]->m_done_atomic.exchange(
+            false,
+            std::memory_order::acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 }
@@ -580,6 +599,18 @@ InferenceQueue& Context::get_static_inference_queue() {
 
 std::unique_ptr<InferenceThread> Context::make_inference_thread() {
     return std::make_unique<InferenceThread>(m_next_inference, m_context_config.m_wait_strategy);
+}
+
+unsigned int Context::get_num_inference_threads() {
+    return InferenceThread::get_num_active_threads();
+}
+
+bool Context::has_inference_threads() {
+    // The pool covers the native auto-managed threads even before
+    // prepare_session() starts them; the active count covers externally driven
+    // threads (user-created on native, JS Workers on WebAssembly, where the
+    // pool is always empty).
+    return !m_thread_pool.empty() || InferenceThread::get_num_active_threads() > 0;
 }
 
 #ifdef USE_LIBTORCH

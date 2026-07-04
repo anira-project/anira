@@ -6,6 +6,23 @@ import type {
   ReadyRespose,
 } from './messages'
 
+// AudioWorkletGlobalScope has no `performance` object
+// (https://github.com/WebAudio/web-audio-api/issues/2413), but the Emscripten
+// runtime implements clock_time_get via `performance.now()`. Any wasm code
+// path that reads a clock on the audio thread — e.g. the timed semaphore wait
+// used when InferenceConfig's blocking_ratio > 0 — would otherwise throw a
+// ReferenceError. Polyfill with a monotonic Date.now()-based clock (the same
+// fallback Emscripten's own -sAUDIO_WORKLET mode uses); the runtime assumes
+// the clock never goes backwards, so clamp against NTP steps.
+if (typeof (globalThis as { performance?: unknown }).performance === 'undefined') {
+  const timeOrigin = Date.now()
+  let last = 0
+  ;(globalThis as { performance?: unknown }).performance = {
+    now: () => (last = Math.max(last, Date.now() - timeOrigin)),
+    timeOrigin,
+  }
+}
+
 export type AniraWorkletState = {
   wasmMemory: WebAssembly.Memory
   aniraWeb: AniraWeb

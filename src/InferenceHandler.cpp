@@ -3,6 +3,7 @@
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/backends/BackendBase.h>
+#include <anira/scheduler/Context.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 
@@ -226,6 +227,10 @@ size_t InferenceHandler::get_available_samples(size_t tensor_index, size_t chann
 
 void InferenceHandler::set_non_realtime(bool is_non_realtime) {
     m_inference_manager.set_non_realtime(is_non_realtime);
+}
+
+unsigned int InferenceHandler::get_num_inference_threads() {
+    return Context::get_num_inference_threads();
 }
 
 void InferenceHandler::reset() {

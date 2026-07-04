@@ -24,8 +24,16 @@ extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
 uintptr_t inference_thread_create_from_context() {
-    auto& queue = anira::Context::get_static_inference_queue();
-    return reinterpret_cast<uintptr_t>(new anira::InferenceThread(queue));
+    // Ownership passes to JS; inference_thread_destroy() deletes the object.
+    return reinterpret_cast<uintptr_t>(anira::Context::make_inference_thread().release());
+}
+
+// Number of inference threads currently spun up (started and not yet stopped)
+// across all WASM instances. Callable from any instance: the counter lives in
+// shared static memory.
+EMSCRIPTEN_KEEPALIVE
+unsigned int get_num_inference_threads() {
+    return anira::Context::get_num_inference_threads();
 }
 
 EMSCRIPTEN_KEEPALIVE

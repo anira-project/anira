@@ -109,6 +109,20 @@ public:
     bool is_running() const;
 #endif
 
+    /**
+     * @brief Number of inference threads currently active in the process.
+     *
+     * Native: threads currently executing run_loop() — the auto-managed pool
+     * once started plus any user-created threads. WebAssembly: externally
+     * driven threads between start() and stop(); counted there (start() runs
+     * synchronously on the main instance) rather than at run_loop() entry, so
+     * the count is already visible when AniraWeb.spinUpInferenceWorker()
+     * returns, before the worker asynchronously enters its loop. The counter
+     * has static storage duration — on WebAssembly that is shared memory, so
+     * every WASM instance sees the same value.
+     */
+    static unsigned int get_num_active_threads();
+
 private:
 #ifndef __EMSCRIPTEN__
     /**
@@ -185,6 +199,9 @@ private:
                                        ///< requests
     InferenceData m_inference_data;    ///< Current inference data being processed by this thread
     WaitStrategy m_wait_strategy;  ///< How run_loop() waits for new work when the queue is empty
+
+    inline static std::atomic<unsigned int> s_num_active_threads{0};  ///< See
+                                                                      ///< get_num_active_threads()
 
 #ifdef __EMSCRIPTEN__
     std::atomic<bool> m_should_exit{false};

@@ -2,6 +2,7 @@
 #include <anira/PrePostProcessor.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
+#include <anira/utils/Logger.h>
 #include <concurrentqueue.h>
 
 #ifdef USE_LIBTORCH
@@ -33,6 +34,12 @@ SessionElement::SessionElement(int new_session_id,
                                moodycamel::ProducerToken&& producer_token)
     : m_session_id(new_session_id)
     , m_producer_token(std::move(producer_token))
+    // One slot per ThreadSafeStruct plus this queue's single explicit producer,
+    // so enqueue_pending_dispatch() never allocates after construction.
+    , m_dispatch_pending(inference_config.m_num_parallel_processors,
+                         /*maxExplicitProducers=*/1,
+                         /*maxImplicitProducers=*/0)
+    , m_dispatch_producer_token(m_dispatch_pending)
     , m_pp_processor(pp_processor)
     , m_inference_config(inference_config)
     , m_default_processor(m_inference_config)
@@ -94,8 +101,18 @@ void SessionElement::clear() {
 void SessionElement::enqueue_pending_dispatch(
     std::shared_ptr<ThreadSafeStruct> thread_safe_struct) {
     // Single producer (the audio thread for this session), so insertion order
-    // equals submission order.
-    m_dispatch_pending.enqueue(std::move(thread_safe_struct));
+    // equals submission order. The explicit token plus the capacity reserved in
+    // the constructor keep this allocation-free; try_enqueue leaves the argument
+    // untouched when it fails, so the fallback below may still use it.
+    if (!m_dispatch_pending.try_enqueue(m_dispatch_producer_token,
+                                        std::move(thread_safe_struct))) {
+        // Unreachable while the capacity bound holds (pending entries are
+        // distinct ThreadSafeStructs); handled like any other queue-full drop.
+        LOG_ERROR << "[ERROR] Could not enqueue pending stateful dispatch! "
+                     "Dropping the inference and zero-filling its output."
+                  << '\n';
+        complete_with_zeros(thread_safe_struct);
+    }
 }
 
 std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_next_dispatch() {

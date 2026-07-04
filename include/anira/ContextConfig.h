@@ -96,6 +96,23 @@ inline constexpr LogLevel default_log_level() {
 }
 
 /**
+ * @brief Platform-dependent default thread count: half of the available CPU
+ * cores (minimum 1) on native builds, 0 on WebAssembly.
+ *
+ * On WebAssembly the context cannot run threads — InferenceThread owns no OS
+ * thread there and inference loops are driven externally by JS Workers (see
+ * Context::make_inference_thread()) — so the only meaningful pool size is 0.
+ */
+inline unsigned int default_num_threads() noexcept {
+#ifdef __EMSCRIPTEN__
+    return 0;
+#else
+    return (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2
+                                                         : 1;
+#endif
+}
+
+/**
  * @brief Configuration structure for the inference context and threading behavior
  *
  * The ContextConfig struct controls global settings for the anira inference system,
@@ -129,10 +146,15 @@ struct ANIRA_API ContextConfig {
      * feature flags.
      *
      * @param num_threads Number of background inference threads to create.
-     *                   Default: half of available CPU cores (minimum 1).
+     *                   Default: half of available CPU cores (minimum 1) on native
+     *                   builds, 0 on WebAssembly (see default_num_threads()).
      *                   Pass 0 to opt out of the auto-managed pool and supply your
      *                   own threads via Context::make_inference_thread() (required on
-     *                   WebAssembly, optional on native). When the Context singleton
+     *                   WebAssembly, optional on native). On WebAssembly a nonzero
+     *                   value is coerced to 0 with a warning by Context::get_instance
+     *                   and JsonConfigLoader — the context cannot run threads there;
+     *                   they are always supplied externally (e.g.
+     *                   AniraWeb.spinUpInferenceWorker()). When the Context singleton
      *                   already exists, num_threads == 0 leaves any existing pool
      *                   untouched — it signals "no preference," not "shrink to zero."
      * @param wait_strategy How idle inference threads wait for new work.
@@ -146,9 +168,7 @@ struct ANIRA_API ContextConfig {
      * @note The constructor automatically detects and registers available inference
      * backends based on compile-time definitions (USE_LIBTORCH, USE_ONNXRUNTIME, USE_TFLITE)
      */
-    ContextConfig(unsigned int num_threads = (std::thread::hardware_concurrency() / 2 > 0)
-                                                 ? std::thread::hardware_concurrency() / 2
-                                                 : 1,
+    ContextConfig(unsigned int num_threads = default_num_threads(),
                   WaitStrategy wait_strategy = WaitStrategy::SpinBackoff,
                   LogLevel log_level = default_log_level())
         : m_num_threads(num_threads), m_wait_strategy(wait_strategy), m_log_level(log_level) {

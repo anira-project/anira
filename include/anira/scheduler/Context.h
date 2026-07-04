@@ -178,6 +178,10 @@ public:
      * is processed immediately.
      *
      * @param session Shared pointer to the session requesting data processing
+     *
+     * @note If the session is in non-real-time mode (see
+     *       InferenceManager::set_non_realtime()), this blocks until the pending
+     *       inference completes instead of returning immediately.
      */
     void new_data_request(const std::shared_ptr<SessionElement>& session);
 
@@ -189,6 +193,10 @@ public:
      *
      * @param session Shared pointer to the session requesting data processing
      * @param wait_until Time point at which to begin processing the data request
+     *
+     * @note If the session is in non-real-time mode (see
+     *       InferenceManager::set_non_realtime()), this blocks until the pending
+     *       inference completes instead of honoring wait_until.
      */
     void new_data_request(const std::shared_ptr<SessionElement>& session,
                           std::chrono::steady_clock::time_point wait_until);
@@ -249,6 +257,35 @@ public:
      */
     static std::unique_ptr<InferenceThread> make_inference_thread();
 
+    /**
+     * @brief Number of inference threads currently active in the process.
+     *
+     * Native: threads currently executing their processing loop — the
+     * auto-managed pool once started plus any user-created threads.
+     * WebAssembly: externally driven threads that have been started and not
+     * yet stopped (i.e. the inference workers currently spun up; exposed to
+     * JavaScript as AniraWeb.getNumInferenceThreads()). See
+     * InferenceThread::get_num_active_threads() for the exact semantics.
+     *
+     * @return Number of active inference threads.
+     */
+    static unsigned int get_num_inference_threads();
+
+    /**
+     * @brief Whether any inference threads exist that could satisfy blocking
+     * (non-real-time) waits.
+     *
+     * True when the auto-managed pool is non-empty (native; its threads are
+     * started in prepare_session()) or at least one externally driven thread
+     * is active (user-created on native, JS-driven on WebAssembly, where the
+     * pool is always empty). Used to gate
+     * InferenceManager::set_non_realtime(true), whose unbounded waits would
+     * otherwise never complete.
+     *
+     * @return True if at least one inference thread is configured or active.
+     */
+    static bool has_inference_threads();
+
 private:
     /**
      * @brief Gets the next available session ID
@@ -294,6 +331,29 @@ private:
      * @param session Shared pointer to the session whose task to dispatch
      */
     static void try_dispatch_stateful(const std::shared_ptr<SessionElement>& session);
+
+    /**
+     * @brief Blocks until a session's queued inference completes (non-real-time mode)
+     *
+     * Waits on whichever synchronization primitive the session actually signals
+     * on completion: InferenceThread::do_inference() releases m_done_semaphore
+     * when m_inference_config.m_blocking_ratio > 0.f, and stores to m_done_atomic
+     * otherwise, for the whole lifetime of the session. Mirroring that same
+     * condition here -- instead of each new_data_request() overload re-deriving it
+     * independently -- means both overloads wait correctly regardless of which
+     * one a caller uses.
+     *
+     * Also kicks a pending stateful dispatch first: a session-exclusive
+     * processor's next task may still be waiting to be dispatched with none in
+     * flight (a previous attempt found the global queue full and dropped its
+     * task), and no further submission may be coming to restart the chain.
+     *
+     * @param session Shared pointer to the session awaiting completion
+     * @param index Index into the session's inference queue to wait on
+     *
+     * @note Not real-time safe: blocks for as long as the inference takes.
+     */
+    static void wait_for_completion(const std::shared_ptr<SessionElement>& session, size_t index);
 
     /**
      * @brief Enqueues a prepared task into the global inference queue, dropping it on failure

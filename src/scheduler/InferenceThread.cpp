@@ -43,12 +43,19 @@ void InferenceThread::run() {
 #else
 void InferenceThread::start() {
     m_should_exit.store(false, std::memory_order::release);
-    m_is_running.store(true, std::memory_order::release);
+    // Count only the false→true transition so repeated start() calls (and the
+    // stop() in the destructor of a never-started thread) keep the process-wide
+    // active count balanced.
+    if (!m_is_running.exchange(true, std::memory_order::acq_rel)) {
+        s_num_active_threads.fetch_add(1, std::memory_order::relaxed);
+    }
 }
 
 void InferenceThread::stop() {
     m_should_exit.store(true, std::memory_order::release);
-    m_is_running.store(false, std::memory_order::release);
+    if (m_is_running.exchange(false, std::memory_order::acq_rel)) {
+        s_num_active_threads.fetch_sub(1, std::memory_order::relaxed);
+    }
 }
 
 bool InferenceThread::should_exit() const {
@@ -60,8 +67,20 @@ bool InferenceThread::is_running() const {
 }
 #endif
 
+unsigned int InferenceThread::get_num_active_threads() {
+    return s_num_active_threads.load(std::memory_order::relaxed);
+}
+
 void InferenceThread::run_loop() {
 #ifndef __EMSCRIPTEN__
+    // Count this thread as active for the lifetime of its pumping loop. Under
+    // Emscripten the count is maintained by start()/stop() instead, which run
+    // synchronously on the main instance (run_loop() entry in the JS Worker is
+    // asynchronous and would race callers that just spun the worker up).
+    struct ActiveGuard {
+        ActiveGuard() { s_num_active_threads.fetch_add(1, std::memory_order::relaxed); }
+        ~ActiveGuard() { s_num_active_threads.fetch_sub(1, std::memory_order::relaxed); }
+    } const active_guard;
     if (m_wait_strategy == WaitStrategy::Blocking) {
         run_loop_blocking();
         return;
