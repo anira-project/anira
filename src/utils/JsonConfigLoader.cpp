@@ -74,15 +74,34 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
             // driven cooperatively by JS Workers, and there is no pthreads
             // runtime to block on. Accept the (valid) value so shared config
             // files keep working, but coerce it.
-            LOG_INFO << "[WARNING] wait_strategy 'blocking' is not supported on WebAssembly "
-                        "builds. Using 'spin_backoff'."
-                     << '\n';
+            LOG_WARNING << "[WARNING] wait_strategy 'blocking' is not supported on WebAssembly "
+                           "builds. Using 'spin_backoff'."
+                        << '\n';
 #else
             m_context_config->m_wait_strategy = anira::WaitStrategy::Blocking;
 #endif
         } else {
             LOG_ERROR << "Invalid 'wait_strategy' value: expected \"spin_backoff\" or "
                          "\"blocking\". Defaulting to \"spin_backoff\"."
+                      << '\n';
+        }
+    }
+
+    if (context_json.contains("log_level")) {
+        const auto& level_json = context_json.at("log_level");
+        std::string const level =
+            level_json.is_string() ? level_json.get<std::string>() : std::string();
+        if (level == "debug") {
+            m_context_config->m_log_level = anira::LogLevel::Debug;
+        } else if (level == "info") {
+            m_context_config->m_log_level = anira::LogLevel::Info;
+        } else if (level == "warning") {
+            m_context_config->m_log_level = anira::LogLevel::Warning;
+        } else if (level == "error") {
+            m_context_config->m_log_level = anira::LogLevel::Error;
+        } else {
+            LOG_ERROR << "Invalid 'log_level' value: expected \"debug\", \"info\", "
+                         "\"warning\" or \"error\". Using the default log level."
                       << '\n';
         }
     }

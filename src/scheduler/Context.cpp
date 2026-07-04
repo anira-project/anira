@@ -22,6 +22,7 @@
 #include <anira/utils/Logger.h>
 #include <concurrentqueue.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -42,6 +43,16 @@ Context::Context(const ContextConfig& context_config) {
 }
 
 std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_config) {
+    // Apply the log level before anything (including this function) logs. The level
+    // is process-global, like the thread pool; when a context already exists, the
+    // lowest (most verbose) of the existing and requested levels wins, so no session
+    // can silence the diagnostics another session asked for. Backend processors pick
+    // the level up when their instances are created.
+    const LogLevel log_level =
+        m_context == nullptr
+            ? context_config.m_log_level
+            : std::min(m_context->m_context_config.m_log_level, context_config.m_log_level);
+    set_log_level(log_level);
 #ifdef __EMSCRIPTEN__
     // Blocking waits are impossible on WebAssembly: inference loops are driven
     // cooperatively by JS Workers, and there is no pthreads runtime to block on.
@@ -49,9 +60,9 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
     // effect and the mismatch check below stay meaningful.
     ContextConfig sanitized_config = context_config;
     if (sanitized_config.m_wait_strategy == WaitStrategy::Blocking) {
-        LOG_INFO << "[WARNING] WaitStrategy::Blocking is not supported on WebAssembly builds. "
-                    "Using WaitStrategy::SpinBackoff."
-                 << '\n';
+        LOG_WARNING << "[WARNING] WaitStrategy::Blocking is not supported on WebAssembly builds. "
+                       "Using WaitStrategy::SpinBackoff."
+                    << '\n';
         sanitized_config.m_wait_strategy = WaitStrategy::SpinBackoff;
     }
 #else
@@ -67,8 +78,24 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
             LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!"
                       << '\n';
         }
+        if (m_context->m_context_config.m_log_level != sanitized_config.m_log_level) {
+            LOG_WARNING << "[WARNING] ContextConfig log level mismatch: the context is at log "
+                           "level '"
+                        << to_string(m_context->m_context_config.m_log_level)
+                        << "' but a new session requested '"
+                        << to_string(sanitized_config.m_log_level)
+                        << "'. The log level is process-global and the lowest (most verbose) "
+                           "requested level wins, so '"
+                        << to_string(log_level)
+                        << "' is now in effect. Align the ContextConfig of all sessions to "
+                           "silence this warning."
+                        << '\n';
+        }
+        // Keep the stored config in sync with the level actually in effect (the
+        // lowest requested one, applied by set_log_level above).
+        m_context->m_context_config.m_log_level = log_level;
         if (m_context->m_context_config.m_wait_strategy != sanitized_config.m_wait_strategy) {
-            LOG_INFO
+            LOG_WARNING
                 << "[WARNING] ContextConfig wait strategy mismatch: the context was created with "
                    "wait_strategy '"
                 << to_string(m_context->m_context_config.m_wait_strategy)
@@ -128,10 +155,10 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
 
     if (inference_config.m_num_parallel_processors > (unsigned int)m_thread_pool.size()) {
         if (!m_thread_pool.empty()) {
-            LOG_INFO << "[WARNING] Session " << session_id
-                     << " requested more parallel processors than threads are available in "
-                        "Context. Using number of threads as number of parallel processors."
-                     << '\n';
+            LOG_WARNING << "[WARNING] Session " << session_id
+                        << " requested more parallel processors than threads are available in "
+                           "Context. Using number of threads as number of parallel processors."
+                        << '\n';
             inference_config.m_num_parallel_processors = (unsigned int)m_thread_pool.size();
         }
     }
@@ -286,8 +313,8 @@ void Context::new_data_submitted(const std::shared_ptr<SessionElement>& session)
                     }
                 }
             }
-            LOG_INFO << "[WARNING] No free inference queue found in session: "
-                     << session->m_session_id << "!" << '\n';
+            LOG_WARNING << "[WARNING] No free inference queue found in session: "
+                        << session->m_session_id << "!" << '\n';
             return;
         }
     }

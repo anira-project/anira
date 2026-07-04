@@ -49,6 +49,53 @@ inline const char* to_string(WaitStrategy wait_strategy) {
 }
 
 /**
+ * @brief Minimum severity of log messages that are emitted
+ *
+ * One level for the whole inference stack: it gates anira's own LOG_DEBUG /
+ * LOG_INFO / LOG_WARNING / LOG_ERROR output and is forwarded to the logging facilities of
+ * the enabled backends (ONNX Runtime environment severity, LiteRT environment
+ * min-logger severity, LibTorch/c10 log level). A message is emitted when its
+ * severity is at or above the configured level.
+ *
+ * @note The TFLite backend is exempt: the prebuilt TFLite C library does not
+ * export any runtime logging control, so its (rare) log lines are unaffected.
+ *
+ * @note The level is process-global, like the inference thread pool. When the
+ * ContextConfigs in a process disagree, the lowest (most verbose) requested
+ * level wins — no session can silence the diagnostics another session asked
+ * for — and the mismatch is reported with a warning.
+ *
+ * @note Debug enables the backends' verbose/debug output; anira itself logs at
+ * Info severity and above.
+ */
+enum class LogLevel { Debug = 0, Info = 1, Warning = 2, Error = 3 };
+
+/**
+ * @brief Returns a human-readable name for a LogLevel value
+ */
+inline const char* to_string(LogLevel log_level) {
+    switch (log_level) {
+        case LogLevel::Debug: return "debug";
+        case LogLevel::Info: return "info";
+        case LogLevel::Warning: return "warning";
+        case LogLevel::Error: return "error";
+    }
+    return "unknown";
+}
+
+/**
+ * @brief Build-type dependent default log level: Info in debug builds, Error in
+ * release builds (NDEBUG)
+ */
+inline constexpr LogLevel default_log_level() {
+#ifdef NDEBUG
+    return LogLevel::Error;
+#else
+    return LogLevel::Info;
+#endif
+}
+
+/**
  * @brief Configuration structure for the inference context and threading behavior
  *
  * The ContextConfig struct controls global settings for the anira inference system,
@@ -92,6 +139,9 @@ struct ANIRA_API ContextConfig {
      *                   Default: WaitStrategy::SpinBackoff (see WaitStrategy for the
      *                   trade-offs). Must be identical across all ContextConfigs in
      *                   a process, since all sessions share one thread pool.
+     * @param log_level Minimum severity of log messages emitted by anira and its
+     *                   backends (see LogLevel). Default: LogLevel::Info in debug
+     *                   builds, LogLevel::Error in release builds.
      *
      * @note The constructor automatically detects and registers available inference
      * backends based on compile-time definitions (USE_LIBTORCH, USE_ONNXRUNTIME, USE_TFLITE)
@@ -99,8 +149,9 @@ struct ANIRA_API ContextConfig {
     ContextConfig(unsigned int num_threads = (std::thread::hardware_concurrency() / 2 > 0)
                                                  ? std::thread::hardware_concurrency() / 2
                                                  : 1,
-                  WaitStrategy wait_strategy = WaitStrategy::SpinBackoff)
-        : m_num_threads(num_threads), m_wait_strategy(wait_strategy) {
+                  WaitStrategy wait_strategy = WaitStrategy::SpinBackoff,
+                  LogLevel log_level = default_log_level())
+        : m_num_threads(num_threads), m_wait_strategy(wait_strategy), m_log_level(log_level) {
 #ifdef USE_LIBTORCH
         m_enabled_backends.push_back(InferenceBackend::LIBTORCH);
 #endif
@@ -144,6 +195,17 @@ struct ANIRA_API ContextConfig {
     WaitStrategy m_wait_strategy = WaitStrategy::SpinBackoff;
 
     /**
+     * @brief Minimum severity of log messages emitted by anira and its backends
+     *
+     * Applied process-globally when the context is created and forwarded to the
+     * logging facilities of the backend runtimes (see LogLevel for details and
+     * the TFLite exemption). When ContextConfigs disagree, the lowest (most
+     * verbose) requested level wins and a warning is logged. Defaults to
+     * LogLevel::Info in debug builds and LogLevel::Error in release builds.
+     */
+    LogLevel m_log_level = default_log_level();
+
+    /**
      * @brief Version string of the anira library
      *
      * Contains the version of the anira library that was used to create this
@@ -185,7 +247,7 @@ private:
      **/
     bool operator==(const ContextConfig& other) const {
         return m_num_threads == other.m_num_threads && m_wait_strategy == other.m_wait_strategy &&
-               m_anira_version == other.m_anira_version &&
+               m_log_level == other.m_log_level && m_anira_version == other.m_anira_version &&
                m_enabled_backends == other.m_enabled_backends;
     }
 

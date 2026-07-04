@@ -56,14 +56,19 @@ Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The fix
         anira::HostConfig host_config(BUFFER_SIZE, SAMPLE_RATE);
         anira::InferenceBackend inference_backend = anira::InferenceBackend::ONNX;
 
+        // Only report errors, so the log output of the backends does not pollute
+        // the benchmark results (see anira::LogLevel)
+        anira::ContextConfig context_config;
+        context_config.m_log_level = anira::LogLevel::Error;
+
         // Create and prepare the InferenceHandler instance
-        m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
+        m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config, context_config);
         m_inference_handler->prepare(host_config);
         m_inference_handler->set_inference_backend(inference_backend);
 
         // Create the input buffer
         m_buffer = std::make_unique<anira::Buffer<float>>(
-            my_inference_config.get_preprocess_input_channels()[0], 
+            my_inference_config.get_preprocess_input_channels()[0],
             host_config.m_buffer_size
         );
 
