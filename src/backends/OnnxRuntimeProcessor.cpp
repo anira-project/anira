@@ -1,3 +1,4 @@
+#include <anira/ContextConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/backends/OnnxRuntimeProcessor.h>
@@ -16,9 +17,11 @@
 
 namespace anira {
 
+namespace {
+
 // Maps anira's log level to the severity of the ONNX Runtime environment.
 // Debug maps to VERBOSE, ONNX Runtime's most detailed severity.
-static OrtLoggingLevel to_ort_logging_level(LogLevel log_level) {
+OrtLoggingLevel to_ort_logging_level(LogLevel log_level) {
     switch (log_level) {
         case LogLevel::Debug: return ORT_LOGGING_LEVEL_VERBOSE;
         case LogLevel::Info: return ORT_LOGGING_LEVEL_INFO;
@@ -27,6 +30,8 @@ static OrtLoggingLevel to_ort_logging_level(LogLevel log_level) {
     }
     return ORT_LOGGING_LEVEL_WARNING;
 }
+
+}  // namespace
 
 OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& inference_config)
     : BackendBase(inference_config) {

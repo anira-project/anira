@@ -9,6 +9,7 @@
 #include <anira/utils/Logger.h>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -104,12 +105,13 @@ LiteRtProcessor::Instance::Instance(InferenceConfig& inference_config)
         // Severity values follow litert/c/internal/litert_logging.h: verbose=0, info=1,
         // warning=2, error=3 — numerically identical to anira's LogLevel enum, with
         // Debug mapping to LiteRt's verbose severity.
-        const int64_t litert_severity = static_cast<int64_t>(get_log_level());
-        const LiteRtEnvOption env_options[] = {{
-            /* .tag = */ kLiteRtEnvOptionTagMinLoggerSeverity,
-            /* .value = */ {kLiteRtAnyTypeInt, {.int_value = litert_severity}},
+        const auto litert_severity = static_cast<int64_t>(get_log_level());
+        const std::array<LiteRtEnvOption, 1> env_options = {{
+            {.tag = kLiteRtEnvOptionTagMinLoggerSeverity,
+             .value = {.type = kLiteRtAnyTypeInt, .int_value = litert_severity}},
         }};
-        litert_check(LiteRtCreateEnvironment(1, env_options, &m_env), "LiteRtCreateEnvironment");
+        litert_check(LiteRtCreateEnvironment(1, env_options.data(), &m_env),
+                     "LiteRtCreateEnvironment");
 
         if (inference_config.is_model_binary(anira::InferenceBackend::LITERT)) {
             const anira::ModelData* model_data =

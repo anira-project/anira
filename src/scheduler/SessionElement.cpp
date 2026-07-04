@@ -104,8 +104,7 @@ void SessionElement::enqueue_pending_dispatch(
     // equals submission order. The explicit token plus the capacity reserved in
     // the constructor keep this allocation-free; try_enqueue leaves the argument
     // untouched when it fails, so the fallback below may still use it.
-    if (!m_dispatch_pending.try_enqueue(m_dispatch_producer_token,
-                                        std::move(thread_safe_struct))) {
+    if (!m_dispatch_pending.try_enqueue(m_dispatch_producer_token, std::move(thread_safe_struct))) {
         // Unreachable while the capacity bound holds (pending entries are
         // distinct ThreadSafeStructs); handled like any other queue-full drop.
         LOG_ERROR << "[ERROR] Could not enqueue pending stateful dispatch! "
