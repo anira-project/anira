@@ -172,7 +172,6 @@ void InferenceThread::do_inference(
     } else {
         thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
     }
-    session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 
     // Session-exclusive processors: this task is fully done (its state write has
     // completed), so release the dispatch slot and hand the next pending task to

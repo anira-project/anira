@@ -151,8 +151,19 @@ void adapt_cnn_config(anira::InferenceConfig& inference_config, int buffer_size,
     inference_config.set_tensor_output_shape({{1, output_size, 1}},
                                              anira::InferenceBackend::LITERT);
 #endif
+    // Default (universal) tensor shape, assigned to the custom backend below
+    inference_config.m_tensor_shape.emplace_back(anira::TensorShapeList{{1, 1, input_size}},
+                                                 anira::TensorShapeList{{1, 1, output_size}});
     inference_config.clear_processing_spec();
     inference_config.update_processing_spec();
     inference_config.set_preprocess_input_size(
         std::vector<size_t>{static_cast<size_t>(input_size - receptive_field)});
+
+    // The custom backend needs no model file, but the benchmark fixture resolves a model
+    // name via get_model_path(CUSTOM): add a placeholder entry. update_processing_spec()
+    // then assigns the default (universal) tensor shape to the custom backend. Called
+    // without clear_processing_spec() it keeps the preprocess sizes set above
+    inference_config.m_model_data.emplace_back(std::string("custom-placeholder"),
+                                               anira::InferenceBackend::CUSTOM);
+    inference_config.update_processing_spec();
 }
