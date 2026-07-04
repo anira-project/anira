@@ -104,6 +104,45 @@ public:
                               [[maybe_unused]] InferenceBackend current_inference_backend);
 
     /**
+     * @brief Hook called on the inference thread immediately before the backend runs
+     *
+     * Override this to patch input tensors with data that must reflect the result of the
+     * previous inference (e.g. recurrent state feedback). This is necessary because
+     * pre_process() is called at submission time: when more than one inference is queued,
+     * all their input tensors have already been filled before the first one runs, so any
+     * state written there is stale. With session_exclusive_processor = true inferences
+     * execute strictly in submission order and never concurrently, which makes this hook
+     * the only safe place to splice in cross-inference state.
+     *
+     * @param input Vector of input tensors about to be fed to the inference engine
+     * @param current_inference_backend Currently active inference backend
+     *
+     * @note Called on the inference thread, not the audio thread. The default implementation
+     * does nothing.
+     * @see after_inference()
+     */
+    virtual void before_inference([[maybe_unused]] std::vector<BufferF>& input,
+                                  [[maybe_unused]] InferenceBackend current_inference_backend) {}
+
+    /**
+     * @brief Hook called on the inference thread immediately after the backend runs
+     *
+     * Override this to capture output tensors that must be fed into the next inference
+     * (e.g. recurrent state feedback). Runs before the inference is marked done and before
+     * the next session-exclusive inference can be dispatched, so the state captured here is
+     * guaranteed to be visible to the next before_inference() call.
+     *
+     * @param output Vector of output tensors produced by the inference engine
+     * @param current_inference_backend Currently active inference backend
+     *
+     * @note Called on the inference thread, not the audio thread. The default implementation
+     * does nothing.
+     * @see before_inference()
+     */
+    virtual void after_inference([[maybe_unused]] std::vector<BufferF>& output,
+                                 [[maybe_unused]] InferenceBackend current_inference_backend) {}
+
+    /**
      * @brief Sets a non-streamable input value in thread-safe storage
      *
      * Used to store control parameters or static values that don't change sample-by-sample.
@@ -215,6 +254,39 @@ public:
                                  size_t num_new_samples,
                                  size_t num_old_samples,
                                  size_t offset);
+
+    /**
+     * @brief Extracts a batch of overlapping windows in a single call
+     *
+     * Repeats the offset overload @p num_batches times, advancing the output
+     * offset by the window size (@p num_new_samples + @p num_old_samples) for
+     * each batch. This produces a contiguously laid-out batched tensor — batch
+     * @c b occupies <tt>[offset + b * window_size, offset + (b + 1) *
+     * window_size)</tt> — as required by models whose input shape is
+     * <tt>[num_batches, ..., window_size]</tt> (e.g. the HybridNN/GuitarLSTM
+     * windowing).
+     *
+     * Equivalent to calling the offset overload in a loop, but keeps the loop
+     * in native code. This matters for the WebAssembly build, where doing the
+     * loop in JavaScript incurs one JS↔Wasm boundary crossing per batch element
+     * and can dominate the audio-thread budget for large batches.
+     *
+     * @param input Source ring buffer
+     * @param output Destination tensor buffer
+     * @param num_new_samples Number of new samples to extract per channel and batch
+     * @param num_old_samples Number of past samples to retain per channel and batch
+     * @param offset Starting position in the output buffer for the first batch
+     * @param num_batches Number of consecutive windows to extract
+     *
+     * @note Real-time safe operation
+     * @see pop_samples_from_buffer(RingBuffer&, BufferF&, size_t, size_t, size_t)
+     */
+    void pop_samples_from_buffer(RingBuffer& input,
+                                 BufferF& output,
+                                 size_t num_new_samples,
+                                 size_t num_old_samples,
+                                 size_t offset,
+                                 size_t num_batches);
 
     /**
      * @brief Writes samples from a tensor to a ring buffer

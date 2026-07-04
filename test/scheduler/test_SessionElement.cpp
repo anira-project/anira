@@ -3,14 +3,18 @@
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
+#include <concurrentqueue.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <iomanip>
 #include <ios>
 #include <ostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -61,9 +65,11 @@ TEST_P(SessionElementTest, LatencyStructAndRingbuffers) {
 
     PrePostProcessor pp_processor(test_params.m_inference_config);
 
+    InferenceQueue inference_queue;
     SessionElement session_element(0,  // session_id
                                    pp_processor,
-                                   test_params.m_inference_config);
+                                   test_params.m_inference_config,
+                                   moodycamel::ProducerToken(inference_queue));
 
     session_element.prepare(test_params.m_host_config);
 
@@ -486,3 +492,58 @@ INSTANTIATE_TEST_SUITE_P(
             {15360}  // Expected receive buffer sizes
         }),
     build_test_name);
+
+// =============================================================================
+// Regression: clear() must drain the done-semaphores without blocking
+// =============================================================================
+
+namespace {
+// Everything the detached worker thread touches lives here, heap-allocated and
+// intentionally leaked by the test: if clear() deadlocks (the bug under test),
+// the thread stays blocked inside it forever and must not reference destroyed
+// stack objects while the remaining tests run. Process teardown reclaims it.
+struct ClearDeadlockFixture {
+    InferenceConfig m_inference_config{
+        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+        40.f,
+        0,
+        false,
+        0.5f,  // blocking_ratio > 0: clear() takes the semaphore branch
+        2};
+    PrePostProcessor m_pp_processor{m_inference_config};
+    InferenceQueue m_inference_queue;
+    SessionElement m_session{0,
+                             m_pp_processor,
+                             m_inference_config,
+                             moodycamel::ProducerToken(m_inference_queue)};
+    std::atomic<bool> m_cleared{false};
+};
+}  // namespace
+
+TEST(SessionElementClearTest, ClearWithBlockingRatioDoesNotFreeze) {
+    auto* fixture = new ClearDeadlockFixture();  // leaked deliberately, see above
+    fixture->m_session.prepare(HostConfig(2048, 48000));
+
+    // Mixed signal state: one struct carries a stale unconsumed completion
+    // signal, the others none. clear() must consume what is there and never
+    // wait — a blind acquire() on a count-0 semaphore blocks forever, since
+    // the callers' drain_inference_queue() guarantees no inference thread will
+    // signal this session again.
+    fixture->m_session.m_inference_queue[0]->m_done_semaphore.release();
+
+    std::thread([fixture] {
+        fixture->m_session.clear();
+        fixture->m_cleared.store(true, std::memory_order_release);
+    }).detach();
+
+    auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!fixture->m_cleared.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    ASSERT_TRUE(fixture->m_cleared.load(std::memory_order_acquire))
+        << "SessionElement::clear() deadlocked draining the done-semaphores "
+           "(blind acquire on a semaphore with count 0).";
+}

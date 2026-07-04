@@ -1,9 +1,8 @@
 name: build_benchmark
 
 on:
-  workflow_call:
   workflow_dispatch: # lets you run a build from github.com
-  # Runs the workflow on all push events
+  # Runs on pull requests only: the regular tests already run in build_test.yml
   pull_request:
     branches:
       - main
@@ -57,6 +56,11 @@ jobs:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
           TARGETS: (cnn-size-benchmark advanced-benchmark simple-benchmark)
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_EXAMPLES=ON"
+          # Benchmark + tests + examples: same combination as the desktop-benchmark-tests preset
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_EXAMPLES=ON"
       - name: test
         uses: ./.github/actions/test
+        with:
+          # Only run the benchmark tests (Benchmark.Advanced/CNNSize/Simple): the unit
+          # tests registered by ANIRA_WITH_TESTS already run in build_test.yml
+          CTEST_ARGS: "-R ^Benchmark"

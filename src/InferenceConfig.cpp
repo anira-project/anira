@@ -39,8 +39,8 @@ InferenceConfig::InferenceConfig(std::vector<ModelData> model_data,
     if (m_session_exclusive_processor) { m_num_parallel_processors = 1; }
     if (m_num_parallel_processors < 1) {
         m_num_parallel_processors = 1;
-        LOG_INFO << "[WARNING] Number of parellel processors must be at least 1. Setting to 1."
-                 << '\n';
+        LOG_WARNING << "[WARNING] Number of parellel processors must be at least 1. Setting to 1."
+                    << '\n';
     }
 }
 

@@ -6,6 +6,23 @@ import type {
   ReadyRespose,
 } from './messages'
 
+// AudioWorkletGlobalScope has no `performance` object
+// (https://github.com/WebAudio/web-audio-api/issues/2413), but the Emscripten
+// runtime implements clock_time_get via `performance.now()`. Any wasm code
+// path that reads a clock on the audio thread — e.g. the timed semaphore wait
+// used when InferenceConfig's blocking_ratio > 0 — would otherwise throw a
+// ReferenceError. Polyfill with a monotonic Date.now()-based clock (the same
+// fallback Emscripten's own -sAUDIO_WORKLET mode uses); the runtime assumes
+// the clock never goes backwards, so clamp against NTP steps.
+if (typeof (globalThis as { performance?: unknown }).performance === 'undefined') {
+  const timeOrigin = Date.now()
+  let last = 0
+  ;(globalThis as { performance?: unknown }).performance = {
+    now: () => (last = Math.max(last, Date.now() - timeOrigin)),
+    timeOrigin,
+  }
+}
+
 export type AniraWorkletState = {
   wasmMemory: WebAssembly.Memory
   aniraWeb: AniraWeb
@@ -64,15 +81,26 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
           ) => {
             const prePostProcessor = this.prePostRegistry.get(prePostProcessorPtr)
             if (prePostProcessor) {
-              if (phase === 0) {
-                prePostProcessor.preProcess(inputPtr, outputPtr, backend)
-                return
+              // pre/post_process (phases 0/1) fire here on the audio worklet.
+              // before/after_inference (phases 2/3) fire on the inference
+              // worker instead, but are dispatched for symmetry with the
+              // inference worker's handler.
+              switch (phase) {
+                case 0:
+                  prePostProcessor.preProcess(inputPtr, outputPtr, backend)
+                  return
+                case 1:
+                  prePostProcessor.postProcess(inputPtr, outputPtr, backend)
+                  return
+                case 2:
+                  prePostProcessor.beforeInference(inputPtr, backend)
+                  return
+                case 3:
+                  prePostProcessor.afterInference(outputPtr, backend)
+                  return
+                default:
+                  throw new Error(`Unknown pre/post phase: ${phase}`)
               }
-              if (phase === 1) {
-                prePostProcessor.postProcess(inputPtr, outputPtr, backend)
-                return
-              }
-              throw new Error(`Unknown pre/post phase: ${phase}`)
             }
 
             throw new Error(

@@ -1,3 +1,4 @@
+#include <anira/ContextConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/backends/OnnxRuntimeProcessor.h>
@@ -15,6 +16,22 @@
 #include <vector>
 
 namespace anira {
+
+namespace {
+
+// Maps anira's log level to the severity of the ONNX Runtime environment.
+// Debug maps to VERBOSE, ONNX Runtime's most detailed severity.
+OrtLoggingLevel to_ort_logging_level(LogLevel log_level) {
+    switch (log_level) {
+        case LogLevel::Debug: return ORT_LOGGING_LEVEL_VERBOSE;
+        case LogLevel::Info: return ORT_LOGGING_LEVEL_INFO;
+        case LogLevel::Warning: return ORT_LOGGING_LEVEL_WARNING;
+        case LogLevel::Error: return ORT_LOGGING_LEVEL_ERROR;
+    }
+    return ORT_LOGGING_LEVEL_WARNING;
+}
+
+}  // namespace
 
 OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& inference_config)
     : BackendBase(inference_config) {
@@ -45,9 +62,9 @@ void OnnxRuntimeProcessor::process(std::vector<BufferF>& input,
 
 OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config)
     : m_memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU))
-    , m_inference_config(inference_config)
 #ifdef USE_ANIRA_WEB
-    , m_env(nullptr) {
+    , m_env(nullptr)
+    , m_inference_config(inference_config) {
     // Create threading options
     OrtThreadingOptions* threading_options = nullptr;
     Ort::ThrowOnError(Ort::GetApi().CreateThreadingOptions(&threading_options));
@@ -56,15 +73,16 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config)
     // Create environment with global threadpools
     OrtEnv* raw_env = nullptr;
     Ort::ThrowOnError(Ort::GetApi().CreateEnvWithGlobalThreadPools(
-        ORT_LOGGING_LEVEL_WARNING,  // Logging level
-        "Default",                  // Log ID
-        threading_options,          // Threading options
-        &raw_env                    // Out parameter for the raw environment
+        to_ort_logging_level(get_log_level()),  // Logging level
+        "Default",                              // Log ID
+        threading_options,                      // Threading options
+        &raw_env                                // Out parameter for the raw environment
         ));
 
     m_env = Ort::Env(raw_env);  // Wrap the raw environment in a C++ object
 #else
-{
+    , m_env(to_ort_logging_level(get_log_level()), "Default")
+    , m_inference_config(inference_config) {
 #endif
     m_session_options.SetIntraOpNumThreads(1);
 

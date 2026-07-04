@@ -109,6 +109,15 @@ Model Loading Failures
     3. Ensure tensor shapes in your :cpp:struct:`anira::InferenceConfig` match the model's expected shapes
     4. Try a different backend if available
 
+Wait Strategy Mismatch
+^^^^^^^^^^^^^^^^^^^^^^
+
+**Issue**: The log shows ``[WARNING] ContextConfig wait strategy mismatch``.
+
+All anira instances in a process share one inference thread pool, and the pool's threads wait for work according to the :cpp:enum:`anira::WaitStrategy` of the *first* :cpp:struct:`anira::ContextConfig` the context was created with. A later instance that requests a different strategy has no effect — the warning tells you the originally configured strategy stays active. This is harmless (both strategies produce identical results), but the requested idle-CPU/latency characteristic is not the one in effect.
+
+**Solution**: Use the same ``wait_strategy`` in every :cpp:struct:`anira::ContextConfig` (and in the ``context_config`` block of every JSON configuration file) that the process loads.
+
 Thread Priority Issues
 ^^^^^^^^^^^^^^^^^^^^^^
 

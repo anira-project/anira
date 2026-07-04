@@ -55,10 +55,18 @@ TEST(UserManagedInferenceThread, ProcessesAudioWithoutAutoPool) {
     }
 
     const size_t prev_samples = inference_handler.get_available_samples(0);
-    inference_handler.process(test_buffer.get_array_of_write_pointers(), k_buffer_size);
+    // Submit-only: push_data() enqueues the inference but never pops from the
+    // receive buffer, so get_available_samples() is a monotone signal here — it
+    // rises above prev_samples exactly when the user-managed thread has executed
+    // the inference and its output was collected. process() must not be used for
+    // this check: it pops one block of (latency) samples on the way out, so the
+    // level returns to exactly prev_samples once the inference lands, and the
+    // comparison races the inference thread (hangs when inference completes
+    // within process(), exits early when it does not).
+    inference_handler.push_data(test_buffer.get_array_of_write_pointers(), k_buffer_size);
 
     auto start = std::chrono::system_clock::now();
-    while (inference_handler.get_available_samples(0) == prev_samples) {
+    while (inference_handler.get_available_samples(0) <= prev_samples) {
         if (std::chrono::system_clock::now() >
             start + std::chrono::duration<long int>(k_user_thread_timeout_s)) {
             FAIL() << "User-managed inference thread did not process the block";

@@ -324,15 +324,39 @@ public:
     size_t get_available_samples(size_t tensor_index, size_t channel = 0) const;
 
     /**
-     * @brief Configures the handler for non-real-time operation
+     * @brief Configures the handler for non-real-time (offline) operation
      *
-     * When set to true, relaxes real-time constraints and may use different
-     * memory allocation strategies or processing algorithms optimized for
-     * offline processing.
+     * When enabled, process()/pop_data() block the calling thread until every
+     * pending inference for this session completes, instead of returning early
+     * or giving up at a deadline. Output is therefore always complete -- never a
+     * dropped/zero-filled chunk -- at the cost of an unbounded wait, so this is
+     * intended for offline rendering (e.g. bounce-to-disk), not the live audio
+     * thread.
      *
-     * @param is_non_realtime True to enable non-real-time mode, false for real-time mode
+     * @param is_non_realtime True to block for complete output (non-real-time
+     * mode), false to restore the bounded/non-blocking real-time behavior
+     *
+     * @warning Not real-time safe while enabled. Refused with a warning when
+     * no inference threads exist to satisfy the waits (see
+     * InferenceManager::set_non_realtime()); on WebAssembly spin up at least
+     * one inference worker first, and prefer running offline processing in a
+     * Worker or under an OfflineAudioContext -- the waits there spin.
      */
     void set_non_realtime(bool is_non_realtime);
+
+    /**
+     * @brief Number of inference threads currently active in the process.
+     *
+     * Process-wide, not per-session: all sessions share one thread pool.
+     * Native: threads currently executing their processing loop — the
+     * auto-managed pool once started plus any user-created threads.
+     * WebAssembly: the inference workers currently spun up (started and not
+     * yet stopped). Useful e.g. to verify threads exist before enabling
+     * non-real-time mode. See Context::get_num_inference_threads().
+     *
+     * @return Number of active inference threads.
+     */
+    static unsigned int get_num_inference_threads();
 
     /**
      * @brief Resets the inference handler to its initial state

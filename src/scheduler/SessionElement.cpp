@@ -2,6 +2,8 @@
 #include <anira/PrePostProcessor.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
+#include <anira/utils/Logger.h>
+#include <concurrentqueue.h>
 
 #ifdef USE_LIBTORCH
 #include <anira/backends/LibTorchProcessor.h>
@@ -28,8 +30,16 @@ namespace anira {
 
 SessionElement::SessionElement(int new_session_id,
                                PrePostProcessor& pp_processor,
-                               InferenceConfig& inference_config)
+                               InferenceConfig& inference_config,
+                               moodycamel::ProducerToken&& producer_token)
     : m_session_id(new_session_id)
+    , m_producer_token(std::move(producer_token))
+    // One slot per ThreadSafeStruct plus this queue's single explicit producer,
+    // so enqueue_pending_dispatch() never allocates after construction.
+    , m_dispatch_pending(inference_config.m_num_parallel_processors,
+                         /*maxExplicitProducers=*/1,
+                         /*maxImplicitProducers=*/0)
+    , m_dispatch_producer_token(m_dispatch_pending)
     , m_pp_processor(pp_processor)
     , m_inference_config(inference_config)
     , m_default_processor(m_inference_config)
@@ -44,6 +54,11 @@ SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<size_t>& te
 }
 
 void SessionElement::clear() {
+    // Precondition: no task of this session is executing or queued — every caller
+    // (Context::prepare_session/release_session/reset_session) runs
+    // Context::drain_inference_queue() first. So no new completion signal can
+    // arrive while we reset the structs below; stale signals are drained, never
+    // waited on.
     for (auto& buffer : m_send_buffer) { buffer.clear_with_positions(); }
     for (auto& buffer : m_receive_buffer) { buffer.clear_with_positions(); }
     m_time_stamps.clear();
@@ -57,7 +72,10 @@ void SessionElement::clear() {
     for (auto& inference : m_inference_queue) {
         inference->m_free.store(true, std::memory_order_relaxed);
         if (m_inference_config.m_blocking_ratio > 0.f) {
-            inference->m_done_semaphore.acquire();
+            // Drain stale completion signals without blocking: a struct that has no
+            // unconsumed signal (the common case) has a semaphore count of 0, and a
+            // blocking acquire() would deadlock here.
+            while (inference->m_done_semaphore.try_acquire()) {}
         } else {
             inference->m_done_atomic.store(false, std::memory_order_relaxed);
         }
@@ -83,8 +101,17 @@ void SessionElement::clear() {
 void SessionElement::enqueue_pending_dispatch(
     std::shared_ptr<ThreadSafeStruct> thread_safe_struct) {
     // Single producer (the audio thread for this session), so insertion order
-    // equals submission order.
-    m_dispatch_pending.enqueue(std::move(thread_safe_struct));
+    // equals submission order. The explicit token plus the capacity reserved in
+    // the constructor keep this allocation-free; try_enqueue leaves the argument
+    // untouched when it fails, so the fallback below may still use it.
+    if (!m_dispatch_pending.try_enqueue(m_dispatch_producer_token, std::move(thread_safe_struct))) {
+        // Unreachable while the capacity bound holds (pending entries are
+        // distinct ThreadSafeStructs); handled like any other queue-full drop.
+        LOG_ERROR << "[ERROR] Could not enqueue pending stateful dispatch! "
+                     "Dropping the inference and zero-filling its output."
+                  << '\n';
+        complete_with_zeros(thread_safe_struct);
+    }
 }
 
 std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_next_dispatch() {
@@ -108,6 +135,20 @@ std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_ne
 
 void SessionElement::release_dispatch() {
     m_stateful_dispatch_busy.store(false, std::memory_order_release);
+}
+
+void SessionElement::complete_with_zeros(
+    const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct) {
+    // The global queue rejected the task (momentarily full), so this inference is
+    // dropped. Completing it with zeroed output keeps the stream time-aligned:
+    // the output side consumes the task at its correct position like any other
+    // and frees the struct, it just yields silence for this chunk.
+    for (auto& output_data : thread_safe_struct->m_tensor_output_data) { output_data.clear(); }
+    if (m_inference_config.m_blocking_ratio > 0.f) {
+        thread_safe_struct->m_done_semaphore.release();
+    } else {
+        thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
+    }
 }
 
 void SessionElement::prepare(const HostConfig& host_config, std::vector<long> custom_latency) {

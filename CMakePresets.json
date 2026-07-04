@@ -7,37 +7,132 @@
   },
   "configurePresets": [
     {
-      "name": "desktop-debug",
-      "displayName": "Desktop Debug",
+      "name": "desktop-base",
+      "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/desktop/Debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++"
       }
     },
     {
+      "name": "desktop-debug",
+      "displayName": "Desktop Debug",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/desktop/Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
       "name": "desktop-release",
       "displayName": "Desktop Release",
-      "generator": "Ninja",
+      "inherits": "desktop-base",
       "binaryDir": "${sourceDir}/build/desktop/Release",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "desktop-tests-debug",
+      "displayName": "Desktop Tests Debug",
+      "description": "Debug build with ANIRA_WITH_TESTS enabled",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/desktop/Tests/Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ANIRA_WITH_TESTS": "ON"
+      }
+    },
+    {
+      "name": "desktop-tests-release",
+      "displayName": "Desktop Tests Release",
+      "description": "Release build with ANIRA_WITH_TESTS enabled",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/desktop/Tests/Release",
+      "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_C_COMPILER": "clang",
-        "CMAKE_CXX_COMPILER": "clang++"
+        "ANIRA_WITH_TESTS": "ON"
+      }
+    },
+    {
+      "name": "desktop-benchmark-debug",
+      "displayName": "Desktop Benchmark Debug",
+      "description": "Debug build with ANIRA_WITH_BENCHMARK enabled",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/desktop/Benchmark/Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ANIRA_WITH_BENCHMARK": "ON"
+      }
+    },
+    {
+      "name": "desktop-benchmark-release",
+      "displayName": "Desktop Benchmark Release",
+      "description": "Release build with ANIRA_WITH_BENCHMARK enabled",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/desktop/Benchmark/Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANIRA_WITH_BENCHMARK": "ON"
+      }
+    },
+    {
+      "name": "desktop-benchmark-tests-debug",
+      "displayName": "Desktop Benchmark + Tests Debug",
+      "description": "Debug build with tests and the example benchmarks enabled, so benchmarks can be run via ctest (ANIRA_WITH_EXAMPLES is required to build the benchmark executables)",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/desktop/BenchmarkTests/Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ANIRA_WITH_BENCHMARK": "ON",
+        "ANIRA_WITH_TESTS": "ON",
+        "ANIRA_WITH_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "desktop-benchmark-tests-release",
+      "displayName": "Desktop Benchmark + Tests Release",
+      "description": "Release build with tests and the example benchmarks enabled, so benchmarks can be run via ctest (ANIRA_WITH_EXAMPLES is required to build the benchmark executables)",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/desktop/BenchmarkTests/Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANIRA_WITH_BENCHMARK": "ON",
+        "ANIRA_WITH_TESTS": "ON",
+        "ANIRA_WITH_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "desktop-examples-debug",
+      "displayName": "Desktop Examples Debug",
+      "description": "Debug build with ANIRA_WITH_EXAMPLES enabled",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/desktop/Examples/Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ANIRA_WITH_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "desktop-examples-release",
+      "displayName": "Desktop Examples Release",
+      "description": "Release build with ANIRA_WITH_EXAMPLES enabled",
+      "inherits": "desktop-base",
+      "binaryDir": "${sourceDir}/build/desktop/Examples/Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANIRA_WITH_EXAMPLES": "ON"
       }
     },
     {
       "name": "clang-tidy",
       "displayName": "Clang-Tidy",
       "description": "Library + tests + benchmark build with all backends, used for clang-tidy analysis (exports compile_commands.json)",
-      "generator": "Ninja",
+      "inherits": "desktop-base",
       "binaryDir": "${sourceDir}/build/clang-tidy",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_C_COMPILER": "clang",
-        "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "ANIRA_WITH_TESTS": "ON",
         "ANIRA_WITH_BENCHMARK": "ON",
@@ -108,6 +203,48 @@
       "configuration": "Release"
     },
     {
+      "name": "desktop-tests-debug",
+      "configurePreset": "desktop-tests-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "desktop-tests-release",
+      "configurePreset": "desktop-tests-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "desktop-benchmark-debug",
+      "configurePreset": "desktop-benchmark-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "desktop-benchmark-release",
+      "configurePreset": "desktop-benchmark-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "desktop-benchmark-tests-debug",
+      "configurePreset": "desktop-benchmark-tests-debug",
+      "configuration": "Debug",
+      "targets": ["tests", "simple-benchmark", "advanced-benchmark", "cnn-size-benchmark"]
+    },
+    {
+      "name": "desktop-benchmark-tests-release",
+      "configurePreset": "desktop-benchmark-tests-release",
+      "configuration": "Release",
+      "targets": ["tests", "simple-benchmark", "advanced-benchmark", "cnn-size-benchmark"]
+    },
+    {
+      "name": "desktop-examples-debug",
+      "configurePreset": "desktop-examples-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "desktop-examples-release",
+      "configurePreset": "desktop-examples-release",
+      "configuration": "Release"
+    },
+    {
       "name": "clang-tidy",
       "configurePreset": "clang-tidy",
       "configuration": "Debug"
@@ -143,6 +280,30 @@
       "configurePreset": "desktop-release",
       "configuration": "Release",
       "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "desktop-tests-debug",
+      "configurePreset": "desktop-tests-debug",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "desktop-tests-release",
+      "configurePreset": "desktop-tests-release",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "desktop-benchmark-tests-debug",
+      "configurePreset": "desktop-benchmark-tests-debug",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true, "verbosity": "verbose" }
+    },
+    {
+      "name": "desktop-benchmark-tests-release",
+      "configurePreset": "desktop-benchmark-tests-release",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true, "verbosity": "verbose" }
     }
   ]
 }

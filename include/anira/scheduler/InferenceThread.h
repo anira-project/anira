@@ -8,8 +8,8 @@
 #ifndef __EMSCRIPTEN__
 #include "../system/HighPriorityThread.h"
 #endif
-#include <concurrentqueue.h>
 
+#include "../ContextConfig.h"
 #include "../utils/Buffer.h"
 #include "SessionElement.h"
 #ifdef __x86_64__
@@ -33,10 +33,13 @@ namespace anira {
  * instance shares memory with the main instance; spawning OS threads from
  * C++ inside a worker would interact badly with the shared allocator.
  *
- * A moodycamel::ConsumerToken is pre-allocated in the constructor (which
- * must run on the thread that owns the allocator — the main WASM instance
- * in browser builds). Using an explicit token makes execute() fully
- * allocation-free.
+ * Dequeueing is deliberately done without a moodycamel::ConsumerToken: the
+ * non-tokenized try_dequeue scans all producer sub-queues, so any enqueued
+ * task is reliably picked up even by a single consumer, and it never
+ * allocates — execute() and run_loop() stay fully allocation-free. A
+ * ConsumerToken's sticky sub-queue rotation is a many-consumer throughput
+ * optimization that can intermittently miss items enqueued via producer
+ * tokens (lost inference tasks, see issue #77).
  */
 class ANIRA_API InferenceThread
 #ifndef __EMSCRIPTEN__
@@ -53,18 +56,12 @@ public:
      *
      * @param next_inference Reference to a thread-safe concurrent queue containing
      *                      inference data structures to process
+     * @param wait_strategy How run_loop() waits for new work when the queue is
+     *                      empty (see WaitStrategy). Ignored on WebAssembly builds,
+     *                      where JS Workers drive the loop cooperatively.
      */
-    /**
-     * @brief Constructor that initializes the inference thread with a task queue
-     *
-     * Creates an inference thread that will process inference requests from the
-     * provided concurrent queue. The thread is not started automatically and
-     * must be explicitly started using the start() method.
-     *
-     * @param next_inference Reference to a thread-safe concurrent queue containing
-     *                      inference data structures to process
-     */
-    InferenceThread(moodycamel::ConcurrentQueue<InferenceData>& next_inference);
+    InferenceThread(InferenceQueue& next_inference,
+                    WaitStrategy wait_strategy = WaitStrategy::SpinBackoff);
 
     ~InferenceThread()
 #ifndef __EMSCRIPTEN__
@@ -93,10 +90,13 @@ public:
     bool execute();
 
     /**
-     * @brief Run the main processing loop with exponential backoff.
+     * @brief Run the main processing loop.
      *
      * Natively, this is invoked by the inherited HighPriorityThread via the
-     * run() override. Under Emscripten, JS Workers call this directly.
+     * run() override, and waits for work according to the configured
+     * WaitStrategy: either the exponential-backoff polling loop or a blocking
+     * wait on the queue's semaphore. Under Emscripten, JS Workers call this
+     * directly and the loop always polls (blocking is not possible there).
      * Returns when should_exit() becomes true.
      */
     void run_loop();
@@ -108,6 +108,20 @@ public:
     bool should_exit() const;
     bool is_running() const;
 #endif
+
+    /**
+     * @brief Number of inference threads currently active in the process.
+     *
+     * Native: threads currently executing run_loop() — the auto-managed pool
+     * once started plus any user-created threads. WebAssembly: externally
+     * driven threads between start() and stop(); counted there (start() runs
+     * synchronously on the main instance) rather than at run_loop() entry, so
+     * the count is already visible when AniraWeb.spinUpInferenceWorker()
+     * returns, before the worker asynchronously enters its loop. The counter
+     * has static storage duration — on WebAssembly that is shared memory, so
+     * every WASM instance sees the same value.
+     */
+    static unsigned int get_num_active_threads();
 
 private:
 #ifndef __EMSCRIPTEN__
@@ -159,12 +173,35 @@ private:
      */
     void exponential_backoff(std::array<int, 2> iterations);
 
+#ifndef __EMSCRIPTEN__
+    /**
+     * @brief Processing loop for WaitStrategy::Blocking
+     *
+     * Blocks on the queue's semaphore until work is enqueued, waking
+     * periodically (a few ms) to check should_exit(). The wakeup on enqueue is
+     * immediate — the timeout only bounds shutdown latency.
+     */
+    void run_loop_blocking();
+#endif
+
+    /**
+     * @brief Processes the inference request currently held in m_inference_data
+     *
+     * Shared by both wait strategies after a successful dequeue: skips the
+     * request if its session is no longer initialized, otherwise runs
+     * do_inference().
+     */
+    void process_dequeued_inference();
+
 private:
-    moodycamel::ConcurrentQueue<InferenceData>& m_next_inference;  ///< Reference to the thread-safe
-                                                                   ///< queue containing inference
-                                                                   ///< requests
-    InferenceData m_inference_data;  ///< Current inference data being processed by this thread
-    moodycamel::ConsumerToken m_consumer_token;
+    InferenceQueue& m_next_inference;  ///< Reference to the thread-safe
+                                       ///< queue containing inference
+                                       ///< requests
+    InferenceData m_inference_data;    ///< Current inference data being processed by this thread
+    WaitStrategy m_wait_strategy;  ///< How run_loop() waits for new work when the queue is empty
+
+    inline static std::atomic<unsigned int> s_num_active_threads{0};  ///< See
+                                                                      ///< get_num_active_threads()
 
 #ifdef __EMSCRIPTEN__
     std::atomic<bool> m_should_exit{false};

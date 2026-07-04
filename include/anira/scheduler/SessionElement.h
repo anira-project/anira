@@ -2,9 +2,11 @@
 #define ANIRA_SESSIONELEMENT_H
 
 #include <concurrentqueue.h>
+#ifndef __EMSCRIPTEN__
+#include <blockingconcurrentqueue.h>
+#endif
 
 #include <atomic>
-#include <queue>
 
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
@@ -74,10 +76,13 @@ public:
      * @param new_session_id Unique identifier for this session
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration containing model settings
+     * @param producer_token Producer token bound to the global inference queue, moved into the
+     * session (see m_producer_token)
      */
     SessionElement(int new_session_id,
                    PrePostProcessor& pp_processor,
-                   InferenceConfig& inference_config);
+                   InferenceConfig& inference_config,
+                   moodycamel::ProducerToken&& producer_token);
 
     /**
      * @brief Clears all session data and resets to initial state
@@ -216,6 +221,19 @@ public:
     std::atomic<int> m_active_inferences{0};  ///< Atomic counter of currently active inference
                                               ///< operations
 
+    // This session's explicit producer token for the global inference queue.
+    // Pinning one token per session keeps enqueue allocation-free on the audio
+    // thread (no implicit-producer registration) and gives the token RAII
+    // lifetime: the underlying producer slot is recycled when the session is
+    // destroyed. A ProducerToken must never be used by two threads at once —
+    // this holds here because all enqueues of a session are serialized: the
+    // non-stateful path enqueues only from the session's single driving thread,
+    // and the stateful path enqueues only while holding the
+    // m_stateful_dispatch_busy gate (whose acquire/release ordering also makes
+    // the token's state visible when ownership migrates between threads).
+    moodycamel::ProducerToken m_producer_token;  ///< Per-session producer token for the global
+                                                 ///< inference queue
+
     // --- Stateful in-order dispatch ---
     // For stateful models, only ONE of this session's tasks may be in the global
     // inference queue (and therefore running) at a time. Prepared tasks wait here
@@ -224,21 +242,33 @@ public:
     // sessions are unaffected and keep using the shared thread pool in parallel.
     std::atomic<bool> m_stateful_dispatch_busy{false};  ///< True while a stateful task of this
                                                         ///< session is queued or running
+    // Pre-sized in the constructor to m_num_parallel_processors — a pending
+    // entry is always a distinct ThreadSafeStruct, so the depth is bounded —
+    // and fed exclusively through m_dispatch_producer_token, so enqueues never
+    // allocate: neither on the audio thread (real-time safety) nor, on
+    // WebAssembly, from a non-main WASM instance (which must not touch the
+    // shared allocator).
     moodycamel::ConcurrentQueue<std::shared_ptr<ThreadSafeStruct>>
-        m_dispatch_pending;  ///< Prepared-but-not-yet-dispatched
-                             ///< stateful
-                             ///< tasks,
-                             ///< in
-                             ///< submission
-                             ///< order
+        m_dispatch_pending;  ///< Prepared-but-not-yet-dispatched stateful
+                             ///< tasks, in submission order
+    // Same single-producer discipline as m_producer_token above: only the
+    // session's driving thread enqueues pending dispatches.
+    moodycamel::ProducerToken m_dispatch_producer_token;  ///< Explicit producer for
+                                                          ///< m_dispatch_pending
 
-    /** @brief Queue a prepared stateful task awaiting dispatch (called in submission order). */
+    /** @brief Queue a prepared stateful task awaiting dispatch (called in submission order on the
+     * session's driving thread; allocation-free). If the pending queue rejects the task — which
+     * the capacity bound makes unreachable — it is completed with zeroed output instead. */
     void enqueue_pending_dispatch(std::shared_ptr<ThreadSafeStruct> thread_safe_struct);
     /** @brief Claim the next stateful task to dispatch, or nullptr if one is already in flight or
      * none are pending. */
     std::shared_ptr<ThreadSafeStruct> try_acquire_next_dispatch();
     /** @brief Mark the in-flight stateful task finished, allowing the next to be dispatched. */
     void release_dispatch();
+    /** @brief Complete a task without running inference: zero its output tensors and signal
+     * completion. Used when the global queue rejects a task, so the dropped inference still
+     * yields (silent) output at its correct stream position and the struct is freed normally. */
+    void complete_with_zeros(const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct);
 
     PrePostProcessor& m_pp_processor;  ///< Reference to the preprocessing/postprocessing pipeline
     InferenceConfig& m_inference_config;  ///< Reference to the inference configuration
@@ -246,7 +276,16 @@ public:
     BackendBase m_default_processor;  ///< Default backend processor instance
     BackendBase* m_custom_processor;  ///< Pointer to custom backend processor (if provided)
 
-    bool m_is_non_real_time = false;  ///< Flag indicating non-real-time processing mode
+    // Written by InferenceManager::set_non_realtime() -- typically from a control/UI
+    // thread, e.g. a host toggling offline bounce/render mode -- and read on the
+    // audio thread inside Context::new_data_request(). A plain bool would be a
+    // data race between those two threads, so this needs real synchronization.
+    std::atomic<bool> m_is_non_real_time{false};  ///< True forces new_data_request() to
+                                                  ///< block until each pending inference
+                                                  ///< completes, ignoring blocking_ratio
+                                                  ///< and any deadline, trading real-time
+                                                  ///< safety for complete, deterministic
+                                                  ///< output (see Context::new_data_request).
 
     std::vector<unsigned int> m_latency;  ///< Calculated latency values for each tensor in samples
     size_t m_num_structs = 0;  ///< Number of allocated thread-safe structures (for testing access)
@@ -402,6 +441,28 @@ struct InferenceData {
                                                                              ///< and
                                                                              ///< synchronization
 };
+
+/**
+ * @brief Queue type used for passing InferenceData to the inference threads
+ *
+ * On native builds this is a moodycamel::BlockingConcurrentQueue so that
+ * inference threads can optionally block on the queue's semaphore instead of
+ * polling (see WaitStrategy). The blocking queue is a strict superset of the
+ * plain ConcurrentQueue API, and as long as no consumer ever blocks, its
+ * enqueue never makes a syscall — so ContextConfigs using
+ * WaitStrategy::SpinBackoff keep the exact lock-free behavior of the plain
+ * queue, at the cost of one extra atomic operation per enqueue/dequeue.
+ *
+ * On WebAssembly builds the plain ConcurrentQueue is used: inference loops
+ * are driven cooperatively by JS Workers across WASM instances that share
+ * memory via postMessage, so there is no pthreads runtime to block on, and a
+ * blocked worker could not service its JS event loop anyway.
+ */
+#ifdef __EMSCRIPTEN__
+using InferenceQueue = moodycamel::ConcurrentQueue<InferenceData>;
+#else
+using InferenceQueue = moodycamel::BlockingConcurrentQueue<InferenceData>;
+#endif
 
 }  // namespace anira
 

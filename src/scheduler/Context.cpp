@@ -22,11 +22,13 @@
 #include <anira/utils/Logger.h>
 #include <concurrentqueue.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -36,29 +38,120 @@ namespace anira {
 Context::Context(const ContextConfig& context_config) {
     m_context_config = context_config;
     for (unsigned int i = 0; i < m_context_config.m_num_threads; ++i) {
-        m_thread_pool.emplace_back(std::make_unique<InferenceThread>(m_next_inference));
+        m_thread_pool.emplace_back(
+            std::make_unique<InferenceThread>(m_next_inference, m_context_config.m_wait_strategy));
     }
 }
 
 std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_config) {
+    // Apply the log level before anything (including this function) logs. The level
+    // is process-global, like the thread pool; when a context already exists, the
+    // lowest (most verbose) of the existing and requested levels wins, so no session
+    // can silence the diagnostics another session asked for. Backend processors pick
+    // the level up when their instances are created.
+    const LogLevel log_level =
+        m_context == nullptr
+            ? context_config.m_log_level
+            : std::min(m_context->m_context_config.m_log_level, context_config.m_log_level);
+    set_log_level(log_level);
+#ifdef __EMSCRIPTEN__
+    // Blocking waits are impossible on WebAssembly: inference loops are driven
+    // cooperatively by JS Workers, and there is no pthreads runtime to block on.
+    // Coerce before the config is stored or compared, so the strategy that takes
+    // effect and the mismatch check below stay meaningful.
+    ContextConfig sanitized_config = context_config;
+    if (sanitized_config.m_wait_strategy == WaitStrategy::Blocking) {
+        LOG_WARNING << "[WARNING] WaitStrategy::Blocking is not supported on WebAssembly builds. "
+                       "Using WaitStrategy::SpinBackoff."
+                    << '\n';
+        sanitized_config.m_wait_strategy = WaitStrategy::SpinBackoff;
+    }
+    // The auto-managed thread pool cannot exist on WebAssembly either: an
+    // InferenceThread owns no OS thread here, so pool entries would be inert
+    // objects that never run, and the parallel-processor clamp in
+    // create_session() would measure phantom capacity. Threads are always
+    // supplied externally (JS Workers via AniraWeb.spinUpInferenceWorker(),
+    // backed by Context::make_inference_thread()).
+    if (sanitized_config.m_num_threads > 0) {
+        LOG_WARNING << "[WARNING] ContextConfig::m_num_threads = " << sanitized_config.m_num_threads
+                    << " is not supported on WebAssembly builds: the context cannot run "
+                       "inference threads; they must be supplied externally (e.g. "
+                       "AniraWeb.spinUpInferenceWorker()). Using num_threads = 0."
+                    << '\n';
+        sanitized_config.m_num_threads = 0;
+    }
+#else
+    const ContextConfig& sanitized_config = context_config;
+#endif
     if (m_context == nullptr) {
-        m_context = std::make_shared<Context>(context_config);
+        m_context = std::make_shared<Context>(sanitized_config);
         LOG_INFO << "[INFO] Anira version: " << m_context->m_context_config.m_anira_version << '\n';
     } else {
-        // TODO: Better error handling
-        if (m_context->m_context_config.m_anira_version != context_config.m_anira_version) {}
-        if (m_context->m_context_config.m_enabled_backends != context_config.m_enabled_backends) {
+        if (m_context->m_context_config.m_anira_version != sanitized_config.m_anira_version) {
+            const std::string& context_version = m_context->m_context_config.m_anira_version;
+            const std::string& session_version = sanitized_config.m_anira_version;
+            // Major version differences imply API/ABI incompatibility; anything
+            // below that is only worth a warning.
+            if (context_version.substr(0, context_version.find('.')) !=
+                session_version.substr(0, session_version.find('.'))) {
+                LOG_ERROR << "[ERROR] Anira version mismatch: the context was created by anira "
+                             "version '"
+                          << context_version << "' but a new session was compiled against '"
+                          << session_version
+                          << "'. The major versions differ, so the API/ABI is likely "
+                             "incompatible. Make sure all components in this process use the "
+                             "same anira version."
+                          << '\n';
+            } else {
+                LOG_WARNING << "[WARNING] Anira version mismatch: the context was created by "
+                               "anira version '"
+                            << context_version << "' but a new session was compiled against '"
+                            << session_version
+                            << "'. The major versions match, so this is likely compatible, but "
+                               "aligning the anira versions is recommended."
+                            << '\n';
+            }
+        }
+        if (m_context->m_context_config.m_enabled_backends != sanitized_config.m_enabled_backends) {
             LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!"
                       << '\n';
+        }
+        if (m_context->m_context_config.m_log_level != sanitized_config.m_log_level) {
+            LOG_WARNING << "[WARNING] ContextConfig log level mismatch: the context is at log "
+                           "level '"
+                        << to_string(m_context->m_context_config.m_log_level)
+                        << "' but a new session requested '"
+                        << to_string(sanitized_config.m_log_level)
+                        << "'. The log level is process-global and the lowest (most verbose) "
+                           "requested level wins, so '"
+                        << to_string(log_level)
+                        << "' is now in effect. Note that the inference backends were already "
+                           "initialized with the first context's log level and keep it. Align "
+                           "the ContextConfig of all sessions to silence this warning."
+                        << '\n';
+        }
+        // Keep the stored config in sync with the level actually in effect (the
+        // lowest requested one, applied by set_log_level above).
+        m_context->m_context_config.m_log_level = log_level;
+        if (m_context->m_context_config.m_wait_strategy != sanitized_config.m_wait_strategy) {
+            LOG_WARNING
+                << "[WARNING] ContextConfig wait strategy mismatch: the context was created with "
+                   "wait_strategy '"
+                << to_string(m_context->m_context_config.m_wait_strategy)
+                << "' but a new session requested '" << to_string(sanitized_config.m_wait_strategy)
+                << "'. All sessions in this process share one inference thread pool, so only one "
+                   "strategy can be in effect and the originally configured one stays active. "
+                   "Align the ContextConfig of all sessions to silence this warning."
+                << '\n';
         }
         // num_threads == 0 means "I'm opting out of the auto-pool and bringing
         // my own threads via Context::make_inference_thread()" — not "shrink
         // any existing pool to zero." Skip the resize so a manual-threading
         // caller doesn't tear down threads another caller is relying on.
-        if (context_config.m_num_threads > 0 &&
-            (unsigned int)m_context->m_thread_pool.size() > context_config.m_num_threads) {
-            m_context->new_num_threads(context_config.m_num_threads);
-            m_context->m_context_config.m_num_threads = context_config.m_num_threads;
+        if (sanitized_config.m_num_threads > 0 &&
+            (unsigned int)m_context->m_thread_pool.size() > sanitized_config.m_num_threads) {
+            m_context->new_num_threads(sanitized_config.m_num_threads);
+            m_context->m_context_config.m_num_threads = sanitized_config.m_num_threads;
         }
     }
     return m_context;
@@ -79,7 +172,9 @@ void Context::new_num_threads(unsigned int new_num_threads) {
 
     if (new_num_threads > current_num_threads) {
         for (unsigned int i = current_num_threads; i < new_num_threads; ++i) {
-            m_thread_pool.emplace_back(std::make_unique<InferenceThread>(m_next_inference));
+            m_thread_pool.emplace_back(
+                std::make_unique<InferenceThread>(m_next_inference,
+                                                  m_context_config.m_wait_strategy));
         }
     } else if (new_num_threads < current_num_threads) {
         for (unsigned int i = current_num_threads - 1; i >= new_num_threads; --i) {
@@ -96,23 +191,25 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
                                                         InferenceConfig& inference_config,
                                                         BackendBase* custom_processor) {
     int const session_id = get_available_session_id();
-    if (m_producer_tokens.size() < k_max_num_instances) {
-        m_producer_tokens.emplace_back(
-            std::make_unique<moodycamel::ProducerToken>(m_next_inference));
-    }
 
     if (inference_config.m_num_parallel_processors > (unsigned int)m_thread_pool.size()) {
         if (!m_thread_pool.empty()) {
-            LOG_INFO << "[WARNING] Session " << session_id
-                     << " requested more parallel processors than threads are available in "
-                        "Context. Using number of threads as number of parallel processors."
-                     << '\n';
+            LOG_WARNING << "[WARNING] Session " << session_id
+                        << " requested more parallel processors than threads are available in "
+                           "Context. Using number of threads as number of parallel processors."
+                        << '\n';
             inference_config.m_num_parallel_processors = (unsigned int)m_thread_pool.size();
         }
     }
 
+    // Each session owns one explicit producer token for the global inference
+    // queue (created here, off the audio thread; destroyed with the session,
+    // which recycles the underlying producer slot).
     std::shared_ptr<SessionElement> const session =
-        std::make_shared<SessionElement>(session_id, pp_processor, inference_config);
+        std::make_shared<SessionElement>(session_id,
+                                         pp_processor,
+                                         inference_config,
+                                         moodycamel::ProducerToken(m_next_inference));
 
     if (custom_processor != nullptr) {
         custom_processor->prepare();
@@ -142,7 +239,9 @@ void Context::release_thread_pool() {
 }
 
 void Context::release_session(const std::shared_ptr<SessionElement>& session) {
-    session->m_initialized.store(false, std::memory_order::release);
+    // seq_cst: pairs with the worker's register-before-check in
+    // InferenceThread::process_dequeued_inference().
+    session->m_initialized.store(false, std::memory_order::seq_cst);
 
     drain_inference_queue(session);
 
@@ -191,7 +290,9 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
 void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
                               HostConfig new_config,
                               std::vector<long> custom_latency) {
-    session->m_initialized.store(false, std::memory_order::release);
+    // seq_cst: pairs with the worker's register-before-check in
+    // InferenceThread::process_dequeued_inference().
+    session->m_initialized.store(false, std::memory_order::seq_cst);
 
     drain_inference_queue(session);
 
@@ -251,23 +352,20 @@ void Context::new_data_submitted(const std::shared_ptr<SessionElement>& session)
                     }
                 }
             }
-            LOG_INFO << "[WARNING] No free inference queue found in session: "
-                     << session->m_session_id << "!" << '\n';
+            LOG_WARNING << "[WARNING] No free inference queue found in session: "
+                        << session->m_session_id << "!" << '\n';
             return;
         }
     }
 }
 
+// Full realtime safe path
 void Context::new_data_request(const std::shared_ptr<SessionElement>& session) {
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
-                if (session->m_is_non_real_time) {
-                    while (!session->m_inference_queue[i]->m_done_atomic.exchange(
-                        false,
-                        std::memory_order::acquire)) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    }
+                if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
+                    wait_for_completion(session, i);
                 } else {
                     if (session->m_inference_queue[i]->m_done_atomic.exchange(
                             false,
@@ -284,15 +382,14 @@ void Context::new_data_request(const std::shared_ptr<SessionElement>& session) {
     }
 }
 
+// With blocking ratio > 0, the semaphore is used to wait for data. This is not 100% realtime safe.
 void Context::new_data_request(const std::shared_ptr<SessionElement>& session,
                                std::chrono::steady_clock::time_point wait_until) {
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back()) {
-                if (session->m_is_non_real_time) {
-                    if (session->m_inference_config.m_blocking_ratio > 0.f) {
-                        session->m_inference_queue[i]->m_done_semaphore.acquire();
-                    }
+                if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
+                    wait_for_completion(session, i);
                 } else if (wait_until.time_since_epoch().count() == 0) {
                     if (session->m_inference_queue[i]->m_done_semaphore.try_acquire()) {
                     } else {
@@ -309,6 +406,27 @@ void Context::new_data_request(const std::shared_ptr<SessionElement>& session,
                 post_process(session, session->m_inference_queue[i]);
                 break;
             }
+        }
+    }
+}
+
+// Mirrors the completion signal InferenceThread::do_inference() uses for this
+// session (semaphore when blocking_ratio > 0.f, atomic otherwise) so both
+// new_data_request() overloads above wait correctly in non-real-time mode
+// regardless of which one is called.
+void Context::wait_for_completion(const std::shared_ptr<SessionElement>& session, size_t index) {
+    // A stateful task may still be awaiting dispatch with none in flight (a
+    // previous dispatch attempt found the global queue full and dropped its
+    // task). No further submission may be coming to restart the chain, so kick
+    // it before blocking.
+    try_dispatch_stateful(session);
+    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+        session->m_inference_queue[index]->m_done_semaphore.acquire();
+    } else {
+        while (!session->m_inference_queue[index]->m_done_atomic.exchange(
+            false,
+            std::memory_order::acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 }
@@ -333,24 +451,13 @@ bool Context::pre_process(const std::shared_ptr<SessionElement>& session) {
                 // the global queue; the rest wait in submission order and are
                 // released one at a time as each completes.
                 session->enqueue_pending_dispatch(session->m_inference_queue[i]);
-                if (auto next = session->try_acquire_next_dispatch()) {
-                    if (!m_next_inference.try_enqueue(
-                            InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
-                        LOG_ERROR << "[ERROR] Could not enqueue next inference!" << '\n';
-                        session->release_dispatch();  // retried on the next submission/completion
-                    }
-                }
+                // If the global queue is full, the claimed task (possibly an
+                // older chunk) is dropped and completes as zeros at its stream
+                // position — either way this submission stands, so fall through
+                // to return true.
+                try_dispatch_stateful(session);
             } else {
-                InferenceData const inference_data = {
-                    .m_session = session,
-                    .m_thread_safe_struct = session->m_inference_queue[i]};
-                moodycamel::ProducerToken const& producer_token = get_producer_token();
-                if (!m_next_inference.try_enqueue(producer_token, inference_data)) {
-                    LOG_ERROR << "[ERROR] Could not enqueue next inference!" << '\n';
-                    session->m_inference_queue[i]->m_free.exchange(true);
-                    session->m_time_stamps.pop_back();
-                    return false;
-                }
+                enqueue_inference_or_drop(session, session->m_inference_queue[i]);
             }
             if (session->m_current_queue >= UINT16_MAX) {
                 session->m_current_queue = 0;
@@ -361,6 +468,34 @@ bool Context::pre_process(const std::shared_ptr<SessionElement>& session) {
         }
     }
     return false;
+}
+
+void Context::try_dispatch_stateful(const std::shared_ptr<SessionElement>& session) {
+    if (!session->m_inference_config.m_session_exclusive_processor) { return; }
+    if (auto next = session->try_acquire_next_dispatch()) {
+        if (!enqueue_inference_or_drop(session, next)) { session->release_dispatch(); }
+    }
+}
+
+bool Context::enqueue_inference_or_drop(
+    const std::shared_ptr<SessionElement>& session,
+    const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct) {
+    InferenceData const inference_data = {.m_session = session,
+                                          .m_thread_safe_struct = thread_safe_struct};
+    // The session's own producer token keeps this allocation-free and safe:
+    // per-session enqueues are serialized (single driving thread, and the
+    // stateful path additionally holds the dispatch gate).
+    bool const enqueued = m_next_inference.try_enqueue(session->m_producer_token, inference_data);
+    if (!enqueued) {
+        // The task keeps its struct and timestamp and completes as zeros at its
+        // stream position, so the output stays time-aligned: exactly one chunk
+        // was consumed and exactly one (silent) chunk will be produced.
+        LOG_ERROR << "[ERROR] Could not enqueue next inference to global context job queue! "
+                     "Dropping the inference and zero-filling its output."
+                  << '\n';
+        session->complete_with_zeros(thread_safe_struct);
+    }
+    return enqueued;
 }
 
 void Context::post_process(
@@ -381,7 +516,10 @@ void Context::start_thread_pool() {
 }
 
 void Context::drain_inference_queue(const std::shared_ptr<SessionElement>& session) {
-    while (session->m_active_inferences.load(std::memory_order::acquire) != 0) {
+    // seq_cst: pairs with the worker's register-before-check in
+    // InferenceThread::process_dequeued_inference() — either the worker sees
+    // m_initialized == false and skips, or this load sees its increment and waits.
+    while (session->m_active_inferences.load(std::memory_order::seq_cst) != 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
 
@@ -443,7 +581,9 @@ void Context::release_processor(InferenceConfig& inference_config,
 }
 
 void Context::reset_session(const std::shared_ptr<SessionElement>& session) {
-    session->m_initialized.store(false, std::memory_order::release);
+    // seq_cst: pairs with the worker's register-before-check in
+    // InferenceThread::process_dequeued_inference().
+    session->m_initialized.store(false, std::memory_order::seq_cst);
 
     drain_inference_queue(session);
 
@@ -452,17 +592,24 @@ void Context::reset_session(const std::shared_ptr<SessionElement>& session) {
     session->m_initialized.store(true, std::memory_order::release);
 }
 
-moodycamel::ProducerToken& Context::get_producer_token() {
-    size_t const index = m_next_producer_index.fetch_add(1) % m_producer_tokens.size();
-    return *m_producer_tokens[index];
-}
-
-moodycamel::ConcurrentQueue<InferenceData>& Context::get_static_inference_queue() {
+InferenceQueue& Context::get_static_inference_queue() {
     return m_next_inference;
 }
 
 std::unique_ptr<InferenceThread> Context::make_inference_thread() {
-    return std::make_unique<InferenceThread>(m_next_inference);
+    return std::make_unique<InferenceThread>(m_next_inference, m_context_config.m_wait_strategy);
+}
+
+unsigned int Context::get_num_inference_threads() {
+    return InferenceThread::get_num_active_threads();
+}
+
+bool Context::has_inference_threads() {
+    // The pool covers the native auto-managed threads even before
+    // prepare_session() starts them; the active count covers externally driven
+    // threads (user-created on native, JS Workers on WebAssembly, where the
+    // pool is always empty).
+    return !m_thread_pool.empty() || InferenceThread::get_num_active_threads() > 0;
 }
 
 #ifdef USE_LIBTORCH

@@ -216,13 +216,28 @@ public:
     int get_session_id() const;
 
     /**
-     * @brief Configures the manager for non-real-time operation
+     * @brief Configures the session for non-real-time (offline) operation
      *
-     * When set to true, relaxes real-time constraints and may use different
-     * processing algorithms or memory allocation strategies optimized for
-     * offline processing rather than real-time audio.
+     * When enabled, Context::new_data_request() blocks the calling thread until
+     * every pending inference for this session completes, instead of returning
+     * early (blocking_ratio == 0) or giving up at a deadline (blocking_ratio > 0).
+     * This means process()/pop_data() always yield complete output -- never a
+     * dropped/zero-filled chunk -- at the cost of an unbounded wait, so it is
+     * intended for offline rendering (e.g. bounce-to-disk), not the live audio
+     * thread.
      *
-     * @param is_non_realtime True to enable non-real-time mode, false for real-time mode
+     * @param is_non_realtime True to block for complete output (non-real-time
+     * mode), false to restore the bounded/non-blocking real-time behavior
+     *
+     * @warning Not real-time safe while enabled. Requires at least one
+     * inference thread to exist (Context::has_inference_threads()) — without
+     * one the blocking waits could never complete, so the call is refused with
+     * a warning. On WebAssembly that means spinning up at least one inference
+     * worker (AniraWeb.spinUpInferenceWorker()) before enabling this mode; the
+     * waits there are busy-waits (spins), so run offline processing in a
+     * Worker or under an OfflineAudioContext rather than on the main thread.
+     * The check runs once at enable time: stopping all inference threads while
+     * non-real-time mode is active re-creates the hang.
      */
     void set_non_realtime(bool is_non_realtime) const;
 

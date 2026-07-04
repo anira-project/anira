@@ -6,10 +6,12 @@
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <c10/util/Exception.h>
+#include <c10/util/Logging.h>
 #include <torch/csrc/autograd/generated/variable_factories.h>
 #include <torch/csrc/jit/serialization/import.h>
 #include <torch/utils.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <sstream>
@@ -20,6 +22,11 @@ namespace anira {
 LibtorchProcessor::LibtorchProcessor(InferenceConfig& inference_config)
     : BackendBase(inference_config) {
     torch::set_num_threads(1);
+
+    // Forward anira's log level to c10's glog-style logging (INFO=0, WARNING=1,
+    // ERROR=2, FATAL=3). c10 has no severity below INFO, so both Debug and Info
+    // map to INFO.
+    FLAGS_caffe2_log_level = std::max(static_cast<int>(get_log_level()) - 1, 0);
 
     for (unsigned int i = 0; i < m_inference_config.m_num_parallel_processors; ++i) {
         m_instances.emplace_back(std::make_shared<Instance>(m_inference_config));
