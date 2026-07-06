@@ -437,6 +437,10 @@ public:
      * parameters, ensuring consistent behavior across different usage scenarios.
      */
     struct Defaults {
+        /// Default maximum inference time in milliseconds. Used when the value is not specified
+        /// (e.g. offline-only configs that omit it). It is a real-time scheduling hint only and is
+        /// ignored by the OfflineInferenceHandler; real-time users should set an explicit value.
+        static constexpr float k_max_inference_time = 0.f;
         static constexpr unsigned int k_warm_up = 0;  ///< Default number of warm-up inferences (0 =
                                                       ///< no warm-up)
         static constexpr bool k_session_exclusive_processor = false;  ///< Default session
@@ -469,7 +473,9 @@ public:
      * @param model_data Vector of model data for different backends
      * @param tensor_shape Vector of tensor shape configurations
      * @param processing_spec Processing specification defining channels, sizes, and latencies
-     * @param max_inference_time Maximum allowed inference time in milliseconds per inference
+     * @param max_inference_time Maximum allowed inference time in milliseconds per inference. A
+     * real-time scheduling hint; defaults to 0 ("unspecified"), which the OfflineInferenceHandler
+     * accepts and ignores. The real-time InferenceHandler::prepare() requires a value > 0.
      * @param warm_up Number of warm-up inferences to perform during initialization
      * @param session_exclusive_processor Whether to use exclusive processor sessions
      * @param blocking_ratio Ratio controlling blocking behavior (0.0-1.0)
@@ -478,7 +484,7 @@ public:
     InferenceConfig(std::vector<ModelData> model_data,
                     std::vector<TensorShape> tensor_shape,
                     ProcessingSpec processing_spec,
-                    float max_inference_time,                    // in ms per inference
+                    float max_inference_time = Defaults::k_max_inference_time,  // ms per inference
                     unsigned int warm_up = Defaults::k_warm_up,  // number of warm up inferences
                     bool session_exclusive_processor = Defaults::k_session_exclusive_processor,
                     float blocking_ratio = Defaults::k_blocking_ratio,
@@ -493,7 +499,9 @@ public:
      *
      * @param model_data Vector of model data for different backends
      * @param tensor_shape Vector of tensor shape configurations
-     * @param max_inference_time Maximum allowed inference time in milliseconds per inference
+     * @param max_inference_time Maximum allowed inference time in milliseconds per inference. A
+     * real-time scheduling hint; defaults to 0 ("unspecified"), which the OfflineInferenceHandler
+     * accepts and ignores. The real-time InferenceHandler::prepare() requires a value > 0.
      * @param warm_up Number of warm-up inferences to perform during initialization
      * @param session_exclusive_processor Whether to use exclusive processor sessions
      * @param blocking_ratio Ratio controlling blocking behavior (0.0-1.0)
@@ -501,7 +509,7 @@ public:
      */
     InferenceConfig(std::vector<ModelData> model_data,
                     std::vector<TensorShape> tensor_shape,
-                    float max_inference_time,                    // in ms per inference
+                    float max_inference_time = Defaults::k_max_inference_time,  // ms per inference
                     unsigned int warm_up = Defaults::k_warm_up,  // number of warm up inferences
                     bool session_exclusive_processor = Defaults::k_session_exclusive_processor,
                     float blocking_ratio = Defaults::k_blocking_ratio,

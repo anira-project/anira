@@ -134,7 +134,6 @@ void anira::JsonConfigLoader::parse_inference_config(const nlohmann::json& confi
     SingleParameterStruct single_parameters;
 
     bool processing_spec_required = false;
-    bool max_inference_time_defined = false;
 
     if (inference_json.contains("model_data")) {
         const auto& model_data_json = inference_json.at("model_data");
@@ -152,10 +151,9 @@ void anira::JsonConfigLoader::parse_inference_config(const nlohmann::json& confi
             create_processing_spec_from_config(processing_spec_json, processing_spec_required);
     }
 
-    single_parameters =
-        create_single_parameters_from_config(inference_json, max_inference_time_defined);
+    single_parameters = create_single_parameters_from_config(inference_json);
 
-    if (!model_data.empty() && !tensor_shape.empty() && max_inference_time_defined) {
+    if (!model_data.empty() && !tensor_shape.empty()) {
         if (processing_spec_required) {
             m_inference_config = std::make_unique<anira::InferenceConfig>(
                 model_data,
@@ -460,21 +458,21 @@ std::vector<size_t> anira::JsonConfigLoader::parse_size_t_json_shape(
 
 anira::JsonConfigLoader::SingleParameterStruct
     anira::JsonConfigLoader::create_single_parameters_from_config(
-        const nlohmann::basic_json<>& config,
-        bool& necessary_parameter_set) {
+        const nlohmann::basic_json<>& config) {
     SingleParameterStruct single_parameters;
 
+    // 'max_inference_time' is optional: it is a real-time scheduling hint only and is ignored by
+    // the OfflineInferenceHandler, so offline-only configs may omit it. When absent it defaults to
+    // InferenceConfig::Defaults::k_max_inference_time.
     if (config.contains("max_inference_time")) {
         const auto& max_inference_time_json = config.at("max_inference_time");
         if (max_inference_time_json.is_number_float()) {
             const float max_inference_time = max_inference_time_json.get<float>();
             single_parameters.m_max_inference_time = max_inference_time;
-            necessary_parameter_set = true;
+            single_parameters.m_max_inference_time_set = true;
         } else {
             LOG_ERROR << "Invalid 'max_inference_time' value: expected a float." << '\n';
         }
-    } else {
-        LOG_ERROR << "Missing 'max_inference_time' key." << '\n';
     }
 
     if (config.contains("warm_up")) {

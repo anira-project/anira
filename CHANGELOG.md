@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `InferenceConfig::max_inference_time` is now optional and defaults to `0` (`InferenceConfig::Defaults::k_max_inference_time`), meaning "unspecified". It is a real-time scheduling hint that the `OfflineInferenceHandler` ignores, so offline-only configs (and their `*.anira.json` files) may omit it. The `InferenceConfig` constructor now only rejects negative values; the real-time `InferenceHandler::prepare()` still throws `std::invalid_argument` if it is not `> 0`. `JsonConfigLoader` no longer treats a missing `max_inference_time` key as an error.
 - `ContextConfig`'s default `num_threads` is now platform-dependent: half the available CPU cores (as before) on native builds, `0` on WebAssembly, since inference threads there are always supplied externally via `AniraWeb.spinUpInferenceWorker()`.
 
 ### Fixed

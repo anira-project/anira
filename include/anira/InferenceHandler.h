@@ -370,6 +370,11 @@ public:
     void reset();
 
 private:
+    /// Validates configuration requirements specific to real-time processing. Throws
+    /// std::invalid_argument if InferenceConfig::m_max_inference_time is not > 0 (the real-time
+    /// scheduler needs it; only the OfflineInferenceHandler may leave it unspecified as 0).
+    void check_realtime_requirements() const;
+
     InferenceConfig& m_inference_config;   ///< Reference to the inference configuration
     InferenceManager m_inference_manager;  ///< Internal inference manager handling the processing
                                            ///< pipeline

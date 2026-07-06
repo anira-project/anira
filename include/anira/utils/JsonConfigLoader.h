@@ -46,8 +46,7 @@ private:
     static std::vector<size_t> parse_size_t_json_shape(const nlohmann::json& shape_node,
                                                        const std::string& json_key_name);
     static SingleParameterStruct create_single_parameters_from_config(
-        const nlohmann::basic_json<>& config,
-        bool& necessary_parameter_set);
+        const nlohmann::basic_json<>& config);
 
     std::unique_ptr<anira::ContextConfig> m_context_config;
     std::unique_ptr<anira::InferenceConfig> m_inference_config;

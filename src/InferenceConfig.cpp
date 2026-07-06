@@ -28,10 +28,13 @@ InferenceConfig::InferenceConfig(std::vector<ModelData> model_data,
     , m_session_exclusive_processor(session_exclusive_processor)
     , m_blocking_ratio(blocking_ratio)
     , m_num_parallel_processors(num_parallel_processors) {
-    if (m_max_inference_time <= 0.f) {
+    // max_inference_time is a real-time scheduling hint. 0 means "unspecified" and is valid for
+    // offline-only use (the OfflineInferenceHandler ignores it); the real-time InferenceHandler
+    // validates that it is > 0 in prepare(). Negative values are always invalid.
+    if (m_max_inference_time < 0.f) {
         LOG_ERROR << "Invalid max_inference_time: " << m_max_inference_time
-                  << ". It must be greater than 0." << '\n';
-        throw std::invalid_argument("max_inference_time must be greater than 0.");
+                  << ". It must be greater than or equal to 0." << '\n';
+        throw std::invalid_argument("max_inference_time must be greater than or equal to 0.");
     }
 
     update_processing_spec();

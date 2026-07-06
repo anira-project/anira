@@ -6,10 +6,12 @@
 #include <anira/scheduler/Context.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
+#include <anira/utils/Logger.h>
 
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
+#include <stdexcept>
 #include <vector>
 
 namespace anira {
@@ -76,7 +78,19 @@ InferenceHandler::~InferenceHandler() {
     free(m_output_tensor_num_samples);
 }
 
+void InferenceHandler::check_realtime_requirements() const {
+    if (m_inference_config.m_max_inference_time <= 0.f) {
+        LOG_ERROR << "Invalid max_inference_time: " << m_inference_config.m_max_inference_time
+                  << ". The real-time InferenceHandler requires max_inference_time > 0 (only the "
+                     "OfflineInferenceHandler may leave it unspecified as 0)."
+                  << '\n';
+        throw std::invalid_argument(
+            "InferenceHandler::prepare requires InferenceConfig::max_inference_time > 0.");
+    }
+}
+
 void InferenceHandler::prepare(HostConfig new_audio_config) {
+    check_realtime_requirements();
     m_inference_manager.prepare(
         new_audio_config,
         std::vector<long>(m_inference_config.get_tensor_output_shape().size(), -1));
@@ -85,6 +99,7 @@ void InferenceHandler::prepare(HostConfig new_audio_config) {
 void InferenceHandler::prepare(HostConfig new_audio_config,
                                unsigned int custom_latency,
                                size_t tensor_index) {
+    check_realtime_requirements();
     std::vector<long> custom_latency_vector(m_inference_config.get_tensor_output_shape().size(),
                                             -1);
     if (m_inference_config.get_postprocess_output_size()[tensor_index] <= 0) {
@@ -100,6 +115,7 @@ void InferenceHandler::prepare(HostConfig new_audio_config,
 
 void InferenceHandler::prepare(HostConfig new_audio_config,
                                std::vector<unsigned int> custom_latency) {
+    check_realtime_requirements();
     assert(custom_latency.size() == m_inference_config.get_tensor_output_shape().size() &&
            "Custom latency size must match the number of output tensors.");
     std::vector<long> custom_latency_long(custom_latency.begin(), custom_latency.end());
