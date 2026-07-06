@@ -77,10 +77,21 @@ void InferenceThread::run_loop() {
     // Emscripten the count is maintained by start()/stop() instead, which run
     // synchronously on the main instance (run_loop() entry in the JS Worker is
     // asynchronous and would race callers that just spun the worker up).
+    // The per-thread m_entered_run_loop flag lets Context::start_thread_pool()
+    // wait for this asynchronous registration before it returns, so a caller
+    // reading get_num_inference_threads() right after start_thread_pool() sees
+    // this thread (the global counter is incremented before the flag is set).
     struct ActiveGuard {
-        ActiveGuard() { s_num_active_threads.fetch_add(1, std::memory_order::relaxed); }
-        ~ActiveGuard() { s_num_active_threads.fetch_sub(1, std::memory_order::relaxed); }
-    } const active_guard;
+        explicit ActiveGuard(std::atomic<bool>& entered) : m_entered(entered) {
+            s_num_active_threads.fetch_add(1, std::memory_order::relaxed);
+            m_entered.store(true, std::memory_order::release);
+        }
+        ~ActiveGuard() {
+            m_entered.store(false, std::memory_order::release);
+            s_num_active_threads.fetch_sub(1, std::memory_order::relaxed);
+        }
+        std::atomic<bool>& m_entered;
+    } const active_guard(m_entered_run_loop);
     if (m_wait_strategy == WaitStrategy::Blocking) {
         run_loop_blocking();
         return;

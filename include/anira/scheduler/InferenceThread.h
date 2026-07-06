@@ -123,6 +123,21 @@ public:
      */
     static unsigned int get_num_active_threads();
 
+#ifndef __EMSCRIPTEN__
+    /**
+     * @brief Whether this thread has entered run_loop() and is counted active
+     *
+     * Native threads register in get_num_active_threads() asynchronously, at
+     * run_loop() entry — after start() has already returned and is_running() is
+     * true. Context::start_thread_pool() polls this so it only returns once every
+     * started thread is counted, closing the startup race in which a caller
+     * reading get_num_inference_threads() right afterwards could see a stale zero.
+     */
+    bool has_entered_run_loop() const {
+        return m_entered_run_loop.load(std::memory_order::acquire);
+    }
+#endif
+
 private:
 #ifndef __EMSCRIPTEN__
     /**
@@ -202,6 +217,12 @@ private:
 
     inline static std::atomic<unsigned int> s_num_active_threads{0};  ///< See
                                                                       ///< get_num_active_threads()
+
+#ifndef __EMSCRIPTEN__
+    /// Set true once this thread has entered run_loop() (and been counted by
+    /// get_num_active_threads()), false once it leaves. See has_entered_run_loop().
+    std::atomic<bool> m_entered_run_loop{false};
+#endif
 
 #ifdef __EMSCRIPTEN__
     std::atomic<bool> m_should_exit{false};

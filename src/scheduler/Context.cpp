@@ -512,8 +512,20 @@ void Context::post_process(
 void Context::start_thread_pool() {
     for (const auto& i : m_thread_pool) {
         if (!i->is_running()) { i->start(); }
-        while (!i->is_running()) { std::this_thread::sleep_for(std::chrono::microseconds(50)); }
     }
+#ifndef __EMSCRIPTEN__
+    // is_running() only means the OS thread was spawned; the thread registers in
+    // get_num_inference_threads() asynchronously, when it enters run_loop(). Block
+    // until every started thread has done so, otherwise a caller reading
+    // get_num_inference_threads() right after this returns (e.g. the
+    // OfflineInferenceHandler's thread-availability check) could observe a stale
+    // zero and wrongly conclude no inference threads are available.
+    for (const auto& i : m_thread_pool) {
+        while (!i->has_entered_run_loop()) {
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+    }
+#endif
 }
 
 void Context::drain_inference_queue(const std::shared_ptr<SessionElement>& session) {
