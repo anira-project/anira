@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `anira::OfflineInferenceHandler`: job-based offline (non-real-time) inference. Arbitrary-length buffers are processed through the existing pre-/post-processing pipeline and the shared inference thread pool, with input-aligned output (model-internal latency trimmed, tail zero-flushed) and a completion callback per job. Jobs run in parallel on internal lanes (`num_parallel_jobs`; stateful configs default to one lane), with `wait()`/`wait_all()` and an optional polled delivery mode (`poll()`/`poll_wait()`). See the new "Offline Processing" documentation section and the `offline-inference` example.
+- anira-web: `OfflineInferenceHandler` TS wrapper with Promise-based `submit()` and dedicated offline pump workers (one per lane).
+- `InferenceManager::get_num_structs()` accessor, and an optional `num_structs_override` parameter on the `prepare()` chain (0 = automatic, unchanged behavior) used by the offline handler to size the struct pool exactly.
+
 ### Fixed
 
 - The JUCE and CLAP example plugins now call `InferenceHandler::set_non_realtime()` when the host switches to offline/bounce rendering (JUCE's `isNonRealtime()`, CLAP's `clap.render` extension) so `process()`/`pop_data()` block until inference genuinely completes. Previously the JUCE example only faked offline pacing by sleeping for the buffer's wall-clock duration -- which does not guarantee complete output -- and the CLAP example did not implement the render extension at all.

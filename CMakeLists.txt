@@ -237,6 +237,7 @@ target_sources(${PROJECT_NAME}
 
         # Interface
         src/InferenceHandler.cpp
+        src/OfflineInferenceHandler.cpp
         src/PrePostProcessor.cpp
         src/InferenceConfig.cpp
 

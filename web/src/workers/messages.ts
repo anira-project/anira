@@ -92,6 +92,58 @@ export type InferenceWorkerMessage =
   | DestroyMessage
 
 // ---------------------------------
+// ------ OfflineWorker Messages ---
+// ---------------------------------
+
+export type InitOfflineWorkerMessage = {
+  type: 'initOfflineWorker'
+  wasmMemory: WebAssembly.Memory
+  stackPtr: number
+  handlerPtr: number
+  laneIndex: number
+}
+
+/**
+ * Dispatches one offline job to a pump worker's lane. All pointer fields are
+ * WASM heap addresses allocated on the main instance by
+ * :js:meth:`OfflineInferenceHandler.submit` (multi-tensor
+ * ``data[tensor][channel][sample]`` pointer arrays plus per-tensor sample
+ * counts / capacities). `headTrimPtr` is 0 for the default (latency) trim.
+ */
+export type SubmitOfflineJobMessage = {
+  type: 'submitOfflineJob'
+  jobId: number
+  inputPointersPtr: number
+  inputCountsPtr: number
+  outputPointersPtr: number
+  outputCapacitiesPtr: number
+  headTrimPtr: number
+  tailFlush: boolean
+}
+
+/**
+ * Payload-free nudge posted after a pump worker finished a job. The
+ * completion queue inside the C++ handler is the authoritative result data —
+ * the receiving handler drains it via
+ * ``_offlineinferencehandler_try_dequeue_result`` (one nudge may drain
+ * several completions).
+ */
+export type OfflineJobDoneResponse = {
+  type: 'offlineJobDone'
+}
+
+export type OfflineJobErrorResponse = {
+  type: 'offlineJobError'
+  jobId: number
+  message: string
+}
+
+export type OfflineWorkerMessage =
+  | InitOfflineWorkerMessage
+  | SubmitOfflineJobMessage
+  | DestroyMessage
+
+// ---------------------------------
 // ------ Audio Worklet Messages --
 // ---------------------------------
 

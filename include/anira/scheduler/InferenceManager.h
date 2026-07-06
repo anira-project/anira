@@ -82,7 +82,9 @@ public:
      * @param custom_latency Optional vector of custom latency values for each tensor (empty for
      * automatic calculation)
      */
-    void prepare(HostConfig config, std::vector<long> custom_latency = {});
+    void prepare(HostConfig config,
+                 std::vector<long> custom_latency = {},
+                 size_t num_structs_override = 0);
 
     /**
      * @brief Processes multi-tensor audio data with separate input and output buffers
@@ -214,6 +216,19 @@ public:
      * @return The current session ID
      */
     int get_session_id() const;
+
+    /**
+     * @brief Gets the number of pre-allocated thread-safe structures of the session
+     *
+     * Returns the size of the session's inference-queue pool as calculated by the
+     * last prepare() call (SessionElement::calculate_num_structs). This is the upper
+     * bound of concurrently in-flight inferences for this session; callers that pace
+     * submissions themselves (e.g. the offline pump) use it to bound their in-flight
+     * count so the no-free-struct drop path can never be hit.
+     *
+     * @return Number of allocated ThreadSafeStructs (0 before prepare())
+     */
+    size_t get_num_structs() const;
 
     /**
      * @brief Configures the session for non-real-time (offline) operation

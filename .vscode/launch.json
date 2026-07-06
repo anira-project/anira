@@ -13,6 +13,14 @@
             "cwd": "${workspaceRoot}"
         },
         {
+            "name": "Launch offline-inference",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceRoot}/build/desktop/Examples/Debug/examples/offline-inference/offline-inference",
+            "args": [],
+            "cwd": "${workspaceRoot}"
+        },
+        {
             "name": "Launch simple-benchmark",
             "type": "lldb",
             "request": "launch",

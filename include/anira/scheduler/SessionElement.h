@@ -102,8 +102,13 @@ public:
      * @param spec Host configuration containing sample rate, buffer size, and audio settings
      * @param custom_latency Optional vector of custom latency values for each tensor (empty for
      * automatic calculation)
+     * @param num_structs_override Optional fixed number of thread-safe structs (0 = automatic
+     * calculation from max_inference_time / host config). Used by non-real-time drivers whose
+     * in-flight task count is bounded by construction (see OfflineInferenceHandler).
      */
-    void prepare(const HostConfig& spec, std::vector<long> custom_latency = {});
+    void prepare(const HostConfig& spec,
+                 std::vector<long> custom_latency = {},
+                 size_t num_structs_override = 0);
 
     /**
      * @brief Template method for setting backend processors

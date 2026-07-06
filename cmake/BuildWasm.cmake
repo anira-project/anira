@@ -30,6 +30,7 @@ set(ANIRA_WASM_WRAPPER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten-wrappers/utils/Vectors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten-wrappers/InferenceConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten-wrappers/InferenceHandler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten-wrappers/OfflineInferenceHandler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emscripten-wrappers/PrePostProcessor.cpp
 )
 

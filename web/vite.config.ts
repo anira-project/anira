@@ -27,6 +27,10 @@ function preserveWorkerUrls(): Plugin {
       builtEntry: 'workers/inference-worker.js',
     },
     {
+      sourcePath: './workers/offline-worker.ts',
+      builtEntry: 'workers/offline-worker.js',
+    },
+    {
       sourcePath: './workers/audio-worklet.bundled.js',
       builtEntry: 'workers/audio-worklet.bundled.js',
     },
@@ -171,6 +175,10 @@ export default defineConfig({
         'workers/inference-worker': path.resolve(
           __dirname,
           'src/workers/inference-worker.ts'
+        ),
+        'workers/offline-worker': path.resolve(
+          __dirname,
+          'src/workers/offline-worker.ts'
         ),
         'workers/audio-worklet': path.resolve(__dirname, 'src/workers/audio-worklet.ts'),
         'workers/worklet-base': path.resolve(__dirname, 'src/workers/worklet-base.ts'),

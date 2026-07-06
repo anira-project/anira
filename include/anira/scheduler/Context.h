@@ -147,7 +147,8 @@ public:
      */
     void prepare_session(const std::shared_ptr<SessionElement>& session,
                          HostConfig new_config,
-                         std::vector<long> custom_latency = {});
+                         std::vector<long> custom_latency = {},
+                         size_t num_structs_override = 0);
 
     /**
      * @brief Gets the number of active inference sessions

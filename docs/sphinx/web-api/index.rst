@@ -19,4 +19,5 @@ reference.
    custom_audio_worklets
    custom_pre_post_processing
    custom_inference_backends
+   offline_processing
    reference/index

@@ -151,14 +151,17 @@ void SessionElement::complete_with_zeros(
     }
 }
 
-void SessionElement::prepare(const HostConfig& host_config, std::vector<long> custom_latency) {
+void SessionElement::prepare(const HostConfig& host_config,
+                             std::vector<long> custom_latency,
+                             size_t num_structs_override) {
     m_host_config = host_config;
 
     // Calculate the latency, number of structs needed
     m_latency.clear();
     std::vector<float> const latency = calculate_latency(host_config);
     m_latency = sync_latencies(latency);
-    m_num_structs = calculate_num_structs(host_config);
+    m_num_structs =
+        num_structs_override > 0 ? num_structs_override : calculate_num_structs(host_config);
 
     // If the host config allows smaller buffers, we need to adjust the latency and number of
     // structs
@@ -300,9 +303,10 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
                 }
             }
 
-            size_t const adjusted_num_structs = calculate_num_structs(adjusted_config);
-
-            if (adjusted_num_structs > m_num_structs) { m_num_structs = adjusted_num_structs; }
+            if (num_structs_override == 0) {
+                size_t const adjusted_num_structs = calculate_num_structs(adjusted_config);
+                if (adjusted_num_structs > m_num_structs) { m_num_structs = adjusted_num_structs; }
+            }
         }
     }
 

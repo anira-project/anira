@@ -2,6 +2,12 @@ export { BaseWrapper, resolvePtr, type PossiblePointer } from './BaseWrapper'
 export { createInferenceBackend, type InferenceBackendValues } from './InferenceBackend'
 export { InferenceConfig } from './InferenceConfig'
 export { InferenceHandler } from './InferenceHandler'
+export {
+  OfflineInferenceHandler,
+  type OfflineJobResult,
+  type OfflineSubmitOptions,
+  type OfflinePrepareOptions,
+} from './OfflineInferenceHandler'
 export { JSPrePostProcessor } from './JSPrePostProcessor'
 export { ModelData } from './ModelData'
 export { PrePostProcessor } from './PrePostProcessor'

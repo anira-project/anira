@@ -599,3 +599,75 @@ Some neural networks require additional input parameters or output values that d
 
 ..  note::
     The functions :cpp:func:`anira::PrePostProcessor::set_input` and :cpp:func:`anira::PrePostProcessor::get_output` can be called from any thread, allowing you to update control parameters or retrieve additional values asynchronously without blocking the real-time audio processing thread.
+
+6. Offline Processing
+---------------------
+
+For non-real-time workloads -- rendering whole files, batch inference, bounce-to-disk -- anira
+provides the :cpp:class:`anira::OfflineInferenceHandler`. Instead of streaming block by block, you
+submit a whole, arbitrary-length buffer as a **job** together with a completion callback. The
+handler chunks the buffer internally through the same ring-buffer/``PrePostProcessor`` pipeline as
+the real-time path (custom pre/post processors work unchanged), executes the chunks on the shared
+inference thread pool, and invokes the callback asynchronously when the whole job is done.
+
+.. code-block:: cpp
+
+    anira::InferenceConfig inference_config = ...;   // same config type as the RT path
+    MyPrePostProcessor pp_processor(inference_config);
+    anira::OfflineInferenceHandler handler(pp_processor, inference_config);
+    handler.set_inference_backend(anira::InferenceBackend::ONNX);
+    handler.prepare();   // no arguments: chunking, rate and anchor are chosen internally
+
+    std::vector<float> output(handler.get_expected_output_samples(input_length)[0]);
+    const float* input_channels[] = {input.data()};
+    float* output_channels[] = {output.data()};
+
+    handler.submit(input_channels, input_length, output_channels, output.size(),
+                   [](const anira::OfflineJobResult& result) {
+                       // fires from the handler's worker thread when the job completed
+                   });
+    handler.wait_all();
+
+Key semantics:
+
+* **Input-aligned output**: the model-internal latency is trimmed from the head and the input
+  is zero-flushed at the tail, so output sample 0 corresponds to input sample 0. Offline
+  sessions carry no real-time latency bookkeeping -- ``get_latency()`` returns exactly the
+  config's ``internal_model_latency``, no prefill zeros exist, the struct pool is sized to the
+  pump's in-flight bound, and ``max_inference_time`` is ignored (it is a real-time scheduling
+  hint). Raw untrimmed output is available via :cpp:struct:`anira::OfflineJobOptions`
+  (``m_head_trim``, ``m_tail_flush``).
+* **Independent jobs**: the session stream state (ring buffers including past-sample history,
+  latency prefill) is cleared automatically after every job -- each job starts with pristine
+  zero left-context.
+* **Parallel jobs via lanes**: the handler manages ``num_parallel_jobs`` internal lanes (one
+  session plus one pump thread each; constructor argument, ``0`` = auto). Jobs are dispatched
+  FIFO to free lanes and may therefore complete out of submission order; chunks within a job
+  additionally run in parallel on the inference pool (bounded by
+  ``m_num_parallel_processors``). Stateful (``session_exclusive_processor``) configurations
+  default to a single lane. Callbacks may fire concurrently from different lane threads --
+  custom ``PrePostProcessor`` implementations must be re-entrant when using multiple lanes.
+* **Non-streamable tensors**: per-job values are passed via
+  ``OfflineJobOptions::m_non_streamable_inputs`` (such a job runs exclusively, since the values
+  live in the shared ``PrePostProcessor``); values constant across jobs should instead be set
+  once directly on the ``PrePostProcessor``. Final values of non-streamable output tensors are
+  returned in :cpp:struct:`anira::OfflineJobResult`.
+* **Buffer lifetime**: the sample buffers passed to ``submit()`` are borrowed and must stay
+  valid and untouched until the job's callback returns (the pointer arrays themselves are
+  copied at submit time).
+* **Not real-time safe**: ``submit()`` (like ``wait()``/``wait_all()``/``poll()``) allocates,
+  locks and signals -- never call it from an audio callback. If real-time code needs to
+  trigger a job (e.g. a plugin's bounce state), defer the ``submit()`` to a message/UI thread
+  via a lock-free flag or your framework's async-message facility. The real-time safe anira
+  API remains the streaming ``InferenceHandler``.
+* **Delivery modes**: by default callbacks fire immediately from the lane's worker thread
+  (``OfflineDeliveryMode::Immediate``); with ``OfflineDeliveryMode::Polled`` completed jobs
+  queue up and the callbacks fire on whichever thread calls ``poll()``/``poll_wait()`` -- useful
+  to receive them on a GUI or main-loop thread.
+* **Coexistence with real-time processing**: offline chunks share the global inference queue
+  with real-time sessions, but at most ``num_parallel_jobs * m_num_parallel_processors`` offline
+  chunks are ever in flight, so real-time sessions see only a bounded, tunable delay. For
+  offline-dominant applications, ``WaitStrategy::Blocking`` in the :cpp:struct:`anira::ContextConfig`
+  avoids idle spinning of the pool between jobs.
+
+See the bundled ``examples/offline-inference`` example for a complete program.

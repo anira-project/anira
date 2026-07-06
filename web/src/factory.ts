@@ -26,6 +26,12 @@ export type AniraWasmConfig = {
 export type AniraWasmInstance = Omit<MainModule, 'HEAPF32' | 'HEAPU32'> & {
   HEAPF32: Float32Array
   HEAPU32: Uint32Array
+  /**
+   * The shared `WebAssembly.Memory` this module instance runs on. Needed by
+   * wrappers that bootstrap their own workers over the same memory (e.g.
+   * `OfflineInferenceHandler`).
+   */
+  wasmMemory: WebAssembly.Memory
 }
 
 // Export factory with WASM locateFile override
@@ -55,5 +61,6 @@ export const createAniraWasm = async (
     ...out,
     HEAPF32: out.HEAPF32 as Float32Array,
     HEAPU32: out.HEAPU32 as Uint32Array,
+    wasmMemory,
   }
 }

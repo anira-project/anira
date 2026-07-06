@@ -37,10 +37,15 @@ InferenceBackend InferenceManager::get_backend() const {
     return m_session->m_current_backend.load(std::memory_order_relaxed);
 }
 
-void InferenceManager::prepare(HostConfig new_config, std::vector<long> custom_latency) {
+void InferenceManager::prepare(HostConfig new_config,
+                               std::vector<long> custom_latency,
+                               size_t num_structs_override) {
     m_host_config = new_config;
 
-    m_context->prepare_session(m_session, m_host_config, std::move(custom_latency));
+    m_context->prepare_session(m_session,
+                               m_host_config,
+                               std::move(custom_latency),
+                               num_structs_override);
 
     m_missing_samples.clear();
     m_missing_samples.resize(m_inference_config.get_tensor_output_shape().size(), 0);
@@ -231,6 +236,10 @@ size_t InferenceManager::get_available_samples(size_t tensor_index, size_t chann
 
 int InferenceManager::get_session_id() const {
     return m_session->m_session_id;
+}
+
+size_t InferenceManager::get_num_structs() const {
+    return m_session->m_num_structs;
 }
 
 void InferenceManager::set_non_realtime(bool is_non_realtime) const {

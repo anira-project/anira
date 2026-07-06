@@ -24,6 +24,10 @@
       "types": "./dist/workers/inference-worker.d.ts",
       "import": "./dist/workers/inference-worker.js"
     },
+    "./workers/offline-worker": {
+      "types": "./dist/workers/offline-worker.d.ts",
+      "import": "./dist/workers/offline-worker.js"
+    },
     "./workers/audio-worklet": {
       "types": "./dist/workers/audio-worklet.d.ts",
       "import": "./dist/workers/audio-worklet.js"

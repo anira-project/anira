@@ -289,14 +289,15 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
 
 void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
                               HostConfig new_config,
-                              std::vector<long> custom_latency) {
+                              std::vector<long> custom_latency,
+                              size_t num_structs_override) {
     // seq_cst: pairs with the worker's register-before-check in
     // InferenceThread::process_dequeued_inference().
     session->m_initialized.store(false, std::memory_order::seq_cst);
 
     drain_inference_queue(session);
 
-    session->prepare(new_config, std::move(custom_latency));
+    session->prepare(new_config, std::move(custom_latency), num_structs_override);
 
     start_thread_pool();
 

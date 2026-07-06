@@ -3,6 +3,7 @@
 
 #include "InferenceConfig.h"
 #include "InferenceHandler.h"
+#include "OfflineInferenceHandler.h"
 #include "PrePostProcessor.h"
 #include "backends/LibTorchProcessor.h"
 #include "backends/LiteRtProcessor.h"
