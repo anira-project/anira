@@ -226,6 +226,24 @@ public:
     void reset_session(const std::shared_ptr<SessionElement>& session);
 
     /**
+     * @brief Wait-free reset of a session for real-time callers.
+     *
+     * Unlike reset_session(), this NEVER blocks the caller on in-flight inferences:
+     * it bumps the session generation (invalidating every already-dispatched inference)
+     * and then calls SessionElement::clear_non_blocking(). Stale inferences complete on
+     * their worker threads, have their results discarded, and their structs reclaimed
+     * lazily by pre_process(). The observable output is identical to reset_session()
+     * because that path also discards the in-flight result — it merely waited first so
+     * it could safely wipe the struct memory.
+     *
+     * Only supported for non-stateful sessions; a session-exclusive (stateful) session
+     * falls back to the blocking reset_session() to preserve in-order execution.
+     *
+     * @param session Shared pointer to the session to reset
+     */
+    void reset_session_non_blocking(const std::shared_ptr<SessionElement>& session);
+
+    /**
      * @brief Get a reference to the static inference queue
      * Returns a reference to the global concurrent queue used for inference requests.
      * This is used to construct InferenceThreads (user-managed or WASM
@@ -317,6 +335,20 @@ private:
      * @return True if preprocessing was successful, false otherwise
      */
     static bool pre_process(const std::shared_ptr<SessionElement>& session);
+
+    /**
+     * @brief Returns structs left over from a wait-free reset to the free pool.
+     *
+     * A non-blocking reset (reset_session_non_blocking) leaves in-flight structs of the
+     * previous generation untouched. Once their worker publishes completion, the audio
+     * thread can safely reclaim them: this scans the session's structs and, for any that
+     * is stale (dispatch generation != current) and already done, drops its (discarded)
+     * result and marks it free. Called on the audio thread from new_data_submitted().
+     * No-op when no reset is pending.
+     *
+     * @param session Shared pointer to the session whose stale structs to reclaim
+     */
+    static void reclaim_stale_structs(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Dispatches the next stateful task of a session-exclusive session

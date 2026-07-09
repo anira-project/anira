@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Wait-free session reset: `InferenceHandler::reset_non_blocking()` / `InferenceManager::reset_non_blocking()` / `Context::reset_session_non_blocking()`, a real-time-safe variant of `reset()` that re-anchors a session without ever blocking the caller on in-flight inferences. `reset()` drains the inference queue first (a `nanosleep`-based spin that is unsafe on the audio thread); the non-blocking variant instead bumps a per-session generation counter (`SessionElement::m_generation`, stamped onto each dispatch via `ThreadSafeStruct::m_dispatch_generation`) so already-dispatched inferences become "stale": their results are ignored by `new_data_request()` (generation guard) and their structs are reclaimed lazily on the audio thread by `reclaim_stale_structs()` once the worker publishes completion. Produces output identical to `reset()` (which also discards the in-flight result — it merely waited first so it could safely wipe the struct memory). Supported for non-stateful sessions only; a `session_exclusive_processor` session transparently falls back to the blocking `reset()`.
+
 ## [v2.2.1] - 2026-07-04
 
 ### Added

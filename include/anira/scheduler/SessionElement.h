@@ -93,6 +93,23 @@ public:
     void clear();
 
     /**
+     * @brief Wait-free variant of clear() for real-time resets.
+     *
+     * Resets the audio-thread-owned state (send/receive ring buffers, timestamp
+     * bookkeeping) and any ThreadSafeStruct that is currently free, but — unlike
+     * clear() — never touches a struct that a worker still holds in flight
+     * (m_free == false). It therefore does NOT require Context::drain_inference_queue()
+     * as a precondition and never blocks the caller.
+     *
+     * Correctness is provided by the session generation (see m_generation): the
+     * caller (Context::reset_session_non_blocking) bumps the generation first, which
+     * makes every already-dispatched inference "stale" — its result is ignored by
+     * Context::new_data_request() and its struct is reclaimed by Context::pre_process()
+     * once the worker signals completion. Only valid for non-stateful sessions.
+     */
+    void clear_non_blocking();
+
+    /**
      * @brief Prepares the session for processing with specified audio configuration
      *
      * Initializes all buffers, calculates latencies, and configures the session
@@ -200,8 +217,15 @@ public:
         std::atomic<bool> m_done_atomic{false};  ///< Atomic flag for non-blocking completion
                                                  ///< checking
 
-        unsigned long m_time_stamp;                ///< Timestamp for latency tracking and debugging
-        std::vector<BufferF> m_tensor_input_data;  ///< Input tensor data buffers
+        unsigned long m_time_stamp;  ///< Timestamp for latency tracking and debugging
+        // Session generation this struct was dispatched under (stamped in
+        // Context::pre_process). A wait-free reset bumps SessionElement::m_generation;
+        // a dispatch whose stamp no longer matches is "stale" — its result is discarded
+        // and the struct reclaimed. Written on the audio thread at dispatch, read on the
+        // worker thread and audio thread; a dispatch's stamp is stable for its lifetime,
+        // so a plain value (not atomic) is sufficient.
+        unsigned long m_dispatch_generation{0};
+        std::vector<BufferF> m_tensor_input_data;   ///< Input tensor data buffers
         std::vector<BufferF> m_tensor_output_data;  ///< Output tensor data buffers
     };
 
@@ -220,6 +244,15 @@ public:
                                               ///< initialized
     std::atomic<int> m_active_inferences{0};  ///< Atomic counter of currently active inference
                                               ///< operations
+
+    // Monotonic generation counter, bumped by Context::reset_session_non_blocking()
+    // on the audio thread. Every inference dispatched under an earlier generation is
+    // "stale": its output is discarded and its struct reclaimed, without the audio
+    // thread ever waiting for the worker. Only the audio thread writes it; workers
+    // read it to decide whether to skip a stale dispatch. seq_cst on the write pairs
+    // with the worker's register-before-read of m_active_inferences (store-buffering),
+    // matching the existing m_initialized handshake.
+    std::atomic<unsigned long> m_generation{0};
 
     // This session's explicit producer token for the global inference queue.
     // Pinning one token per session keeps enqueue allocation-free on the audio

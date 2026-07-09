@@ -369,6 +369,18 @@ public:
      */
     void reset();
 
+    /**
+     * @brief Wait-free variant of reset() safe to call from the audio thread.
+     *
+     * Re-anchors the inference pipeline without blocking on in-flight inferences, so it
+     * introduces no nanosleep / priority-inversion risk on the real-time thread. The
+     * observable output matches reset() (both discard any in-flight inference result).
+     *
+     * Intended for real-time re-anchoring (e.g. onset/transient re-sync). Non-stateful
+     * configurations only; stateful ones fall back to the blocking reset() internally.
+     */
+    void reset_non_blocking() ANIRA_REALTIME;
+
 private:
     InferenceConfig& m_inference_config;   ///< Reference to the inference configuration
     InferenceManager m_inference_manager;  ///< Internal inference manager handling the processing

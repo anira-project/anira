@@ -98,6 +98,49 @@ void SessionElement::clear() {
     }
 }
 
+void SessionElement::clear_non_blocking() {
+    // Precondition (unlike clear()): NO drain has run, so worker threads may still be
+    // mid-inference on this session's in-flight structs. We therefore reset only state
+    // the audio thread owns exclusively right now:
+    //   - the send/receive ring buffers and timestamp bookkeeping (audio-thread only), and
+    //   - the internals of structs that are currently FREE.
+    // In-flight structs (m_free == false) are left entirely untouched. The generation
+    // bump in Context::reset_session_non_blocking() makes their eventual result be
+    // ignored (Context::new_data_request generation guard) and Context::pre_process()
+    // reclaims them once the worker publishes completion.
+    for (auto& buffer : m_send_buffer) { buffer.clear_with_positions(); }
+    for (auto& buffer : m_receive_buffer) { buffer.clear_with_positions(); }
+    m_time_stamps.clear();
+    m_current_queue = 0;
+
+    for (auto& inference : m_inference_queue) {
+        // Only a free struct is exclusively ours to reset; skip anything a worker may
+        // still be reading/writing.
+        if (!inference->m_free.load(std::memory_order_acquire)) { continue; }
+        if (m_inference_config.m_blocking_ratio > 0.f) {
+            while (inference->m_done_semaphore.try_acquire()) {}
+        } else {
+            inference->m_done_atomic.store(false, std::memory_order_relaxed);
+        }
+        inference->m_time_stamp = 0;
+        for (auto& input_data : inference->m_tensor_input_data) { input_data.clear(); }
+        for (auto& output_data : inference->m_tensor_output_data) { output_data.clear(); }
+    }
+
+    // Push back 0.f for latency (identical to clear()).
+    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+        if (m_latency[i] > 0) {
+            for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
+                for (size_t k = 0;
+                     k < m_latency[i] - m_inference_config.get_internal_model_latency()[i];
+                     ++k) {
+                    m_receive_buffer[i].push_sample(j, 0.f);
+                }
+            }
+        }
+    }
+}
+
 void SessionElement::enqueue_pending_dispatch(
     std::shared_ptr<ThreadSafeStruct> thread_safe_struct) {
     // Single producer (the audio thread for this session), so insertion order

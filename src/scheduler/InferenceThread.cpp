@@ -163,16 +163,32 @@ bool InferenceThread::execute() {
 
 void InferenceThread::process_dequeued_inference() {
     auto& session = m_inference_data.m_session;
-    // Register the job BEFORE checking m_initialized, so a concurrent
-    // drain_inference_queue() can never miss it: either this thread observes the
-    // reset and skips, or the drain observes the increment and waits. Both sides
-    // do store-then-load on the two variables (store-buffering pattern), so the
-    // paired accesses must be seq_cst — with release/acquire alone the store-load
-    // reordering lets both sides read stale values and a "ghost" inference could
-    // run concurrently with SessionElement::clear().
+    auto& thread_safe_struct = m_inference_data.m_thread_safe_struct;
+    // Register the job BEFORE checking m_initialized / m_generation, so a concurrent
+    // reset can never miss it: either this thread observes the reset and skips, or the
+    // reset observes the increment. Both sides do store-then-load on the shared
+    // variables (store-buffering pattern), so the paired accesses must be seq_cst —
+    // with release/acquire alone the store-load reordering lets both sides read stale
+    // values and a "ghost" inference could run concurrently with SessionElement::clear().
     session->m_active_inferences.fetch_add(1, std::memory_order::seq_cst);
-    if (session->m_initialized.load(std::memory_order::seq_cst)) {
-        do_inference(session, m_inference_data.m_thread_safe_struct);
+
+    // A wait-free reset (Context::reset_session_non_blocking) bumps the session
+    // generation. A non-stateful dispatch whose stamp is now stale would have its
+    // output discarded anyway, so skip the model — but still publish the completion
+    // signal do_inference() would have set, so the audio thread's
+    // Context::reclaim_stale_structs() can return this struct to the free pool.
+    const bool stale = !session->m_inference_config.m_session_exclusive_processor &&
+                       thread_safe_struct->m_dispatch_generation !=
+                           session->m_generation.load(std::memory_order::seq_cst);
+
+    if (stale) {
+        if (session->m_inference_config.m_blocking_ratio > 0.f) {
+            thread_safe_struct->m_done_semaphore.release();
+        } else {
+            thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
+        }
+    } else if (session->m_initialized.load(std::memory_order::seq_cst)) {
+        do_inference(session, thread_safe_struct);
     }
     session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 }

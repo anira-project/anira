@@ -251,6 +251,17 @@ public:
      */
     void reset();
 
+    /**
+     * @brief Wait-free variant of reset() for real-time callers.
+     *
+     * Clears the session and re-anchors the inference grid without ever blocking on
+     * in-flight inferences (see Context::reset_session_non_blocking). Produces the same
+     * observable output as reset() — which also discards any in-flight result — but is
+     * safe to call from the audio thread. Non-stateful sessions only; stateful sessions
+     * transparently fall back to the blocking reset().
+     */
+    void reset_non_blocking();
+
 private:
     /**
      * @brief Processes input data through the preprocessing pipeline
