@@ -39,6 +39,9 @@ class TFLiteProcessor;
 #ifdef USE_LITERT
 class LiteRtProcessor;
 #endif
+#ifdef USE_EXECUTORCH
+class ExecuTorchProcessor;
+#endif
 
 /**
  * @brief Core session management class for individual inference instances
@@ -313,6 +316,12 @@ public:
     std::shared_ptr<LiteRtProcessor> m_litert_processor = nullptr;  ///< Shared pointer to LiteRT
                                                                     ///< backend processor
                                                                     ///< (if available)
+#endif
+#ifdef USE_EXECUTORCH
+    std::shared_ptr<ExecuTorchProcessor> m_executorch_processor = nullptr;  ///< Shared pointer to
+                                                                            ///< ExecuTorch backend
+                                                                            ///< processor
+                                                                            ///< (if available)
 #endif
 
 private:

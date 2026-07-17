@@ -139,7 +139,8 @@
         "ANIRA_WITH_LIBTORCH": "ON",
         "ANIRA_WITH_ONNXRUNTIME": "ON",
         "ANIRA_WITH_TFLITE": "OFF",
-        "ANIRA_WITH_LITERT": "ON"
+        "ANIRA_WITH_LITERT": "ON",
+        "ANIRA_WITH_EXECUTORCH": "ON"
       }
     },
     {
@@ -154,6 +155,7 @@
         "ANIRA_WITH_LIBTORCH": "OFF",
         "ANIRA_WITH_TFLITE": "OFF",
         "ANIRA_WITH_LITERT": "OFF",
+        "ANIRA_WITH_EXECUTORCH": "OFF",
         "ANIRA_WITH_ONNXRUNTIME": "ON",
         "CMAKE_BUILD_TYPE": "Debug"
       }
@@ -170,6 +172,7 @@
         "ANIRA_WITH_LIBTORCH": "OFF",
         "ANIRA_WITH_TFLITE": "OFF",
         "ANIRA_WITH_LITERT": "OFF",
+        "ANIRA_WITH_EXECUTORCH": "OFF",
         "ANIRA_WITH_ONNXRUNTIME": "ON",
         "CMAKE_BUILD_TYPE": "Release"
       }
@@ -185,6 +188,7 @@
         "ANIRA_WITH_LIBTORCH": "OFF",
         "ANIRA_WITH_TFLITE": "OFF",
         "ANIRA_WITH_LITERT": "OFF",
+        "ANIRA_WITH_EXECUTORCH": "OFF",
         "ANIRA_WITH_ONNXRUNTIME": "OFF",
         "CMAKE_BUILD_TYPE": "Release",
         "Python3_EXECUTABLE": "/usr/bin/python3"

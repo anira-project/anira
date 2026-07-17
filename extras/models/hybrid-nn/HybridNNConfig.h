@@ -21,6 +21,11 @@ static std::vector<anira::ModelData> model_data_hybridnn_config = {
     {GUITARLSTM_MODELS_PATH_TENSORFLOW + std::string("/model_0/GuitarLSTM-256.tflite"),
      anira::InferenceBackend::LITERT},
 #endif
+#ifdef USE_EXECUTORCH
+    // Exported ahead-of-time from the same PyTorch weights as the LibTorch model.
+    {GUITARLSTM_MODELS_PATH_PYTORCH + std::string("/model_0/GuitarLSTM-executorch.pte"),
+     anira::InferenceBackend::EXECUTORCH},
+#endif
 };
 
 static std::vector<anira::TensorShape> tensor_shape_hybridnn_config = {

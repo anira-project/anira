@@ -2,6 +2,9 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/backends/BackendBase.h>
+#ifdef USE_EXECUTORCH
+#include <anira/backends/ExecuTorchProcessor.h>
+#endif
 #ifdef USE_LIBTORCH
 #include <anira/backends/LibTorchProcessor.h>
 #endif
@@ -228,6 +231,9 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
 #ifdef USE_LITERT
     set_processor(session, inference_config, m_litert_processors, InferenceBackend::LITERT);
 #endif
+#ifdef USE_EXECUTORCH
+    set_processor(session, inference_config, m_executorch_processors, InferenceBackend::EXECUTORCH);
+#endif
 
     m_sessions.emplace_back(session);
 
@@ -258,6 +264,9 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
 #ifdef USE_LITERT
     std::shared_ptr<LiteRtProcessor> litert_processor = session->m_litert_processor;
 #endif
+#ifdef USE_EXECUTORCH
+    std::shared_ptr<ExecuTorchProcessor> executorch_processor = session->m_executorch_processor;
+#endif
 
     for (size_t i = 0; i < m_sessions.size(); ++i) {
         if (m_sessions[i] == session) {
@@ -277,6 +286,9 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
 #endif
 #ifdef USE_LITERT
     release_processor(inference_config, m_litert_processors, litert_processor);
+#endif
+#ifdef USE_EXECUTORCH
+    release_processor(inference_config, m_executorch_processors, executorch_processor);
 #endif
 
     m_active_sessions.fetch_sub(1);
@@ -655,5 +667,16 @@ template void Context::release_processor<LiteRtProcessor>(
     InferenceConfig& inference_config,
     std::vector<std::shared_ptr<LiteRtProcessor>>& processors,
     std::shared_ptr<LiteRtProcessor>& processor);
+#endif
+#ifdef USE_EXECUTORCH
+template void Context::set_processor<ExecuTorchProcessor>(
+    const std::shared_ptr<SessionElement>& session,
+    InferenceConfig& inference_config,
+    std::vector<std::shared_ptr<ExecuTorchProcessor>>& processors,
+    InferenceBackend backend);
+template void Context::release_processor<ExecuTorchProcessor>(
+    InferenceConfig& inference_config,
+    std::vector<std::shared_ptr<ExecuTorchProcessor>>& processors,
+    std::shared_ptr<ExecuTorchProcessor>& processor);
 #endif
 }  // namespace anira

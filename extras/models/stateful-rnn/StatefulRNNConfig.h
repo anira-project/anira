@@ -20,6 +20,12 @@ static std::vector<anira::ModelData> model_data_rnn_config = {
     {STATEFULLSTM_MODELS_PATH_TENSORFLOW + std::string("/model_0/stateful-lstm-dynamic.tflite"),
      anira::InferenceBackend::LITERT},
 #endif
+#ifdef USE_EXECUTORCH
+    // Exported with mutable state buffers at a fixed 2048-sample chunk (the
+    // stateful graph cannot be exported with a dynamic sequence axis).
+    {STATEFULLSTM_MODELS_PATH_PYTORCH + std::string("/model_0/stateful-lstm-executorch.pte"),
+     anira::InferenceBackend::EXECUTORCH},
+#endif
 };
 
 static std::vector<anira::TensorShape> tensor_shape_rnn_config = {
@@ -34,6 +40,9 @@ static std::vector<anira::TensorShape> tensor_shape_rnn_config = {
 #endif
 #ifdef USE_LITERT
     {{{1, 2048, 1}}, {{1, 2048, 1}}, anira::InferenceBackend::LITERT},
+#endif
+#ifdef USE_EXECUTORCH
+    {{{2048, 1, 1}}, {{2048, 1, 1}}, anira::InferenceBackend::EXECUTORCH},
 #endif
 };
 

@@ -25,6 +25,9 @@
 #ifdef USE_LITERT
 #include "../backends/LiteRtProcessor.h"
 #endif
+#ifdef USE_EXECUTORCH
+#include "../backends/ExecuTorchProcessor.h"
+#endif
 
 namespace anira {
 
@@ -504,6 +507,10 @@ private:
 #ifdef USE_LITERT
     inline static std::vector<std::shared_ptr<LiteRtProcessor>>
         m_litert_processors;  ///< Pool of LiteRT backend processors
+#endif
+#ifdef USE_EXECUTORCH
+    inline static std::vector<std::shared_ptr<ExecuTorchProcessor>>
+        m_executorch_processors;  ///< Pool of ExecuTorch backend processors
 #endif
 
 #if DOXYGEN

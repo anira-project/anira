@@ -73,6 +73,8 @@ Missing Backend Dependencies
     - `-DANIRA_WITH_LIBTORCH=OFF`
     - `-DANIRA_WITH_ONNXRUNTIME=OFF`
     - `-DANIRA_WITH_TFLITE=OFF`
+    - `-DANIRA_WITH_LITERT=OFF`
+    - `-DANIRA_WITH_EXECUTORCH=OFF`
 
 Alternatively, you can specify custom paths to these dependencies if they are installed in non-standard locations.
 

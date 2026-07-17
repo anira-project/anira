@@ -17,6 +17,9 @@
 #ifdef USE_LITERT
 #include <anira/backends/LiteRtProcessor.h>
 #endif
+#ifdef USE_EXECUTORCH
+#include <anira/backends/ExecuTorchProcessor.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -401,6 +404,11 @@ void SessionElement::set_processor(std::shared_ptr<T>& processor) {
         m_litert_processor = std::dynamic_pointer_cast<LiteRtProcessor>(processor);
     }
 #endif
+#ifdef USE_EXECUTORCH
+    if (std::is_same_v<T, ExecuTorchProcessor>) {
+        m_executorch_processor = std::dynamic_pointer_cast<ExecuTorchProcessor>(processor);
+    }
+#endif
 }
 
 size_t SessionElement::calculate_num_structs(const HostConfig& host_config) const {
@@ -664,6 +672,10 @@ template void SessionElement::set_processor<TFLiteProcessor>(
 #ifdef USE_LITERT
 template void SessionElement::set_processor<LiteRtProcessor>(
     std::shared_ptr<LiteRtProcessor>& processor);
+#endif
+#ifdef USE_EXECUTORCH
+template void SessionElement::set_processor<ExecuTorchProcessor>(
+    std::shared_ptr<ExecuTorchProcessor>& processor);
 #endif
 
 }  // namespace anira

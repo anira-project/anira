@@ -27,11 +27,20 @@ if(NOT BUILD_SHARED_LIBS AND ANIRA_WITH_LIBTORCH)
 endif()
 
 # Android / iOS: the anira backends release ships no LibTorch mobile build (LibTorch
-# is desktop-only upstream; the mobile path is ExecuTorch, not yet integrated here).
+# is desktop-only upstream; the PyTorch mobile path is the ExecuTorch backend).
 # LibTorch defaults ON, so a mobile build must opt out of it explicitly.
 if((CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS") AND ANIRA_WITH_LIBTORCH)
     message(FATAL_ERROR "LibTorch has no Android/iOS build in the anira backends release. Disable it "
-                        "(-DANIRA_WITH_LIBTORCH=OFF) and use the ONNX Runtime or LiteRT backend on mobile.")
+                        "(-DANIRA_WITH_LIBTORCH=OFF) and use the ONNX Runtime, LiteRT or ExecuTorch backend on mobile.")
+endif()
+
+# ExecuTorch's desktop archives are wired through the ExecuTorch CMake package,
+# whose config files demand CMake 3.24. Fail early with a clear message (the
+# package's own cmake_minimum_required error is cryptic).
+if(ANIRA_WITH_EXECUTORCH AND CMAKE_VERSION VERSION_LESS "3.24"
+   AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    message(FATAL_ERROR "The ExecuTorch backend requires CMake >= 3.24 on desktop platforms "
+                        "(required by ExecuTorch's exported package config); found ${CMAKE_VERSION}.")
 endif()
 
 # iOS: the ONNX Runtime xcframework vendors its own copy of the TfLite C API symbols,
@@ -61,5 +70,7 @@ if(DEFINED EMSDK_VERSION)
         message(FATAL_ERROR "Only the ONNX Runtime backend is supported for WebAssembly. Set -DANIRA_WITH_TFLITE=OFF and enable ANIRA_WITH_ONNXRUNTIME.")
     elseif(ANIRA_WITH_LITERT)
         message(FATAL_ERROR "Only the ONNX Runtime backend is supported for WebAssembly. Set -DANIRA_WITH_LITERT=OFF and enable ANIRA_WITH_ONNXRUNTIME.")
+    elseif(ANIRA_WITH_EXECUTORCH)
+        message(FATAL_ERROR "Only the ONNX Runtime backend is supported for WebAssembly. Set -DANIRA_WITH_EXECUTORCH=OFF and enable ANIRA_WITH_ONNXRUNTIME.")
     endif()
 endif()

@@ -238,6 +238,14 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
                          "entry : LITERT currently disabled in config."
                       << '\n';
 #endif
+        } else if (model_backend == "EXECUTORCH") {
+#if USE_EXECUTORCH
+            model_data.emplace_back(model_path, anira::InferenceBackend::EXECUTORCH);
+#else
+            LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
+                         "entry : EXECUTORCH currently disabled in config."
+                      << '\n';
+#endif
         } else if (model_backend == "LIBTORCH") {
 #if USE_LIBTORCH
             if (item.contains("model_function")) {
@@ -264,7 +272,7 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
         } else {
             LOG_ERROR << "Invalid 'inference_backend' value in 'model_data' array "
                          "entry : expected a string of the following list ['ONNX', "
-                         "'TFLITE', 'LITERT', 'LIBTORCH', 'CUSTOM']."
+                         "'TFLITE', 'LITERT', 'EXECUTORCH', 'LIBTORCH', 'CUSTOM']."
                       << '\n';
         }
     }
@@ -342,6 +350,16 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
                          "entry : LITERT currently disabled in config."
                       << '\n';
 #endif
+        } else if (tensor_backend == "EXECUTORCH") {
+#if USE_EXECUTORCH
+            tensor_shape.emplace_back(input_shape_list,
+                                      output_shape_list,
+                                      anira::InferenceBackend::EXECUTORCH);
+#else
+            LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array "
+                         "entry : EXECUTORCH currently disabled in config."
+                      << '\n';
+#endif
         } else if (tensor_backend == "LIBTORCH") {
 #if USE_LIBTORCH
             tensor_shape.emplace_back(input_shape_list,
@@ -361,7 +379,7 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
         } else {
             LOG_ERROR << "Invalid 'inference_backend' value in 'tensor_shape' array "
                          "entry : expected a string of the following list ['ONNX', "
-                         "'TFLITE', 'LITERT', 'LIBTORCH']."
+                         "'TFLITE', 'LITERT', 'EXECUTORCH', 'LIBTORCH']."
                       << '\n';
         }
     }

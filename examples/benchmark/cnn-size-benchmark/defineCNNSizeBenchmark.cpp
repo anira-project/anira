@@ -31,6 +31,9 @@ std::vector<anira::InferenceBackend> inference_backends = {
 #ifdef USE_LITERT
     anira::InferenceBackend::LITERT,
 #endif
+#ifdef USE_EXECUTORCH
+    anira::InferenceBackend::EXECUTORCH,
+#endif
     anira::InferenceBackend::CUSTOM};
 std::vector<anira::InferenceConfig> inference_configs = {cnn_config,
                                                          medium_cnn_config,
@@ -156,6 +159,12 @@ void adapt_cnn_config(anira::InferenceConfig& inference_config, int buffer_size,
     inference_config.set_tensor_input_shape({{1, input_size, 1}}, anira::InferenceBackend::LITERT);
     inference_config.set_tensor_output_shape({{1, output_size, 1}},
                                              anira::InferenceBackend::LITERT);
+#endif
+#ifdef USE_EXECUTORCH
+    inference_config.set_tensor_input_shape({{1, 1, input_size}},
+                                            anira::InferenceBackend::EXECUTORCH);
+    inference_config.set_tensor_output_shape({{1, 1, output_size}},
+                                             anira::InferenceBackend::EXECUTORCH);
 #endif
     // Default (universal) tensor shape, assigned to the custom backend below
     inference_config.m_tensor_shape.emplace_back(anira::TensorShapeList{{1, 1, input_size}},

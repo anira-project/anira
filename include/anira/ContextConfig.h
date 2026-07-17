@@ -184,6 +184,9 @@ struct ANIRA_API ContextConfig {
 #ifdef USE_LITERT
         m_enabled_backends.push_back(InferenceBackend::LITERT);
 #endif
+#ifdef USE_EXECUTORCH
+        m_enabled_backends.push_back(InferenceBackend::EXECUTORCH);
+#endif
     }
 
     /**

@@ -289,6 +289,11 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String& parameterID
             inference_handler.set_inference_backend(anira::InferenceBackend::LITERT);
         }
 #endif
+#ifdef USE_EXECUTORCH
+        if (paramString == "EXECUTORCH") {
+            inference_handler.set_inference_backend(anira::InferenceBackend::EXECUTORCH);
+        }
+#endif
 #ifdef USE_ONNXRUNTIME
         if (paramString == "ONNX") {
             inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);

@@ -18,6 +18,9 @@
 #ifdef USE_LITERT
 #include <anira/backends/LiteRtProcessor.h>  // IWYU pragma: keep
 #endif
+#ifdef USE_EXECUTORCH
+#include <anira/backends/ExecuTorchProcessor.h>  // IWYU pragma: keep
+#endif
 
 #include <array>
 #include <atomic>
@@ -260,6 +263,17 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
         } else {
             session->m_default_processor.process(input, output, session);
             LOG_ERROR << "[ERROR] LiteRT model has not been provided. Using default processor."
+                      << '\n';
+        }
+    }
+#endif
+#ifdef USE_EXECUTORCH
+    if (session->m_current_backend.load(std::memory_order_relaxed) == EXECUTORCH) {
+        if (session->m_executorch_processor != nullptr) {
+            session->m_executorch_processor->process(input, output, session);
+        } else {
+            session->m_default_processor.process(input, output, session);
+            LOG_ERROR << "[ERROR] ExecuTorch model has not been provided. Using default processor."
                       << '\n';
         }
     }

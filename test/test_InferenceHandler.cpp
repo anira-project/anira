@@ -55,6 +55,9 @@ std::ostream& operator<<(std::ostream& stream, const InferenceTestParams& params
 #ifdef USE_LITERT
         case anira::InferenceBackend::LITERT: backend = "LiteRt"; break;
 #endif
+#ifdef USE_EXECUTORCH
+        case anira::InferenceBackend::EXECUTORCH: backend = "ExecuTorch"; break;
+#endif
         case anira::InferenceBackend::CUSTOM: backend = "custom"; break;
 
         default: backend = "unknown"; break;
@@ -656,5 +659,51 @@ INSTANTIATE_TEST_SUITE_P(
             149,
             1e-6f,
             2e-7f}),
+    build_test_name);
+#endif
+
+// The ExecuTorch .pte is exported ahead-of-time from the same PyTorch weights as the
+// LibTorch model, so it reuses the y_pred.wav reference. The looser epsilons cover
+// XNNPACK's different (but still float32) op implementations.
+#ifdef USE_EXECUTORCH
+INSTANTIATE_TEST_SUITE_P(
+    InferenceExecuTorch,
+    InferenceTest,
+    ::testing::Values(
+        InferenceTestParams{anira::InferenceBackend::EXECUTORCH,
+                            HostConfig(1024, 44100),
+                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+                            149,
+                            1e-4f,
+                            1e-5f},
+        InferenceTestParams{anira::InferenceBackend::EXECUTORCH,
+                            HostConfig(2048, 44100),
+                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+                            149,
+                            1e-4f,
+                            1e-5f},
+        InferenceTestParams{anira::InferenceBackend::EXECUTORCH,
+                            HostConfig(512, 44100),
+                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+                            149,
+                            1e-4f,
+                            1e-5f},
+        InferenceTestParams{anira::InferenceBackend::EXECUTORCH,
+                            HostConfig(256, 44100),
+                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+                            149,
+                            1e-4f,
+                            1e-5f},
+        InferenceTestParams{anira::InferenceBackend::EXECUTORCH,
+                            HostConfig(300, 44100),
+                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
+                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
+                            149,
+                            1e-4f,
+                            1e-5f}),
     build_test_name);
 #endif

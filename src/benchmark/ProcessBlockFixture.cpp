@@ -76,6 +76,12 @@ void ProcessBlockFixture::initialize_repetition(const InferenceConfig& inference
                     path = m_inference_config.get_model_path(anira::InferenceBackend::LITERT);
                     break;
 #endif
+#ifdef USE_EXECUTORCH
+                case anira::InferenceBackend::EXECUTORCH:
+                    m_inference_backend_name = "executorch";
+                    path = m_inference_config.get_model_path(anira::InferenceBackend::EXECUTORCH);
+                    break;
+#endif
                 case anira::InferenceBackend::CUSTOM:
                     m_inference_backend_name = "custom";
                     path = m_inference_config.get_model_path(anira::InferenceBackend::CUSTOM);

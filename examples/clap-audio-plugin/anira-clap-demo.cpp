@@ -57,7 +57,7 @@ bool AniraClapPluginExample::paramsInfo(uint32_t paramIndex, clap_param_info* in
             strncpy(info->name, "Backend", CLAP_NAME_SIZE);
             strncpy(info->module, "Demo", CLAP_NAME_SIZE);
             info->min_value = 0;
-            info->max_value = 4;
+            info->max_value = 5;
             info->default_value = 3;
             info->flags |= CLAP_PARAM_IS_STEPPED;
             break;
@@ -111,6 +111,13 @@ bool AniraClapPluginExample::paramsValueToText(clap_id paramId,
                     sValue = "LiteRt";
 #else
                     sValue = "LiteRt (not available)";
+#endif
+                    break;
+                case ExecuTorch:
+#if USE_EXECUTORCH
+                    sValue = "ExecuTorch";
+#else
+                    sValue = "ExecuTorch (not available)";
 #endif
                     break;
             }
@@ -256,6 +263,13 @@ void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t* evt) 
                 case LiteRt:
 #if USE_LITERT
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::LITERT);
+#else
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
+#endif
+                    break;
+                case ExecuTorch:
+#if USE_EXECUTORCH
+                    m_inference_handler.set_inference_backend(anira::InferenceBackend::EXECUTORCH);
 #else
                     m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
 #endif
