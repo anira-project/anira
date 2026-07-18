@@ -34,6 +34,19 @@ if((CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS") AN
                         "(-DANIRA_WITH_LIBTORCH=OFF) and use the ONNX Runtime, LiteRT or ExecuTorch backend on mobile.")
 endif()
 
+# ExecuTorch, LiteRT and TFLite all bundle their own (different) copy of XNNPACK.
+# In a fully static anira every backend's archives are linked into one image, where
+# the duplicate xnn_* symbols hard-collide at link time (and would cross-bind the
+# delegates if they didn't). Shared builds are unaffected: LiteRT/TFLite are then
+# self-contained shared libraries. ExecuTorch is the newcomer, so auto-disable it
+# (mirroring the LibTorch static auto-disable) instead of failing the default build.
+if(NOT BUILD_SHARED_LIBS AND ANIRA_WITH_EXECUTORCH AND (ANIRA_WITH_LITERT OR ANIRA_WITH_TFLITE))
+    message(WARNING "ExecuTorch and LiteRT/TFLite bundle conflicting copies of XNNPACK and cannot "
+                    "be combined in a fully static anira build (BUILD_SHARED_LIBS=OFF); disabling "
+                    "ANIRA_WITH_EXECUTORCH. Disable LiteRT/TFLite or build shared to use ExecuTorch.")
+    set(ANIRA_WITH_EXECUTORCH OFF)
+endif()
+
 # ExecuTorch's desktop archives are wired through the ExecuTorch CMake package,
 # whose config files demand CMake 3.24. Fail early with a clear message (the
 # package's own cmake_minimum_required error is cryptic).

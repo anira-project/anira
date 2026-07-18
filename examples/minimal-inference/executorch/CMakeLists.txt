@@ -17,6 +17,14 @@ add_executable(minimal-executorch
 target_link_libraries(minimal-executorch
   executorch executorch_extensions executorch_kernels xnnpack_backend
 )
+# anira strips the compile usage requirements off the imported ExecuTorch targets
+# (their vendored c10 headers must not leak into anira's own TUs), so this example
+# adds the include dirs and the collected compile definitions explicitly.
+target_include_directories(minimal-executorch SYSTEM PRIVATE
+  "${ANIRA_EXECUTORCH_ROOTDIR}/include"
+  "${ANIRA_EXECUTORCH_ROOTDIR}/include/executorch/runtime/core/portable_type/c10"
+)
+target_compile_definitions(minimal-executorch PRIVATE ${ANIRA_EXECUTORCH_COMPILE_DEFINITIONS})
 if(TARGET xnnpack-microkernels-prod)
     # See the matching comment in the top-level CMakeLists.txt.
     target_link_libraries(minimal-executorch "$<LINK_LIBRARY:WHOLE_ARCHIVE,xnnpack-microkernels-prod>")

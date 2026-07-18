@@ -174,7 +174,13 @@ endif()
 
 if(ANIRA_WITH_EXECUTORCH)
     anira_setup_backend(executorch)
-    list(APPEND BACKEND_SOURCES src/backends/ExecuTorchProcessor.cpp)
+    if(NOT TARGET executorch)
+        # Mobile merged-lib path: LibTorch has no mobile build, so ExecuTorch's
+        # vendored c10 headers cannot clash there and the processor compiles as a
+        # regular anira source. On desktop it is compiled in an isolated object
+        # target instead (see the ExecuTorch link block below).
+        list(APPEND BACKEND_SOURCES src/backends/ExecuTorchProcessor.cpp)
+    endif()
 endif()
 
 ## ==============================================================================
@@ -270,8 +276,9 @@ foreach(LIBRARY_DIR ${BACKEND_BUILD_LIBRARY_DIRS})
     )
 endforeach()
 
-target_compile_definitions(${PROJECT_NAME}
-    PUBLIC
+# Shared between the anira target and the isolated ExecuTorch object target below —
+# the two must agree on every USE_* define (they shape the anira class layouts).
+set(ANIRA_COMPILE_DEFINITIONS
     # Backend-specific definitions
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
@@ -282,6 +289,11 @@ target_compile_definitions(${PROJECT_NAME}
     $<$<BOOL:${ANIRA_WITH_LOGGING}>:ENABLE_LOGGING>
     # Version number
     -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
+)
+
+target_compile_definitions(${PROJECT_NAME}
+    PUBLIC
+    ${ANIRA_COMPILE_DEFINITIONS}
 )
 
 if(ANIRA_WITH_RTSAN)
@@ -321,6 +333,38 @@ if(ANIRA_WITH_EXECUTORCH)
         endif()
         target_link_libraries(${PROJECT_NAME} ${ANIRA_EXECUTORCH_LINK_SCOPE}
             executorch executorch_extensions executorch_kernels xnnpack_backend)
+
+        # ExecuTorchProcessor.cpp is the only TU that may see the ExecuTorch headers:
+        # they vendor a copy of c10 that must never shadow LibTorch's real c10 in the
+        # other backend TUs (it breaks the LibTorch backend at link time on MSVC).
+        # anira_setup_backend stripped the compile usage requirements off the imported
+        # ExecuTorch targets, so compile it in its own object target with explicit
+        # include dirs and merge the objects into anira.
+        add_library(anira-executorch-objs OBJECT src/backends/ExecuTorchProcessor.cpp)
+        set_target_properties(anira-executorch-objs PROPERTIES
+            POSITION_INDEPENDENT_CODE ON
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED ON)
+        target_compile_definitions(anira-executorch-objs PRIVATE
+            ${ANIRA_COMPILE_DEFINITIONS}
+            ${ANIRA_EXECUTORCH_COMPILE_DEFINITIONS})
+        target_include_directories(anira-executorch-objs PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/include")
+        target_include_directories(anira-executorch-objs SYSTEM PRIVATE
+            "${ANIRA_EXECUTORCH_ROOTDIR}/include"
+            "${ANIRA_EXECUTORCH_ROOTDIR}/include/executorch/runtime/core/portable_type/c10")
+        target_link_libraries(anira-executorch-objs PRIVATE
+            concurrentqueue nlohmann_json::nlohmann_json)
+        if(MSVC)
+            # Match anira's export decoration (see cmake/msvc-support.cmake): the
+            # objects become part of anira, so ANIRA_API must resolve identically.
+            if(BUILD_SHARED_LIBS)
+                target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_EXPORTS)
+            else()
+                target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_STATIC_DEFINE)
+            endif()
+        endif()
+        target_sources(${PROJECT_NAME} PRIVATE $<TARGET_OBJECTS:anira-executorch-objs>)
         # XNNPACK's runtime-dispatch config tables reference its microkernel symbols
         # from data sections, which on-demand archive resolution does not satisfy
         # (Apple's linker fails with "does not have address" fixup errors on archive

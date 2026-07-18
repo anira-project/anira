@@ -4,10 +4,12 @@
 #include <anira/backends/BackendBase.h>
 #include <anira/backends/ExecuTorchProcessor.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
+#include <anira/utils/Buffer.h>  // IWYU pragma: keep
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 
+#include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -16,14 +18,20 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
+// IWYU pragma: begin_keep — the ExecuTorch headers are compiled as SYSTEM includes,
+// where misc-include-cleaner cannot attribute the used symbols to their providers.
 #include "executorch/extension/data_loader/buffer_data_loader.h"
 #include "executorch/extension/module/module.h"
-#include "executorch/extension/tensor/tensor.h"
+#include "executorch/extension/tensor/tensor_ptr.h"
+#include "executorch/extension/tensor/tensor_ptr_maker.h"
 #include "executorch/extension/threadpool/threadpool.h"
 #include "executorch/runtime/core/error.h"
 #include "executorch/runtime/core/evalue.h"
+#include "executorch/runtime/core/exec_aten/exec_aten.h"
+// IWYU pragma: end_keep
 
 namespace anira {
 
@@ -57,6 +65,33 @@ void pin_threadpool_to_one_thread() {
 }
 
 }  // namespace
+
+// Defined here, not in the header: it owns ExecuTorch runtime objects, and the
+// ExecuTorch headers (with their vendored c10) must stay out of anira's public
+// headers (see the note on ExecuTorchProcessor).
+struct ExecuTorchProcessor::Instance {
+    Instance(InferenceConfig& inference_config);
+    ~Instance() = default;
+
+    void prepare();
+    void process(std::vector<BufferF>& input,
+                 std::vector<BufferF>& output,
+                 const std::shared_ptr<SessionElement>& session);
+
+    std::unique_ptr<executorch::extension::Module> m_module;  ///< Loaded .pte program with
+                                                              ///< its 'forward' method
+
+    std::vector<std::vector<float>> m_input_data;  ///< Instance-owned host memory backing
+                                                   ///< the input tensors
+    std::vector<executorch::extension::TensorPtr> m_input_tensors;  ///< Input tensors
+                                                                    ///< wrapping m_input_data
+    std::vector<executorch::runtime::EValue> m_input_values;        ///< Reusable 'forward'
+                                                                    ///< argument list
+
+    InferenceConfig& m_inference_config;    ///< Reference to inference configuration
+    std::atomic<bool> m_processing{false};  ///< Flag indicating if instance is currently
+                                            ///< processing
+};
 
 ExecuTorchProcessor::ExecuTorchProcessor(InferenceConfig& inference_config)
     : BackendBase(inference_config) {
@@ -131,11 +166,9 @@ ExecuTorchProcessor::Instance::Instance(InferenceConfig& inference_config)
     }
 }
 
-ExecuTorchProcessor::Instance::~Instance() = default;
-
 void ExecuTorchProcessor::Instance::prepare() {
     // Reset input buffers to a known (zero) state between sessions.
-    for (auto& input : m_input_data) { std::fill(input.begin(), input.end(), 0.f); }
+    for (auto& input : m_input_data) { std::ranges::fill(input, 0.f); }
 }
 
 void ExecuTorchProcessor::Instance::process(std::vector<BufferF>& input,

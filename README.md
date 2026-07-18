@@ -145,7 +145,10 @@ and/or `static` (anira's linkage follows `BUILD_SHARED_LIBS`):
 
 LibTorch is shared-only (auto-disabled for fully static anira builds); ExecuTorch is static-only.
 LiteRT and TFLite are the same runtime via two C APIs and are mutually exclusive (LiteRT is the
-default). On WebAssembly only ONNX Runtime is supported. Backends for Android and iOS are also
+default). In a fully static anira build ExecuTorch cannot be combined with LiteRT or TFLite
+(each bundles its own copy of XNNPACK, whose symbols collide in one static image) — ExecuTorch
+is then auto-disabled; disable LiteRT/TFLite to build a static anira with ExecuTorch. On
+WebAssembly only ONNX Runtime is supported. Backends for Android and iOS are also
 published in the [anira-project/backends](https://github.com/anira-project/backends) release for
 cross-builds. `—` = not provided.
 

@@ -3,7 +3,6 @@
 
 #ifdef USE_EXECUTORCH
 
-#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -11,9 +10,6 @@
 #include "../scheduler/SessionElement.h"
 #include "../utils/Buffer.h"
 #include "BackendBase.h"
-#include "executorch/extension/module/module.h"
-#include "executorch/extension/tensor/tensor.h"
-#include "executorch/runtime/core/evalue.h"
 
 namespace anira {
 
@@ -26,8 +22,14 @@ namespace anira {
  * small static runtime executes, with CPU execution delegated to XNNPACK. This makes
  * it the PyTorch path on mobile platforms, where LibTorch has no build.
  *
+ * @note Unlike the other backend processors this header does not include the
+ * engine's headers: ExecuTorch vendors its own copy of the c10 headers, which must
+ * never shadow LibTorch's real c10 in translation units that use both backends. The
+ * per-instance ExecuTorch state therefore lives behind an opaque Instance type that
+ * only ExecuTorchProcessor.cpp defines.
+ *
  * @warning This class is only available when compiled with USE_EXECUTORCH defined
- * @see BackendBase, ExecuTorchProcessor::Instance, InferenceConfig, ModelData, SessionElement
+ * @see BackendBase, InferenceConfig, ModelData, SessionElement
  */
 class ANIRA_API ExecuTorchProcessor : public BackendBase {
 public:
@@ -67,60 +69,13 @@ private:
     /**
      * @brief Internal processing instance for thread-safe ExecuTorch operations
      *
-     * Each Instance owns an independent ExecuTorch Module (program + loaded 'forward'
-     * method) plus pre-built input tensors wrapping instance-owned host memory. Each
-     * instance is used by only one thread at a time, so inference needs no locking;
-     * the atomic processing flag guards instance allocation.
-     *
-     * @see ExecuTorchProcessor
+     * Opaque to keep the ExecuTorch headers out of this public header (see the class
+     * note). Each Instance owns an independent ExecuTorch Module (program + loaded
+     * 'forward' method) plus pre-built input tensors wrapping instance-owned host
+     * memory. Each instance is used by only one thread at a time, so inference needs
+     * no locking; an atomic processing flag guards instance allocation.
      */
-    struct Instance {
-        /**
-         * @brief Constructs an ExecuTorch processing instance
-         * @param inference_config Reference to inference configuration
-         */
-        Instance(InferenceConfig& inference_config);
-
-        /**
-         * @brief Destructor that cleans up ExecuTorch resources for this instance
-         */
-        ~Instance();
-
-        /**
-         * @brief Prepares this instance for inference operations
-         */
-        void prepare();
-
-        /**
-         * @brief Processes input through this instance's ExecuTorch module
-         *
-         * @param input Input buffers to process
-         * @param output Output buffers to fill with results
-         * @param session Session element for context (unused in instance)
-         */
-        void process(std::vector<BufferF>& input,
-                     std::vector<BufferF>& output,
-                     const std::shared_ptr<SessionElement>& session);
-
-        std::unique_ptr<executorch::extension::Module> m_module;  ///< Loaded .pte program with
-                                                                  ///< its 'forward' method
-
-        std::vector<std::vector<float>> m_input_data;  ///< Instance-owned host memory backing
-                                                       ///< the input tensors
-        std::vector<executorch::extension::TensorPtr> m_input_tensors;  ///< Input tensors
-                                                                        ///< wrapping m_input_data
-        std::vector<executorch::runtime::EValue> m_input_values;        ///< Reusable 'forward'
-                                                                        ///< argument list
-
-        InferenceConfig& m_inference_config;    ///< Reference to inference configuration
-        std::atomic<bool> m_processing{false};  ///< Flag indicating if instance is currently
-                                                ///< processing
-
-#if DOXYGEN
-        // Since Doxygen does not find classes structures nested in std::shared_ptr
-        MemoryBlock<float>* __doxygen_force_0;  ///< Placeholder for Doxygen documentation
-#endif
-    };
+    struct Instance;
 
     std::vector<std::shared_ptr<Instance>> m_instances;  ///< Vector of parallel processing
                                                          ///< instances

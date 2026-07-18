@@ -436,16 +436,43 @@ macro(_anira_setup_legacy_armv7l id)
 endmacro()
 
 # ------------------------------------------------------------------------------
-# _anira_sanitize_executorch_targets() — the ExecuTorch package's exported targets
-# bake absolute SDK paths from the machine that built the archives into their
-# INTERFACE_LINK_LIBRARIES (e.g. .../MacOSX15.5.sdk/usr/lib/libm.tbd and
-# .../Frameworks/Foundation.framework). Those paths rarely exist on the consuming
-# machine, so rewrite them into portable equivalents: <sdk>/lib<name>.tbd -> <name>
-# (resolved against the active SDK) and <path>/<Name>.framework -> -framework <Name>.
+# _anira_sanitize_executorch_targets() — clean up the ExecuTorch package's exported
+# targets for use inside anira:
+#
+#  * They bake absolute SDK paths from the machine that built the archives into
+#    their INTERFACE_LINK_LIBRARIES (e.g. .../MacOSX15.5.sdk/usr/lib/libm.tbd and
+#    .../Frameworks/Foundation.framework). Those paths rarely exist on the
+#    consuming machine, so rewrite them into portable equivalents:
+#    <sdk>/lib<name>.tbd -> <name> and <path>/<Name>.framework -> -framework <Name>.
+#
+#  * They carry compile usage requirements (include dirs — among them ExecuTorch's
+#    VENDORED c10 headers — compile definitions and options) that would leak into
+#    every TU of a target linking them. The vendored c10 headers shadow LibTorch's
+#    real c10 on MSVC (and C10_USING_CUSTOM_GENERATED_MACROS would corrupt the real
+#    c10's configuration), breaking the LibTorch backend. So strip all compile-side
+#    usage requirements — only ExecuTorchProcessor.cpp needs them, and it is
+#    compiled in an isolated object target with explicit include dirs. The compile
+#    definitions the headers DO need (collected before clearing) are exposed as
+#    ANIRA_EXECUTORCH_COMPILE_DEFINITIONS for that object target (and the
+#    minimal-executorch example) to apply explicitly.
 # ------------------------------------------------------------------------------
 function(_anira_sanitize_executorch_targets)
     get_property(_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY IMPORTED_TARGETS)
+    set(_defs "")
     foreach(_tgt IN LISTS _targets)
+        get_target_property(_tgt_defs "${_tgt}" INTERFACE_COMPILE_DEFINITIONS)
+        if(_tgt_defs)
+            list(APPEND _defs ${_tgt_defs})
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES _defs)
+    set(ANIRA_EXECUTORCH_COMPILE_DEFINITIONS "${_defs}" PARENT_SCOPE)
+    foreach(_tgt IN LISTS _targets)
+        set_target_properties("${_tgt}" PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES ""
+            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ""
+            INTERFACE_COMPILE_OPTIONS ""
+            INTERFACE_COMPILE_DEFINITIONS "")
         get_target_property(_libs "${_tgt}" INTERFACE_LINK_LIBRARIES)
         if(NOT _libs)
             continue()
@@ -524,9 +551,11 @@ macro(anira_setup_backend id)
         endif()
         set(ANIRA_${_ab_ID}_VERSION "${_ab_version}") # expose the resolved version (e.g. for BuildWasm license bundling)
 
-        # Windows static additionally ships a Debug variant.
+        # Windows static additionally ships a Debug variant (except executorch,
+        # which publishes a single static archive per platform).
         set(_ab_linktoken "${_ab_linkage}")
-        if(_ab_linkage STREQUAL "static" AND WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+        if(_ab_linkage STREQUAL "static" AND WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug"
+           AND NOT _ab_id STREQUAL "executorch")
             set(_ab_linktoken "static-debug")
         endif()
 
@@ -597,10 +626,10 @@ macro(anira_setup_backend id)
         set(ANIRA_EXECUTORCH_IS_STATIC TRUE)
         set(ANIRA_EXECUTORCH_LIB_BASENAME "executorch")
         set(ANIRA_EXECUTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
-        # anira compiles the prebuilt ExecuTorch headers as SYSTEM to silence their
-        # warnings; the c10 subtree is a separate entry on ExecuTorch's include path.
-        list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_rootdir}/include")
-        list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_rootdir}/include/executorch/runtime/core/portable_type/c10")
+        # NB: the ExecuTorch include dirs are deliberately NOT added to
+        # BACKEND_BUILD_HEADER_DIRS — its vendored c10 headers must never be visible
+        # to the LibTorch backend's TUs. Only the isolated ExecuTorchProcessor object
+        # target (see CMakeLists.txt) gets them, explicitly.
     elseif(_ab_arch STREQUAL "armv7l")
         # legacy macro already populated header/lib dirs + ANIRA_<ID>_* vars
         set(ANIRA_${_ab_ID}_LINKAGE "${_ab_linkage}")
