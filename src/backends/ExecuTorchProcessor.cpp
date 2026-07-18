@@ -56,6 +56,11 @@ void pin_threadpool_to_one_thread() {
     static std::once_flag once;
     std::call_once(once, [] {
         auto* threadpool = executorch::extension::threadpool::get_threadpool();
+        // _unsafe_reset_threadpool is deprecated but remains the only exported way to
+        // size the pool permanently: the suggested UseNThreadsThreadPoolGuard is a
+        // scoped, Meta-internal API. Resizing here is safe — no inference has run yet,
+        // so no threadpool pointer is held anywhere.
+        // NOLINTNEXTLINE(clang-diagnostic-deprecated-declarations)
         if (threadpool == nullptr || !threadpool->_unsafe_reset_threadpool(1)) {
             LOG_WARNING << "[anira][ExecuTorch] could not pin the XNNPACK threadpool to "
                            "a single thread."
