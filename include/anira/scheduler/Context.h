@@ -430,7 +430,10 @@ private:
      * @brief Blocks until none of the session's inferences are queued or running.
      *
      * Quiescence barrier for the control-thread paths (prepare_session,
-     * release_session): sleeps until no worker holds one of this session's tasks,
+     * release_session): sleeps until no registered inference of this session is
+     * executing (a worker preempted before registering its dequeued task is
+     * invisible here — the callers' generation bump makes such a laggard's task
+     * skip as stale, so it never runs user code),
      * dequeues the session's never-started tasks from the global queue and
      * completes them as silence at their stream positions, and repeats until a
      * full pass finds nothing (a worker mid-continuation can enqueue into a

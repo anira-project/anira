@@ -104,12 +104,13 @@ public:
      * It initializes internal buffers and prepares the inference pipeline.
      *
      * @note Blocking quiescence point: waits until no inference thread is
-     *       executing or holding any of this handler's work before rebuilding the
-     *       internal buffers. This is the guarantee reset() deliberately does not
-     *       provide — call prepare() when you need to know that no inference
-     *       thread touches state shared with a custom backend or the
-     *       PrePostProcessor::before_inference()/after_inference() hooks anymore.
-     *       Never call from the audio thread.
+     *       executing any of this handler's work before rebuilding the internal
+     *       buffers, and invalidates everything dispatched before the call — so
+     *       once prepare() returns, no inference thread will run user code (a
+     *       custom backend or the PrePostProcessor::before_inference()/
+     *       after_inference() hooks) for pre-prepare work. This is the guarantee
+     *       reset() deliberately does not provide. Never call from the audio
+     *       thread.
      *
      * @param new_audio_config The new audio configuration containing sample rate, buffer size, etc.
      */

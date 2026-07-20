@@ -15,6 +15,7 @@
 #include "../utils/Buffer.h"
 #include "../utils/HostConfig.h"
 #include "../utils/InferenceBackend.h"
+#include "../utils/RealtimeSanitizer.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/Semaphore.h"
 
@@ -286,9 +287,11 @@ public:
     // Gate word layout: bit 0 = busy (a task of this session is queued or
     // running), bits 63..1 = dispatch epoch. The epoch gives the gate an owner
     // identity: force_reset_dispatch_chain() (quiescent contexts only) opens a
-    // new epoch, so a laggard worker that was preempted across a prepare() and
-    // still holds a token from the old era cannot release — and thereby stomp —
-    // the new era's gate (release_dispatch() is an epoch-checked CAS).
+    // new epoch after waiting out any transient holder, and release_dispatch()
+    // is an epoch-checked CAS — so any release still carrying a pre-reset token
+    // is inert, whatever the interleaving. A safety invariant, not a
+    // specific-scenario patch: it holds for every release path (worker tail,
+    // stale skip, dispatch failure, drain).
     static constexpr uint64_t k_dispatch_busy = 1;
     // The wait-free reset()/dispatch guarantees assume these 64-bit atomics are
     // implemented lock-free; a target where they are not would silently reintroduce
@@ -333,10 +336,13 @@ public:
      * free of queue/semaphore/logging syscalls. If a task is in flight, does nothing: the worker
      * filters the stale prefix at its next task boundary. */
     void discard_pending_dispatches();
-    /** @brief Quiescent-only (a drain has run, no task in flight or queued): flush the pending
-     * queue and open a new dispatch epoch, invalidating any token a laggard worker may still
-     * hold. Called from prepare(). */
-    void force_reset_dispatch_chain();
+    /** @brief Quiescent-only (a drain has run; no task of this session is queued or running,
+     * though a laggard worker may still transiently hold the gate while filtering stale
+     * entries): waits out any transient gate holder, opens a new dispatch epoch (so any
+     * release carrying a pre-reset token is inert, whatever the interleaving), then flushes
+     * the pending queue. Blocking (sleeps in 50us steps while the gate is held) — called
+     * only from prepare(), never from a real-time path. */
+    void force_reset_dispatch_chain() ANIRA_BLOCKING;
     /** @brief Complete a task without running inference: zero its output tensors and signal
      * completion. Used when the global queue rejects a task, so the dropped inference still
      * yields (silent) output at its correct stream position and the struct is freed normally. */
