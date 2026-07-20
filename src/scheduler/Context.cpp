@@ -374,6 +374,15 @@ void Context::new_data_submitted(const std::shared_ptr<SessionElement>& session)
 
 // Full realtime safe path
 void Context::new_data_request(const std::shared_ptr<SessionElement>& session) {
+    // A stateful task may still be awaiting dispatch with none in flight: its
+    // dispatch can race a worker's task boundary so that both sides bail (the
+    // audio thread finds the gate briefly held, the worker's recheck misses the
+    // just-enqueued entry), or a prior dispatch attempt found the global queue
+    // full. No further submission may be coming while the caller only polls for
+    // output, so kick the chain here — the same rationale as the kick in
+    // wait_for_completion(). No-op for non-stateful sessions; wait-free (bounded
+    // CAS + at most one token enqueue, the normal dispatch path).
+    try_dispatch_stateful(session);
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
@@ -405,6 +414,8 @@ void Context::new_data_request(const std::shared_ptr<SessionElement>& session) {
 // With blocking ratio > 0, the semaphore is used to wait for data. This is not 100% realtime safe.
 void Context::new_data_request(const std::shared_ptr<SessionElement>& session,
                                std::chrono::steady_clock::time_point wait_until) {
+    // See the stalled-chain kick rationale in the realtime-safe overload above.
+    try_dispatch_stateful(session);
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
