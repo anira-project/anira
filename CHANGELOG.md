@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Segfault in `SessionElement::prepare()` when the host allows smaller buffers and **all** output tensors are non-streamable (e.g. analysis models whose results leave through a custom backend): the smaller-buffer pass collected adjusted latencies for streamable outputs only, leaving the vector empty for `sync_latencies()` to index. The vector now stays index-aligned with the output tensors (non-streamable outputs contribute zero latency), which also corrects latency assignment for configs mixing streamable and non-streamable outputs.
+
 ## [v2.2.1] - 2026-07-04
 
 ### Added

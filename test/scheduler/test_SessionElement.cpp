@@ -547,3 +547,30 @@ TEST(SessionElementClearTest, ClearWithBlockingRatioDoesNotFreeze) {
         << "SessionElement::clear() deadlocked draining the done-semaphores "
            "(blind acquire on a semaphore with count 0).";
 }
+
+// Regression: a config whose output tensors are ALL non-streamable (e.g. an
+// analysis model whose result leaves through a custom backend, with only a
+// control-value output tensor) crashed prepare() when the host allowed
+// smaller buffers: the smaller-buffer pass collected adjusted latencies for
+// streamable outputs only, so the vector stayed empty and sync_latencies()
+// dereferenced latencies[0].
+TEST(SessionElementNonStreamableOutputTest, PrepareWithSmallerBuffersDoesNotCrash) {
+    InferenceConfig inference_config(
+        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        std::vector<TensorShape>{TensorShape({{1, 2048}, {1, 1}}, {{1, 1}})},
+        ProcessingSpec({1, 1}, {1}, {2048, 0}, {0}),
+        10.f,
+        0,
+        true);
+    PrePostProcessor pp_processor(inference_config);
+    InferenceQueue inference_queue;
+    SessionElement session(0,
+                           pp_processor,
+                           inference_config,
+                           moodycamel::ProducerToken(inference_queue));
+
+    session.prepare(HostConfig(512, 48000, true));
+
+    ASSERT_EQ(session.m_latency.size(), 1u);
+    ASSERT_EQ(session.m_latency[0], 0u) << "A non-streamable output carries no latency.";
+}
