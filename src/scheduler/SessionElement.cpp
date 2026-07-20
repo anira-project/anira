@@ -20,9 +20,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <memory>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -54,60 +56,15 @@ SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<size_t>& te
 }
 
 void SessionElement::clear() {
-    // Precondition: no task of this session is executing or queued — every caller
-    // (Context::prepare_session/release_session/reset_session) runs
-    // Context::drain_inference_queue() first. So no new completion signal can
-    // arrive while we reset the structs below; stale signals are drained, never
-    // waited on.
-    for (auto& buffer : m_send_buffer) { buffer.clear_with_positions(); }
-    for (auto& buffer : m_receive_buffer) { buffer.clear_with_positions(); }
-    m_time_stamps.clear();
-    m_current_queue = 0;
-
-    // Reset stateful dispatch state and drop any tasks that never got dispatched.
-    std::shared_ptr<ThreadSafeStruct> drained;
-    while (m_dispatch_pending.try_dequeue(drained)) {}
-    m_stateful_dispatch_busy.store(false, std::memory_order_relaxed);
-
-    for (auto& inference : m_inference_queue) {
-        inference->m_free.store(true, std::memory_order_relaxed);
-        if (m_inference_config.m_blocking_ratio > 0.f) {
-            // Drain stale completion signals without blocking: a struct that has no
-            // unconsumed signal (the common case) has a semaphore count of 0, and a
-            // blocking acquire() would deadlock here.
-            while (inference->m_done_semaphore.try_acquire()) {}
-        } else {
-            inference->m_done_atomic.store(false, std::memory_order_relaxed);
-        }
-        inference->m_time_stamp = 0;
-        for (auto& input_data : inference->m_tensor_input_data) { input_data.clear(); }
-        for (auto& output_data : inference->m_tensor_output_data) { output_data.clear(); }
-    }
-
-    // Push back 0.f for latency
-    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-        if (m_latency[i] > 0) {
-            for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
-                for (size_t k = 0;
-                     k < m_latency[i] - m_inference_config.get_internal_model_latency()[i];
-                     ++k) {
-                    m_receive_buffer[i].push_sample(j, 0.f);
-                }
-            }
-        }
-    }
-}
-
-void SessionElement::clear_non_blocking() {
-    // Precondition (unlike clear()): NO drain has run, so worker threads may still be
-    // mid-inference on this session's in-flight structs. We therefore reset only state
-    // the audio thread owns exclusively right now:
+    // Wait-free: NO drain is required, so worker threads may still be mid-inference
+    // on this session's in-flight structs. We therefore reset only state the audio
+    // thread owns exclusively right now:
     //   - the send/receive ring buffers and timestamp bookkeeping (audio-thread only), and
     //   - the internals of structs that are currently FREE.
     // In-flight structs (m_free == false) are left entirely untouched. The generation
-    // bump in Context::reset_session_non_blocking() makes their eventual result be
-    // ignored (Context::new_data_request generation guard) and Context::pre_process()
-    // reclaims them once the worker publishes completion.
+    // bump in Context::reset_session() makes their eventual result be ignored
+    // (Context::new_data_request generation guard) and Context::reclaim_stale_structs()
+    // (run from new_data_submitted) reclaims them once the worker publishes completion.
     for (auto& buffer : m_send_buffer) { buffer.clear_with_positions(); }
     for (auto& buffer : m_receive_buffer) { buffer.clear_with_positions(); }
     m_time_stamps.clear();
@@ -127,7 +84,7 @@ void SessionElement::clear_non_blocking() {
         for (auto& output_data : inference->m_tensor_output_data) { output_data.clear(); }
     }
 
-    // Push back 0.f for latency (identical to clear()).
+    // Re-seed the latency zero-padding (matches prepare()'s seed).
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_latency[i] > 0) {
             for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
@@ -158,26 +115,117 @@ void SessionElement::enqueue_pending_dispatch(
 }
 
 std::shared_ptr<SessionElement::ThreadSafeStruct> SessionElement::try_acquire_next_dispatch() {
-    // Only one task may be dispatched at a time. Whoever flips the busy flag from
-    // false to true owns the right to release the next pending task.
-    if (m_stateful_dispatch_busy.exchange(true, std::memory_order_acquire)) { return nullptr; }
+    // Only one task may be dispatched at a time. Whoever flips the busy bit from
+    // 0 to 1 (same epoch) owns the right to release the next pending task.
+    uint64_t gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
+    if ((gate & k_dispatch_busy) != 0 ||
+        !m_stateful_dispatch_gate.compare_exchange_strong(gate,
+                                                          gate | k_dispatch_busy,
+                                                          std::memory_order_acq_rel,
+                                                          std::memory_order_relaxed)) {
+        return nullptr;
+    }
+    const uint64_t token = gate | k_dispatch_busy;
     while (true) {
         std::shared_ptr<ThreadSafeStruct> next;
         if (m_dispatch_pending.try_dequeue(next)) {
-            return next;  // keep busy = true; the task is now in flight
+            if (next->m_dispatch_generation != m_generation.load(std::memory_order_seq_cst)) {
+                // Stale entry (a wait-free reset bumped the generation after it was
+                // prepared). It was never handed to a worker, so the gate-holder owns
+                // it exclusively: return it to the free pool and keep filtering. Only
+                // m_free is written — m_time_stamp stays audio-thread-owned, and the
+                // retained stale stamp is harmless (pre_process overwrites it at
+                // reuse; the generation guard rejects any lookup in between). A
+                // filter racing a second bump may treat an about-to-be-stale entry
+                // as fresh and dispatch it — benign: the worker's dequeue-time stale
+                // check and the new_data_request generation guard catch it, at the
+                // cost of one wasted dispatch. Do not "fix" this into a stronger
+                // invariant.
+                next->m_free.store(true, std::memory_order_release);
+                continue;
+            }
+            next->m_dispatch_epoch = token;
+            return next;  // keep busy; the task is now in flight
         }
         // Nothing pending: release ownership. Re-check to avoid a lost task that
         // was enqueued between the failed dequeue and the release.
-        m_stateful_dispatch_busy.store(false, std::memory_order_release);
+        release_dispatch(token);
         if (m_dispatch_pending.size_approx() == 0) { return nullptr; }
-        if (m_stateful_dispatch_busy.exchange(true, std::memory_order_acquire)) {
-            return nullptr;  // another caller re-acquired; it will handle dispatch
+        gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
+        if ((gate & k_dispatch_busy) != 0 || (gate | k_dispatch_busy) != token ||
+            !m_stateful_dispatch_gate.compare_exchange_strong(gate,
+                                                              token,
+                                                              std::memory_order_acq_rel,
+                                                              std::memory_order_relaxed)) {
+            return nullptr;  // re-acquired by another holder (it will handle dispatch)
+                             // or the chain was force-reset (new epoch)
         }
     }
 }
 
-void SessionElement::release_dispatch() {
-    m_stateful_dispatch_busy.store(false, std::memory_order_release);
+void SessionElement::release_dispatch(uint64_t token) {
+    // Epoch-checked release: only a holder of the CURRENT epoch's busy gate may
+    // free it. A laggard worker finishing (or skipping) a task from before a
+    // force_reset_dispatch_chain() carries a stale token, fails the CAS silently,
+    // and cannot stomp a newer era's in-flight dispatch.
+    uint64_t expected = token;
+    m_stateful_dispatch_gate.compare_exchange_strong(expected,
+                                                     token & ~k_dispatch_busy,
+                                                     std::memory_order_acq_rel,
+                                                     std::memory_order_relaxed);
+}
+
+void SessionElement::discard_pending_dispatches() {
+    // Reset kick, driving thread only, immediately after the generation bump: every
+    // pending entry was prepared before the bump (same thread), so all are stale.
+    // Free them all without dispatching anything — this keeps the reset path free
+    // of queue/semaphore/logging syscalls. If the gate is busy, an in-flight task
+    // owns the chain; its worker filters the stale prefix at the next task
+    // boundary (try_acquire_next_dispatch generation filter).
+    uint64_t gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
+    if ((gate & k_dispatch_busy) != 0 ||
+        !m_stateful_dispatch_gate.compare_exchange_strong(gate,
+                                                          gate | k_dispatch_busy,
+                                                          std::memory_order_acq_rel,
+                                                          std::memory_order_relaxed)) {
+        return;
+    }
+    const uint64_t token = gate | k_dispatch_busy;
+    std::shared_ptr<ThreadSafeStruct> pending;
+    while (m_dispatch_pending.try_dequeue(pending)) {
+        // Never handed to a worker while we hold the gate — the direct-free is
+        // exclusive. Only m_free is written (see the filter above for why).
+        pending->m_free.store(true, std::memory_order_release);
+    }
+    release_dispatch(token);
+}
+
+void SessionElement::force_reset_dispatch_chain() {
+    // Quiescent contexts only (Context::drain_inference_queue has run): no task of
+    // this session is queued or running, but a laggard worker — one that was
+    // invisible to the drain and woke on the stale-skip path — may still
+    // TRANSIENTLY hold the gate while it filters the pending queue. Never erase a
+    // live holder's busy bit (an unconditional store here would let a later
+    // dispatch acquire the "freed" gate while the laggard still believes it owns
+    // it — two holders, mutual exclusion broken). Instead bump the epoch with a
+    // CAS that only succeeds on a free gate, waiting out any transient holder.
+    // Bounded: with the session generation already bumped by the caller's flow, a
+    // laggard holder only filters stale pending entries and releases — it never
+    // dispatches, so the busy phase is microseconds.
+    uint64_t gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
+    while ((gate & k_dispatch_busy) != 0 ||
+           !m_stateful_dispatch_gate.compare_exchange_weak(gate,
+                                                           ((gate >> 1U) + 1U) << 1U,
+                                                           std::memory_order_acq_rel,
+                                                           std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+        gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
+    }
+    // Epoch bumped first: a laggard acquiring from here on does so under the new
+    // epoch and finds only stale entries to filter. Flush whatever remains — the
+    // entries reference structs the caller is about to rebuild or wipe.
+    std::shared_ptr<ThreadSafeStruct> drained;
+    while (m_dispatch_pending.try_dequeue(drained)) {}
 }
 
 void SessionElement::complete_with_zeros(
@@ -406,6 +454,12 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
             }
         }
     }
+
+    // The pending-dispatch chain must not survive the struct rebuild below: a
+    // leftover entry would reference an orphaned struct and could be dispatched
+    // into the rebuilt session. Also opens a new dispatch epoch, invalidating
+    // any gate token a laggard worker may still hold from before the drain.
+    force_reset_dispatch_chain();
 
     // Create the thread-safe structs for the inference queue
     m_inference_queue.clear();

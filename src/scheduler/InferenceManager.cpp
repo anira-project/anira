@@ -259,11 +259,4 @@ void InferenceManager::reset() {
     }
 }
 
-void InferenceManager::reset_non_blocking() {
-    m_context->reset_session_non_blocking(m_session);
-    for (size_t& missing_samples : m_missing_samples) {
-        missing_samples = 0;  // Reset missing samples to zero
-    }
-}
-
 }  // namespace anira

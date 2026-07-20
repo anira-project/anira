@@ -237,8 +237,4 @@ void InferenceHandler::reset() {
     m_inference_manager.reset();
 }
 
-void InferenceHandler::reset_non_blocking() {
-    m_inference_manager.reset_non_blocking();
-}
-
 }  // namespace anira

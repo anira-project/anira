@@ -242,25 +242,21 @@ public:
     void set_non_realtime(bool is_non_realtime) const;
 
     /**
-     * @brief Resets the inference session to its initial state
+     * @brief Wait-free reset of the inference session to its initial state.
      *
-     * This method clears all internal buffers, resets the inference pipeline,
-     * and prepares the handler for a new processing session.
+     * Clears the session's buffers and re-anchors the inference grid without ever
+     * blocking on in-flight inferences (see Context::reset_session): every
+     * already-dispatched inference is invalidated via the session generation, its
+     * result discarded and its structure reclaimed lazily. Safe to call from the
+     * audio thread, for all session types. Also resets the missing-samples
+     * bookkeeping.
      *
-     * @note This method waits for all ongoing inferences to complete before resetting.
+     * @note Does NOT wait for in-flight inferences: a worker thread may still be
+     *       executing a (discarded) inference — including user code in a custom
+     *       backend or the before_inference()/after_inference() hooks — after
+     *       this returns. Call prepare() if you need that quiescence.
      */
     void reset();
-
-    /**
-     * @brief Wait-free variant of reset() for real-time callers.
-     *
-     * Clears the session and re-anchors the inference grid without ever blocking on
-     * in-flight inferences (see Context::reset_session_non_blocking). Produces the same
-     * observable output as reset() — which also discards any in-flight result — but is
-     * safe to call from the audio thread. Non-stateful sessions only; stateful sessions
-     * transparently fall back to the blocking reset().
-     */
-    void reset_non_blocking();
 
 private:
     /**

@@ -188,10 +188,27 @@ private:
      * @brief Processes the inference request currently held in m_inference_data
      *
      * Shared by both wait strategies after a successful dequeue: skips the
-     * request if its session is no longer initialized, otherwise runs
-     * do_inference().
+     * request if it is stale (its session's generation was bumped by a wait-free
+     * reset) or its session is momentarily uninitialized (a prepare/release drain
+     * is in progress), otherwise runs do_inference(). Skip paths still publish
+     * the completion signal, and for session-exclusive tasks end the task's turn
+     * on the dispatch chain.
      */
     void process_dequeued_inference();
+
+    /**
+     * @brief Hands the session's next pending stateful task to the pool.
+     *
+     * Claims the next pending dispatch (stale entries are filtered to the free
+     * pool by try_acquire_next_dispatch) and enqueues it into the global
+     * inference queue. On a full queue the task completes as zeros at its stream
+     * position and the gate is released. Shared continuation of every
+     * session-exclusive task boundary except the uninitialized skip, which must
+     * not dispatch new work into a drain's window.
+     *
+     * @param session Session whose dispatch chain to continue
+     */
+    void dispatch_next_pending(const std::shared_ptr<SessionElement>& session);
 
 private:
     InferenceQueue& m_next_inference;  ///< Reference to the thread-safe

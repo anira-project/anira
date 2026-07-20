@@ -172,14 +172,16 @@ void InferenceThread::process_dequeued_inference() {
     // values and a "ghost" inference could run concurrently with SessionElement::clear().
     session->m_active_inferences.fetch_add(1, std::memory_order::seq_cst);
 
-    // A wait-free reset (Context::reset_session_non_blocking) bumps the session
-    // generation. A non-stateful dispatch whose stamp is now stale would have its
-    // output discarded anyway, so skip the model — but still publish the completion
-    // signal do_inference() would have set, so the audio thread's
-    // Context::reclaim_stale_structs() can return this struct to the free pool.
-    const bool stale = !session->m_inference_config.m_session_exclusive_processor &&
-                       thread_safe_struct->m_dispatch_generation !=
-                           session->m_generation.load(std::memory_order::seq_cst);
+    // A wait-free reset (Context::reset_session) bumps the session generation. A
+    // dispatch whose stamp is now stale would have its output discarded anyway, so
+    // skip the model — but still publish the completion signal do_inference() would
+    // have set, so the audio thread's Context::reclaim_stale_structs() can return
+    // this struct to the free pool. For a session-exclusive task the skipped
+    // dispatch still ends its turn on the chain (release + dispatch-next), exactly
+    // like a completed one — a skip path that missed the continuation would leave
+    // the gate wedged forever.
+    const bool stale = thread_safe_struct->m_dispatch_generation !=
+                       session->m_generation.load(std::memory_order::seq_cst);
 
     if (stale) {
         if (session->m_inference_config.m_blocking_ratio > 0.f) {
@@ -187,10 +189,44 @@ void InferenceThread::process_dequeued_inference() {
         } else {
             thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
         }
+        if (session->m_inference_config.m_session_exclusive_processor) {
+            session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+            dispatch_next_pending(session);
+        }
     } else if (session->m_initialized.load(std::memory_order::seq_cst)) {
         do_inference(session, thread_safe_struct);
+    } else {
+        // Session momentarily uninitialized (prepare/release drain in progress).
+        // Complete as silence so the struct is not stranded without a completion
+        // signal, and end the exclusive task's turn on the chain — but NEVER
+        // dispatch a successor here: new work injected into the drain's window
+        // would let drain_inference_queue() return before quiescence. Pending
+        // entries are the drainer's job (force_reset_dispatch_chain in prepare).
+        session->complete_with_zeros(thread_safe_struct);
+        if (session->m_inference_config.m_session_exclusive_processor) {
+            session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+        }
     }
     session->m_active_inferences.fetch_sub(1, std::memory_order::release);
+}
+
+void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement>& session) {
+    if (auto next = session->try_acquire_next_dispatch()) {
+        // Safe to use the session's producer token here: the dispatch gate
+        // guarantees only one thread at a time enqueues for this session,
+        // and its acquire/release ordering publishes the token's state.
+        if (!m_next_inference.try_enqueue(
+                session->m_producer_token,
+                InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
+            // The task completes as zeros at its stream position, keeping
+            // the output time-aligned instead of stalling the session.
+            LOG_ERROR << "[ERROR] Could not enqueue next inference! "
+                         "Dropping the inference and zero-filling its output."
+                      << '\n';
+            session->complete_with_zeros(next);
+            session->release_dispatch(next->m_dispatch_epoch);
+        }
+    }
 }
 
 void InferenceThread::do_inference(
@@ -213,23 +249,8 @@ void InferenceThread::do_inference(
     // the pool. Only one task per session is ever in flight, keeping execution in
     // order and mutually exclusive with no spinning.
     if (session->m_inference_config.m_session_exclusive_processor) {
-        session->release_dispatch();
-        if (auto next = session->try_acquire_next_dispatch()) {
-            // Safe to use the session's producer token here: the dispatch gate
-            // guarantees only one thread at a time enqueues for this session,
-            // and its acquire/release ordering publishes the token's state.
-            if (!m_next_inference.try_enqueue(
-                    session->m_producer_token,
-                    InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
-                // The task completes as zeros at its stream position, keeping
-                // the output time-aligned instead of stalling the session.
-                LOG_ERROR << "[ERROR] Could not enqueue next inference! "
-                             "Dropping the inference and zero-filling its output."
-                          << '\n';
-                session->complete_with_zeros(next);
-                session->release_dispatch();
-            }
-        }
+        session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+        dispatch_next_pending(session);
     }
 }
 

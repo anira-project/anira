@@ -294,6 +294,15 @@ void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
     // InferenceThread::process_dequeued_inference().
     session->m_initialized.store(false, std::memory_order::seq_cst);
 
+    // Bump the generation so a laggard worker — one that dequeued a task of this
+    // session but was preempted before registering it, invisible to the drain
+    // below — takes the stale-skip path when it finally wakes (possibly after
+    // this prepare has completed and re-initialized the session) instead of
+    // running the model on an orphaned pre-prepare struct. Its stale-epoch gate
+    // token cannot disturb the rebuilt dispatch chain either (see
+    // SessionElement::release_dispatch).
+    session->m_generation.fetch_add(1, std::memory_order::seq_cst);
+
     drain_inference_queue(session);
 
     session->prepare(new_config, std::move(custom_latency));
@@ -365,7 +374,7 @@ void Context::new_data_submitted(const std::shared_ptr<SessionElement>& session)
 
 // Full realtime safe path
 void Context::new_data_request(const std::shared_ptr<SessionElement>& session) {
-    const unsigned long generation = session->m_generation.load(std::memory_order::relaxed);
+    const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             // Match by timestamp AND generation: a stale struct (left in flight by a
@@ -396,7 +405,7 @@ void Context::new_data_request(const std::shared_ptr<SessionElement>& session) {
 // With blocking ratio > 0, the semaphore is used to wait for data. This is not 100% realtime safe.
 void Context::new_data_request(const std::shared_ptr<SessionElement>& session,
                                std::chrono::steady_clock::time_point wait_until) {
-    const unsigned long generation = session->m_generation.load(std::memory_order::relaxed);
+    const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             // See the generation-guard rationale in the realtime-safe overload above.
@@ -460,7 +469,7 @@ bool Context::pre_process(const std::shared_ptr<SessionElement>& session) {
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
             // Stamp the generation this dispatch belongs to, so a wait-free reset that
             // bumps the generation afterwards can identify and discard it (see
-            // reset_session_non_blocking / new_data_request generation guard).
+            // reset_session / new_data_request generation guard).
             session->m_inference_queue[i]->m_dispatch_generation =
                 session->m_generation.load(std::memory_order::relaxed);
             if (session->m_inference_config.m_session_exclusive_processor) {
@@ -492,7 +501,9 @@ bool Context::pre_process(const std::shared_ptr<SessionElement>& session) {
 void Context::try_dispatch_stateful(const std::shared_ptr<SessionElement>& session) {
     if (!session->m_inference_config.m_session_exclusive_processor) { return; }
     if (auto next = session->try_acquire_next_dispatch()) {
-        if (!enqueue_inference_or_drop(session, next)) { session->release_dispatch(); }
+        if (!enqueue_inference_or_drop(session, next)) {
+            session->release_dispatch(next->m_dispatch_epoch);
+        }
     }
 }
 
@@ -535,22 +546,60 @@ void Context::start_thread_pool() {
 }
 
 void Context::drain_inference_queue(const std::shared_ptr<SessionElement>& session) {
-    // seq_cst: pairs with the worker's register-before-check in
-    // InferenceThread::process_dequeued_inference() — either the worker sees
-    // m_initialized == false and skips, or this load sees its increment and waits.
-    while (session->m_active_inferences.load(std::memory_order::seq_cst) != 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(50));
-    }
+    // Fixpoint loop: one spin-then-single-pass is not enough — a worker that
+    // dequeued one of this session's tasks just before m_initialized went false
+    // can still run its session-exclusive continuation and enqueue a successor
+    // into this drain's window. Repeat until a full pass finds none of this
+    // session's entries AND no inference is registered afterwards. The chain
+    // cannot grow indefinitely: with the session uninitialized, the worker's
+    // skip path never dispatches a successor, so each pass strictly shrinks the
+    // outstanding work.
+    while (true) {
+        // seq_cst: pairs with the worker's register-before-check in
+        // InferenceThread::process_dequeued_inference() — either the worker sees
+        // m_initialized == false and skips, or this load sees its increment and
+        // waits.
+        while (session->m_active_inferences.load(std::memory_order::seq_cst) != 0) {
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
 
-    std::vector<InferenceData> inference_stack;
-    InferenceData inference_data;
-    while (m_next_inference.try_dequeue(inference_data)) {
-        if (inference_data.m_session != session) { inference_stack.emplace_back(inference_data); }
-    }
+        bool found_own = false;
+        std::vector<InferenceData> inference_stack;
+        InferenceData inference_data;
+        while (m_next_inference.try_dequeue(inference_data)) {
+            if (inference_data.m_session == session) {
+                found_own = true;
+                // Complete the never-started task as silence at its stream
+                // position (kept time-aligned for callers that continue after
+                // the drain) and end its turn on the stateful dispatch chain so
+                // the gate cannot stay wedged.
+                session->complete_with_zeros(inference_data.m_thread_safe_struct);
+                if (session->m_inference_config.m_session_exclusive_processor) {
+                    session->release_dispatch(
+                        inference_data.m_thread_safe_struct->m_dispatch_epoch);
+                }
+            } else {
+                inference_stack.emplace_back(inference_data);
+            }
+        }
 
-    for (auto& inference_data : inference_stack) {
-        if (!m_next_inference.try_enqueue(inference_data)) {
-            LOG_ERROR << "[ERROR] Could not requeue inference data!" << '\n';
+        for (auto& other : inference_stack) {
+            if (!m_next_inference.try_enqueue(other)) {
+                // Requeue failed: complete the other session's task as silence so
+                // its stream stays time-aligned (previously it was silently lost),
+                // and unwedge its dispatch chain.
+                LOG_ERROR << "[ERROR] Could not requeue inference data! Dropping the "
+                             "inference and zero-filling its output."
+                          << '\n';
+                other.m_session->complete_with_zeros(other.m_thread_safe_struct);
+                if (other.m_session->m_inference_config.m_session_exclusive_processor) {
+                    other.m_session->release_dispatch(other.m_thread_safe_struct->m_dispatch_epoch);
+                }
+            }
+        }
+
+        if (!found_own && session->m_active_inferences.load(std::memory_order::seq_cst) == 0) {
+            return;
         }
     }
 }
@@ -600,26 +649,9 @@ void Context::release_processor(InferenceConfig& inference_config,
 }
 
 void Context::reset_session(const std::shared_ptr<SessionElement>& session) {
-    // seq_cst: pairs with the worker's register-before-check in
-    // InferenceThread::process_dequeued_inference().
-    session->m_initialized.store(false, std::memory_order::seq_cst);
-
-    drain_inference_queue(session);
-
-    session->clear();
-
-    session->m_initialized.store(true, std::memory_order::release);
-}
-
-void Context::reset_session_non_blocking(const std::shared_ptr<SessionElement>& session) {
-    // Stateful sessions rely on strict in-order, mutually-exclusive dispatch; the
-    // generation-based reclaim below does not model that, so fall back to the
-    // blocking reset for them. The fast pitch-tracker path is non-stateful.
-    if (session->m_inference_config.m_session_exclusive_processor) {
-        reset_session(session);
-        return;
-    }
-
+    // Wait-free for ALL session types — the public entry point
+    // InferenceHandler::reset() is [[clang::nonblocking]].
+    //
     // seq_cst: pairs with the worker's register-before-read in
     // InferenceThread::process_dequeued_inference() (m_active_inferences increment
     // then generation load), the same store-buffering discipline as m_initialized.
@@ -629,21 +661,34 @@ void Context::reset_session_non_blocking(const std::shared_ptr<SessionElement>& 
     // running; staleness alone guards correctness — and we never wait.
     session->m_generation.fetch_add(1, std::memory_order::seq_cst);
 
-    session->clear_non_blocking();
+    session->clear();
+
+    if (session->m_inference_config.m_session_exclusive_processor) {
+        // Reconcile the stateful dispatch chain. Gate free: every pending entry
+        // (all stale — this runs on the session's single driving thread, so
+        // nothing fresh can have been prepared since the bump) is returned to
+        // the free pool right here, without dispatching or enqueueing anything.
+        // Gate busy: the in-flight task's worker filters the stale prefix at its
+        // next task boundary (try_acquire_next_dispatch generation filter).
+        session->discard_pending_dispatches();
+    }
 }
 
 void Context::reclaim_stale_structs(const std::shared_ptr<SessionElement>& session) {
-    const unsigned long generation = session->m_generation.load(std::memory_order::relaxed);
+    const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
     for (const auto& s : session->m_inference_queue) {
         // Skip free structs (nothing to reclaim) and current-generation structs (live).
         if (s->m_free.load(std::memory_order::relaxed)) { continue; }
         if (s->m_dispatch_generation == generation) { continue; }
 
         // Stale struct. Reclaim only once the worker has published completion, which
-        // guarantees it no longer touches the struct's tensors (non-stateful path):
-        // do_inference() sets the done signal as its last write, and a stale dispatch
-        // that skipped inference publishes the same signal (see process_dequeued_inference).
-        // Until then it is genuinely in flight — leave it for a later call.
+        // guarantees it no longer touches the struct's tensors: do_inference() sets
+        // the done signal as its last struct write, and a stale dispatch that skipped
+        // inference publishes the same signal (see process_dequeued_inference; stale
+        // session-exclusive tasks flow through here too). A stale pending entry that
+        // was direct-freed by the gate-holder never had a done signal and is already
+        // free, so this loop skips it. Until the signal arrives a struct is genuinely
+        // in flight — leave it for a later call.
         bool done;
         if (session->m_inference_config.m_blocking_ratio > 0.f) {
             done = s->m_done_semaphore.try_acquire();

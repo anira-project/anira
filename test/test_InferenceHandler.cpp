@@ -415,6 +415,155 @@ TEST_P(InferenceTest, Reset) {
     }
 }
 
+// Hammers the wait-free reset() on a session-exclusive (stateful) session at
+// varying phases relative to in-flight inference. Stresses the stateful
+// dispatch-chain reconciliation: resets right after submission hit a busy gate
+// (the worker filters the stale pending prefix at its task boundary), resets at
+// idle hit a free gate (the calling thread filters), and back-to-back resets
+// exercise repeated generation bumps. Recovery is then verified functionally: a
+// wedged dispatch gate would time out the per-block completion wait below, and
+// unreclaimed structs would exhaust the free pool and corrupt the output.
+TEST_P(InferenceTest, ResetStatefulHammer) {
+    auto const& test_params = GetParam();
+    auto const buffer_size = static_cast<size_t>(test_params.m_host_config.m_buffer_size);
+    auto const& reference_offset = test_params.m_reference_data_offset;
+
+    std::vector<float> data_input;
+    std::vector<float> data_reference;
+
+    read_wav(test_params.m_input_data_path, data_input);
+    read_wav(test_params.m_reference_data_path, data_reference);
+
+    ASSERT_TRUE(data_input.size() > 0);
+    ASSERT_TRUE(data_reference.size() > 0);
+
+    ContextConfig const anira_context_config;
+    InferenceConfig inference_config = hybridnn_config;
+    // The point of this test: strict in-order, mutually-exclusive dispatch.
+    inference_config.m_session_exclusive_processor = true;
+    HybridNNPrePostProcessor pp_processor(inference_config);
+    HybridNNBypassProcessor bypass_processor(inference_config);
+
+    if (static_cast<size_t>(buffer_size) % inference_config.get_preprocess_input_size()[0] != 0) {
+        GTEST_SKIP()
+            << "Test requires the preprocess_input_size to be a multiple of the buffer size.";
+        return;
+    }
+
+    InferenceHandler inference_handler(pp_processor,
+                                       inference_config,
+                                       bypass_processor,
+                                       anira_context_config);
+
+    inference_handler.prepare(test_params.m_host_config);
+    inference_handler.set_inference_backend(test_params.m_backend);
+
+    int const latency_offset = static_cast<int>(inference_handler.get_latency());
+
+    BufferF test_buffer(1, buffer_size);
+
+    // Hammer phase: output is discarded; only the reset/dispatch interplay matters.
+    for (size_t round = 0; round < 20; round++) {
+        for (size_t block = 0; block < 5; block++) {
+            for (size_t i = 0; i < buffer_size; i++) {
+                test_buffer.set_sample(0, i, data_input.at((block * buffer_size) + i));
+            }
+            inference_handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
+            if (block == 2) {
+                // Likely mid-flight: the exclusive task submitted above may hold
+                // the dispatch gate, forcing the worker-boundary filtering path.
+                inference_handler.reset();
+            }
+        }
+        inference_handler.reset();
+        inference_handler.reset();  // back-to-back resets must be harmless
+        EXPECT_EQ(inference_handler.get_available_samples(0), (size_t)latency_offset)
+            << "Available samples should re-anchor to the latency after reset (round " << round
+            << ")";
+    }
+
+    // Reconciliation barrier: a wait-free reset leaves the structures of in-flight
+    // and pending stale work captive until the worker's next task boundary, so the
+    // pool can be transiently exhausted right after the hammer — fresh chunks
+    // submitted in that window complete as silence at their stream positions
+    // (time-aligned, self-recovering; see the reset() docs). Let the stale work
+    // finish, then verify the chain still processes end-to-end: with a wedged
+    // dispatch gate the fresh chunks below would never complete and the wait
+    // would time out.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    for (size_t block = 0; block < 3; block++) {
+        for (size_t i = 0; i < buffer_size; i++) {
+            test_buffer.set_sample(0, i, data_input.at(block * buffer_size + i));
+        }
+        size_t const prev_samples = inference_handler.get_available_samples(0);
+        inference_handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
+        auto start = std::chrono::system_clock::now();
+        while (inference_handler.get_available_samples(0) != prev_samples) {
+            if (std::chrono::system_clock::now() >
+                start + std::chrono::duration<long int>(k_inference_timeout_s)) {
+                FAIL() << "Timeout while reconciling after the reset hammer — the stateful "
+                          "dispatch chain may be wedged (block "
+                       << block << ")";
+            }
+            std::this_thread::sleep_for(std::chrono::nanoseconds(10));
+        }
+    }
+
+    // Re-anchor from a quiescent state: nothing is in flight anymore, so this
+    // reset leaves a fully free pool and the reference phase below is
+    // deterministic.
+    inference_handler.reset();
+    EXPECT_EQ(inference_handler.get_available_samples(0), (size_t)latency_offset)
+        << "Available samples should re-anchor to the latency after the quiescent reset";
+
+    // Recovery phase: after all that, the session must behave exactly like a
+    // freshly prepared one — every block completes (a wedged chain would hit the
+    // completion timeout) and the output matches the reference from the start.
+    RingBuffer ring_buffer;
+    ring_buffer.initialize_with_positions(1, latency_offset + buffer_size + reference_offset);
+    for (size_t i = 0; i < latency_offset + reference_offset; i++) {
+        ring_buffer.push_sample(0, 0);
+    }
+
+    for (size_t repeat = 0; repeat < 100; repeat++) {
+        for (size_t i = 0; i < buffer_size; i++) {
+            test_buffer.set_sample(0, i, data_input.at((repeat * buffer_size) + i));
+            ring_buffer.push_sample(0, data_reference.at((repeat * buffer_size) + i));
+        }
+
+        size_t const prev_samples = inference_handler.get_available_samples(0);
+
+        inference_handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
+
+        auto start = std::chrono::system_clock::now();
+        while (inference_handler.get_available_samples(0) != prev_samples) {
+            if (std::chrono::system_clock::now() >
+                start + std::chrono::duration<long int>(k_inference_timeout_s)) {
+                FAIL() << "Timeout while waiting for block to be processed — the stateful "
+                          "dispatch chain may be wedged (repeat "
+                       << repeat << ")";
+            }
+            std::this_thread::sleep_for(std::chrono::nanoseconds(10));
+        }
+
+        for (size_t i = 0; i < buffer_size; i++) {
+            float const reference = ring_buffer.pop_sample(0);
+            float const processed = test_buffer.get_sample(0, i);
+
+            if (repeat * buffer_size + i < latency_offset + reference_offset) {
+                ASSERT_FLOAT_EQ(reference, 0);
+            } else {
+                float const epsilon =
+                    max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    test_params.m_epsilon_abs;
+                ASSERT_NEAR(reference, processed, epsilon)
+                    << "After reset hammer: repeat=" << repeat << ", i=" << i
+                    << ", total sample nr: " << repeat * buffer_size + i << '\n';
+            }
+        }
+    }
+}
+
 namespace {
 std::string build_test_name(const testing::TestParamInfo<InferenceTest::ParamType>& info) {
     std::stringstream ss_sample_rate, ss_buffer_size;

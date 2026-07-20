@@ -7,6 +7,7 @@
 #endif
 
 #include <atomic>
+#include <cstdint>
 
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
@@ -85,29 +86,24 @@ public:
                    moodycamel::ProducerToken&& producer_token);
 
     /**
-     * @brief Clears all session data and resets to initial state
-     *
-     * Resets ring buffers, clears inference queues, and reinitializes all
-     * session state to prepare for reconfiguration or shutdown.
-     */
-    void clear();
-
-    /**
-     * @brief Wait-free variant of clear() for real-time resets.
+     * @brief Wait-free clear of the session's audio-thread-owned state.
      *
      * Resets the audio-thread-owned state (send/receive ring buffers, timestamp
-     * bookkeeping) and any ThreadSafeStruct that is currently free, but — unlike
-     * clear() — never touches a struct that a worker still holds in flight
+     * bookkeeping, latency re-seed) and any ThreadSafeStruct that is currently
+     * free, but never touches a struct that a worker still holds in flight
      * (m_free == false). It therefore does NOT require Context::drain_inference_queue()
      * as a precondition and never blocks the caller.
      *
      * Correctness is provided by the session generation (see m_generation): the
-     * caller (Context::reset_session_non_blocking) bumps the generation first, which
-     * makes every already-dispatched inference "stale" — its result is ignored by
-     * Context::new_data_request() and its struct is reclaimed by Context::pre_process()
-     * once the worker signals completion. Only valid for non-stateful sessions.
+     * caller (Context::reset_session) bumps the generation first, which makes every
+     * already-dispatched inference "stale" — its result is ignored by
+     * Context::new_data_request() and its struct is reclaimed by
+     * Context::reclaim_stale_structs() (run from new_data_submitted()) once the
+     * worker publishes completion. Valid for all session types; the stateful
+     * dispatch chain is reconciled separately (see discard_pending_dispatches()
+     * and the generation filter in try_acquire_next_dispatch()).
      */
-    void clear_non_blocking();
+    void clear();
 
     /**
      * @brief Prepares the session for processing with specified audio configuration
@@ -217,14 +213,25 @@ public:
         std::atomic<bool> m_done_atomic{false};  ///< Atomic flag for non-blocking completion
                                                  ///< checking
 
-        unsigned long m_time_stamp;  ///< Timestamp for latency tracking and debugging
+        unsigned long m_time_stamp;  ///< Timestamp for latency tracking and debugging. Written
+                                     ///< only on the session's driving (audio) thread — keep it
+                                     ///< that way; it is a plain field.
         // Session generation this struct was dispatched under (stamped in
         // Context::pre_process). A wait-free reset bumps SessionElement::m_generation;
         // a dispatch whose stamp no longer matches is "stale" — its result is discarded
         // and the struct reclaimed. Written on the audio thread at dispatch, read on the
         // worker thread and audio thread; a dispatch's stamp is stable for its lifetime,
-        // so a plain value (not atomic) is sufficient.
-        unsigned long m_dispatch_generation{0};
+        // so a plain value (not atomic) is sufficient. 64-bit so the counter cannot
+        // wrap within any realistic session lifetime (unsigned long is 32-bit on
+        // LLP64/Windows).
+        uint64_t m_dispatch_generation{0};
+        // Dispatch-gate token this struct was dispatched under (stamped in
+        // try_acquire_next_dispatch, stateful sessions only). The holder passes it
+        // back to release_dispatch(), whose epoch check makes a laggard release
+        // from before a force_reset_dispatch_chain() fail silently instead of
+        // stomping a newer era's in-flight dispatch. Plain field: stable for the
+        // dispatch's lifetime, synced by the gate/queue handoffs.
+        uint64_t m_dispatch_epoch{0};
         std::vector<BufferF> m_tensor_input_data;   ///< Input tensor data buffers
         std::vector<BufferF> m_tensor_output_data;  ///< Output tensor data buffers
     };
@@ -245,14 +252,16 @@ public:
     std::atomic<int> m_active_inferences{0};  ///< Atomic counter of currently active inference
                                               ///< operations
 
-    // Monotonic generation counter, bumped by Context::reset_session_non_blocking()
-    // on the audio thread. Every inference dispatched under an earlier generation is
-    // "stale": its output is discarded and its struct reclaimed, without the audio
-    // thread ever waiting for the worker. Only the audio thread writes it; workers
-    // read it to decide whether to skip a stale dispatch. seq_cst on the write pairs
-    // with the worker's register-before-read of m_active_inferences (store-buffering),
-    // matching the existing m_initialized handshake.
-    std::atomic<unsigned long> m_generation{0};
+    // Monotonic generation counter, bumped by Context::reset_session() (audio
+    // thread) and Context::prepare_session() (control thread, quiescent). Every
+    // inference dispatched under an earlier generation is "stale": its output is
+    // discarded and its struct reclaimed, without the caller ever waiting for the
+    // worker. Workers read it to decide whether to skip a stale dispatch. seq_cst
+    // on the write pairs with the worker's register-before-read of
+    // m_active_inferences (store-buffering), matching the existing m_initialized
+    // handshake. 64-bit: wrap-around (ABA) is unreachable even at per-block reset
+    // rates.
+    std::atomic<uint64_t> m_generation{0};
 
     // This session's explicit producer token for the global inference queue.
     // Pinning one token per session keeps enqueue allocation-free on the audio
@@ -262,7 +271,7 @@ public:
     // this holds here because all enqueues of a session are serialized: the
     // non-stateful path enqueues only from the session's single driving thread,
     // and the stateful path enqueues only while holding the
-    // m_stateful_dispatch_busy gate (whose acquire/release ordering also makes
+    // m_stateful_dispatch_gate (whose acquire/release ordering also makes
     // the token's state visible when ownership migrates between threads).
     moodycamel::ProducerToken m_producer_token;  ///< Per-session producer token for the global
                                                  ///< inference queue
@@ -273,8 +282,22 @@ public:
     // in submission order and are released one at a time as each completes, which
     // guarantees in-order, mutually-exclusive execution without spinning. Other
     // sessions are unaffected and keep using the shared thread pool in parallel.
-    std::atomic<bool> m_stateful_dispatch_busy{false};  ///< True while a stateful task of this
-                                                        ///< session is queued or running
+    //
+    // Gate word layout: bit 0 = busy (a task of this session is queued or
+    // running), bits 63..1 = dispatch epoch. The epoch gives the gate an owner
+    // identity: force_reset_dispatch_chain() (quiescent contexts only) opens a
+    // new epoch, so a laggard worker that was preempted across a prepare() and
+    // still holds a token from the old era cannot release — and thereby stomp —
+    // the new era's gate (release_dispatch() is an epoch-checked CAS).
+    static constexpr uint64_t k_dispatch_busy = 1;
+    // The wait-free reset()/dispatch guarantees assume these 64-bit atomics are
+    // implemented lock-free; a target where they are not would silently reintroduce
+    // locks into [[clang::nonblocking]] paths — fail the build loudly instead.
+    static_assert(std::atomic<uint64_t>::is_always_lock_free,
+                  "anira's wait-free reset/dispatch requires lock-free 64-bit atomics");
+    std::atomic<uint64_t> m_stateful_dispatch_gate{0};  ///< {epoch, busy} dispatch gate; busy while
+                                                        ///< a stateful task of this session is
+                                                        ///< queued or running
     // Pre-sized in the constructor to m_num_parallel_processors — a pending
     // entry is always a distinct ThreadSafeStruct, so the depth is bounded —
     // and fed exclusively through m_dispatch_producer_token, so enqueues never
@@ -294,10 +317,26 @@ public:
      * the capacity bound makes unreachable — it is completed with zeroed output instead. */
     void enqueue_pending_dispatch(std::shared_ptr<ThreadSafeStruct> thread_safe_struct);
     /** @brief Claim the next stateful task to dispatch, or nullptr if one is already in flight or
-     * none are pending. */
+     * none are pending. Pending entries whose dispatch generation is stale (a wait-free reset
+     * bumped m_generation after they were prepared) are returned straight to the free pool and
+     * skipped: they were never handed to a worker, so the gate-holder owns them exclusively. The
+     * returned struct carries the gate token in m_dispatch_epoch, which the holder must pass back
+     * to release_dispatch(). */
     std::shared_ptr<ThreadSafeStruct> try_acquire_next_dispatch();
-    /** @brief Mark the in-flight stateful task finished, allowing the next to be dispatched. */
-    void release_dispatch();
+    /** @brief Mark the in-flight stateful task finished, allowing the next to be dispatched.
+     * Epoch-checked: a token from before a force_reset_dispatch_chain() fails silently. */
+    void release_dispatch(uint64_t token);
+    /** @brief Wait-free reset kick for the stateful dispatch chain (driving thread only, called
+     * right after the generation bump): if no task is in flight, acquires the gate, returns every
+     * pending entry to the free pool (all are stale — same driving thread, so nothing fresh can
+     * have been prepared since the bump) and releases. Never enqueues, so the reset path stays
+     * free of queue/semaphore/logging syscalls. If a task is in flight, does nothing: the worker
+     * filters the stale prefix at its next task boundary. */
+    void discard_pending_dispatches();
+    /** @brief Quiescent-only (a drain has run, no task in flight or queued): flush the pending
+     * queue and open a new dispatch epoch, invalidating any token a laggard worker may still
+     * hold. Called from prepare(). */
+    void force_reset_dispatch_chain();
     /** @brief Complete a task without running inference: zero its output tensors and signal
      * completion. Used when the global queue rejects a task, so the dropped inference still
      * yields (silent) output at its correct stream position and the struct is freed normally. */
