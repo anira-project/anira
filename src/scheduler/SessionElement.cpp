@@ -298,9 +298,7 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
                     m_inference_config.get_postprocess_output_size()[greatest_buffer_size_index]);
         }
         min_config.m_buffer_size =
-            buffer_size_ratio *
-            static_cast<float>(
-                m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index]);
+            buffer_size_ratio * host_config.get_reference_size(m_inference_config);
 
         while (--greatest_buffer_size > 0) {
             float buffer_size_ratio;
@@ -317,9 +315,7 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
                             .get_postprocess_output_size()[greatest_buffer_size_index]);
             }
             adjusted_config.m_buffer_size =
-                buffer_size_ratio *
-                static_cast<float>(
-                    m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index]);
+                buffer_size_ratio * host_config.get_reference_size(m_inference_config);
 
             std::vector<float> adjusted_latency;
             for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
@@ -379,6 +375,11 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
 
                     adjusted_latency.push_back(
                         static_cast<float>(inference_caused_latency + buffer_adaptation));
+                } else {
+                    // Non-streamable outputs carry no latency, but the vector must
+                    // stay index-aligned with the output tensors: sync_latencies and
+                    // the m_latency update below index it per output tensor.
+                    adjusted_latency.push_back(0.f);
                 }
             }
 
@@ -570,7 +571,7 @@ std::vector<unsigned int> SessionElement::sync_latencies(
                 result.push_back(0);  // If no output size, just return 0
             }
         }
-    } else {
+    } else if (latencies.size() == 1) {
         result.push_back(std::ceil(latencies[0]));  // If only one output size, just return the
                                                     // calculated value
     }
