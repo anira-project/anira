@@ -103,17 +103,12 @@ TEST(Buffer, InvalidSizeSwap) {
     int* buffer1_ptr = buffer1.data();
     int* buffer2_ptr = buffer2.data();
 
-    testing::internal::CaptureStderr();
+    // Mismatched dimensions: swap must be refused (diagnostics go through
+    // thl's logger, so only the behavior is asserted here)
     buffer1.swap_data(buffer2);
 
-    std::string const output = testing::internal::GetCapturedStderr();
-
-    // check that the blocks were actually swapped
     ASSERT_EQ(buffer1_ptr, buffer1.data());
     ASSERT_EQ(buffer2_ptr, buffer2.data());
-    ASSERT_EQ(
-        output,
-        std::string("Cannot swap data, buffers have different number of channels or sizes!\n"));
 }
 
 TEST(Buffer, InvalidChannelsSwap) {
@@ -122,15 +117,10 @@ TEST(Buffer, InvalidChannelsSwap) {
     int* buffer1_ptr = buffer1.data();
     int* buffer2_ptr = buffer2.data();
 
-    testing::internal::CaptureStderr();
+    // Mismatched dimensions: swap must be refused (diagnostics go through
+    // thl's logger, so only the behavior is asserted here)
     buffer1.swap_data(buffer2);
 
-    std::string const output = testing::internal::GetCapturedStderr();
-
-    // check that the blocks were actually swapped
     ASSERT_EQ(buffer1_ptr, buffer1.data());
     ASSERT_EQ(buffer2_ptr, buffer2.data());
-    ASSERT_EQ(
-        output,
-        std::string("Cannot swap data, buffers have different number of channels or sizes!\n"));
 }

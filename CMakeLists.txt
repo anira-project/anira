@@ -197,6 +197,33 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(concurrentqueue)
 
+# ==============================================================================
+# Fetch tanh-lib (Apache-2.0 core component only)
+# ==============================================================================
+
+# anira's Buffer / RingBuffer / MemoryBlock are aliases over thl::core (see
+# include/anira/utils/*.h). Only the core component is built: tanh::Core is
+# tanh-lib's dedicated Apache-2.0 target — the AGPL components (state, dsp,
+# modulation, audio-io) are never fetched into the build.
+# Pinned to tanh-lab/tanh-lib#12 (refactor/apache-core-with-buffers); bump to a
+# tagged release once that PR lands.
+set(TANH_BUILD_CORE ON CACHE BOOL "" FORCE)
+set(TANH_BUILD_STATE OFF CACHE BOOL "" FORCE)
+set(TANH_BUILD_DSP OFF CACHE BOOL "" FORCE)
+set(TANH_BUILD_MODULATION OFF CACHE BOOL "" FORCE)
+set(TANH_BUILD_AUDIO_IO OFF CACHE BOOL "" FORCE)
+set(TANH_WITH_TESTS OFF CACHE BOOL "" FORCE)
+set(TANH_WITH_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(TANH_WITH_DOCS OFF CACHE BOOL "" FORCE)
+set(TANH_WITH_INSTALL OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+    tanh-lib
+    GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
+    GIT_TAG 3d233dbdc50d30880d7b4e2bb6f30c8726f33722
+)
+FetchContent_MakeAvailable(tanh-lib)
+
 # Fetch the release tarball instead of cloning the repo — the full git
 # history plus test suite is ~150MB while the release archive is a few MB, the
 # URL_HASH verifies integrity, and the tarball is content-addressable so CMake
@@ -267,8 +294,6 @@ target_sources(${PROJECT_NAME}
         src/scheduler/SessionElement.cpp
 
         # Utils
-        src/utils/Buffer.cpp
-        src/utils/RingBuffer.cpp
         src/utils/JsonConfigLoader.cpp
 
         # Interface
@@ -325,7 +350,7 @@ if(ANIRA_WITH_RTSAN)
     anira_rtsan_configure(${PROJECT_NAME})
 endif()
 
-target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json)
+target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
 
 if(ANIRA_WITH_EXECUTORCH)
     if(TARGET executorch)

@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Context::drain_inference_queue` is annotated `[[clang::blocking]]` under RTSan, drains to a fixpoint and completes never-started tasks as silence instead of dropping them.
 - The stateful dispatch gate carries an epoch, so an inference thread preempted across a `prepare()` can no longer release — and corrupt — the rebuilt session's in-flight dispatch.
 - The RTSan CI job (`build_sanitizer.yml`) is un-parked; the remaining logging-from-the-audio-path violations are suppressed via `.github/rtsan-suppressions.supp`, everything else fails CI.
+- `anira::Buffer<T>`, `anira::RingBuffer` and `anira::MemoryBlock<T>` are now aliases over [tanh-lib](https://github.com/tanh-lab/tanh-lib)'s Apache-2.0 `thl::core` containers instead of in-tree implementations (tanh-lib is fetched at configure time, core component only — no AGPL code enters the build). The public API is unchanged; new: `anira::RingBufferT<T>` exposes the now-templated ring buffer for non-float element types (e.g. integer token streams). Behavioral notes: ring-buffer overflow/empty-pop no longer log errors (a full-channel push still overwrites the oldest sample, popping an empty channel still yields 0), and `Buffer` carries an additional optional `sample_rate` member (ABI change).
 
 ### Removed
 
