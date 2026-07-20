@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Hang in `SessionElement::prepare()` for generator-style configs with no streamable input (all inputs are control parameters, outputs are streamed): the relative buffer/rate ratios divided by the reference input tensor's preprocess size — 0 for a non-streamable input — and the resulting `inf` never left the smaller-buffer countdown loop. The reference stream (new `HostConfig::get_reference_size()`) now falls back from the configured reference input to the first streamable input, then to the first streamable output.
 - Segfault in `SessionElement::prepare()` when the host allows smaller buffers and **all** output tensors are non-streamable (e.g. analysis models whose results leave through a custom backend): the smaller-buffer pass collected adjusted latencies for streamable outputs only, leaving the vector empty for `sync_latencies()` to index. The vector now stays index-aligned with the output tensors (non-streamable outputs contribute zero latency), which also corrects latency assignment for configs mixing streamable and non-streamable outputs.
 
 ## [v2.2.1] - 2026-07-04

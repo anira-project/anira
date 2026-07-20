@@ -574,3 +574,55 @@ TEST(SessionElementNonStreamableOutputTest, PrepareWithSmallerBuffersDoesNotCras
     ASSERT_EQ(session.m_latency.size(), 1u);
     ASSERT_EQ(session.m_latency[0], 0u) << "A non-streamable output carries no latency.";
 }
+
+namespace {
+// Leaked deliberately (same pattern as ClearDeadlockFixture above): on
+// regression prepare() never returns, and the detached thread must not touch
+// a destroyed fixture when the test gives up.
+struct OutputOnlyPrepareFixture {
+    InferenceConfig m_inference_config{
+        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
+        ProcessingSpec({1}, {1}, {0}, {2048}),
+        10.f,
+        0,
+        true};
+    PrePostProcessor m_pp_processor{m_inference_config};
+    InferenceQueue m_inference_queue;
+    SessionElement m_session{0,
+                             m_pp_processor,
+                             m_inference_config,
+                             moodycamel::ProducerToken(m_inference_queue)};
+    std::atomic<bool> m_prepared{false};
+};
+}  // namespace
+
+// Regression: generator-style configs — no streamable input, only streamable
+// outputs — hung prepare() forever when the host allowed smaller buffers. The
+// relative buffer-size ratio divided by the reference input tensor's
+// preprocess size, which is 0 for a non-streamable input; the resulting inf
+// never left the smaller-buffer countdown loop (inf - 1 == inf). The
+// reference stream now falls back to the first streamable tensor.
+TEST(SessionElementOutputOnlyTest, PrepareWithSmallerBuffersTerminates) {
+    auto* fixture = new OutputOnlyPrepareFixture();
+
+    std::thread([fixture] {
+        fixture->m_session.prepare(HostConfig(512, 48000, true));
+        fixture->m_prepared.store(true, std::memory_order_release);
+    }).detach();
+
+    auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!fixture->m_prepared.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    ASSERT_TRUE(fixture->m_prepared.load(std::memory_order_acquire))
+        << "prepare() did not terminate for an output-only config with "
+           "allow_smaller_buffers (relative buffer ratio divided by the "
+           "non-streamable reference input's size 0).";
+    ASSERT_EQ(fixture->m_session.m_latency.size(), 1u);
+    ASSERT_EQ(fixture->m_session.m_latency[0], 2527u)
+        << "Latency should scale the 2048-sample output chunk against the "
+           "512-sample host buffer via the streamable-output reference.";
+}

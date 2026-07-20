@@ -207,9 +207,7 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
                     m_inference_config.get_postprocess_output_size()[greatest_buffer_size_index]);
         }
         min_config.m_buffer_size =
-            buffer_size_ratio *
-            static_cast<float>(
-                m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index]);
+            buffer_size_ratio * host_config.get_reference_size(m_inference_config);
 
         while (--greatest_buffer_size > 0) {
             float buffer_size_ratio;
@@ -226,9 +224,7 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
                             .get_postprocess_output_size()[greatest_buffer_size_index]);
             }
             adjusted_config.m_buffer_size =
-                buffer_size_ratio *
-                static_cast<float>(
-                    m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index]);
+                buffer_size_ratio * host_config.get_reference_size(m_inference_config);
 
             std::vector<float> adjusted_latency;
             for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
