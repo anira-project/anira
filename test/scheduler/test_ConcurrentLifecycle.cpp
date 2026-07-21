@@ -65,9 +65,7 @@ public:
         while (!m_go.load(std::memory_order_acquire)) {}
     }
     void wait_for_arrivals(int n) {
-        while (m_arrived.load(std::memory_order_acquire) < n) {
-            std::this_thread::yield();
-        }
+        while (m_arrived.load(std::memory_order_acquire) < n) { std::this_thread::yield(); }
     }
     void open() { m_go.store(true, std::memory_order_release); }
 
@@ -138,9 +136,7 @@ TEST(ConcurrentLifecycleTest, DestroyCreateOverlap) {
 // destroy-vs-destroy interleavings without staged timing.
 TEST(ConcurrentLifecycleTest, ParallelChurn) {
     auto churn = [] {
-        for (int i = 0; i < k_churn_iterations; ++i) {
-            Instance instance;
-        }
+        for (int i = 0; i < k_churn_iterations; ++i) { Instance instance; }
     };
 
     std::thread thread_a(churn);
