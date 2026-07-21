@@ -10,6 +10,7 @@
 #include "../ContextConfig.h"
 #include "../PrePostProcessor.h"
 #include "../utils/HostConfig.h"
+#include "../utils/RealtimeSanitizer.h"
 #include "InferenceThread.h"
 #include "SessionElement.h"
 
@@ -215,11 +216,26 @@ public:
     static std::vector<std::shared_ptr<SessionElement>>& get_sessions();
 
     /**
-     * @brief Resets a session to its initial state
+     * @brief Wait-free reset of a session, safe on the session's driving (audio) thread.
      *
-     * Clears all internal buffers, resets the inference pipeline,
-     * and prepares the session for a new processing session. This method is
-     * typically used to reinitialize a session without releasing it completely.
+     * NEVER blocks the caller on in-flight inferences: it bumps the session
+     * generation (invalidating every already-dispatched inference) and then calls
+     * SessionElement::clear(). Stale inferences complete on their worker threads,
+     * have their results discarded (new_data_request() generation guard), and
+     * their structs reclaimed lazily by reclaim_stale_structs() from
+     * new_data_submitted(). The observable output is identical to the former
+     * blocking reset, which also discarded the in-flight result — it merely
+     * waited first so it could safely wipe the struct memory.
+     *
+     * Supported for all session types. For a session-exclusive (stateful)
+     * session, the pending-dispatch chain is reconciled without waiting: pending
+     * entries are returned to the free pool by the gate-holder (this call when
+     * the gate is free, otherwise the worker at its next task boundary — see
+     * SessionElement::try_acquire_next_dispatch). Nothing is ever enqueued from
+     * this call, so it performs no queue, semaphore, or logging syscalls.
+     *
+     * Must be called from the session's single driving thread (the thread that
+     * runs process()/push_data()/pop_data()), or with no such call concurrent.
      *
      * @param session Shared pointer to the session to reset
      */
@@ -319,6 +335,22 @@ private:
     static bool pre_process(const std::shared_ptr<SessionElement>& session);
 
     /**
+     * @brief Returns structs left over from a wait-free reset to the free pool.
+     *
+     * A wait-free reset (reset_session) leaves in-flight structs of the previous
+     * generation untouched. Once their worker publishes completion — after running
+     * the model for a dispatch that raced the reset, or straight away for one it
+     * skipped as stale (session-exclusive dispatches included) — the audio thread
+     * can safely reclaim them: this scans the session's structs and, for any that
+     * is stale (dispatch generation != current) and already done, drops its
+     * (discarded) result and marks it free. Called on the audio thread from
+     * new_data_submitted(). No-op when no reset is pending.
+     *
+     * @param session Shared pointer to the session whose stale structs to reclaim
+     */
+    static void reclaim_stale_structs(const std::shared_ptr<SessionElement>& session);
+
+    /**
      * @brief Dispatches the next stateful task of a session-exclusive session
      *
      * Claims the session's next task awaiting dispatch and enqueues it into the
@@ -395,17 +427,29 @@ private:
     static void start_thread_pool();
 
     /**
-     * @brief Drain Session Inference Queue
+     * @brief Blocks until none of the session's inferences are queued or running.
      *
-     * Drains the inference queue for the specified session, processing all
-     * pending inference requests. This method is typically called when the session
-     * is being reset or released to ensure all pending inferences are completed.
+     * Quiescence barrier for the control-thread paths (prepare_session,
+     * release_session): sleeps until no registered inference of this session is
+     * executing (a worker preempted before registering its dequeued task is
+     * invisible here — the callers' generation bump makes such a laggard's task
+     * skip as stale, so it never runs user code),
+     * dequeues the session's never-started tasks from the global queue and
+     * completes them as silence at their stream positions, and repeats until a
+     * full pass finds nothing (a worker mid-continuation can enqueue into a
+     * single pass's window). Other sessions' tasks are requeued; if requeueing
+     * fails they are completed as silence instead of being silently lost.
      *
      * @param session Shared pointer to the session whose queue to drain
      *
+     * @warning Blocking (sleeps in 50us steps) — never reachable from a
+     *          real-time path; annotated ANIRA_BLOCKING so RealtimeSanitizer
+     *          reports any call from a [[clang::nonblocking]] context
+     *          deterministically.
      * @warning Make sure to uninitialize the session before calling this method.
      */
-    static void drain_inference_queue(const std::shared_ptr<SessionElement>& session);
+    static void drain_inference_queue(const std::shared_ptr<SessionElement>& session)
+        ANIRA_BLOCKING;
 
     /**
      * @brief Template method for setting backend processors

@@ -225,7 +225,13 @@ export class InferenceHandler extends BaseWrapper {
     this.wasmInstance._inferencehandler_set_non_realtime(this.ptr, nonRealtime ? 1 : 0)
   }
 
-  /** Mirrors :cpp:func:`anira::InferenceHandler::reset`. */
+  /**
+   * Mirrors :cpp:func:`anira::InferenceHandler::reset`.
+   *
+   * Wait-free: re-anchors the stream without ever blocking on in-flight
+   * inferences (results still in flight are discarded and their structures
+   * reclaimed automatically), so it is safe to call from the audio worklet.
+   */
   reset(): void {
     this.wasmInstance._inferencehandler_reset(this.ptr)
   }
