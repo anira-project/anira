@@ -44,6 +44,9 @@ Context::Context(const ContextConfig& context_config) {
 }
 
 std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_config) {
+    // Whole function locked: everything here reads or writes shared lifecycle
+    // state (m_context, m_context_config, the pool via new_num_threads).
+    std::lock_guard<std::mutex> lifecycle_lock(m_lifecycle_mutex);
     // Apply the log level before anything (including this function) logs. The level
     // is process-global, like the thread pool; when a context already exists, the
     // lowest (most verbose) of the existing and requested levels wins, so no session
@@ -190,6 +193,9 @@ void Context::new_num_threads(unsigned int new_num_threads) {
 std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_processor,
                                                         InferenceConfig& inference_config,
                                                         BackendBase* custom_processor) {
+    // Whole function locked: registers the session in m_sessions and hands out
+    // shared backend processors from the static pools.
+    std::lock_guard<std::mutex> lifecycle_lock(m_lifecycle_mutex);
     int const session_id = get_available_session_id();
 
     if (inference_config.m_num_parallel_processors > (unsigned int)m_thread_pool.size()) {
@@ -259,6 +265,11 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
     std::shared_ptr<LiteRtProcessor> litert_processor = session->m_litert_processor;
 #endif
 
+    // Everything above only touches this session (the drain waits on its own
+    // in-flight inferences), so it runs unlocked. From here on we mutate the
+    // shared registry, the processor pools, and possibly tear down the pool.
+    std::lock_guard<std::mutex> lifecycle_lock(m_lifecycle_mutex);
+
     for (size_t i = 0; i < m_sessions.size(); ++i) {
         if (m_sessions[i] == session) {
             m_sessions.erase(m_sessions.begin() + (ptrdiff_t)i);
@@ -279,9 +290,9 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
     release_processor(inference_config, m_litert_processors, litert_processor);
 #endif
 
-    m_active_sessions.fetch_sub(1);
-
-    if (m_active_sessions == 0) {
+    // fetch_sub returns the pre-decrement value, so exactly one releaser can
+    // observe the transition to zero and tear the shared pool down.
+    if (m_active_sessions.fetch_sub(1) == 1) {
         release_thread_pool();
         release_instance();
     }
@@ -307,7 +318,12 @@ void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
 
     session->prepare(new_config, std::move(custom_latency));
 
-    start_thread_pool();
+    {
+        // Only the pool restart touches shared state; the drain and the
+        // session's own prepare above are session-local and stay unlocked.
+        std::lock_guard<std::mutex> lifecycle_lock(m_lifecycle_mutex);
+        start_thread_pool();
+    }
 
     session->m_initialized.store(true, std::memory_order::release);
 }

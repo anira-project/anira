@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "../ContextConfig.h"
@@ -88,6 +89,8 @@ public:
      *
      * @note If a context already exists, the provided configuration is ignored.
      *       The configuration is only used when creating a new instance.
+     * @note Thread-safe: may be called from any non-realtime thread, including
+     *       concurrently with other sessions' lifecycle calls.
      */
     static std::shared_ptr<Context> get_instance(const ContextConfig& context_config);
 
@@ -103,6 +106,9 @@ public:
      * @param inference_config Reference to the inference configuration
      * @param custom_processor Pointer to custom backend processor (nullptr for default backends)
      * @return Shared pointer to the newly created session
+     *
+     * @note Thread-safe: may be called from any non-realtime thread, including
+     *       concurrently with other sessions' lifecycle calls.
      */
     static std::shared_ptr<SessionElement> create_session(PrePostProcessor& pp_processor,
                                                           InferenceConfig& inference_config,
@@ -115,6 +121,11 @@ public:
      * of associated backend processors, buffers, and other resources.
      *
      * @param session Shared pointer to the session to release
+     *
+     * @note Thread-safe: may be called from any non-realtime thread, including
+     *       concurrently with other sessions' lifecycle calls. Exactly one
+     *       releaser tears down the shared thread pool when the last session
+     *       goes away.
      */
     static void release_session(const std::shared_ptr<SessionElement>& session);
 
@@ -145,6 +156,10 @@ public:
      * @param session Shared pointer to the session to prepare
      * @param new_config New host configuration with audio settings
      * @param custom_latency Optional vector of custom latency values for each tensor
+     *
+     * @note Thread-safe with respect to other sessions' lifecycle calls. Not
+     *       safe against concurrent processing calls on the *same* session —
+     *       the host must not process a session it is currently preparing.
      */
     void prepare_session(const std::shared_ptr<SessionElement>& session,
                          HostConfig new_config,
@@ -485,6 +500,15 @@ private:
     static void release_processor(InferenceConfig& inference_config,
                                   std::vector<std::shared_ptr<T>>& processors,
                                   std::shared_ptr<T>& processor);
+
+    inline static std::mutex m_lifecycle_mutex;  ///< Serializes mutation of the shared lifecycle
+                                                 ///< state below (m_context, m_sessions,
+                                                 ///< m_thread_pool, the processor pools) across
+                                                 ///< get_instance / create_session /
+                                                 ///< release_session / prepare_session. Hosts may
+                                                 ///< drive several sessions' lifecycles from
+                                                 ///< different threads concurrently. Never taken
+                                                 ///< on realtime paths.
 
     inline static std::shared_ptr<Context> m_context = nullptr;  ///< Singleton instance of the
                                                                  ///< context
