@@ -119,7 +119,7 @@ TEST(ConcurrentLifecycleTest, DestroyCreateOverlap) {
         });
         std::thread thread_b([&] {
             gate.arrive_and_wait();
-            Instance instance_b;
+            const Instance instance_b;
         });
         gate.wait_for_arrivals(2);
         gate.open();
@@ -136,7 +136,7 @@ TEST(ConcurrentLifecycleTest, DestroyCreateOverlap) {
 // destroy-vs-destroy interleavings without staged timing.
 TEST(ConcurrentLifecycleTest, ParallelChurn) {
     auto churn = [] {
-        for (int i = 0; i < k_churn_iterations; ++i) { Instance instance; }
+        for (int i = 0; i < k_churn_iterations; ++i) { const Instance instance; }
     };
 
     std::thread thread_a(churn);
