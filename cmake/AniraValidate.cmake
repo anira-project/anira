@@ -40,23 +40,55 @@ endif()
 # delegates if they didn't). Shared builds are unaffected: LiteRT/TFLite are then
 # self-contained shared libraries.
 #
-# On desktop Apple/ELF platforms the LiteRT + ExecuTorch combination is resolved
-# instead of refused: LiteRT's archive is partially linked into one object whose
-# only remaining global symbols are the LiteRt* C API, demoting its vendored
-# XNNPACK/cpuinfo/pthreadpool internals to local symbols so ExecuTorch's copy is
-# the only global one (see anira_localize_static_archive in AniraBackends.cmake;
-# ANIRA_LITERT_LOCALIZE tells the link site to use it). Where that tooling does
-# not exist (MSVC has no partial-link/localize equivalent), and for the legacy
-# TFLite backend and the mobile merged-lib paths, auto-disable ExecuTorch as
-# before (mirroring the LibTorch static auto-disable) instead of failing the
-# default build.
+# On desktop platforms the LiteRT + ExecuTorch combination is resolved instead
+# of refused (see anira_localize_static_archive in AniraBackends.cmake;
+# ANIRA_LITERT_LOCALIZE tells the link site to use it):
+#   - Apple/ELF: LiteRT's archive is partially linked into one object whose
+#     only remaining global symbols are the LiteRt* C API, demoting its
+#     vendored XNNPACK/cpuinfo/pthreadpool internals to local symbols so
+#     ExecuTorch's copy is the only global one.
+#   - Windows (COFF has no partial link): those internals are renamed with an
+#     anira_litert_ prefix instead — definitions and references consistently,
+#     via llvm-objcopy --redefine-syms — which needs llvm-nm/llvm-objcopy
+#     (shipped with LLVM; also bundled with Visual Studio's Clang tools).
+# Where the tooling is missing, and for the legacy TFLite backend and the
+# mobile merged-lib paths, auto-disable ExecuTorch as before (mirroring the
+# LibTorch static auto-disable) instead of failing the default build.
 set(ANIRA_LITERT_LOCALIZE FALSE)
 if(NOT BUILD_SHARED_LIBS AND ANIRA_WITH_EXECUTORCH AND (ANIRA_WITH_LITERT OR ANIRA_WITH_TFLITE))
-    if(ANIRA_WITH_LITERT AND NOT WIN32 AND NOT EMSDK_VERSION
+    if(ANIRA_WITH_LITERT AND NOT EMSDK_VERSION
        AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-        set(ANIRA_LITERT_LOCALIZE TRUE)
-        message(STATUS "anira: static LiteRT + ExecuTorch — LiteRT's archive will be "
-                       "localized to its LiteRt* API to avoid the XNNPACK symbol clash.")
+        if(WIN32)
+            # Visual Studio bundles the tools when the Clang component is
+            # installed; a standalone LLVM install works as well.
+            find_program(ANIRA_LLVM_NM llvm-nm
+                HINTS "$ENV{ProgramFiles}/LLVM/bin"
+                      "$ENV{VSINSTALLDIR}/VC/Tools/Llvm/x64/bin"
+                      "$ENV{VSINSTALLDIR}/VC/Tools/Llvm/ARM64/bin"
+                      "$ENV{VSINSTALLDIR}/VC/Tools/Llvm/bin")
+            find_program(ANIRA_LLVM_OBJCOPY llvm-objcopy
+                HINTS "$ENV{ProgramFiles}/LLVM/bin"
+                      "$ENV{VSINSTALLDIR}/VC/Tools/Llvm/x64/bin"
+                      "$ENV{VSINSTALLDIR}/VC/Tools/Llvm/ARM64/bin"
+                      "$ENV{VSINSTALLDIR}/VC/Tools/Llvm/bin")
+            if(ANIRA_LLVM_NM AND ANIRA_LLVM_OBJCOPY)
+                set(ANIRA_LITERT_LOCALIZE TRUE)
+                message(STATUS "anira: static LiteRT + ExecuTorch — LiteRT's non-API symbols "
+                               "will be renamed (anira_litert_ prefix) to avoid the XNNPACK "
+                               "symbol clash (using ${ANIRA_LLVM_OBJCOPY}).")
+            else()
+                message(WARNING "ExecuTorch and LiteRT both bundle XNNPACK, whose symbols collide in a "
+                                "fully static anira build (BUILD_SHARED_LIBS=OFF). Resolving this on "
+                                "Windows needs llvm-nm and llvm-objcopy, which were not found — install "
+                                "LLVM (or Visual Studio's 'C++ Clang tools') and reconfigure. Disabling "
+                                "ANIRA_WITH_EXECUTORCH for now.")
+                set(ANIRA_WITH_EXECUTORCH OFF)
+            endif()
+        else()
+            set(ANIRA_LITERT_LOCALIZE TRUE)
+            message(STATUS "anira: static LiteRT + ExecuTorch — LiteRT's archive will be "
+                           "localized to its LiteRt* API to avoid the XNNPACK symbol clash.")
+        endif()
     else()
         message(WARNING "ExecuTorch and LiteRT/TFLite bundle conflicting copies of XNNPACK and cannot "
                         "be combined in a fully static anira build (BUILD_SHARED_LIBS=OFF) on this "

@@ -786,9 +786,14 @@ endfunction()
 #
 # Desktop-only tooling: Apple uses ld -r + -exported_symbols_list (which
 # demotes the resulting private externs to locals), ELF uses ld -r +
-# objcopy --keep-global-symbols. MSVC has no partial-link/localize
-# equivalent, so callers must not reach this on Windows (AniraValidate
-# auto-disables the conflicting combination there instead).
+# objcopy --keep-global-symbols. COFF has no partial link, so on Windows the
+# internals are RENAMED instead of localized: every defined external except
+# the API prefix gets an anira_<id>_ prefix, rewritten member-by-member with
+# llvm-objcopy --redefine-syms (definitions and references consistently, so
+# no partial link is needed) — see AniraRenameArchive.cmake. That flavor
+# needs llvm-nm/llvm-objcopy, discovered by AniraValidate.cmake
+# (ANIRA_LLVM_NM / ANIRA_LLVM_OBJCOPY); without them AniraValidate keeps the
+# old ExecuTorch auto-disable and this function is never reached.
 #
 # Defines a custom target anira-<id>-localize producing the object; callers
 # must add_dependencies() their consumer on it.
@@ -797,6 +802,33 @@ function(anira_localize_static_archive id archive api_prefix out_var)
     set(_dir "${CMAKE_BINARY_DIR}/anira-localized-backends")
     set(_obj "${_dir}/anira-${id}-localized.o")
     file(MAKE_DIRECTORY "${_dir}")
+    if(WIN32)
+        # Rename flavor, run at configure time (a few seconds; skipped while
+        # the output is newer than the downloaded archive). The result is
+        # still an archive, linked on-demand like the original.
+        set(_obj "${_dir}/anira-${id}-renamed.lib")
+        if(NOT EXISTS "${_obj}" OR "${archive}" IS_NEWER_THAN "${_obj}")
+            execute_process(
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DNM=${ANIRA_LLVM_NM}"
+                    "-DOBJCOPY=${ANIRA_LLVM_OBJCOPY}"
+                    "-DARCHIVE=${archive}"
+                    "-DKEEP_PREFIX=${api_prefix}"
+                    "-DRENAME_PREFIX=anira_${id}_"
+                    "-DOUTPUT=${_obj}"
+                    -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/AniraRenameArchive.cmake"
+                RESULT_VARIABLE _rename_res
+            )
+            if(NOT _rename_res EQUAL 0)
+                message(FATAL_ERROR "anira: renaming the static ${id} archive failed "
+                                    "(see AniraRenameArchive output above).")
+            endif()
+        endif()
+        # Nothing left to do at build time; empty target keeps call sites uniform.
+        add_custom_target(anira-${id}-localize)
+        set(${out_var} "${_obj}" PARENT_SCOPE)
+        return()
+    endif()
     if(APPLE)
         # Mach-O symbols carry a leading underscore. -exported_symbols_list
         # supports globs; with -r, non-exported globals become private extern
