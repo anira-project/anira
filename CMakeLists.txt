@@ -450,7 +450,21 @@ endif()
 
 if(ANIRA_WITH_LITERT)
     if(ANIRA_LITERT_IS_STATIC)
-        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_LITERT_STATIC_LIB}")
+        if(ANIRA_LITERT_LOCALIZE)
+            # Static LiteRT + static ExecuTorch: both vendor XNNPACK (plus
+            # cpuinfo/pthreadpool), and ExecuTorch's copy is force-loaded, so
+            # linking the raw archive would collide. Link a localized object
+            # whose only globals are the LiteRt* C API instead (decided in
+            # AniraValidate.cmake, built by anira_localize_static_archive).
+            anira_localize_static_archive(litert "${ANIRA_LITERT_STATIC_LIB}" "LiteRt" ANIRA_LITERT_LOCALIZED_OBJ)
+            anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_LITERT_LOCALIZED_OBJ}")
+            add_dependencies(${PROJECT_NAME} anira-litert-localize)
+            # Point the install plumbing (install.cmake) at the localized object
+            # instead of the raw archive.
+            get_filename_component(ANIRA_LITERT_STATIC_LIB_SUBPATH "${ANIRA_LITERT_LOCALIZED_OBJ}" NAME)
+        else()
+            anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_LITERT_STATIC_LIB}")
+        endif()
     else()
         target_link_libraries(${PROJECT_NAME} PUBLIC LiteRt)
     endif()

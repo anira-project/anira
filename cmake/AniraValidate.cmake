@@ -38,13 +38,32 @@ endif()
 # In a fully static anira every backend's archives are linked into one image, where
 # the duplicate xnn_* symbols hard-collide at link time (and would cross-bind the
 # delegates if they didn't). Shared builds are unaffected: LiteRT/TFLite are then
-# self-contained shared libraries. ExecuTorch is the newcomer, so auto-disable it
-# (mirroring the LibTorch static auto-disable) instead of failing the default build.
+# self-contained shared libraries.
+#
+# On desktop Apple/ELF platforms the LiteRT + ExecuTorch combination is resolved
+# instead of refused: LiteRT's archive is partially linked into one object whose
+# only remaining global symbols are the LiteRt* C API, demoting its vendored
+# XNNPACK/cpuinfo/pthreadpool internals to local symbols so ExecuTorch's copy is
+# the only global one (see anira_localize_static_archive in AniraBackends.cmake;
+# ANIRA_LITERT_LOCALIZE tells the link site to use it). Where that tooling does
+# not exist (MSVC has no partial-link/localize equivalent), and for the legacy
+# TFLite backend and the mobile merged-lib paths, auto-disable ExecuTorch as
+# before (mirroring the LibTorch static auto-disable) instead of failing the
+# default build.
+set(ANIRA_LITERT_LOCALIZE FALSE)
 if(NOT BUILD_SHARED_LIBS AND ANIRA_WITH_EXECUTORCH AND (ANIRA_WITH_LITERT OR ANIRA_WITH_TFLITE))
-    message(WARNING "ExecuTorch and LiteRT/TFLite bundle conflicting copies of XNNPACK and cannot "
-                    "be combined in a fully static anira build (BUILD_SHARED_LIBS=OFF); disabling "
-                    "ANIRA_WITH_EXECUTORCH. Disable LiteRT/TFLite or build shared to use ExecuTorch.")
-    set(ANIRA_WITH_EXECUTORCH OFF)
+    if(ANIRA_WITH_LITERT AND NOT WIN32 AND NOT EMSDK_VERSION
+       AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        set(ANIRA_LITERT_LOCALIZE TRUE)
+        message(STATUS "anira: static LiteRT + ExecuTorch — LiteRT's archive will be "
+                       "localized to its LiteRt* API to avoid the XNNPACK symbol clash.")
+    else()
+        message(WARNING "ExecuTorch and LiteRT/TFLite bundle conflicting copies of XNNPACK and cannot "
+                        "be combined in a fully static anira build (BUILD_SHARED_LIBS=OFF) on this "
+                        "platform; disabling ANIRA_WITH_EXECUTORCH. Disable LiteRT/TFLite or build "
+                        "shared to use ExecuTorch.")
+        set(ANIRA_WITH_EXECUTORCH OFF)
+    endif()
 endif()
 
 # ExecuTorch's desktop archives are wired through the ExecuTorch CMake package,

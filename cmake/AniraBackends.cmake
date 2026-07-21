@@ -619,7 +619,20 @@ macro(anira_setup_backend id)
             message(FATAL_ERROR "anira: the ExecuTorch backend requires CMake >= 3.24 "
                                 "(demanded by ExecuTorch's exported package config).")
         endif()
+        # Imported targets are directory-scoped. A static anira links the
+        # ExecuTorch targets PUBLIC (the kernel registrations must reach the
+        # final image), so when anira is a subproject the consumer's directory
+        # must be able to resolve them too — promote everything the package
+        # imported to global.
+        get_property(_ab_imported_before DIRECTORY PROPERTY IMPORTED_TARGETS)
         find_package(executorch REQUIRED CONFIG PATHS "${_ab_rootdir}/lib/cmake/ExecuTorch" NO_DEFAULT_PATH)
+        get_property(_ab_imported_after DIRECTORY PROPERTY IMPORTED_TARGETS)
+        if(_ab_imported_before)
+            list(REMOVE_ITEM _ab_imported_after ${_ab_imported_before})
+        endif()
+        foreach(_ab_tgt IN LISTS _ab_imported_after)
+            set_target_properties(${_ab_tgt} PROPERTIES IMPORTED_GLOBAL TRUE)
+        endforeach()
         _anira_sanitize_executorch_targets()
         set(ANIRA_EXECUTORCH_ROOTDIR "${_ab_rootdir}")
         set(ANIRA_EXECUTORCH_LINKAGE "static")
@@ -758,4 +771,64 @@ function(anira_target_link_static_backend target libpath)
         target_link_libraries(${target} PUBLIC
             "$<BUILD_INTERFACE:${libpath}>" Threads::Threads ${CMAKE_DL_LIBS} m)
     endif()
+endfunction()
+
+# ------------------------------------------------------------------------------
+# anira_localize_static_archive(<id> <archive> <api-prefix> <out-obj-var>)
+#
+# Merge a backend's static archive into a single relocatable object whose only
+# remaining GLOBAL symbols are the backend's public <api-prefix>* C API; every
+# other global — the vendored XNNPACK / cpuinfo / pthreadpool / kleidiai
+# internals — is demoted to a local symbol. The partial link resolves the
+# archive's internal references member-to-member first, so the localized copy
+# can neither collide with nor cross-bind against another backend that bundles
+# the same vendored libraries (ExecuTorch force-loads its own XNNPACK).
+#
+# Desktop-only tooling: Apple uses ld -r + -exported_symbols_list (which
+# demotes the resulting private externs to locals), ELF uses ld -r +
+# objcopy --keep-global-symbols. MSVC has no partial-link/localize
+# equivalent, so callers must not reach this on Windows (AniraValidate
+# auto-disables the conflicting combination there instead).
+#
+# Defines a custom target anira-<id>-localize producing the object; callers
+# must add_dependencies() their consumer on it.
+# ------------------------------------------------------------------------------
+function(anira_localize_static_archive id archive api_prefix out_var)
+    set(_dir "${CMAKE_BINARY_DIR}/anira-localized-backends")
+    set(_obj "${_dir}/anira-${id}-localized.o")
+    file(MAKE_DIRECTORY "${_dir}")
+    if(APPLE)
+        # Mach-O symbols carry a leading underscore. -exported_symbols_list
+        # supports globs; with -r, non-exported globals become private extern
+        # and are then written out as local symbols.
+        set(_syms "${_dir}/anira-${id}-exported-symbols.txt")
+        file(WRITE "${_syms}" "_${api_prefix}*\n")
+        if(CMAKE_OSX_ARCHITECTURES)
+            list(GET CMAKE_OSX_ARCHITECTURES 0 _arch)
+        else()
+            set(_arch "${CMAKE_SYSTEM_PROCESSOR}")
+        endif()
+        set(_minos "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+        if(NOT _minos)
+            set(_minos "11.0")
+        endif()
+        add_custom_command(OUTPUT "${_obj}"
+            COMMAND ld -r -arch "${_arch}" -platform_version macos "${_minos}" "${_minos}"
+                -force_load "${archive}" -exported_symbols_list "${_syms}" -o "${_obj}"
+            DEPENDS "${archive}" "${_syms}"
+            COMMENT "anira: localizing static ${id} (only ${api_prefix}* stays global)"
+            VERBATIM)
+    else()
+        set(_syms "${_dir}/anira-${id}-keep-symbols.txt")
+        file(WRITE "${_syms}" "${api_prefix}*\n")
+        add_custom_command(OUTPUT "${_obj}"
+            COMMAND "${CMAKE_LINKER}" -r -o "${_obj}"
+                --whole-archive "${archive}" --no-whole-archive
+            COMMAND "${CMAKE_OBJCOPY}" --wildcard "--keep-global-symbols=${_syms}" "${_obj}"
+            DEPENDS "${archive}" "${_syms}"
+            COMMENT "anira: localizing static ${id} (only ${api_prefix}* stays global)"
+            VERBATIM)
+    endif()
+    add_custom_target(anira-${id}-localize DEPENDS "${_obj}")
+    set(${out_var} "${_obj}" PARENT_SCOPE)
 endfunction()
