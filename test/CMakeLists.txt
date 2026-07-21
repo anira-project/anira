@@ -31,6 +31,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	utils/test_RingBuffer.cpp
 	utils/test_Semaphore.cpp
 	utils/test_JsonConfigLoader.cpp
+	scheduler/test_ConcurrentLifecycle.cpp
 	scheduler/test_InferenceManager.cpp
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp
