@@ -103,6 +103,15 @@ public:
      * This method must be called before processing begins or when audio settings change.
      * It initializes internal buffers and prepares the inference pipeline.
      *
+     * @note Blocking quiescence point: waits until no inference thread is
+     *       executing any of this handler's work before rebuilding the internal
+     *       buffers, and invalidates everything dispatched before the call — so
+     *       once prepare() returns, no inference thread will run user code (a
+     *       custom backend or the PrePostProcessor::before_inference()/
+     *       after_inference() hooks) for pre-prepare work. This is the guarantee
+     *       reset() deliberately does not provide. Never call from the audio
+     *       thread.
+     *
      * @param new_audio_config The new audio configuration containing sample rate, buffer size, etc.
      */
     void prepare(HostConfig new_audio_config);
@@ -359,15 +368,37 @@ public:
     static unsigned int get_num_inference_threads();
 
     /**
-     * @brief Resets the inference handler to its initial state
+     * @brief Resets the inference handler to its initial state (wait-free, real-time safe).
      *
-     * This method clears all internal buffers, resets the inference pipeline,
-     * and prepares the handler for a new processing session. This also resets
-     * the latency and available samples for all tensors.
+     * Clears the internal audio ring buffers, re-seeds the latency zero-padding,
+     * and invalidates every inference dispatched so far: results still in flight
+     * are discarded and their internal structures reclaimed lazily. The handler
+     * is ready for new data immediately — intended for stream re-anchoring (e.g.
+     * transport jumps or onset/transient re-sync), for stateless and stateful
+     * (session-exclusive) configurations alike. Never waits, sleeps, locks,
+     * allocates, or performs any syscall, and is annotated
+     * `[[clang::nonblocking]]` under RealtimeSanitizer builds.
      *
-     * @note This method waits for all ongoing inferences to complete before resetting.
+     * @note Call from the thread that drives process()/push_data()/pop_data()
+     *       (or ensure no such call is concurrent), and never concurrently with
+     *       prepare() or destruction.
+     * @note Does NOT wait for in-flight inferences to finish: a worker thread may
+     *       still be executing a — discarded — inference after this returns,
+     *       including user code in a custom backend or the
+     *       PrePostProcessor::before_inference()/after_inference() hooks. If you
+     *       need that quiescence (e.g. before mutating state such code reads),
+     *       call prepare() instead, or synchronize within your own backend.
+     * @note Until in-flight work finishes (bounded by one inference duration),
+     *       its internal structures stay captive; if fresh data submitted in that
+     *       window exhausts the remaining pool — likely on session-exclusive
+     *       configurations, whose pools are small — the affected chunks complete
+     *       as silence at their correct stream positions. The stream stays
+     *       time-aligned and recovers by itself.
+     * @note Model-internal state (e.g. a recurrent hidden state inside the
+     *       backend) is not touched — no reset variant has ever reset it; splice
+     *       such state via the before_inference()/after_inference() hooks.
      */
-    void reset();
+    void reset() ANIRA_REALTIME;
 
 private:
     InferenceConfig& m_inference_config;   ///< Reference to the inference configuration

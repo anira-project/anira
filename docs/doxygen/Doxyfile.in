@@ -2489,6 +2489,7 @@ INCLUDE_FILE_PATTERNS  =
 # This tag requires that the tag ENABLE_PREPROCESSING is set to YES.
 
 PREDEFINED             = ANIRA_REALTIME= \
+                         ANIRA_BLOCKING= \
                          USE_LIBTORCH=1 \
                          USE_TFLITE=1 \
                          USE_ONNXRUNTIME=1 \
