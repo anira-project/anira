@@ -40,8 +40,11 @@ get_filename_component(ANIRA_BACKENDS_MODULES_DIR "${ANIRA_BACKENDS_CMAKE_DIR}/.
 
 # Default backends release tag. Bump this (and the per-engine versions in
 # _anira_engine_version) when pointing anira at a new anira-project/backends release.
+# v2.3.0 ships the static desktop LiteRT archives pre-isolated to their LiteRt* C
+# API (vendored XNNPACK/cpuinfo/pthreadpool internals localized/renamed at
+# packaging), which is what allows static LiteRT + ExecuTorch in one image.
 if(NOT DEFINED ANIRA_BACKENDS_VERSION OR ANIRA_BACKENDS_VERSION STREQUAL "")
-    set(ANIRA_BACKENDS_VERSION "v2.2.0")
+    set(ANIRA_BACKENDS_VERSION "v2.3.0")
 endif()
 
 # ------------------------------------------------------------------------------
@@ -771,96 +774,4 @@ function(anira_target_link_static_backend target libpath)
         target_link_libraries(${target} PUBLIC
             "$<BUILD_INTERFACE:${libpath}>" Threads::Threads ${CMAKE_DL_LIBS} m)
     endif()
-endfunction()
-
-# ------------------------------------------------------------------------------
-# anira_localize_static_archive(<id> <archive> <api-prefix> <out-obj-var>)
-#
-# Merge a backend's static archive into a single relocatable object whose only
-# remaining GLOBAL symbols are the backend's public <api-prefix>* C API; every
-# other global — the vendored XNNPACK / cpuinfo / pthreadpool / kleidiai
-# internals — is demoted to a local symbol. The partial link resolves the
-# archive's internal references member-to-member first, so the localized copy
-# can neither collide with nor cross-bind against another backend that bundles
-# the same vendored libraries (ExecuTorch force-loads its own XNNPACK).
-#
-# Desktop-only tooling: Apple uses ld -r + -exported_symbols_list (which
-# demotes the resulting private externs to locals), ELF uses ld -r +
-# objcopy --keep-global-symbols. COFF has no partial link, so on Windows the
-# internals are RENAMED instead of localized: every defined external except
-# the API prefix gets an anira_<id>_ prefix, rewritten member-by-member with
-# llvm-objcopy --redefine-syms (definitions and references consistently, so
-# no partial link is needed) — see AniraRenameArchive.cmake. That flavor
-# needs llvm-nm/llvm-objcopy, discovered by AniraValidate.cmake
-# (ANIRA_LLVM_NM / ANIRA_LLVM_OBJCOPY); without them AniraValidate keeps the
-# old ExecuTorch auto-disable and this function is never reached.
-#
-# Defines a custom target anira-<id>-localize producing the object; callers
-# must add_dependencies() their consumer on it.
-# ------------------------------------------------------------------------------
-function(anira_localize_static_archive id archive api_prefix out_var)
-    set(_dir "${CMAKE_BINARY_DIR}/anira-localized-backends")
-    set(_obj "${_dir}/anira-${id}-localized.o")
-    file(MAKE_DIRECTORY "${_dir}")
-    if(WIN32)
-        # Rename flavor, run at configure time (a few seconds; skipped while
-        # the output is newer than the downloaded archive). The result is
-        # still an archive, linked on-demand like the original.
-        set(_obj "${_dir}/anira-${id}-renamed.lib")
-        if(NOT EXISTS "${_obj}" OR "${archive}" IS_NEWER_THAN "${_obj}")
-            execute_process(
-                COMMAND "${CMAKE_COMMAND}"
-                    "-DNM=${ANIRA_LLVM_NM}"
-                    "-DOBJCOPY=${ANIRA_LLVM_OBJCOPY}"
-                    "-DARCHIVE=${archive}"
-                    "-DKEEP_PREFIX=${api_prefix}"
-                    "-DRENAME_PREFIX=anira_${id}_"
-                    "-DOUTPUT=${_obj}"
-                    -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/AniraRenameArchive.cmake"
-                RESULT_VARIABLE _rename_res
-            )
-            if(NOT _rename_res EQUAL 0)
-                message(FATAL_ERROR "anira: renaming the static ${id} archive failed "
-                                    "(see AniraRenameArchive output above).")
-            endif()
-        endif()
-        # Nothing left to do at build time; empty target keeps call sites uniform.
-        add_custom_target(anira-${id}-localize)
-        set(${out_var} "${_obj}" PARENT_SCOPE)
-        return()
-    endif()
-    if(APPLE)
-        # Mach-O symbols carry a leading underscore. -exported_symbols_list
-        # supports globs; with -r, non-exported globals become private extern
-        # and are then written out as local symbols.
-        set(_syms "${_dir}/anira-${id}-exported-symbols.txt")
-        file(WRITE "${_syms}" "_${api_prefix}*\n")
-        if(CMAKE_OSX_ARCHITECTURES)
-            list(GET CMAKE_OSX_ARCHITECTURES 0 _arch)
-        else()
-            set(_arch "${CMAKE_SYSTEM_PROCESSOR}")
-        endif()
-        set(_minos "${CMAKE_OSX_DEPLOYMENT_TARGET}")
-        if(NOT _minos)
-            set(_minos "11.0")
-        endif()
-        add_custom_command(OUTPUT "${_obj}"
-            COMMAND ld -r -arch "${_arch}" -platform_version macos "${_minos}" "${_minos}"
-                -force_load "${archive}" -exported_symbols_list "${_syms}" -o "${_obj}"
-            DEPENDS "${archive}" "${_syms}"
-            COMMENT "anira: localizing static ${id} (only ${api_prefix}* stays global)"
-            VERBATIM)
-    else()
-        set(_syms "${_dir}/anira-${id}-keep-symbols.txt")
-        file(WRITE "${_syms}" "${api_prefix}*\n")
-        add_custom_command(OUTPUT "${_obj}"
-            COMMAND "${CMAKE_LINKER}" -r -o "${_obj}"
-                --whole-archive "${archive}" --no-whole-archive
-            COMMAND "${CMAKE_OBJCOPY}" --wildcard "--keep-global-symbols=${_syms}" "${_obj}"
-            DEPENDS "${archive}" "${_syms}"
-            COMMENT "anira: localizing static ${id} (only ${api_prefix}* stays global)"
-            VERBATIM)
-    endif()
-    add_custom_target(anira-${id}-localize DEPENDS "${_obj}")
-    set(${out_var} "${_obj}" PARENT_SCOPE)
 endfunction()

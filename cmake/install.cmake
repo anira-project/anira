@@ -214,15 +214,6 @@ foreach(_engine ONNXRUNTIME TFLITE LITERT EXECUTORCH)
     endif()
 endforeach()
 
-# When static LiteRT was localized (see AniraValidate.cmake), the exported targets
-# reference the localized object rather than the raw archive — ship it.
-if(ANIRA_LITERT_LOCALIZE AND ANIRA_LITERT_LOCALIZED_OBJ)
-    install(FILES "${ANIRA_LITERT_LOCALIZED_OBJ}"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-        COMPONENT deps-backends
-    )
-endif()
-
 # ==============================================================================
 # Generate cmake config files
 # ==============================================================================
