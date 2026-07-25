@@ -19,6 +19,7 @@ add_compile_definitions(
 		RAVE_MODEL_FUNK_DRUM_DECODER_JSON_CONFIG_PATH="${RAVE_MODEL_FUNK_DRUM_DECODER_JSON_CONFIG_PATH}"
 		SIMPLE_GAIN_JSON_CONFIG_PATH="${SIMPLE_GAIN_JSON_CONFIG_PATH}"
 		SIMPLEGAIN_MODEL_PATH="${SIMPLEGAIN_MODEL_PATH}"
+		MULTIFUNCTION_GAIN_MODEL_PATH="${MULTIFUNCTION_GAIN_MODEL_PATH}"
 		RAVE_MODEL_DIR="${RAVE_MODEL_DIR}"
 )
 
@@ -27,6 +28,7 @@ add_executable(${PROJECT_NAME})
 target_sources(${PROJECT_NAME} PRIVATE
 	test_InferenceHandler.cpp
 	test_StatefulOrdering.cpp
+	backends/test_ExecuTorchModelFunction.cpp
     utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
 	utils/test_Semaphore.cpp

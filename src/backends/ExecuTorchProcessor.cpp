@@ -84,7 +84,11 @@ struct ExecuTorchProcessor::Instance {
                  const std::shared_ptr<SessionElement>& session);
 
     std::unique_ptr<executorch::extension::Module> m_module;  ///< Loaded .pte program with
-                                                              ///< its 'forward' method
+                                                              ///< its selected method
+
+    std::string m_method;  ///< Method executed per inference: the config's model_function
+                           ///< (a .pte can carry several named entry points, e.g.
+                           ///< encode/decode), or "forward" when none is set
 
     std::vector<std::vector<float>> m_input_data;  ///< Instance-owned host memory backing
                                                    ///< the input tensors
@@ -144,10 +148,13 @@ ExecuTorchProcessor::Instance::Instance(InferenceConfig& inference_config)
         m_module = std::make_unique<executorch::extension::Module>(modelpath);
     }
 
-    // Load the program and its 'forward' method up front: this parses the .pte,
+    // Load the program and the selected method up front: this parses the .pte,
     // initializes the delegates and allocates the planned memory — none of which may
     // happen lazily on the real-time inference path.
-    executorch_check(m_module->load_forward(), "Module::load_forward");
+    m_method = m_inference_config.get_model_function(anira::InferenceBackend::EXECUTORCH);
+    if (m_method.empty()) { m_method = "forward"; }
+    executorch_check(m_module->load_method(m_method),
+                     ("Module::load_method(\"" + m_method + "\")").c_str());
 
     // Build the input tensors once, wrapping instance-owned host memory: the .pte
     // interface is positional float32 tensors of the configured shapes.
@@ -166,8 +173,9 @@ ExecuTorchProcessor::Instance::Instance(InferenceConfig& inference_config)
     }
 
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
-        const auto result = m_module->forward(m_input_values);
-        executorch_check(result.error(), "Module::forward (warm-up)");
+        const auto result = m_module->execute(m_method, m_input_values);
+        executorch_check(result.error(),
+                         ("Module::execute(\"" + m_method + "\") (warm-up)").c_str());
     }
 }
 
@@ -189,8 +197,8 @@ void ExecuTorchProcessor::Instance::process(std::vector<BufferF>& input,
                         m_inference_config.get_tensor_input_size()[i] * sizeof(float));
         }
 
-        const auto result = m_module->forward(m_input_values);
-        executorch_check(result.error(), "Module::forward");
+        const auto result = m_module->execute(m_method, m_input_values);
+        executorch_check(result.error(), ("Module::execute(\"" + m_method + "\")").c_str());
         const std::vector<executorch::runtime::EValue>& outputs = result.get();
 
         const size_t num_outputs = m_inference_config.get_tensor_output_shape().size();

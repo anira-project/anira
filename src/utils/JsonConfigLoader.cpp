@@ -240,7 +240,20 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
 #endif
         } else if (model_backend == "EXECUTORCH") {
 #if USE_EXECUTORCH
-            model_data.emplace_back(model_path, anira::InferenceBackend::EXECUTORCH);
+            if (item.contains("model_function")) {
+                if (!item.at("model_function").is_string()) {
+                    LOG_ERROR << "Invalid 'model_function' value in 'model_data' array "
+                                 "entry: expected a string."
+                              << '\n';
+                    continue;
+                }
+                const std::string model_function = item.at("model_function").get<std::string>();
+                model_data.emplace_back(model_path,
+                                        anira::InferenceBackend::EXECUTORCH,
+                                        model_function);
+            } else {
+                model_data.emplace_back(model_path, anira::InferenceBackend::EXECUTORCH);
+            }
 #else
             LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
                          "entry : EXECUTORCH currently disabled in config."

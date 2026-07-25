@@ -53,6 +53,7 @@ set(STATEFULLSTM_MODELS_PATH_TENSORFLOW "${ANIRA_EXTRAS_MODELS_DIR}/stateful-rnn
 set(STATEFULLSTM_MODELS_PATH_PYTORCH "${ANIRA_EXTRAS_MODELS_DIR}/stateful-rnn/stateful-lstm/models/" CACHE PATH "Path to the StatefulLSTM PyTorch models")
 
 set(SIMPLEGAIN_MODEL_PATH "${ANIRA_EXTRAS_MODELS_DIR}/model-pool/example-models/SimpleGainNetwork/models/" CACHE PATH "Path to the SimpleGainNetwork models")
+set(MULTIFUNCTION_GAIN_MODEL_PATH "${ANIRA_EXTRAS_MODELS_DIR}/model-pool/example-models/MultiFunctionGainNetwork/models/" CACHE PATH "Path to the MultiFunctionGainNetwork models (multi-method .pte)")
 
 # RAVE is a TorchScript (.ts) model exercised only by the LibTorch backend, which
 # has no mobile build — so the (large) download and its configs are skipped unless
