@@ -42,12 +42,12 @@ struct ANIRA_API ModelData {
     ModelData(void* data,
               size_t size,
               InferenceBackend backend,
-              const std::string& model_function = "",
+              std::string model_function = "",
               bool is_binary = true)
         : m_data(data)
         , m_size(size)
         , m_backend(backend)
-        , m_model_function(model_function)
+        , m_model_function(std::move(model_function))
         , m_is_binary(is_binary) {
         assert((m_size > 0 && "Model data size must be greater than zero."));
         assert((m_data != nullptr && "Model data pointer cannot be null."));
@@ -79,7 +79,8 @@ struct ANIRA_API ModelData {
      *
      * @param model_path Path to the model file on disk
      * @param backend The inference backend that will use this model
-     * @param model_function Optional function/method name within the model (LibTorch and ExecuTorch)
+     * @param model_function Optional function/method name within the model (LibTorch and
+     * ExecuTorch)
      * @param is_binary Whether to treat the path as binary data (typically false for file paths)
      */
     ModelData(const std::string& model_path,
@@ -151,7 +152,8 @@ struct ANIRA_API ModelData {
     void* m_data;                  ///< Pointer to model data (binary data or string data)
     size_t m_size;                 ///< Size of the model data in bytes
     InferenceBackend m_backend;    ///< Target inference backend for this model
-    std::string m_model_function;  ///< Function/method name within the model (LibTorch and ExecuTorch)
+    std::string m_model_function;  ///< Function/method name within the model (LibTorch and
+                                   ///< ExecuTorch)
     bool m_is_binary;              ///< Whether the data represents binary model data
 
     /**

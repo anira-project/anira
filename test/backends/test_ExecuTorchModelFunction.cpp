@@ -6,15 +6,14 @@
 
 #ifdef USE_EXECUTORCH
 
+#include <anira/anira.h>
+#include <gtest/gtest.h>
+
 #include <chrono>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <gtest/gtest.h>
-
-#include <anira/anira.h>
 
 namespace {
 
@@ -39,11 +38,9 @@ void process_block(anira::InferenceHandler& handler, std::vector<float>& io) {
     float* channels[1] = {io.data()};
     const size_t prev = handler.get_available_samples(0);
     handler.process(channels, kSize);
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(kTimeoutSecs);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(kTimeoutSecs);
     while (handler.get_available_samples(0) != prev) {
-        ASSERT_LT(std::chrono::steady_clock::now(), deadline)
-            << "timed out waiting for inference";
+        ASSERT_LT(std::chrono::steady_clock::now(), deadline) << "timed out waiting for inference";
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
 }
@@ -57,8 +54,7 @@ float steady_state_output(const std::string& model_function) {
     handler.prepare({static_cast<float>(kSize), 48000.0F});
     handler.set_inference_backend(anira::InferenceBackend::EXECUTORCH);
 
-    const int warmup_blocks =
-        static_cast<int>(handler.get_latency() / kSize) + 2;
+    const int warmup_blocks = static_cast<int>(handler.get_latency() / kSize) + 2;
     std::vector<float> io;
     for (int i = 0; i < warmup_blocks + 1; ++i) {
         io.assign(kSize, 1.0F);
@@ -86,8 +82,8 @@ TEST(ExecuTorchModelFunction, JsonConfigCarriesModelFunction) {
         "inference_config": {
             "model_data": [
                 { "model_path": ")" +
-                             std::string(MULTIFUNCTION_GAIN_MODEL_PATH) +
-                             R"(/multi_function_gain.pte",
+                            std::string(MULTIFUNCTION_GAIN_MODEL_PATH) +
+                            R"(/multi_function_gain.pte",
                   "inference_backend": "EXECUTORCH",
                   "model_function": "gain2" }
             ],
