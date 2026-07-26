@@ -35,7 +35,12 @@ void PrePostProcessor::pre_process(std::vector<RingBuffer>& input,
         if (m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
             const size_t num_new_samples =
                 m_inference_config.get_preprocess_input_size()[tensor_index];
-            const size_t tensor_size = m_inference_config.get_tensor_input_size()[tensor_index];
+            // Per-CHANNEL frame count: a multichannel tensor (e.g. 4 latents in
+            // [1, 4, 1]) holds channels*hop samples without being a window —
+            // same division as calculate_send_buffer_sizes' past_samples_needed.
+            const size_t tensor_size =
+                m_inference_config.get_tensor_input_size()[tensor_index] /
+                m_inference_config.get_preprocess_input_channels()[tensor_index];
             if (tensor_size > num_new_samples) {
                 // Receptive-field / sliding-window models: the tensor holds a full
                 // window of tensor_size samples but only preprocess_input_size fresh

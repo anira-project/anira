@@ -68,3 +68,33 @@ TEST(PrePostProcessorWindow, HistoryFillsTheWindowHead) {
             << "window sample " << i;
     }
 }
+
+TEST(PrePostProcessorWindow, MultichannelTensorIsNotAWindow) {
+    // A [1, 4, 1] tensor (4 channels x 1 frame, hop 1) holds more samples
+    // than its hop, but per channel it holds exactly the hop: no history may
+    // be mixed in — the regression here fed 3 stale frames into a 4-channel
+    // latent tensor.
+    const std::vector<anira::ModelData> model_data = {
+        {"unused-by-this-test.pte", anira::InferenceBackend::CUSTOM},
+    };
+    const std::vector<anira::TensorShape> tensor_shapes = {
+        {{{1, 4, 1}}, {{1, 1, 4}}},
+    };
+    const anira::ProcessingSpec processing_spec({4}, {1}, {1}, {4});
+    anira::InferenceConfig config{model_data, tensor_shapes, processing_spec, 5.0F};
+    anira::PrePostProcessor pp(config);
+
+    std::vector<anira::RingBuffer> input(1);
+    input[0].initialize_with_positions(4, 8);
+    std::vector<anira::BufferF> model_input(1);
+    model_input[0].resize(1, 4);
+
+    for (size_t ch = 0; ch < 4; ++ch) {
+        input[0].push_sample(ch, static_cast<float>(ch + 1));
+    }
+    pp.pre_process(input, model_input, anira::InferenceBackend::CUSTOM);
+    for (size_t i = 0; i < 4; ++i) {
+        EXPECT_FLOAT_EQ(model_input[0].get_sample(0, i), static_cast<float>(i + 1))
+            << "latent " << i;
+    }
+}
