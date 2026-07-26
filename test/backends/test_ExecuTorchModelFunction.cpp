@@ -6,10 +6,17 @@
 
 #ifdef USE_EXECUTORCH
 
-#include <anira/anira.h>
+#include <anira/InferenceConfig.h>
+#include <anira/InferenceHandler.h>
+#include <anira/PrePostProcessor.h>
+#include <anira/utils/InferenceBackend.h>
+#include <anira/utils/JsonConfigLoader.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -17,17 +24,17 @@
 
 namespace {
 
-constexpr size_t kSize = 64;
-constexpr int kTimeoutSecs = 5;
+constexpr size_t k_size = 64;
+constexpr int k_timeout_secs = 5;
 
 anira::InferenceConfig make_config(const std::string& model_function) {
-    std::vector<anira::ModelData> model_data = {
+    const std::vector<anira::ModelData> model_data = {
         {std::string(MULTIFUNCTION_GAIN_MODEL_PATH) + "/multi_function_gain.pte",
          anira::InferenceBackend::EXECUTORCH,
          model_function},
     };
-    std::vector<anira::TensorShape> tensor_shapes = {
-        {{{1, 1, static_cast<int64_t>(kSize)}}, {{1, 1, static_cast<int64_t>(kSize)}}},
+    const std::vector<anira::TensorShape> tensor_shapes = {
+        {{{1, 1, static_cast<int64_t>(k_size)}}, {{1, 1, static_cast<int64_t>(k_size)}}},
     };
     return {model_data, tensor_shapes, 5.0F};
 }
@@ -35,10 +42,10 @@ anira::InferenceConfig make_config(const std::string& model_function) {
 // Push one block of ones and wait until its inference result has been consumed
 // back into the ring (available samples return to the pre-push level).
 void process_block(anira::InferenceHandler& handler, std::vector<float>& io) {
-    float* channels[1] = {io.data()};
+    std::array<float*, 1> channels = {io.data()};
     const size_t prev = handler.get_available_samples(0);
-    handler.process(channels, kSize);
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(kTimeoutSecs);
+    handler.process(channels.data(), k_size);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(k_timeout_secs);
     while (handler.get_available_samples(0) != prev) {
         ASSERT_LT(std::chrono::steady_clock::now(), deadline) << "timed out waiting for inference";
         std::this_thread::sleep_for(std::chrono::microseconds(50));
@@ -51,16 +58,16 @@ float steady_state_output(const std::string& model_function) {
     anira::InferenceConfig config = make_config(model_function);
     anira::PrePostProcessor pp(config);
     anira::InferenceHandler handler(pp, config);
-    handler.prepare({static_cast<float>(kSize), 48000.0F});
+    handler.prepare({static_cast<float>(k_size), 48000.0F});
     handler.set_inference_backend(anira::InferenceBackend::EXECUTORCH);
 
-    const int warmup_blocks = static_cast<int>(handler.get_latency() / kSize) + 2;
+    const int warmup_blocks = static_cast<int>(handler.get_latency() / k_size) + 2;
     std::vector<float> io;
     for (int i = 0; i < warmup_blocks + 1; ++i) {
-        io.assign(kSize, 1.0F);
+        io.assign(k_size, 1.0F);
         process_block(handler, io);
     }
-    for (size_t i = 1; i < kSize; ++i) {
+    for (size_t i = 1; i < k_size; ++i) {
         EXPECT_FLOAT_EQ(io[i], io[0]) << "output not uniform at sample " << i;
     }
     return io[0];
