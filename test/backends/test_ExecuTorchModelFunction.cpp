@@ -1,6 +1,6 @@
 // model_function on the EXECUTORCH backend: a .pte can carry several named
 // entry points, and the configured method — not a hardcoded "forward" — must
-// run. The MultiFunctionGainNetwork fixture (example-models) packs
+// run. The multi-function SimpleGainNetwork fixture (example-models) packs
 // forward/gain2/gain4 (x*1, x*2, x*4 on [1, 1, 64]) into one program, so the
 // output gain proves which graph executed.
 
@@ -29,7 +29,7 @@ constexpr int k_timeout_secs = 5;
 
 anira::InferenceConfig make_config(const std::string& model_function) {
     const std::vector<anira::ModelData> model_data = {
-        {std::string(MULTIFUNCTION_GAIN_MODEL_PATH) + "/multi_function_gain.pte",
+        {std::string(SIMPLEGAIN_MODEL_PATH) + "/simple_gain_network_multifunction.pte",
          anira::InferenceBackend::EXECUTORCH,
          model_function},
     };
