@@ -117,6 +117,9 @@ The following parameters can be defined in the :cpp:struct:`anira::ProcessingSpe
 |                               | of samples required per tensor before triggering preprocessing and inference. For streamable   |
 |                               | tensors, this determines how many samples must accumulate before processing begins. Set to     |
 |                               | ``0`` for non-streamable tensors to start processing immediately without waiting for samples.  |
+|                               | If the tensor holds more samples than this (a receptive-field model, e.g. shape                |
+|                               | ``[1, 1, 15380]`` with size ``2048``), the default PrePostProcessor slides a window: the head  |
+|                               | is filled with history, only this many fresh samples are consumed per inference.               |
 +-------------------------------+------------------------------------------------------------------------------------------------+
 | postprocess_output_size       | Type: ``std::vector<size_t>``, default: ``output_tensor_sizes``. Defines the number of samples |
 |                               | that will be returned after the postprocessing step. Set to ``0`` for non-streamable tensors.  |

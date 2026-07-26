@@ -33,9 +33,22 @@ void PrePostProcessor::pre_process(std::vector<RingBuffer>& input,
     for (size_t tensor_index = 0; tensor_index < m_inference_config.get_tensor_input_shape().size();
          tensor_index++) {
         if (m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
-            pop_samples_from_buffer(input[tensor_index],
-                                    output[tensor_index],
-                                    m_inference_config.get_preprocess_input_size()[tensor_index]);
+            const size_t num_new_samples =
+                m_inference_config.get_preprocess_input_size()[tensor_index];
+            const size_t tensor_size = m_inference_config.get_tensor_input_size()[tensor_index];
+            if (tensor_size > num_new_samples) {
+                // Receptive-field / sliding-window models: the tensor holds a full
+                // window of tensor_size samples but only preprocess_input_size fresh
+                // samples arrive per inference — fill the head of the window with
+                // history from the ring (single-channel tensors, like the custom
+                // processors that used to be required for this pattern).
+                pop_samples_from_buffer(input[tensor_index],
+                                        output[tensor_index],
+                                        num_new_samples,
+                                        tensor_size - num_new_samples);
+            } else {
+                pop_samples_from_buffer(input[tensor_index], output[tensor_index], num_new_samples);
+            }
         } else {
             for (size_t sample = 0;
                  sample < m_inference_config.get_tensor_input_size()[tensor_index];

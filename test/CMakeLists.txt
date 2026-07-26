@@ -31,6 +31,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	backends/test_ExecuTorchModelFunction.cpp
     utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
+	utils/test_PrePostProcessorWindow.cpp
 	utils/test_Semaphore.cpp
 	utils/test_JsonConfigLoader.cpp
 	scheduler/test_ConcurrentLifecycle.cpp
