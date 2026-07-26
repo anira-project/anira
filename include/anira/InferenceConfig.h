@@ -203,7 +203,12 @@ struct ANIRA_API TensorShape {
                                             ///< of dimensions)
     TensorShapeList m_tensor_output_shape;  ///< List of output tensor shapes (each shape is a
                                             ///< vector of dimensions)
-    InferenceBackend m_backend;             ///< Target backend for backend-specific shapes
+    InferenceBackend m_backend = InferenceBackend::CUSTOM;  ///< Target backend for
+                                                            ///< backend-specific shapes; the
+                                                            ///< universal constructor leaves the
+                                                            ///< default (reading an uninitialized
+                                                            ///< enum is UB, and universal shapes
+                                                            ///< serve every backend anyway)
     bool m_universal = false;  ///< Whether this shape configuration is universal (backend-agnostic)
 
     /**
