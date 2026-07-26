@@ -89,8 +89,8 @@ TEST(ExecuTorchModelFunction, JsonConfigCarriesModelFunction) {
         "inference_config": {
             "model_data": [
                 { "model_path": ")" +
-                            std::string(MULTIFUNCTION_GAIN_MODEL_PATH) +
-                            R"(/multi_function_gain.pte",
+                            std::string(SIMPLEGAIN_MODEL_PATH) +
+                            R"(/simple_gain_network_multifunction.pte",
                   "inference_backend": "EXECUTORCH",
                   "model_function": "gain2" }
             ],
