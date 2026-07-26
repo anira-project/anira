@@ -89,9 +89,7 @@ TEST(PrePostProcessorWindow, MultichannelTensorIsNotAWindow) {
     std::vector<anira::BufferF> model_input(1);
     model_input[0].resize(1, 4);
 
-    for (size_t ch = 0; ch < 4; ++ch) {
-        input[0].push_sample(ch, static_cast<float>(ch + 1));
-    }
+    for (size_t ch = 0; ch < 4; ++ch) { input[0].push_sample(ch, static_cast<float>(ch + 1)); }
     pp.pre_process(input, model_input, anira::InferenceBackend::CUSTOM);
     for (size_t i = 0; i < 4; ++i) {
         EXPECT_FLOAT_EQ(model_input[0].get_sample(0, i), static_cast<float>(i + 1))
