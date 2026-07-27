@@ -85,6 +85,11 @@ public:
     /**
      * @brief Sets the inference backend to use for neural network processing
      *
+     * Calling this is optional: the active backend defaults to the first model
+     * in the InferenceConfig whose backend is available in this build, or to
+     * CUSTOM when a custom processor was passed to the constructor (or when no
+     * configured backend is available).
+     *
      * @param inference_backend The backend type to use (e.g., ONNX, LibTorch, TensorFlow Lite or
      * custom)
      */
@@ -92,6 +97,9 @@ public:
 
     /**
      * @brief Gets the currently active inference backend
+     *
+     * Unless set_inference_backend() was called, this is the default described
+     * there: the first available configured backend, or CUSTOM.
      *
      * @return The currently configured inference backend type
      */

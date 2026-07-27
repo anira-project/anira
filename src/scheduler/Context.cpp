@@ -242,6 +242,52 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
     set_processor(session, inference_config, m_executorch_processors, InferenceBackend::EXECUTORCH);
 #endif
 
+    // Default the active backend to the first configured model whose processor
+    // is available, instead of the CUSTOM roundtrip. Sessions used to start on
+    // CUSTOM until set_inference_backend() — forgetting that call silently
+    // passed audio through. A caller-provided custom processor keeps CUSTOM
+    // active: running it is why it was passed. Entries whose backend is not
+    // compiled in (or whose processor could not be created) are skipped, so a
+    // config can list backends the build does not provide without selecting an
+    // unrunnable one; when nothing matches, CUSTOM remains, as before.
+    if (custom_processor == nullptr) {
+        for (const auto& model_data : inference_config.m_model_data) {
+            bool processor_available = false;
+            switch (model_data.m_backend) {
+#ifdef USE_LIBTORCH
+                case InferenceBackend::LIBTORCH:
+                    processor_available = session->m_libtorch_processor != nullptr;
+                    break;
+#endif
+#ifdef USE_ONNXRUNTIME
+                case InferenceBackend::ONNX:
+                    processor_available = session->m_onnx_processor != nullptr;
+                    break;
+#endif
+#ifdef USE_TFLITE
+                case InferenceBackend::TFLITE:
+                    processor_available = session->m_tflite_processor != nullptr;
+                    break;
+#endif
+#ifdef USE_LITERT
+                case InferenceBackend::LITERT:
+                    processor_available = session->m_litert_processor != nullptr;
+                    break;
+#endif
+#ifdef USE_EXECUTORCH
+                case InferenceBackend::EXECUTORCH:
+                    processor_available = session->m_executorch_processor != nullptr;
+                    break;
+#endif
+                default: break;
+            }
+            if (processor_available) {
+                session->m_current_backend.store(model_data.m_backend, std::memory_order_relaxed);
+                break;
+            }
+        }
+    }
+
     m_sessions.emplace_back(session);
 
     return m_sessions.back();

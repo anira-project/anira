@@ -331,7 +331,7 @@ You can also opt out of the auto-managed thread pool entirely and supply your ow
 4. Get ready for Processing
 ---------------------------
 
-Before processing audio data, the :cpp:func:`anira::InferenceHandler::prepare` method of the :cpp:class:`anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The :cpp:func:`anira::InferenceHandler::prepare` method needs an instance of :cpp:struct:`anira::HostConfig` which defines the buffer size and sample rate of the host application. Also an inference backend must be selected, which is done by calling the :cpp:func:`anira::InferenceHandler::set_inference_backend` method.
+Before processing audio data, the :cpp:func:`anira::InferenceHandler::prepare` method of the :cpp:class:`anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The :cpp:func:`anira::InferenceHandler::prepare` method needs an instance of :cpp:struct:`anira::HostConfig` which defines the buffer size and sample rate of the host application. The active inference backend defaults to the first model in your :cpp:class:`anira::InferenceConfig` whose backend is available in the build (or to ``CUSTOM`` when a custom processor was passed to the constructor); to run a different backend, select it with the :cpp:func:`anira::InferenceHandler::set_inference_backend` method.
 
 4.1. HostConfig
 ~~~~~~~~~~~~~~~
@@ -407,11 +407,11 @@ Before processing audio, you must select which inference backend to use. The ava
 - ``anira::InferenceBackend::TFLITE`` - TensorFlow Lite models
 - ``anira::InferenceBackend::CUSTOM`` - Custom backend implementations
 
-Select the backend that corresponds to your model format:
+The first configured model's backend is selected automatically; to run another one, select the backend that corresponds to your model format:
 
 .. code-block:: cpp
 
-    // Select the inference backend
+    // Select the inference backend (optional — defaults to the first configured model)
     inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
 
 .. note::
