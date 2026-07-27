@@ -12,6 +12,7 @@
 #include <cassert>
 #include <cstddef>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -31,10 +32,30 @@ OrtLoggingLevel to_ort_logging_level(LogLevel log_level) {
     return ORT_LOGGING_LEVEL_WARNING;
 }
 
+// If backend symbols leak out of the module embedding anira (misconfigured
+// visibility) and the host process has loaded a different ONNX Runtime, the
+// dynamic linker can bind OrtGetApiBase to the host's runtime. GetApi() with
+// our (newer) ORT_API_VERSION then returns null and the first Ort:: call
+// crashes the host. Detect that here and fail with a diagnosable error
+// instead; the throw propagates out of the InferenceHandler constructor.
+void throw_if_foreign_onnxruntime() {
+    const OrtApiBase* api_base = OrtGetApiBase();
+    if (api_base == nullptr || api_base->GetApi(ORT_API_VERSION) == nullptr) {
+        throw std::runtime_error(
+            "anira: OrtGetApiBase resolved to an ONNX Runtime that does not "
+            "support the API version anira was built against. A different "
+            "ONNX Runtime is already loaded in this process (e.g. shipped by "
+            "the host application) and backend symbols were not kept private "
+            "to the module embedding anira. Link the ONNX Runtime archive "
+            "with hidden visibility (see anira_target_link_static_backend).");
+    }
+}
+
 }  // namespace
 
 OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& inference_config)
     : BackendBase(inference_config) {
+    throw_if_foreign_onnxruntime();
     for (unsigned int i = 0; i < m_inference_config.m_num_parallel_processors; ++i) {
         m_instances.emplace_back(std::make_shared<Instance>(m_inference_config));
     }
