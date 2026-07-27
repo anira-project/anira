@@ -226,6 +226,20 @@ add_library(${PROJECT_NAME})
 
 # enable position independent code because otherwise the static library cannot be linked into a shared library
 set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
+
+# Compile with hidden symbol visibility on every platform; the public API is
+# re-exported through ANIRA_API (AniraWinExports.h) — the same allowlist model
+# Windows enforces via dllexport. This keeps the backend runtimes private:
+# without it, weak C++ symbols from the backend headers (e.g. ONNX Runtime's
+# Ort::Global<void>::api_) are exported from any plugin that embeds anira and
+# get weak-coalesced by the dynamic linker against a host application that
+# ships its own copy of the runtime (Ableton Live 12 bundles an ONNX Runtime
+# dylib), making Ort::GetApi() resolve against a mismatched runtime and
+# crashing the host on the first Ort:: call.
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON)
 # add an alias so that the project can be used with add_subdirectory
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
@@ -344,7 +358,10 @@ if(ANIRA_WITH_EXECUTORCH)
         set_target_properties(anira-executorch-objs PROPERTIES
             POSITION_INDEPENDENT_CODE ON
             CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED ON)
+            CXX_STANDARD_REQUIRED ON
+            # Same hidden-visibility policy as the main target (see above).
+            CXX_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN ON)
         target_compile_definitions(anira-executorch-objs PRIVATE
             ${ANIRA_COMPILE_DEFINITIONS}
             ${ANIRA_EXECUTORCH_COMPILE_DEFINITIONS})
