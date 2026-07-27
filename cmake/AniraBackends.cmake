@@ -752,10 +752,22 @@ endmacro()
 # installed package is relocatable. The system libs are unconditional (PUBLIC),
 # so they propagate to both the build tree and the installed package.
 # ------------------------------------------------------------------------------
+# Link a prebuilt static backend archive so that none of its symbols become
+# dynamic exports of the linking module. Hosts may ship their own copy of a
+# backend runtime (Ableton Live 12 bundles an ONNX Runtime dylib); any backend
+# symbol exported from a plugin can then be interposed (ELF) or weak-coalesced
+# (Mach-O) against the host's copy, which crashes the host on the first API
+# call when the versions differ. Mach-O uses -load_hidden (ld64, Xcode >= 14):
+# the archive is linked on-demand exactly like a plain input, but every symbol
+# it contributes is marked private_extern. ELF uses --exclude-libs on the
+# archive's basename, which localizes its symbols in the output; the option is
+# PUBLIC so it applies both to a shared libanira and to consumers linking the
+# static anira.
 function(anira_target_link_static_backend target libpath)
     if(EMSDK_VERSION)
         target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>")
     elseif(MSVC)
+        # PE/COFF exports nothing without __declspec(dllexport): no hiding needed.
         target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>")
     elseif(APPLE)
         # Static onnxruntime/tflite/litert pull in absl/CoreFoundation time-zone +
@@ -763,14 +775,18 @@ function(anira_target_link_static_backend target libpath)
         # Metal (LiteRtCreateMetalInfo -> MTLCreateSystemDefaultDevice), so link those
         # system frameworks.
         target_link_libraries(${target} PUBLIC
-            "$<BUILD_INTERFACE:${libpath}>" "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
+            "$<BUILD_INTERFACE:-Wl,-load_hidden,${libpath}>" "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
     elseif(ANDROID)
         # Android's bionic folds pthread/dl/libm into libc, but the static LiteRT/TFLite
         # archives vendor the GPU (GL ES) delegate and use Android logging, whose symbols
         # (glClear, EGL*, __android_log_*) live in NDK system libs that must be linked.
+        get_filename_component(_anira_backend_archive "${libpath}" NAME)
+        target_link_options(${target} PUBLIC "LINKER:--exclude-libs,${_anira_backend_archive}")
         target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>" EGL GLESv2 android log)
     else() # Linux / other ELF
         find_package(Threads REQUIRED)
+        get_filename_component(_anira_backend_archive "${libpath}" NAME)
+        target_link_options(${target} PUBLIC "LINKER:--exclude-libs,${_anira_backend_archive}")
         target_link_libraries(${target} PUBLIC
             "$<BUILD_INTERFACE:${libpath}>" Threads::Threads ${CMAKE_DL_LIBS} m)
     endif()
