@@ -245,7 +245,13 @@ public:
                                                                        ///< concurrent processing
 
     std::atomic<InferenceBackend> m_current_backend{CUSTOM};  ///< Currently active inference
-                                                              ///< backend for this session
+                                                              ///< backend for this session.
+                                                              ///< Initialized by
+                                                              ///< Context::create_session to the
+                                                              ///< first configured model's
+                                                              ///< available backend (CUSTOM when a
+                                                              ///< custom processor was provided or
+                                                              ///< nothing matches).
     unsigned long m_current_queue = 0;         ///< Current position in the inference queue
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
 
