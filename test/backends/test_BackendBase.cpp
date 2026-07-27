@@ -72,8 +72,7 @@ TEST(BackendBase, ProcessWithMoreInputsThanOutputs) {
 
 TEST(BackendBase, ProcessWithMoreOutputsThanInputsClearsExtras) {
     const std::vector<anira::TensorShape> tensor_shapes = {
-        {{{1, 1, k_audio_size}},
-         {{1, 1, k_audio_size}, {1, k_state_size}}}};
+        {{{1, 1, k_audio_size}}, {{1, 1, k_audio_size}, {1, k_state_size}}}};
     anira::InferenceConfig config = make_config(tensor_shapes);
     anira::BackendBase backend(config);
 
