@@ -866,9 +866,14 @@ TEST(InferenceHandlerDefaultBackend, DefaultsToFirstConfiguredModel) {
 
     InferenceHandler inference_handler(pp_processor, inference_config);
 
-    ASSERT_FALSE(inference_config.m_model_data.empty());
-    EXPECT_EQ(inference_handler.get_inference_backend(),
-              inference_config.m_model_data[0].m_backend);
+    if (inference_config.m_model_data.empty()) {
+        // No backend compiled into this build (e.g. the no-backend mobile CI
+        // variant): nothing is selectable, so the CUSTOM default remains.
+        EXPECT_EQ(inference_handler.get_inference_backend(), anira::InferenceBackend::CUSTOM);
+    } else {
+        EXPECT_EQ(inference_handler.get_inference_backend(),
+                  inference_config.m_model_data[0].m_backend);
+    }
 }
 
 TEST(InferenceHandlerDefaultBackend, CustomProcessorKeepsCustomBackend) {
