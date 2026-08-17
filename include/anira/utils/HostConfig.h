@@ -113,7 +113,9 @@ struct ANIRA_API HostConfig {
     float get_relative_buffer_size(const InferenceConfig& inference_config,
                                    size_t tensor_index,
                                    bool input = true) const {
-        float const ratio_buffer_size = m_buffer_size / get_reference_size(inference_config);
+        float const ratio_buffer_size =
+            m_buffer_size /
+            static_cast<float>(inference_config.get_preprocess_input_size()[m_tensor_index]);
         if (input) {
             return static_cast<float>(inference_config.get_preprocess_input_size()[tensor_index]) *
                    ratio_buffer_size;
@@ -147,7 +149,9 @@ struct ANIRA_API HostConfig {
     float get_relative_sample_rate(const InferenceConfig& inference_config,
                                    size_t tensor_index,
                                    bool input = true) const {
-        float const ratio_sample_rate = m_sample_rate / get_reference_size(inference_config);
+        float const ratio_sample_rate =
+            m_sample_rate /
+            static_cast<float>(inference_config.get_preprocess_input_size()[m_tensor_index]);
         if (input) {
             return static_cast<float>(inference_config.get_preprocess_input_size()[tensor_index]) *
                    ratio_sample_rate;
@@ -156,35 +160,6 @@ struct ANIRA_API HostConfig {
                        inference_config.get_postprocess_output_size()[tensor_index]) *
                    ratio_sample_rate;
         }
-    }
-
-    /**
-     * @brief Size of the reference stream used for relative buffer/rate scaling
-     *
-     * The reference is the input tensor selected by m_tensor_index. If that
-     * tensor is non-streamable (preprocess size 0) — e.g. generator-style
-     * models whose inputs are all control parameters — the reference falls
-     * back to the first streamable input, then to the first streamable
-     * output. Without the fallback the ratio computations above divide by
-     * zero, and the resulting inf ends up in SessionElement::prepare()'s
-     * smaller-buffer countdown loop, which never terminates (inf - 1 == inf).
-     *
-     * @param inference_config The inference configuration containing tensor sizes
-     * @return The reference tensor's streamable size, or 1.0f if no tensor is
-     *         streamable (ratios are meaningless then, but stay finite)
-     */
-    float get_reference_size(const InferenceConfig& inference_config) const {
-        const auto& input_sizes = inference_config.get_preprocess_input_size();
-        if (m_tensor_index < input_sizes.size() && input_sizes[m_tensor_index] > 0) {
-            return static_cast<float>(input_sizes[m_tensor_index]);
-        }
-        for (const auto size : input_sizes) {
-            if (size > 0) { return static_cast<float>(size); }
-        }
-        for (const auto size : inference_config.get_postprocess_output_size()) {
-            if (size > 0) { return static_cast<float>(size); }
-        }
-        return 1.0f;
     }
 };
 
