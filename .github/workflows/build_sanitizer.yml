@@ -21,15 +21,15 @@ concurrency:
 
 jobs:
   build_and_test_rtsan:
-    # Parked until the real-time-safety violations RTSan currently flags are fixed.
-    # As of now, with -DANIRA_WITH_RTSAN=ON the suite aborts on genuine issues:
-    #   1. moodycamel ConcurrentQueue allocates on the audio thread on first enqueue
-    #      (lazy implicit-producer creation) — both the dispatch and InferenceData
-    #      queues. Fix: explicit ProducerToken per session + a prepare-time block warm-up.
-    #   2. RingBuffer overflow logging runs in the realtime path (RingBuffer.cpp: LOG_ERROR
-    #      -> std::cerr -> fwrite/flockfile/mutex). Fix: don't log from the audio thread.
-    # The job below is otherwise ready (RTSan via clang-20); flip `if: false` once fixed.
-    if: false
+    # Gates the ANIRA_REALTIME ([[clang::nonblocking]]) hot path — process/
+    # push_data/pop_data/reset — at runtime. Of the two violations this job was
+    # originally parked on, the moodycamel first-enqueue allocation was fixed in
+    # v2.2.1 (explicit per-session producer tokens; verified clean under RTSan),
+    # and the remaining stream-logging-from-the-audio-path class (RingBuffer
+    # overflow log, new_data_submitted "no free inference queue" warning) is
+    # suppressed via .github/rtsan-suppressions.supp until logging is moved off
+    # the audio thread. Everything else — allocations, locks, sleeps, semaphore
+    # syscalls in a real-time context — fails the job.
     name: Check real-time safety with RTSan
     strategy:
       matrix:
@@ -63,3 +63,5 @@ jobs:
           CMAKE_BUILD_ARGS: "-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_RTSAN=ON"
       - name: test
         uses: ./.github/actions/test
+        env:
+          RTSAN_OPTIONS: "suppressions=${{ github.workspace }}/.github/rtsan-suppressions.supp"

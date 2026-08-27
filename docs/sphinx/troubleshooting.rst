@@ -73,6 +73,8 @@ Missing Backend Dependencies
     - `-DANIRA_WITH_LIBTORCH=OFF`
     - `-DANIRA_WITH_ONNXRUNTIME=OFF`
     - `-DANIRA_WITH_TFLITE=OFF`
+    - `-DANIRA_WITH_LITERT=OFF`
+    - `-DANIRA_WITH_EXECUTORCH=OFF`
 
 Alternatively, you can specify custom paths to these dependencies if they are installed in non-standard locations.
 
@@ -109,6 +111,15 @@ Model Loading Failures
     3. Ensure tensor shapes in your :cpp:struct:`anira::InferenceConfig` match the model's expected shapes
     4. Try a different backend if available
 
+Wait Strategy Mismatch
+^^^^^^^^^^^^^^^^^^^^^^
+
+**Issue**: The log shows ``[WARNING] ContextConfig wait strategy mismatch``.
+
+All anira instances in a process share one inference thread pool, and the pool's threads wait for work according to the :cpp:enum:`anira::WaitStrategy` of the *first* :cpp:struct:`anira::ContextConfig` the context was created with. A later instance that requests a different strategy has no effect — the warning tells you the originally configured strategy stays active. This is harmless (both strategies produce identical results), but the requested idle-CPU/latency characteristic is not the one in effect.
+
+**Solution**: Use the same ``wait_strategy`` in every :cpp:struct:`anira::ContextConfig` (and in the ``context_config`` block of every JSON configuration file) that the process loads.
+
 Thread Priority Issues
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -132,6 +143,26 @@ Unexpected Results or Crashes
     2. Ensure your pre/post-processing logic correctly handles the data format
     3. Try using a different backend to rule out backend-specific issues
     4. Check that your model works correctly outside of anira use the minimal inference example provided in the :doc:`examples` section.
+
+Host application ships its own backend runtime
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Issue**: A plugin embedding anira crashes (or fails to instantiate with an
+"OrtGetApiBase resolved to an ONNX Runtime that does not support the API
+version" error) inside a specific host application, but works in the
+standalone build and in other hosts. Ableton Live 12, for example, bundles its
+own ONNX Runtime dylib for its built-in AI features.
+
+**Cause**: If backend symbols are exported from the plugin binary, the dynamic
+linker can bind them across module boundaries — ELF interposition on Linux,
+weak-symbol coalescing on macOS (e.g. the ORT C++ header's
+``Ort::Global<void>::api_``). The plugin's backend calls then resolve against
+the host's (typically older) runtime and the first API call crashes the host.
+
+**Solutions**:
+    1. Use anira's build system to link the prebuilt backend archives: ``anira_target_link_static_backend`` links them hidden (``-load_hidden`` on macOS, ``--exclude-libs`` on Linux), and anira itself is compiled with hidden symbol visibility, so nothing backend-related is exported from your binary. anira's ONNX Runtime processor additionally verifies at startup that ``OrtGetApiBase()`` resolved to a compatible runtime and throws a descriptive error instead of crashing the host.
+    2. If your plugin's own translation units include backend headers (e.g. ``onnxruntime_cxx_api.h``), compile them with hidden visibility too (``CXX_VISIBILITY_PRESET hidden``, ``VISIBILITY_INLINES_HIDDEN ON``).
+    3. As defense-in-depth, restrict your plugin's exports to its entry points — e.g. on macOS ``-Wl,-exported_symbols_list`` with only ``_bundleEntry``/``_bundleExit``/``_GetPluginFactory`` for a VST3. This also covers any other statically linked dependency. Verify with ``nm -gU your_plugin`` (macOS) or ``nm -D --defined-only your_plugin.so`` (Linux): no ``Ort``/backend symbols should appear.
 
 .. note::
     If you continue to experience issues feel free to file an issue on the [GitHub repository](https://github.com/anira-project/anira/issues).

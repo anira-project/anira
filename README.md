@@ -22,9 +22,9 @@ An extensive documentation of anira can be found at [https://anira-project.githu
 - **Thread Pool Management**: Utilizes a static thread pool to avoid oversubscription and enables efficient parallel inference
 - **Minimal Latency**: Designed to minimize latency while maintaining real-time safety
 - **Built-in Benchmarking**: Includes tools for evaluating the real-time performance of neural networks
-- **Comprehensive Inference Engine Support**: Integrates common inference engines, LibTorch, ONNXRuntime, and TensorFlow Lite
+- **Comprehensive Inference Engine Support**: Integrates common inference engines, LibTorch, ONNXRuntime, LiteRT, TensorFlow Lite and ExecuTorch
 - **Flexible Neural Network Integration**: Supports a variety of neural network models, including stateful and stateless models
-- **Cross-Platform Compatibility**: Works seamlessly on macOS, Linux, and Windows
+- **Cross-Platform Compatibility**: Works seamlessly on macOS, Linux, Windows, Android and iOS, and in the browser via WebAssembly
 
 ## Usage
 
@@ -119,34 +119,38 @@ cmake --install build --prefix /path/to/install/directory
 
 ### C++ Build Options
 
-By default, LibTorch, ONNXRuntime and LiteRT are enabled. You can disable specific backends as needed:
+By default, LibTorch, ONNXRuntime, LiteRT and ExecuTorch are enabled. You can disable specific backends as needed:
 
 - LibTorch: ``-DANIRA_WITH_LIBTORCH=OFF``
 - OnnxRuntime: ``-DANIRA_WITH_ONNXRUNTIME=OFF``
 - LiteRT (`LiteRt*` C API): ``-DANIRA_WITH_LITERT=OFF`` — runs `.tflite` models through LiteRT's native CompiledModel runtime. Enabled by default; it is the modern TensorFlow-Lite-family backend.
 - TensorFlow Lite (legacy `TfLite*` C API): ``-DANIRA_WITH_TFLITE=ON`` — the **same runtime** as LiteRT exposed through the older C API, so the two are **mutually exclusive**. To use it, disable LiteRT: ``-DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON``.
+- ExecuTorch: ``-DANIRA_WITH_EXECUTORCH=OFF`` — runs `.pte` programs exported ahead-of-time with `torch.export`; PyTorch's edge/mobile inference stack (CPU execution via XNNPACK). Enabled by default; static-only and requires CMake ≥ 3.24 on desktop (disable it to build with an older CMake).
 
 #### Platform / backend support
 
 anira builds on the targets below; the pre-built backends it downloads ship per target as `shared`
 and/or `static` (anira's linkage follows `BUILD_SHARED_LIBS`):
 
-| Target                  | LibTorch | ONNXRuntime     | LiteRT          | TFLite (legacy) |
-| ----------------------- | -------- | --------------- | --------------- | --------------- |
-| macOS `x86_64`          | shared   | shared · static | shared · static | shared · static |
-| macOS `arm64`           | shared   | shared · static | shared · static | shared · static |
-| macOS `universal`       | shared   | shared · static | shared · static | shared · static |
-| Linux `x86_64`          | shared   | shared · static | shared · static | shared · static |
-| Linux `aarch64`         | shared   | shared · static | shared · static | shared · static |
-| Windows `x86_64`        | shared   | shared · static | shared · static | shared · static |
-| Windows `arm64`         | shared   | shared · static | shared · static | shared · static |
-| `WASM` (Emscripten)     | —        | static          | —               | —               |
+| Target                  | LibTorch | ONNXRuntime     | LiteRT          | TFLite (legacy) | ExecuTorch |
+| ----------------------- | -------- | --------------- | --------------- | --------------- | ---------- |
+| macOS `x86_64`          | shared   | shared · static | shared · static | shared · static | static     |
+| macOS `arm64`           | shared   | shared · static | shared · static | shared · static | static     |
+| macOS `universal`       | shared   | shared · static | shared · static | shared · static | static     |
+| Linux `x86_64`          | shared   | shared · static | shared · static | shared · static | static     |
+| Linux `aarch64`         | shared   | shared · static | shared · static | shared · static | static     |
+| Windows `x86_64`        | shared   | shared · static | shared · static | shared · static | static     |
+| Windows `arm64`         | shared   | shared · static | shared · static | shared · static | static     |
+| `WASM` (Emscripten)     | —        | static          | —               | —               | —          |
 
-LibTorch is shared-only (auto-disabled for fully static anira builds). LiteRT and TFLite are the
-same runtime via two C APIs and are mutually exclusive (LiteRT is the default). On WebAssembly only
-ONNX Runtime is supported. Backends for Android and iOS are also published in the
-[anira-project/backends](https://github.com/anira-project/backends) release for cross-builds.
-`—` = not provided.
+LibTorch is shared-only (auto-disabled for fully static anira builds); ExecuTorch is static-only.
+LiteRT and TFLite are the same runtime via two C APIs and are mutually exclusive (LiteRT is the
+default). In a fully static anira build ExecuTorch cannot be combined with LiteRT or TFLite
+(each bundles its own copy of XNNPACK, whose symbols collide in one static image) — ExecuTorch
+is then auto-disabled; disable LiteRT/TFLite to build a static anira with ExecuTorch. On
+WebAssembly only ONNX Runtime is supported. Backends for Android and iOS are also
+published in the [anira-project/backends](https://github.com/anira-project/backends) release for
+cross-builds. `—` = not provided.
 
 Pre-built backend binaries are downloaded at configure time from the
 [anira-project/backends](https://github.com/anira-project/backends) release pinned by
@@ -155,7 +159,7 @@ asset's published SHA256 and re-downloads any backend whose archive changed upst
 incompletely (the download is verified against that hash). Nothing is pinned in-repo. Linkage and
 source are configurable:
 
-- Linkage follows ``BUILD_SHARED_LIBS`` (shared anira → shared backends, static → static). Decouple a single engine with ``-DANIRA_<ENGINE>_LINKAGE=shared|static`` where `<ENGINE>` is `LIBTORCH|ONNXRUNTIME|TFLITE|LITERT`. LibTorch is shared-only.
+- Linkage follows ``BUILD_SHARED_LIBS`` (shared anira → shared backends, static → static). Decouple a single engine with ``-DANIRA_<ENGINE>_LINKAGE=shared|static`` where `<ENGINE>` is `LIBTORCH|ONNXRUNTIME|TFLITE|LITERT|EXECUTORCH`. LibTorch is shared-only; ExecuTorch is static-only.
 - Backends release tag: ``-DANIRA_BACKENDS_VERSION=v2.1.1``.
 - Offline / reproducible builds: ``-DANIRA_BACKENDS_SKIP_REMOTE_CHECK=ON`` skips the GitHub query and reuses whatever is already in `modules/`.
 - Bring your own backend (no fork): ``-DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt`` (a tree with `include/` + `lib/`), or a custom source via ``-DANIRA_<ENGINE>_URL=... -DANIRA_<ENGINE>_SHA256=...``.

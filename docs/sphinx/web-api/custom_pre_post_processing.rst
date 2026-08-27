@@ -63,17 +63,31 @@ What You Can Override
 
 :js:class:`JSPrePostProcessor` exposes the same hooks as the C++ class:
 
-+-------------------------------------------------+-----------------------------------------------+
-| Method                                          | When it runs                                  |
-+=================================================+===============================================+
-| ``preProcess(ringBuffers, buffers, backend)``   | Before each inference call. Use it to pull    |
-|                                                 | samples from the input ring buffers into the  |
-|                                                 | model's input tensors.                        |
-+-------------------------------------------------+-----------------------------------------------+
-| ``postProcess(buffers, ringBuffers, backend)``  | After each inference call. Use it to push     |
-|                                                 | the model's output tensors into the output    |
-|                                                 | ring buffers.                                 |
-+-------------------------------------------------+-----------------------------------------------+
++-------------------------------------------------+-----------------------------------------------------------------+
+| Method                                          | When it runs                                                    |
++=================================================+=================================================================+
+| ``preProcess(ringBuffers, buffers, backend)``   | Before each inference call, on the **audio worklet**. Pull      |
+|                                                 | samples from the input ring buffers into the model's input      |
+|                                                 | tensors.                                                        |
++-------------------------------------------------+-----------------------------------------------------------------+
+| ``postProcess(buffers, ringBuffers, backend)``  | After each inference call, on the **audio worklet**. Push the   |
+|                                                 | model's output tensors into the output ring buffers.            |
++-------------------------------------------------+-----------------------------------------------------------------+
+| ``beforeInference(buffers, backend)``           | On the **inference worker**, immediately before the backend     |
+|                                                 | runs. Patch input tensors with data that must reflect the       |
+|                                                 | previous inference (e.g. recurrent state).                      |
++-------------------------------------------------+-----------------------------------------------------------------+
+| ``afterInference(buffers, backend)``            | On the **inference worker**, immediately after the backend      |
+|                                                 | runs. Capture output tensors that must feed the next inference  |
+|                                                 | (e.g. recurrent state).                                         |
++-------------------------------------------------+-----------------------------------------------------------------+
+
+``preProcess`` / ``postProcess`` and ``beforeInference`` / ``afterInference``
+run on **different threads**, so they are registered in different places (see
+:ref:`inference-hooks` below). ``preProcess`` / ``postProcess`` each take two
+vectors — the ring buffers and the tensor buffers; ``beforeInference`` /
+``afterInference`` take a single ``VectorBufferF`` (the input tensors before the
+run, the output tensors after it).
 
 Inside an override you can read and write non-streamable tensor values
 with ``getInput`` / ``setInput`` / ``getOutput`` / ``setOutput`` (same
@@ -151,6 +165,98 @@ except that ``PrePostProcessor`` becomes ``JSPrePostProcessor`` and
      ppProcessor.setInput(parseFloat(gainSlider.value), 0, 1)
    }
 
+.. _inference-hooks:
+
+Inference-Thread Hooks (Stateful Models)
+----------------------------------------
+
+``beforeInference`` and ``afterInference`` do **not** run on the audio
+worklet. They fire on the inference worker, wrapped tightly around the
+backend's forward pass — ``beforeInference`` right before it,
+``afterInference`` right after and, with ``session_exclusive_processor =
+true``, before the next inference is dispatched. That makes them the correct
+place to splice cross-inference state such as a recurrent model's hidden
+state, which ``preProcess`` cannot do reliably: ``preProcess`` fills input
+tensors at submission time, so once several inferences are queued its state is
+already stale. See :cpp:func:`anira::PrePostProcessor::before_inference` for
+the full rationale.
+
+Because the hooks run on the inference worker, the subclass has to be
+reconstructed **there**, not only on the worklet — two steps beyond the
+worklet registration above.
+
+**1. Teach the inference worker about the subclass.** Ship a custom inference
+worker file and pass the subclass in the second argument of
+``setupInferenceWorker`` (the first is the custom-backend map from
+:doc:`custom_inference_backends`):
+
+.. code-block:: typescript
+
+   // stateful-inference-worker.ts
+   import { setupInferenceWorker } from '@anira-project/anira'
+   import { StatefulPrePostProcessor } from './stateful-pre-post-processor'
+
+   setupInferenceWorker({}, { StatefulPrePostProcessor })
+
+where the subclass overrides the inference hooks:
+
+.. code-block:: typescript
+
+   // stateful-pre-post-processor.ts
+   import {
+     JSPrePostProcessor,
+     type PossiblePointer,
+     type VectorBufferF,
+   } from '@anira-project/anira'
+
+   export class StatefulPrePostProcessor extends JSPrePostProcessor {
+     override beforeInference(
+       buffers: PossiblePointer<VectorBufferF>,
+       backend: number
+     ): void {
+       // write the state captured last time into the model's state input tensor
+     }
+     override afterInference(
+       buffers: PossiblePointer<VectorBufferF>,
+       backend: number
+     ): void {
+       // read the model's state output tensor and stash it for next time
+     }
+   }
+
+**2. Register the processor on the worker(s).** On the main thread, register
+the processor by class name and spin up the worker with your custom worker
+file:
+
+.. code-block:: typescript
+
+   const ppProcessor = aniraWeb.JSPrePostProcessor(inferenceConfig)
+
+   await aniraWeb.registerPrePostProcessor(ppProcessor, 'StatefulPrePostProcessor')
+   await aniraWeb.spinUpInferenceWorker(
+     new URL('./stateful-inference-worker.ts', import.meta.url)
+   )
+
+``registerPrePostProcessor`` forwards the processor to every inference worker
+already running and replays it on any spun up later, so the two calls can go
+in either order. Registration also *arms* the C++ hooks: until a processor is
+registered on a worker, ``beforeInference`` / ``afterInference`` short-circuit
+to the base no-op without crossing into JS, so a :js:class:`JSPrePostProcessor`
+used only for ``preProcess`` / ``postProcess`` pays nothing on the inference
+thread.
+
+The same ``ppProcessor`` still goes to ``configureAudioWorklet`` and, if it
+also customizes ``preProcess`` / ``postProcess``, is registered on the worklet
+as shown above — the two registrations are independent and both drive the one
+shared C++ object.
+
+.. note::
+   The class-name string passed to ``registerPrePostProcessor`` must match a
+   key in the map given to ``setupInferenceWorker`` — that is how the worker
+   knows which subclass to reconstruct around the shared C++ pointer. If it is
+   omitted or unknown, the worker falls back to the base
+   :js:class:`JSPrePostProcessor`, whose inference hooks are no-ops.
+
 Pointer Arguments
 -----------------
 
@@ -174,3 +280,23 @@ logic.
    audio block. The raw exports skip the wrapper entirely, at the
    cost of dealing in numeric pointers. Reach for them in real-time
    paths; stick with the wrappers everywhere else.
+
+.. warning::
+   When a model needs one overlapping window **per batch element**
+   (input shape ``[num_batches, ..., window_size]``, as in the
+   guitar-lstm/HybridNN demo), do **not** loop in JavaScript calling
+   ``_prepostprocessor_pop_samples_from_buffer_window_offset`` once per
+   batch. Each call crosses the JS↔WASM boundary, and for large batches
+   that per-element overhead runs on the audio render thread and can blow
+   the render-quantum budget, underrunning the whole ``AudioContext``.
+   Use the batched export instead, which runs the loop in native code in
+   a single call::
+
+     // offset stride is (numNewSamples + numOldSamples) per batch
+     this.wasmInstance._prepostprocessor_pop_samples_from_buffer_batched(
+       this.getPointer(), ringBuffer0, buffer0,
+       numNewSamples, numOldSamples, /*offset*/ 0, numBatches)
+
+   or, off the real-time path, the wrapper overload
+   ``ppProcessor.popSamplesFromBuffer(ringBuffer, buffer, numNewSamples,
+   numOldSamples, offset, numBatches)``.

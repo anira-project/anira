@@ -150,6 +150,6 @@ jobs:
           CMAKE_BUILD_PARALLEL_LEVEL: 4
           # Backends resolve per-leg: explicit matrix override first, else the shared
           # `inference_engines` toggle, else OFF (TFLite defaults OFF — legacy, opt-in).
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.onnxruntime || matrix.inference_engines }} -DANIRA_WITH_LITERT=${{ matrix.litert || matrix.inference_engines }} -DANIRA_WITH_TFLITE=${{ matrix.tflite || 'OFF' }}"
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.onnxruntime || matrix.inference_engines }} -DANIRA_WITH_LITERT=${{ matrix.litert || matrix.inference_engines }} -DANIRA_WITH_EXECUTORCH=${{ matrix.executorch || matrix.inference_engines }} -DANIRA_WITH_TFLITE=${{ matrix.tflite || 'OFF' }}"
       - name: test
         uses: ./.github/actions/test

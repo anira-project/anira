@@ -177,6 +177,27 @@ if(ANIRA_WITH_LITERT)
     endif()
 endif()
 
+if(ANIRA_WITH_EXECUTORCH)
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/executorch.xcframework"
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
+        install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/executorch.xcframework/${ANIRA_EXECUTORCH_IOS_SLICE}/Headers/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT deps-backends)
+    else()
+        # On desktop the installed lib/ tree includes ExecuTorch's CMake package
+        # (lib/cmake/ExecuTorch), which aniraConfig.cmake re-resolves via
+        # find_package(executorch) — analogous to the libtorch handling above.
+        install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/include/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+            COMPONENT deps-backends
+        )
+        install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/lib/"
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+            COMPONENT deps-backends
+        )
+    endif()
+endif()
+
 # Relocatable static-backend linkage. anira_target_link_static_backend() linked each
 # backend archive through $<BUILD_INTERFACE> only, so its absolute build-tree path is
 # kept out of the exported targets. Add the matching $<INSTALL_INTERFACE> entry that
@@ -185,7 +206,7 @@ endif()
 # of a path on the build machine. (Shared backends already link by name via the
 # installed lib dir, so they need nothing here. ANIRA_<ID>_STATIC_LIB_SUBPATH is the
 # archive's path under the install libdir, set by anira_setup_backend().)
-foreach(_engine ONNXRUNTIME TFLITE LITERT)
+foreach(_engine ONNXRUNTIME TFLITE LITERT EXECUTORCH)
     if(ANIRA_WITH_${_engine} AND ANIRA_${_engine}_IS_STATIC AND ANIRA_${_engine}_STATIC_LIB_SUBPATH)
         target_link_libraries(${PROJECT_NAME} INTERFACE
             "$<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_LIBDIR}/${ANIRA_${_engine}_STATIC_LIB_SUBPATH}>"

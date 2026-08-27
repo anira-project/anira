@@ -1,10 +1,16 @@
 name: test
 description: "Test the library"
 
+inputs:
+  CTEST_ARGS:
+    required: false
+    default: ""
+    description: "Additional arguments passed to ctest (e.g. -R to filter tests)"
+
 runs:
   using: "composite"
   steps:
     # Build the project
     - name: ctest
       shell: bash
-      run: ctest --test-dir build --output-on-failure
+      run: ctest --test-dir build --output-on-failure ${{ inputs.CTEST_ARGS }}

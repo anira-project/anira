@@ -28,7 +28,9 @@ Anira provides the following structures and classes to help you integrate real-t
 +---------------------------------------+--------------------------------------------------------------------------+
 | :cpp:struct:`anira::ContextConfig`    | **Optional:** The configuration structure that defines the context       |
 |                                       | across all anira instances. Here you can define the behaviour of the     |
-|                                       | thread pool, such as specifying the number of threads.                   |
+|                                       | thread pool, such as the number of threads and how idle threads wait     |
+|                                       | for new work (see :cpp:enum:`anira::WaitStrategy`), as well as the       |
+|                                       | log level of anira and its backends (see :cpp:enum:`anira::LogLevel`).   |
 +---------------------------------------+--------------------------------------------------------------------------+
 
 1. Inference Configuration
@@ -115,6 +117,9 @@ The following parameters can be defined in the :cpp:struct:`anira::ProcessingSpe
 |                               | of samples required per tensor before triggering preprocessing and inference. For streamable   |
 |                               | tensors, this determines how many samples must accumulate before processing begins. Set to     |
 |                               | ``0`` for non-streamable tensors to start processing immediately without waiting for samples.  |
+|                               | If the tensor holds more samples than this (a receptive-field model, e.g. shape                |
+|                               | ``[1, 1, 15380]`` with size ``2048``), the default PrePostProcessor slides a window: the head  |
+|                               | is filled with history, only this many fresh samples are consumed per inference.               |
 +-------------------------------+------------------------------------------------------------------------------------------------+
 | postprocess_output_size       | Type: ``std::vector<size_t>``, default: ``output_tensor_sizes``. Defines the number of samples |
 |                               | that will be returned after the postprocessing step. Set to ``0`` for non-streamable tensors.  |
@@ -179,6 +184,72 @@ These are the other optional parameters that can be set in the :cpp:struct:`anir
 |                             | for the inference.                                     |
 +-----------------------------+--------------------------------------------------------+
 
+1.5. (Optional) Loading the Configuration from JSON
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Instead of constructing the :cpp:struct:`anira::InferenceConfig` (and the optional :cpp:struct:`anira::ContextConfig`) in C++, you can describe them in a JSON file and load them at runtime with :cpp:class:`anira::JsonConfigLoader`. This keeps model paths, tensor shapes and processing parameters out of the compiled binary, so you can swap models without recompiling.
+
+The JSON mirrors the two configuration structs — a ``context_config`` object and an ``inference_config`` object:
+
+.. code-block:: json
+
+    {
+      "context_config": {
+        "num_threads": 1,
+        "wait_strategy": "spin_backoff",
+        "log_level": "warning"
+      },
+      "inference_config": {
+        "model_data": [
+          { "model_path": ".../simple_gain_network_mono.pt",     "inference_backend": "LIBTORCH" },
+          { "model_path": ".../simple_gain_network_mono.onnx",   "inference_backend": "ONNX" },
+          { "model_path": ".../simple_gain_network_mono.tflite", "inference_backend": "TFLITE" }
+        ],
+        "tensor_shape": [
+          {
+            "input_shape":  [[1, 1, 512], [1]],
+            "output_shape": [[1, 1, 512], [1]]
+          }
+        ],
+        "processing_spec": {
+          "preprocess_input_channels":   [1, 1],
+          "postprocess_output_channels": [1, 1],
+          "preprocess_input_size":       [512, 0],
+          "postprocess_output_size":     [512, 0]
+        },
+        "max_inference_time": 5.0,
+        "warm_up": 1
+      }
+    }
+
+The keys map directly onto the fields described above:
+
+- ``context_config`` → :cpp:struct:`anira::ContextConfig`: ``num_threads`` (unsigned integer), ``wait_strategy`` (``"spin_backoff"`` or ``"blocking"``, see :cpp:enum:`anira::WaitStrategy`) and ``log_level`` (``"debug"``, ``"info"``, ``"warning"`` or ``"error"``, see :cpp:enum:`anira::LogLevel`). The whole block is optional. On WebAssembly builds ``"blocking"`` is not supported and is coerced to ``"spin_backoff"`` with a warning; likewise a ``num_threads`` other than ``0`` is coerced to ``0`` with a warning — the context cannot run inference threads on the web, they are always created from JavaScript via ``AniraWeb.spinUpInferenceWorker()``.
+- ``inference_config.model_data`` → the vector of :cpp:struct:`anira::ModelData`; each entry needs a ``model_path`` and an ``inference_backend`` (one of ``LIBTORCH``, ``ONNX``, ``TFLITE``, ``LITERT``, ``EXECUTORCH``), and optionally a ``model_function`` naming the entry point to run for LibTorch and ExecuTorch (both formats can carry several named methods in one file, e.g. RAVE's ``encode``/``decode``; ExecuTorch defaults to ``forward``).
+- ``inference_config.tensor_shape`` → the vector of :cpp:struct:`anira::TensorShape`. For a single-tensor model the shapes may be given as a flat array (``[1, 1, 2048]``); for multi-tensor models use a list of per-tensor shapes (``[[1, 1, 512], [1]]``).
+- ``inference_config.processing_spec`` → the optional :cpp:struct:`anira::ProcessingSpec` (``preprocess_input_channels``, ``postprocess_output_channels``, ``preprocess_input_size``, ``postprocess_output_size`` and the optional ``internal_model_latency``).
+- ``max_inference_time``, ``warm_up``, ``session_exclusive_processor``, ``blocking_ratio`` and ``num_parallel_processors`` → the InferenceConfig parameters from the table above.
+
+Then load the file and move the configurations out of the loader:
+
+.. code-block:: cpp
+
+    #include <anira/anira.h>
+
+    anira::JsonConfigLoader json_config_loader("path/to/Config.json");
+
+    anira::ContextConfig context_config = std::move(*json_config_loader.get_context_config());
+    anira::InferenceConfig inference_config = std::move(*json_config_loader.get_inference_config());
+
+    anira::PrePostProcessor pp_processor(inference_config);
+    anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
+
+.. note::
+    :cpp:func:`anira::JsonConfigLoader::get_context_config` and :cpp:func:`anira::JsonConfigLoader::get_inference_config` each return a ``std::unique_ptr``; move the value out (as above) before using it. The loader also accepts a ``std::istream``, so the configuration can be loaded from an embedded resource instead of a file on disk.
+
+.. tip::
+    See the JUCE plugin example (``MODEL_TO_USE == 8``), which loads the RAVE model entirely from ``RaveFunkDrumConfig.json`` via :cpp:class:`anira::JsonConfigLoader`.
+
 2. Pre and Post Processing
 --------------------------
 
@@ -211,7 +282,7 @@ In your application, you will need to create an instance of the :cpp:class:`anir
 3.1. (Optional) ContextConfig
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-If you want to define a custom context configuration, you can do so by creating an instance of the :cpp:struct:`anira::ContextConfig` structure. This structure allows you to define the behaviour of the thread pool, by specifying the number of threads.
+If you want to define a custom context configuration, you can do so by creating an instance of the :cpp:struct:`anira::ContextConfig` structure. This structure allows you to define the behaviour of the thread pool — the number of threads and how idle threads wait for new work — as well as the log level of anira and its inference backends.
 
 .. code-block:: cpp
 
@@ -219,11 +290,31 @@ If you want to define a custom context configuration, you can do so by creating 
 
     // Create an instance of anira::ContextConfig
     anira::ContextConfig context_config {
-        4 // Number of threads
+        4,                              // Number of threads
+        anira::WaitStrategy::Blocking,  // Idle threads block instead of polling
+        anira::LogLevel::Warning        // Only report warnings and errors
     };
 
     // Create an InferenceHandler instance
     anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
+
+The wait strategy (:cpp:enum:`anira::WaitStrategy`) controls what an inference thread does while the shared inference queue is empty:
+
+- ``anira::WaitStrategy::SpinBackoff`` (default): the thread polls the queue with an exponential backoff — a short hot-spin phase, then a yield/sleep loop with a period of roughly 100 µs. This gives the lowest possible pickup latency when new work arrives within microseconds of the thread going idle, at the cost of continuous polling syscalls and CPU wakeups for as long as the thread is idle.
+- ``anira::WaitStrategy::Blocking``: the thread blocks on the queue's semaphore and is woken directly by the enqueue. Idle threads consume no CPU, and the wakeup arrives immediately (typically within a few microseconds via a futex/semaphore signal). In exchange, the submitting thread pays one bounded, non-blocking semaphore signal per submission when a consumer is asleep — the same class of wakeup that audio servers like JACK and PipeWire issue from their real-time threads on every cycle.
+
+For models whose inference time dominates the round trip, the throughput of both strategies is identical within measurement noise — choose ``Blocking`` to eliminate idle CPU/power usage, and ``SpinBackoff`` only when sub-microsecond work-pickup latency matters.
+
+.. note::
+    All anira instances in a process share one inference thread pool, so only one wait strategy can be in effect per process — the one of the first-created context. If a later instance requests a different strategy, the request is ignored and anira logs a warning. Since both strategies produce identical results, a mismatch is harmless; the warning only tells you that the requested performance characteristic is not the one in effect.
+
+.. note::
+    On WebAssembly builds blocking waits are impossible — inference loops are driven cooperatively by JS Workers — so ``anira::WaitStrategy::Blocking`` is coerced to ``SpinBackoff`` with a warning, both by :cpp:class:`anira::JsonConfigLoader` and by the context itself.
+
+The log level (:cpp:enum:`anira::LogLevel`) is one setting for the whole inference stack: it gates anira's own log output and is forwarded to the logging facilities of the enabled backends — the ONNX Runtime environment severity, the LiteRT environment min-logger severity and the LibTorch/c10 log level (TFLite and ExecuTorch excepted — their prebuilt runtimes offer no runtime logging control). A message is emitted when its severity is at or above the configured level; the available levels are ``Debug``, ``Info``, ``Warning`` and ``Error``, where ``Debug`` additionally enables the backends' verbose output. The default is ``LogLevel::Info`` in debug builds and ``LogLevel::Error`` in release builds.
+
+.. note::
+    Like the thread pool, the log level is process-global. If the ContextConfigs in a process disagree, the lowest (most verbose) requested level wins — no session can silence the diagnostics another session asked for — and the mismatch is reported with a warning. The TFLite backend is exempt from the log level — the prebuilt TFLite C library does not export any runtime logging control, so its (rare) log lines are unaffected.
 
 You can also opt out of the auto-managed thread pool entirely and supply your own threads. Pass ``0`` to :cpp:struct:`anira::ContextConfig` so the auto-pool stays empty, then create as many threads as you want via :cpp:func:`anira::Context::make_inference_thread`, call ``start()`` on each, and either call ``stop()`` or simply destroy the returned ``unique_ptr`` to tear them down.
 
@@ -240,7 +331,7 @@ You can also opt out of the auto-managed thread pool entirely and supply your ow
 4. Get ready for Processing
 ---------------------------
 
-Before processing audio data, the :cpp:func:`anira::InferenceHandler::prepare` method of the :cpp:class:`anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The :cpp:func:`anira::InferenceHandler::prepare` method needs an instance of :cpp:struct:`anira::HostConfig` which defines the buffer size and sample rate of the host application. Also an inference backend must be selected, which is done by calling the :cpp:func:`anira::InferenceHandler::set_inference_backend` method.
+Before processing audio data, the :cpp:func:`anira::InferenceHandler::prepare` method of the :cpp:class:`anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The :cpp:func:`anira::InferenceHandler::prepare` method needs an instance of :cpp:struct:`anira::HostConfig` which defines the buffer size and sample rate of the host application. The active inference backend defaults to the first model in your :cpp:class:`anira::InferenceConfig` whose backend is available in the build (or to ``CUSTOM`` when a custom processor was passed to the constructor); to run a different backend, select it with the :cpp:func:`anira::InferenceHandler::set_inference_backend` method.
 
 4.1. HostConfig
 ~~~~~~~~~~~~~~~
@@ -316,11 +407,11 @@ Before processing audio, you must select which inference backend to use. The ava
 - ``anira::InferenceBackend::TFLITE`` - TensorFlow Lite models
 - ``anira::InferenceBackend::CUSTOM`` - Custom backend implementations
 
-Select the backend that corresponds to your model format:
+The first configured model's backend is selected automatically; to run another one, select the backend that corresponds to your model format:
 
 .. code-block:: cpp
 
-    // Select the inference backend
+    // Select the inference backend (optional — defaults to the first configured model)
     inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
 
 .. note::
@@ -511,3 +602,24 @@ Some neural networks require additional input parameters or output values that d
 
 ..  note::
     The functions :cpp:func:`anira::PrePostProcessor::set_input` and :cpp:func:`anira::PrePostProcessor::get_output` can be called from any thread, allowing you to update control parameters or retrieve additional values asynchronously without blocking the real-time audio processing thread.
+
+5.4. Resetting the Stream
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:cpp:func:`anira::InferenceHandler::reset` re-anchors the inference pipeline to its initial state: it clears all internal buffers, re-seeds the latency zero-padding, and invalidates every inference dispatched so far — results still in flight are discarded and their internal structures reclaimed automatically. This is useful whenever the processed stream loses continuity, e.g. on transport jumps, playback restarts, or onset/transient re-synchronization.
+
+.. code-block:: cpp
+
+    // Safe on the audio thread, e.g. to realign the inference grid mid-stream
+    inference_handler.reset();
+
+The call is wait-free and real-time safe for all session configurations, including stateful (``session_exclusive_processor``) ones — it never sleeps, locks, allocates, or performs a syscall, and is annotated ``[[clang::nonblocking]]`` in RealtimeSanitizer builds. Call it from the thread that drives :cpp:func:`anira::InferenceHandler::process` (or :cpp:func:`anira::InferenceHandler::push_data` / :cpp:func:`anira::InferenceHandler::pop_data`), or ensure no such call is concurrent — and never concurrently with :cpp:func:`anira::InferenceHandler::prepare` or destruction.
+
+..  note::
+    :cpp:func:`anira::InferenceHandler::reset` does not wait for in-flight inferences to finish: an inference thread may still be executing a — discarded — inference after the call returns, including user code in a custom backend or the :cpp:func:`anira::PrePostProcessor::before_inference` / :cpp:func:`anira::PrePostProcessor::after_inference` hooks. If you need the guarantee that no inference thread touches shared state anymore (e.g. before mutating parameters such code reads), call :cpp:func:`anira::InferenceHandler::prepare` — which drains all in-flight work — or synchronize within your own backend.
+
+..  note::
+    Until in-flight work finishes (bounded by one inference duration), its internal structures stay captive. If fresh data submitted in that window exhausts the remaining structure pool — likely on session-exclusive configurations, whose pools are small — the affected chunks complete as silence at their correct stream positions; the stream stays time-aligned and recovers by itself.
+
+..  note::
+    Model-internal state (e.g. a recurrent hidden state inside the backend) is not reset — no anira reset has ever touched it. For stateful models, splice or clear such state via the :cpp:func:`anira::PrePostProcessor::before_inference` / :cpp:func:`anira::PrePostProcessor::after_inference` hooks.

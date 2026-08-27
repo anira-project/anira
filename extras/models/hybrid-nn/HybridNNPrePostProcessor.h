@@ -54,6 +54,9 @@ public:
 #ifdef USE_LITERT
             current_inference_backend != anira::InferenceBackend::LITERT &&
 #endif
+#ifdef USE_EXECUTORCH
+            current_inference_backend != anira::InferenceBackend::EXECUTORCH &&
+#endif
             current_inference_backend != anira::InferenceBackend::CUSTOM) {
             throw std::runtime_error("Invalid inference backend");
         }

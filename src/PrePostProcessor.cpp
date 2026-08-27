@@ -33,9 +33,27 @@ void PrePostProcessor::pre_process(std::vector<RingBuffer>& input,
     for (size_t tensor_index = 0; tensor_index < m_inference_config.get_tensor_input_shape().size();
          tensor_index++) {
         if (m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
-            pop_samples_from_buffer(input[tensor_index],
-                                    output[tensor_index],
-                                    m_inference_config.get_preprocess_input_size()[tensor_index]);
+            const size_t num_new_samples =
+                m_inference_config.get_preprocess_input_size()[tensor_index];
+            // Per-CHANNEL frame count: a multichannel tensor (e.g. 4 latents in
+            // [1, 4, 1]) holds channels*hop samples without being a window —
+            // same division as calculate_send_buffer_sizes' past_samples_needed.
+            const size_t tensor_size =
+                m_inference_config.get_tensor_input_size()[tensor_index] /
+                m_inference_config.get_preprocess_input_channels()[tensor_index];
+            if (tensor_size > num_new_samples) {
+                // Receptive-field / sliding-window models: the tensor holds a full
+                // window of tensor_size samples but only preprocess_input_size fresh
+                // samples arrive per inference — fill the head of the window with
+                // history from the ring (single-channel tensors, like the custom
+                // processors that used to be required for this pattern).
+                pop_samples_from_buffer(input[tensor_index],
+                                        output[tensor_index],
+                                        num_new_samples,
+                                        tensor_size - num_new_samples);
+            } else {
+                pop_samples_from_buffer(input[tensor_index], output[tensor_index], num_new_samples);
+            }
         } else {
             for (size_t sample = 0;
                  sample < m_inference_config.get_tensor_input_size()[tensor_index];
@@ -111,6 +129,22 @@ void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input,
                                   input.get_past_sample(i, num_total_samples - (size_t)j));
             }
         }
+    }
+}
+
+void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input,
+                                               BufferF& output,
+                                               size_t num_new_samples,
+                                               size_t num_old_samples,
+                                               size_t offset,
+                                               size_t num_batches) {
+    size_t const window_size = num_new_samples + num_old_samples;
+    for (size_t batch = 0; batch < num_batches; ++batch) {
+        pop_samples_from_buffer(input,
+                                output,
+                                num_new_samples,
+                                num_old_samples,
+                                offset + batch * window_size);
     }
 }
 

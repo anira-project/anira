@@ -1,5 +1,8 @@
-# Set up Python virtual environment for Sphinx
-find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+# Set up Python virtual environment for Sphinx.
+# Only the interpreter is needed (to create the venv); requesting the Development
+# component would force CMake to pick a Python that also ships libpython headers,
+# which can select a stray/self-built interpreter with a broken ensurepip.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(DOCS_VENV_DIR "${CMAKE_CURRENT_BINARY_DIR}/venv")
 
 # Use a more robust approach with a custom target for venv creation

@@ -49,24 +49,75 @@ void anira::JsonConfigLoader::parse(const nlohmann::json& config) {
 }
 
 void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config) {
-    if (config.contains("context_config")) {
-        const auto& context_json = config.at("context_config");
+    m_context_config = std::make_unique<anira::ContextConfig>();
 
-        if (!context_json.contains("num_threads")) {
-            m_context_config = std::make_unique<anira::ContextConfig>();
-            return;
-        }
+    if (!config.contains("context_config")) { return; }
+    const auto& context_json = config.at("context_config");
 
+    if (context_json.contains("num_threads")) {
         if (context_json.at("num_threads").is_number_unsigned()) {
-            unsigned int const num_threads = context_json.at("num_threads").get<unsigned int>();
-            m_context_config = std::make_unique<anira::ContextConfig>(num_threads);
-            return;
+#ifdef __EMSCRIPTEN__
+            // The context cannot run inference threads on WebAssembly — they are
+            // always supplied externally (e.g. AniraWeb.spinUpInferenceWorker()).
+            // Accept the (valid) value so shared config files keep working, but
+            // coerce it.
+            if (context_json.at("num_threads").get<unsigned int>() > 0) {
+                LOG_WARNING << "[WARNING] 'num_threads' > 0 is not supported on WebAssembly "
+                               "builds: inference threads must be supplied externally (e.g. "
+                               "AniraWeb.spinUpInferenceWorker()). Using num_threads = 0."
+                            << '\n';
+            }
+#else
+            m_context_config->m_num_threads = context_json.at("num_threads").get<unsigned int>();
+#endif
         } else {
             LOG_ERROR << "Invalid 'num_threads' value: expected an unsigned integer." << '\n';
         }
     }
 
-    m_context_config = std::make_unique<anira::ContextConfig>();
+    if (context_json.contains("wait_strategy")) {
+        const auto& strategy_json = context_json.at("wait_strategy");
+        std::string const strategy =
+            strategy_json.is_string() ? strategy_json.get<std::string>() : std::string();
+        if (strategy == "spin_backoff") {
+            m_context_config->m_wait_strategy = anira::WaitStrategy::SpinBackoff;
+        } else if (strategy == "blocking") {
+#ifdef __EMSCRIPTEN__
+            // Blocking waits are impossible on WebAssembly: inference loops are
+            // driven cooperatively by JS Workers, and there is no pthreads
+            // runtime to block on. Accept the (valid) value so shared config
+            // files keep working, but coerce it.
+            LOG_WARNING << "[WARNING] wait_strategy 'blocking' is not supported on WebAssembly "
+                           "builds. Using 'spin_backoff'."
+                        << '\n';
+#else
+            m_context_config->m_wait_strategy = anira::WaitStrategy::Blocking;
+#endif
+        } else {
+            LOG_ERROR << "Invalid 'wait_strategy' value: expected \"spin_backoff\" or "
+                         "\"blocking\". Defaulting to \"spin_backoff\"."
+                      << '\n';
+        }
+    }
+
+    if (context_json.contains("log_level")) {
+        const auto& level_json = context_json.at("log_level");
+        std::string const level =
+            level_json.is_string() ? level_json.get<std::string>() : std::string();
+        if (level == "debug") {
+            m_context_config->m_log_level = anira::LogLevel::Debug;
+        } else if (level == "info") {
+            m_context_config->m_log_level = anira::LogLevel::Info;
+        } else if (level == "warning") {
+            m_context_config->m_log_level = anira::LogLevel::Warning;
+        } else if (level == "error") {
+            m_context_config->m_log_level = anira::LogLevel::Error;
+        } else {
+            LOG_ERROR << "Invalid 'log_level' value: expected \"debug\", \"info\", "
+                         "\"warning\" or \"error\". Using the default log level."
+                      << '\n';
+        }
+    }
 }
 
 void anira::JsonConfigLoader::parse_inference_config(const nlohmann::json& config) {
@@ -187,6 +238,27 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
                          "entry : LITERT currently disabled in config."
                       << '\n';
 #endif
+        } else if (model_backend == "EXECUTORCH") {
+#if USE_EXECUTORCH
+            if (item.contains("model_function")) {
+                if (!item.at("model_function").is_string()) {
+                    LOG_ERROR << "Invalid 'model_function' value in 'model_data' array "
+                                 "entry: expected a string."
+                              << '\n';
+                    continue;
+                }
+                const std::string model_function = item.at("model_function").get<std::string>();
+                model_data.emplace_back(model_path,
+                                        anira::InferenceBackend::EXECUTORCH,
+                                        model_function);
+            } else {
+                model_data.emplace_back(model_path, anira::InferenceBackend::EXECUTORCH);
+            }
+#else
+            LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
+                         "entry : EXECUTORCH currently disabled in config."
+                      << '\n';
+#endif
         } else if (model_backend == "LIBTORCH") {
 #if USE_LIBTORCH
             if (item.contains("model_function")) {
@@ -213,7 +285,7 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
         } else {
             LOG_ERROR << "Invalid 'inference_backend' value in 'model_data' array "
                          "entry : expected a string of the following list ['ONNX', "
-                         "'TFLITE', 'LITERT', 'LIBTORCH', 'CUSTOM']."
+                         "'TFLITE', 'LITERT', 'EXECUTORCH', 'LIBTORCH', 'CUSTOM']."
                       << '\n';
         }
     }
@@ -291,6 +363,16 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
                          "entry : LITERT currently disabled in config."
                       << '\n';
 #endif
+        } else if (tensor_backend == "EXECUTORCH") {
+#if USE_EXECUTORCH
+            tensor_shape.emplace_back(input_shape_list,
+                                      output_shape_list,
+                                      anira::InferenceBackend::EXECUTORCH);
+#else
+            LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array "
+                         "entry : EXECUTORCH currently disabled in config."
+                      << '\n';
+#endif
         } else if (tensor_backend == "LIBTORCH") {
 #if USE_LIBTORCH
             tensor_shape.emplace_back(input_shape_list,
@@ -310,7 +392,7 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
         } else {
             LOG_ERROR << "Invalid 'inference_backend' value in 'tensor_shape' array "
                          "entry : expected a string of the following list ['ONNX', "
-                         "'TFLITE', 'LITERT', 'LIBTORCH']."
+                         "'TFLITE', 'LITERT', 'EXECUTORCH', 'LIBTORCH']."
                       << '\n';
         }
     }

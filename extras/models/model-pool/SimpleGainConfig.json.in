@@ -19,6 +19,10 @@
       {
         "model_path": "@SIMPLEGAIN_MODEL_PATH@/simple_gain_network_mono.tflite",
         "inference_backend": "LITERT"
+      },
+      {
+        "model_path": "@SIMPLEGAIN_MODEL_PATH@/simple_gain_network_mono.pte",
+        "inference_backend": "EXECUTORCH"
       }
     ],
     "tensor_shape": [

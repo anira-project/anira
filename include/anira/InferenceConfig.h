@@ -35,33 +35,35 @@ struct ANIRA_API ModelData {
      * @param data Pointer to model data (binary data) or model path string
      * @param size Size of the data in bytes (for binary) or string length (for paths)
      * @param backend The inference backend that will use this model
-     * @param model_function Optional function name within the model (LibTorch only)
+     * @param model_function Optional function/method name within the model (LibTorch and
+     * ExecuTorch; both formats can carry multiple named entry points in one file)
      * @param is_binary Whether the data represents binary model data (true) or a file path (false)
      */
     ModelData(void* data,
               size_t size,
               InferenceBackend backend,
-              const std::string& model_function = "",
+              std::string model_function = "",
               bool is_binary = true)
         : m_data(data)
         , m_size(size)
         , m_backend(backend)
-        , m_model_function(model_function)
+        , m_model_function(std::move(model_function))
         , m_is_binary(is_binary) {
         assert((m_size > 0 && "Model data size must be greater than zero."));
         assert((m_data != nullptr && "Model data pointer cannot be null."));
         if (!m_model_function.empty()) {
+            bool supported = false;
 #ifdef USE_LIBTORCH
-            if (backend == InferenceBackend::LIBTORCH) {
-                m_model_function = model_function;  // For LIBTORCH, we can specify a function name
-            } else {
-                LOG_ERROR << "Model function is only applicable for LIBTORCH backend." << '\n';
-            }
-#else
-            LOG_ERROR << "Model function is only applicable for LIBTORCH backend (LIBTORCH "
-                         "disabled in config)."
-                      << std::endl;
+            supported = supported || (backend == InferenceBackend::LIBTORCH);
 #endif
+#ifdef USE_EXECUTORCH
+            supported = supported || (backend == InferenceBackend::EXECUTORCH);
+#endif
+            if (!supported) {
+                LOG_ERROR << "Model function is only applicable to the LIBTORCH and "
+                             "EXECUTORCH backends."
+                          << '\n';
+            }
         }
         if (!is_binary) {
             m_data = malloc(sizeof(char) * size);
@@ -77,7 +79,8 @@ struct ANIRA_API ModelData {
      *
      * @param model_path Path to the model file on disk
      * @param backend The inference backend that will use this model
-     * @param model_function Optional function name within the model (LibTorch only)
+     * @param model_function Optional function/method name within the model (LibTorch and
+     * ExecuTorch)
      * @param is_binary Whether to treat the path as binary data (typically false for file paths)
      */
     ModelData(const std::string& model_path,
@@ -149,7 +152,8 @@ struct ANIRA_API ModelData {
     void* m_data;                  ///< Pointer to model data (binary data or string data)
     size_t m_size;                 ///< Size of the model data in bytes
     InferenceBackend m_backend;    ///< Target inference backend for this model
-    std::string m_model_function;  ///< Function name within the model (LibTorch specific)
+    std::string m_model_function;  ///< Function/method name within the model (LibTorch and
+                                   ///< ExecuTorch)
     bool m_is_binary;              ///< Whether the data represents binary model data
 
     /**
@@ -199,7 +203,12 @@ struct ANIRA_API TensorShape {
                                             ///< of dimensions)
     TensorShapeList m_tensor_output_shape;  ///< List of output tensor shapes (each shape is a
                                             ///< vector of dimensions)
-    InferenceBackend m_backend;             ///< Target backend for backend-specific shapes
+    InferenceBackend m_backend = InferenceBackend::CUSTOM;  ///< Target backend for
+                                                            ///< backend-specific shapes; the
+                                                            ///< universal constructor leaves the
+                                                            ///< default (reading an uninitialized
+                                                            ///< enum is UB, and universal shapes
+                                                            ///< serve every backend anyway)
     bool m_universal = false;  ///< Whether this shape configuration is universal (backend-agnostic)
 
     /**
@@ -536,7 +545,7 @@ public:
     /**
      * @brief Gets the model function name for a specific backend
      * @param backend The target inference backend
-     * @return Model function name (LibTorch specific)
+     * @return Model function/method name (LibTorch and ExecuTorch)
      */
     std::string get_model_function(InferenceBackend backend) const;
 

@@ -4,6 +4,7 @@
 #include "InferenceConfig.h"
 #include "InferenceHandler.h"
 #include "PrePostProcessor.h"
+#include "backends/ExecuTorchProcessor.h"
 #include "backends/LibTorchProcessor.h"
 #include "backends/LiteRtProcessor.h"
 #include "backends/OnnxRuntimeProcessor.h"

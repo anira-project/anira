@@ -27,10 +27,14 @@ add_executable(${PROJECT_NAME})
 target_sources(${PROJECT_NAME} PRIVATE
 	test_InferenceHandler.cpp
 	test_StatefulOrdering.cpp
+	backends/test_BackendBase.cpp
+	backends/test_ExecuTorchModelFunction.cpp
     utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
+	utils/test_PrePostProcessorWindow.cpp
 	utils/test_Semaphore.cpp
 	utils/test_JsonConfigLoader.cpp
+	scheduler/test_ConcurrentLifecycle.cpp
 	scheduler/test_InferenceManager.cpp
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp

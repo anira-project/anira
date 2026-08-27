@@ -48,11 +48,11 @@ jobs:
       matrix:
         include:
           - name: onnx-litert
-            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF"
+            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
           - name: tflite
-            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON"
+            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON -DANIRA_WITH_EXECUTORCH=OFF"
           - name: no-backend
-            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF"
+            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
     env:
       GITHUB_TOKEN: ${{ github.token }} # lets anira's backend integrity check avoid API rate limits
     steps:
@@ -114,16 +114,16 @@ jobs:
         include:
           - name: onnx-litert-shared
             shared: ON
-            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF"
+            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
           - name: onnx-litert-static
             shared: OFF
-            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF"
+            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
           - name: tflite-shared
             shared: ON
-            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON"
+            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON -DANIRA_WITH_EXECUTORCH=OFF"
           - name: no-backend-shared
             shared: ON
-            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF"
+            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
     env:
       GITHUB_TOKEN: ${{ github.token }}
       ANDROID_PLATFORM: android-24

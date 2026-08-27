@@ -85,6 +85,11 @@ public:
     /**
      * @brief Sets the inference backend to use for neural network processing
      *
+     * Calling this is optional: the active backend defaults to the first model
+     * in the InferenceConfig whose backend is available in this build, or to
+     * CUSTOM when a custom processor was passed to the constructor (or when no
+     * configured backend is available).
+     *
      * @param inference_backend The backend type to use (e.g., ONNX, LibTorch, TensorFlow Lite or
      * custom)
      */
@@ -92,6 +97,9 @@ public:
 
     /**
      * @brief Gets the currently active inference backend
+     *
+     * Unless set_inference_backend() was called, this is the default described
+     * there: the first available configured backend, or CUSTOM.
      *
      * @return The currently configured inference backend type
      */
@@ -102,6 +110,15 @@ public:
      *
      * This method must be called before processing begins or when audio settings change.
      * It initializes internal buffers and prepares the inference pipeline.
+     *
+     * @note Blocking quiescence point: waits until no inference thread is
+     *       executing any of this handler's work before rebuilding the internal
+     *       buffers, and invalidates everything dispatched before the call — so
+     *       once prepare() returns, no inference thread will run user code (a
+     *       custom backend or the PrePostProcessor::before_inference()/
+     *       after_inference() hooks) for pre-prepare work. This is the guarantee
+     *       reset() deliberately does not provide. Never call from the audio
+     *       thread.
      *
      * @param new_audio_config The new audio configuration containing sample rate, buffer size, etc.
      */
@@ -324,26 +341,72 @@ public:
     size_t get_available_samples(size_t tensor_index, size_t channel = 0) const;
 
     /**
-     * @brief Configures the handler for non-real-time operation
+     * @brief Configures the handler for non-real-time (offline) operation
      *
-     * When set to true, relaxes real-time constraints and may use different
-     * memory allocation strategies or processing algorithms optimized for
-     * offline processing.
+     * When enabled, process()/pop_data() block the calling thread until every
+     * pending inference for this session completes, instead of returning early
+     * or giving up at a deadline. Output is therefore always complete -- never a
+     * dropped/zero-filled chunk -- at the cost of an unbounded wait, so this is
+     * intended for offline rendering (e.g. bounce-to-disk), not the live audio
+     * thread.
      *
-     * @param is_non_realtime True to enable non-real-time mode, false for real-time mode
+     * @param is_non_realtime True to block for complete output (non-real-time
+     * mode), false to restore the bounded/non-blocking real-time behavior
+     *
+     * @warning Not real-time safe while enabled. Refused with a warning when
+     * no inference threads exist to satisfy the waits (see
+     * InferenceManager::set_non_realtime()); on WebAssembly spin up at least
+     * one inference worker first, and prefer running offline processing in a
+     * Worker or under an OfflineAudioContext -- the waits there spin.
      */
     void set_non_realtime(bool is_non_realtime);
 
     /**
-     * @brief Resets the inference handler to its initial state
+     * @brief Number of inference threads currently active in the process.
      *
-     * This method clears all internal buffers, resets the inference pipeline,
-     * and prepares the handler for a new processing session. This also resets
-     * the latency and available samples for all tensors.
+     * Process-wide, not per-session: all sessions share one thread pool.
+     * Native: threads currently executing their processing loop — the
+     * auto-managed pool once started plus any user-created threads.
+     * WebAssembly: the inference workers currently spun up (started and not
+     * yet stopped). Useful e.g. to verify threads exist before enabling
+     * non-real-time mode. See Context::get_num_inference_threads().
      *
-     * @note This method waits for all ongoing inferences to complete before resetting.
+     * @return Number of active inference threads.
      */
-    void reset();
+    static unsigned int get_num_inference_threads();
+
+    /**
+     * @brief Resets the inference handler to its initial state (wait-free, real-time safe).
+     *
+     * Clears the internal audio ring buffers, re-seeds the latency zero-padding,
+     * and invalidates every inference dispatched so far: results still in flight
+     * are discarded and their internal structures reclaimed lazily. The handler
+     * is ready for new data immediately — intended for stream re-anchoring (e.g.
+     * transport jumps or onset/transient re-sync), for stateless and stateful
+     * (session-exclusive) configurations alike. Never waits, sleeps, locks,
+     * allocates, or performs any syscall, and is annotated
+     * `[[clang::nonblocking]]` under RealtimeSanitizer builds.
+     *
+     * @note Call from the thread that drives process()/push_data()/pop_data()
+     *       (or ensure no such call is concurrent), and never concurrently with
+     *       prepare() or destruction.
+     * @note Does NOT wait for in-flight inferences to finish: a worker thread may
+     *       still be executing a — discarded — inference after this returns,
+     *       including user code in a custom backend or the
+     *       PrePostProcessor::before_inference()/after_inference() hooks. If you
+     *       need that quiescence (e.g. before mutating state such code reads),
+     *       call prepare() instead, or synchronize within your own backend.
+     * @note Until in-flight work finishes (bounded by one inference duration),
+     *       its internal structures stay captive; if fresh data submitted in that
+     *       window exhausts the remaining pool — likely on session-exclusive
+     *       configurations, whose pools are small — the affected chunks complete
+     *       as silence at their correct stream positions. The stream stays
+     *       time-aligned and recovers by itself.
+     * @note Model-internal state (e.g. a recurrent hidden state inside the
+     *       backend) is not touched — no reset variant has ever reset it; splice
+     *       such state via the before_inference()/after_inference() hooks.
+     */
+    void reset() ANIRA_REALTIME;
 
 private:
     InferenceConfig& m_inference_config;   ///< Reference to the inference configuration

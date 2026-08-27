@@ -50,6 +50,9 @@ void TFLiteProcessor::process(std::vector<BufferF>& input,
 
 TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config)
     : m_inference_config(inference_config) {
+    // Note: ContextConfig::m_log_level cannot be forwarded to this backend. TFLite logs
+    // through its internal MinimalLogger, and the prebuilt TFLite C library does not
+    // export any symbol to adjust its severity (checked libtensorflowlite_c.so 2.17).
     if (inference_config.is_model_binary(anira::InferenceBackend::TFLITE)) {
         const anira::ModelData* model_data =
             m_inference_config.get_model_data(anira::InferenceBackend::TFLITE);

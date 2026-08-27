@@ -134,3 +134,5 @@ anira employs a multi-threaded architecture with careful synchronization:
 * **Synchronization:** Lock-free communication with atomic operations and ring buffers
 
 The system avoids blocking operations in the audio thread and uses a carefully designed thread pool to prevent CPU oversubscription.
+
+How idle inference threads wait for new work is configurable via :cpp:enum:`anira::WaitStrategy` in :cpp:struct:`anira::ContextConfig`: either an exponential-backoff polling loop (``SpinBackoff``, the default) or a blocking wait on the shared inference queue's semaphore (``Blocking``), where the enqueue from the audio thread wakes a sleeping worker directly with a single bounded, non-blocking semaphore signal. See the :doc:`usage` chapter for the trade-offs.

@@ -18,7 +18,7 @@ FetchContent_Declare(benchmark
     GIT_REPOSITORY https://github.com/google/benchmark.git
     GIT_PROGRESS TRUE
     GIT_SHALLOW TRUE
-    GIT_TAG v1.8.3)
+    GIT_TAG v1.9.5)
 
 # For benchmark we want to set the BENCMARK_ENABLE_TESTING to OFF therefore we cannot use FetchContent_MakeAvailable()
 # Check if population has already been performed
@@ -30,6 +30,8 @@ if(NOT benchmark_POPULATED)
     # Set custom variables, policies, etc.
     set(BENCHMARK_ENABLE_TESTING OFF)
     set(BENCHMARK_ENABLE_GTEST_TESTS OFF)
+    # Don't let warnings from newer compilers turn into build errors in benchmark's own sources
+    set(BENCHMARK_ENABLE_WERROR OFF)
 
     if (APPLE AND (CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64"))
     set(HAVE_STD_REGEX ON)

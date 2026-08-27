@@ -33,6 +33,9 @@ std::vector<anira::InferenceBackend> inference_backends = {
 #ifdef USE_LITERT
     anira::InferenceBackend::LITERT,
 #endif
+#ifdef USE_EXECUTORCH
+    anira::InferenceBackend::EXECUTORCH,
+#endif
     anira::InferenceBackend::CUSTOM};
 std::vector<anira::InferenceConfig> inference_configs = {cnn_config, hybridnn_config, rnn_config};
 anira::InferenceConfig inference_config;
@@ -45,8 +48,20 @@ static void Arguments(::benchmark::internal::Benchmark* b) {
     for (int i = 0; i < buffer_sizes.size(); ++i) {
         for (int j = 0; j < inference_configs.size(); ++j) {
             for (int k = 0; k < inference_backends.size(); ++k) {
-                // ONNX backend does not support stateful RNN
-                if (!(j == 2 && k == 1)) { b->Args({buffer_sizes[i], j, k}); }
+                const bool is_stateful_rnn = (j == 2);
+                bool skip = false;
+#ifdef USE_ONNXRUNTIME
+                // ONNX backend does not support the stateful RNN
+                skip = skip ||
+                       (is_stateful_rnn && inference_backends[k] == anira::InferenceBackend::ONNX);
+#endif
+#ifdef USE_EXECUTORCH
+                // The stateful RNN .pte is exported at a fixed 2048-sample chunk and
+                // cannot follow the varying buffer size
+                skip = skip || (is_stateful_rnn &&
+                                inference_backends[k] == anira::InferenceBackend::EXECUTORCH);
+#endif
+                if (!skip) { b->Args({buffer_sizes[i], j, k}); }
             }
         }
     }
@@ -79,9 +94,15 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
 
     ClearCustomProcessor clear_custom_processor(inference_config);
 
+    // Only report errors, so the log output of the backends does not pollute the
+    // benchmark results.
+    anira::ContextConfig context_config;
+    context_config.m_log_level = anira::LogLevel::Error;
+
     m_inference_handler = std::make_unique<anira::InferenceHandler>(*my_pp_processor,
                                                                     inference_config,
-                                                                    clear_custom_processor);
+                                                                    clear_custom_processor,
+                                                                    context_config);
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backends[state.range(2)]);
 
@@ -106,7 +127,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
 
         interation_step(start, end, state);
     }
-    repetition_step();
+    repetition_step(NUM_REPETITIONS);
 
     delete my_pp_processor;
 }
@@ -159,6 +180,15 @@ void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int
         inference_config.set_tensor_output_shape({{1, output_size, 1}},
                                                  anira::InferenceBackend::LITERT);
 #endif
+#ifdef USE_EXECUTORCH
+        inference_config.set_tensor_input_shape({{1, 1, input_size}},
+                                                anira::InferenceBackend::EXECUTORCH);
+        inference_config.set_tensor_output_shape({{1, 1, output_size}},
+                                                 anira::InferenceBackend::EXECUTORCH);
+#endif
+        // Default (universal) tensor shape, assigned to the custom backend below
+        inference_config.m_tensor_shape.emplace_back(anira::TensorShapeList{{1, 1, input_size}},
+                                                     anira::TensorShapeList{{1, 1, output_size}});
         inference_config.clear_processing_spec();
         inference_config.update_processing_spec();
         inference_config.set_preprocess_input_size(
@@ -201,10 +231,24 @@ void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int
                                                  anira::InferenceBackend::LIBTORCH);
 #endif
 #ifdef USE_ONNXRUNTIME
-        inference_config.set_tensor_input_shape({{buffer_size, 1, 1}},
-                                                anira::InferenceBackend::ONNX);
-        inference_config.set_tensor_output_shape({{buffer_size, 1, 1}},
-                                                 anira::InferenceBackend::ONNX);
+        // ONNX backend does not support the stateful RNN: remove its model and
+        // tensor shapes from the config so no OnnxRuntimeProcessor is created
+        std::erase_if(inference_config.m_model_data, [](const anira::ModelData& model_data) {
+            return model_data.m_backend == anira::InferenceBackend::ONNX;
+        });
+        std::erase_if(inference_config.m_tensor_shape, [](const anira::TensorShape& tensor_shape) {
+            return tensor_shape.m_backend == anira::InferenceBackend::ONNX;
+        });
+#endif
+#ifdef USE_EXECUTORCH
+        // The stateful RNN .pte runs only at its exported 2048-sample chunk size:
+        // remove it so no ExecuTorchProcessor is created for other buffer sizes
+        std::erase_if(inference_config.m_model_data, [](const anira::ModelData& model_data) {
+            return model_data.m_backend == anira::InferenceBackend::EXECUTORCH;
+        });
+        std::erase_if(inference_config.m_tensor_shape, [](const anira::TensorShape& tensor_shape) {
+            return tensor_shape.m_backend == anira::InferenceBackend::EXECUTORCH;
+        });
 #endif
 #ifdef USE_TFLITE
         inference_config.set_tensor_input_shape({{1, buffer_size, 1}},
@@ -218,7 +262,18 @@ void adapt_config(anira::InferenceConfig& inference_config, int buffer_size, int
         inference_config.set_tensor_output_shape({{1, buffer_size, 1}},
                                                  anira::InferenceBackend::LITERT);
 #endif
+        // Default (universal) tensor shape, assigned to the custom backend below
+        inference_config.m_tensor_shape.emplace_back(anira::TensorShapeList{{buffer_size, 1, 1}},
+                                                     anira::TensorShapeList{{buffer_size, 1, 1}});
         inference_config.clear_processing_spec();
         inference_config.update_processing_spec();
     }
+
+    // The custom backend needs no model file, but the benchmark fixture resolves a model
+    // name via get_model_path(CUSTOM): add a placeholder entry. update_processing_spec()
+    // then assigns the default (universal) tensor shape to the custom backend. Called
+    // without clear_processing_spec() it keeps the preprocess sizes set above
+    inference_config.m_model_data.emplace_back(std::string("custom-placeholder"),
+                                               anira::InferenceBackend::CUSTOM);
+    inference_config.update_processing_spec();
 }

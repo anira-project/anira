@@ -19,7 +19,7 @@
 # release metadata is unreachable (offline, rate-limited, CMake < 3.19), a backend
 # already present on disk is reused; only a missing backend then needs the network.
 #
-# Per call:  anira_setup_backend(<id>)        id = libtorch|onnxruntime|tflite|litert
+# Per call:  anira_setup_backend(<id>)        id = libtorch|onnxruntime|tflite|litert|executorch
 #
 # Configurable cache variables (see CMakeLists.txt for the user-facing options):
 #   ANIRA_BACKENDS_VERSION          release tag to download from (default v2.1.1)
@@ -29,7 +29,7 @@
 #   ANIRA_<ENGINE>_URL              override the download URL (custom mirror/build)
 #   ANIRA_<ENGINE>_SHA256           expected hash for ANIRA_<ENGINE>_URL
 #   ANIRA_<ENGINE>_VERSION          override the engine version baked into the asset name
-# where <ENGINE> is LIBTORCH | ONNXRUNTIME | TFLITE | LITERT.
+# where <ENGINE> is LIBTORCH | ONNXRUNTIME | TFLITE | LITERT | EXECUTORCH.
 # ==============================================================================
 
 include_guard(GLOBAL)
@@ -40,8 +40,11 @@ get_filename_component(ANIRA_BACKENDS_MODULES_DIR "${ANIRA_BACKENDS_CMAKE_DIR}/.
 
 # Default backends release tag. Bump this (and the per-engine versions in
 # _anira_engine_version) when pointing anira at a new anira-project/backends release.
+# v2.3.0 ships the static desktop LiteRT archives pre-isolated to their LiteRt* C
+# API (vendored XNNPACK/cpuinfo/pthreadpool internals localized/renamed at
+# packaging), which is what allows static LiteRT + ExecuTorch in one image.
 if(NOT DEFINED ANIRA_BACKENDS_VERSION OR ANIRA_BACKENDS_VERSION STREQUAL "")
-    set(ANIRA_BACKENDS_VERSION "v2.1.1")
+    set(ANIRA_BACKENDS_VERSION "v2.3.0")
 endif()
 
 # ------------------------------------------------------------------------------
@@ -56,8 +59,10 @@ function(_anira_backend_libname id out)
         set(${out} "tensorflowlite_c" PARENT_SCOPE)
     elseif(id STREQUAL "litert")
         set(${out} "LiteRt" PARENT_SCOPE)
+    elseif(id STREQUAL "executorch")
+        set(${out} "executorch" PARENT_SCOPE)
     else()
-        message(FATAL_ERROR "Unknown backend id '${id}' (expected libtorch|onnxruntime|tflite|litert)")
+        message(FATAL_ERROR "Unknown backend id '${id}' (expected libtorch|onnxruntime|tflite|litert|executorch)")
     endif()
 endfunction()
 
@@ -74,6 +79,8 @@ function(_anira_engine_version libname out)
         set(${out} "2.17.0" PARENT_SCOPE)
     elseif(libname STREQUAL "LiteRt")
         set(${out} "2.1.5" PARENT_SCOPE)
+    elseif(libname STREQUAL "executorch")
+        set(${out} "1.3.1" PARENT_SCOPE)
     else()
         set(${out} "" PARENT_SCOPE)
     endif()
@@ -249,6 +256,9 @@ function(_anira_resolve_linkage id supported out)
         if(supported STREQUAL "shared")
             message(STATUS "anira: ${id} ships shared-only — forcing shared linkage (requested '${_linkage}').")
             set(_linkage "shared")
+        elseif(supported STREQUAL "static")
+            message(STATUS "anira: ${id} ships static-only — forcing static linkage (requested '${_linkage}').")
+            set(_linkage "static")
         else()
             message(FATAL_ERROR "anira: ${id} does not support '${_linkage}' linkage (supported: ${supported}).")
         endif()
@@ -428,6 +438,67 @@ macro(_anira_setup_legacy_armv7l id)
     endif()
 endmacro()
 
+# ------------------------------------------------------------------------------
+# _anira_sanitize_executorch_targets() — clean up the ExecuTorch package's exported
+# targets for use inside anira:
+#
+#  * They bake absolute SDK paths from the machine that built the archives into
+#    their INTERFACE_LINK_LIBRARIES (e.g. .../MacOSX15.5.sdk/usr/lib/libm.tbd and
+#    .../Frameworks/Foundation.framework). Those paths rarely exist on the
+#    consuming machine, so rewrite them into portable equivalents:
+#    <sdk>/lib<name>.tbd -> <name> and <path>/<Name>.framework -> -framework <Name>.
+#
+#  * They carry compile usage requirements (include dirs — among them ExecuTorch's
+#    VENDORED c10 headers — compile definitions and options) that would leak into
+#    every TU of a target linking them. The vendored c10 headers shadow LibTorch's
+#    real c10 on MSVC (and C10_USING_CUSTOM_GENERATED_MACROS would corrupt the real
+#    c10's configuration), breaking the LibTorch backend. So strip all compile-side
+#    usage requirements — only ExecuTorchProcessor.cpp needs them, and it is
+#    compiled in an isolated object target with explicit include dirs. The compile
+#    definitions the headers DO need (collected before clearing) are exposed as
+#    ANIRA_EXECUTORCH_COMPILE_DEFINITIONS for that object target (and the
+#    minimal-executorch example) to apply explicitly.
+# ------------------------------------------------------------------------------
+function(_anira_sanitize_executorch_targets)
+    get_property(_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY IMPORTED_TARGETS)
+    set(_defs "")
+    foreach(_tgt IN LISTS _targets)
+        get_target_property(_tgt_defs "${_tgt}" INTERFACE_COMPILE_DEFINITIONS)
+        if(_tgt_defs)
+            list(APPEND _defs ${_tgt_defs})
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES _defs)
+    set(ANIRA_EXECUTORCH_COMPILE_DEFINITIONS "${_defs}" PARENT_SCOPE)
+    foreach(_tgt IN LISTS _targets)
+        set_target_properties("${_tgt}" PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES ""
+            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ""
+            INTERFACE_COMPILE_OPTIONS ""
+            INTERFACE_COMPILE_DEFINITIONS "")
+        get_target_property(_libs "${_tgt}" INTERFACE_LINK_LIBRARIES)
+        if(NOT _libs)
+            continue()
+        endif()
+        set(_rewritten "")
+        set(_changed FALSE)
+        foreach(_lib IN LISTS _libs)
+            if(_lib MATCHES "^/.*/([A-Za-z0-9_]+)\\.framework$")
+                list(APPEND _rewritten "-framework ${CMAKE_MATCH_1}")
+                set(_changed TRUE)
+            elseif(_lib MATCHES "^/.*/lib([A-Za-z0-9_.+-]+)\\.tbd$")
+                list(APPEND _rewritten "${CMAKE_MATCH_1}")
+                set(_changed TRUE)
+            else()
+                list(APPEND _rewritten "${_lib}")
+            endif()
+        endforeach()
+        if(_changed)
+            set_target_properties("${_tgt}" PROPERTIES INTERFACE_LINK_LIBRARIES "${_rewritten}")
+        endif()
+    endforeach()
+endfunction()
+
 # ==============================================================================
 # anira_setup_backend(<id>) — main entry point. A macro so find_package(Torch),
 # CMAKE_CXX_FLAGS, and the BACKEND_BUILD_*_DIRS accumulators all act on the
@@ -441,9 +512,11 @@ macro(anira_setup_backend id)
     string(TOUPPER "${_ab_id}" _ab_ID)
     _anira_backend_libname("${_ab_id}" _ab_libname)
 
-    # Supported linkages per engine (libtorch is shared-only).
+    # Supported linkages per engine (libtorch is shared-only, executorch static-only).
     if(_ab_id STREQUAL "libtorch")
         set(_ab_supported "shared")
+    elseif(_ab_id STREQUAL "executorch")
+        set(_ab_supported "static")
     else()
         set(_ab_supported "shared;static")
     endif()
@@ -481,9 +554,11 @@ macro(anira_setup_backend id)
         endif()
         set(ANIRA_${_ab_ID}_VERSION "${_ab_version}") # expose the resolved version (e.g. for BuildWasm license bundling)
 
-        # Windows static additionally ships a Debug variant.
+        # Windows static additionally ships a Debug variant (except executorch,
+        # which publishes a single static archive per platform).
         set(_ab_linktoken "${_ab_linkage}")
-        if(_ab_linkage STREQUAL "static" AND WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+        if(_ab_linkage STREQUAL "static" AND WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug"
+           AND NOT _ab_id STREQUAL "executorch")
             set(_ab_linktoken "static-debug")
         endif()
 
@@ -536,6 +611,41 @@ macro(anira_setup_backend id)
         set(ANIRA_LIBTORCH_ROOTDIR "${_ab_rootdir}")
         set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
         set(ANIRA_LIBTORCH_LINKAGE "shared")
+    elseif(_ab_id STREQUAL "executorch" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # The ExecuTorch desktop archives ship the full ExecuTorch CMake package
+        # (lib/cmake/ExecuTorch), which exports each static library together with
+        # the per-platform force-load options its kernel/backend registration
+        # requires — so wire it via find_package, like libtorch. The mobile
+        # archives ship a single merged libexecutorch.a instead and take the
+        # generic per-ABI / xcframework paths below.
+        if(CMAKE_VERSION VERSION_LESS "3.24")
+            message(FATAL_ERROR "anira: the ExecuTorch backend requires CMake >= 3.24 "
+                                "(demanded by ExecuTorch's exported package config).")
+        endif()
+        # Imported targets are directory-scoped. A static anira links the
+        # ExecuTorch targets PUBLIC (the kernel registrations must reach the
+        # final image), so when anira is a subproject the consumer's directory
+        # must be able to resolve them too — promote everything the package
+        # imported to global.
+        get_property(_ab_imported_before DIRECTORY PROPERTY IMPORTED_TARGETS)
+        find_package(executorch REQUIRED CONFIG PATHS "${_ab_rootdir}/lib/cmake/ExecuTorch" NO_DEFAULT_PATH)
+        get_property(_ab_imported_after DIRECTORY PROPERTY IMPORTED_TARGETS)
+        if(_ab_imported_before)
+            list(REMOVE_ITEM _ab_imported_after ${_ab_imported_before})
+        endif()
+        foreach(_ab_tgt IN LISTS _ab_imported_after)
+            set_target_properties(${_ab_tgt} PROPERTIES IMPORTED_GLOBAL TRUE)
+        endforeach()
+        _anira_sanitize_executorch_targets()
+        set(ANIRA_EXECUTORCH_ROOTDIR "${_ab_rootdir}")
+        set(ANIRA_EXECUTORCH_LINKAGE "static")
+        set(ANIRA_EXECUTORCH_IS_STATIC TRUE)
+        set(ANIRA_EXECUTORCH_LIB_BASENAME "executorch")
+        set(ANIRA_EXECUTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
+        # NB: the ExecuTorch include dirs are deliberately NOT added to
+        # BACKEND_BUILD_HEADER_DIRS — its vendored c10 headers must never be visible
+        # to the LibTorch backend's TUs. Only the isolated ExecuTorchProcessor object
+        # target (see CMakeLists.txt) gets them, explicitly.
     elseif(_ab_arch STREQUAL "armv7l")
         # legacy macro already populated header/lib dirs + ANIRA_<ID>_* vars
         set(ANIRA_${_ab_ID}_LINKAGE "${_ab_linkage}")
@@ -642,10 +752,22 @@ endmacro()
 # installed package is relocatable. The system libs are unconditional (PUBLIC),
 # so they propagate to both the build tree and the installed package.
 # ------------------------------------------------------------------------------
+# Link a prebuilt static backend archive so that none of its symbols become
+# dynamic exports of the linking module. Hosts may ship their own copy of a
+# backend runtime (Ableton Live 12 bundles an ONNX Runtime dylib); any backend
+# symbol exported from a plugin can then be interposed (ELF) or weak-coalesced
+# (Mach-O) against the host's copy, which crashes the host on the first API
+# call when the versions differ. Mach-O uses -load_hidden (ld64, Xcode >= 14):
+# the archive is linked on-demand exactly like a plain input, but every symbol
+# it contributes is marked private_extern. ELF uses --exclude-libs on the
+# archive's basename, which localizes its symbols in the output; the option is
+# PUBLIC so it applies both to a shared libanira and to consumers linking the
+# static anira.
 function(anira_target_link_static_backend target libpath)
     if(EMSDK_VERSION)
         target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>")
     elseif(MSVC)
+        # PE/COFF exports nothing without __declspec(dllexport): no hiding needed.
         target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>")
     elseif(APPLE)
         # Static onnxruntime/tflite/litert pull in absl/CoreFoundation time-zone +
@@ -653,14 +775,18 @@ function(anira_target_link_static_backend target libpath)
         # Metal (LiteRtCreateMetalInfo -> MTLCreateSystemDefaultDevice), so link those
         # system frameworks.
         target_link_libraries(${target} PUBLIC
-            "$<BUILD_INTERFACE:${libpath}>" "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
+            "$<BUILD_INTERFACE:-Wl,-load_hidden,${libpath}>" "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
     elseif(ANDROID)
         # Android's bionic folds pthread/dl/libm into libc, but the static LiteRT/TFLite
         # archives vendor the GPU (GL ES) delegate and use Android logging, whose symbols
         # (glClear, EGL*, __android_log_*) live in NDK system libs that must be linked.
+        get_filename_component(_anira_backend_archive "${libpath}" NAME)
+        target_link_options(${target} PUBLIC "LINKER:--exclude-libs,${_anira_backend_archive}")
         target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>" EGL GLESv2 android log)
     else() # Linux / other ELF
         find_package(Threads REQUIRED)
+        get_filename_component(_anira_backend_archive "${libpath}" NAME)
+        target_link_options(${target} PUBLIC "LINKER:--exclude-libs,${_anira_backend_archive}")
         target_link_libraries(${target} PUBLIC
             "$<BUILD_INTERFACE:${libpath}>" Threads::Threads ${CMAKE_DL_LIBS} m)
     endif()

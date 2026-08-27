@@ -17,11 +17,17 @@ namespace anira {
  * Performance and compatibility considerations:
  * - LIBTORCH: PyTorch models, larger memory footprint
  * - ONNX: Cross-platform ONNX models, optimized for CPU inference
- * - TFLITE: TensorFlow Lite models, optimized for mobile and embedded devices
+ * - LITERT: TensorFlow Lite (.tflite) models via the native LiteRt* C API, the default
+ *   TensorFlow-Lite-family backend
+ * - TFLITE: TensorFlow Lite models via the legacy TfLite* C API (same runtime as LITERT,
+ *   mutually exclusive with it)
+ * - EXECUTORCH: PyTorch models ahead-of-time exported to ExecuTorch (.pte), small
+ *   runtime footprint, the PyTorch path on mobile platforms
  * - CUSTOM: User-defined backends for specialized inference implementations
  *
  * @note Backend availability depends on compile-time flags (USE_LIBTORCH, USE_ONNXRUNTIME,
- * USE_TFLITE) and the presence of corresponding dependencies in the build system.
+ * USE_TFLITE, USE_LITERT, USE_EXECUTORCH) and the presence of corresponding dependencies
+ * in the build system.
  */
 enum InferenceBackend {
 #ifdef USE_LIBTORCH
@@ -75,6 +81,20 @@ enum InferenceBackend {
      * Platform support: Windows, Linux, macOS, Android, iOS
      */
     LITERT,
+#endif
+#ifdef USE_EXECUTORCH
+    /**
+     * @brief ExecuTorch inference backend
+     *
+     * Uses PyTorch's ExecuTorch runtime for models exported ahead-of-time with
+     * torch.export. ExecuTorch is PyTorch's edge/mobile inference stack: a small
+     * static runtime that executes pre-compiled programs, with CPU execution
+     * delegated to XNNPACK. Requires ExecuTorch to be linked at build time.
+     *
+     * Model format: .pte (ExecuTorch program)
+     * Platform support: Windows, Linux, macOS, Android, iOS
+     */
+    EXECUTORCH,
 #endif
     /**
      * @brief Custom user-defined inference backend

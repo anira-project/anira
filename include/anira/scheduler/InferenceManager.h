@@ -216,23 +216,45 @@ public:
     int get_session_id() const;
 
     /**
-     * @brief Configures the manager for non-real-time operation
+     * @brief Configures the session for non-real-time (offline) operation
      *
-     * When set to true, relaxes real-time constraints and may use different
-     * processing algorithms or memory allocation strategies optimized for
-     * offline processing rather than real-time audio.
+     * When enabled, Context::new_data_request() blocks the calling thread until
+     * every pending inference for this session completes, instead of returning
+     * early (blocking_ratio == 0) or giving up at a deadline (blocking_ratio > 0).
+     * This means process()/pop_data() always yield complete output -- never a
+     * dropped/zero-filled chunk -- at the cost of an unbounded wait, so it is
+     * intended for offline rendering (e.g. bounce-to-disk), not the live audio
+     * thread.
      *
-     * @param is_non_realtime True to enable non-real-time mode, false for real-time mode
+     * @param is_non_realtime True to block for complete output (non-real-time
+     * mode), false to restore the bounded/non-blocking real-time behavior
+     *
+     * @warning Not real-time safe while enabled. Requires at least one
+     * inference thread to exist (Context::has_inference_threads()) — without
+     * one the blocking waits could never complete, so the call is refused with
+     * a warning. On WebAssembly that means spinning up at least one inference
+     * worker (AniraWeb.spinUpInferenceWorker()) before enabling this mode; the
+     * waits there are busy-waits (spins), so run offline processing in a
+     * Worker or under an OfflineAudioContext rather than on the main thread.
+     * The check runs once at enable time: stopping all inference threads while
+     * non-real-time mode is active re-creates the hang.
      */
     void set_non_realtime(bool is_non_realtime) const;
 
     /**
-     * @brief Resets the inference session to its initial state
+     * @brief Wait-free reset of the inference session to its initial state.
      *
-     * This method clears all internal buffers, resets the inference pipeline,
-     * and prepares the handler for a new processing session.
+     * Clears the session's buffers and re-anchors the inference grid without ever
+     * blocking on in-flight inferences (see Context::reset_session): every
+     * already-dispatched inference is invalidated via the session generation, its
+     * result discarded and its structure reclaimed lazily. Safe to call from the
+     * audio thread, for all session types. Also resets the missing-samples
+     * bookkeeping.
      *
-     * @note This method waits for all ongoing inferences to complete before resetting.
+     * @note Does NOT wait for in-flight inferences: a worker thread may still be
+     *       executing a (discarded) inference — including user code in a custom
+     *       backend or the before_inference()/after_inference() hooks — after
+     *       this returns. Call prepare() if you need that quiescence.
      */
     void reset();
 

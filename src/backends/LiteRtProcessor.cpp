@@ -9,6 +9,7 @@
 #include <anira/utils/Logger.h>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -20,9 +21,11 @@
 #include <string>
 #include <vector>
 
+#include "litert/c/litert_any.h"
 #include "litert/c/litert_common.h"
 #include "litert/c/litert_compiled_model.h"
 #include "litert/c/litert_environment.h"
+#include "litert/c/litert_environment_options.h"
 #include "litert/c/litert_layout.h"
 #include "litert/c/litert_model.h"
 #include "litert/c/litert_model_types.h"
@@ -96,7 +99,19 @@ LiteRtProcessor::Instance::Instance(InferenceConfig& inference_config)
     // Any litert_check below can throw; if it does mid-construction the destructor
     // never runs, so release the handles created so far before propagating.
     try {
-        litert_check(LiteRtCreateEnvironment(0, nullptr, &m_env), "LiteRtCreateEnvironment");
+        // Forward anira's log level to LiteRt's default logger, otherwise LiteRt spams
+        // INFO logs on every environment creation and model compilation. The logger C API
+        // is not exported from the prebuilt runtime, so this env option is the only route.
+        // Severity values follow litert/c/internal/litert_logging.h: verbose=0, info=1,
+        // warning=2, error=3 — numerically identical to anira's LogLevel enum, with
+        // Debug mapping to LiteRt's verbose severity.
+        const auto litert_severity = static_cast<int64_t>(get_log_level());
+        const std::array<LiteRtEnvOption, 1> env_options = {{
+            {.tag = kLiteRtEnvOptionTagMinLoggerSeverity,
+             .value = {.type = kLiteRtAnyTypeInt, .int_value = litert_severity}},
+        }};
+        litert_check(LiteRtCreateEnvironment(1, env_options.data(), &m_env),
+                     "LiteRtCreateEnvironment");
 
         if (inference_config.is_model_binary(anira::InferenceBackend::LITERT)) {
             const anira::ModelData* model_data =

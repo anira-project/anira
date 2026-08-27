@@ -24,6 +24,9 @@ using namespace anira;
 #elif defined(USE_LITERT)
 #define POOL_PROCESSOR(session) ((session)->m_litert_processor)
 #define ANIRA_HAS_POOLED_BACKEND 1
+#elif defined(USE_EXECUTORCH)
+#define POOL_PROCESSOR(session) ((session)->m_executorch_processor)
+#define ANIRA_HAS_POOLED_BACKEND 1
 #else
 #define ANIRA_HAS_POOLED_BACKEND 0
 #endif

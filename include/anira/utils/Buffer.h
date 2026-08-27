@@ -369,6 +369,9 @@ public:
      * @return The sample value at the specified position
      */
     T get_sample(size_t channel, size_t sample_index) const {
+        // m_channels is only null if malloc_channels() failed to allocate, which is
+        // already logged there and treated as fatal, not recoverable here.
+        // NOLINTNEXTLINE(clang-analyzer-core.NullDereference)
         return m_channels[channel][sample_index];
     }
 
@@ -383,6 +386,9 @@ public:
      * @param value The sample value to write
      */
     void set_sample(size_t channel, size_t sample_index, T value) {
+        // m_channels is only null if malloc_channels() failed to allocate, which is
+        // already logged there and treated as fatal, not recoverable here.
+        // NOLINTNEXTLINE(clang-analyzer-core.NullDereference)
         m_channels[channel][sample_index] = value;
     }
 
