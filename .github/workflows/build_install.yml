@@ -64,24 +64,31 @@ jobs:
           BUILD_TYPE: Release
           CMAKE_BUILD_PARALLEL_LEVEL: 4
           TARGETS: (anira)
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_INSTALL=ON -DANIRA_WITH_TESTS=OFF -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/prefix"
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_INSTALL=ON -DANIRA_WITH_TESTS=OFF -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF"
+      # The prefix is passed at install time rather than through CMAKE_BUILD_ARGS:
+      # the composite build action expands that string unquoted in bash, which
+      # strips the backslashes out of a Windows workspace path.
       - name: install
         shell: bash
         run: |
-          cmake --install build --config Release
+          PREFIX="$PWD/prefix"
+          if command -v cygpath > /dev/null; then PREFIX="$(cygpath -m "$PREFIX")"; fi
+          cmake --install build --config Release --prefix "$PREFIX"
           echo "::group::install tree"
           find prefix -type f | sort
           echo "::endgroup::"
       - name: build and run the consumer against the prefix
         shell: bash
         run: |
+          PREFIX="$PWD/prefix"
+          if command -v cygpath > /dev/null; then PREFIX="$(cygpath -m "$PREFIX")"; fi
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            cmake -S test/install -B build-consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ github.workspace }}/prefix"
+            cmake -S test/install -B build-consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"
             cmake --build build-consumer --config Release --parallel
             # anira.dll installs to lib/ (anira's convention), tanh_core.dll to bin/.
-            PATH="${{ github.workspace }}/prefix/bin:${{ github.workspace }}/prefix/lib:$PATH" ./build-consumer/Release/consumer.exe
+            PATH="$PWD/prefix/bin:$PWD/prefix/lib:$PATH" ./build-consumer/Release/consumer.exe
           else
-            cmake -S test/install -B build-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ github.workspace }}/prefix"
+            cmake -S test/install -B build-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"
             cmake --build build-consumer --parallel
             ./build-consumer/consumer
           fi

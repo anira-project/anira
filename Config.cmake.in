@@ -12,6 +12,8 @@ set(ANIRA_VERSION @PROJECT_VERSION_FULL@)
 
 find_package(concurrentqueue REQUIRED)
 find_package(nlohmann_json REQUIRED)
+# Statically linked backends put Threads::Threads on anira's link interface.
+find_dependency(Threads)
 
 # anira's Buffer / RingBuffer / MemoryBlock are aliases over tanh-lib's
 # Apache-2.0 core component, installed alongside anira into the same prefix.
