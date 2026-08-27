@@ -1,8 +1,14 @@
-// Exercises the public umbrella header, the tanh-lib-backed containers and a
+// Exercises the public headers, the tanh-lib-backed containers and a
 // real InferenceHandler round trip so that the installed package must carry
 // anira's headers, its exported target, tanh::Core and the enabled backends.
-#include <anira/anira.h>
+#include <anira/InferenceConfig.h>
+#include <anira/InferenceHandler.h>
+#include <anira/PrePostProcessor.h>
+#include <anira/utils/Buffer.h>
+#include <anira/utils/InferenceBackend.h>
+#include <anira/utils/RingBuffer.h>
 
+#include <array>
 #include <cstdio>
 #include <vector>
 
@@ -26,8 +32,8 @@ int main() {
     handler.prepare({64.0F, 48000.0});
     handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
     std::vector<float> data(64, 0.25F);
-    float* channels[] = {data.data()};
-    handler.process(channels, 64);
+    std::array<float*, 1> channels = {data.data()};
+    handler.process(channels.data(), 64);
 
     std::printf("oldest=%g tokens=%d sample=%g latency=%d\n",
                 static_cast<double>(ring.pop_sample(0)),

@@ -2,7 +2,6 @@
 #include <anira/utils/MemoryBlock.h>
 
 #include <cstddef>
-#include <string>
 
 #include "gtest/gtest.h"
 

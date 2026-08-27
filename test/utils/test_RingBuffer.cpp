@@ -1,9 +1,8 @@
-#include <anira/utils/Buffer.h>
 #include <anira/utils/RingBuffer.h>
 
 #include <array>
 #include <cstddef>
-#include <string>
+#include <cstdint>
 
 #include "gtest/gtest.h"
 
