@@ -19,6 +19,10 @@ namespace anira {
  * The element type is generic: float for audio, integer types for token or
  * index streams.
  *
+ * The containers never log. Allocation failure throws std::bad_alloc, and
+ * swap_data() requires matching dimensions: a mismatch asserts in debug
+ * builds and is a no-op in release builds.
+ *
  * @see RingBuffer, MemoryBlock
  */
 template <typename T>

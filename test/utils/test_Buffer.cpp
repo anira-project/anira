@@ -97,14 +97,15 @@ TEST(Buffer, BufferSwap) {
         ASSERT_EQ(buffer2.get_sample(0, i), i);
     }
 }
+// Mismatched dimensions violate swap_data()'s contract: the containers never
+// log, so the call asserts in debug builds and is a silent no-op in release.
+#ifdef NDEBUG
 TEST(Buffer, InvalidSizeSwap) {
     anira::Buffer<int> buffer1(1, 5);
     anira::Buffer<int> buffer2(1, 6);
     int* buffer1_ptr = buffer1.data();
     int* buffer2_ptr = buffer2.data();
 
-    // Mismatched dimensions: swap must be refused (diagnostics go through
-    // thl's logger, so only the behavior is asserted here)
     buffer1.swap_data(buffer2);
 
     ASSERT_EQ(buffer1_ptr, buffer1.data());
@@ -117,10 +118,21 @@ TEST(Buffer, InvalidChannelsSwap) {
     int* buffer1_ptr = buffer1.data();
     int* buffer2_ptr = buffer2.data();
 
-    // Mismatched dimensions: swap must be refused (diagnostics go through
-    // thl's logger, so only the behavior is asserted here)
     buffer1.swap_data(buffer2);
 
     ASSERT_EQ(buffer1_ptr, buffer1.data());
     ASSERT_EQ(buffer2_ptr, buffer2.data());
 }
+#else
+TEST(BufferDeathTest, InvalidSizeSwap) {
+    anira::Buffer<int> buffer1(1, 5);
+    anira::Buffer<int> buffer2(1, 6);
+    EXPECT_DEATH(buffer1.swap_data(buffer2), "different dimensions");
+}
+
+TEST(BufferDeathTest, InvalidChannelsSwap) {
+    anira::Buffer<int> buffer1(2, 5);
+    anira::Buffer<int> buffer2(1, 5);
+    EXPECT_DEATH(buffer1.swap_data(buffer2), "different dimensions");
+}
+#endif
