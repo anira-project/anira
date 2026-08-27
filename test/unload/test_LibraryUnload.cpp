@@ -6,7 +6,6 @@
 // test/unload/module_api.h.
 
 #include <chrono>
-#include <cstdlib>
 #include <string>
 #include <thread>
 #include <vector>
@@ -21,9 +20,11 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+
+#include <cstdlib>  // std::_Exit
 #else
 #include <dlfcn.h>
-#include <sys/wait.h>
+#include <sys/wait.h>  // IWYU pragma: keep (WIFSIGNALED)
 #include <unistd.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
@@ -75,7 +76,7 @@ void pin_backend_runtimes() {
         ASSERT_NE(handle, nullptr)
             << "could not pin backend runtime " << path << " (error " << GetLastError() << ")";
 #else
-        void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL | RTLD_NODELETE);
+        const void* const handle = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL | RTLD_NODELETE);
         ASSERT_NE(handle, nullptr) << "could not pin backend runtime " << path << ": " << dlerror();
 #endif
     }
@@ -119,17 +120,17 @@ using UIntFn = unsigned int (*)();
 using VoidFn = void (*)();
 
 struct Api {
-    CreateFn create = nullptr;
-    PrepareFn prepare = nullptr;
-    ProcessFn process = nullptr;
-    DestroyFn destroy = nullptr;
-    IntFn create_throwing = nullptr;
-    UIntFn num_inference_threads = nullptr;
-    IntFn has_inference_threads = nullptr;
-    IntFn num_sessions = nullptr;
-    IntFn has_core = nullptr;
-    VoidFn shutdown = nullptr;
-    VoidFn leak_thread = nullptr;
+    CreateFn m_create = nullptr;
+    PrepareFn m_prepare = nullptr;
+    ProcessFn m_process = nullptr;
+    DestroyFn m_destroy = nullptr;
+    IntFn m_create_throwing = nullptr;
+    UIntFn m_num_inference_threads = nullptr;
+    IntFn m_has_inference_threads = nullptr;
+    IntFn m_num_sessions = nullptr;
+    IntFn m_has_core = nullptr;
+    VoidFn m_shutdown = nullptr;
+    VoidFn m_leak_thread = nullptr;
 };
 
 // The loaded module, plus the resolved API. Mirrors what a host does with a plugin.
@@ -150,17 +151,17 @@ public:
             return false;
         }
 #endif
-        return resolve(m_api.create, "anira_test_create") &&
-               resolve(m_api.prepare, "anira_test_prepare") &&
-               resolve(m_api.process, "anira_test_process") &&
-               resolve(m_api.destroy, "anira_test_destroy") &&
-               resolve(m_api.create_throwing, "anira_test_create_throwing") &&
-               resolve(m_api.num_inference_threads, "anira_test_num_inference_threads") &&
-               resolve(m_api.has_inference_threads, "anira_test_has_inference_threads") &&
-               resolve(m_api.num_sessions, "anira_test_num_sessions") &&
-               resolve(m_api.has_core, "anira_test_has_core") &&
-               resolve(m_api.shutdown, "anira_test_shutdown") &&
-               resolve(m_api.leak_thread, "anira_test_leak_thread");
+        return resolve(m_api.m_create, "anira_test_create") &&
+               resolve(m_api.m_prepare, "anira_test_prepare") &&
+               resolve(m_api.m_process, "anira_test_process") &&
+               resolve(m_api.m_destroy, "anira_test_destroy") &&
+               resolve(m_api.m_create_throwing, "anira_test_create_throwing") &&
+               resolve(m_api.m_num_inference_threads, "anira_test_num_inference_threads") &&
+               resolve(m_api.m_has_inference_threads, "anira_test_has_inference_threads") &&
+               resolve(m_api.m_num_sessions, "anira_test_num_sessions") &&
+               resolve(m_api.m_has_core, "anira_test_has_core") &&
+               resolve(m_api.m_shutdown, "anira_test_shutdown") &&
+               resolve(m_api.m_leak_thread, "anira_test_leak_thread");
     }
 
     void unload() {
@@ -208,13 +209,13 @@ private:
 // Linux/Windows a module that stays mapped is a real finding (e.g. a NODELETE object
 // from STB_GNU_UNIQUE symbols under GCC) and fails.
 bool module_is_unloadable() {
-    static const bool unloadable = [] {
+    static const bool k_unloadable = [] {
         Module probe;
         if (!probe.load()) { return true; }  // let the real tests report the load error
         probe.unload();
         return !is_mapped(k_module_path);
     }();
-    return unloadable;
+    return k_unloadable;
 }
 
 #if defined(__APPLE__)
@@ -242,7 +243,7 @@ void expect_unmapped() {
 // asynchronously after prepare(); only the join side (count 0) is synchronous.
 bool wait_for_num_inference_threads(const Api& api, unsigned int expected) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (api.num_inference_threads() != expected) {
+    while (api.m_num_inference_threads() != expected) {
         if (std::chrono::steady_clock::now() > deadline) { return false; }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -269,20 +270,20 @@ TEST_F(LibraryUnload, DefaultPolicyLeavesNoThreadBehind) {
     ASSERT_TRUE(module.load()) << module.error();
     const Api& api = module.api();
 
-    void* instance = api.create();
+    void* instance = api.m_create();
     ASSERT_NE(instance, nullptr);
-    api.prepare(instance);
-    api.process(instance, 50);
+    api.m_prepare(instance);
+    api.m_process(instance, 50);
     EXPECT_TRUE(wait_for_num_inference_threads(api, 2));
-    EXPECT_EQ(api.num_sessions(), 1);
+    EXPECT_EQ(api.m_num_sessions(), 1);
 
-    api.destroy(instance);
+    api.m_destroy(instance);
     // Joined synchronously by the last release — no waiting, no polling.
-    EXPECT_EQ(api.num_inference_threads(), 0u);
-    EXPECT_EQ(api.has_inference_threads(), 0);
-    EXPECT_EQ(api.num_sessions(), 0);
+    EXPECT_EQ(api.m_num_inference_threads(), 0u);
+    EXPECT_EQ(api.m_has_inference_threads(), 0);
+    EXPECT_EQ(api.m_num_sessions(), 0);
     // The core outlives the sessions while the library is loaded (immortal) …
-    EXPECT_EQ(api.has_core(), 1);
+    EXPECT_EQ(api.m_has_core(), 1);
 
     // … and is reclaimed by the unload hook when the library goes.
     module.unload();
@@ -298,15 +299,15 @@ TEST_F(LibraryUnload, UnloadWithLiveSessionIsJoinedByHook) {
     ASSERT_TRUE(module.load()) << module.error();
     const Api& api = module.api();
 
-    void* instance = api.create();
+    void* instance = api.m_create();
     ASSERT_NE(instance, nullptr);
-    api.prepare(instance);
-    api.process(instance, 10);
+    api.m_prepare(instance);
+    api.m_process(instance, 10);
     ASSERT_TRUE(wait_for_num_inference_threads(api, 2));
 
 #if defined(_WIN32)
-    api.shutdown();
-    EXPECT_EQ(api.num_inference_threads(), 0u);
+    api.m_shutdown();
+    EXPECT_EQ(api.m_num_inference_threads(), 0u);
 #endif
 
     // No destroy: the instance (and its session) is leaked, as a careless host would.
@@ -322,10 +323,10 @@ TEST_F(LibraryUnload, FailedCreateLeavesNoState) {
     ASSERT_TRUE(module.load()) << module.error();
     const Api& api = module.api();
 
-    EXPECT_EQ(api.create_throwing(), 1);
-    EXPECT_EQ(api.num_sessions(), 0);
-    EXPECT_EQ(api.num_inference_threads(), 0u);
-    EXPECT_EQ(api.has_inference_threads(), 0);
+    EXPECT_EQ(api.m_create_throwing(), 1);
+    EXPECT_EQ(api.m_num_sessions(), 0);
+    EXPECT_EQ(api.m_num_inference_threads(), 0u);
+    EXPECT_EQ(api.m_has_inference_threads(), 0);
 
     module.unload();
     expect_unmapped();
@@ -339,12 +340,12 @@ TEST_F(LibraryUnload, ReloadAfterUnloadWorks) {
         ASSERT_TRUE(module.load()) << module.error();
         const Api& api = module.api();
         if (cycle == 1) {
-            void* instance = api.create();
+            void* instance = api.m_create();
             ASSERT_NE(instance, nullptr);
-            api.prepare(instance);
-            api.process(instance, 10);
-            api.destroy(instance);
-            EXPECT_EQ(api.num_inference_threads(), 0u);
+            api.m_prepare(instance);
+            api.m_process(instance, 10);
+            api.m_destroy(instance);
+            EXPECT_EQ(api.m_num_inference_threads(), 0u);
         }
         module.unload();
         expect_unmapped();
@@ -371,7 +372,7 @@ TEST(LibraryUnloadDeathTest, LeakedThreadCrashesOnUnload) {
             pin_backend_runtimes();
             Module module;
             if (!module.load()) { std::_Exit(3); }
-            module.api().leak_thread();
+            module.api().m_leak_thread();
             module.unload();
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             std::_Exit(0);
@@ -383,12 +384,15 @@ TEST(LibraryUnloadDeathTest, LeakedThreadCrashesOnUnload) {
             pin_backend_runtimes();
             Module module;
             if (!module.load()) { _exit(3); }
-            module.api().leak_thread();
+            module.api().m_leak_thread();
             module.unload();
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             _exit(0);
         },
-        [](int status) { return WIFSIGNALED(status); },
+        [](int status) {
+            // NOLINTNEXTLINE(misc-include-cleaner) — WIFSIGNALED comes from <sys/wait.h>
+            return WIFSIGNALED(status);
+        },
         "");
 #endif
 }

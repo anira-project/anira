@@ -10,6 +10,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <ios>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -91,10 +92,10 @@ TEST(CreateSessionFailureTest, ThrowingCustomProcessorLeaksNothing) {
 
     EXPECT_THROW(
         {
-            InferenceHandler handler(pp_processor,
-                                     inference_config,
-                                     throwing_processor,
-                                     ContextConfig(2));
+            const InferenceHandler handler(pp_processor,
+                                           inference_config,
+                                           throwing_processor,
+                                           ContextConfig(2));
         },
         std::runtime_error);
 
@@ -113,10 +114,10 @@ TEST(CreateSessionFailureTest, RepeatedFailuresLeakNothing) {
 
     for (int i = 0; i < 3; ++i) {
         EXPECT_ANY_THROW({
-            InferenceHandler handler(pp_processor,
-                                     inference_config,
-                                     throwing_processor,
-                                     ContextConfig(2));
+            const InferenceHandler handler(pp_processor,
+                                           inference_config,
+                                           throwing_processor,
+                                           ContextConfig(2));
         });
         expect_clean_slate();
     }
@@ -137,10 +138,10 @@ TEST(CreateSessionFailureTest, FailureBesideLiveSessionKeepsItsPool) {
     PrePostProcessor pp_processor(inference_config);
     ThrowingProcessor throwing_processor(inference_config);
     EXPECT_ANY_THROW({
-        InferenceHandler handler(pp_processor,
-                                 inference_config,
-                                 throwing_processor,
-                                 ContextConfig(2));
+        const InferenceHandler handler(pp_processor,
+                                       inference_config,
+                                       throwing_processor,
+                                       ContextConfig(2));
     });
 
     EXPECT_EQ(Context::get_num_sessions(), 1);
@@ -169,7 +170,7 @@ TEST(CreateSessionFailureTest, UnloadableOnnxModelLeaksNothing) {
         PrePostProcessor pp_processor(inference_config);
 
         EXPECT_ANY_THROW(
-            { InferenceHandler handler(pp_processor, inference_config, ContextConfig(2)); });
+            { const InferenceHandler handler(pp_processor, inference_config, ContextConfig(2)); });
     }
     std::filesystem::remove(model_path);
 

@@ -37,7 +37,7 @@ InferenceConfig make_inference_config() {
 }
 
 ContextConfig make_context_config() {
-    return ContextConfig(2, WaitStrategy::SpinBackoff, LogLevel::Warning);
+    return {2, WaitStrategy::SpinBackoff, LogLevel::Warning};
 }
 
 struct Instance {
@@ -82,10 +82,10 @@ int anira_test_create_throwing(void) {
     PrePostProcessor pp_processor(inference_config);
     ThrowingProcessor throwing_processor(inference_config);
     try {
-        InferenceHandler handler(pp_processor,
-                                 inference_config,
-                                 throwing_processor,
-                                 make_context_config());
+        const InferenceHandler handler(pp_processor,
+                                       inference_config,
+                                       throwing_processor,
+                                       make_context_config());
     } catch (const std::exception&) { return 1; }
     return 0;
 }
