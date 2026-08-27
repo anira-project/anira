@@ -117,6 +117,8 @@ cmake --build build --config Release --target anira
 cmake --install build --prefix /path/to/install/directory
 ```
 
+The install tree also carries the Apache-2.0 core component of [tanh-lib](https://github.com/tanh-lab/tanh-lib) that backs anira's buffers, together with its own CMake package; `find_package(anira)` resolves it automatically via `find_dependency(tanh COMPONENTS Core)`, so consumers only add the anira prefix to `CMAKE_PREFIX_PATH`.
+
 ### C++ Build Options
 
 By default, LibTorch, ONNXRuntime, LiteRT and ExecuTorch are enabled. You can disable specific backends as needed:

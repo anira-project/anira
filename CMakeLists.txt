@@ -204,9 +204,17 @@ FetchContent_MakeAvailable(concurrentqueue)
 # anira's Buffer / RingBuffer / MemoryBlock are aliases over thl::core (see
 # include/anira/utils/*.h). Only the core component is built: tanh::Core is
 # tanh-lib's dedicated Apache-2.0 target — the AGPL components (state, dsp,
-# modulation, audio-io) are never fetched into the build.
-# Pinned to tanh-lab/tanh-lib main (post #12 merge); bump to a tagged release
-# once one is cut.
+# modulation, audio-io) are never fetched into the build. tanh::Core links no
+# platform library (the Linux journald sink stays opt-in and off here), so
+# anira's system-dependency footprint is unchanged on every target incl. WASM.
+#
+# When anira installs, tanh's core component installs into the same prefix
+# with its own CMake package; aniraConfig.cmake re-resolves it through
+# find_dependency(tanh COMPONENTS Core), so a consumer's find_package(anira)
+# links the exported tanh::Core.
+#
+# Pinned to tanh-lab/tanh-lib#14 (feat/core-hardening); bump to a tagged
+# release once one is cut.
 set(TANH_BUILD_CORE ON CACHE BOOL "" FORCE)
 set(TANH_BUILD_STATE OFF CACHE BOOL "" FORCE)
 set(TANH_BUILD_DSP OFF CACHE BOOL "" FORCE)
@@ -215,12 +223,13 @@ set(TANH_BUILD_AUDIO_IO OFF CACHE BOOL "" FORCE)
 set(TANH_WITH_TESTS OFF CACHE BOOL "" FORCE)
 set(TANH_WITH_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(TANH_WITH_DOCS OFF CACHE BOOL "" FORCE)
-set(TANH_WITH_INSTALL OFF CACHE BOOL "" FORCE)
+set(TANH_WITH_JOURNALD OFF CACHE BOOL "" FORCE)
+set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL} CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    GIT_TAG c03b134b191b7a31b4ff3e51737ebd23a0cfadda
+    GIT_TAG e3e4391e3cfedef94e6a7a7a1cd23a60cfdbc7b7
 )
 FetchContent_MakeAvailable(tanh-lib)
 
@@ -410,7 +419,7 @@ if(ANIRA_WITH_EXECUTORCH)
             "${ANIRA_EXECUTORCH_ROOTDIR}/include"
             "${ANIRA_EXECUTORCH_ROOTDIR}/include/executorch/runtime/core/portable_type/c10")
         target_link_libraries(anira-executorch-objs PRIVATE
-            concurrentqueue nlohmann_json::nlohmann_json)
+            concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
         if(MSVC)
             # Match anira's export decoration (see cmake/msvc-support.cmake): the
             # objects become part of anira, so ANIRA_API must resolve identically.

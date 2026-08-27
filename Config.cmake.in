@@ -1,5 +1,7 @@
 @PACKAGE_INIT@
 
+include(CMakeFindDependencyMacro)
+
 message(STATUS "Configuring anira")
 
 set(ANIRA_WITH_LIBTORCH @ANIRA_WITH_LIBTORCH@)
@@ -10,6 +12,10 @@ set(ANIRA_VERSION @PROJECT_VERSION_FULL@)
 
 find_package(concurrentqueue REQUIRED)
 find_package(nlohmann_json REQUIRED)
+
+# anira's Buffer / RingBuffer / MemoryBlock are aliases over tanh-lib's
+# Apache-2.0 core component, installed alongside anira into the same prefix.
+find_dependency(tanh COMPONENTS Core)
 
 # Find the dependencies
 if (ANIRA_WITH_LIBTORCH)
