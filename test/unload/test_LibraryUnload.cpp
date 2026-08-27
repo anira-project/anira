@@ -1,0 +1,360 @@
+// Host-shaped library-unload test. See CMakeLists.txt in this directory.
+//
+// This executable deliberately links nothing of anira and includes no anira header:
+// the module loaded below is the only thing that maps anira into the process, exactly
+// like a plugin in a DAW. Every entry point is resolved by name; the signatures mirror
+// test/unload/module_api.h.
+
+#include <chrono>
+#include <cstdlib>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "gtest/gtest.h"
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+#endif
+
+namespace {
+
+constexpr const char* k_module_path = ANIRA_UNLOAD_MODULE_PATH;
+#if defined(ANIRA_UNLOAD_LIB_PATH)
+// Shared build: libanira itself must be gone after the module is unloaded.
+constexpr const char* k_library_path = ANIRA_UNLOAD_LIB_PATH;
+#else
+constexpr const char* k_library_path = nullptr;
+#endif
+
+// How long a surviving thread gets to run into unmapped memory before the test ends.
+constexpr auto k_post_unload_grace = std::chrono::milliseconds(300);
+
+std::string basename_of(const std::string& path) {
+    const auto pos = path.find_last_of("/\\");
+    return pos == std::string::npos ? path : path.substr(pos + 1);
+}
+
+std::vector<std::string> pinned_runtimes() {
+    std::vector<std::string> result;
+    const std::string joined = ANIRA_UNLOAD_PINNED_LIBS;
+    std::string::size_type start = 0;
+    while (start <= joined.size()) {
+        const auto end = joined.find('|', start);
+        const std::string item =
+            joined.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!item.empty()) { result.push_back(item); }
+        if (end == std::string::npos) { break; }
+        start = end + 1;
+    }
+    return result;
+}
+
+// Keep the shared backend runtimes (libtorch, ONNX Runtime, ...) mapped for the life of
+// the process so that unloading the module never unloads them: their global destructors
+// are not ours to test, and some are not unloadable at all. The handles are leaked on
+// purpose. A missing runtime is a hard failure — silently not pinning would let the
+// unmapped assertion pass or fail for the wrong reasons.
+void pin_backend_runtimes() {
+    for (const std::string& path : pinned_runtimes()) {
+#if defined(_WIN32)
+        HMODULE handle = LoadLibraryExA(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        ASSERT_NE(handle, nullptr)
+            << "could not pin backend runtime " << path << " (error " << GetLastError() << ")";
+#else
+        void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL | RTLD_NODELETE);
+        ASSERT_NE(handle, nullptr) << "could not pin backend runtime " << path << ": " << dlerror();
+#endif
+    }
+}
+
+// Is a library with this path currently mapped in the process?
+bool is_mapped(const char* path) {
+#if defined(_WIN32)
+    HMODULE module = nullptr;
+    return GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              basename_of(path).c_str(),
+                              &module) != 0;
+#else
+    // RTLD_NOLOAD: succeeds only if the object is already loaded (glibc matches by
+    // device/inode, dyld by path).
+    if (void* handle = dlopen(path, RTLD_NOW | RTLD_NOLOAD)) {
+        dlclose(handle);
+        return true;
+    }
+#if defined(__APPLE__)
+    // Belt and braces: dyld may know the image under an @rpath name.
+    const std::string name = basename_of(path);
+    for (uint32_t i = 0; i < _dyld_image_count(); ++i) {
+        const std::string image = _dyld_get_image_name(i);
+        if (image.size() >= name.size() &&
+            image.compare(image.size() - name.size(), name.size(), name) == 0) {
+            return true;
+        }
+    }
+#endif
+    return false;
+#endif
+}
+
+using CreateFn = void* (*)();
+using PrepareFn = void (*)(void*);
+using ProcessFn = void (*)(void*, int);
+using DestroyFn = void (*)(void*);
+using IntFn = int (*)();
+using UIntFn = unsigned int (*)();
+using VoidFn = void (*)();
+
+struct Api {
+    CreateFn create = nullptr;
+    PrepareFn prepare = nullptr;
+    ProcessFn process = nullptr;
+    DestroyFn destroy = nullptr;
+    IntFn create_throwing = nullptr;
+    UIntFn num_inference_threads = nullptr;
+    IntFn has_inference_threads = nullptr;
+    IntFn num_sessions = nullptr;
+    IntFn has_core = nullptr;
+    VoidFn shutdown = nullptr;
+    VoidFn leak_thread = nullptr;
+};
+
+// The loaded module, plus the resolved API. Mirrors what a host does with a plugin.
+class Module {
+public:
+    bool load() {
+#if defined(_WIN32)
+        m_handle = LoadLibraryExA(k_module_path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (m_handle == nullptr) {
+            m_error = "LoadLibrary failed with error " + std::to_string(GetLastError());
+            return false;
+        }
+#else
+        m_handle = dlopen(k_module_path, RTLD_NOW | RTLD_LOCAL);
+        if (m_handle == nullptr) {
+            const char* error = dlerror();
+            m_error = error != nullptr ? error : "dlopen failed";
+            return false;
+        }
+#endif
+        return resolve(m_api.create, "anira_test_create") &&
+               resolve(m_api.prepare, "anira_test_prepare") &&
+               resolve(m_api.process, "anira_test_process") &&
+               resolve(m_api.destroy, "anira_test_destroy") &&
+               resolve(m_api.create_throwing, "anira_test_create_throwing") &&
+               resolve(m_api.num_inference_threads, "anira_test_num_inference_threads") &&
+               resolve(m_api.has_inference_threads, "anira_test_has_inference_threads") &&
+               resolve(m_api.num_sessions, "anira_test_num_sessions") &&
+               resolve(m_api.has_core, "anira_test_has_core") &&
+               resolve(m_api.shutdown, "anira_test_shutdown") &&
+               resolve(m_api.leak_thread, "anira_test_leak_thread");
+    }
+
+    void unload() {
+        if (m_handle == nullptr) { return; }
+#if defined(_WIN32)
+        FreeLibrary(static_cast<HMODULE>(m_handle));
+#else
+        dlclose(m_handle);
+#endif
+        m_handle = nullptr;
+        m_api = Api{};
+    }
+
+    const Api& api() const { return m_api; }
+    const std::string& error() const { return m_error; }
+
+private:
+    template <typename Fn>
+    bool resolve(Fn& out, const char* name) {
+#if defined(_WIN32)
+        auto* symbol =
+            reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(m_handle), name));
+#else
+        void* symbol = dlsym(m_handle, name);
+#endif
+        if (symbol == nullptr) {
+            m_error = std::string("missing entry point ") + name;
+            return false;
+        }
+        out = reinterpret_cast<Fn>(symbol);
+        return true;
+    }
+
+    void* m_handle = nullptr;
+    Api m_api;
+    std::string m_error;
+};
+
+void expect_unmapped() {
+    EXPECT_FALSE(is_mapped(k_module_path))
+        << "the module is still mapped after unload — the loader refused to delete it "
+           "(a NODELETE object, e.g. from STB_GNU_UNIQUE symbols under GCC?); the test "
+           "cannot prove anything while it stays mapped";
+    if (k_library_path != nullptr) {
+        EXPECT_FALSE(is_mapped(k_library_path))
+            << "libanira is still mapped after the module was unloaded";
+    }
+}
+
+// The pool's threads count themselves as active when they enter their loop, i.e.
+// asynchronously after prepare(); only the join side (count 0) is synchronous.
+bool wait_for_num_inference_threads(const Api& api, unsigned int expected) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (api.num_inference_threads() != expected) {
+        if (std::chrono::steady_clock::now() > deadline) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+// Give a thread that survived the unload the chance to run into unmapped memory: if one
+// exists, the process dies here, which is the visible failure this test is for.
+void grace_period() {
+    std::this_thread::sleep_for(k_post_unload_grace);
+}
+
+class LibraryUnload : public ::testing::Test {
+protected:
+    void SetUp() override { pin_backend_runtimes(); }
+};
+
+}  // namespace
+
+// The default lifecycle: once the last handler is destroyed no anira thread exists, so
+// the host may unload right away.
+TEST_F(LibraryUnload, DefaultPolicyLeavesNoThreadBehind) {
+    Module module;
+    ASSERT_TRUE(module.load()) << module.error();
+    const Api& api = module.api();
+
+    void* instance = api.create();
+    ASSERT_NE(instance, nullptr);
+    api.prepare(instance);
+    api.process(instance, 50);
+    EXPECT_TRUE(wait_for_num_inference_threads(api, 2));
+    EXPECT_EQ(api.num_sessions(), 1);
+
+    api.destroy(instance);
+    // Joined synchronously by the last release — no waiting, no polling.
+    EXPECT_EQ(api.num_inference_threads(), 0u);
+    EXPECT_EQ(api.has_inference_threads(), 0);
+    EXPECT_EQ(api.num_sessions(), 0);
+    // The core outlives the sessions while the library is loaded (immortal) …
+    EXPECT_EQ(api.has_core(), 1);
+
+    // … and is reclaimed by the unload hook when the library goes.
+    module.unload();
+    expect_unmapped();
+    grace_period();
+}
+
+// A host that unloads while an instance is still alive: the library-unload hook joins
+// the pool (POSIX). On Windows there is no hook that may join; the plugin's module-exit
+// entry point calls shutdown() instead, which is mirrored here.
+TEST_F(LibraryUnload, UnloadWithLiveSessionIsJoinedByHook) {
+    Module module;
+    ASSERT_TRUE(module.load()) << module.error();
+    const Api& api = module.api();
+
+    void* instance = api.create();
+    ASSERT_NE(instance, nullptr);
+    api.prepare(instance);
+    api.process(instance, 10);
+    ASSERT_TRUE(wait_for_num_inference_threads(api, 2));
+
+#if defined(_WIN32)
+    api.shutdown();
+    EXPECT_EQ(api.num_inference_threads(), 0u);
+#endif
+
+    // No destroy: the instance (and its session) is leaked, as a careless host would.
+    module.unload();
+    expect_unmapped();
+    grace_period();
+}
+
+// Issue #106 from the host's angle: a failed construction leaves nothing behind, so the
+// host may unload right after it.
+TEST_F(LibraryUnload, FailedCreateLeavesNoState) {
+    Module module;
+    ASSERT_TRUE(module.load()) << module.error();
+    const Api& api = module.api();
+
+    EXPECT_EQ(api.create_throwing(), 1);
+    EXPECT_EQ(api.num_sessions(), 0);
+    EXPECT_EQ(api.num_inference_threads(), 0u);
+    EXPECT_EQ(api.has_inference_threads(), 0);
+
+    module.unload();
+    expect_unmapped();
+    grace_period();
+}
+
+// Two load/unload cycles in one process — a host scanning, then using, a plugin.
+TEST_F(LibraryUnload, ReloadAfterUnloadWorks) {
+    for (int cycle = 0; cycle < 2; ++cycle) {
+        Module module;
+        ASSERT_TRUE(module.load()) << module.error();
+        const Api& api = module.api();
+        if (cycle == 1) {
+            void* instance = api.create();
+            ASSERT_NE(instance, nullptr);
+            api.prepare(instance);
+            api.process(instance, 10);
+            api.destroy(instance);
+            EXPECT_EQ(api.num_inference_threads(), 0u);
+        }
+        module.unload();
+        expect_unmapped();
+    }
+    grace_period();
+}
+
+// The negative control that proves the harness is sensitive: a thread that is still
+// alive at unload must crash the process. If the child reaches _exit(0), the thread
+// survived — meaning the unmapping was not real (a NODELETE or otherwise pinned
+// library), which would have turned every test above into a false pass.
+TEST(LibraryUnloadDeathTest, LeakedThreadCrashesOnUnload) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+#if defined(_WIN32)
+    EXPECT_DEATH(
+        {
+            SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS);
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { std::_Exit(3); }
+            module.api().leak_thread();
+            module.unload();
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::_Exit(0);
+        },
+        "");
+#else
+    EXPECT_EXIT(
+        {
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            module.api().leak_thread();
+            module.unload();
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            _exit(0);
+        },
+        [](int status) { return WIFSIGNALED(status); },
+        "");
+#endif
+}

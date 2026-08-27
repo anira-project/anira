@@ -445,7 +445,7 @@ public:
      * This nested struct provides sensible default values for optional InferenceConfig
      * parameters, ensuring consistent behavior across different usage scenarios.
      */
-    struct Defaults {
+    struct ANIRA_API Defaults {
         static constexpr unsigned int k_warm_up = 0;  ///< Default number of warm-up inferences (0 =
                                                       ///< no warm-up)
         static constexpr bool k_session_exclusive_processor = false;  ///< Default session
@@ -454,10 +454,10 @@ public:
         static constexpr float k_blocking_ratio = 0.f;  ///< Default blocking ratio (0.0 =
                                                         ///< non-blocking)
 
-        /// Default number of parallel processors (half of available hardware threads, minimum 1)
-        inline static unsigned int m_num_parallel_processors =
-            (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2
-                                                          : 1;
+        /// Default number of parallel processors (half of available hardware threads, minimum 1).
+        /// Defined out of line (InferenceConfig.cpp): an exported inline variable would be
+        /// bound STB_GNU_UNIQUE by GCC, which makes glibc refuse to ever unload the library.
+        static unsigned int m_num_parallel_processors;
     };
 
     /**

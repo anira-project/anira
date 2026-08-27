@@ -39,7 +39,14 @@ static const void* get_factory(const char* factory_id) {
 bool clap_init(const char* p) {
     return true;
 }
-void clap_deinit() {}
+void clap_deinit() {
+    // The host calls this before it unloads the plugin library, outside any loader
+    // lock. anira's inference threads are already gone once the last plugin instance
+    // was destroyed; this is the backstop for hosts that unload with live instances —
+    // and the only place where that backstop can run on Windows (see
+    // anira::Context::shutdown()).
+    anira::Context::shutdown();
+}
 
 }  // namespace clap_plugin_example::pluginentry
 

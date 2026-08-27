@@ -306,7 +306,10 @@ The wait strategy (:cpp:enum:`anira::WaitStrategy`) controls what an inference t
 For models whose inference time dominates the round trip, the throughput of both strategies is identical within measurement noise — choose ``Blocking`` to eliminate idle CPU/power usage, and ``SpinBackoff`` only when sub-microsecond work-pickup latency matters.
 
 .. note::
-    All anira instances in a process share one inference thread pool, so only one wait strategy can be in effect per process — the one of the first-created context. If a later instance requests a different strategy, the request is ignored and anira logs a warning. Since both strategies produce identical results, a mismatch is harmless; the warning only tells you that the requested performance characteristic is not the one in effect.
+    All anira instances in a process share one inference thread pool, so only one wait strategy can be in effect per process — the one of the first-created instance. If a later instance requests a different strategy, the request is ignored and anira logs a warning. Since both strategies produce identical results, a mismatch is harmless; the warning only tells you that the requested performance characteristic is not the one in effect.
+
+.. note::
+    The thread pool exists exactly while :cpp:class:`anira::InferenceHandler` instances exist: the first instance's :cpp:struct:`anira::ContextConfig` builds it (its threads start with the first ``prepare()``), later instances' configurations are reconciled against it (the pool only shrinks, never grows, and never to zero; the most verbose log level wins), and destroying the last instance stops and joins every inference thread before its destructor returns. Once all instances are gone, the next instance's configuration takes effect afresh. For plugins this means the host may unload your library the moment the last instance is destroyed — see :ref:`plugin-library-unload` in the troubleshooting guide for the details and the Windows caveat.
 
 .. note::
     On WebAssembly builds blocking waits are impossible — inference loops are driven cooperatively by JS Workers — so ``anira::WaitStrategy::Blocking`` is coerced to ``SpinBackoff`` with a warning, both by :cpp:class:`anira::JsonConfigLoader` and by the context itself.

@@ -35,6 +35,8 @@ target_sources(${PROJECT_NAME} PRIVATE
 	utils/test_Semaphore.cpp
 	utils/test_JsonConfigLoader.cpp
 	scheduler/test_ConcurrentLifecycle.cpp
+	scheduler/test_ContextLifecycle.cpp
+	scheduler/test_CreateSessionFailure.cpp
 	scheduler/test_InferenceManager.cpp
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp
@@ -54,6 +56,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
 else()
     # gtest_discover_tests will register a CTest test for each gtest and run them all in parallel with the rest of the Test.
     gtest_discover_tests(${PROJECT_NAME} DISCOVERY_TIMEOUT 90)
+endif()
+
+# Host-shaped library-unload test: a plugin-like module embedding anira is dlopen'ed,
+# driven and dlclose'd by an executable that does not link anira. It proves that no
+# anira thread survives the unload (and that the library really gets unmapped). Not
+# on mobile (no dlopen story on device) and not under RTSan (the module inherits
+# -fsanitize=realtime but an executable without the runtime cannot load it).
+if(NOT CMAKE_SYSTEM_NAME MATCHES "Android|iOS" AND NOT EMSCRIPTEN AND NOT ANIRA_WITH_RTSAN)
+    add_subdirectory(unload)
 endif()
 
 # Installed-package smoke test: install anira to a throwaway prefix and build +

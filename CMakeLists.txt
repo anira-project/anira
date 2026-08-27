@@ -240,6 +240,16 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     C_VISIBILITY_PRESET hidden
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON)
+# GCC binds exported vague-linkage data (inline variables, template statics, static
+# locals of inline functions — libstdc++ emits one from every make_shared TU) as
+# STB_GNU_UNIQUE, and glibc never unloads a shared object that defines a unique
+# symbol that was looked up: it is implicitly marked NODELETE. A plugin host's
+# dlclose() would then silently keep libanira — or a plugin embedding it — mapped
+# forever, and hide any thread-at-unload bug behind it. Plain weak binding is all
+# anira needs (the unload test asserts that the library really gets unmapped).
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(${PROJECT_NAME} PRIVATE -fno-gnu-unique)
+endif()
 # add an alias so that the project can be used with add_subdirectory
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
@@ -362,6 +372,10 @@ if(ANIRA_WITH_EXECUTORCH)
             # Same hidden-visibility policy as the main target (see above).
             CXX_VISIBILITY_PRESET hidden
             VISIBILITY_INLINES_HIDDEN ON)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            # Same unique-symbol policy as the main target (see above).
+            target_compile_options(anira-executorch-objs PRIVATE -fno-gnu-unique)
+        endif()
         target_compile_definitions(anira-executorch-objs PRIVATE
             ${ANIRA_COMPILE_DEFINITIONS}
             ${ANIRA_EXECUTORCH_COMPILE_DEFINITIONS})

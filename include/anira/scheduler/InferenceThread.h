@@ -217,8 +217,10 @@ private:
     InferenceData m_inference_data;    ///< Current inference data being processed by this thread
     WaitStrategy m_wait_strategy;  ///< How run_loop() waits for new work when the queue is empty
 
-    inline static std::atomic<unsigned int> s_num_active_threads{0};  ///< See
-                                                                      ///< get_num_active_threads()
+    // The active-thread counter (see get_num_active_threads()) is defined in
+    // InferenceThread.cpp rather than as an inline static member: an exported inline
+    // variable would be bound STB_GNU_UNIQUE by GCC, which makes glibc refuse to ever
+    // unload the library (see Context).
 
 #ifdef __EMSCRIPTEN__
     std::atomic<bool> m_should_exit{false};

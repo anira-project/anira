@@ -27,11 +27,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -39,33 +41,165 @@
 
 namespace anira {
 
-Context::Context(const ContextConfig& context_config) {
-    m_context_config = context_config;
-    for (unsigned int i = 0; i < m_context_config.m_num_threads; ++i) {
-        m_thread_pool.emplace_back(
-            std::make_unique<InferenceThread>(m_next_inference, m_context_config.m_wait_strategy));
+// The context's entire state. Allocated once by Context::core() and never destroyed
+// while the library is loaded: the only static is the trivially destructible pointer
+// below, so no destructor of ours is registered for static teardown and every call
+// into the context stays valid until the library's pages are unmapped. Freed only by
+// Context::release_core_if_idle() (from the unload hook) once nothing uses it.
+struct Context::Core {
+    std::mutex m_lifecycle_mutex;  ///< Serializes mutation of the shared lifecycle state
+                                   ///< below (registry, thread pool, processor pools,
+                                   ///< configuration) across create_session /
+                                   ///< release_session / prepare_session / shutdown.
+                                   ///< Hosts may drive several sessions' lifecycles
+                                   ///< from different threads concurrently. Never taken
+                                   ///< on realtime paths; never taken by pool threads.
+
+    std::vector<std::shared_ptr<SessionElement>> m_sessions;  ///< Session registry
+
+    std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;  ///< Inference thread pool;
+                                                                  ///< non-empty exactly while
+                                                                  ///< the registry is non-empty
+                                                                  ///< (or until shutdown())
+
+    ContextConfig m_context_config;  ///< Configuration in effect: that of the first session of
+                                     ///< the current generation, reconciled with the later
+                                     ///< ones. Meaningful while the registry is non-empty.
+
+    std::optional<ContextConfig> m_staged_config;  ///< Configuration staged by the deprecated
+                                                   ///< get_instance(const ContextConfig&) for
+                                                   ///< the deprecated 3-argument
+                                                   ///< create_session()
+
+    std::atomic<int> m_next_id{-1};  ///< Counter for generating unique session IDs
+
+    /**
+     * @brief Thread-safe concurrent queue for inference requests
+     *
+     * Lock-free concurrent queue that manages inference requests from all sessions.
+     * The queue is initialized with minimum capacity and pre-allocation hints for
+     * explicit and implicit producers (moodycamel signature: minCapacity,
+     * maxExplicitProducers, maxImplicitProducers).
+     * See InferenceQueue for the type choice per platform and the WaitStrategy
+     * interaction.
+     */
+    InferenceQueue m_next_inference{k_min_capacity_inference_queue,
+                                    k_max_num_instances,
+                                    k_max_num_implicit_producers};
+
+#ifdef USE_LIBTORCH
+    std::vector<std::shared_ptr<LibtorchProcessor>> m_libtorch_processors;  ///< Pool of LibTorch
+                                                                            ///< backend processors
+#endif
+#ifdef USE_ONNXRUNTIME
+    std::vector<std::shared_ptr<OnnxRuntimeProcessor>> m_onnx_processors;  ///< Pool of ONNX
+                                                                           ///< Runtime backend
+                                                                           ///< processors
+#endif
+#ifdef USE_TFLITE
+    std::vector<std::shared_ptr<TFLiteProcessor>> m_tflite_processors;  ///< Pool of TensorFlow
+                                                                        ///< Lite backend
+                                                                        ///< processors
+#endif
+#ifdef USE_LITERT
+    std::vector<std::shared_ptr<LiteRtProcessor>> m_litert_processors;  ///< Pool of LiteRT
+                                                                        ///< backend processors
+#endif
+#ifdef USE_EXECUTORCH
+    std::vector<std::shared_ptr<ExecuTorchProcessor>> m_executorch_processors;  ///< Pool of
+                                                                                ///< ExecuTorch
+                                                                                ///< backend
+                                                                                ///< processors
+#endif
+};
+
+namespace {
+// The one static of the context: a pointer. Trivially destructible, so nothing is
+// registered for static teardown. Null until the first call that needs the core; a
+// binary that never creates a session never allocates it.
+std::atomic<void*> s_core{nullptr};
+
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+// Library-unload hook (ELF and Mach-O). Runs from the DSO's fini pass on dlclose (and at
+// process exit), before the C++ static destructors of this DSO — for a shared libanira as
+// well as for a plugin embedding a static anira. It lives in this translation unit so a
+// static library always links it in (Context.cpp is referenced by every user).
+//
+// shutdown() is a backstop: with the default lifecycle no pool thread exists once the
+// last session was released, so it only ever joins something when a host unloads the
+// library with a live instance. Joining here is safe because the pool threads never take
+// the loader lock: they block in nanosleep/futex or run anira code that was bound at load
+// time (RTLD_NOW, no lazy binding, no global-dynamic TLS). release_core_if_idle() then
+// returns the core's memory unless something is left.
+__attribute__((destructor)) void anira_library_unload_hook() {
+    anira::Context::shutdown();
+    anira::Context::release_core_if_idle();
+}
+#elif defined(_WIN32)
+// Windows has no equivalent that may join threads: the CRT runs this destructor from
+// DllMain(DLL_PROCESS_DETACH) under the loader lock, and a thread cannot exit (it needs
+// the loader lock for its DLL_THREAD_DETACH notifications) while we wait for it there.
+// So this only frees an idle core — it never blocks (try_lock) and never joins. Plugins
+// that want the shutdown() backstop call it from their module-exit entry point (CLAP
+// deinit, VST3 ExitDll), which the host invokes before FreeLibrary and outside the lock.
+struct UnloadGuard {
+    ~UnloadGuard() { anira::Context::release_core_if_idle(); }
+};
+[[maybe_unused]] UnloadGuard s_unload_guard;
+#endif
+}  // namespace
+
+Context::Core& Context::core() {
+    if (void* existing = s_core.load(std::memory_order_acquire)) {
+        return *static_cast<Core*>(existing);
     }
+    auto* fresh = new Core();
+    void* expected = nullptr;
+    if (!s_core.compare_exchange_strong(expected,
+                                        fresh,
+                                        std::memory_order_acq_rel,
+                                        std::memory_order_acquire)) {
+        // Lost the race against a concurrent first use: theirs is the core.
+        delete fresh;
+        return *static_cast<Core*>(expected);
+    }
+    return *fresh;
+}
+
+Context::Core& Context::existing_core() {
+    void* existing = s_core.load(std::memory_order_acquire);
+    assert(existing != nullptr && "real-time path reached without a registered session");
+    return *static_cast<Core*>(existing);
+}
+
+Context& Context::get_instance() {
+    // Trivially destructible and constant-initialized: no guard, no destructor.
+    static Context instance;
+    return instance;
 }
 
 std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_config) {
-    // Whole function locked: everything here reads or writes shared lifecycle
-    // state (m_context, m_context_config, the pool via new_num_threads).
-    const std::lock_guard<std::mutex> lifecycle_lock(m_lifecycle_mutex);
-    // Apply the log level before anything (including this function) logs. The level
-    // is process-global, like the thread pool; when a context already exists, the
-    // lowest (most verbose) of the existing and requested levels wins, so no session
-    // can silence the diagnostics another session asked for. Backend processors pick
-    // the level up when their instances are created.
-    const LogLevel log_level =
-        m_context == nullptr
-            ? context_config.m_log_level
-            : std::min(m_context->m_context_config.m_log_level, context_config.m_log_level);
-    set_log_level(log_level);
+    Core& c = core();
+    const ContextConfig config = sanitize_config(context_config);
+    {
+        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        apply_log_level_locked(c, config);
+        c.m_staged_config = config;
+    }
+    // Non-owning: the context is never destroyed.
+    return {&get_instance(), [](Context*) {}};
+}
+
+bool Context::has_core() {
+    return s_core.load(std::memory_order_acquire) != nullptr;
+}
+
+ContextConfig Context::sanitize_config(const ContextConfig& context_config) {
 #ifdef __EMSCRIPTEN__
     // Blocking waits are impossible on WebAssembly: inference loops are driven
     // cooperatively by JS Workers, and there is no pthreads runtime to block on.
     // Coerce before the config is stored or compared, so the strategy that takes
-    // effect and the mismatch check below stay meaningful.
+    // effect and the mismatch check stay meaningful.
     ContextConfig sanitized_config = context_config;
     if (sanitized_config.m_wait_strategy == WaitStrategy::Blocking) {
         LOG_WARNING << "[WARNING] WaitStrategy::Blocking is not supported on WebAssembly builds. "
@@ -87,129 +221,214 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
                     << '\n';
         sanitized_config.m_num_threads = 0;
     }
+    return sanitized_config;
 #else
-    const ContextConfig& sanitized_config = context_config;
+    return context_config;
 #endif
-    if (m_context == nullptr) {
-        m_context = std::make_shared<Context>(sanitized_config);
-        LOG_INFO << "[INFO] Anira version: " << m_context->m_context_config.m_anira_version << '\n';
-    } else {
-        if (m_context->m_context_config.m_anira_version != sanitized_config.m_anira_version) {
-            const std::string& context_version = m_context->m_context_config.m_anira_version;
-            const std::string& session_version = sanitized_config.m_anira_version;
-            // Major version differences imply API/ABI incompatibility; anything
-            // below that is only worth a warning.
-            if (context_version.substr(0, context_version.find('.')) !=
-                session_version.substr(0, session_version.find('.'))) {
-                LOG_ERROR << "[ERROR] Anira version mismatch: the context was created by anira "
-                             "version '"
-                          << context_version << "' but a new session was compiled against '"
-                          << session_version
-                          << "'. The major versions differ, so the API/ABI is likely "
-                             "incompatible. Make sure all components in this process use the "
-                             "same anira version."
-                          << '\n';
-            } else {
-                LOG_WARNING << "[WARNING] Anira version mismatch: the context was created by "
-                               "anira version '"
-                            << context_version << "' but a new session was compiled against '"
-                            << session_version
-                            << "'. The major versions match, so this is likely compatible, but "
-                               "aligning the anira versions is recommended."
-                            << '\n';
-            }
+}
+
+void Context::apply_log_level_locked(Core& c, const ContextConfig& context_config) {
+    // The level is process-global, like the thread pool; while sessions exist, the
+    // lowest (most verbose) of the level in effect and the requested one wins, so no
+    // session can silence the diagnostics another session asked for. Backend
+    // processors pick the level up when their instances are created.
+    const LogLevel log_level =
+        c.m_sessions.empty() ? context_config.m_log_level
+                             : std::min(c.m_context_config.m_log_level, context_config.m_log_level);
+    set_log_level(log_level);
+}
+
+void Context::apply_or_compare_config_locked(Core& c, const ContextConfig& context_config) {
+    if (c.m_sessions.empty()) {
+        // First session of a generation: its configuration is the one in effect and the
+        // pool is built from it. Registry empty implies pool empty (release_session tears
+        // the pool down in the same critical section that empties the registry, and
+        // shutdown() clears it outright).
+        assert(c.m_thread_pool.empty() && "pool alive without registered sessions");
+        c.m_context_config = context_config;
+        LOG_INFO << "[INFO] Anira version: " << c.m_context_config.m_anira_version << '\n';
+        try {
+            resize_pool_locked(c, context_config.m_num_threads);
+        } catch (...) {
+            c.m_thread_pool.clear();
+            throw;
         }
-        if (m_context->m_context_config.m_enabled_backends != sanitized_config.m_enabled_backends) {
-            LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!"
+        return;
+    }
+
+    if (c.m_context_config.m_anira_version != context_config.m_anira_version) {
+        const std::string& context_version = c.m_context_config.m_anira_version;
+        const std::string& session_version = context_config.m_anira_version;
+        // Major version differences imply API/ABI incompatibility; anything
+        // below that is only worth a warning.
+        if (context_version.substr(0, context_version.find('.')) !=
+            session_version.substr(0, session_version.find('.'))) {
+            LOG_ERROR << "[ERROR] Anira version mismatch: the context was created by anira "
+                         "version '"
+                      << context_version << "' but a new session was compiled against '"
+                      << session_version
+                      << "'. The major versions differ, so the API/ABI is likely "
+                         "incompatible. Make sure all components in this process use the "
+                         "same anira version."
                       << '\n';
-        }
-        if (m_context->m_context_config.m_log_level != sanitized_config.m_log_level) {
-            LOG_WARNING << "[WARNING] ContextConfig log level mismatch: the context is at log "
-                           "level '"
-                        << to_string(m_context->m_context_config.m_log_level)
-                        << "' but a new session requested '"
-                        << to_string(sanitized_config.m_log_level)
-                        << "'. The log level is process-global and the lowest (most verbose) "
-                           "requested level wins, so '"
-                        << to_string(log_level)
-                        << "' is now in effect. Note that the inference backends were already "
-                           "initialized with the first context's log level and keep it. Align "
-                           "the ContextConfig of all sessions to silence this warning."
+        } else {
+            LOG_WARNING << "[WARNING] Anira version mismatch: the context was created by "
+                           "anira version '"
+                        << context_version << "' but a new session was compiled against '"
+                        << session_version
+                        << "'. The major versions match, so this is likely compatible, but "
+                           "aligning the anira versions is recommended."
                         << '\n';
         }
-        // Keep the stored config in sync with the level actually in effect (the
-        // lowest requested one, applied by set_log_level above).
-        m_context->m_context_config.m_log_level = log_level;
-        if (m_context->m_context_config.m_wait_strategy != sanitized_config.m_wait_strategy) {
-            LOG_WARNING
-                << "[WARNING] ContextConfig wait strategy mismatch: the context was created with "
-                   "wait_strategy '"
-                << to_string(m_context->m_context_config.m_wait_strategy)
-                << "' but a new session requested '" << to_string(sanitized_config.m_wait_strategy)
-                << "'. All sessions in this process share one inference thread pool, so only one "
-                   "strategy can be in effect and the originally configured one stays active. "
-                   "Align the ContextConfig of all sessions to silence this warning."
-                << '\n';
-        }
-        // num_threads == 0 means "I'm opting out of the auto-pool and bringing
-        // my own threads via Context::make_inference_thread()" — not "shrink
-        // any existing pool to zero." Skip the resize so a manual-threading
-        // caller doesn't tear down threads another caller is relying on.
-        if (sanitized_config.m_num_threads > 0 &&
-            (unsigned int)m_context->m_thread_pool.size() > sanitized_config.m_num_threads) {
-            m_context->new_num_threads(sanitized_config.m_num_threads);
-            m_context->m_context_config.m_num_threads = sanitized_config.m_num_threads;
-        }
     }
-    return m_context;
+    if (c.m_context_config.m_enabled_backends != context_config.m_enabled_backends) {
+        LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!" << '\n';
+    }
+    const LogLevel log_level = std::min(c.m_context_config.m_log_level, context_config.m_log_level);
+    if (c.m_context_config.m_log_level != context_config.m_log_level) {
+        LOG_WARNING << "[WARNING] ContextConfig log level mismatch: the context is at log "
+                       "level '"
+                    << to_string(c.m_context_config.m_log_level)
+                    << "' but a new session requested '" << to_string(context_config.m_log_level)
+                    << "'. The log level is process-global and the lowest (most verbose) "
+                       "requested level wins, so '"
+                    << to_string(log_level)
+                    << "' is now in effect. Note that the inference backends were already "
+                       "initialized with the first context's log level and keep it. Align "
+                       "the ContextConfig of all sessions to silence this warning."
+                    << '\n';
+    }
+    // Keep the stored config in sync with the level actually in effect (the
+    // lowest requested one, applied by apply_log_level_locked).
+    c.m_context_config.m_log_level = log_level;
+    if (c.m_context_config.m_wait_strategy != context_config.m_wait_strategy) {
+        LOG_WARNING
+            << "[WARNING] ContextConfig wait strategy mismatch: the context was created with "
+               "wait_strategy '"
+            << to_string(c.m_context_config.m_wait_strategy) << "' but a new session requested '"
+            << to_string(context_config.m_wait_strategy)
+            << "'. All sessions in this process share one inference thread pool, so only one "
+               "strategy can be in effect and the originally configured one stays active. "
+               "Align the ContextConfig of all sessions to silence this warning."
+            << '\n';
+    }
+    // num_threads == 0 means "I'm opting out of the auto-pool and bringing
+    // my own threads via Context::make_inference_thread()" — not "shrink
+    // any existing pool to zero." Skip the resize so a manual-threading
+    // caller doesn't tear down threads another caller is relying on.
+    if (context_config.m_num_threads > 0 &&
+        static_cast<unsigned int>(c.m_thread_pool.size()) > context_config.m_num_threads) {
+        resize_pool_locked(c, context_config.m_num_threads);
+        c.m_context_config.m_num_threads = context_config.m_num_threads;
+    }
 }
 
-void Context::release_instance() {
-    m_context.reset();
+size_t Context::prospective_pool_size_locked(const Core& c, const ContextConfig& context_config) {
+    if (c.m_sessions.empty()) { return context_config.m_num_threads; }
+    if (context_config.m_num_threads > 0 &&
+        static_cast<unsigned int>(c.m_thread_pool.size()) > context_config.m_num_threads) {
+        return context_config.m_num_threads;
+    }
+    return c.m_thread_pool.size();
 }
 
-int Context::get_available_session_id() {
-    m_next_id.fetch_add(1);
-    m_active_sessions.fetch_add(1);
-    return m_next_id.load();
-}
-
-void Context::new_num_threads(unsigned int new_num_threads) {
-    auto const current_num_threads = (unsigned int)m_thread_pool.size();
+void Context::resize_pool_locked(Core& c, unsigned int new_num_threads) {
+    auto const current_num_threads = static_cast<unsigned int>(c.m_thread_pool.size());
 
     if (new_num_threads > current_num_threads) {
         for (unsigned int i = current_num_threads; i < new_num_threads; ++i) {
-            m_thread_pool.emplace_back(
-                std::make_unique<InferenceThread>(m_next_inference,
-                                                  m_context_config.m_wait_strategy));
+            c.m_thread_pool.emplace_back(
+                std::make_unique<InferenceThread>(c.m_next_inference,
+                                                  c.m_context_config.m_wait_strategy));
         }
     } else if (new_num_threads < current_num_threads) {
         for (unsigned int i = current_num_threads - 1; i >= new_num_threads; --i) {
-            m_thread_pool[i]->stop();
-            while (m_thread_pool[i]->is_running()) {
+            c.m_thread_pool[i]->stop();
+            while (c.m_thread_pool[i]->is_running()) {
                 std::this_thread::sleep_for(std::chrono::microseconds(50));
             }
-            m_thread_pool.pop_back();
+            c.m_thread_pool.pop_back();
+            if (i == 0) { break; }
         }
     }
+}
+
+void Context::register_session_locked(Core& c, const std::shared_ptr<SessionElement>& session) {
+    c.m_sessions.emplace_back(session);
+}
+
+void Context::unregister_session_locked(Core& c, const std::shared_ptr<SessionElement>& session) {
+    for (size_t i = 0; i < c.m_sessions.size(); ++i) {
+        if (c.m_sessions[i] == session) {
+            c.m_sessions.erase(c.m_sessions.begin() + static_cast<ptrdiff_t>(i));
+            break;
+        }
+    }
+
+    // A pooled processor stays while another registered session shares it — which is
+    // why the session was removed from the registry first.
+#ifdef USE_LIBTORCH
+    release_processor(c,
+                      session->m_inference_config,
+                      c.m_libtorch_processors,
+                      session->m_libtorch_processor);
+#endif
+#ifdef USE_ONNXRUNTIME
+    release_processor(c,
+                      session->m_inference_config,
+                      c.m_onnx_processors,
+                      session->m_onnx_processor);
+#endif
+#ifdef USE_TFLITE
+    release_processor(c,
+                      session->m_inference_config,
+                      c.m_tflite_processors,
+                      session->m_tflite_processor);
+#endif
+#ifdef USE_LITERT
+    release_processor(c,
+                      session->m_inference_config,
+                      c.m_litert_processors,
+                      session->m_litert_processor);
+#endif
+#ifdef USE_EXECUTORCH
+    release_processor(c,
+                      session->m_inference_config,
+                      c.m_executorch_processors,
+                      session->m_executorch_processor);
+#endif
+
+    // The pool policy: inference threads exist exactly while sessions exist. Stopping
+    // and joining them here, inside the critical section that emptied the registry,
+    // is what lets a plugin host unload the library right after the last handler is
+    // destroyed. (Each InferenceThread's destructor stops and joins its OS thread.)
+    if (c.m_sessions.empty()) { c.m_thread_pool.clear(); }
 }
 
 std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_processor,
                                                         InferenceConfig& inference_config,
-                                                        BackendBase* custom_processor) {
-    // Whole function locked: registers the session in m_sessions and hands out
-    // shared backend processors from the static pools.
-    const std::lock_guard<std::mutex> lifecycle_lock(m_lifecycle_mutex);
-    int const session_id = get_available_session_id();
+                                                        BackendBase* custom_processor,
+                                                        const ContextConfig& context_config) {
+    Core& c = core();
+    // Whole function locked: applies or reconciles the configuration, hands out shared
+    // backend processors from the pools, builds the thread pool for a first session and
+    // registers the session — one decision, one critical section.
+    const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+    const ContextConfig config = sanitize_config(context_config);
+    // Apply the log level before anything (including this function) logs.
+    apply_log_level_locked(c, config);
 
-    if (inference_config.m_num_parallel_processors > (unsigned int)m_thread_pool.size()) {
-        if (!m_thread_pool.empty()) {
-            LOG_WARNING << "[WARNING] Session " << session_id
-                        << " requested more parallel processors than threads are available in "
-                           "Context. Using number of threads as number of parallel processors."
-                        << '\n';
-            inference_config.m_num_parallel_processors = (unsigned int)m_thread_pool.size();
-        }
+    int const session_id = c.m_next_id.fetch_add(1) + 1;
+
+    // The pool is built at registration (the last step), so clamp against the size it
+    // will have. An empty pool means the caller brings its own threads: no clamp.
+    const size_t pool_size = prospective_pool_size_locked(c, config);
+    if (pool_size > 0 && inference_config.m_num_parallel_processors > pool_size) {
+        LOG_WARNING << "[WARNING] Session " << session_id
+                    << " requested more parallel processors than threads are available in "
+                       "Context. Using number of threads as number of parallel processors."
+                    << '\n';
+        inference_config.m_num_parallel_processors = static_cast<unsigned int>(pool_size);
     }
 
     // Each session owns one explicit producer token for the global inference
@@ -219,82 +438,135 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
         std::make_shared<SessionElement>(session_id,
                                          pp_processor,
                                          inference_config,
-                                         moodycamel::ProducerToken(m_next_inference));
+                                         moodycamel::ProducerToken(c.m_next_inference));
 
-    if (custom_processor != nullptr) {
-        custom_processor->prepare();
-        session->m_custom_processor = custom_processor;
-    }
+    // Everything that can fail — a backend that cannot load its model, a custom
+    // processor's prepare(), the pool build — happens before the session is registered.
+    // On failure, undo the only shared state touched so far (processors attached to the
+    // half-built session) and leave the registry, the pool and the configuration exactly
+    // as they were: nothing leaks, and a later session starts from a clean slate.
+    try {
+        if (custom_processor != nullptr) {
+            custom_processor->prepare();
+            session->m_custom_processor = custom_processor;
+        }
 
 #ifdef USE_LIBTORCH
-    set_processor(session, inference_config, m_libtorch_processors, InferenceBackend::LIBTORCH);
+        set_processor(session,
+                      inference_config,
+                      c.m_libtorch_processors,
+                      InferenceBackend::LIBTORCH);
 #endif
 #ifdef USE_ONNXRUNTIME
-    set_processor(session, inference_config, m_onnx_processors, InferenceBackend::ONNX);
+        set_processor(session, inference_config, c.m_onnx_processors, InferenceBackend::ONNX);
 #endif
 #ifdef USE_TFLITE
-    set_processor(session, inference_config, m_tflite_processors, InferenceBackend::TFLITE);
+        set_processor(session, inference_config, c.m_tflite_processors, InferenceBackend::TFLITE);
 #endif
 #ifdef USE_LITERT
-    set_processor(session, inference_config, m_litert_processors, InferenceBackend::LITERT);
+        set_processor(session, inference_config, c.m_litert_processors, InferenceBackend::LITERT);
 #endif
 #ifdef USE_EXECUTORCH
-    set_processor(session, inference_config, m_executorch_processors, InferenceBackend::EXECUTORCH);
+        set_processor(session,
+                      inference_config,
+                      c.m_executorch_processors,
+                      InferenceBackend::EXECUTORCH);
 #endif
 
-    // Default the active backend to the first configured model whose processor
-    // is available, instead of the CUSTOM roundtrip. Sessions used to start on
-    // CUSTOM until set_inference_backend() — forgetting that call silently
-    // passed audio through. A caller-provided custom processor keeps CUSTOM
-    // active: running it is why it was passed. Entries whose backend is not
-    // compiled in (or whose processor could not be created) are skipped, so a
-    // config can list backends the build does not provide without selecting an
-    // unrunnable one; when nothing matches, CUSTOM remains, as before.
-    if (custom_processor == nullptr) {
-        for (const auto& model_data : inference_config.m_model_data) {
-            bool processor_available = false;
-            switch (model_data.m_backend) {
+        // Default the active backend to the first configured model whose processor
+        // is available, instead of the CUSTOM roundtrip. Sessions used to start on
+        // CUSTOM until set_inference_backend() — forgetting that call silently
+        // passed audio through. A caller-provided custom processor keeps CUSTOM
+        // active: running it is why it was passed. Entries whose backend is not
+        // compiled in (or whose processor could not be created) are skipped, so a
+        // config can list backends the build does not provide without selecting an
+        // unrunnable one; when nothing matches, CUSTOM remains, as before.
+        if (custom_processor == nullptr) {
+            for (const auto& model_data : inference_config.m_model_data) {
+                bool processor_available = false;
+                switch (model_data.m_backend) {
 #ifdef USE_LIBTORCH
-                case InferenceBackend::LIBTORCH:
-                    processor_available = session->m_libtorch_processor != nullptr;
-                    break;
+                    case InferenceBackend::LIBTORCH:
+                        processor_available = session->m_libtorch_processor != nullptr;
+                        break;
 #endif
 #ifdef USE_ONNXRUNTIME
-                case InferenceBackend::ONNX:
-                    processor_available = session->m_onnx_processor != nullptr;
-                    break;
+                    case InferenceBackend::ONNX:
+                        processor_available = session->m_onnx_processor != nullptr;
+                        break;
 #endif
 #ifdef USE_TFLITE
-                case InferenceBackend::TFLITE:
-                    processor_available = session->m_tflite_processor != nullptr;
-                    break;
+                    case InferenceBackend::TFLITE:
+                        processor_available = session->m_tflite_processor != nullptr;
+                        break;
 #endif
 #ifdef USE_LITERT
-                case InferenceBackend::LITERT:
-                    processor_available = session->m_litert_processor != nullptr;
-                    break;
+                    case InferenceBackend::LITERT:
+                        processor_available = session->m_litert_processor != nullptr;
+                        break;
 #endif
 #ifdef USE_EXECUTORCH
-                case InferenceBackend::EXECUTORCH:
-                    processor_available = session->m_executorch_processor != nullptr;
-                    break;
+                    case InferenceBackend::EXECUTORCH:
+                        processor_available = session->m_executorch_processor != nullptr;
+                        break;
 #endif
-                default: break;
-            }
-            if (processor_available) {
-                session->m_current_backend.store(model_data.m_backend, std::memory_order_relaxed);
-                break;
+                    default: break;
+                }
+                if (processor_available) {
+                    session->m_current_backend.store(model_data.m_backend,
+                                                     std::memory_order_relaxed);
+                    break;
+                }
             }
         }
+
+        apply_or_compare_config_locked(c, config);
+        register_session_locked(c, session);
+    } catch (...) {
+        // The session is not registered, so release_processor's "another session shares
+        // this config" check sees only the sessions that really exist.
+#ifdef USE_LIBTORCH
+        release_processor(c,
+                          inference_config,
+                          c.m_libtorch_processors,
+                          session->m_libtorch_processor);
+#endif
+#ifdef USE_ONNXRUNTIME
+        release_processor(c, inference_config, c.m_onnx_processors, session->m_onnx_processor);
+#endif
+#ifdef USE_TFLITE
+        release_processor(c, inference_config, c.m_tflite_processors, session->m_tflite_processor);
+#endif
+#ifdef USE_LITERT
+        release_processor(c, inference_config, c.m_litert_processors, session->m_litert_processor);
+#endif
+#ifdef USE_EXECUTORCH
+        release_processor(c,
+                          inference_config,
+                          c.m_executorch_processors,
+                          session->m_executorch_processor);
+#endif
+        throw;
     }
 
-    m_sessions.emplace_back(session);
-
-    return m_sessions.back();
+    return session;
 }
 
-void Context::release_thread_pool() {
-    m_thread_pool.clear();
+std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_processor,
+                                                        InferenceConfig& inference_config,
+                                                        BackendBase* custom_processor) {
+    Core& c = core();
+    ContextConfig config;
+    {
+        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        if (c.m_staged_config.has_value()) {
+            config = *c.m_staged_config;
+            c.m_staged_config.reset();
+        } else if (!c.m_sessions.empty()) {
+            config = c.m_context_config;
+        }
+    }
+    return create_session(pp_processor, inference_config, custom_processor, config);
 }
 
 void Context::release_session(const std::shared_ptr<SessionElement>& session) {
@@ -304,57 +576,51 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
 
     drain_inference_queue(session);
 
-    InferenceConfig inference_config = session->m_inference_config;
-#ifdef USE_LIBTORCH
-    std::shared_ptr<LibtorchProcessor> libtorch_processor = session->m_libtorch_processor;
-#endif
-#ifdef USE_ONNXRUNTIME
-    std::shared_ptr<OnnxRuntimeProcessor> onnx_processor = session->m_onnx_processor;
-#endif
-#ifdef USE_TFLITE
-    std::shared_ptr<TFLiteProcessor> tflite_processor = session->m_tflite_processor;
-#endif
-#ifdef USE_LITERT
-    std::shared_ptr<LiteRtProcessor> litert_processor = session->m_litert_processor;
-#endif
-#ifdef USE_EXECUTORCH
-    std::shared_ptr<ExecuTorchProcessor> executorch_processor = session->m_executorch_processor;
-#endif
-
     // Everything above only touches this session (the drain waits on its own
     // in-flight inferences), so it runs unlocked. From here on we mutate the
     // shared registry, the processor pools, and possibly tear down the pool.
-    const std::lock_guard<std::mutex> lifecycle_lock(m_lifecycle_mutex);
+    Core& c = core();
+    const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+    unregister_session_locked(c, session);
+}
 
-    for (size_t i = 0; i < m_sessions.size(); ++i) {
-        if (m_sessions[i] == session) {
-            m_sessions.erase(m_sessions.begin() + (ptrdiff_t)i);
-            break;
-        }
+void Context::shutdown() {
+    // Never construct the core here: a binary that never created a session (a plugin
+    // being scanned) has nothing to shut down and should not start allocating on unload.
+    void* existing = s_core.load(std::memory_order_acquire);
+    if (existing == nullptr) { return; }
+    Core& c = *static_cast<Core*>(existing);
+    const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+    if (!c.m_sessions.empty()) {
+        LOG_ERROR << "[ERROR] Context::shutdown() called with " << c.m_sessions.size()
+                  << " registered session(s): the host is unloading anira while an inference "
+                     "handler is still alive. The inference threads are stopped; the "
+                     "sessions' memory is leaked."
+                  << '\n';
     }
+    c.m_thread_pool.clear();
+}
 
-#ifdef USE_LIBTORCH
-    release_processor(inference_config, m_libtorch_processors, libtorch_processor);
-#endif
-#ifdef USE_ONNXRUNTIME
-    release_processor(inference_config, m_onnx_processors, onnx_processor);
-#endif
-#ifdef USE_TFLITE
-    release_processor(inference_config, m_tflite_processors, tflite_processor);
-#endif
-#ifdef USE_LITERT
-    release_processor(inference_config, m_litert_processors, litert_processor);
-#endif
-#ifdef USE_EXECUTORCH
-    release_processor(inference_config, m_executorch_processors, executorch_processor);
-#endif
-
-    // fetch_sub returns the pre-decrement value, so exactly one releaser can
-    // observe the transition to zero and tear the shared pool down.
-    if (m_active_sessions.fetch_sub(1) == 1) {
-        release_thread_pool();
-        release_instance();
+bool Context::release_core_if_idle() {
+    void* existing = s_core.load(std::memory_order_acquire);
+    if (existing == nullptr) { return false; }
+    Core& c = *static_cast<Core*>(existing);
+    // Never block: this runs at library unload, possibly under a loader lock. A held
+    // lifecycle lock means someone is inside the context — then it is not idle.
+    std::unique_lock<std::mutex> lifecycle_lock(c.m_lifecycle_mutex, std::try_to_lock);
+    if (!lifecycle_lock.owns_lock()) { return false; }
+    // User-managed threads (make_inference_thread) reference the queue inside the core.
+    if (!c.m_sessions.empty() || !c.m_thread_pool.empty() ||
+        InferenceThread::get_num_active_threads() > 0) {
+        return false;
     }
+    void* expected = existing;
+    if (!s_core.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel)) {
+        return false;
+    }
+    lifecycle_lock.unlock();
+    delete &c;
+    return true;
 }
 
 void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
@@ -378,10 +644,11 @@ void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
     session->prepare(new_config, std::move(custom_latency));
 
     {
-        // Only the pool restart touches shared state; the drain and the
+        // Only the pool start touches shared state; the drain and the
         // session's own prepare above are session-local and stay unlocked.
-        const std::lock_guard<std::mutex> lifecycle_lock(m_lifecycle_mutex);
-        start_thread_pool();
+        Core& c = core();
+        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        start_thread_pool_locked(c);
     }
 
     session->m_initialized.store(true, std::memory_order::release);
@@ -540,8 +807,13 @@ void Context::wait_for_completion(const std::shared_ptr<SessionElement>& session
     }
 }
 
-std::vector<std::shared_ptr<SessionElement>>& Context::get_sessions() {
-    return m_sessions;
+std::vector<std::shared_ptr<SessionElement>> Context::get_sessions() {
+    // A query must not allocate the core: no core means no sessions.
+    void* existing = s_core.load(std::memory_order_acquire);
+    if (existing == nullptr) { return {}; }
+    Core& c = *static_cast<Core*>(existing);
+    const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+    return c.m_sessions;
 }
 
 bool Context::pre_process(const std::shared_ptr<SessionElement>& session) {
@@ -600,8 +872,10 @@ bool Context::enqueue_inference_or_drop(
                                           .m_thread_safe_struct = thread_safe_struct};
     // The session's own producer token keeps this allocation-free and safe:
     // per-session enqueues are serialized (single driving thread, and the
-    // stateful path additionally holds the dispatch gate).
-    bool const enqueued = m_next_inference.try_enqueue(session->m_producer_token, inference_data);
+    // stateful path additionally holds the dispatch gate). existing_core(): this is
+    // a real-time path, reached only through a registered session.
+    bool const enqueued =
+        existing_core().m_next_inference.try_enqueue(session->m_producer_token, inference_data);
     if (!enqueued) {
         // The task keeps its struct and timestamp and completes as zeros at its
         // stream position, so the output stays time-aligned: exactly one chunk
@@ -624,14 +898,15 @@ void Context::post_process(
     thread_safe_struct->m_free.store(true, std::memory_order::release);
 }
 
-void Context::start_thread_pool() {
-    for (const auto& i : m_thread_pool) {
+void Context::start_thread_pool_locked(Core& c) {
+    for (const auto& i : c.m_thread_pool) {
         if (!i->is_running()) { i->start(); }
         while (!i->is_running()) { std::this_thread::sleep_for(std::chrono::microseconds(50)); }
     }
 }
 
 void Context::drain_inference_queue(const std::shared_ptr<SessionElement>& session) {
+    InferenceQueue& next_inference = core().m_next_inference;
     // Fixpoint loop: one spin-then-single-pass is not enough — a worker that
     // dequeued one of this session's tasks just before m_initialized went false
     // can still run its session-exclusive continuation and enqueue a successor
@@ -652,7 +927,7 @@ void Context::drain_inference_queue(const std::shared_ptr<SessionElement>& sessi
         bool found_own = false;
         std::vector<InferenceData> inference_stack;
         InferenceData inference_data;
-        while (m_next_inference.try_dequeue(inference_data)) {
+        while (next_inference.try_dequeue(inference_data)) {
             if (inference_data.m_session == session) {
                 found_own = true;
                 // Complete the never-started task as silence at its stream
@@ -670,7 +945,7 @@ void Context::drain_inference_queue(const std::shared_ptr<SessionElement>& sessi
         }
 
         for (auto& other : inference_stack) {
-            if (!m_next_inference.try_enqueue(other)) {
+            if (!next_inference.try_enqueue(other)) {
                 // Requeue failed: complete the other session's task as silence so
                 // its stream stays time-aligned (previously it was silently lost),
                 // and unwedge its dispatch chain.
@@ -691,7 +966,12 @@ void Context::drain_inference_queue(const std::shared_ptr<SessionElement>& sessi
 }
 
 int Context::get_num_sessions() {
-    return m_active_sessions.load();
+    // A query must not allocate the core: no core means no sessions.
+    void* existing = s_core.load(std::memory_order_acquire);
+    if (existing == nullptr) { return 0; }
+    Core& c = *static_cast<Core*>(existing);
+    const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+    return static_cast<int>(c.m_sessions.size());
 }
 
 template <typename T>
@@ -717,18 +997,19 @@ void Context::set_processor(const std::shared_ptr<SessionElement>& session,
 }
 
 template <typename T>
-void Context::release_processor(InferenceConfig& inference_config,
+void Context::release_processor(Core& c,
+                                InferenceConfig& inference_config,
                                 std::vector<std::shared_ptr<T>>& processors,
                                 std::shared_ptr<T>& processor) {
     if (processor == nullptr) { return; }
     if (!inference_config.m_session_exclusive_processor) {
-        for (const auto& session : m_sessions) {
+        for (const auto& session : c.m_sessions) {
             if (session->m_inference_config == inference_config) { return; }
         }
     }
     for (size_t i = 0; i < processors.size(); ++i) {
         if (processors[i] == processor) {
-            processors.erase(processors.begin() + (ptrdiff_t)i);
+            processors.erase(processors.begin() + static_cast<ptrdiff_t>(i));
             return;
         }
     }
@@ -792,11 +1073,17 @@ void Context::reclaim_stale_structs(const std::shared_ptr<SessionElement>& sessi
 }
 
 InferenceQueue& Context::get_static_inference_queue() {
-    return m_next_inference;
+    return core().m_next_inference;
 }
 
 std::unique_ptr<InferenceThread> Context::make_inference_thread() {
-    return std::make_unique<InferenceThread>(m_next_inference, m_context_config.m_wait_strategy);
+    Core& c = core();
+    WaitStrategy wait_strategy = WaitStrategy::SpinBackoff;
+    {
+        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        wait_strategy = c.m_context_config.m_wait_strategy;
+    }
+    return std::make_unique<InferenceThread>(c.m_next_inference, wait_strategy);
 }
 
 unsigned int Context::get_num_inference_threads() {
@@ -808,7 +1095,13 @@ bool Context::has_inference_threads() {
     // prepare_session() starts them; the active count covers externally driven
     // threads (user-created on native, JS Workers on WebAssembly, where the
     // pool is always empty).
-    return !m_thread_pool.empty() || InferenceThread::get_num_active_threads() > 0;
+    bool pool_exists = false;
+    if (void* existing = s_core.load(std::memory_order_acquire)) {
+        Core& c = *static_cast<Core*>(existing);
+        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        pool_exists = !c.m_thread_pool.empty();
+    }
+    return pool_exists || InferenceThread::get_num_active_threads() > 0;
 }
 
 #ifdef USE_LIBTORCH
@@ -818,6 +1111,7 @@ template void Context::set_processor<LibtorchProcessor>(
     std::vector<std::shared_ptr<LibtorchProcessor>>& processors,
     InferenceBackend backend);
 template void Context::release_processor<LibtorchProcessor>(
+    Core& c,
     InferenceConfig& inference_config,
     std::vector<std::shared_ptr<LibtorchProcessor>>& processors,
     std::shared_ptr<LibtorchProcessor>& processor);
@@ -829,6 +1123,7 @@ template void Context::set_processor<OnnxRuntimeProcessor>(
     std::vector<std::shared_ptr<OnnxRuntimeProcessor>>& processors,
     InferenceBackend backend);
 template void Context::release_processor<OnnxRuntimeProcessor>(
+    Core& c,
     InferenceConfig& inference_config,
     std::vector<std::shared_ptr<OnnxRuntimeProcessor>>& processors,
     std::shared_ptr<OnnxRuntimeProcessor>& processor);
@@ -840,6 +1135,7 @@ template void Context::set_processor<TFLiteProcessor>(
     std::vector<std::shared_ptr<TFLiteProcessor>>& processors,
     InferenceBackend backend);
 template void Context::release_processor<TFLiteProcessor>(
+    Core& c,
     InferenceConfig& inference_config,
     std::vector<std::shared_ptr<TFLiteProcessor>>& processors,
     std::shared_ptr<TFLiteProcessor>& processor);
@@ -851,6 +1147,7 @@ template void Context::set_processor<LiteRtProcessor>(
     std::vector<std::shared_ptr<LiteRtProcessor>>& processors,
     InferenceBackend backend);
 template void Context::release_processor<LiteRtProcessor>(
+    Core& c,
     InferenceConfig& inference_config,
     std::vector<std::shared_ptr<LiteRtProcessor>>& processors,
     std::shared_ptr<LiteRtProcessor>& processor);
@@ -862,6 +1159,7 @@ template void Context::set_processor<ExecuTorchProcessor>(
     std::vector<std::shared_ptr<ExecuTorchProcessor>>& processors,
     InferenceBackend backend);
 template void Context::release_processor<ExecuTorchProcessor>(
+    Core& c,
     InferenceConfig& inference_config,
     std::vector<std::shared_ptr<ExecuTorchProcessor>>& processors,
     std::shared_ptr<ExecuTorchProcessor>& processor);

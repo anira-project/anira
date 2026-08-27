@@ -164,6 +164,44 @@ the host's (typically older) runtime and the first API call crashes the host.
     2. If your plugin's own translation units include backend headers (e.g. ``onnxruntime_cxx_api.h``), compile them with hidden visibility too (``CXX_VISIBILITY_PRESET hidden``, ``VISIBILITY_INLINES_HIDDEN ON``).
     3. As defense-in-depth, restrict your plugin's exports to its entry points — e.g. on macOS ``-Wl,-exported_symbols_list`` with only ``_bundleEntry``/``_bundleExit``/``_GetPluginFactory`` for a VST3. This also covers any other statically linked dependency. Verify with ``nm -gU your_plugin`` (macOS) or ``nm -D --defined-only your_plugin.so`` (Linux): no ``Ort``/backend symbols should appear.
 
+.. _plugin-library-unload:
+
+Host crashes when unloading the plugin
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Issue**: A plugin embedding anira works, but the host crashes when the last
+instance is removed or when the host quits.
+
+**Cause**: Hosts unload a plugin's shared library (``dlclose`` / ``FreeLibrary``)
+once the last instance is gone; any thread still running inside it then executes
+unmapped code. anira holds the required invariant — *no anira thread exists once the
+last* :cpp:class:`anira::InferenceHandler` *is destroyed* — by construction: the
+inference threads exist exactly while handler instances exist, and destroying the
+last one stops and joins them before its destructor returns. The context's state is
+never destroyed while the library is loaded (calling into anira is valid at any time,
+even from late-running static destructors) and is reclaimed at unload.
+
+**Solutions**:
+    1. **Host unloads with a live instance** (a host bug, but it happens): on Linux
+       and macOS a library-unload hook calls :cpp:func:`anira::Context::shutdown`
+       automatically. On Windows nothing that runs at ``DLL_PROCESS_DETACH`` may join a
+       thread (loader lock), so call ``anira::Context::shutdown()`` from your module-exit
+       entry point — CLAP ``deinit``, VST3 ``ExitDll`` — as ``examples/clap-audio-plugin``
+       does. It is idempotent and cheap when there is nothing to do.
+    2. **You manage inference threads yourself** (``ContextConfig(0)`` +
+       :cpp:func:`anira::Context::make_inference_thread`): stop them before your library
+       can be unloaded; the hook only joins anira's own pool.
+    3. **The library silently never unloads (GCC/Linux)**: glibc never unloads an object
+       that defines an ``STB_GNU_UNIQUE`` symbol, which GCC emits for exported inline
+       statics and template statics. anira compiles with ``-fno-gnu-unique``; add the
+       same flag plus hidden visibility (``CXX_VISIBILITY_PRESET hidden``,
+       ``VISIBILITY_INLINES_HIDDEN ON``) to your plugin's translation units, and verify
+       with ``nm -DC your_plugin.so | grep ' u '`` (should print nothing).
+
+The scenario is covered by anira's host-shaped ``test/unload`` test, which loads a
+plugin-shaped module from an executable that does not link anira, unloads it and
+checks that it was really unmapped.
+
 .. note::
     If you continue to experience issues feel free to file an issue on the [GitHub repository](https://github.com/anira-project/anira/issues).
 

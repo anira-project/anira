@@ -297,8 +297,8 @@ private:
                     const std::vector<size_t>& num_channels);
 
 private:
-    std::shared_ptr<Context> m_context;  ///< Shared pointer to the inference context managing
-                                         ///< threads and sessions
+    Context& m_context;  ///< The process-wide inference context managing threads and
+                         ///< sessions (immortal, see Context)
 
     InferenceConfig& m_inference_config;  ///< Reference to the inference configuration containing
                                           ///< model settings

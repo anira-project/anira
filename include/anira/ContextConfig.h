@@ -30,7 +30,7 @@ namespace anira {
  *
  * @note Blocking is not available on WebAssembly builds, where inference loops
  * are driven cooperatively by JS Workers and blocking is not possible. There,
- * Context::get_instance and the JSON config loader coerce Blocking to
+ * Context::create_session and the JSON config loader coerce Blocking to
  * SpinBackoff and log a warning.
  *
  * @note All sessions in a process share one inference thread pool, so only one
@@ -131,9 +131,10 @@ inline unsigned int default_num_threads() noexcept {
  * anira::InferenceHandler handler(pp_processor, inference_config, custom_config);
  * @endcode
  *
- * @note This configuration affects global behavior and should be set once during
- * application initialization. Changing context configuration during runtime
- * requires recreating the context and all associated sessions.
+ * @note This configuration affects global behavior. It is applied by the first session
+ * that is created (Context::create_session) and reconciled against later sessions'
+ * configurations while sessions exist; once the last session is released, the next
+ * session's configuration takes effect again.
  *
  * @see Context, InferenceHandler, InferenceBackend
  */
@@ -151,12 +152,14 @@ struct ANIRA_API ContextConfig {
      *                   Pass 0 to opt out of the auto-managed pool and supply your
      *                   own threads via Context::make_inference_thread() (required on
      *                   WebAssembly, optional on native). On WebAssembly a nonzero
-     *                   value is coerced to 0 with a warning by Context::get_instance
+     *                   value is coerced to 0 with a warning by Context::create_session
      *                   and JsonConfigLoader — the context cannot run threads there;
      *                   they are always supplied externally (e.g.
-     *                   AniraWeb.spinUpInferenceWorker()). When the Context singleton
-     *                   already exists, num_threads == 0 leaves any existing pool
-     *                   untouched — it signals "no preference," not "shrink to zero."
+     *                   AniraWeb.spinUpInferenceWorker()). When sessions already
+     *                   exist, num_threads == 0 leaves the existing pool untouched —
+     *                   it signals "no preference," not "shrink to zero." The pool
+     *                   exists exactly while sessions exist: it is built by the first
+     *                   session's config and joined when the last session is released.
      * @param wait_strategy How idle inference threads wait for new work.
      *                   Default: WaitStrategy::SpinBackoff (see WaitStrategy for the
      *                   trade-offs). Must be identical across all ContextConfigs in
