@@ -229,7 +229,7 @@ set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL} CACHE BOOL "" FORCE)
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    GIT_TAG 24d652968ee59822d160882ff9f36a3ef39a69a1
+    GIT_TAG 0fd2f8b0efcadff387062f81ca9652aca9b6d195
 )
 FetchContent_MakeAvailable(tanh-lib)
 
