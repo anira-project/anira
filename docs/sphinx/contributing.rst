@@ -70,6 +70,19 @@ General
 - Include appropriate documentation for public API
 - Add tests for new functionality
 
+Code Style
+~~~~~~~~~~
+
+Formatting and linting are enforced by ``.clang-format``, ``.clang-tidy`` and ``.clangd`` in the repository root. These files are **not maintained in anira**: they are shared across the tanh-lab projects and installed verbatim from a pinned release of `tanh-tooling <https://github.com/tanh-lab/tanh-tooling>`_ (the canonical copies live in its ``clang/`` directory). Do not edit them by hand — the ``clang_check`` CI job re-downloads the pinned versions and fails if the committed files differ.
+
+To update to a newer tanh-tooling release, run its installer with the new tag, commit the rewritten files, and bump the ``ref`` (and the workflow version) in ``.github/workflows/clang_check.yml`` to the same tag in the same commit:
+
+.. code-block:: bash
+
+    TANH_TOOLING_REF=vX.Y.Z sh -c "$(curl -fsSL https://raw.githubusercontent.com/tanh-lab/tanh-tooling/vX.Y.Z/clang/install.sh)"
+
+Style changes themselves belong in tanh-tooling, not here.
+
 Documentation
 ~~~~~~~~~~~~~
 
