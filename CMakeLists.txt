@@ -213,8 +213,7 @@ FetchContent_MakeAvailable(concurrentqueue)
 # find_dependency(tanh COMPONENTS Core), so a consumer's find_package(anira)
 # links the exported tanh::Core.
 #
-# Pinned to tanh-lab/tanh-lib#14 (feat/core-hardening); bump to a tagged
-# release once one is cut.
+# Pinned to a tagged tanh-lib release.
 set(TANH_BUILD_CORE ON CACHE BOOL "" FORCE)
 set(TANH_BUILD_STATE OFF CACHE BOOL "" FORCE)
 set(TANH_BUILD_DSP OFF CACHE BOOL "" FORCE)
@@ -229,7 +228,7 @@ set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL} CACHE BOOL "" FORCE)
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    GIT_TAG 3480d269b508bbd629053469ff865893c0c01c3c
+    GIT_TAG v0.0.1
 )
 FetchContent_MakeAvailable(tanh-lib)
 
