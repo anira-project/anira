@@ -123,7 +123,7 @@ TEST(Buffer, InvalidChannelsSwap) {
     ASSERT_EQ(buffer1_ptr, buffer1.data());
     ASSERT_EQ(buffer2_ptr, buffer2.data());
 }
-#else
+#elif GTEST_HAS_DEATH_TEST
 TEST(BufferDeathTest, InvalidSizeSwap) {
     anira::Buffer<int> buffer1(1, 5);
     anira::Buffer<int> buffer2(1, 6);

@@ -1,0 +1,86 @@
+name: build_install
+
+# Install-tree completeness: build anira with ANIRA_WITH_INSTALL=ON, install it
+# into a fresh prefix and build + run test/install (an external project using
+# find_package(anira)) against that prefix. Catches headers, exported targets or
+# dependencies (tanh::Core, backends) missing from what `cmake --install`
+# produces — the regular jobs only ever link against the build tree.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+
+concurrency:
+  group: build_install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_install:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ONNX Runtime stays on so the backend part of the install tree is
+          # covered; the other engines are exercised by on_tag.yml.
+          - name: Linux-x86_64-shared
+            os: ubuntu-latest
+            shared: ON
+          - name: Linux-x86_64-static
+            os: ubuntu-latest
+            shared: OFF
+          - name: macOS-arm64-shared
+            os: macOS-latest
+            shared: ON
+          - name: macOS-arm64-static
+            os: macOS-latest
+            shared: OFF
+          - name: Windows-x86_64-shared
+            os: windows-latest
+            shared: ON
+          - name: Windows-x86_64-static
+            os: windows-latest
+            shared: OFF
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: get repo and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - name: setup
+        uses: ./.github/actions/setup
+      - name: build
+        uses: ./.github/actions/build
+        with:
+          BUILD_TYPE: Release
+          CMAKE_BUILD_PARALLEL_LEVEL: 4
+          TARGETS: (anira)
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_INSTALL=ON -DANIRA_WITH_TESTS=OFF -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/prefix"
+      - name: install
+        shell: bash
+        run: |
+          cmake --install build --config Release
+          echo "::group::install tree"
+          find prefix -type f | sort
+          echo "::endgroup::"
+      - name: build and run the consumer against the prefix
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cmake -S test/install -B build-consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ github.workspace }}/prefix"
+            cmake --build build-consumer --config Release --parallel
+            PATH="${{ github.workspace }}/prefix/lib:$PATH" ./build-consumer/Release/consumer.exe
+          else
+            cmake -S test/install -B build-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ github.workspace }}/prefix"
+            cmake --build build-consumer --parallel
+            ./build-consumer/consumer
+          fi
