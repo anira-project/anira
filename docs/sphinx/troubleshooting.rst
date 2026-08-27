@@ -199,7 +199,8 @@ even from late-running static destructors) and is reclaimed at unload.
        with ``nm -DC your_plugin.so | grep ' u '`` (should print nothing).
     4. **macOS never unloads your plugin** (the opposite problem, and harmless): dyld
        does not unload images that use thread-local storage, which the statically linked
-       ONNX Runtime and LiteRT archives do. Such a plugin stays mapped until the host
+       backend archives (ONNX Runtime, LiteRT, ExecuTorch) do. Such a plugin — or a
+       ``libanira.dylib`` with a static backend inside — stays mapped until the host
        quits and cannot crash this way; anira's ``test/unload`` skips its unmapped
        assertions in that configuration.
 

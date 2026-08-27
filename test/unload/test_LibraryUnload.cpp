@@ -200,22 +200,26 @@ private:
     std::string m_error;
 };
 
-// Can this module be unloaded at all? Probed once per process by loading and unloading
-// it without touching anira. dyld (macOS) never unloads some images — in practice any
-// image carrying thread-local variables, which the statically linked ONNX Runtime and
-// LiteRT archives do — so a static-backend module stays mapped forever there. Such a
-// module cannot crash on unload either (there is no unload), so the unmapped assertions
-// and the death test have nothing to prove and are skipped on Apple platforms. On
-// Linux/Windows a module that stays mapped is a real finding (e.g. a NODELETE object
-// from STB_GNU_UNIQUE symbols under GCC) and fails.
-bool module_is_unloadable() {
-    static const bool k_unloadable = [] {
+// Can this module — and, in shared builds, libanira — be unloaded at all? Probed once
+// per process by loading and unloading the module without touching anira. dyld (macOS)
+// never unloads some images — in practice any image carrying thread-local variables,
+// which the statically linked backend runtimes (ONNX Runtime, LiteRT, ExecuTorch) do —
+// so such an image stays mapped forever there. It cannot crash on unload either (there
+// is no unload), so the unmapped assertions and the death test have nothing to prove
+// and are skipped on Apple platforms. On Linux/Windows an image that stays mapped is a
+// real finding (e.g. a NODELETE object from STB_GNU_UNIQUE symbols under GCC) and fails.
+const std::string& pinned_by_loader() {
+    static const std::string k_pinned = [] {
         Module probe;
-        if (!probe.load()) { return true; }  // let the real tests report the load error
+        if (!probe.load()) { return std::string(); }  // let the real tests report the load error
         probe.unload();
-        return !is_mapped(k_module_path);
+        if (is_mapped(k_module_path)) { return std::string("the test module"); }
+        if (k_library_path != nullptr && is_mapped(k_library_path)) {
+            return std::string("libanira");
+        }
+        return std::string();
     }();
-    return k_unloadable;
+    return k_pinned;
 }
 
 #if defined(__APPLE__)
@@ -225,9 +229,10 @@ constexpr bool k_skip_when_not_unloadable = false;
 #endif
 
 void expect_unmapped() {
-    if (k_skip_when_not_unloadable && !module_is_unloadable()) {
-        GTEST_SKIP() << "dyld never unloads this module (thread-local variables from the "
-                        "statically linked backend runtimes), so there is no unload to survive";
+    if (k_skip_when_not_unloadable && !pinned_by_loader().empty()) {
+        GTEST_SKIP() << "dyld never unloads " << pinned_by_loader()
+                     << " (thread-local variables from the statically linked backend "
+                        "runtimes), so there is no unload to survive";
     }
     EXPECT_FALSE(is_mapped(k_module_path))
         << "the module is still mapped after unload — the loader refused to delete it "
@@ -362,8 +367,9 @@ TEST(LibraryUnloadDeathTest, LeakedThreadCrashesOnUnload) {
     // Pin in the parent as well: the unloadability probe below loads and unloads the
     // module, and the backend runtimes must not be unloaded along with it.
     pin_backend_runtimes();
-    if (k_skip_when_not_unloadable && !module_is_unloadable()) {
-        GTEST_SKIP() << "dyld never unloads this module, so a leaked thread cannot crash";
+    if (k_skip_when_not_unloadable && !pinned_by_loader().empty()) {
+        GTEST_SKIP() << "dyld never unloads " << pinned_by_loader()
+                     << ", so a leaked thread cannot crash";
     }
 #if defined(_WIN32)
     EXPECT_DEATH(
