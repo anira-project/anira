@@ -20,13 +20,16 @@ InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
                                    InferenceConfig& inference_config,
                                    BackendBase* custom_processor,
                                    const ContextConfig& context_config)
-    : m_context(Context::get_instance(context_config))
-    , m_session(m_context->create_session(pp_processor, inference_config, custom_processor))
+    : m_context(Context::get_instance())
     , m_inference_config(inference_config)
-    , m_pp_processor(pp_processor) {}
+    , m_pp_processor(pp_processor)
+    , m_session(Context::create_session(pp_processor,
+                                        inference_config,
+                                        custom_processor,
+                                        context_config)) {}
 
 InferenceManager::~InferenceManager() {
-    m_context->release_session(m_session);
+    Context::release_session(m_session);
 }
 
 void InferenceManager::set_backend(InferenceBackend new_inference_backend) {
@@ -40,7 +43,7 @@ InferenceBackend InferenceManager::get_backend() const {
 void InferenceManager::prepare(HostConfig new_config, std::vector<long> custom_latency) {
     m_host_config = new_config;
 
-    m_context->prepare_session(m_session, m_host_config, std::move(custom_latency));
+    m_context.prepare_session(m_session, m_host_config, std::move(custom_latency));
 
     m_missing_samples.clear();
     m_missing_samples.resize(m_inference_config.get_tensor_output_shape().size(), 0);
@@ -52,7 +55,7 @@ size_t* InferenceManager::process(const float* const* const* input_data,
                                   size_t* num_output_samples) {
     process_input(input_data, num_input_samples);
 
-    m_context->new_data_submitted(m_session);
+    m_context.new_data_submitted(m_session);
     if (m_inference_config.m_blocking_ratio > 0.f) {
         std::chrono::steady_clock::time_point wait_until = std::chrono::steady_clock::now();
         auto buffer_size_in_sec =
@@ -61,9 +64,9 @@ size_t* InferenceManager::process(const float* const* const* input_data,
         auto time_to_process = std::chrono::microseconds(
             static_cast<long>(buffer_size_in_sec * 1e6 * m_inference_config.m_blocking_ratio));
         wait_until += time_to_process;
-        m_context->new_data_request(m_session, wait_until);
+        m_context.new_data_request(m_session, wait_until);
     } else {
-        m_context->new_data_request(m_session);
+        m_context.new_data_request(m_session);
     }
 
     return process_output(output_data, num_output_samples);
@@ -71,15 +74,15 @@ size_t* InferenceManager::process(const float* const* const* input_data,
 
 void InferenceManager::push_data(const float* const* const* input_data, size_t* num_input_samples) {
     process_input(input_data, num_input_samples);
-    m_context->new_data_submitted(m_session);
+    m_context.new_data_submitted(m_session);
 }
 
 size_t* InferenceManager::pop_data(float* const* const* output_data, size_t* num_output_samples) {
     if (m_inference_config.m_blocking_ratio > 0.f) {
         std::chrono::steady_clock::time_point const wait_until;
-        m_context->new_data_request(m_session, wait_until);
+        m_context.new_data_request(m_session, wait_until);
     } else {
-        m_context->new_data_request(m_session);
+        m_context.new_data_request(m_session);
     }
 
     return process_output(output_data, num_output_samples);
@@ -89,7 +92,7 @@ size_t* InferenceManager::pop_data(float* const* const* output_data,
                                    size_t* num_output_samples,
                                    std::chrono::steady_clock::time_point wait_until) {
     if (m_inference_config.m_blocking_ratio > 0.f) {
-        m_context->new_data_request(m_session, wait_until);
+        m_context.new_data_request(m_session, wait_until);
     } else {
         LOG_ERROR << "[ERROR] InferenceConfig does not use blocking_ratio and does not use "
                      "semaphores for data acquisition, cannot wait for data!"
@@ -217,11 +220,11 @@ std::vector<unsigned int> InferenceManager::get_latency() const {
 }
 
 const Context& InferenceManager::get_context() const {
-    return *m_context;
+    return m_context;
 }
 
 size_t InferenceManager::get_available_samples(size_t tensor_index, size_t channel) const {
-    m_context->new_data_request(m_session);
+    m_context.new_data_request(m_session);
     if (m_inference_config.get_postprocess_output_size()[tensor_index] > 0) {
         return m_session->m_receive_buffer[tensor_index].get_available_samples(channel);
     } else {
@@ -253,7 +256,7 @@ void InferenceManager::set_non_realtime(bool is_non_realtime) const {
 }
 
 void InferenceManager::reset() {
-    m_context->reset_session(m_session);
+    m_context.reset_session(m_session);
     for (size_t& missing_samples : m_missing_samples) {
         missing_samples = 0;  // Reset missing samples to zero
     }

@@ -1,11 +1,10 @@
 #ifndef ANIRA_CONTEXT_H
 #define ANIRA_CONTEXT_H
 
-#include <concurrentqueue.h>
-
 #include <atomic>
+#include <chrono>
+#include <cstddef>
 #include <memory>
-#include <mutex>
 #include <vector>
 
 #include "../ContextConfig.h"
@@ -34,80 +33,107 @@
 namespace anira {
 
 /**
- * @brief Singleton context class managing global inference resources and session coordination
+ * @brief Process-wide inference context: session registry, inference thread pool, backend
+ * processor pools and the global inference queue
  *
- * The Context class serves as a singleton manager for all neural network inference resources,
- * including thread pools, backend processors, and session management. It provides centralized
- * coordination for multiple inference sessions while maintaining efficient resource sharing
- * and thread safety across the entire inference system.
+ * The Context coordinates every inference session in a process (or, for a plugin, in the
+ * binary that embeds anira): it owns the shared inference thread pool, pools backend
+ * processors between sessions with equal configurations, and hands out the global
+ * inference queue that the inference threads consume from.
  *
- * Key responsibilities:
- * - Managing singleton instance lifecycle and configuration
- * - Coordinating inference thread pool with configurable size
- * - Managing backend processor instances (LibTorch, ONNX, TensorFlow Lite)
- * - Session creation, management, and cleanup
- * - Thread-safe concurrent queue management for inference requests
- * - Resource pooling and efficient allocation/deallocation
+ * @par Lifetime
+ * The context is immortal: its state lives in one heap-allocated core that is created on
+ * first use and is never destroyed while the library is loaded. Nothing of it runs during
+ * static teardown, so calling into the context is valid at any time, from any thread —
+ * including from destructors of static or host-owned objects that happen to run late. The
+ * core is reclaimed only when the library is unloaded and nothing is left (see
+ * release_core_if_idle()); a plugin that is merely scanned (loaded and unloaded without
+ * ever creating a session) allocates nothing.
  *
- * The Context uses a singleton pattern to ensure:
- * - Global resource coordination across multiple inference instances
- * - Efficient sharing of expensive resources (thread pools)
- * - Centralized configuration and lifecycle management
- * - Thread-safe access to shared components
+ * @par Thread pool lifetime
+ * The inference threads exist exactly while sessions exist. This is a rule enforced by the
+ * session registry, not a side effect of reference counting: create_session() builds the
+ * pool (from that session's ContextConfig) when it registers the first session, and
+ * release_session() stops and joins every pool thread — before it returns, inside the same
+ * critical section — when it unregisters the last one. A plugin host may therefore unload
+ * the plugin's shared library as soon as the last InferenceHandler has been destroyed: no
+ * thread of anira's is alive at that point.
  *
- * @note This class is thread-safe and manages its own lifecycle. All access
- *       should be through the static interface methods rather than direct instantiation.
+ * On ELF and Mach-O platforms a library-unload hook additionally calls shutdown() as a
+ * backstop for hosts that unload a plugin while an instance is still alive. Windows offers
+ * no safe equivalent (nothing that runs at DLL detach may wait for a thread), so a plugin
+ * that wants that protection there calls shutdown() from its module-exit entry point
+ * (CLAP `deinit`, VST3 `ExitDll`) — see the troubleshooting guide.
+ *
+ * @par Configuration
+ * The ContextConfig travels with the session: create_session() applies it when the
+ * registry is empty and reconciles it against the configuration in effect otherwise
+ * (log level: the most verbose requested level wins; wait strategy: the first wins;
+ * thread count: the pool only shrinks, and never to zero). Decision and mutation happen in
+ * one critical section, so no session can observe a configuration other than the one its
+ * pool was built with.
+ *
+ * @note One context per binary. A shared libanira is shared by everything that links it;
+ *       a plugin that embeds anira statically has its own. (On GCC/Linux, two such plugins
+ *       used to share one context by accident through unique-symbol binding; they no
+ *       longer do.)
  *
  * @see ContextConfig, SessionElement, InferenceThread, PrePostProcessor, BackendBase
  */
 class ANIRA_API Context {
 public:
-    /**
-     * @brief Constructor that initializes the context with specified configuration
-     *
-     * Creates a new context instance with the provided configuration settings.
-     * This constructor is should not be called directly. Use
-     * get_instance() to obtain a context instance.
-     *
-     * @param context_config Configuration settings for thread pool size, backend preferences, etc.
-     */
-    Context(const ContextConfig& context_config);
+    Context(const Context&) = delete;
+    Context& operator=(const Context&) = delete;
+    Context(Context&&) = delete;
+    Context& operator=(Context&&) = delete;
+    ~Context() = default;
 
     /**
-     * @brief Destructor that cleans up all context resources
+     * @brief Returns the process-wide context
      *
-     * Properly shuts down the thread pool, releases all backend processors,
-     * and cleans up any remaining sessions or inference data.
+     * The context is immortal and always valid to call (see the class description), so
+     * the returned reference never dangles.
+     *
+     * @return Reference to the context
      */
-    ~Context() = default;
+    static Context& get_instance();
+
     /**
-     * @brief Gets or creates the singleton context instance
+     * @brief Deprecated: returns the context and stages a configuration for the
+     * deprecated three-argument create_session()
      *
-     * Returns the existing context instance or creates a new one with the specified
-     * configuration if none exists. This is the primary method for accessing the
-     * global inference cntext.
+     * Kept for one minor release so existing code compiles unchanged. The returned
+     * shared_ptr is non-owning (the context is never destroyed). The configuration is
+     * applied when the next session is created via the three-argument
+     * create_session() — pass it to the four-argument create_session() directly instead.
      *
-     * @param context_config Configuration settings for the context (used only on first creation)
-     * @return Shared pointer to the singleton context instance
+     * @param context_config Configuration to apply with the next session
+     * @return Non-owning shared pointer to the context
      *
-     * @note If a context already exists, the provided configuration is ignored.
-     *       The configuration is only used when creating a new instance.
-     * @note Thread-safe: may be called from any non-realtime thread, including
-     *       concurrently with other sessions' lifecycle calls.
+     * @deprecated Use get_instance() and create_session(PrePostProcessor&,
+     *             InferenceConfig&, BackendBase*, const ContextConfig&).
      */
+    [[deprecated("Use get_instance() and pass the ContextConfig to create_session().")]]
     static std::shared_ptr<Context> get_instance(const ContextConfig& context_config);
 
     /**
-     * @brief Creates a new inference session with specified components
+     * @brief Creates and registers a new inference session
      *
-     * Creates and registers a new inference session with the provided preprocessing/
-     * postprocessing pipeline, inference configuration, and optional custom backend.
-     * The session is automatically assigned a unique ID and integrated into the
-     * global resource management system.
+     * Applies or reconciles the given ContextConfig (see the class description), builds the
+     * session with its preprocessing/postprocessing pipeline, inference configuration and
+     * optional custom backend, and registers it. When this is the first session, the
+     * inference thread pool is built from @p context_config (its threads are started by
+     * prepare_session()).
+     *
+     * Registration is the last step: if anything before it throws (typically a backend
+     * that cannot load the model), the registry, the thread pool and the configuration are
+     * left exactly as they were and any backend processor created for the failed session is
+     * released again. Nothing leaks.
      *
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration
-     * @param custom_processor Pointer to custom backend processor (nullptr for default backends)
+     * @param custom_processor Pointer to a custom backend processor (nullptr for default backends)
+     * @param context_config Configuration of the context as requested by this session
      * @return Shared pointer to the newly created session
      *
      * @note Thread-safe: may be called from any non-realtime thread, including
@@ -115,46 +141,89 @@ public:
      */
     static std::shared_ptr<SessionElement> create_session(PrePostProcessor& pp_processor,
                                                           InferenceConfig& inference_config,
+                                                          BackendBase* custom_processor,
+                                                          const ContextConfig& context_config);
+
+    /**
+     * @brief Deprecated: creates a session with the configuration staged by the deprecated
+     * get_instance(const ContextConfig&) (or the one in effect, or a default one)
+     *
+     * @deprecated Pass the ContextConfig to create_session() directly.
+     */
+    [[deprecated("Pass the ContextConfig to create_session() directly.")]]
+    static std::shared_ptr<SessionElement> create_session(PrePostProcessor& pp_processor,
+                                                          InferenceConfig& inference_config,
                                                           BackendBase* custom_processor);
 
     /**
      * @brief Releases an inference session and its resources
      *
-     * Properly shuts down and releases the specified session, including cleanup
-     * of associated backend processors, buffers, and other resources.
+     * Drains the session's in-flight inferences, unregisters it and releases its backend
+     * processors. When this was the last session, the inference thread pool is stopped and
+     * joined before this function returns, in the same critical section as the
+     * unregistration — after the last InferenceHandler is destroyed no anira thread exists.
      *
      * @param session Shared pointer to the session to release
      *
      * @note Thread-safe: may be called from any non-realtime thread, including
-     *       concurrently with other sessions' lifecycle calls. Exactly one
-     *       releaser tears down the shared thread pool when the last session
-     *       goes away.
+     *       concurrently with other sessions' lifecycle calls.
      */
     static void release_session(const std::shared_ptr<SessionElement>& session);
 
     /**
-     * @brief Releases the singleton context instance
+     * @brief Stops and joins the inference thread pool, regardless of registered sessions
      *
-     * Shuts down and releases the global context instance, including all sessions,
-     * thread pools, and backend processors. This should be called during application
-     * shutdown to ensure proper cleanup.
+     * Idempotent and cheap when there is nothing to do (in particular it never creates the
+     * context: a binary that never created a session pays nothing). Registered sessions
+     * stay registered; the pool is rebuilt by the next create_session() into an empty
+     * registry.
+     *
+     * With the default lifecycle the pool is already gone once the last session was
+     * released, so this is a backstop for hosts that unload a plugin's library while an
+     * instance is still alive. On ELF/Mach-O it is called automatically from a
+     * library-unload hook; on Windows nothing that runs at DLL detach may wait for a
+     * thread, so call it from your module-exit entry point (CLAP `deinit`, VST3 `ExitDll`)
+     * — those run before the host unloads the library and outside the loader lock.
+     *
+     * @note Not real-time safe (joins threads). Logs an error if sessions are still
+     *       registered — a host that unloads live instances is a host bug; the sessions'
+     *       memory is leaked, no thread is.
      */
-    static void release_instance();
+    static void shutdown();
 
     /**
-     * @brief Releases the inference thread pool
+     * @brief Frees the context core if nothing uses it
      *
-     * Shuts down all inference threads and releases thread pool resources.
-     * This is typically called as part of context cleanup or reconfiguration.
+     * Deletes the core when no session is registered, no pool thread exists and no
+     * user-managed inference thread is active (see make_inference_thread()). The next call
+     * into the context creates a fresh core. Called from the library-unload hook after
+     * shutdown(), so that a plugin's load/unload cycle leaves no memory behind.
+     *
+     * @warning Only safe when no other thread can call into anira concurrently (which is
+     *          the case at library unload). Never blocks: if the lifecycle lock is held by
+     *          someone, nothing is freed.
+     *
+     * @return True if the core was freed, false if it did not exist or is in use
      */
-    static void release_thread_pool();
+    static bool release_core_if_idle();
+
+    /**
+     * @brief Whether the context core currently exists
+     *
+     * True from the first call that needs the core (typically create_session()) until
+     * release_core_if_idle() frees it. Diagnostic; used by the tests.
+     *
+     * @return True if the core is allocated
+     */
+    static bool has_core();
 
     /**
      * @brief Prepares a session for processing with new audio configuration
      *
      * Configures the specified session with new audio host settings and optional
      * custom latency values. This method handles buffer allocation, latency
-     * calculation, and session state updates.
+     * calculation, and session state updates, and starts the inference thread pool if it is
+     * not running yet.
      *
      * @param session Shared pointer to the session to prepare
      * @param new_config New host configuration with audio settings
@@ -169,12 +238,9 @@ public:
                          std::vector<long> custom_latency = {});
 
     /**
-     * @brief Gets the number of active inference sessions
+     * @brief Gets the number of registered inference sessions
      *
-     * Returns the current count of active inference sessions managed by the context.
-     * This is useful for monitoring and debugging purposes.
-     *
-     * @return Number of currently active sessions
+     * @return Number of currently registered sessions
      */
     static int get_num_sessions();
 
@@ -221,17 +287,14 @@ public:
                           std::chrono::steady_clock::time_point wait_until);
 
     /**
-     * @brief Gets a reference to all active sessions
+     * @brief Gets a snapshot of all registered sessions
      *
-     * Returns a reference to the vector containing all currently active inference
-     * sessions. This method is primarily used for internal management and debugging.
+     * Returns a copy of the registry, taken under the lifecycle lock. Primarily used for
+     * internal management and debugging.
      *
-     * @return Reference to the vector of active session shared pointers
-     *
-     * @note This method provides direct access to internal data structures and
-     *       should be used carefully to avoid disrupting session management.
+     * @return Vector of the registered sessions' shared pointers
      */
-    static std::vector<std::shared_ptr<SessionElement>>& get_sessions();
+    static std::vector<std::shared_ptr<SessionElement>> get_sessions();
 
     /**
      * @brief Wait-free reset of a session, safe on the session's driving (audio) thread.
@@ -260,32 +323,38 @@ public:
     void reset_session(const std::shared_ptr<SessionElement>& session);
 
     /**
-     * @brief Get a reference to the static inference queue
+     * @brief Get a reference to the global inference queue
+     *
      * Returns a reference to the global concurrent queue used for inference requests.
      * This is used to construct InferenceThreads (user-managed or WASM
      * worker-driven) that consume from the global queue; dequeueing is
      * non-tokenized and allocation-free.
-     * @return Reference to the static inference queue
+     *
+     * The queue lives in the immortal context core, so the reference stays valid for as
+     * long as the library is loaded — in particular after all sessions were released.
+     *
+     * @return Reference to the global inference queue
      */
     static InferenceQueue& get_static_inference_queue();
 
     /**
-     * @brief Factory for a user-owned InferenceThread bound to the static inference queue.
+     * @brief Factory for a user-owned InferenceThread bound to the global inference queue.
      *
      * Returns a new InferenceThread whose lifecycle is fully managed by the caller.
      * The thread is not started automatically — call start() on the returned object
      * to begin processing. The caller must also call stop() (or simply destroy the
-     * object) before program exit.
+     * object) before program exit — and, for a plugin, before its library is unloaded:
+     * the unload hook joins only the context's own pool.
      *
      * This is purely additive: the auto-managed thread pool sized via
      * ContextConfig::m_num_threads continues to work unchanged. Users who want full
-     * control over threading typically construct Context with ContextConfig(0) so
+     * control over threading typically construct their sessions with ContextConfig(0) so
      * that no auto-pool threads exist, then create and manage threads themselves
      * via this factory.
      *
-     * The returned thread references the static inference queue, which has static
-     * storage duration — so the thread remains valid even after all sessions and
-     * the Context singleton itself are released.
+     * The returned thread references the global inference queue, which lives in the
+     * immortal context core — so the thread remains valid even after all sessions have
+     * been released.
      *
      * @return Unique pointer to a new user-owned InferenceThread.
      */
@@ -321,25 +390,129 @@ public:
     static bool has_inference_threads();
 
 private:
-    /**
-     * @brief Gets the next available session ID
-     *
-     * Returns a unique session ID for new session creation. This method is
-     * thread-safe and ensures each session gets a unique identifier.
-     *
-     * @return Next available session ID
-     */
-    static int get_available_session_id();
+    Context() = default;
 
     /**
-     * @brief Updates the thread pool with a new number of threads
+     * @brief The context's state: registry, thread pool, queue, processor pools
      *
-     * Adjusts the inference thread pool size to the specified number of threads.
-     * This may involve creating new threads or shutting down existing ones.
+     * Defined in Context.cpp. Allocated once on first use and never destroyed while the
+     * library is loaded (see the class description); freed only by
+     * release_core_if_idle().
+     */
+    struct Core;
+
+    /**
+     * @brief Returns the core, creating it on first use
      *
+     * Lock-free: an atomic load on the fast path, a compare-and-swap on first creation.
+     *
+     * @return Reference to the core
+     */
+    static Core& core();
+
+    /**
+     * @brief Returns the already-existing core
+     *
+     * For the real-time paths, which are only ever reached through a registered session
+     * and therefore never observe a missing core. Performs no allocation.
+     *
+     * @return Reference to the core
+     */
+    static Core& existing_core();
+
+    /**
+     * @brief Coerces a requested configuration to what this platform can honor
+     *
+     * WebAssembly: blocking waits and context-run threads are impossible, so
+     * WaitStrategy::Blocking becomes SpinBackoff and m_num_threads becomes 0, each with a
+     * warning. Native: returns the configuration unchanged.
+     *
+     * @param context_config Configuration as requested by a session
+     * @return Configuration to apply
+     */
+    static ContextConfig sanitize_config(const ContextConfig& context_config);
+
+    /**
+     * @brief Applies the log level a session requests, honoring "most verbose wins"
+     *
+     * Called with the lifecycle lock held, before anything on the session-creation path
+     * logs. With an empty registry the requested level takes effect; otherwise the lower
+     * (more verbose) of the level in effect and the requested one does.
+     *
+     * @param core The context core
+     * @param context_config Sanitized configuration of the session being created
+     */
+    static void apply_log_level_locked(Core& core, const ContextConfig& context_config);
+
+    /**
+     * @brief Applies a configuration into an empty registry, or reconciles it otherwise
+     *
+     * Called with the lifecycle lock held. Registry empty: the configuration becomes the
+     * one in effect and the inference thread pool is built from it (threads are created
+     * but not started). Registry non-empty: the configuration is compared with the one in
+     * effect — anira version, enabled backends, log level (most verbose wins), wait
+     * strategy (first wins) and thread count (the pool only shrinks, and never to zero) —
+     * and every mismatch is reported.
+     *
+     * @param core The context core
+     * @param context_config Sanitized configuration of the session being created
+     */
+    static void apply_or_compare_config_locked(Core& core, const ContextConfig& context_config);
+
+    /**
+     * @brief Adds a fully constructed session to the registry
+     *
+     * Called with the lifecycle lock held, as the last step of create_session().
+     *
+     * @param core The context core
+     * @param session The session to register
+     */
+    static void register_session_locked(Core& core, const std::shared_ptr<SessionElement>& session);
+
+    /**
+     * @brief Removes a session from the registry and enforces the pool policy
+     *
+     * Called with the lifecycle lock held. When the registry becomes empty, every
+     * inference thread of the pool is stopped and joined before this returns.
+     *
+     * @param core The context core
+     * @param session The session to unregister
+     */
+    static void unregister_session_locked(Core& core,
+                                          const std::shared_ptr<SessionElement>& session);
+
+    /**
+     * @brief Size the pool will have once the given configuration has been applied
+     *
+     * Side-effect free; used by create_session() to clamp a session's parallel-processor
+     * count before the pool exists (it is built at registration, the last step).
+     *
+     * @param core The context core
+     * @param context_config Sanitized configuration of the session being created
+     * @return Number of pool threads after apply_or_compare_config_locked()
+     */
+    static size_t prospective_pool_size_locked(const Core& core,
+                                               const ContextConfig& context_config);
+
+    /**
+     * @brief Resizes the inference thread pool
+     *
+     * Called with the lifecycle lock held. Creates (unstarted) threads to grow, or stops
+     * and joins threads to shrink.
+     *
+     * @param core The context core
      * @param new_num_threads New number of threads for the inference thread pool
      */
-    static void new_num_threads(unsigned int new_num_threads);
+    static void resize_pool_locked(Core& core, unsigned int new_num_threads);
+
+    /**
+     * @brief Starts every pool thread that is not running yet
+     *
+     * Called with the lifecycle lock held, from prepare_session().
+     *
+     * @param core The context core
+     */
+    static void start_thread_pool_locked(Core& core);
 
     /**
      * @brief Performs preprocessing for a session
@@ -437,14 +610,6 @@ private:
                              const std::shared_ptr<SessionElement::ThreadSafeStruct>& next_buffer);
 
     /**
-     * @brief Starts the inference thread pool
-     *
-     * Initializes and starts all threads in the inference thread pool according
-     * to the context configuration. This method is called during context initialization.
-     */
-    static void start_thread_pool();
-
-    /**
      * @brief Blocks until none of the session's inferences are queued or running.
      *
      * Quiescence barrier for the control-thread paths (prepare_session,
@@ -492,46 +657,20 @@ private:
      * @brief Template method for releasing backend processors
      *
      * Generic template method for properly releasing backend processors and
-     * returning them to the available processor pool.
+     * returning them to the available processor pool. A processor stays pooled while
+     * another registered session with an equal configuration shares it.
      *
      * @tparam T Backend processor type (LibtorchProcessor, OnnxRuntimeProcessor, etc.)
+     * @param core The context core
      * @param inference_config Inference configuration
      * @param processors Vector of available processors of type T
      * @param processor Processor to release
      */
     template <typename T>
-    static void release_processor(InferenceConfig& inference_config,
+    static void release_processor(Core& core,
+                                  InferenceConfig& inference_config,
                                   std::vector<std::shared_ptr<T>>& processors,
                                   std::shared_ptr<T>& processor);
-
-    inline static std::mutex m_lifecycle_mutex;  ///< Serializes mutation of the shared lifecycle
-                                                 ///< state below (m_context, m_sessions,
-                                                 ///< m_thread_pool, the processor pools) across
-                                                 ///< get_instance / create_session /
-                                                 ///< release_session / prepare_session. Hosts may
-                                                 ///< drive several sessions' lifecycles from
-                                                 ///< different threads concurrently. Never taken
-                                                 ///< on realtime paths.
-
-    inline static std::shared_ptr<Context> m_context = nullptr;  ///< Singleton instance of the
-                                                                 ///< context
-    inline static ContextConfig m_context_config;  ///< Configuration used for the current context
-                                                   ///< instance
-
-    inline static std::vector<std::shared_ptr<SessionElement>> m_sessions;  ///< Vector of all
-                                                                            ///< active inference
-                                                                            ///< sessions
-    inline static std::atomic<int> m_next_id{-1};  ///< Thread-safe counter for generating unique
-                                                   ///< session IDs
-    inline static std::atomic<int> m_active_sessions{0};   ///< Thread-safe counter of currently
-                                                           ///< active sessions
-    inline static bool m_thread_pool_should_exit = false;  ///< Flag indicating whether the thread
-                                                           ///< pool should shut down
-
-    inline static std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;  ///< Vector of
-                                                                                ///< inference
-                                                                                ///< threads in the
-                                                                                ///< thread pool
 
     static constexpr size_t k_min_capacity_inference_queue = 10000;  ///< Minimum pre-allocated
                                                                      ///< capacity of the inference
@@ -545,41 +684,6 @@ private:
                                                                ///< enqueues from off-RT control
                                                                ///< threads, e.g. requeueing in
                                                                ///< drain_inference_queue)
-
-    /**
-     * @brief Thread-safe concurrent queue for inference requests
-     *
-     * Lock-free concurrent queue that manages inference requests from all sessions.
-     * The queue is initialized with minimum capacity and pre-allocation hints for
-     * explicit and implicit producers (moodycamel signature: minCapacity,
-     * maxExplicitProducers, maxImplicitProducers).
-     * See InferenceQueue for the type choice per platform and the WaitStrategy
-     * interaction.
-     */
-    inline static InferenceQueue m_next_inference = InferenceQueue(k_min_capacity_inference_queue,
-                                                                   k_max_num_instances,
-                                                                   k_max_num_implicit_producers);
-
-#ifdef USE_LIBTORCH
-    inline static std::vector<std::shared_ptr<LibtorchProcessor>>
-        m_libtorch_processors;  ///< Pool of LibTorch backend processors
-#endif
-#ifdef USE_ONNXRUNTIME
-    inline static std::vector<std::shared_ptr<OnnxRuntimeProcessor>>
-        m_onnx_processors;  ///< Pool of ONNX Runtime backend processors
-#endif
-#ifdef USE_TFLITE
-    inline static std::vector<std::shared_ptr<TFLiteProcessor>>
-        m_tflite_processors;  ///< Pool of TensorFlow Lite backend processors
-#endif
-#ifdef USE_LITERT
-    inline static std::vector<std::shared_ptr<LiteRtProcessor>>
-        m_litert_processors;  ///< Pool of LiteRT backend processors
-#endif
-#ifdef USE_EXECUTORCH
-    inline static std::vector<std::shared_ptr<ExecuTorchProcessor>>
-        m_executorch_processors;  ///< Pool of ExecuTorch backend processors
-#endif
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr

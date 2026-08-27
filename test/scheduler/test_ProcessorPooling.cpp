@@ -55,17 +55,16 @@ using namespace anira;
 // processor owns its config in its own storage, so the addresses differ.
 TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
     ContextConfig const context_config;
-    auto context = Context::get_instance(context_config);
 
     // Two hosts, each owning an equal-valued InferenceConfig. Session A's config is
     // heap-allocated so its storage can be freed deterministically mid-test.
     auto* config_a = new InferenceConfig(hybridnn_config);
     auto* pp_a = new PrePostProcessor(*config_a);
-    auto session_a = context->create_session(*pp_a, *config_a, nullptr);
+    auto session_a = Context::create_session(*pp_a, *config_a, nullptr, context_config);
 
     auto config_b = std::make_unique<InferenceConfig>(hybridnn_config);
     auto pp_b = std::make_unique<PrePostProcessor>(*config_b);
-    auto session_b = context->create_session(*pp_b, *config_b, nullptr);
+    auto session_b = Context::create_session(*pp_b, *config_b, nullptr, context_config);
 
     // Precondition: equal configs must actually share one pooled processor, otherwise
     // the test would not exercise the bug at all.
@@ -80,7 +79,7 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
 
     // Release session A and free its config — exactly as a host destroying one plugin
     // instance would. Session B and the pooled processor live on.
-    context->release_session(session_a);
+    Context::release_session(session_a);
     session_a.reset();
     delete pp_a;
     delete config_a;  // Session A's InferenceConfig storage is now freed.
@@ -92,8 +91,8 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
         << "Pooled processor still aliases the released session's InferenceConfig "
            "(use-after-free, issue #76)";
 
-    // Cleanup: releasing the last session resets the Context singleton.
-    context->release_session(session_b);
+    // Cleanup: releasing the last session tears the shared thread pool down.
+    Context::release_session(session_b);
 }
 
 #else

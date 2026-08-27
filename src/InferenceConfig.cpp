@@ -7,10 +7,14 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 namespace anira {
+
+unsigned int InferenceConfig::Defaults::m_num_parallel_processors =
+    (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2 : 1;
 
 InferenceConfig::InferenceConfig(std::vector<ModelData> model_data,
                                  std::vector<TensorShape> tensor_shape,

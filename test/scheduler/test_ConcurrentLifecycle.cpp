@@ -103,6 +103,10 @@ TEST(ConcurrentLifecycleTest, ConcurrentDestroy) {
 
         ASSERT_EQ(Context::get_num_sessions(), 0)
             << "session bookkeeping corrupted after concurrent destroy, iteration " << i;
+        ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+            << "inference threads survived the last release, iteration " << i;
+        ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+            << "inference threads survived the last release, iteration " << i;
     }
 }
 
@@ -128,6 +132,10 @@ TEST(ConcurrentLifecycleTest, DestroyCreateOverlap) {
 
         ASSERT_EQ(Context::get_num_sessions(), 0)
             << "session bookkeeping corrupted after destroy/create overlap, iteration " << i;
+        ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+            << "inference threads survived the last release, iteration " << i;
+        ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+            << "inference threads survived the last release, iteration " << i;
     }
 }
 
@@ -146,4 +154,8 @@ TEST(ConcurrentLifecycleTest, ParallelChurn) {
 
     ASSERT_EQ(Context::get_num_sessions(), 0)
         << "session bookkeeping corrupted after parallel churn";
+    ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+        << "inference threads survived the last release";
+    ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+        << "inference threads survived the last release";
 }

@@ -32,6 +32,14 @@
 
 namespace anira {
 
+namespace {
+// Process-wide count of threads executing their run loop (Emscripten: started and not yet
+// stopped). Static storage duration; on WebAssembly that is shared memory, so every WASM
+// instance sees the same value. Deliberately not an inline static class member — see
+// InferenceThread.h.
+std::atomic<unsigned int> s_num_active_threads{0};
+}  // namespace
+
 InferenceThread::InferenceThread(InferenceQueue& next_inference, WaitStrategy wait_strategy)
     : m_next_inference(next_inference), m_wait_strategy(wait_strategy) {}
 
