@@ -199,7 +199,35 @@ private:
     std::string m_error;
 };
 
+// Can this module be unloaded at all? Probed once per process by loading and unloading
+// it without touching anira. dyld (macOS) never unloads some images — in practice any
+// image carrying thread-local variables, which the statically linked ONNX Runtime and
+// LiteRT archives do — so a static-backend module stays mapped forever there. Such a
+// module cannot crash on unload either (there is no unload), so the unmapped assertions
+// and the death test have nothing to prove and are skipped on Apple platforms. On
+// Linux/Windows a module that stays mapped is a real finding (e.g. a NODELETE object
+// from STB_GNU_UNIQUE symbols under GCC) and fails.
+bool module_is_unloadable() {
+    static const bool unloadable = [] {
+        Module probe;
+        if (!probe.load()) { return true; }  // let the real tests report the load error
+        probe.unload();
+        return !is_mapped(k_module_path);
+    }();
+    return unloadable;
+}
+
+#if defined(__APPLE__)
+constexpr bool k_skip_when_not_unloadable = true;
+#else
+constexpr bool k_skip_when_not_unloadable = false;
+#endif
+
 void expect_unmapped() {
+    if (k_skip_when_not_unloadable && !module_is_unloadable()) {
+        GTEST_SKIP() << "dyld never unloads this module (thread-local variables from the "
+                        "statically linked backend runtimes), so there is no unload to survive";
+    }
     EXPECT_FALSE(is_mapped(k_module_path))
         << "the module is still mapped after unload — the loader refused to delete it "
            "(a NODELETE object, e.g. from STB_GNU_UNIQUE symbols under GCC?); the test "
@@ -327,9 +355,15 @@ TEST_F(LibraryUnload, ReloadAfterUnloadWorks) {
 // The negative control that proves the harness is sensitive: a thread that is still
 // alive at unload must crash the process. If the child reaches _exit(0), the thread
 // survived — meaning the unmapping was not real (a NODELETE or otherwise pinned
-// library), which would have turned every test above into a false pass.
+// library), which would have turned every test above into a false pass. The
+// "threadsafe" death-test style is passed on the command line by CMake.
 TEST(LibraryUnloadDeathTest, LeakedThreadCrashesOnUnload) {
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    // Pin in the parent as well: the unloadability probe below loads and unloads the
+    // module, and the backend runtimes must not be unloaded along with it.
+    pin_backend_runtimes();
+    if (k_skip_when_not_unloadable && !module_is_unloadable()) {
+        GTEST_SKIP() << "dyld never unloads this module, so a leaked thread cannot crash";
+    }
 #if defined(_WIN32)
     EXPECT_DEATH(
         {

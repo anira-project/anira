@@ -197,6 +197,11 @@ even from late-running static destructors) and is reclaimed at unload.
        same flag plus hidden visibility (``CXX_VISIBILITY_PRESET hidden``,
        ``VISIBILITY_INLINES_HIDDEN ON``) to your plugin's translation units, and verify
        with ``nm -DC your_plugin.so | grep ' u '`` (should print nothing).
+    4. **macOS never unloads your plugin** (the opposite problem, and harmless): dyld
+       does not unload images that use thread-local storage, which the statically linked
+       ONNX Runtime and LiteRT archives do. Such a plugin stays mapped until the host
+       quits and cannot crash this way; anira's ``test/unload`` skips its unmapped
+       assertions in that configuration.
 
 The scenario is covered by anira's host-shaped ``test/unload`` test, which loads a
 plugin-shaped module from an executable that does not link anira, unloads it and

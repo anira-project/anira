@@ -101,8 +101,14 @@ if(BUILD_SHARED_LIBS)
     endif()
 endif()
 
-# The death test re-executes this binary; macOS crash reporting can make that slow.
-gtest_discover_tests(anira_unload_test DISCOVERY_TIMEOUT 90 PROPERTIES TIMEOUT 120)
+# The death test must run in the "threadsafe" style (a fresh re-executed process);
+# passed on the command line rather than via GTEST_FLAG_SET, whose flag variable is
+# not exported from gtest's DLL build on Windows. macOS crash reporting can make the
+# re-execution slow, hence the timeout.
+gtest_discover_tests(anira_unload_test
+    EXTRA_ARGS --gtest_death_test_style=threadsafe
+    DISCOVERY_TIMEOUT 90
+    PROPERTIES TIMEOUT 120)
 
 # Windows: the module, anira.dll and every runtime DLL are searched relative to the
 # application, so copy them next to the executable (the module is built into the same
