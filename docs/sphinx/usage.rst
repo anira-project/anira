@@ -341,11 +341,11 @@ Before processing audio data, the :cpp:func:`anira::InferenceHandler::prepare` m
 
 The :cpp:struct:`anira::HostConfig` structure defines the host application's configuration, including buffer size and sample rate. This configuration is essential for the :cpp:class:`anira::InferenceHandler` to allocate appropriate memory and calculate processing latency.
 
-To construct :cpp:struct:`anira::HostConfig`, provide the buffer size and sample rate for a specific streamable input tensor. By default, tensor index 0 is used. For models with multiple input tensors, specify the desired tensor index.
+To construct :cpp:struct:`anira::HostConfig`, provide the buffer size and sample rate in samples of the *reference stream* — the streamable tensor whose samples are the unit of both values. By default the reference is resolved automatically: the first streamable input tensor, or, for generator models with no streamable input, the first streamable output tensor. For models with multiple streamable tensors you can name the reference explicitly with a tensor index and a direction (input or output). Naming a non-streamable or out-of-range tensor is an error: :cpp:func:`anira::InferenceHandler::prepare` throws ``std::invalid_argument`` instead of silently falling back.
 
 The structure also includes an optional parameter that controls whether the buffer size is seen as static or as the maximum buffer size. When this parameter is set to true, variable buffer sizes smaller than the specified maximum are allowed, which is useful for real-time applications with dynamic buffer sizes. However, this may increase the latency that anira calculates, since it needs to compensate for all possible size variations.
 
-**Create HostConfig with static buffer size for input tensor 0:**
+**Create HostConfig with static buffer size (automatic reference):**
 
 .. code-block:: cpp
 
@@ -362,7 +362,19 @@ The structure also includes an optional parameter that controls whether the buff
         2048.f, // Buffer size in samples
         44100.f, // Sample rate in Hz
         true, // Allow smaller buffer sizes (optional, default is false)
-        1 // Tensor index (optional, default is 0)
+        1 // Reference tensor index (optional, default: first streamable tensor)
+    };
+
+**Create HostConfig with an output tensor as the reference:**
+
+.. code-block:: cpp
+
+    anira::HostConfig host_config {
+        2048.f, // Buffer size in samples of output tensor 0
+        44100.f, // Sample rate in Hz
+        false, // Allow smaller buffer sizes
+        0, // Reference tensor index
+        false // The reference is an output tensor (optional, default is true = input)
     };
 
 ..  note::
@@ -564,6 +576,9 @@ The :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::Inferen
 .. note::
     The :cpp:func:`anira::InferenceHandler::pop_data` method supports a wait_until parameter for blocking until data is available or timeout occurs. Use with the ``blocking_ratio`` in :cpp:struct:`anira::InferenceConfig` for proper latency compensation. Note that this blocks the real-time thread and is not fully lock-free, but this enables you to further reduce latency by waiting for the next available data.
 
+.. note::
+    :cpp:func:`anira::InferenceHandler::push_data` also collects finished inferences, as long as the receive buffers have room for them. Push-only usage is therefore fully supported for models whose results leave through non-streamable outputs (see section 5.4) — no periodic ``pop_data()`` or ``get_available_samples()`` call is needed. A *streamable* output must still be popped: if it never is, anira keeps the unread samples intact, stops collecting into the full buffer and logs a warning ("Output stream not consumed").
+
 
 5.3. Processing Non-Streamable Tensors
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -606,7 +621,42 @@ Some neural networks require additional input parameters or output values that d
 ..  note::
     The functions :cpp:func:`anira::PrePostProcessor::set_input` and :cpp:func:`anira::PrePostProcessor::get_output` can be called from any thread, allowing you to update control parameters or retrieve additional values asynchronously without blocking the real-time audio processing thread.
 
-5.4. Resetting the Stream
+5.4. One-sided Streaming: Generators and Analysers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Streamable tensors may sit on one side only. A *generator* has no streamable input — its inputs are all non-streamable control parameters, its output is a stream. An *analyser* has no streamable output — it consumes a stream and its results leave as non-streamable values. Both are first-class configurations: the reference stream (section 4.1) resolves to the streamable side automatically, and ``prepare()``, latency and buffer sizing work as for any other model.
+
+**Generator: process() and pop_data() are pulls.** With no input stream to push, inference is driven by output demand: each :cpp:func:`anira::InferenceHandler::process` or :cpp:func:`anira::InferenceHandler::pop_data` call adds the requested sample count on the reference output to the demand, and one inference is submitted per ``postprocess_output_size`` demanded samples — capturing the parameter values that are current at that call. :cpp:func:`anira::InferenceHandler::push_data` only stores parameters and never submits. :cpp:func:`anira::InferenceHandler::get_latency` counts from the first pull after ``prepare()`` or ``reset()``.
+
+.. code-block:: cpp
+
+    // Model: 4 control parameters in (non-streamable), 2048-sample audio stream out
+    // anira::InferenceConfig with ProcessingSpec({1}, {1}, {0}, {2048})
+
+    void processBlock(float** audio_output, int num_samples, float frequency) {
+        // Update the control parameters (any thread, captured at submission)
+        pp_processor.set_input(frequency, 0, 0);
+
+        // Pull the generated stream; this submits inference on demand
+        inference_handler.pop_data(audio_output, num_samples, 0);
+    }
+
+**Analyser: push the stream, read the latest result.** The input side behaves as for any other model. Non-streamable outputs carry the value of the *latest completed* inference: they are updated whenever results are collected (any ``process``/``push_data``/``pop_data``/``get_available_samples`` call), read ``0`` before the first inference completes, and ``get_latency()`` reports ``0`` for them. Push-only operation is supported — ``push_data()`` collects finished inferences itself (see the note in section 5.2).
+
+.. code-block:: cpp
+
+    // Model: 2048-sample audio stream in + 1 control parameter in, 1 scalar out
+    // anira::InferenceConfig with ProcessingSpec({1, 1}, {1}, {2048, 0}, {0})
+
+    void processBlock(const float** audio_input, int num_samples) {
+        // Push the stream; one inference runs per full 2048-sample window
+        inference_handler.push_data(audio_input, num_samples, 0);
+
+        // Read the newest available result (updates as inferences complete)
+        float score = pp_processor.get_output(0, 0);
+    }
+
+5.5. Resetting the Stream
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 :cpp:func:`anira::InferenceHandler::reset` re-anchors the inference pipeline to its initial state: it clears all internal buffers, re-seeds the latency zero-padding, and invalidates every inference dispatched so far — results still in flight are discarded and their internal structures reclaimed automatically. This is useful whenever the processed stream loses continuity, e.g. on transport jumps, playback restarts, or onset/transient re-synchronization.

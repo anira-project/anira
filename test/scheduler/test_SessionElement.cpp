@@ -13,8 +13,10 @@
 #include <ios>
 #include <ostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -111,7 +113,11 @@ std::string build_test_name(const testing::TestParamInfo<SessionElementTest::Par
     ss_buffer_size << std::fixed << std::setprecision(4) << info.param.m_host_config.m_buffer_size;
     ss_max_inference_time << std::fixed << std::setprecision(2)
                           << info.param.m_inference_config.m_max_inference_time;
-    ss_tensor_index << info.param.m_host_config.m_tensor_index;
+    if (info.param.m_host_config.m_tensor_index == anira::HostConfig::k_first_streamable) {
+        ss_tensor_index << "auto";
+    } else {
+        ss_tensor_index << info.param.m_host_config.m_tensor_index;
+    }
 
     std::stringstream ss;
     ss << "__input_size_";
@@ -546,4 +552,226 @@ TEST(SessionElementClearTest, ClearWithBlockingRatioDoesNotFreeze) {
     ASSERT_TRUE(fixture->m_cleared.load(std::memory_order_acquire))
         << "SessionElement::clear() deadlocked draining the done-semaphores "
            "(blind acquire on a semaphore with count 0).";
+}
+
+// =============================================================================
+// One-sided streaming regression tests (redo of the reverted PR #101, see #110)
+//
+// A generator has no streamable input (its inputs are all control parameters);
+// an analyser has no streamable output (its results leave as non-streamable
+// values). Both were broken at prepare() time: the generator hung / divided by
+// zero on the reference input's size, the analyser segfaulted in
+// sync_latencies() on an empty adjusted-latency vector. The reference stream is
+// now first-class (an input or an output), so both prepare() correctly.
+//
+// Expected values are derived by comparison with an equivalent two-sided config
+// computed by the same code -- never hard-coded numbers -- so they are immune to
+// float vs double rounding.
+// =============================================================================
+
+namespace {
+InferenceConfig make_config(std::vector<TensorShape> shapes, ProcessingSpec spec) {
+    return InferenceConfig(
+        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        std::move(shapes),
+        std::move(spec),
+        10.f,   // max_inference_time
+        0,      // warm_up
+        false,  // session_exclusive_processor
+        0.f,    // blocking_ratio
+        2);     // num_parallel_processors
+}
+
+struct PrepareResult {
+    std::vector<unsigned int> m_latency;
+    size_t m_num_structs = 0;
+    std::vector<size_t> m_send;
+    std::vector<size_t> m_receive;
+};
+
+PrepareResult prepare_and_measure(InferenceConfig inference_config, const HostConfig& host_config) {
+    PrePostProcessor pp_processor(inference_config);
+    InferenceQueue inference_queue;
+    SessionElement session(0,
+                           pp_processor,
+                           inference_config,
+                           moodycamel::ProducerToken(inference_queue));
+    session.prepare(host_config);
+    return PrepareResult{.m_latency = session.m_latency,
+                         .m_num_structs = session.m_num_structs,
+                         .m_send = session.m_send_buffer_size,
+                         .m_receive = session.m_receive_buffer_size};
+}
+
+// Generator: 4 control parameters in, a 2048-sample audio stream out.
+InferenceConfig generator_config() {
+    return make_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
+                       ProcessingSpec({1}, {1}, {0}, {2048}));
+}
+
+// The generator's two-sided twin: a 2048-sample stream in and out. Same reference
+// size (2048), so the driving-side inference count and the output side match.
+InferenceConfig generator_twin_config() {
+    return make_config(std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+                       ProcessingSpec({1}, {1}, {2048}, {2048}));
+}
+
+// Analyser: a 2048-sample audio stream in plus one control parameter in, one
+// non-streamable scalar out.
+InferenceConfig analyser_config() {
+    return make_config(std::vector<TensorShape>{TensorShape({{1, 2048}, {1, 1}}, {{1, 1}})},
+                       ProcessingSpec({1, 1}, {1}, {2048, 0}, {0}));
+}
+
+// The analyser's two-sided twin: identical input side, a 2048-sample streamable
+// output instead of the scalar.
+InferenceConfig analyser_twin_config() {
+    return make_config(std::vector<TensorShape>{TensorShape({{1, 2048}, {1, 1}}, {{1, 2048}})},
+                       ProcessingSpec({1, 1}, {1}, {2048, 0}, {2048}));
+}
+}  // namespace
+
+class OneSidedStreamingPrepareTest : public ::testing::TestWithParam<bool> {};
+
+TEST_P(OneSidedStreamingPrepareTest, GeneratorEqualsTwoSidedTwin) {
+    bool const smaller = GetParam();
+    PrepareResult const gen =
+        prepare_and_measure(generator_config(), HostConfig(512, 48000, smaller));
+    PrepareResult const twin =
+        prepare_and_measure(generator_twin_config(), HostConfig(512, 48000, smaller));
+
+    EXPECT_EQ(gen.m_latency, twin.m_latency);
+    EXPECT_EQ(gen.m_num_structs, twin.m_num_structs);
+    EXPECT_EQ(gen.m_receive, twin.m_receive);
+    ASSERT_EQ(gen.m_send.size(), 1u);
+    EXPECT_EQ(gen.m_send[0], 0u) << "A generator has no streamable input, so no send ring.";
+    ASSERT_EQ(gen.m_latency.size(), 1u);
+    EXPECT_GT(gen.m_latency[0], 0u) << "The streamable output still has a latency.";
+}
+
+TEST_P(OneSidedStreamingPrepareTest, AnalyserHasNoStreamLatency) {
+    bool const smaller = GetParam();
+    PrepareResult const ana =
+        prepare_and_measure(analyser_config(), HostConfig(512, 48000, smaller));
+    PrepareResult const twin =
+        prepare_and_measure(analyser_twin_config(), HostConfig(512, 48000, smaller));
+
+    ASSERT_EQ(ana.m_latency.size(), 1u);
+    EXPECT_EQ(ana.m_latency[0], 0u) << "A non-streamable output carries no stream latency.";
+    ASSERT_EQ(ana.m_receive.size(), 1u);
+    EXPECT_EQ(ana.m_receive[0], 0u) << "A non-streamable output has no receive ring.";
+    EXPECT_EQ(ana.m_send, twin.m_send) << "The input side is identical to the twin.";
+    EXPECT_EQ(ana.m_num_structs, twin.m_num_structs);
+}
+
+INSTANTIATE_TEST_SUITE_P(OneSidedStreaming,
+                         OneSidedStreamingPrepareTest,
+                         ::testing::Values(false, true),
+                         [](const testing::TestParamInfo<bool>& info) {
+                             return info.param ? "allow_smaller_buffers" : "static_buffer";
+                         });
+
+// The generator hang (#101): with allow_smaller_buffers the buffer-ratio countdown
+// never terminated. Run prepare() on a detached thread against a deadline. The
+// fixture is leaked deliberately -- if prepare() ever hangs again the detached
+// thread must not touch a destroyed fixture (same pattern as SessionElementClearTest).
+namespace {
+struct GeneratorPrepareFixture {
+    InferenceConfig m_inference_config = generator_config();
+    PrePostProcessor m_pp_processor{m_inference_config};
+    InferenceQueue m_inference_queue;
+    SessionElement m_session{0,
+                             m_pp_processor,
+                             m_inference_config,
+                             moodycamel::ProducerToken(m_inference_queue)};
+    std::atomic<bool> m_prepared{false};
+};
+}  // namespace
+
+TEST(OneSidedStreamingPrepareStandalone, GeneratorPrepareTerminates) {
+    auto* fixture = new GeneratorPrepareFixture();  // leaked deliberately, see above
+
+    std::thread([fixture] {
+        fixture->m_session.prepare(HostConfig(512, 48000, true));
+        fixture->m_prepared.store(true, std::memory_order_release);
+    }).detach();
+
+    auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!fixture->m_prepared.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    ASSERT_TRUE(fixture->m_prepared.load(std::memory_order_acquire))
+        << "prepare() did not terminate for a generator config with allow_smaller_buffers "
+           "(the buffer-ratio countdown divided by the non-streamable reference input's size 0).";
+}
+
+TEST(OneSidedStreamingPrepareStandalone, ExplicitOutputReferenceEqualsInputReference) {
+    // A two-sided config with equal input/output stream sizes: naming input 0 or output 0 as
+    // the reference gives the same ratios and hence the same result.
+    PrepareResult const by_input =
+        prepare_and_measure(generator_twin_config(), HostConfig(2048, 48000, true));
+    PrepareResult const by_output = prepare_and_measure(
+        generator_twin_config(),
+        HostConfig(2048, 48000, true, /*tensor_index=*/0, /*tensor_is_input=*/false));
+
+    EXPECT_EQ(by_input.m_latency, by_output.m_latency);
+    EXPECT_EQ(by_input.m_num_structs, by_output.m_num_structs);
+    EXPECT_EQ(by_input.m_send, by_output.m_send);
+    EXPECT_EQ(by_input.m_receive, by_output.m_receive);
+}
+
+TEST(OneSidedStreamingPrepareStandalone, InvalidReferenceThrows) {
+    // Explicit non-streamable input reference on a generator.
+    EXPECT_THROW(prepare_and_measure(generator_config(), HostConfig(512, 48000, true, 0, true)),
+                 std::invalid_argument);
+    // Explicit non-streamable output reference on an analyser.
+    EXPECT_THROW(prepare_and_measure(analyser_config(), HostConfig(512, 48000, true, 0, false)),
+                 std::invalid_argument);
+    // Out of range, both directions.
+    EXPECT_THROW(
+        prepare_and_measure(generator_twin_config(), HostConfig(512, 48000, true, 5, true)),
+        std::invalid_argument);
+    EXPECT_THROW(
+        prepare_and_measure(generator_twin_config(), HostConfig(512, 48000, true, 5, false)),
+        std::invalid_argument);
+    // No streamable tensor anywhere.
+    EXPECT_THROW(
+        prepare_and_measure(make_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 1}})},
+                                        ProcessingSpec({1}, {1}, {0}, {0})),
+                            HostConfig(512, 48000)),
+        std::invalid_argument);
+}
+
+// =============================================================================
+// HostConfig::resolve_reference() unit tests, independent of prepare().
+// =============================================================================
+
+TEST(HostConfigReference, AutoPicksFirstStreamableInput) {
+    InferenceConfig config =
+        make_config(std::vector<TensorShape>{TensorShape({{1, 1}, {2, 256}}, {{1, 1, 2048}})},
+                    ProcessingSpec({1, 2}, {1}, {0, 256}, {2048}));
+    ReferenceStream const ref = HostConfig(256, 48000).resolve_reference(config);
+    EXPECT_TRUE(ref.m_is_input);
+    EXPECT_EQ(ref.m_index, 1u) << "input 0 is non-streamable, input 1 is the first streamable one.";
+}
+
+TEST(HostConfigReference, AutoFallsBackToFirstStreamableOutput) {
+    InferenceConfig const config = generator_config();
+    ReferenceStream const ref = HostConfig(512, 48000).resolve_reference(config);
+    EXPECT_FALSE(ref.m_is_input) << "no streamable input, so the reference is an output.";
+    EXPECT_EQ(ref.m_index, 0u);
+}
+
+TEST(HostConfigReference, EqualityDependsOnDirection) {
+    EXPECT_NE(HostConfig(512, 48000, true, 0, true), HostConfig(512, 48000, true, 0, false));
+    EXPECT_EQ(HostConfig(512, 48000, true, 0, false), HostConfig(512, 48000, true, 0, false));
+}
+
+TEST(HostConfigReference, RelativeBufferSizeIsFiniteForGenerator) {
+    InferenceConfig const config = generator_config();
+    float const size = HostConfig(512, 48000).get_relative_buffer_size(config, 0, false);
+    EXPECT_TRUE(std::isfinite(size));
+    EXPECT_GT(size, 0.f);
 }

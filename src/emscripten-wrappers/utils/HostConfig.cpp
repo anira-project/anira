@@ -18,9 +18,20 @@ EMSCRIPTEN_KEEPALIVE
 uintptr_t hostconfig_create_with_params(float buffer_size,
                                         float sample_rate,
                                         bool allow_smaller_buffers,
-                                        size_t tensor_index) {
-    return reinterpret_cast<uintptr_t>(
-        new anira::HostConfig(buffer_size, sample_rate, allow_smaller_buffers, tensor_index));
+                                        size_t tensor_index,
+                                        bool tensor_is_input) {
+    return reinterpret_cast<uintptr_t>(new anira::HostConfig(buffer_size,
+                                                             sample_rate,
+                                                             allow_smaller_buffers,
+                                                             tensor_index,
+                                                             tensor_is_input));
+}
+
+// The k_first_streamable sentinel, exported so JS never hard-codes the
+// width-dependent value (size_t is 32-bit on wasm32 and returns as a signed i32).
+EMSCRIPTEN_KEEPALIVE
+size_t hostconfig_first_streamable() {
+    return anira::HostConfig::k_first_streamable;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -49,6 +60,11 @@ size_t hostconfig_get_tensor_index(uintptr_t ptr) {
     return reinterpret_cast<anira::HostConfig*>(ptr)->m_tensor_index;
 }
 
+EMSCRIPTEN_KEEPALIVE
+bool hostconfig_get_tensor_is_input(uintptr_t ptr) {
+    return reinterpret_cast<anira::HostConfig*>(ptr)->m_tensor_is_input;
+}
+
 // Property setters
 EMSCRIPTEN_KEEPALIVE
 void hostconfig_set_buffer_size(uintptr_t ptr, float buffer_size) {
@@ -68,6 +84,11 @@ void hostconfig_set_allow_smaller_buffers(uintptr_t ptr, bool allow_smaller_buff
 EMSCRIPTEN_KEEPALIVE
 void hostconfig_set_tensor_index(uintptr_t ptr, size_t tensor_index) {
     reinterpret_cast<anira::HostConfig*>(ptr)->m_tensor_index = tensor_index;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void hostconfig_set_tensor_is_input(uintptr_t ptr, bool tensor_is_input) {
+    reinterpret_cast<anira::HostConfig*>(ptr)->m_tensor_is_input = tensor_is_input;
 }
 
 // Comparison

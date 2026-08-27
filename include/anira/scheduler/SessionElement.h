@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
@@ -116,9 +117,16 @@ public:
      * for processing with the provided host audio configuration. This method
      * must be called before the session can process audio data.
      *
+     * The host configuration's reference stream (HostConfig::resolve_reference) is
+     * resolved here, once, and stored in m_reference / m_input_driven for the
+     * real-time path.
+     *
      * @param spec Host configuration containing sample rate, buffer size, and audio settings
      * @param custom_latency Optional vector of custom latency values for each tensor (empty for
-     * automatic calculation)
+     * automatic calculation); entries for non-streamable outputs are ignored, their latency is
+     * always 0
+     * @throws std::invalid_argument if the host config's reference stream cannot be resolved
+     *         (explicit reference out of range or not streamable, or no streamable tensor at all)
      */
     void prepare(const HostConfig& spec, std::vector<long> custom_latency = {});
 
@@ -179,6 +187,18 @@ public:
      * @return Vector of buffer sizes for each output tensor
      */
     std::vector<size_t> calculate_receive_buffer_sizes(const HostConfig& host_config) const;
+
+    /**
+     * @brief Whether every streamable receive ring can take one more inference result
+     *
+     * True if each streamable output's ring buffer has at least postprocess_output_size
+     * free samples (trivially true when no output is streamable). Used by the push-side
+     * collection in Context::collect_completed() so that a completed result is only
+     * post-processed when it fits, and unread output is never overwritten.
+     *
+     * @return True if a completed inference can be post-processed without overflowing a ring
+     */
+    bool receive_rings_have_room();
 
     std::vector<RingBuffer> m_send_buffer;  ///< Ring buffers for input data streaming to inference
     std::vector<RingBuffer> m_receive_buffer;  ///< Ring buffers for output data streaming from
@@ -254,6 +274,11 @@ public:
                                                               ///< nothing matches).
     unsigned long m_current_queue = 0;         ///< Current position in the inference queue
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
+    size_t m_pending_pull_samples = 0;  ///< Generator sessions only (!m_input_driven): samples of
+                                        ///< the reference output the driving thread has demanded
+                                        ///< that no submitted inference covers yet. Plain field,
+                                        ///< written and read only on the session's driving thread
+                                        ///< (like m_time_stamps).
 
     const int m_session_id;  ///< Unique identifier for this session (immutable)
 
@@ -374,7 +399,15 @@ public:
                                                   ///< safety for complete, deterministic
                                                   ///< output (see Context::new_data_request).
 
-    std::vector<unsigned int> m_latency;  ///< Calculated latency values for each tensor in samples
+    std::vector<unsigned int> m_latency;  ///< Calculated latency values for each output tensor in
+                                          ///< samples, index-aligned with the output tensor list;
+                                          ///< 0 for non-streamable outputs
+    ReferenceStream m_reference;  ///< Reference stream resolved once in prepare(); read on the
+                                  ///< real-time path, never re-resolved there
+    bool m_input_driven = true;   ///< True if any input tensor is streamable: inference is
+                                  ///< triggered by arriving input samples. False for a generator
+                                  ///< (no streamable input), whose inference is triggered by
+                                  ///< output demand (see m_pending_pull_samples).
     size_t m_num_structs = 0;  ///< Number of allocated thread-safe structures (for testing access)
     std::vector<size_t> m_send_buffer_size;  ///< Calculated send buffer sizes (for testing access)
     std::vector<size_t> m_receive_buffer_size;  ///< Calculated receive buffer sizes (for testing
@@ -413,23 +446,60 @@ private:
      * @brief Synchronizes latency values to integer samples
      *
      * Converts floating-point latency calculations to integer sample counts
-     * while maintaining accuracy and consistency across all tensors.
+     * while maintaining accuracy and consistency across all tensors. Input and
+     * output are index-aligned with the output tensor list (see
+     * collect_output_latencies()); non-streamable outputs stay at 0.
      *
-     * @param latencies Vector of floating-point latency values
-     * @return Vector of synchronized integer latency values in samples
+     * @param latencies Vector of floating-point latency values, one per output tensor
+     * @return Vector of synchronized integer latency values in samples, one per output tensor
      */
     std::vector<unsigned int> sync_latencies(const std::vector<float>& latencies) const;
+
+    /**
+     * @brief Builds an index-aligned latency vector over the output tensors
+     *
+     * The one place that decides the shape of a latency vector: one entry per
+     * output tensor, in output tensor order, 0 for a non-streamable output (it has
+     * no stream and hence no stream latency) and the callback's value otherwise.
+     * Both the baseline and the smaller-buffer pass of prepare() go through here,
+     * so sync_latencies() and the per-output loops can index by output tensor
+     * unconditionally.
+     *
+     * @param streamable_output_latency Callback computing the latency of streamable output i
+     * @return Latency values, one per output tensor
+     */
+    std::vector<float> collect_output_latencies(
+        const std::function<float(size_t)>& streamable_output_latency) const;
+
+    /**
+     * @brief Whether any input tensor is streamable
+     *
+     * @return True if at least one input has a non-zero preprocess_input_size
+     */
+    bool has_streamable_input() const;
 
     /**
      * @brief Calculates maximum number of possible inferences per buffer
      *
      * Determines the theoretical maximum number of inference operations that
-     * could be required for the given host configuration.
+     * could be required for the given host configuration, over the driving
+     * side: the streamable inputs when there are any (one inference per full
+     * input hop), otherwise the streamable outputs of a generator (one inference
+     * per hop of demanded output).
      *
      * @param host_config Host configuration to calculate for
      * @return Maximum number of inferences per processing cycle
      */
     float max_num_inferences(const HostConfig& host_config) const;
+
+    /**
+     * @brief Maximum number of inferences one host buffer can trigger on one stream
+     *
+     * @param host_buffer_size Host buffer size in samples of this stream
+     * @param stream_size Samples of this stream consumed or produced per inference
+     * @return Maximum number of inferences per host buffer
+     */
+    int max_num_inferences_for_stream(float host_buffer_size, int stream_size) const;
 
     /**
      * @brief Calculates buffer size adaptation factor

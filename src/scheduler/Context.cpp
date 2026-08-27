@@ -654,26 +654,43 @@ void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
     session->m_initialized.store(true, std::memory_order::release);
 }
 
+bool Context::inputs_ready(const std::shared_ptr<SessionElement>& session) {
+    for (size_t tensor_index = 0;
+         tensor_index < session->m_inference_config.get_tensor_input_shape().size();
+         tensor_index++) {
+        if (session->m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
+            for (size_t channel = 0;
+                 channel <
+                 session->m_inference_config.get_preprocess_input_channels()[tensor_index];
+                 channel++) {
+                if (session->m_send_buffer[tensor_index].get_available_samples(channel) <
+                    session->m_inference_config.get_preprocess_input_size()[tensor_index]) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 void Context::new_data_submitted(const std::shared_ptr<SessionElement>& session) {
     // Return any structs orphaned by a prior wait-free reset to the free pool before
     // trying to claim one below. Cheap (O(num_structs)) and a no-op when no reset is
     // pending; keeps the free pool from draining across repeated onset re-anchors.
     reclaim_stale_structs(session);
     while (true) {
-        for (size_t tensor_index = 0;
-             tensor_index < session->m_inference_config.get_tensor_input_shape().size();
-             tensor_index++) {
-            if (session->m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
-                for (size_t channel = 0;
-                     channel <
-                     session->m_inference_config.get_preprocess_input_channels()[tensor_index];
-                     channel++) {
-                    if (session->m_send_buffer[tensor_index].get_available_samples(channel) <
-                        session->m_inference_config.get_preprocess_input_size()[tensor_index]) {
-                        return;
-                    }
-                }
-            }
+        if (session->m_input_driven) {
+            // Push-driven: one inference per full hop of every streamable input.
+            if (!inputs_ready(session)) { return; }
+        } else {
+            // Generator (no streamable input): one inference per hop of demanded reference
+            // output samples. The demand is consumed before the attempt, mirroring the
+            // input-driven failure path below, which consumes one hop of input and produces
+            // one hop of zeros -- so the demand stays bounded even when the pool is exhausted.
+            size_t const hop = session->m_inference_config
+                                   .get_postprocess_output_size()[session->m_reference.m_index];
+            if (session->m_pending_pull_samples < hop) { return; }
+            session->m_pending_pull_samples -= hop;
         }
         bool const success = pre_process(session);
 
@@ -716,6 +733,20 @@ void Context::new_data_submitted(const std::shared_ptr<SessionElement>& session)
 
 // Full realtime safe path
 void Context::new_data_request(const std::shared_ptr<SessionElement>& session) {
+    // The non-waiting collection walk, shared with the push side. It also kicks a
+    // possibly stalled stateful dispatch chain (see collect_completed) and places
+    // results only while the receive rings have room.
+    collect_completed(session);
+}
+
+// The non-waiting collection walk (also issue #99's push-side collection): post-processes
+// finished inferences in submission order with one guard -- a completed result is only
+// placed while every streamable receive ring can take it. Otherwise the result stays in
+// its struct (the host is not popping the output stream) and false is returned so the
+// push side can warn. Non-blocking for both completion signals (atomic exchange /
+// semaphore try_acquire); in non-real-time mode it waits for the oldest in-flight
+// inference like every other collection point.
+bool Context::collect_completed(const std::shared_ptr<SessionElement>& session) {
     // A stateful task may still be awaiting dispatch with none in flight: its
     // dispatch can race a worker's task boundary so that both sides bail (the
     // audio thread finds the gate briefly held, the worker's recheck misses the
@@ -727,43 +758,48 @@ void Context::new_data_request(const std::shared_ptr<SessionElement>& session) {
     try_dispatch_stateful(session);
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
     while (session->m_time_stamps.size() > 0) {
+        bool collected = false;
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
-            // Match by timestamp AND generation: a stale struct (left in flight by a
-            // wait-free reset) may still carry a timestamp value that collides with a
-            // fresh post-reset one; the generation guard prevents consuming its result.
-            // With no reset in play the generation is constant, so this never changes
-            // behavior.
-            if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back() &&
-                session->m_inference_queue[i]->m_dispatch_generation == generation) {
-                if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
-                    wait_for_completion(session, i);
-                } else {
-                    if (session->m_inference_queue[i]->m_done_atomic.exchange(
-                            false,
-                            std::memory_order::acquire)) {
-                    } else {
-                        return;
-                    }
-                }
-                session->m_time_stamps.pop_back();
-                post_process(session, session->m_inference_queue[i]);
-                break;
+            if (session->m_inference_queue[i]->m_time_stamp != session->m_time_stamps.back() ||
+                session->m_inference_queue[i]->m_dispatch_generation != generation) {
+                continue;
             }
+            if (!session->receive_rings_have_room()) { return false; }
+            if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
+                wait_for_completion(session, i);
+            } else if (session->m_inference_config.m_blocking_ratio > 0.f) {
+                if (!session->m_inference_queue[i]->m_done_semaphore.try_acquire()) { return true; }
+            } else {
+                if (!session->m_inference_queue[i]->m_done_atomic.exchange(
+                        false,
+                        std::memory_order::acquire)) {
+                    return true;
+                }
+            }
+            session->m_time_stamps.pop_back();
+            post_process(session, session->m_inference_queue[i]);
+            collected = true;
+            break;
         }
+        if (!collected) { return true; }  // No struct carries the oldest timestamp (stale)
     }
+    return true;
 }
 
 // With blocking ratio > 0, the semaphore is used to wait for data. This is not 100% realtime safe.
 void Context::new_data_request(const std::shared_ptr<SessionElement>& session,
                                std::chrono::steady_clock::time_point wait_until) {
-    // See the stalled-chain kick rationale in the realtime-safe overload above.
+    // See the stalled-chain kick rationale in collect_completed().
     try_dispatch_stateful(session);
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
     while (session->m_time_stamps.size() > 0) {
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
-            // See the generation-guard rationale in the realtime-safe overload above.
+            // See the generation-guard rationale in collect_completed().
             if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back() &&
                 session->m_inference_queue[i]->m_dispatch_generation == generation) {
+                // Same gate as collect_completed(): a result is only placed while the
+                // receive rings can take it; unread output is never overwritten.
+                if (!session->receive_rings_have_room()) { return; }
                 if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
                     wait_for_completion(session, i);
                 } else if (wait_until.time_since_epoch().count() == 0) {

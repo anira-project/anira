@@ -121,6 +121,8 @@ public:
      *       thread.
      *
      * @param new_audio_config The new audio configuration containing sample rate, buffer size, etc.
+     * @throws std::invalid_argument if the host config's reference stream cannot be resolved
+     *         (see HostConfig::resolve_reference())
      */
     void prepare(HostConfig new_audio_config);
 
@@ -133,7 +135,10 @@ public:
      *
      * @param new_audio_config The new audio configuration containing sample rate, buffer size, etc.
      * @param custom_latency Custom latency value in samples to override the calculated latency
-     * @param tensor_index Index of the tensor to apply the custom latency (default: 0)
+     * @param tensor_index Index of the streamable output tensor to apply the custom latency
+     * (default: 0)
+     * @throws std::invalid_argument if tensor_index is out of range, or if the host config's
+     *         reference stream cannot be resolved (see HostConfig::resolve_reference())
      */
     void prepare(HostConfig new_audio_config, unsigned int custom_latency, size_t tensor_index = 0);
 
@@ -145,7 +150,10 @@ public:
      * It initializes internal buffers and prepares the inference pipeline.
      *
      * @param new_audio_config The new audio configuration containing sample rate, buffer size, etc.
-     * @param custom_latency Vector of custom latency values in samples for each tensor
+     * @param custom_latency Vector of custom latency values in samples for each output tensor
+     * (0 for non-streamable outputs, which carry no stream latency)
+     * @throws std::invalid_argument if the host config's reference stream cannot be resolved
+     *         (see HostConfig::resolve_reference())
      */
     void prepare(HostConfig new_audio_config, std::vector<unsigned int> custom_latency);
 
@@ -198,6 +206,15 @@ public:
      * This method handles complex models with multiple input and output tensors,
      * processing all tensors in a single call.
      *
+     * @par One-sided streaming
+     * For a non-streamable tensor the sample count is a value count (clamped to the
+     * tensor size): its values are set via the input buffer before the inference is
+     * submitted and read from the output buffer after results are collected. A
+     * generator (no streamable input) is pulled: the requested count on the reference
+     * output is the demand that submits inferences, one per postprocess_output_size
+     * samples. An analyser (no streamable output) is pushed and its non-streamable
+     * outputs carry the latest completed result (see PrePostProcessor::get_output()).
+     *
      * @param input_data Input data organized as data[tensor_index][channel][sample]
      * @param num_input_samples Array of input sample counts for each tensor
      * @param output_data Output data buffers organized as data[tensor_index][channel][sample]
@@ -218,7 +235,13 @@ public:
      * @brief Pushes input data to the processing pipeline for a specific tensor
      *
      * This method enables decoupled input/output processing where data can be pushed
-     * and popped independently. Useful for buffered processing scenarios.
+     * and popped independently. Useful for buffered processing scenarios. Finished
+     * inferences are collected here as well, as long as the receive buffers have room
+     * for them, so a push-only host (an analyser reading its non-streamable outputs
+     * through PrePostProcessor::get_output()) never runs out of inference structs; a
+     * host that never pops a streamed output is warned instead. On a generator (no
+     * streamable input) this only stores the parameter values: inference is driven by
+     * the output demand of process()/pop_data().
      *
      * @param input_data Input audio data organized as data[channel][sample]
      * @param num_input_samples Number of input samples to push
@@ -246,6 +269,9 @@ public:
      * Retrieves processed data from the inference pipeline for a specific tensor.
      * Should be used in conjunction with push_data for decoupled processing.
      * This method is non-blocking and returns immediately with available samples.
+     * On a generator (no streamable input) this is the pull that drives inference:
+     * the requested sample count on the reference output is added to the demand and
+     * one inference is submitted per postprocess_output_size demanded samples.
      *
      * @param output_data Output buffer organized as data[channel][sample]
      * @param num_output_samples Maximum number of samples the output buffer can hold
@@ -314,10 +340,13 @@ public:
     /**
      * @brief Gets the processing latency for a specific tensor
      *
-     * Returns the latency introduced by the inference processing in samples for a specific tensor.
-     * This includes buffering delays and model-specific processing latency.
+     * Returns the latency introduced by the inference processing in samples for a specific
+     * output tensor. This includes buffering delays and model-specific processing latency.
+     * A non-streamable output carries no stream latency and reports 0. For a generator
+     * (no streamable input) the latency counts from the first process()/pop_data() call
+     * after prepare() or reset().
      *
-     * @param tensor_index Index of the tensor to query (default: 0)
+     * @param tensor_index Index of the output tensor to query (default: 0)
      * @return Latency in samples for the specified tensor
      */
     unsigned int get_latency(size_t tensor_index = 0) const;
@@ -325,7 +354,8 @@ public:
     /**
      * @brief Gets the processing latency for all tensors
      *
-     * @return Vector containing latency values in samples for each tensor index
+     * @return Vector containing latency values in samples for each output tensor index,
+     *         index-aligned with the output tensor list (0 for non-streamable outputs)
      */
     std::vector<unsigned int> get_latency_vector() const;
 
