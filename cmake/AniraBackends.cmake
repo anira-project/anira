@@ -442,11 +442,14 @@ endmacro()
 # _anira_sanitize_executorch_targets() — clean up the ExecuTorch package's exported
 # targets for use inside anira:
 #
-#  * They bake absolute SDK paths from the machine that built the archives into
-#    their INTERFACE_LINK_LIBRARIES (e.g. .../MacOSX15.5.sdk/usr/lib/libm.tbd and
-#    .../Frameworks/Foundation.framework). Those paths rarely exist on the
-#    consuming machine, so rewrite them into portable equivalents:
-#    <sdk>/lib<name>.tbd -> <name> and <path>/<Name>.framework -> -framework <Name>.
+#  * They bake absolute system-library paths from the machine that built the
+#    archives into their INTERFACE_LINK_LIBRARIES (e.g.
+#    .../MacOSX15.5.sdk/usr/lib/libm.tbd, .../Frameworks/Foundation.framework,
+#    or Debian's multiarch /usr/lib/aarch64-linux-gnu/libm.so). Those paths
+#    rarely exist on the consuming machine (Fedora keeps libm in /usr/lib64), so
+#    rewrite them into portable equivalents the consumer's toolchain resolves:
+#    <sdk>/lib<name>.tbd -> <name>, /usr/lib[/<multiarch>]/lib<name>.so -> <name>,
+#    and <path>/<Name>.framework -> -framework <Name>.
 #
 #  * They carry compile usage requirements (include dirs — among them ExecuTorch's
 #    VENDORED c10 headers — compile definitions and options) that would leak into
@@ -488,6 +491,13 @@ function(_anira_sanitize_executorch_targets)
                 set(_changed TRUE)
             elseif(_lib MATCHES "^/.*/lib([A-Za-z0-9_.+-]+)\\.tbd$")
                 list(APPEND _rewritten "${CMAKE_MATCH_1}")
+                set(_changed TRUE)
+            elseif(_lib MATCHES "^/usr/lib(64)?(/[A-Za-z0-9_-]+)?/lib([A-Za-z0-9_+-]+)\\.so(\\.[0-9.]+)?$")
+                # Linux system library referenced by absolute path from the build
+                # machine (e.g. Debian multiarch /usr/lib/aarch64-linux-gnu/libm.so).
+                # Keep only the library name so the consumer's toolchain resolves it
+                # (-lm) and no bogus -L / rpath entries leak into the link line.
+                list(APPEND _rewritten "${CMAKE_MATCH_3}")
                 set(_changed TRUE)
             else()
                 list(APPEND _rewritten "${_lib}")
