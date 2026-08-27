@@ -78,7 +78,8 @@ jobs:
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             cmake -S test/install -B build-consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ github.workspace }}/prefix"
             cmake --build build-consumer --config Release --parallel
-            PATH="${{ github.workspace }}/prefix/lib:$PATH" ./build-consumer/Release/consumer.exe
+            # anira.dll installs to lib/ (anira's convention), tanh_core.dll to bin/.
+            PATH="${{ github.workspace }}/prefix/bin:${{ github.workspace }}/prefix/lib:$PATH" ./build-consumer/Release/consumer.exe
           else
             cmake -S test/install -B build-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${{ github.workspace }}/prefix"
             cmake --build build-consumer --parallel
