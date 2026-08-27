@@ -205,8 +205,8 @@ FetchContent_MakeAvailable(concurrentqueue)
 # include/anira/utils/*.h). Only the core component is built: tanh::Core is
 # tanh-lib's dedicated Apache-2.0 target — the AGPL components (state, dsp,
 # modulation, audio-io) are never fetched into the build.
-# Pinned to tanh-lab/tanh-lib#12 (refactor/apache-core-with-buffers); bump to a
-# tagged release once that PR lands.
+# Pinned to tanh-lab/tanh-lib main (post #12 merge); bump to a tagged release
+# once one is cut.
 set(TANH_BUILD_CORE ON CACHE BOOL "" FORCE)
 set(TANH_BUILD_STATE OFF CACHE BOOL "" FORCE)
 set(TANH_BUILD_DSP OFF CACHE BOOL "" FORCE)
@@ -220,7 +220,7 @@ set(TANH_WITH_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    GIT_TAG 3d233dbdc50d30880d7b4e2bb6f30c8726f33722
+    GIT_TAG c03b134b191b7a31b4ff3e51737ebd23a0cfadda
 )
 FetchContent_MakeAvailable(tanh-lib)
 
