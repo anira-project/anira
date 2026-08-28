@@ -216,6 +216,41 @@ std::string build_test_name(const testing::TestParamInfo<InferenceManagerTest::P
 }
 }  // namespace
 
+// A custom latency replaces the calculated one wholesale, so it must not drop below the
+// model's internal latency: the receive buffer is primed with
+// (latency - internal_model_latency) zeros, and an unsigned underflow there would try to
+// prime ~4G samples. Below-internal values are clamped, above-internal values are kept.
+TEST(InferenceManagerCustomLatency, ClampsToInternalModelLatency) {
+    constexpr size_t k_internal_latency = 100;
+    InferenceConfig inference_config(
+        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+        ProcessingSpec({1}, {1}, {2048}, {2048}, {k_internal_latency}),
+        1.f,
+        0,
+        false,
+        0.f,
+        2);
+    HostConfig const host_config(2048, 48000, true);
+
+    {
+        PrePostProcessor pp_processor(inference_config);
+        ContextConfig const context_config(2);
+        InferenceManager inference_manager(pp_processor, inference_config, nullptr, context_config);
+        inference_manager.prepare(host_config, std::vector<long>{10});
+        EXPECT_EQ(inference_manager.get_latency()[0], k_internal_latency)
+            << "custom latency below the internal model latency must be clamped";
+    }
+    {
+        PrePostProcessor pp_processor(inference_config);
+        ContextConfig const context_config(2);
+        InferenceManager inference_manager(pp_processor, inference_config, nullptr, context_config);
+        inference_manager.prepare(host_config, std::vector<long>{500});
+        EXPECT_EQ(inference_manager.get_latency()[0], 500u)
+            << "custom latency above the internal model latency must be kept";
+    }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     CalculateLatency,
     InferenceManagerTest,
