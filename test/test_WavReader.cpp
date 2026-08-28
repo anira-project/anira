@@ -1,9 +1,11 @@
+#include <tanh/core/Buffer.h>
+#include <tanh/core/WavReader.h>
+
 #include <cstddef>
 #include <string>
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "tanh/core/WavReader.h"
 
 TEST(WavReader, Read) {
     std::vector<float> reference = {-0.008862195,  -0.007644168,  -0.006510143, -0.004956109,

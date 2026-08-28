@@ -236,7 +236,7 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
     # TODO(#91): switch back to a release tag once tanh-lib tags the core WAV
     # decoder (tanh-lab/tanh-lib#18) — this is that PR's head commit.
-    GIT_TAG d12f083737f49b759d56194a298f88c1b597fe97
+    GIT_TAG b79cecc61b2c3362aedddcb84094cb4e23af3dfe
 )
 FetchContent_MakeAvailable(tanh-lib)
 

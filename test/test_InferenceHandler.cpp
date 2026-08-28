@@ -6,6 +6,8 @@
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/RingBuffer.h>
+#include <tanh/core/Buffer.h>
+#include <tanh/core/WavReader.h>
 
 #include <algorithm>
 #include <cfloat>
@@ -25,13 +27,14 @@
 #include "../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "gtest/gtest.h"
-#include "tanh/core/WavReader.h"
 
 constexpr int k_inference_timeout_s = 2;
 using namespace anira;
 
+namespace {
+
 // Load a mono WAV file into a flat vector.
-static std::vector<float> load_mono_wav(const std::string& path) {
+std::vector<float> load_mono_wav(const std::string& path) {
     std::string error;
     const thl::core::BufferF buffer = thl::core::read_wav(path, &error);
     if (buffer.get_num_channels() == 0) {
@@ -46,6 +49,8 @@ static std::vector<float> load_mono_wav(const std::string& path) {
     const float* samples = buffer.get_read_pointer(0);
     return {samples, samples + buffer.get_num_samples()};
 }
+
+}  // namespace
 
 struct InferenceTestParams {
     InferenceBackend m_backend;
