@@ -34,6 +34,10 @@ if(BUILD_SHARED_LIBS)
         set(ANIRA_DLL "${anira_BINARY_DIR}/anira.dll")
     endif()
     list(APPEND ANIRA_SHARED_LIBS_WIN ${ANIRA_DLL})
+    # tanh-lib's core component is a DLL in a shared build. anira calls into it
+    # (thl::Logger), so every executable linking anira needs it beside it — the
+    # generator expression resolves to the right per-generator/config path.
+    list(APPEND ANIRA_SHARED_LIBS_WIN "$<TARGET_FILE:tanh::Core>")
 endif()
 
 # Add all necessary DLLs to a list for later copying. Only shared backends ship a
