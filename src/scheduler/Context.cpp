@@ -151,14 +151,22 @@ struct UnloadGuard {
 
 // The real-time log path (thl::Logger::rt, used by everything reachable from an
 // ANIRA_REALTIME entry point and by the inference threads) needs a drain thread to
-// deliver its records. It follows the thread pool's policy: it runs exactly while
-// sessions exist, so a plugin host can unload the library right after the last
-// handler is destroyed (stop() joins the thread). tanh-lib restarts it lazily on
-// the next synchronous logger call, so a host that shares thl::Logger loses nothing
-// but a few milliseconds of latency. Not on WebAssembly: there is no thread to run
-// it on; the host pumps thl::Logger::rt::drain() itself if it wants those records.
-void start_rt_log_drain() {
+// deliver its records. anira makes sure one runs from the first session on — unless
+// the host disabled tanh-lib's rt path (LoggerConfig::m_rt_enabled = false, e.g. to
+// pump rt::drain() itself), which is respected. The thread is process-global and
+// possibly shared with a host that logs through thl::Logger too, so anira never stops
+// it when a session goes away; only Context::shutdown() — the library-unload backstop,
+// after which nothing may run anira code — stops and joins it. Not on WebAssembly:
+// there is no thread to run it on.
+// rt::stop() also clears LoggerConfig::m_rt_enabled, which is how a host opts out; this
+// flag tells anira's own stop apart from the host's so a later session may start again.
+std::atomic<bool> s_rt_drain_stopped_by_anira{false};
+
+void ensure_rt_log_drain() {
 #if !defined(__EMSCRIPTEN__) && defined(ENABLE_LOGGING)
+    if (thl::Logger::rt::is_running()) { return; }
+    const bool stopped_by_anira = s_rt_drain_stopped_by_anira.exchange(false);
+    if (!stopped_by_anira && !thl::Logger::get_config().m_rt_enabled) { return; }
     thl::Logger::rt::start();
 #endif
 }
@@ -167,6 +175,7 @@ void stop_rt_log_drain() {
 #if !defined(__EMSCRIPTEN__) && defined(ENABLE_LOGGING)
     // Also reached from the library-unload hook, possibly after tanh-lib's static logger
     // state was torn down; rt::stop() is a no-op then (tanh-lib >= v0.0.4).
+    if (thl::Logger::rt::is_running()) { s_rt_drain_stopped_by_anira.store(true); }
     thl::Logger::rt::stop();
 #endif
 }
@@ -280,7 +289,7 @@ void Context::apply_or_compare_config_locked(Core& c, const ContextConfig& conte
             c.m_thread_pool.clear();
             throw;
         }
-        start_rt_log_drain();
+        ensure_rt_log_drain();
         return;
     }
 
@@ -428,10 +437,7 @@ void Context::unregister_session_locked(Core& c, const std::shared_ptr<SessionEl
     // and joining them here, inside the critical section that emptied the registry,
     // is what lets a plugin host unload the library right after the last handler is
     // destroyed. (Each InferenceThread's destructor stops and joins its OS thread.)
-    if (c.m_sessions.empty()) {
-        c.m_thread_pool.clear();
-        stop_rt_log_drain();
-    }
+    if (c.m_sessions.empty()) { c.m_thread_pool.clear(); }
 }
 
 std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_processor,
@@ -620,15 +626,20 @@ void Context::shutdown() {
     void* existing = s_core.load(std::memory_order_acquire);
     if (existing == nullptr) { return; }
     Core& c = *static_cast<Core*>(existing);
-    const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
-    if (!c.m_sessions.empty()) {
-        ANIRA_LOG_ERROR(log_group::k_context,
-                        "Context::shutdown() called with %zu registered session(s): the host is "
-                        "unloading anira while an inference handler is still alive. The "
-                        "inference threads are stopped; the sessions' memory is leaked.",
-                        c.m_sessions.size());
+    {
+        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        if (!c.m_sessions.empty()) {
+            ANIRA_LOG_ERROR(log_group::k_context,
+                            "Context::shutdown() called with %zu registered session(s): the "
+                            "host is unloading anira while an inference handler is still alive. "
+                            "The inference threads are stopped; the sessions' memory is leaked.",
+                            c.m_sessions.size());
+        }
+        c.m_thread_pool.clear();
     }
-    c.m_thread_pool.clear();
+    // Outside the lifecycle lock: stopping joins the drain thread and flushes the queue
+    // through the sinks on this thread, and a host's log callback may call back into
+    // the context (get_sessions(), get_num_inference_threads(), ...).
     stop_rt_log_drain();
 }
 

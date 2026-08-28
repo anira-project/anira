@@ -28,8 +28,8 @@
  *   thread forwards to the sinks. Use these anywhere reachable from an
  *   ANIRA_REALTIME entry point or from an inference thread. If the queue is full
  *   the message is dropped and counted; if no drain thread runs it is dropped.
- *   anira runs the drain thread exactly while sessions exist, alongside the
- *   inference thread pool (see Context).
+ *   anira starts the drain thread with the first session (unless the host disabled
+ *   tanh-lib's rt path) and stops it only in Context::shutdown().
  *
  * Both take printf-style arguments: `ANIRA_LOG_ERROR(group, "fmt %d", value)` and are
  * aliases of tanh-lib's THL_LOG_* / THL_LOG_RT_*. With ANIRA_WITH_LOGGING=OFF every

@@ -2,6 +2,7 @@
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/scheduler/Context.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
@@ -108,9 +109,9 @@ TEST(Logger, ContextConfigLevelIsAppliedToThlLogger) {
 }
 
 #if !defined(__EMSCRIPTEN__) && defined(ENABLE_LOGGING)
-TEST(Logger, RtDrainThreadLivesWithTheSessions) {
-    // No session: anira has stopped the drain thread (or never started it).
-    EXPECT_FALSE(thl::Logger::rt::is_running());
+TEST(Logger, RtDrainThreadStartsWithTheFirstSessionAndOutlivesIt) {
+    // The drain thread is process-global (a host logging through thl::Logger shares
+    // it), so anira starts it but never stops it on a session's behalf.
     {
         const Instance first;
         EXPECT_TRUE(thl::Logger::rt::is_running());
@@ -118,11 +119,31 @@ TEST(Logger, RtDrainThreadLivesWithTheSessions) {
             const Instance second;
             EXPECT_TRUE(thl::Logger::rt::is_running());
         }
-        // Still one session: the drain thread stays.
         EXPECT_TRUE(thl::Logger::rt::is_running());
     }
-    // Last session gone: stopped and joined in release_session.
+    EXPECT_TRUE(thl::Logger::rt::is_running());
+
+    // Only the unload backstop stops it — and a later session starts it again.
+    Context::shutdown();
     EXPECT_FALSE(thl::Logger::rt::is_running());
+    {
+        const Instance again;
+        EXPECT_TRUE(thl::Logger::rt::is_running());
+    }
+}
+
+TEST(Logger, RtDrainRespectsAHostThatDisabledIt) {
+    thl::Logger::rt::stop();
+    auto config = thl::Logger::get_config();
+    config.m_rt_enabled = false;
+    thl::Logger::set_config(config);
+    {
+        const Instance instance;
+        EXPECT_FALSE(thl::Logger::rt::is_running());
+    }
+    config.m_rt_enabled = true;
+    thl::Logger::set_config(config);
+    EXPECT_TRUE(thl::Logger::rt::is_running());
 }
 
 TEST(Logger, RtRecordsReachTheSinksWhileASessionExists) {
