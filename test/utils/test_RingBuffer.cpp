@@ -1,9 +1,8 @@
-#include <anira/utils/Buffer.h>
 #include <anira/utils/RingBuffer.h>
 
 #include <array>
 #include <cstddef>
-#include <string>
+#include <cstdint>
 
 #include "gtest/gtest.h"
 
@@ -31,7 +30,8 @@ TEST_F(RingBufferTest, Initialization) {
     // All channels should start empty
     for (size_t channel = 0; channel < m_ring_buffer.get_num_channels(); ++channel) {
         EXPECT_EQ(m_ring_buffer.get_available_samples(channel), 0);
-        EXPECT_EQ(m_ring_buffer.get_available_past_samples(channel), 5);
+        // Past samples are actually-written history, none yet after init
+        EXPECT_EQ(m_ring_buffer.get_available_past_samples(channel), 0);
     }
 }
 
@@ -91,14 +91,9 @@ TEST_F(RingBufferTest, BufferOverflow) {
 
     EXPECT_EQ(m_ring_buffer.get_available_samples(channel), 5);
 
-    // Capture stderr to check for overflow error
-    testing::internal::CaptureStderr();
-
-    // Push one more sample (should cause overflow)
+    // Push one more sample: silently overwrites the oldest (delay-line
+    // semantics of the thl::core ring buffer)
     m_ring_buffer.push_sample(channel, 6.0f);
-
-    std::string const output = testing::internal::GetCapturedStderr();
-    EXPECT_TRUE(output.find("Buffer overflow detected") != std::string::npos);
 
     // Buffer should still be full
     EXPECT_EQ(m_ring_buffer.get_available_samples(channel), 5);
@@ -116,13 +111,8 @@ TEST_F(RingBufferTest, BufferOverflow) {
 TEST_F(RingBufferTest, PopFromEmptyBuffer) {
     const size_t channel = 0;
 
-    // Capture stderr to check for empty buffer error
-    testing::internal::CaptureStderr();
-
+    // Popping an empty channel returns a value-initialized sample
     float const popped = m_ring_buffer.pop_sample(channel);
-
-    std::string const output = testing::internal::GetCapturedStderr();
-    EXPECT_TRUE(output.find("Attempted to pop sample from empty buffer") != std::string::npos);
     EXPECT_FLOAT_EQ(popped, 0.0f);
 }
 
@@ -147,15 +137,11 @@ TEST_F(RingBufferTest, GetSampleInvalidOffset) {
     // Push only one sample
     m_ring_buffer.push_sample(channel, 1.0f);
 
-    // Capture stderr to check for invalid offset error
-    testing::internal::CaptureStderr();
-
-    // Try to get sample with offset beyond available samples
+    // Offsets are taken modulo the capacity (the caller is responsible for
+    // checking get_available_samples()); offset 5 on a 5-slot ring wraps to
+    // the pushed sample
     float const sample = m_ring_buffer.get_future_sample(channel, 5);
-
-    std::string const output = testing::internal::GetCapturedStderr();
-    EXPECT_TRUE(output.find("Attempted to get sample with offset") != std::string::npos);
-    EXPECT_FLOAT_EQ(sample, 0.0f);
+    EXPECT_FLOAT_EQ(sample, 1.0f);
 }
 
 // Test get_past_sample functionality
@@ -175,13 +161,10 @@ TEST_F(RingBufferTest, GetPastSample) {
     EXPECT_FLOAT_EQ(m_ring_buffer.get_past_sample(channel, 1), 2.0f);
     EXPECT_FLOAT_EQ(m_ring_buffer.get_past_sample(channel, 2), 1.0f);
 
-    // Capture stderr to check for past sample retrieval
-    testing::internal::CaptureStderr();
-    EXPECT_FLOAT_EQ(m_ring_buffer.get_past_sample(channel, 3), 0.0f);  // No sample available
-
-    std::string const output = testing::internal::GetCapturedStderr();
-    EXPECT_TRUE(output.find("RingBuffer: Attempted to get past sample with offset") !=
-                std::string::npos);
+    // Beyond the written history the offset wraps modulo the capacity (the
+    // caller guards via get_available_past_samples()); offset 3 lands on the
+    // newest unread sample here
+    EXPECT_FLOAT_EQ(m_ring_buffer.get_past_sample(channel, 3), 5.0f);
 }
 
 // Test circular buffer wrap-around
@@ -221,13 +204,13 @@ TEST_F(RingBufferTest, ClearWithPositions) {
     // Clear the buffer
     m_ring_buffer.clear_with_positions();
 
-    // Buffer should be empty
+    // Buffer should be empty, history reset
     EXPECT_EQ(m_ring_buffer.get_available_samples(channel), 0);
-    EXPECT_EQ(m_ring_buffer.get_available_past_samples(channel), 5);
+    EXPECT_EQ(m_ring_buffer.get_available_past_samples(channel), 0);
 
-    // All samples should be zero
+    // All slots should be zero again
     for (size_t i = 0; i < m_ring_buffer.get_num_samples(); ++i) {
-        EXPECT_FLOAT_EQ(m_ring_buffer.Buffer<float>::get_sample(channel, i), 0.0f);
+        EXPECT_FLOAT_EQ(m_ring_buffer.get_future_sample(channel, i), 0.0f);
     }
 }
 
@@ -235,25 +218,25 @@ TEST_F(RingBufferTest, ClearWithPositions) {
 TEST_F(RingBufferTest, AvailableSamplesCalculation) {
     const size_t channel = 0;
 
-    // Initially empty
+    // Initially empty, no history
     EXPECT_EQ(m_ring_buffer.get_available_samples(channel), 0);
-    EXPECT_EQ(m_ring_buffer.get_available_past_samples(channel), 5);
+    EXPECT_EQ(m_ring_buffer.get_available_past_samples(channel), 0);
 
-    // Add samples one by one and check available count
+    // Add samples one by one: unread count grows, nothing is history yet
     for (int i = 1; i <= 5; ++i) {
         m_ring_buffer.push_sample(channel, static_cast<float>(i));
         EXPECT_EQ(m_ring_buffer.get_available_samples(channel), i);
-        EXPECT_EQ(m_ring_buffer.get_available_past_samples(channel), 5 - i);
+        EXPECT_EQ(m_ring_buffer.get_available_past_samples(channel), 0);
     }
 
     // Buffer is now full
     EXPECT_EQ(m_ring_buffer.get_available_samples(channel), 5);
-    EXPECT_EQ(m_ring_buffer.get_available_past_samples(channel), 0);
 
-    // Pop samples and check count decreases
+    // Pop samples: unread count decreases and consumed samples become history
     for (int i = 4; i >= 0; --i) {
         m_ring_buffer.pop_sample(channel);
         EXPECT_EQ(m_ring_buffer.get_available_samples(channel), i);
+        EXPECT_EQ(m_ring_buffer.get_available_past_samples(channel), 5 - i);
     }
 }
 
@@ -274,10 +257,7 @@ TEST(RingBufferSingleSample, EdgeCases) {
     // Test overflow with single sample
     small_buffer.push_sample(channel, 1.0f);
 
-    testing::internal::CaptureStderr();
-    small_buffer.push_sample(channel, 2.0f);  // Should overflow
-    std::string const output = testing::internal::GetCapturedStderr();
-    EXPECT_TRUE(output.find("Buffer overflow detected") != std::string::npos);
+    small_buffer.push_sample(channel, 2.0f);  // Silently overwrites
 
     // Should get the newer value
     EXPECT_FLOAT_EQ(small_buffer.pop_sample(channel), 2.0f);
@@ -294,27 +274,21 @@ TEST(RingBufferZeroSize, EdgeCase) {
     EXPECT_EQ(zero_buffer.get_available_samples(channel), 0);
     EXPECT_EQ(zero_buffer.get_available_past_samples(channel), 0);
 
-    // Pushing to zero-sized buffer should be handled
-    testing::internal::CaptureStderr();
+    // Pushing to a zero-sized buffer is a no-op
     zero_buffer.push_sample(channel, 1.0f);
-    testing::internal::GetCapturedStderr();
-    // May or may not produce an error, depends on implementation
+    EXPECT_EQ(zero_buffer.get_available_samples(channel), 0);
 }
 
-// Test inheritance from Buffer<float>
-TEST_F(RingBufferTest, BufferInheritance) {
-    // Test that RingBuffer still provides Buffer functionality
+// The ring buffer no longer inherits Buffer<float> (thl::core composition):
+// dimensions are exposed directly, and element types beyond float are
+// available through anira::RingBufferT<T>.
+TEST_F(RingBufferTest, DimensionsAndTypedVariant) {
     EXPECT_EQ(m_ring_buffer.get_num_channels(), 2);
     EXPECT_EQ(m_ring_buffer.get_num_samples(), 5);
 
-    // Test direct access to underlying buffer (inherited methods)
-    m_ring_buffer.Buffer<float>::set_sample(0, 0, 99.0f);
-    EXPECT_FLOAT_EQ(m_ring_buffer.Buffer<float>::get_sample(0, 0), 99.0f);
-
-    // Test that we can get pointers to the data
-    float* write_ptr = m_ring_buffer.get_write_pointer(0);
-    const float* read_ptr = m_ring_buffer.get_read_pointer(0);
-    EXPECT_NE(write_ptr, nullptr);
-    EXPECT_NE(read_ptr, nullptr);
-    EXPECT_EQ(write_ptr, read_ptr);  // Should point to same location
+    RingBufferT<int64_t> tokens;
+    tokens.initialize_with_positions(1, 4);
+    const int64_t big = (1LL << 40) + 7;  // exact beyond float32's 2^24 range
+    tokens.push_sample(0, big);
+    EXPECT_EQ(tokens.pop_sample(0), big);
 }

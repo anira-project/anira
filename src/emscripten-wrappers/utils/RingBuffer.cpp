@@ -49,6 +49,17 @@ float ringbuffer_get_past_sample(uintptr_t ptr, size_t channel, size_t offset) {
     return reinterpret_cast<anira::RingBuffer*>(ptr)->get_past_sample(channel, offset);
 }
 
+// Dimensions
+EMSCRIPTEN_KEEPALIVE
+size_t ringbuffer_get_num_channels(uintptr_t ptr) {
+    return reinterpret_cast<anira::RingBuffer*>(ptr)->get_num_channels();
+}
+
+EMSCRIPTEN_KEEPALIVE
+size_t ringbuffer_get_num_samples(uintptr_t ptr) {
+    return reinterpret_cast<anira::RingBuffer*>(ptr)->get_num_samples();
+}
+
 // Status queries
 EMSCRIPTEN_KEEPALIVE
 size_t ringbuffer_get_available_samples(uintptr_t ptr, size_t channel) {

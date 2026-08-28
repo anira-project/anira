@@ -197,6 +197,47 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(concurrentqueue)
 
+# ==============================================================================
+# Fetch tanh-lib (Apache-2.0 core component only)
+# ==============================================================================
+
+# anira's Buffer / RingBuffer / MemoryBlock are aliases over thl::core (see
+# include/anira/utils/*.h). Only the core component is built: tanh::Core is
+# tanh-lib's dedicated Apache-2.0 target — the AGPL components (state, dsp,
+# modulation, audio-io) are never fetched into the build. tanh::Core links no
+# platform library (the Linux journald sink stays opt-in and off here), so
+# anira's system-dependency footprint is unchanged on every target incl. WASM.
+#
+# When anira installs, tanh's core component installs into the same prefix
+# with its own CMake package; aniraConfig.cmake re-resolves it through
+# find_dependency(tanh COMPONENTS Core), so a consumer's find_package(anira)
+# links the exported tanh::Core.
+#
+# Pinned to a tagged tanh-lib release.
+#
+# Plain (non-cache) variables on purpose: tanh-lib's cmake_minimum_required
+# puts CMP0077 in NEW mode, so these shadow its option() defaults while anira
+# is the project populating tanh-lib, and never leak into the cache. A parent
+# that fetches tanh-lib itself (with more components) before adding anira keeps
+# its own configuration — FORCE'd cache entries would have clobbered it.
+set(TANH_BUILD_CORE ON)
+set(TANH_BUILD_STATE OFF)
+set(TANH_BUILD_DSP OFF)
+set(TANH_BUILD_MODULATION OFF)
+set(TANH_BUILD_AUDIO_IO OFF)
+set(TANH_WITH_TESTS OFF)
+set(TANH_WITH_EXAMPLES OFF)
+set(TANH_WITH_DOCS OFF)
+set(TANH_WITH_JOURNALD OFF)
+set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
+
+FetchContent_Declare(
+    tanh-lib
+    GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
+    GIT_TAG v0.0.3
+)
+FetchContent_MakeAvailable(tanh-lib)
+
 # Fetch the release tarball instead of cloning the repo — the full git
 # history plus test suite is ~150MB while the release archive is a few MB, the
 # URL_HASH verifies integrity, and the tarball is content-addressable so CMake
@@ -267,8 +308,6 @@ target_sources(${PROJECT_NAME}
         src/scheduler/SessionElement.cpp
 
         # Utils
-        src/utils/Buffer.cpp
-        src/utils/RingBuffer.cpp
         src/utils/JsonConfigLoader.cpp
 
         # Interface
@@ -325,7 +364,7 @@ if(ANIRA_WITH_RTSAN)
     anira_rtsan_configure(${PROJECT_NAME})
 endif()
 
-target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json)
+target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
 
 if(ANIRA_WITH_EXECUTORCH)
     if(TARGET executorch)
@@ -385,7 +424,7 @@ if(ANIRA_WITH_EXECUTORCH)
             "${ANIRA_EXECUTORCH_ROOTDIR}/include"
             "${ANIRA_EXECUTORCH_ROOTDIR}/include/executorch/runtime/core/portable_type/c10")
         target_link_libraries(anira-executorch-objs PRIVATE
-            concurrentqueue nlohmann_json::nlohmann_json)
+            concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
         if(MSVC)
             # Match anira's export decoration (see cmake/msvc-support.cmake): the
             # objects become part of anira, so ANIRA_API must resolve identically.
