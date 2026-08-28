@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <iomanip>
 #include <ios>
@@ -749,7 +750,7 @@ TEST(OneSidedStreamingPrepareStandalone, InvalidReferenceThrows) {
 // =============================================================================
 
 TEST(HostConfigReference, AutoPicksFirstStreamableInput) {
-    InferenceConfig config =
+    InferenceConfig const config =
         make_config(std::vector<TensorShape>{TensorShape({{1, 1}, {2, 256}}, {{1, 1, 2048}})},
                     ProcessingSpec({1, 2}, {1}, {0, 256}, {2048}));
     ReferenceStream const ref = HostConfig(256, 48000).resolve_reference(config);
