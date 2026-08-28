@@ -24,14 +24,6 @@ if (ANIRA_WITH_LIBTORCH)
     find_package(Torch REQUIRED)
 endif()
 
-# Desktop only: the installed lib dir carries ExecuTorch's CMake package, which
-# defines the executorch/executorch_extensions/executorch_kernels/xnnpack_backend
-# targets the exported anira target links. Mobile links the merged archive by
-# install-relative path instead, so there is no package to resolve there.
-if (ANIRA_WITH_EXECUTORCH AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    find_package(executorch REQUIRED CONFIG PATHS "${CMAKE_CURRENT_LIST_DIR}/../ExecuTorch" NO_DEFAULT_PATH)
-endif()
-
 if (ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK)
     find_package(GTest REQUIRED)
 endif()

@@ -65,15 +65,6 @@ if(NOT BUILD_SHARED_LIBS AND ANIRA_WITH_EXECUTORCH AND (ANIRA_WITH_LITERT OR ANI
     endif()
 endif()
 
-# ExecuTorch's desktop archives are wired through the ExecuTorch CMake package,
-# whose config files demand CMake 3.24. Fail early with a clear message (the
-# package's own cmake_minimum_required error is cryptic).
-if(ANIRA_WITH_EXECUTORCH AND CMAKE_VERSION VERSION_LESS "3.24"
-   AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    message(FATAL_ERROR "The ExecuTorch backend requires CMake >= 3.24 on desktop platforms "
-                        "(required by ExecuTorch's exported package config); found ${CMAKE_VERSION}.")
-endif()
-
 # iOS: the ONNX Runtime xcframework vendors its own copy of the TfLite C API symbols,
 # and the TFLite backend is a single pre-linked framework binary whose symbols all
 # load unconditionally — so enabling both on iOS collides (duplicate TfLite* symbols

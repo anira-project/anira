@@ -184,9 +184,9 @@ if(ANIRA_WITH_EXECUTORCH)
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/executorch.xcframework/${ANIRA_EXECUTORCH_IOS_SLICE}/Headers/"
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT deps-backends)
     else()
-        # On desktop the installed lib/ tree includes ExecuTorch's CMake package
-        # (lib/cmake/ExecuTorch), which aniraConfig.cmake re-resolves via
-        # find_package(executorch) — analogous to the libtorch handling above.
+        # Desktop / Android: flat include/ + lib/ (Android: lib/<abi>/), like the
+        # other static backends; the archive is re-linked relative to the install
+        # prefix by the loop below.
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/include/"
             DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
             COMPONENT deps-backends
@@ -213,6 +213,14 @@ foreach(_engine ONNXRUNTIME TFLITE LITERT EXECUTORCH)
         )
     endif()
 endforeach()
+# Windows ExecuTorch: the whole-archived registration lib (see the ExecuTorch link
+# block in CMakeLists.txt) needs the same install-relative counterpart.
+if(ANIRA_WITH_EXECUTORCH AND WIN32)
+    target_link_libraries(${PROJECT_NAME} INTERFACE
+        "$<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_LIBDIR}/executorch_registrations.lib>")
+    target_link_options(${PROJECT_NAME} INTERFACE
+        "$<INSTALL_INTERFACE:/WHOLEARCHIVE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_LIBDIR}/executorch_registrations.lib>")
+endif()
 
 # ==============================================================================
 # Generate cmake config files

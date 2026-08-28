@@ -438,77 +438,6 @@ macro(_anira_setup_legacy_armv7l id)
     endif()
 endmacro()
 
-# ------------------------------------------------------------------------------
-# _anira_sanitize_executorch_targets() — clean up the ExecuTorch package's exported
-# targets for use inside anira:
-#
-#  * They bake absolute system-library paths from the machine that built the
-#    archives into their INTERFACE_LINK_LIBRARIES (e.g.
-#    .../MacOSX15.5.sdk/usr/lib/libm.tbd, .../Frameworks/Foundation.framework,
-#    or Debian's multiarch /usr/lib/aarch64-linux-gnu/libm.so). Those paths
-#    rarely exist on the consuming machine (Fedora keeps libm in /usr/lib64), so
-#    rewrite them into portable equivalents the consumer's toolchain resolves:
-#    <sdk>/lib<name>.tbd -> <name>, /usr/lib[/<multiarch>]/lib<name>.so -> <name>,
-#    and <path>/<Name>.framework -> -framework <Name>.
-#
-#  * They carry compile usage requirements (include dirs — among them ExecuTorch's
-#    VENDORED c10 headers — compile definitions and options) that would leak into
-#    every TU of a target linking them. The vendored c10 headers shadow LibTorch's
-#    real c10 on MSVC (and C10_USING_CUSTOM_GENERATED_MACROS would corrupt the real
-#    c10's configuration), breaking the LibTorch backend. So strip all compile-side
-#    usage requirements — only ExecuTorchProcessor.cpp needs them, and it is
-#    compiled in an isolated object target with explicit include dirs. The compile
-#    definitions the headers DO need (collected before clearing) are exposed as
-#    ANIRA_EXECUTORCH_COMPILE_DEFINITIONS for that object target (and the
-#    minimal-executorch example) to apply explicitly.
-# ------------------------------------------------------------------------------
-function(_anira_sanitize_executorch_targets)
-    get_property(_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY IMPORTED_TARGETS)
-    set(_defs "")
-    foreach(_tgt IN LISTS _targets)
-        get_target_property(_tgt_defs "${_tgt}" INTERFACE_COMPILE_DEFINITIONS)
-        if(_tgt_defs)
-            list(APPEND _defs ${_tgt_defs})
-        endif()
-    endforeach()
-    list(REMOVE_DUPLICATES _defs)
-    set(ANIRA_EXECUTORCH_COMPILE_DEFINITIONS "${_defs}" PARENT_SCOPE)
-    foreach(_tgt IN LISTS _targets)
-        set_target_properties("${_tgt}" PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES ""
-            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ""
-            INTERFACE_COMPILE_OPTIONS ""
-            INTERFACE_COMPILE_DEFINITIONS "")
-        get_target_property(_libs "${_tgt}" INTERFACE_LINK_LIBRARIES)
-        if(NOT _libs)
-            continue()
-        endif()
-        set(_rewritten "")
-        set(_changed FALSE)
-        foreach(_lib IN LISTS _libs)
-            if(_lib MATCHES "^/.*/([A-Za-z0-9_]+)\\.framework$")
-                list(APPEND _rewritten "-framework ${CMAKE_MATCH_1}")
-                set(_changed TRUE)
-            elseif(_lib MATCHES "^/.*/lib([A-Za-z0-9_.+-]+)\\.tbd$")
-                list(APPEND _rewritten "${CMAKE_MATCH_1}")
-                set(_changed TRUE)
-            elseif(_lib MATCHES "^/usr/lib(64)?(/[A-Za-z0-9_-]+)?/lib([A-Za-z0-9_+-]+)\\.so(\\.[0-9.]+)?$")
-                # Linux system library referenced by absolute path from the build
-                # machine (e.g. Debian multiarch /usr/lib/aarch64-linux-gnu/libm.so).
-                # Keep only the library name so the consumer's toolchain resolves it
-                # (-lm) and no bogus -L / rpath entries leak into the link line.
-                list(APPEND _rewritten "${CMAKE_MATCH_3}")
-                set(_changed TRUE)
-            else()
-                list(APPEND _rewritten "${_lib}")
-            endif()
-        endforeach()
-        if(_changed)
-            set_target_properties("${_tgt}" PROPERTIES INTERFACE_LINK_LIBRARIES "${_rewritten}")
-        endif()
-    endforeach()
-endfunction()
-
 # ==============================================================================
 # anira_setup_backend(<id>) — main entry point. A macro so find_package(Torch),
 # CMAKE_CXX_FLAGS, and the BACKEND_BUILD_*_DIRS accumulators all act on the
@@ -621,41 +550,6 @@ macro(anira_setup_backend id)
         set(ANIRA_LIBTORCH_ROOTDIR "${_ab_rootdir}")
         set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
         set(ANIRA_LIBTORCH_LINKAGE "shared")
-    elseif(_ab_id STREQUAL "executorch" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-        # The ExecuTorch desktop archives ship the full ExecuTorch CMake package
-        # (lib/cmake/ExecuTorch), which exports each static library together with
-        # the per-platform force-load options its kernel/backend registration
-        # requires — so wire it via find_package, like libtorch. The mobile
-        # archives ship a single merged libexecutorch.a instead and take the
-        # generic per-ABI / xcframework paths below.
-        if(CMAKE_VERSION VERSION_LESS "3.24")
-            message(FATAL_ERROR "anira: the ExecuTorch backend requires CMake >= 3.24 "
-                                "(demanded by ExecuTorch's exported package config).")
-        endif()
-        # Imported targets are directory-scoped. A static anira links the
-        # ExecuTorch targets PUBLIC (the kernel registrations must reach the
-        # final image), so when anira is a subproject the consumer's directory
-        # must be able to resolve them too — promote everything the package
-        # imported to global.
-        get_property(_ab_imported_before DIRECTORY PROPERTY IMPORTED_TARGETS)
-        find_package(executorch REQUIRED CONFIG PATHS "${_ab_rootdir}/lib/cmake/ExecuTorch" NO_DEFAULT_PATH)
-        get_property(_ab_imported_after DIRECTORY PROPERTY IMPORTED_TARGETS)
-        if(_ab_imported_before)
-            list(REMOVE_ITEM _ab_imported_after ${_ab_imported_before})
-        endif()
-        foreach(_ab_tgt IN LISTS _ab_imported_after)
-            set_target_properties(${_ab_tgt} PROPERTIES IMPORTED_GLOBAL TRUE)
-        endforeach()
-        _anira_sanitize_executorch_targets()
-        set(ANIRA_EXECUTORCH_ROOTDIR "${_ab_rootdir}")
-        set(ANIRA_EXECUTORCH_LINKAGE "static")
-        set(ANIRA_EXECUTORCH_IS_STATIC TRUE)
-        set(ANIRA_EXECUTORCH_LIB_BASENAME "executorch")
-        set(ANIRA_EXECUTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
-        # NB: the ExecuTorch include dirs are deliberately NOT added to
-        # BACKEND_BUILD_HEADER_DIRS — its vendored c10 headers must never be visible
-        # to the LibTorch backend's TUs. Only the isolated ExecuTorchProcessor object
-        # target (see CMakeLists.txt) gets them, explicitly.
     elseif(_ab_arch STREQUAL "armv7l")
         # legacy macro already populated header/lib dirs + ANIRA_<ID>_* vars
         set(ANIRA_${_ab_ID}_LINKAGE "${_ab_linkage}")
@@ -738,7 +632,27 @@ macro(anira_setup_backend id)
             endif()
         endif()
 
-        list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_incdir}")
+        if(_ab_id STREQUAL "executorch")
+            # The ExecuTorch headers vendor a copy of c10 that must never be visible
+            # to the LibTorch backend's TUs (it shadows LibTorch's real c10 and breaks
+            # that backend at link time on MSVC), and anira's public headers do not
+            # include them. So they stay off the anira target; only
+            # ExecuTorchProcessor.cpp gets them, per-source (see CMakeLists.txt).
+            set(ANIRA_EXECUTORCH_INCLUDE_DIR "${_ab_incdir}")
+            # The compile interface the runtime was built with (mirrors what its
+            # exported targets carried): the vendored c10 must not look for a
+            # generated cmake_macros.h, logging is compiled out of the runtime, and
+            # the threadpool extension is built in.
+            set(ANIRA_EXECUTORCH_COMPILE_DEFINITIONS
+                C10_USING_CUSTOM_GENERATED_MACROS ET_LOG_ENABLED=0 ET_USE_THREADPOOL)
+            if(WIN32)
+                # No partial link on COFF, so the registration set ships as a second
+                # lib that must be whole-archived (see the ExecuTorch link block).
+                set(ANIRA_EXECUTORCH_REGISTRATIONS_LIB "${_ab_libdir}/executorch_registrations.lib")
+            endif()
+        else()
+            list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_incdir}")
+        endif()
         list(APPEND BACKEND_BUILD_LIBRARY_DIRS "${_ab_libdir}")
     endif()
 

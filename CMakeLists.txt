@@ -28,7 +28,7 @@ option(ANIRA_WITH_LIBTORCH    "Build with the LibTorch backend" ON)
 option(ANIRA_WITH_ONNXRUNTIME "Build with the ONNX Runtime backend" ON)
 option(ANIRA_WITH_LITERT      "Build with the LiteRT backend (LiteRt* C API; runs .tflite via the CompiledModel runtime)" ON)
 option(ANIRA_WITH_TFLITE      "Build with the legacy TensorFlow Lite backend (TfLite* C API); mutually exclusive with ANIRA_WITH_LITERT" OFF)
-option(ANIRA_WITH_EXECUTORCH  "Build with the ExecuTorch backend (runs .pte models; static-only, requires CMake >= 3.24 on desktop)" ON)
+option(ANIRA_WITH_EXECUTORCH  "Build with the ExecuTorch backend (runs .pte models; static-only)" ON)
 
 # --- Pre-built backend download ------------------------------------------------
 # Backends are downloaded from the anira-project/backends release with this tag.
@@ -174,13 +174,7 @@ endif()
 
 if(ANIRA_WITH_EXECUTORCH)
     anira_setup_backend(executorch)
-    if(NOT TARGET executorch)
-        # Mobile merged-lib path: LibTorch has no mobile build, so ExecuTorch's
-        # vendored c10 headers cannot clash there and the processor compiles as a
-        # regular anira source. On desktop it is compiled in an isolated object
-        # target instead (see the ExecuTorch link block below).
-        list(APPEND BACKEND_SOURCES src/backends/ExecuTorchProcessor.cpp)
-    endif()
+    list(APPEND BACKEND_SOURCES src/backends/ExecuTorchProcessor.cpp)
 endif()
 
 ## ==============================================================================
@@ -339,8 +333,6 @@ foreach(LIBRARY_DIR ${BACKEND_BUILD_LIBRARY_DIRS})
     )
 endforeach()
 
-# Shared between the anira target and the isolated ExecuTorch object target below —
-# the two must agree on every USE_* define (they shape the anira class layouts).
 set(ANIRA_COMPILE_DEFINITIONS
     # Backend-specific definitions
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
@@ -367,88 +359,40 @@ endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
 
 if(ANIRA_WITH_EXECUTORCH)
-    if(TARGET executorch)
-        # Desktop: the ExecuTorch CMake package was found by anira_setup_backend.
-        # Link the runtime plus the extension (Module/TensorPtr/data loader),
-        # kernel (optimized + quantized CPU ops) and XNNPACK-delegate targets —
-        # the ops/backend targets carry the per-platform force-load options that
-        # their static-initializer registration requires. The CoreML/MPS/MLX
-        # delegates are deliberately not linked: anira pins its backends to
-        # portable CPU execution, and their exported targets reference absolute
-        # SDK paths from the machine that built the archives.
-        #
-        # Two ordering/scope constraints:
-        #  * This block must come BEFORE the libtorch link block: libtorch_cpu
-        #    exports its own (different) XNNPACK, and if the torch dylibs precede
-        #    ExecuTorch's static archives on the link line, part of the delegate's
-        #    xnn_* references bind to libtorch's copy and delegate init fails at
-        #    runtime.
-        #  * The force-load options propagate to whatever links these targets, and
-        #    ExecuTorch aborts at static-init when its kernels register twice in
-        #    one process. A shared anira must therefore link them PRIVATE (the
-        #    registrations live inside libanira and consumers reach the runtime
-        #    through it); only a static anira propagates them to the consumer,
-        #    which is then the single place the runtime is linked.
-        if(BUILD_SHARED_LIBS)
-            set(ANIRA_EXECUTORCH_LINK_SCOPE PRIVATE)
-        else()
-            set(ANIRA_EXECUTORCH_LINK_SCOPE PUBLIC)
-        endif()
-        target_link_libraries(${PROJECT_NAME} ${ANIRA_EXECUTORCH_LINK_SCOPE}
-            executorch executorch_extensions executorch_kernels xnnpack_backend)
-
-        # ExecuTorchProcessor.cpp is the only TU that may see the ExecuTorch headers:
-        # they vendor a copy of c10 that must never shadow LibTorch's real c10 in the
-        # other backend TUs (it breaks the LibTorch backend at link time on MSVC).
-        # anira_setup_backend stripped the compile usage requirements off the imported
-        # ExecuTorch targets, so compile it in its own object target with explicit
-        # include dirs and merge the objects into anira.
-        add_library(anira-executorch-objs OBJECT src/backends/ExecuTorchProcessor.cpp)
-        set_target_properties(anira-executorch-objs PROPERTIES
-            POSITION_INDEPENDENT_CODE ON
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED ON
-            # Same hidden-visibility policy as the main target (see above).
-            CXX_VISIBILITY_PRESET hidden
-            VISIBILITY_INLINES_HIDDEN ON)
-        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-            # Same unique-symbol policy as the main target (see above).
-            target_compile_options(anira-executorch-objs PRIVATE -fno-gnu-unique)
-        endif()
-        target_compile_definitions(anira-executorch-objs PRIVATE
-            ${ANIRA_COMPILE_DEFINITIONS}
-            ${ANIRA_EXECUTORCH_COMPILE_DEFINITIONS})
-        target_include_directories(anira-executorch-objs PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/include")
-        target_include_directories(anira-executorch-objs SYSTEM PRIVATE
-            "${ANIRA_EXECUTORCH_ROOTDIR}/include"
-            "${ANIRA_EXECUTORCH_ROOTDIR}/include/executorch/runtime/core/portable_type/c10")
-        target_link_libraries(anira-executorch-objs PRIVATE
-            concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
-        if(MSVC)
-            # Match anira's export decoration (see cmake/msvc-support.cmake): the
-            # objects become part of anira, so ANIRA_API must resolve identically.
-            if(BUILD_SHARED_LIBS)
-                target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_EXPORTS)
-            else()
-                target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_STATIC_DEFINE)
-            endif()
-        endif()
-        target_sources(${PROJECT_NAME} PRIVATE $<TARGET_OBJECTS:anira-executorch-objs>)
-        # XNNPACK's runtime-dispatch config tables reference its microkernel symbols
-        # from data sections, which on-demand archive resolution does not satisfy
-        # (Apple's linker fails with "does not have address" fixup errors on archive
-        # members it never materialized). The microkernel archive is a leaf with no
-        # dependencies or colliding symbols, so link it whole-archive.
-        if(TARGET xnnpack-microkernels-prod)
-            target_link_libraries(${PROJECT_NAME} ${ANIRA_EXECUTORCH_LINK_SCOPE}
-                "$<LINK_LIBRARY:WHOLE_ARCHIVE,xnnpack-microkernels-prod>")
-        endif()
-    else()
-        # Mobile: a single merged libexecutorch.a (per ABI on Android, per
-        # xcframework slice on iOS), linked like the other static backends.
-        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_EXECUTORCH_STATIC_LIB}")
+    # One merged libexecutorch.a per platform/ABI/xcframework slice (runtime +
+    # extensions + optimized/quantized CPU kernels + XNNPACK delegate), built by
+    # anira-project/backends with the kernel/backend registrations pre-linked into
+    # a single archive member, so it links on-demand like the other static
+    # backends — no force-load, no CMake package.
+    #
+    # Ordering: this must come BEFORE the libtorch link block. libtorch_cpu
+    # exports its own (different) XNNPACK, and if the torch dylibs precede the
+    # ExecuTorch archive on the link line, part of the delegate's xnn_* references
+    # bind to libtorch's copy and delegate init fails at runtime. The check below
+    # the libtorch block enforces this at configure time.
+    anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_EXECUTORCH_STATIC_LIB}")
+    if(WIN32)
+        # COFF has no partial link, so the pre-linked registration member does not
+        # exist there: the registration set (runtime core + kernel/backend
+        # registrations + XNNPACK microkernels) ships as a second, small lib that
+        # has to be whole-archived. Same scope rules as the archive itself.
+        target_link_libraries(${PROJECT_NAME} PUBLIC
+            "$<BUILD_INTERFACE:${ANIRA_EXECUTORCH_REGISTRATIONS_LIB}>")
+        # (install.cmake adds the matching $<INSTALL_INTERFACE> entries.)
+        target_link_options(${PROJECT_NAME} PUBLIC
+            "$<BUILD_INTERFACE:/WHOLEARCHIVE:${ANIRA_EXECUTORCH_REGISTRATIONS_LIB}>")
     endif()
+
+    # ExecuTorchProcessor.cpp is the only TU that may see the ExecuTorch headers:
+    # they vendor a copy of c10 that must never shadow LibTorch's real c10 in the
+    # other backend TUs (it breaks the LibTorch backend at link time on MSVC). So
+    # the ExecuTorch include dirs are not on the target (anira_setup_backend keeps
+    # them out of BACKEND_BUILD_HEADER_DIRS); this one source gets them as plain
+    # -I flags, which are searched before every SYSTEM (-isystem / /external:I)
+    # dir of the target — so inside this TU the vendored c10 wins over LibTorch's.
+    set_source_files_properties(src/backends/ExecuTorchProcessor.cpp PROPERTIES
+        COMPILE_OPTIONS "-I${ANIRA_EXECUTORCH_INCLUDE_DIR};-I${ANIRA_EXECUTORCH_INCLUDE_DIR}/executorch/runtime/core/portable_type/c10"
+        COMPILE_DEFINITIONS "${ANIRA_EXECUTORCH_COMPILE_DEFINITIONS}")
 endif()
 
 if(ANIRA_WITH_LIBTORCH)
@@ -473,27 +417,35 @@ if(ANIRA_WITH_LIBTORCH)
     endif()
 endif()
 
-# Enforce the ExecuTorch-before-LibTorch ordering constraint documented above.
-# Both bundle their own XNNPACK; if the torch dylibs precede ExecuTorch's static
-# archives on the link line, part of the XNNPACK delegate's xnn_* references bind
-# to libtorch's (different) copy and delegate init fails at runtime with a bare
 # Internal error. LINK_LIBRARIES preserves the target_link_libraries call order,
-# so a future reshuffle of the two blocks above is caught here at configure time
-# instead of as a runtime failure.
-if(ANIRA_WITH_EXECUTORCH AND ANIRA_WITH_LIBTORCH AND TARGET executorch)
+# so a future reshuffle of the ExecuTorch and libtorch blocks is caught here at
+# configure time instead of as a runtime failure (see the ExecuTorch block above).
+if(ANIRA_WITH_EXECUTORCH AND ANIRA_WITH_LIBTORCH)
     get_target_property(_anira_link_order ${PROJECT_NAME} LINK_LIBRARIES)
-    list(FIND _anira_link_order "executorch" _anira_executorch_index)
-    list(FIND _anira_link_order "torch" _anira_torch_index)
+    set(_anira_executorch_index -1)
+    set(_anira_torch_index -1)
+    set(_anira_i 0)
+    foreach(_anira_entry IN LISTS _anira_link_order)
+        if(_anira_executorch_index EQUAL -1 AND _anira_entry MATCHES "libexecutorch\\.a|executorch\\.lib")
+            set(_anira_executorch_index ${_anira_i})
+        endif()
+        if(_anira_torch_index EQUAL -1 AND _anira_entry STREQUAL "torch")
+            set(_anira_torch_index ${_anira_i})
+        endif()
+        math(EXPR _anira_i "${_anira_i} + 1")
+    endforeach()
     if(_anira_executorch_index EQUAL -1
        OR (_anira_torch_index GREATER -1 AND _anira_executorch_index GREATER _anira_torch_index))
         message(FATAL_ERROR
-            "anira: internal link-order violation — the ExecuTorch targets must be linked "
+            "anira: internal link-order violation — the ExecuTorch archive must be linked "
             "before the LibTorch libraries (both bundle XNNPACK; see the comment at the "
             "ExecuTorch link block). Restore the ExecuTorch block above the LibTorch block.")
     endif()
     unset(_anira_link_order)
     unset(_anira_executorch_index)
     unset(_anira_torch_index)
+    unset(_anira_i)
+    unset(_anira_entry)
 endif()
 
 # Backends link PUBLIC: anira's public headers include the backend headers, and
