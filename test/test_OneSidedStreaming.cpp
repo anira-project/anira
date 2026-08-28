@@ -841,21 +841,24 @@ TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
     // With blocking_ratio > 0 the deadline is derived from the reference stream's
     // block size. Before the fix it read num_input_samples[m_tensor_index] -- the
     // params tensor's value count for a generator -- giving a deadline of
-    // 4/48000 s instead of 512/48000 s.
+    // 4/48000 s (83 us) instead of one host block. The backend sleeps longer than
+    // the buggy deadline; the host block is chosen large (4096 samples, 85 ms) so
+    // that worker wake-up jitter on a loaded CI runner cannot reach the correct
+    // deadline and turn this into a flaky test.
     InferenceConfig config = generator_config(/*session_exclusive=*/false,
                                               /*blocking_ratio=*/1.f);
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    backend.m_sleep_us = 1000;  // 1 ms per inference, well within the 10.6 ms deadline
+    backend.m_sleep_us = 1000;  // 1 ms per inference: > 83 us, << 85 ms
     InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
-    handler.prepare(HostConfig(512, 48000, false));
+    handler.prepare(HostConfig(4096, 48000, false));
 
     GeneratorModel model;
     model.m_latency = handler.get_latency(0);
 
     size_t global_index = 0;
-    for (size_t block = 0; block < 40; ++block) {
-        size_t const n = 512;
+    for (size_t block = 0; block < 20; ++block) {
+        size_t const n = 4096;
         float const param = 1.f + static_cast<float>(block);
         std::vector<float> params{param, 0.f, 0.f, 0.f};
         std::vector<float> out(n, -1.f);
