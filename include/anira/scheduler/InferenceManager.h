@@ -242,6 +242,12 @@ public:
     void set_non_realtime(bool is_non_realtime) const;
 
     /**
+     * @brief Drains the context's real-time log queue into the log sinks
+     * (see InferenceHandler::drain_log()). Not real-time safe.
+     */
+    size_t drain_log() const;
+
+    /**
      * @brief Wait-free reset of the inference session to its initial state.
      *
      * Clears the session's buffers and re-anchors the inference grid without ever

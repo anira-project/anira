@@ -6,6 +6,7 @@
 #include <atomic>
 
 #include "anira/ContextConfig.h"
+#include "anira/system/AniraWinExports.h"
 
 /**
  * @file Logger.h
@@ -21,15 +22,15 @@
  * Two families of macros:
  * - ANIRA_LOG_{DEBUG,INFO,WARNING,ERROR}: synchronous, for non-real-time code.
  *   Sinks run on the caller's thread.
- * - ANIRA_LOG_RT_{DEBUG,INFO,WARNING,ERROR}: real-time safe (thl::Logger::rt).
- *   Never allocates, locks or makes a system call: the message is formatted on the
- *   caller's stack with a locale-free printf subset (see tanh/core/RtFormat.h for the
- *   supported conversions) and pushed into a bounded lock-free queue that a drain
- *   thread forwards to the sinks. Use these anywhere reachable from an
- *   ANIRA_REALTIME entry point or from an inference thread. If the queue is full
- *   the message is dropped and counted; if no drain thread runs it is dropped.
- *   anira starts the drain thread with the first session (unless the host disabled
- *   tanh-lib's rt path) and stops it only in Context::shutdown().
+ * - ANIRA_LOG_RT_{DEBUG,INFO,WARNING,ERROR}: real-time safe. Never allocates, locks
+ *   or makes a system call: the message is formatted on the caller's stack with a
+ *   locale-free printf subset (see tanh/core/RtFormat.h for the supported
+ *   conversions) and pushed into the context's own bounded lock-free queue
+ *   (thl::Logger::rt::Queue, sized by LogConfig::m_queue_capacity), which a
+ *   context-owned low-priority thread or the host (LogDrain) forwards to the sinks.
+ *   Use these anywhere reachable from an ANIRA_REALTIME entry point or from an
+ *   inference thread. A full queue drops and counts; no queue (no context core yet)
+ *   drops silently — no real-time path exists then anyway.
  *
  * Both take printf-style arguments: `ANIRA_LOG_ERROR(group, "fmt %d", value)` and are
  * aliases of tanh-lib's THL_LOG_* / THL_LOG_RT_*. With ANIRA_WITH_LOGGING=OFF every
@@ -100,6 +101,17 @@ inline LogLevel get_log_level() {
 
 }  // namespace anira
 
+namespace anira::detail {
+/**
+ * @brief The context-owned real-time log queue, or nullptr while no context core exists.
+ *
+ * Set by Context when it builds its core (before the first session is registered) and
+ * cleared before the core is freed. Real-time log sites read it with one relaxed
+ * load; no session — and hence no real-time path — exists while it is null.
+ */
+ANIRA_API std::atomic<thl::Logger::rt::Queue*>& rt_log_queue_slot() noexcept;
+}  // namespace anira::detail
+
 #ifdef ENABLE_LOGGING
 /// Synchronous logging (not real-time safe): ANIRA_LOG_ERROR(group, fmt, ...).
 #define ANIRA_LOG_DEBUG(group, ...) THL_LOG_DEBUG(group, __VA_ARGS__)
@@ -107,11 +119,19 @@ inline LogLevel get_log_level() {
 #define ANIRA_LOG_WARNING(group, ...) THL_LOG_WARNING(group, __VA_ARGS__)
 #define ANIRA_LOG_ERROR(group, ...) THL_LOG_ERROR(group, __VA_ARGS__)
 
-/// Real-time safe logging (thl::Logger::rt): ANIRA_LOG_RT_ERROR(group, fmt, ...).
-#define ANIRA_LOG_RT_DEBUG(group, ...) THL_LOG_RT_DEBUG(group, __VA_ARGS__)
-#define ANIRA_LOG_RT_INFO(group, ...) THL_LOG_RT_INFO(group, __VA_ARGS__)
-#define ANIRA_LOG_RT_WARNING(group, ...) THL_LOG_RT_WARNING(group, __VA_ARGS__)
-#define ANIRA_LOG_RT_ERROR(group, ...) THL_LOG_RT_ERROR(group, __VA_ARGS__)
+/// Real-time safe logging into the context's queue: ANIRA_LOG_RT_ERROR(group, fmt, ...).
+#define ANIRA_LOG_RT_IMPL(level, group, ...)                                                \
+    do {                                                                                    \
+        if (auto* anira_rt_queue_ =                                                         \
+                ::anira::detail::rt_log_queue_slot().load(std::memory_order_relaxed)) {     \
+            static_cast<void>(                                                              \
+                anira_rt_queue_->logf(::thl::Logger::LogLevel::level, group, __VA_ARGS__)); \
+        }                                                                                   \
+    } while (false)
+#define ANIRA_LOG_RT_DEBUG(group, ...) ANIRA_LOG_RT_IMPL(Debug, group, __VA_ARGS__)
+#define ANIRA_LOG_RT_INFO(group, ...) ANIRA_LOG_RT_IMPL(Info, group, __VA_ARGS__)
+#define ANIRA_LOG_RT_WARNING(group, ...) ANIRA_LOG_RT_IMPL(Warning, group, __VA_ARGS__)
+#define ANIRA_LOG_RT_ERROR(group, ...) ANIRA_LOG_RT_IMPL(Error, group, __VA_ARGS__)
 #else
 // ANIRA_WITH_LOGGING=OFF: anira's own calls compile out (arguments unevaluated) without
 // touching tanh-lib's THL_LOGGING_DISABLED, which a host may use independently.

@@ -240,6 +240,10 @@ int InferenceManager::get_session_id() const {
     return m_session->m_session_id;
 }
 
+size_t InferenceManager::drain_log() const {
+    return Context::drain_log();
+}
+
 void InferenceManager::set_non_realtime(bool is_non_realtime) const {
     // The unbounded wait this flag triggers in Context::new_data_request() is
     // only ever satisfied by an inference thread completing the task. Without

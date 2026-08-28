@@ -4,6 +4,7 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+#include <tanh/core/threading/Thread.h>
 
 // IWYU pragma: keep - processor methods are called through SessionElement's shared_ptr members
 #ifdef USE_LIBTORCH
@@ -48,8 +49,24 @@ InferenceThread::~InferenceThread() {
 }
 
 #ifndef __EMSCRIPTEN__
-void InferenceThread::run() {
-    run_loop();
+void InferenceThread::start() {
+    thl::core::ThreadOptions options;
+    options.m_priority = thl::core::ThreadPriority::RealTime;
+    options.m_name = "anira-inference";
+    m_thread.start(options, [this](const thl::core::Thread&) { run_loop(); });
+}
+
+void InferenceThread::stop() {
+    m_thread.request_stop();
+    m_thread.join();
+}
+
+bool InferenceThread::should_exit() const {
+    return m_thread.should_stop();
+}
+
+bool InferenceThread::is_running() const {
+    return m_thread.is_running();
 }
 #else
 void InferenceThread::start() {

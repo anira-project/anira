@@ -20,10 +20,9 @@
 
 using namespace anira;
 
-// anira logs through thl::Logger: ContextConfig::m_log_level becomes the logger's
-// runtime level, and the real-time path (thl::Logger::rt, used by everything reachable
-// from an ANIRA_REALTIME entry point) is drained by a thread that lives exactly as long
-// as the inference thread pool does.
+// anira logs through thl::Logger. ContextConfig::m_log.m_level becomes the logger's
+// runtime level; the real-time paths log into a queue the context owns, drained by a
+// context-owned low-priority thread (LogDrain::Thread) or by the host (LogDrain::Manual).
 
 namespace {
 
@@ -36,6 +35,13 @@ InferenceConfig make_inference_config() {
         false,
         0.f,
         2);
+}
+
+ContextConfig make_context_config(LogDrain drain, LogLevel level = LogLevel::Error) {
+    ContextConfig config(2, WaitStrategy::SpinBackoff, level);
+    config.m_log.m_drain = drain;
+    config.m_log.m_drain_interval_ms = 1;
+    return config;
 }
 
 struct Instance {
@@ -59,18 +65,21 @@ struct RecordCollector {
     }
     ~RecordCollector() { thl::Logger::clear_callback(); }
 
-    bool wait_for(const char* message_fragment, const char* source) {
+    bool has(const char* message_fragment, const char* source = "rt") {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        for (const auto& record : m_records) {
+            if (record.m_message.find(message_fragment) != std::string::npos &&
+                record.m_source == source) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool wait_for(const char* message_fragment, const char* source = "rt") {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (std::chrono::steady_clock::now() < deadline) {
-            {
-                const std::lock_guard<std::mutex> lock(m_mutex);
-                for (const auto& record : m_records) {
-                    if (record.m_message.find(message_fragment) != std::string::npos &&
-                        record.m_source == source) {
-                        return true;
-                    }
-                }
-            }
+            if (has(message_fragment, source)) { return true; }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         return false;
@@ -91,11 +100,15 @@ TEST(Logger, LevelMapsOntoThlLogger) {
     const LogLevel previous = get_log_level();
     set_log_level(LogLevel::Warning);
     EXPECT_EQ(get_log_level(), LogLevel::Warning);
+#ifdef ENABLE_LOGGING  // with anira's logging compiled out, thl's global level is left alone
     EXPECT_EQ(thl::Logger::get_level(), thl::Logger::LogLevel::Warning);
     EXPECT_TRUE(thl::Logger::is_enabled(thl::Logger::LogLevel::Error));
     EXPECT_FALSE(thl::Logger::is_enabled(thl::Logger::LogLevel::Info));
+#endif
     set_log_level(previous);
 }
+
+#if defined(ENABLE_LOGGING)
 
 TEST(Logger, ContextConfigLevelIsAppliedToThlLogger) {
     {
@@ -108,52 +121,28 @@ TEST(Logger, ContextConfigLevelIsAppliedToThlLogger) {
     }
 }
 
-#if !defined(__EMSCRIPTEN__) && defined(ENABLE_LOGGING)
-TEST(Logger, RtDrainThreadStartsWithTheFirstSessionAndOutlivesIt) {
-    // The drain thread is process-global (a host logging through thl::Logger shares
-    // it), so anira starts it but never stops it on a session's behalf.
+TEST(Logger, RtQueueExistsExactlyWhileTheCoreDoes) {
+    // Sessions come and go; the queue (and the real-time sites' pointer to it) stays
+    // with the core, so no real-time path can ever find it missing.
     {
-        const Instance first;
-        EXPECT_TRUE(thl::Logger::rt::is_running());
-        {
-            const Instance second;
-            EXPECT_TRUE(thl::Logger::rt::is_running());
-        }
-        EXPECT_TRUE(thl::Logger::rt::is_running());
+        const Instance instance{make_context_config(LogDrain::Thread)};
+        EXPECT_NE(::anira::detail::rt_log_queue_slot().load(), nullptr);
     }
-    EXPECT_TRUE(thl::Logger::rt::is_running());
-
-    // Only the unload backstop stops it — and a later session starts it again.
+    EXPECT_NE(::anira::detail::rt_log_queue_slot().load(), nullptr);
     Context::shutdown();
-    EXPECT_FALSE(thl::Logger::rt::is_running());
-    {
-        const Instance again;
-        EXPECT_TRUE(thl::Logger::rt::is_running());
+    EXPECT_NE(::anira::detail::rt_log_queue_slot().load(), nullptr);
+    if (Context::release_core_if_idle()) {
+        EXPECT_EQ(::anira::detail::rt_log_queue_slot().load(), nullptr);
     }
 }
 
-TEST(Logger, RtDrainRespectsAHostThatDisabledIt) {
-    thl::Logger::rt::stop();
-    auto config = thl::Logger::get_config();
-    config.m_rt_enabled = false;
-    thl::Logger::set_config(config);
-    {
-        const Instance instance;
-        EXPECT_FALSE(thl::Logger::rt::is_running());
-    }
-    config.m_rt_enabled = true;
-    thl::Logger::set_config(config);
-    EXPECT_TRUE(thl::Logger::rt::is_running());
-}
-
-TEST(Logger, RtRecordsReachTheSinksWhileASessionExists) {
+#ifndef __EMSCRIPTEN__
+TEST(Logger, ThreadDrainDeliversRtRecordsWhileASessionExists) {
     RecordCollector collector;
-    const Instance instance{ContextConfig(2, WaitStrategy::SpinBackoff, LogLevel::Debug)};
-
+    const Instance instance{make_context_config(LogDrain::Thread)};
     // Error level: the only one tanh-lib compiles in for Release builds.
     ANIRA_LOG_RT_ERROR(log_group::k_scheduler, "rt record %d from the test", 42);
-    EXPECT_TRUE(collector.wait_for("rt record 42 from the test", "rt"));
-
+    EXPECT_TRUE(collector.wait_for("rt record 42 from the test"));
     ANIRA_LOG_ERROR(log_group::k_scheduler, "sync record from the test");
     EXPECT_TRUE(collector.wait_for("sync record from the test", "native"));
 
@@ -165,4 +154,45 @@ TEST(Logger, RtRecordsReachTheSinksWhileASessionExists) {
         }
     }
 }
+
+TEST(Logger, ThreadDrainFlushesOnLastSessionRelease) {
+    RecordCollector collector;
+    {
+        const Instance instance{make_context_config(LogDrain::Thread)};
+        ANIRA_LOG_RT_ERROR(log_group::k_scheduler, "queued right before release");
+    }
+    // release_session stops and joins the drain thread, which flushes the queue.
+    EXPECT_TRUE(collector.has("queued right before release"));
+}
 #endif
+
+TEST(Logger, ManualDrainDeliversOnlyWhenTheHostPumps) {
+    RecordCollector collector;
+    Instance instance{make_context_config(LogDrain::Manual)};
+    ANIRA_LOG_RT_ERROR(log_group::k_scheduler, "manual record %d", 7);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_FALSE(collector.has("manual record 7")) << "nobody should have drained yet";
+    EXPECT_GE(instance.m_handler.drain_log(), 1U);
+    EXPECT_TRUE(collector.has("manual record 7"));
+    EXPECT_EQ(Context::drain_log(), 0U);
+}
+
+TEST(Logger, ManualDrainFlushesOnLastSessionRelease) {
+    RecordCollector collector;
+    {
+        const Instance instance{make_context_config(LogDrain::Manual)};
+        ANIRA_LOG_RT_ERROR(log_group::k_scheduler, "manual record before release");
+    }
+    EXPECT_TRUE(collector.has("manual record before release"));
+}
+
+TEST(Logger, RtSitesDropSilentlyWithoutAQueue) {
+    Context::shutdown();
+    if (!Context::release_core_if_idle()) { GTEST_SKIP() << "core busy (user-managed threads)"; }
+    ASSERT_EQ(::anira::detail::rt_log_queue_slot().load(), nullptr);
+    RecordCollector collector;
+    ANIRA_LOG_RT_ERROR(log_group::k_scheduler, "nowhere to go");  // must not crash
+    EXPECT_FALSE(collector.has("nowhere to go"));
+}
+
+#endif  // ENABLE_LOGGING

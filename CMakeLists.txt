@@ -214,7 +214,7 @@ FetchContent_MakeAvailable(concurrentqueue)
 # links the exported tanh::Core.
 #
 # Pinned to a tagged tanh-lib release. (Temporarily a commit on tanh-lib PR #17 —
-# THL_LOG_* macros and teardown-safe rt::stop(); bump to the v0.0.4 tag once cut.)
+# THL_LOG_* macros, thl::core::Thread, owned rt log queues; bump to the v0.1.0 tag once cut.)
 #
 # Plain (non-cache) variables on purpose: tanh-lib's cmake_minimum_required
 # puts CMP0077 in NEW mode, so these shadow its option() defaults while anira
@@ -238,7 +238,7 @@ set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    GIT_TAG e8f0033770cd588f50fb24305106aa284b2a4c09
+    GIT_TAG c0f20715e89da389f803cfd8a0b6bb9277e78c3b
 )
 FetchContent_MakeAvailable(tanh-lib)
 
@@ -313,6 +313,7 @@ target_sources(${PROJECT_NAME}
 
         # Utils
         src/utils/JsonConfigLoader.cpp
+        src/utils/Logger.cpp
 
         # Interface
         src/InferenceHandler.cpp
@@ -320,7 +321,6 @@ target_sources(${PROJECT_NAME}
         src/InferenceConfig.cpp
 
         # System
-        src/system/HighPriorityThread.cpp
 )
 
 # add the include directories for the backends to the build interface, public because the anira headers include the backend headers

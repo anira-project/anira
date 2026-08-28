@@ -362,6 +362,19 @@ public:
     void set_non_realtime(bool is_non_realtime);
 
     /**
+     * @brief Forwards the records anira's real-time paths have logged to the log sinks
+     *
+     * With ContextConfig::m_log.m_drain == LogDrain::Manual the host calls this
+     * periodically (e.g. from a UI timer); with LogDrain::Thread the context's own
+     * low-priority thread does it and this is merely an extra flush. The queue is
+     * shared by all handlers in the process, so calling it on any one of them drains
+     * everything. Returns the number of records delivered.
+     *
+     * @warning Not real-time safe: the log sinks run on the calling thread.
+     */
+    size_t drain_log();
+
+    /**
      * @brief Number of inference threads currently active in the process.
      *
      * Process-wide, not per-session: all sessions share one thread pool.

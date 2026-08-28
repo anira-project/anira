@@ -59,7 +59,7 @@ Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The fix
         // Only report errors, so the log output of the backends does not pollute
         // the benchmark results (see anira::LogLevel)
         anira::ContextConfig context_config;
-        context_config.m_log_level = anira::LogLevel::Error;
+        context_config.m_log.m_level = anira::LogLevel::Error;
 
         // Create and prepare the InferenceHandler instance
         m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config, context_config);
@@ -187,13 +187,8 @@ Integrate the benchmark with Google Test for easy execution:
     #include <anira/anira.h>
 
     TEST(Benchmark, Simple) {
-        // Elevate process priority for more consistent timing
-    #if __linux__ || __APPLE__
-        pthread_t self = pthread_self();
-    #elif WIN32
-        HANDLE self = GetCurrentThread();
-    #endif
-        anira::HighPriorityThread::elevate_priority(self, true);
+        // Elevate this thread's priority for more consistent timing
+        thl::core::Thread::set_current_priority(thl::core::ThreadPriority::RealTime);
 
         // Execute the benchmark
         benchmark::RunSpecifiedBenchmarks();

@@ -1,8 +1,8 @@
 #include "anira/InferenceConfig.h"
 
+#include <anira/scheduler/Context.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/val.h>
-#include <tanh/core/Logger.h>
 
 #include "anira/utils/InferenceBackend.h"
 
@@ -35,7 +35,7 @@ const char* anira_get_version() {
 // records delivered. Not real-time safe.
 EMSCRIPTEN_KEEPALIVE
 size_t anira_drain_log() {
-    return thl::Logger::rt::drain();
+    return anira::Context::drain_log();
 }
 
 // Debug helper

@@ -103,22 +103,79 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
         }
     }
 
-    if (context_json.contains("log_level")) {
-        const auto& level_json = context_json.at("log_level");
+    const auto parse_level = [this](const nlohmann::json& level_json, const char* key) {
         std::string const level =
             level_json.is_string() ? level_json.get<std::string>() : std::string();
         if (level == "debug") {
-            m_context_config->m_log_level = anira::LogLevel::Debug;
+            m_context_config->m_log.m_level = anira::LogLevel::Debug;
         } else if (level == "info") {
-            m_context_config->m_log_level = anira::LogLevel::Info;
+            m_context_config->m_log.m_level = anira::LogLevel::Info;
         } else if (level == "warning") {
-            m_context_config->m_log_level = anira::LogLevel::Warning;
+            m_context_config->m_log.m_level = anira::LogLevel::Warning;
         } else if (level == "error") {
-            m_context_config->m_log_level = anira::LogLevel::Error;
+            m_context_config->m_log.m_level = anira::LogLevel::Error;
         } else {
             ANIRA_LOG_ERROR(anira::log_group::k_config,
-                            "Invalid 'log_level' value: expected \"debug\", \"info\", \"warning\" "
-                            "or \"error\". Using the default log level.");
+                            "Invalid '%s' value: expected \"debug\", \"info\", \"warning\" or "
+                            "\"error\". Using the default log level.",
+                            key);
+        }
+    };
+
+    // Legacy key (anira <= 2.2): the level alone. Superseded by the "log" block.
+    if (context_json.contains("log_level")) {
+        parse_level(context_json.at("log_level"), "log_level");
+    }
+
+    if (context_json.contains("log")) {
+        const auto& log_json = context_json.at("log");
+        if (!log_json.is_object()) {
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'log' value: expected an object with the optional keys "
+                            "'level', 'drain', 'queue_capacity' and 'drain_interval_ms'.");
+            return;
+        }
+        if (log_json.contains("level")) { parse_level(log_json.at("level"), "log.level"); }
+        if (log_json.contains("drain")) {
+            const auto& drain_json = log_json.at("drain");
+            std::string const drain =
+                drain_json.is_string() ? drain_json.get<std::string>() : std::string();
+            if (drain == "thread") {
+#ifdef __EMSCRIPTEN__
+                ANIRA_LOG_WARNING(anira::log_group::k_config,
+                                  "log.drain 'thread' is not supported on WebAssembly builds: "
+                                  "no thread can drain the log queue there. Using 'manual'.");
+                m_context_config->m_log.m_drain = anira::LogDrain::Manual;
+#else
+                m_context_config->m_log.m_drain = anira::LogDrain::Thread;
+#endif
+            } else if (drain == "manual") {
+                m_context_config->m_log.m_drain = anira::LogDrain::Manual;
+            } else {
+                ANIRA_LOG_ERROR(anira::log_group::k_config,
+                                "Invalid 'log.drain' value: expected \"thread\" or \"manual\". "
+                                "Using the default.");
+            }
+        }
+        if (log_json.contains("queue_capacity")) {
+            const auto& capacity_json = log_json.at("queue_capacity");
+            if (capacity_json.is_number_unsigned()) {
+                m_context_config->m_log.m_queue_capacity = capacity_json.get<size_t>();
+            } else {
+                ANIRA_LOG_ERROR(anira::log_group::k_config,
+                                "Invalid 'log.queue_capacity' value: expected an unsigned "
+                                "integer. Using the default.");
+            }
+        }
+        if (log_json.contains("drain_interval_ms")) {
+            const auto& interval_json = log_json.at("drain_interval_ms");
+            if (interval_json.is_number_unsigned()) {
+                m_context_config->m_log.m_drain_interval_ms = interval_json.get<uint32_t>();
+            } else {
+                ANIRA_LOG_ERROR(anira::log_group::k_config,
+                                "Invalid 'log.drain_interval_ms' value: expected an unsigned "
+                                "integer. Using the default.");
+            }
         }
     }
 }

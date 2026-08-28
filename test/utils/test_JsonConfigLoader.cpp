@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <sstream>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -116,3 +117,42 @@ TEST(JsonConfigLoader, EqualInferenceConfig) {
 #endif  // USE_ONNXRUNTIME
 #endif  // USE_LITERT
 #endif  // USE_LIBTORCH
+
+TEST(JsonConfigLoader, ContextConfigLogBlock) {
+    std::istringstream json(R"({
+        "context_config": {
+            "num_threads": 1,
+            "log": { "level": "warning", "drain": "manual", "queue_capacity": 2048,
+                     "drain_interval_ms": 5 }
+        },
+        "inference_config": {
+            "model_data": [{ "model_path": "x", "inference_backend": "CUSTOM" }],
+            "tensor_shape": [{ "input_shape": [[1, 1, 512]], "output_shape": [[1, 1, 512]] }],
+            "max_inference_time": 5.0
+        }
+    })");
+    JsonConfigLoader loader(json);
+    const auto config = loader.get_context_config();
+    ASSERT_NE(config, nullptr);
+    EXPECT_EQ(config->m_log.m_level, LogLevel::Warning);
+    EXPECT_EQ(config->m_log.m_drain, LogDrain::Manual);
+    EXPECT_EQ(config->m_log.m_queue_capacity, 2048U);
+    EXPECT_EQ(config->m_log.m_drain_interval_ms, 5U);
+}
+
+TEST(JsonConfigLoader, ContextConfigLegacyLogLevelKey) {
+    std::istringstream json(R"({
+        "context_config": { "log_level": "debug" },
+        "inference_config": {
+            "model_data": [{ "model_path": "x", "inference_backend": "CUSTOM" }],
+            "tensor_shape": [{ "input_shape": [[1, 1, 512]], "output_shape": [[1, 1, 512]] }],
+            "max_inference_time": 5.0
+        }
+    })");
+    JsonConfigLoader loader(json);
+    const auto config = loader.get_context_config();
+    ASSERT_NE(config, nullptr);
+    EXPECT_EQ(config->m_log.m_level, LogLevel::Debug);
+    EXPECT_EQ(config->m_log.m_drain, default_log_drain());
+    EXPECT_EQ(config->m_log.m_queue_capacity, 512U);
+}

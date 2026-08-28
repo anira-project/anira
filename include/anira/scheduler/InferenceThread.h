@@ -6,7 +6,7 @@
 #include <vector>
 
 #ifndef __EMSCRIPTEN__
-#include "../system/HighPriorityThread.h"
+#include <tanh/core/threading/Thread.h>
 #endif
 
 #include "../ContextConfig.h"
@@ -26,8 +26,8 @@ namespace anira {
  * It manages a concurrent queue of inference requests and processes them with minimal
  * latency while maintaining thread safety and real-time performance guarantees.
  *
- * On native builds, this inherits from HighPriorityThread and owns its own
- * OS thread. Under Emscripten there is no owned OS thread — a JS Worker
+ * On native builds this owns a thl::core::Thread running at
+ * thl::core::ThreadPriority::RealTime. Under Emscripten there is no owned OS thread — a JS Worker
  * drives the loop externally by calling run_loop(), and start()/stop()
  * simply flip an atomic flag. This is required because each WASM worker
  * instance shares memory with the main instance; spawning OS threads from
@@ -41,11 +41,7 @@ namespace anira {
  * optimization that can intermittently miss items enqueued via producer
  * tokens (lost inference tasks, see issue #77).
  */
-class ANIRA_API InferenceThread
-#ifndef __EMSCRIPTEN__
-    : public HighPriorityThread
-#endif
-{
+class ANIRA_API InferenceThread {
 public:
     /**
      * @brief Constructor that initializes the inference thread with a task queue
@@ -63,11 +59,10 @@ public:
     InferenceThread(InferenceQueue& next_inference,
                     WaitStrategy wait_strategy = WaitStrategy::SpinBackoff);
 
-    ~InferenceThread()
-#ifndef __EMSCRIPTEN__
-        override
-#endif
-        ;
+    ~InferenceThread();
+
+    InferenceThread(const InferenceThread&) = delete;
+    InferenceThread& operator=(const InferenceThread&) = delete;
 
     /**
      * @brief Executes a single iteration of inference processing
@@ -101,13 +96,22 @@ public:
      */
     void run_loop();
 
-#ifdef __EMSCRIPTEN__
-    // Externally driven lifecycle — the JS Worker owns the thread.
+    /**
+     * @brief Starts the thread (native: a real-time priority OS thread running
+     * run_loop(); WebAssembly: marks the externally driven loop as running).
+     */
     void start();
+
+    /**
+     * @brief Stops the thread: asks run_loop() to return and, natively, joins it.
+     */
     void stop();
+
+    /// True once stop() was called; run_loop() polls this.
     bool should_exit() const;
+
+    /// True from start() until run_loop() has returned (native) / until stop() (web).
     bool is_running() const;
-#endif
 
     /**
      * @brief Number of inference threads currently active in the process.
@@ -124,13 +128,6 @@ public:
     static unsigned int get_num_active_threads();
 
 private:
-#ifndef __EMSCRIPTEN__
-    /**
-     * @brief HighPriorityThread entry point; simply delegates to run_loop().
-     */
-    void run() override;
-#endif
-
     /**
      * @brief Performs inference processing for a specific session
      *
@@ -225,6 +222,8 @@ private:
 #ifdef __EMSCRIPTEN__
     std::atomic<bool> m_should_exit{false};
     std::atomic<bool> m_is_running{false};
+#else
+    thl::core::Thread m_thread;  ///< The OS thread; its stop flag is should_exit()
 #endif
 };
 

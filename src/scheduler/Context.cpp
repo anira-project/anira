@@ -58,6 +58,13 @@ struct Context::Core {
 
     std::vector<std::shared_ptr<SessionElement>> m_sessions;  ///< Session registry
 
+    std::unique_ptr<thl::Logger::rt::Queue> m_log_queue;  ///< Real-time log queue (created
+                                                          ///< once per core, capacity from the
+                                                          ///< first session's LogConfig)
+    std::unique_ptr<thl::Logger::rt::DrainThread> m_log_drain;  ///< Drains m_log_queue at low
+                                                                ///< priority while sessions
+                                                                ///< exist (LogDrain::Thread)
+
     std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;  ///< Inference thread pool;
                                                                   ///< non-empty exactly while
                                                                   ///< the registry is non-empty
@@ -149,40 +156,6 @@ struct UnloadGuard {
 [[maybe_unused]] UnloadGuard s_unload_guard;
 #endif
 
-// The real-time log path (thl::Logger::rt, used by everything reachable from an
-// ANIRA_REALTIME entry point and by the inference threads) needs a drain thread to
-// deliver its records. anira makes sure one runs from the first session on — unless
-// the host disabled tanh-lib's rt path (LoggerConfig::m_rt_enabled = false, e.g. to
-// pump rt::drain() itself), which is respected. The thread is process-global and
-// possibly shared with a host that logs through thl::Logger too, so anira never stops
-// it when a session goes away; only Context::shutdown() — the library-unload backstop,
-// after which nothing may run anira code — stops and joins it. Not on WebAssembly:
-// there is no thread to run it on; the queue is opened for manual draining instead and
-// the host pumps it (anira_drain_log() in the web wrapper).
-// rt::stop() also clears LoggerConfig::m_rt_enabled, which is how a host opts out; this
-// flag tells anira's own stop apart from the host's so a later session may start again.
-std::atomic<bool> s_rt_drain_stopped_by_anira{false};
-
-void ensure_rt_log_drain() {
-#if defined(__EMSCRIPTEN__) && defined(ENABLE_LOGGING)
-    thl::Logger::rt::enable_manual_drain(true);
-#elif defined(ENABLE_LOGGING)
-    if (thl::Logger::rt::is_running()) { return; }
-    const bool stopped_by_anira = s_rt_drain_stopped_by_anira.exchange(false);
-    if (!stopped_by_anira && !thl::Logger::get_config().m_rt_enabled) { return; }
-    thl::Logger::rt::start();
-#endif
-}
-
-void stop_rt_log_drain() {
-#if !defined(__EMSCRIPTEN__) && defined(ENABLE_LOGGING)
-    // Also reached from the library-unload hook, possibly after tanh-lib's static logger
-    // state was torn down; rt::stop() is a no-op then (tanh-lib >= v0.0.4).
-    if (thl::Logger::rt::is_running()) { s_rt_drain_stopped_by_anira.store(true); }
-    thl::Logger::rt::stop();
-#endif
-}
-
 }  // namespace
 
 Context::Core& Context::core() {
@@ -258,6 +231,13 @@ ContextConfig Context::sanitize_config(const ContextConfig& context_config) {
                           sanitized_config.m_num_threads);
         sanitized_config.m_num_threads = 0;
     }
+    if (sanitized_config.m_log.m_drain != LogDrain::Manual) {
+        ANIRA_LOG_WARNING(log_group::k_context,
+                          "LogDrain::Thread is not supported on WebAssembly builds: no thread "
+                          "can drain the log queue there. Using LogDrain::Manual — pump "
+                          "drain_log() from the host.");
+        sanitized_config.m_log.m_drain = LogDrain::Manual;
+    }
     return sanitized_config;
 #else
     return context_config;
@@ -269,10 +249,54 @@ void Context::apply_log_level_locked(Core& c, const ContextConfig& context_confi
     // lowest (most verbose) of the level in effect and the requested one wins, so no
     // session can silence the diagnostics another session asked for. Backend
     // processors pick the level up when their instances are created.
-    const LogLevel log_level =
-        c.m_sessions.empty() ? context_config.m_log_level
-                             : std::min(c.m_context_config.m_log_level, context_config.m_log_level);
+    const LogLevel log_level = c.m_sessions.empty() ? context_config.m_log.m_level
+                                                    : std::min(c.m_context_config.m_log.m_level,
+                                                               context_config.m_log.m_level);
     set_log_level(log_level);
+}
+
+void Context::start_log_drain_locked(Core& c, const ContextConfig& context_config) {
+    const LogConfig& log_config = context_config.m_log;
+    if (!c.m_log_queue) {
+        // Once per core: the queue is what the real-time sites hold a pointer to, so it
+        // is never replaced while the core lives (a later first session that asks for
+        // another capacity is told below).
+        constexpr size_t k_min_capacity = 64;
+        constexpr size_t k_max_capacity = 65536;
+        const size_t capacity =
+            std::clamp(log_config.m_queue_capacity, k_min_capacity, k_max_capacity);
+        if (capacity != log_config.m_queue_capacity) {
+            ANIRA_LOG_WARNING(log_group::k_context,
+                              "LogConfig::m_queue_capacity = %zu is outside [%zu, %zu]; using %zu.",
+                              log_config.m_queue_capacity,
+                              k_min_capacity,
+                              k_max_capacity,
+                              capacity);
+        }
+        c.m_log_queue = std::make_unique<thl::Logger::rt::Queue>(capacity);
+        detail::rt_log_queue_slot().store(c.m_log_queue.get(), std::memory_order_release);
+    } else if (c.m_log_queue->capacity() < log_config.m_queue_capacity) {
+        ANIRA_LOG_WARNING(log_group::k_context,
+                          "LogConfig::m_queue_capacity = %zu requested, but the context's log "
+                          "queue was created with %zu records by an earlier session and keeps "
+                          "that size for the lifetime of the process.",
+                          log_config.m_queue_capacity,
+                          c.m_log_queue->capacity());
+    }
+#ifndef __EMSCRIPTEN__
+    if (log_config.m_drain == LogDrain::Thread) {
+        assert(!c.m_log_drain && "log drain thread alive without registered sessions");
+        thl::Logger::rt::DrainThread::Options options;
+        options.m_interval_ms = log_config.m_drain_interval_ms;
+        options.m_priority = thl::core::ThreadPriority::Low;
+        options.m_name = "anira-log";
+        c.m_log_drain = std::make_unique<thl::Logger::rt::DrainThread>(*c.m_log_queue, options);
+    }
+#endif
+}
+
+std::unique_ptr<thl::Logger::rt::DrainThread> Context::take_log_drain_locked(Core& c) {
+    return std::move(c.m_log_drain);
 }
 
 void Context::apply_or_compare_config_locked(Core& c, const ContextConfig& context_config) {
@@ -288,11 +312,12 @@ void Context::apply_or_compare_config_locked(Core& c, const ContextConfig& conte
                        c.m_context_config.m_anira_version.c_str());
         try {
             resize_pool_locked(c, context_config.m_num_threads);
+            start_log_drain_locked(c, context_config);
         } catch (...) {
             c.m_thread_pool.clear();
+            c.m_log_drain.reset();
             throw;
         }
-        ensure_rt_log_drain();
         return;
     }
 
@@ -324,8 +349,9 @@ void Context::apply_or_compare_config_locked(Core& c, const ContextConfig& conte
         ANIRA_LOG_ERROR(log_group::k_context,
                         "Context already initialized with different backends enabled!");
     }
-    const LogLevel log_level = std::min(c.m_context_config.m_log_level, context_config.m_log_level);
-    if (c.m_context_config.m_log_level != context_config.m_log_level) {
+    const LogLevel log_level =
+        std::min(c.m_context_config.m_log.m_level, context_config.m_log.m_level);
+    if (c.m_context_config.m_log.m_level != context_config.m_log.m_level) {
         ANIRA_LOG_WARNING(log_group::k_context,
                           "ContextConfig log level mismatch: the context is at log level '%s' "
                           "but a new session requested '%s'. The log level is process-global "
@@ -333,13 +359,29 @@ void Context::apply_or_compare_config_locked(Core& c, const ContextConfig& conte
                           "in effect. Note that the inference backends were already "
                           "initialized with the first context's log level and keep it. Align "
                           "the ContextConfig of all sessions to silence this warning.",
-                          to_string(c.m_context_config.m_log_level),
-                          to_string(context_config.m_log_level),
+                          to_string(c.m_context_config.m_log.m_level),
+                          to_string(context_config.m_log.m_level),
                           to_string(log_level));
     }
     // Keep the stored config in sync with the level actually in effect (the
     // lowest requested one, applied by apply_log_level_locked).
-    c.m_context_config.m_log_level = log_level;
+    c.m_context_config.m_log.m_level = log_level;
+    if (c.m_context_config.m_log.m_drain != context_config.m_log.m_drain ||
+        c.m_context_config.m_log.m_queue_capacity != context_config.m_log.m_queue_capacity ||
+        c.m_context_config.m_log.m_drain_interval_ms != context_config.m_log.m_drain_interval_ms) {
+        ANIRA_LOG_WARNING(log_group::k_context,
+                          "ContextConfig log drain mismatch: the context runs drain '%s' with a "
+                          "%zu-record queue and a %u ms interval, but a new session requested "
+                          "'%s', %zu records, %u ms. The log queue and its drain are "
+                          "process-global and keep the first session's settings; align the "
+                          "ContextConfig of all sessions to silence this warning.",
+                          to_string(c.m_context_config.m_log.m_drain),
+                          c.m_context_config.m_log.m_queue_capacity,
+                          c.m_context_config.m_log.m_drain_interval_ms,
+                          to_string(context_config.m_log.m_drain),
+                          context_config.m_log.m_queue_capacity,
+                          context_config.m_log.m_drain_interval_ms);
+    }
     if (c.m_context_config.m_wait_strategy != context_config.m_wait_strategy) {
         ANIRA_LOG_WARNING(log_group::k_context,
                           "ContextConfig wait strategy mismatch: the context was created with "
@@ -619,8 +661,21 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
     // in-flight inferences), so it runs unlocked. From here on we mutate the
     // shared registry, the processor pools, and possibly tear down the pool.
     Core& c = core();
-    const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
-    unregister_session_locked(c, session);
+    std::unique_ptr<thl::Logger::rt::DrainThread> log_drain_to_stop;
+    {
+        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        unregister_session_locked(c, session);
+        if (c.m_sessions.empty()) { log_drain_to_stop = take_log_drain_locked(c); }
+    }
+    // Outside the lifecycle lock: stopping joins the drain thread and flushes the queue
+    // through the log sinks on this thread, and a host's log callback may call back
+    // into the context (get_sessions(), get_num_inference_threads(), ...). In Manual
+    // mode the same final flush makes sure the last session's records are not stuck.
+    if (log_drain_to_stop) {
+        log_drain_to_stop.reset();
+    } else if (c.m_sessions.empty()) {
+        drain_log();
+    }
 }
 
 void Context::shutdown() {
@@ -629,6 +684,7 @@ void Context::shutdown() {
     void* existing = s_core.load(std::memory_order_acquire);
     if (existing == nullptr) { return; }
     Core& c = *static_cast<Core*>(existing);
+    std::unique_ptr<thl::Logger::rt::DrainThread> log_drain_to_stop;
     {
         const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
         if (!c.m_sessions.empty()) {
@@ -639,11 +695,20 @@ void Context::shutdown() {
                             c.m_sessions.size());
         }
         c.m_thread_pool.clear();
+        log_drain_to_stop = take_log_drain_locked(c);
     }
-    // Outside the lifecycle lock: stopping joins the drain thread and flushes the queue
-    // through the sinks on this thread, and a host's log callback may call back into
-    // the context (get_sessions(), get_num_inference_threads(), ...).
-    stop_rt_log_drain();
+    // Outside the lifecycle lock, for the reasons given in release_session().
+    log_drain_to_stop.reset();
+    drain_log();
+}
+
+size_t Context::drain_log() {
+    void* existing = s_core.load(std::memory_order_acquire);
+    if (existing == nullptr) { return 0; }
+    Core& c = *static_cast<Core*>(existing);
+    // The queue lives as long as the core; no lock, so a host's log callback that calls
+    // back into the context cannot deadlock here.
+    return c.m_log_queue ? c.m_log_queue->drain() : 0;
 }
 
 bool Context::release_core_if_idle() {
@@ -663,6 +728,9 @@ bool Context::release_core_if_idle() {
     if (!s_core.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel)) {
         return false;
     }
+    // The real-time sites hold the queue through this slot; clear it before the queue
+    // goes away with the core. No session exists, so no real-time path is running.
+    detail::rt_log_queue_slot().store(nullptr, std::memory_order_release);
     lifecycle_lock.unlock();
     delete &c;
     return true;
