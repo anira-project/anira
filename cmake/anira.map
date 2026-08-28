@@ -1,0 +1,26 @@
+/* Export allowlist of the shared libanira on ELF (GNU ld / lld version script).
+ *
+ * The library is compiled with -fvisibility=hidden and ANIRA_API re-exports the
+ * public API, but that cannot hide what a header stamps default-visibility itself:
+ * libstdc++ wraps namespace std in visibility("default"), LibTorch's C10_API classes
+ * emit default-visibility vtables/typeinfo into anira's objects, and the prebuilt
+ * ExecuTorch desktop archives are compiled with default visibility and force-loaded.
+ * This script pins the dynamic export table to namespace anira — functions, data,
+ * vtables, typeinfo, thunks, guard variables — and makes everything else local.
+ * cmake/anira.exports is the Mach-O twin; cmake/CheckExports.cmake verifies the
+ * result in CTest. Keep the three in sync.
+ */
+{
+  global:
+    _ZN5anira*;       /* anira::… functions, static data, template instantiations */
+    _ZNK5anira*;      /* anira::… const member functions */
+    _ZTVN5anira*;     /* vtables */
+    _ZTIN5anira*;     /* typeinfo */
+    _ZTSN5anira*;     /* typeinfo names */
+    _ZTTN5anira*;     /* VTTs */
+    _ZTh*_N5anira*;   /* non-virtual thunks */
+    _ZTv*_N5anira*;   /* virtual thunks */
+    _ZGVN5anira*;     /* guard variables of function-local statics */
+  local:
+    *;
+};

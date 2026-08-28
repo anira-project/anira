@@ -250,6 +250,32 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(${PROJECT_NAME} PRIVATE -fno-gnu-unique)
 endif()
+# Linker-side export allowlist for the shared library. -fvisibility=hidden cannot
+# hide what a header stamps default-visibility itself: libstdc++ wraps namespace std
+# in visibility("default"), LibTorch's C10_API classes emit default-visibility
+# vtables/typeinfo into anira's own objects, and the prebuilt ExecuTorch desktop
+# archives are compiled with default visibility and force-loaded (Mach-O has no
+# hidden variant of -force_load). Without this, libanira exported ~4000 std::,
+# executorch::, xnn_*, c10:: and BLAS symbols next to the ~400 of the API. So the
+# shared libanira additionally pins its dynamic export table at link time to
+# namespace anira — functions, data, vtables, typeinfo, thunks — and nothing else.
+# cmake/anira.map (ELF version script) and cmake/anira.exports (Mach-O
+# -exported_symbols_list) carry the same pattern list; test/unload registers a CTest
+# check (cmake/CheckExports.cmake) that diffs the real export table against it on
+# every desktop platform. MSVC needs nothing (PE exports only what carries
+# __declspec(dllexport)); Emscripten has no dynamic export table. MinGW is not a
+# supported toolchain (no prebuilt backends) and is left alone.
+if(BUILD_SHARED_LIBS AND NOT WIN32 AND NOT EMSDK_VERSION)
+    if(APPLE)
+        set(ANIRA_EXPORT_LIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/anira.exports")
+        target_link_options(${PROJECT_NAME} PRIVATE "LINKER:-exported_symbols_list,${ANIRA_EXPORT_LIST}")
+    else()
+        set(ANIRA_EXPORT_LIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/anira.map")
+        target_link_options(${PROJECT_NAME} PRIVATE "LINKER:--version-script=${ANIRA_EXPORT_LIST}")
+    endif()
+    # Relink when the allowlist changes.
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${ANIRA_EXPORT_LIST}")
+endif()
 # add an alias so that the project can be used with add_subdirectory
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
@@ -357,6 +383,26 @@ if(ANIRA_WITH_EXECUTORCH)
         endif()
         target_link_libraries(${PROJECT_NAME} ${ANIRA_EXECUTORCH_LINK_SCOPE}
             executorch executorch_extensions executorch_kernels xnnpack_backend)
+        # The desktop archives are compiled with default visibility and (partly)
+        # force-loaded, so — unlike the on-demand static backends that go through
+        # anira_target_link_static_backend — every symbol they contribute would become
+        # a dynamic export of whatever links them (executorch::, xnn_*, pthreadpool_*,
+        # cpuinfo_*, kai_*, the vendored c10:: and Eigen/BLAS). A host that ships its
+        # own XNNPACK (LibTorch does) could then interpose the delegate's kernels. ELF
+        # localizes them with --exclude-libs per archive basename, which composes with
+        # --whole-archive; same scope as the link so a static anira propagates it to
+        # the consumer that ends up linking the archives (basenames only, so the
+        # installed export stays relocatable). Mach-O has no hidden variant of
+        # -force_load: there the shared libanira relies on its export allowlist (see
+        # the symbol-visibility block above) and a plugin embedding a static anira on
+        # its own -exported_symbols_list (docs/sphinx/troubleshooting.rst).
+        if(NOT APPLE AND NOT WIN32 AND NOT EMSDK_VERSION)
+            foreach(_anira_executorch_archive IN LISTS ANIRA_EXECUTORCH_ARCHIVES)
+                target_link_options(${PROJECT_NAME} ${ANIRA_EXECUTORCH_LINK_SCOPE}
+                    "LINKER:--exclude-libs,${_anira_executorch_archive}")
+            endforeach()
+            unset(_anira_executorch_archive)
+        endif()
 
         # ExecuTorchProcessor.cpp is the only TU that may see the ExecuTorch headers:
         # they vendor a copy of c10 that must never shadow LibTorch's real c10 in the

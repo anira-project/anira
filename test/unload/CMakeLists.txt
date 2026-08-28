@@ -110,6 +110,48 @@ gtest_discover_tests(anira_unload_test
     DISCOVERY_TIMEOUT 90
     PROPERTIES TIMEOUT 120)
 
+# Export-table check (cmake/CheckExports.cmake): the shared libanira exports exactly
+# the ANIRA_API surface (namespace anira, nothing else — no std::, backend or
+# STB_GNU_UNIQUE symbol), and the plugin-shaped module exports no backend-runtime
+# symbol. See the symbol-visibility notes in the top-level CMakeLists.txt.
+if(WIN32)
+    set(_anira_exports_format PE)
+    # dumpbin lives next to link.exe; it is not on PATH outside a developer shell.
+    get_filename_component(_anira_linker_dir "${CMAKE_LINKER}" DIRECTORY)
+    find_program(ANIRA_DUMPBIN dumpbin HINTS "${_anira_linker_dir}")
+    set(_anira_exports_tool "${ANIRA_DUMPBIN}")
+    set(_anira_exports_tool_arg "-DDUMPBIN=${ANIRA_DUMPBIN}")
+else()
+    if(APPLE)
+        set(_anira_exports_format MACHO)
+    else()
+        set(_anira_exports_format ELF)
+    endif()
+    if(CMAKE_NM)
+        set(ANIRA_NM "${CMAKE_NM}")
+    else()
+        find_program(ANIRA_NM NAMES nm llvm-nm)
+    endif()
+    set(_anira_exports_tool "${ANIRA_NM}")
+    set(_anira_exports_tool_arg "-DNM=${ANIRA_NM}")
+endif()
+if(_anira_exports_tool)
+    if(BUILD_SHARED_LIBS)
+        set(_anira_exports_library "$<TARGET_FILE:anira>")
+    else()
+        set(_anira_exports_library "")
+    endif()
+    add_test(NAME anira_exports
+        COMMAND ${CMAKE_COMMAND}
+            -DFORMAT=${_anira_exports_format}
+            ${_anira_exports_tool_arg}
+            "-DLIBRARY=${_anira_exports_library}"
+            "-DMODULE=$<TARGET_FILE:anira_unload_module>"
+            -P "${anira_SOURCE_DIR}/cmake/CheckExports.cmake")
+else()
+    message(WARNING "anira: no nm/dumpbin found — the anira_exports test is not registered")
+endif()
+
 # Windows: the module, anira.dll and every runtime DLL are searched relative to the
 # application, so copy them next to the executable (the module is built into the same
 # directory already). Same pattern as test/CMakeLists.txt.

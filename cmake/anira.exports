@@ -1,0 +1,13 @@
+# Export allowlist of the shared libanira on Mach-O (ld64 -exported_symbols_list).
+# Same pattern set as cmake/anira.map — Mach-O symbol names carry a leading
+# underscore; the rationale lives there. cmake/CheckExports.cmake verifies the
+# result in CTest. Keep the three in sync.
+__ZN5anira*
+__ZNK5anira*
+__ZTVN5anira*
+__ZTIN5anira*
+__ZTSN5anira*
+__ZTTN5anira*
+__ZTh*_N5anira*
+__ZTv*_N5anira*
+__ZGVN5anira*
