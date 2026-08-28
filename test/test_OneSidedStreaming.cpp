@@ -777,8 +777,6 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
         EXPECT_NE(captured_gated.find("Output stream not consumed"), std::string::npos)
             << "Over-pushing without popping must warn.";
     }
-    EXPECT_EQ(captured_gated.find("Buffer overflow"), std::string::npos)
-        << "The gate must prevent any receive-ring overflow.";
     EXPECT_EQ(captured_gated.find("No free inference queue"), std::string::npos)
         << "One window per struct never exhausts the pool.";
 

@@ -2,7 +2,6 @@
 #include <anira/utils/MemoryBlock.h>
 
 #include <cstddef>
-#include <string>
 
 #include "gtest/gtest.h"
 
@@ -97,23 +96,19 @@ TEST(Buffer, BufferSwap) {
         ASSERT_EQ(buffer2.get_sample(0, i), i);
     }
 }
+// Mismatched dimensions violate swap_data()'s contract: the containers never
+// log, so the call asserts in debug builds and is a silent no-op in release.
+#ifdef NDEBUG
 TEST(Buffer, InvalidSizeSwap) {
     anira::Buffer<int> buffer1(1, 5);
     anira::Buffer<int> buffer2(1, 6);
     int* buffer1_ptr = buffer1.data();
     int* buffer2_ptr = buffer2.data();
 
-    testing::internal::CaptureStderr();
     buffer1.swap_data(buffer2);
 
-    std::string const output = testing::internal::GetCapturedStderr();
-
-    // check that the blocks were actually swapped
     ASSERT_EQ(buffer1_ptr, buffer1.data());
     ASSERT_EQ(buffer2_ptr, buffer2.data());
-    ASSERT_EQ(
-        output,
-        std::string("Cannot swap data, buffers have different number of channels or sizes!\n"));
 }
 
 TEST(Buffer, InvalidChannelsSwap) {
@@ -122,15 +117,21 @@ TEST(Buffer, InvalidChannelsSwap) {
     int* buffer1_ptr = buffer1.data();
     int* buffer2_ptr = buffer2.data();
 
-    testing::internal::CaptureStderr();
     buffer1.swap_data(buffer2);
 
-    std::string const output = testing::internal::GetCapturedStderr();
-
-    // check that the blocks were actually swapped
     ASSERT_EQ(buffer1_ptr, buffer1.data());
     ASSERT_EQ(buffer2_ptr, buffer2.data());
-    ASSERT_EQ(
-        output,
-        std::string("Cannot swap data, buffers have different number of channels or sizes!\n"));
 }
+#elif GTEST_HAS_DEATH_TEST
+TEST(BufferDeathTest, InvalidSizeSwap) {
+    anira::Buffer<int> buffer1(1, 5);
+    anira::Buffer<int> buffer2(1, 6);
+    EXPECT_DEATH(buffer1.swap_data(buffer2), "different dimensions");
+}
+
+TEST(BufferDeathTest, InvalidChannelsSwap) {
+    anira::Buffer<int> buffer1(2, 5);
+    anira::Buffer<int> buffer2(1, 5);
+    EXPECT_DEATH(buffer1.swap_data(buffer2), "different dimensions");
+}
+#endif
