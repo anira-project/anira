@@ -6,7 +6,6 @@
 
 #include <cassert>
 #include <cstddef>
-#include <utility>
 #include <vector>
 
 namespace anira {
