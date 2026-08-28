@@ -685,11 +685,10 @@ void Context::new_data_submitted(const std::shared_ptr<SessionElement>& session)
                      channel <
                      session->m_inference_config.get_preprocess_input_channels()[tensor_index];
                      channel++) {
-                    for (size_t i = 0;
-                         i < session->m_inference_config.get_preprocess_input_size()[tensor_index];
-                         i++) {  // Non-streamable parameters have no input size
-                        session->m_send_buffer[tensor_index].pop_sample(channel);
-                    }
+                    // Non-streamable parameters have no input size
+                    session->m_send_buffer[tensor_index].discard(
+                        channel,
+                        session->m_inference_config.get_preprocess_input_size()[tensor_index]);
                 }
             }
             for (size_t tensor_index = 0;
@@ -699,12 +698,11 @@ void Context::new_data_submitted(const std::shared_ptr<SessionElement>& session)
                      channel <
                      session->m_inference_config.get_postprocess_output_channels()[tensor_index];
                      channel++) {
-                    for (size_t i = 0;
-                         i <
-                         session->m_inference_config.get_postprocess_output_size()[tensor_index];
-                         i++) {  // Non-streamable parameters have no output size
-                        session->m_receive_buffer[tensor_index].push_sample(channel, 0.f);
-                    }
+                    // Non-streamable parameters have no output size
+                    session->m_receive_buffer[tensor_index].push_fill(
+                        channel,
+                        0.f,
+                        session->m_inference_config.get_postprocess_output_size()[tensor_index]);
                 }
             }
             LOG_WARNING << "[WARNING] No free inference queue found in session: "

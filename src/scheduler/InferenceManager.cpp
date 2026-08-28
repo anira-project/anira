@@ -8,6 +8,7 @@
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -109,11 +110,9 @@ void InferenceManager::process_input(const float* const* const* input_data, size
             for (size_t channel = 0;
                  channel < m_inference_config.get_preprocess_input_channels()[tensor_index];
                  ++channel) {
-                for (size_t sample = 0; sample < num_samples[tensor_index]; ++sample) {
-                    m_session->m_send_buffer[tensor_index].push_sample(
-                        channel,
-                        input_data[tensor_index][channel][sample]);
-                }
+                m_session->m_send_buffer[tensor_index].push_block(channel,
+                                                                  input_data[tensor_index][channel],
+                                                                  num_samples[tensor_index]);
             }
         } else {
             for (size_t sample = 0; sample < num_samples[tensor_index]; ++sample) {
@@ -130,16 +129,19 @@ size_t* InferenceManager::process_output(float* const* const* output_data, size_
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0) {
             int const missing_samples_before = static_cast<int>(m_missing_samples[i]);
-            while (m_missing_samples[i]) {
-                if (m_session->m_receive_buffer[i].get_available_samples(0) > num_samples[i]) {
+            if (m_missing_samples[i] > 0) {
+                // Catch up in one go: drop as many missing samples as can be spared while
+                // still leaving num_samples[i] for this block.
+                size_t const available = m_session->m_receive_buffer[i].get_available_samples(0);
+                if (available > num_samples[i]) {
+                    size_t const to_drop =
+                        std::min(m_missing_samples[i], available - num_samples[i]);
                     for (size_t channel = 0;
                          channel < m_inference_config.get_postprocess_output_channels()[i];
                          ++channel) {
-                        m_session->m_receive_buffer[i].pop_sample(channel);
+                        m_session->m_receive_buffer[i].discard(channel, to_drop);
                     }
-                    m_missing_samples[i]--;
-                } else {
-                    break;  // Exit the loop if not enough samples to pop
+                    m_missing_samples[i] -= to_drop;
                 }
             }
             if (missing_samples_before - m_missing_samples[i] > 0) {
@@ -167,10 +169,10 @@ size_t* InferenceManager::process_output(float* const* const* output_data, size_
                 for (size_t channel = 0;
                      channel < m_inference_config.get_postprocess_output_channels()[tensor_index];
                      ++channel) {
-                    for (size_t sample = 0; sample < num_samples[tensor_index]; ++sample) {
-                        output_data[tensor_index][channel][sample] =
-                            m_session->m_receive_buffer[tensor_index].pop_sample(channel);
-                    }
+                    m_session->m_receive_buffer[tensor_index].pop_block(
+                        channel,
+                        output_data[tensor_index][channel],
+                        num_samples[tensor_index]);
                 }
             } else {
                 for (size_t sample = 0; sample < num_samples[tensor_index]; ++sample) {

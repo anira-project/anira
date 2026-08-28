@@ -114,9 +114,7 @@ static void push_buffer_to_ringbuffer(BufferF const& buffer, RingBuffer& ringbuf
         throw std::invalid_argument("Ring buffer is not initialized, cannot push samples.");
     }
     for (size_t i = 0; i < buffer.get_num_channels(); i++) {
-        for (size_t j = 0; j < buffer.get_num_samples(); j++) {
-            ringbuffer.push_sample(i, buffer.get_sample(i, j));
-        }
+        ringbuffer.push_block(i, buffer.get_read_pointer(i), buffer.get_num_samples());
     }
 }
 
