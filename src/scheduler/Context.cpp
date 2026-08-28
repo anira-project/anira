@@ -157,13 +157,16 @@ struct UnloadGuard {
 // possibly shared with a host that logs through thl::Logger too, so anira never stops
 // it when a session goes away; only Context::shutdown() — the library-unload backstop,
 // after which nothing may run anira code — stops and joins it. Not on WebAssembly:
-// there is no thread to run it on.
+// there is no thread to run it on; the queue is opened for manual draining instead and
+// the host pumps it (anira_drain_log() in the web wrapper).
 // rt::stop() also clears LoggerConfig::m_rt_enabled, which is how a host opts out; this
 // flag tells anira's own stop apart from the host's so a later session may start again.
 std::atomic<bool> s_rt_drain_stopped_by_anira{false};
 
 void ensure_rt_log_drain() {
-#if !defined(__EMSCRIPTEN__) && defined(ENABLE_LOGGING)
+#if defined(__EMSCRIPTEN__) && defined(ENABLE_LOGGING)
+    thl::Logger::rt::enable_manual_drain(true);
+#elif defined(ENABLE_LOGGING)
     if (thl::Logger::rt::is_running()) { return; }
     const bool stopped_by_anira = s_rt_drain_stopped_by_anira.exchange(false);
     if (!stopped_by_anira && !thl::Logger::get_config().m_rt_enabled) { return; }

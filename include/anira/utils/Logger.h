@@ -87,7 +87,11 @@ inline std::atomic<LogLevel>& runtime_log_level() {
 
 inline void set_log_level(LogLevel log_level) {
     runtime_log_level().store(log_level, std::memory_order_relaxed);
+#ifdef ENABLE_LOGGING
+    // thl::Logger's level is process-global and may be shared with a host that logs
+    // through tanh-lib itself; with anira's logging compiled out it is left alone.
     thl::Logger::set_level(to_thl_log_level(log_level));
+#endif
 }
 
 inline LogLevel get_log_level() {
