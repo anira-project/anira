@@ -25,9 +25,12 @@ export const fillBuffer = (buffer: BufferF): void => {
 /**
  * Mirrors `anira::push_buffer_to_ringbuffer(BufferF const&, RingBuffer&)` —
  * pushes every sample of every channel into the ring buffer in order.
+ *
+ * The `wasmInstance` parameter is kept for signature compatibility; both
+ * wrappers carry their own instance, so it is no longer read.
  */
 export const pushBufferToRingbuffer = (
-  wasmInstance: AniraWasmInstance,
+  _wasmInstance: AniraWasmInstance,
   buffer: BufferF,
   ringbuffer: RingBuffer
 ): void => {
