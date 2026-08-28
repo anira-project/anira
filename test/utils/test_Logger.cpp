@@ -7,8 +7,8 @@
 #include <anira/utils/Logger.h>
 #include <tanh/core/Logger.h>
 
-#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -98,11 +98,11 @@ TEST(Logger, LevelMapsOntoThlLogger) {
 
 TEST(Logger, ContextConfigLevelIsAppliedToThlLogger) {
     {
-        Instance instance{ContextConfig(2, WaitStrategy::SpinBackoff, LogLevel::Error)};
+        const Instance instance{ContextConfig(2, WaitStrategy::SpinBackoff, LogLevel::Error)};
         EXPECT_EQ(thl::Logger::get_level(), thl::Logger::LogLevel::Error);
     }
     {
-        Instance instance{ContextConfig(2, WaitStrategy::SpinBackoff, LogLevel::Debug)};
+        const Instance instance{ContextConfig(2, WaitStrategy::SpinBackoff, LogLevel::Debug)};
         EXPECT_EQ(thl::Logger::get_level(), thl::Logger::LogLevel::Debug);
     }
 }
@@ -112,10 +112,10 @@ TEST(Logger, RtDrainThreadLivesWithTheSessions) {
     // No session: anira has stopped the drain thread (or never started it).
     EXPECT_FALSE(thl::Logger::rt::is_running());
     {
-        Instance first;
+        const Instance first;
         EXPECT_TRUE(thl::Logger::rt::is_running());
         {
-            Instance second;
+            const Instance second;
             EXPECT_TRUE(thl::Logger::rt::is_running());
         }
         // Still one session: the drain thread stays.
@@ -127,7 +127,7 @@ TEST(Logger, RtDrainThreadLivesWithTheSessions) {
 
 TEST(Logger, RtRecordsReachTheSinksWhileASessionExists) {
     RecordCollector collector;
-    Instance instance{ContextConfig(2, WaitStrategy::SpinBackoff, LogLevel::Debug)};
+    const Instance instance{ContextConfig(2, WaitStrategy::SpinBackoff, LogLevel::Debug)};
 
     // Error level: the only one tanh-lib compiles in for Release builds.
     ANIRA_LOG_RT_ERROR(log_group::k_scheduler, "rt record %d from the test", 42);

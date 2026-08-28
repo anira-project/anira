@@ -24,6 +24,7 @@
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <concurrentqueue.h>
+#include <tanh/core/Logger.h>
 
 #include <algorithm>
 #include <atomic>
