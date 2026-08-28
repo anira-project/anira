@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <iomanip>
@@ -29,12 +30,17 @@
 constexpr int k_inference_timeout_s = 2;
 using namespace anira;
 
-// Load channel 0 of a WAV file into a flat vector (the test fixtures are mono).
+// Load a mono WAV file into a flat vector.
 static std::vector<float> load_mono_wav(const std::string& path) {
     std::string error;
     const thl::core::BufferF buffer = thl::core::read_wav(path, &error);
     if (buffer.get_num_channels() == 0) {
         ADD_FAILURE() << "Cannot read " << path << ": " << error;
+        return {};
+    }
+    if (buffer.get_num_channels() != 1) {
+        ADD_FAILURE() << path << " has " << buffer.get_num_channels()
+                      << " channels, the test fixtures must be mono";
         return {};
     }
     const float* samples = buffer.get_read_pointer(0);
@@ -171,7 +177,7 @@ TEST_P(InferenceTest, Simple) {
             } else {
                 // calculate epsilon on the fly
                 float const epsilon =
-                    std::max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    std::max(std::abs(reference), std::abs(processed)) * test_params.m_epsilon_rel +
                     test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "repeat=" << repeat << ", i=" << i
@@ -264,7 +270,7 @@ TEST_P(InferenceTest, WithCustomLatency) {
             } else {
                 // calculate epsilon on the fly
                 float const epsilon =
-                    std::max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    std::max(std::abs(reference), std::abs(processed)) * test_params.m_epsilon_rel +
                     test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "repeat=" << repeat << ", i=" << i
@@ -356,7 +362,7 @@ TEST_P(InferenceTest, Reset) {
             } else {
                 // calculate epsilon on the fly
                 float const epsilon =
-                    std::max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    std::max(std::abs(reference), std::abs(processed)) * test_params.m_epsilon_rel +
                     test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "repeat=" << repeat << ", i=" << i
@@ -411,7 +417,7 @@ TEST_P(InferenceTest, Reset) {
             } else {
                 // calculate epsilon on the fly
                 float const epsilon =
-                    std::max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    std::max(std::abs(reference), std::abs(processed)) * test_params.m_epsilon_rel +
                     test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "After reset: repeat=" << repeat << ", i=" << i
@@ -557,7 +563,7 @@ TEST_P(InferenceTest, ResetStatefulHammer) {
                 ASSERT_FLOAT_EQ(reference, 0);
             } else {
                 float const epsilon =
-                    std::max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    std::max(std::abs(reference), std::abs(processed)) * test_params.m_epsilon_rel +
                     test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "After reset hammer: repeat=" << repeat << ", i=" << i

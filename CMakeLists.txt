@@ -213,7 +213,7 @@ FetchContent_MakeAvailable(concurrentqueue)
 # find_dependency(tanh COMPONENTS Core), so a consumer's find_package(anira)
 # links the exported tanh::Core.
 #
-# Pinned to a tagged tanh-lib release.
+# Pinned to a tagged tanh-lib release (temporarily a commit, see the TODO below).
 #
 # Plain (non-cache) variables on purpose: tanh-lib's cmake_minimum_required
 # puts CMP0077 in NEW mode, so these shadow its option() defaults while anira
