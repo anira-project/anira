@@ -23,11 +23,23 @@
 #include "../extras/models/hybrid-nn/HybridNNBypassProcessor.h"  // Only needed for round trip test
 #include "../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "WavReader.h"
 #include "gtest/gtest.h"
+#include "tanh/core/WavReader.h"
 
 constexpr int k_inference_timeout_s = 2;
 using namespace anira;
+
+// Load channel 0 of a WAV file into a flat vector (the test fixtures are mono).
+static std::vector<float> load_mono_wav(const std::string& path) {
+    std::string error;
+    const thl::core::BufferF buffer = thl::core::read_wav(path, &error);
+    if (buffer.get_num_channels() == 0) {
+        ADD_FAILURE() << "Cannot read " << path << ": " << error;
+        return {};
+    }
+    const float* samples = buffer.get_read_pointer(0);
+    return {samples, samples + buffer.get_num_samples()};
+}
 
 struct InferenceTestParams {
     InferenceBackend m_backend;
@@ -82,11 +94,8 @@ TEST_P(InferenceTest, Simple) {
     auto const& reference_offset = test_params.m_reference_data_offset;
 
     // read reference data
-    std::vector<float> data_input;
-    std::vector<float> data_reference;
-
-    read_wav(test_params.m_input_data_path, data_input);
-    read_wav(test_params.m_reference_data_path, data_reference);
+    const std::vector<float> data_input = load_mono_wav(test_params.m_input_data_path);
+    const std::vector<float> data_reference = load_mono_wav(test_params.m_reference_data_path);
 
     ASSERT_TRUE(data_input.size() > 0);
     ASSERT_TRUE(data_reference.size() > 0);
@@ -162,7 +171,7 @@ TEST_P(InferenceTest, Simple) {
             } else {
                 // calculate epsilon on the fly
                 float const epsilon =
-                    max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    std::max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
                     test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "repeat=" << repeat << ", i=" << i
@@ -178,11 +187,8 @@ TEST_P(InferenceTest, WithCustomLatency) {
     auto const& reference_offset = test_params.m_reference_data_offset;
 
     // read reference data
-    std::vector<float> data_input;
-    std::vector<float> data_reference;
-
-    read_wav(test_params.m_input_data_path, data_input);
-    read_wav(test_params.m_reference_data_path, data_reference);
+    const std::vector<float> data_input = load_mono_wav(test_params.m_input_data_path);
+    const std::vector<float> data_reference = load_mono_wav(test_params.m_reference_data_path);
 
     ASSERT_TRUE(data_input.size() > 0);
     ASSERT_TRUE(data_reference.size() > 0);
@@ -258,7 +264,7 @@ TEST_P(InferenceTest, WithCustomLatency) {
             } else {
                 // calculate epsilon on the fly
                 float const epsilon =
-                    max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    std::max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
                     test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "repeat=" << repeat << ", i=" << i
@@ -274,11 +280,8 @@ TEST_P(InferenceTest, Reset) {
     auto const& reference_offset = test_params.m_reference_data_offset;
 
     // read reference data
-    std::vector<float> data_input;
-    std::vector<float> data_reference;
-
-    read_wav(test_params.m_input_data_path, data_input);
-    read_wav(test_params.m_reference_data_path, data_reference);
+    const std::vector<float> data_input = load_mono_wav(test_params.m_input_data_path);
+    const std::vector<float> data_reference = load_mono_wav(test_params.m_reference_data_path);
 
     ASSERT_TRUE(data_input.size() > 0);
     ASSERT_TRUE(data_reference.size() > 0);
@@ -353,7 +356,7 @@ TEST_P(InferenceTest, Reset) {
             } else {
                 // calculate epsilon on the fly
                 float const epsilon =
-                    max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    std::max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
                     test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "repeat=" << repeat << ", i=" << i
@@ -408,7 +411,7 @@ TEST_P(InferenceTest, Reset) {
             } else {
                 // calculate epsilon on the fly
                 float const epsilon =
-                    max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    std::max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
                     test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "After reset: repeat=" << repeat << ", i=" << i
@@ -431,11 +434,8 @@ TEST_P(InferenceTest, ResetStatefulHammer) {
     auto const buffer_size = static_cast<size_t>(test_params.m_host_config.m_buffer_size);
     auto const& reference_offset = test_params.m_reference_data_offset;
 
-    std::vector<float> data_input;
-    std::vector<float> data_reference;
-
-    read_wav(test_params.m_input_data_path, data_input);
-    read_wav(test_params.m_reference_data_path, data_reference);
+    const std::vector<float> data_input = load_mono_wav(test_params.m_input_data_path);
+    const std::vector<float> data_reference = load_mono_wav(test_params.m_reference_data_path);
 
     ASSERT_TRUE(data_input.size() > 0);
     ASSERT_TRUE(data_reference.size() > 0);
@@ -557,7 +557,7 @@ TEST_P(InferenceTest, ResetStatefulHammer) {
                 ASSERT_FLOAT_EQ(reference, 0);
             } else {
                 float const epsilon =
-                    max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
+                    std::max(abs(reference), abs(processed)) * test_params.m_epsilon_rel +
                     test_params.m_epsilon_abs;
                 ASSERT_NEAR(reference, processed, epsilon)
                     << "After reset hammer: repeat=" << repeat << ", i=" << i

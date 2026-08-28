@@ -234,7 +234,9 @@ set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    GIT_TAG v0.0.3
+    # TODO(#91): switch back to a release tag once tanh-lib tags the core WAV
+    # decoder (tanh-lab/tanh-lib#18) — this is that PR's head commit.
+    GIT_TAG d12f083737f49b759d56194a298f88c1b597fe97
 )
 FetchContent_MakeAvailable(tanh-lib)
 
