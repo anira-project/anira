@@ -164,10 +164,9 @@ void start_rt_log_drain() {
 
 void stop_rt_log_drain() {
 #if !defined(__EMSCRIPTEN__) && defined(ENABLE_LOGGING)
-    // shutdown() also runs from the library-unload hook, i.e. possibly after tanh-lib's
-    // static logger state was torn down (which stops the drain thread itself). is_running()
-    // is a plain atomic that survives that; stop() would lock a destroyed mutex.
-    if (thl::Logger::rt::is_running()) { thl::Logger::rt::stop(); }
+    // Also reached from the library-unload hook, possibly after tanh-lib's static logger
+    // state was torn down; rt::stop() is a no-op then (tanh-lib >= v0.0.4).
+    thl::Logger::rt::stop();
 #endif
 }
 

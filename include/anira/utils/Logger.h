@@ -31,8 +31,9 @@
  *   anira runs the drain thread exactly while sessions exist, alongside the
  *   inference thread pool (see Context).
  *
- * Both take printf-style arguments: `ANIRA_LOG_ERROR(group, "fmt %d", value)`.
- * With ANIRA_WITH_LOGGING=OFF every macro expands to nothing.
+ * Both take printf-style arguments: `ANIRA_LOG_ERROR(group, "fmt %d", value)` and are
+ * aliases of tanh-lib's THL_LOG_* / THL_LOG_RT_*. With ANIRA_WITH_LOGGING=OFF every
+ * macro expands to nothing.
  */
 
 namespace anira {
@@ -96,25 +97,28 @@ inline LogLevel get_log_level() {
 }  // namespace anira
 
 #ifdef ENABLE_LOGGING
-#define ANIRA_LOG_IMPL(level, group, ...) \
-    thl::Logger::logf(thl::Logger::LogLevel::level, group, __VA_ARGS__)
-#define ANIRA_LOG_RT_IMPL(level, group, ...) \
-    static_cast<void>(thl::Logger::rt::logf(thl::Logger::LogLevel::level, group, __VA_ARGS__))
-#else
-#define ANIRA_LOG_IMPL(level, group, ...) static_cast<void>(0)
-#define ANIRA_LOG_RT_IMPL(level, group, ...) static_cast<void>(0)
-#endif
-
 /// Synchronous logging (not real-time safe): ANIRA_LOG_ERROR(group, fmt, ...).
-#define ANIRA_LOG_DEBUG(group, ...) ANIRA_LOG_IMPL(Debug, group, __VA_ARGS__)
-#define ANIRA_LOG_INFO(group, ...) ANIRA_LOG_IMPL(Info, group, __VA_ARGS__)
-#define ANIRA_LOG_WARNING(group, ...) ANIRA_LOG_IMPL(Warning, group, __VA_ARGS__)
-#define ANIRA_LOG_ERROR(group, ...) ANIRA_LOG_IMPL(Error, group, __VA_ARGS__)
+#define ANIRA_LOG_DEBUG(group, ...) THL_LOG_DEBUG(group, __VA_ARGS__)
+#define ANIRA_LOG_INFO(group, ...) THL_LOG_INFO(group, __VA_ARGS__)
+#define ANIRA_LOG_WARNING(group, ...) THL_LOG_WARNING(group, __VA_ARGS__)
+#define ANIRA_LOG_ERROR(group, ...) THL_LOG_ERROR(group, __VA_ARGS__)
 
 /// Real-time safe logging (thl::Logger::rt): ANIRA_LOG_RT_ERROR(group, fmt, ...).
-#define ANIRA_LOG_RT_DEBUG(group, ...) ANIRA_LOG_RT_IMPL(Debug, group, __VA_ARGS__)
-#define ANIRA_LOG_RT_INFO(group, ...) ANIRA_LOG_RT_IMPL(Info, group, __VA_ARGS__)
-#define ANIRA_LOG_RT_WARNING(group, ...) ANIRA_LOG_RT_IMPL(Warning, group, __VA_ARGS__)
-#define ANIRA_LOG_RT_ERROR(group, ...) ANIRA_LOG_RT_IMPL(Error, group, __VA_ARGS__)
+#define ANIRA_LOG_RT_DEBUG(group, ...) THL_LOG_RT_DEBUG(group, __VA_ARGS__)
+#define ANIRA_LOG_RT_INFO(group, ...) THL_LOG_RT_INFO(group, __VA_ARGS__)
+#define ANIRA_LOG_RT_WARNING(group, ...) THL_LOG_RT_WARNING(group, __VA_ARGS__)
+#define ANIRA_LOG_RT_ERROR(group, ...) THL_LOG_RT_ERROR(group, __VA_ARGS__)
+#else
+// ANIRA_WITH_LOGGING=OFF: anira's own calls compile out (arguments unevaluated) without
+// touching tanh-lib's THL_LOGGING_DISABLED, which a host may use independently.
+#define ANIRA_LOG_DEBUG(group, ...) static_cast<void>(0)
+#define ANIRA_LOG_INFO(group, ...) static_cast<void>(0)
+#define ANIRA_LOG_WARNING(group, ...) static_cast<void>(0)
+#define ANIRA_LOG_ERROR(group, ...) static_cast<void>(0)
+#define ANIRA_LOG_RT_DEBUG(group, ...) static_cast<void>(0)
+#define ANIRA_LOG_RT_INFO(group, ...) static_cast<void>(0)
+#define ANIRA_LOG_RT_WARNING(group, ...) static_cast<void>(0)
+#define ANIRA_LOG_RT_ERROR(group, ...) static_cast<void>(0)
+#endif
 
 #endif  // ANIRA_LOGGER_H
