@@ -36,9 +36,8 @@ export const pushBufferToRingbuffer = (
   if (numChannels === 0 || numSamples === 0) {
     throw new Error('Buffer is empty, cannot push to ring buffer.')
   }
-  const rbPtr = ringbuffer.getPointer()
-  const rbChannels = wasmInstance._bufferf_get_num_channels(rbPtr)
-  const rbSamples = wasmInstance._bufferf_get_num_samples(rbPtr)
+  const rbChannels = ringbuffer.getNumChannels()
+  const rbSamples = ringbuffer.getNumSamples()
   if (rbChannels === 0 || rbSamples === 0) {
     throw new Error('Ring buffer is not initialized, cannot push samples.')
   }

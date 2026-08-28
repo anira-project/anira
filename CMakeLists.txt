@@ -214,16 +214,22 @@ FetchContent_MakeAvailable(concurrentqueue)
 # links the exported tanh::Core.
 #
 # Pinned to a tagged tanh-lib release.
-set(TANH_BUILD_CORE ON CACHE BOOL "" FORCE)
-set(TANH_BUILD_STATE OFF CACHE BOOL "" FORCE)
-set(TANH_BUILD_DSP OFF CACHE BOOL "" FORCE)
-set(TANH_BUILD_MODULATION OFF CACHE BOOL "" FORCE)
-set(TANH_BUILD_AUDIO_IO OFF CACHE BOOL "" FORCE)
-set(TANH_WITH_TESTS OFF CACHE BOOL "" FORCE)
-set(TANH_WITH_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(TANH_WITH_DOCS OFF CACHE BOOL "" FORCE)
-set(TANH_WITH_JOURNALD OFF CACHE BOOL "" FORCE)
-set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL} CACHE BOOL "" FORCE)
+#
+# Plain (non-cache) variables on purpose: tanh-lib's cmake_minimum_required
+# puts CMP0077 in NEW mode, so these shadow its option() defaults while anira
+# is the project populating tanh-lib, and never leak into the cache. A parent
+# that fetches tanh-lib itself (with more components) before adding anira keeps
+# its own configuration — FORCE'd cache entries would have clobbered it.
+set(TANH_BUILD_CORE ON)
+set(TANH_BUILD_STATE OFF)
+set(TANH_BUILD_DSP OFF)
+set(TANH_BUILD_MODULATION OFF)
+set(TANH_BUILD_AUDIO_IO OFF)
+set(TANH_WITH_TESTS OFF)
+set(TANH_WITH_EXAMPLES OFF)
+set(TANH_WITH_DOCS OFF)
+set(TANH_WITH_JOURNALD OFF)
+set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 
 FetchContent_Declare(
     tanh-lib
