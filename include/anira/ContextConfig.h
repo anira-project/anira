@@ -51,11 +51,13 @@ inline const char* to_string(WaitStrategy wait_strategy) {
 /**
  * @brief Minimum severity of log messages that are emitted
  *
- * One level for the whole inference stack: it gates anira's own LOG_DEBUG /
- * LOG_INFO / LOG_WARNING / LOG_ERROR output and is forwarded to the logging facilities of
+ * One level for the whole inference stack: it is applied as the runtime level of
+ * thl::Logger (tanh-lib), through which all of anira's own output goes (tagged
+ * with `anira.<component>` groups), and is forwarded to the logging facilities of
  * the enabled backends (ONNX Runtime environment severity, LiteRT environment
  * min-logger severity, LibTorch/c10 log level). A message is emitted when its
- * severity is at or above the configured level.
+ * severity is at or above the configured level — and, for anira's own messages,
+ * at or above tanh-lib's compile-time level (Release builds compile in Error only).
  *
  * @note The TFLite backend is exempt: the prebuilt TFLite C library does not
  * export any runtime logging control, so its (rare) log lines are unaffected.

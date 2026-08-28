@@ -111,9 +111,9 @@ void SessionElement::enqueue_pending_dispatch(
     if (!m_dispatch_pending.try_enqueue(m_dispatch_producer_token, std::move(thread_safe_struct))) {
         // Unreachable while the capacity bound holds (pending entries are
         // distinct ThreadSafeStructs); handled like any other queue-full drop.
-        LOG_ERROR << "[ERROR] Could not enqueue pending stateful dispatch! "
-                     "Dropping the inference and zero-filling its output."
-                  << '\n';
+        ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                           "Could not enqueue pending stateful dispatch! Dropping the inference "
+                           "and zero-filling its output.");
         complete_with_zeros(thread_safe_struct);
     }
 }

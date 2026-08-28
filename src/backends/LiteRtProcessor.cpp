@@ -295,7 +295,9 @@ void LiteRtProcessor::Instance::process(std::vector<BufferF>& input,
             litert_check(LiteRtUnlockTensorBuffer(m_output_buffers[i]),
                          "LiteRtUnlockTensorBuffer (output)");
         }
-    } catch (const std::exception& e) { LOG_ERROR << e.what() << '\n'; }
+    } catch (const std::exception& e) {
+        ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+    }
 }
 
 }  // namespace anira

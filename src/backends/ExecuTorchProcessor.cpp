@@ -62,9 +62,9 @@ void pin_threadpool_to_one_thread() {
         // so no threadpool pointer is held anywhere.
         // NOLINTNEXTLINE(clang-diagnostic-deprecated-declarations)
         if (threadpool == nullptr || !threadpool->_unsafe_reset_threadpool(1)) {
-            LOG_WARNING << "[anira][ExecuTorch] could not pin the XNNPACK threadpool to "
-                           "a single thread."
-                        << '\n';
+            ANIRA_LOG_WARNING(log_group::k_backend_executorch,
+                              "could not pin the XNNPACK threadpool to "
+                              "a single thread.");
         }
     });
 }
@@ -216,7 +216,9 @@ void ExecuTorchProcessor::Instance::process(std::vector<BufferF>& input,
                         outputs[i].toTensor().const_data_ptr<float>(),
                         m_inference_config.get_tensor_output_size()[i] * sizeof(float));
         }
-    } catch (const std::exception& e) { LOG_ERROR << e.what() << '\n'; }
+    } catch (const std::exception& e) {
+        ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch, "%s", e.what());
+    }
 }
 
 }  // namespace anira

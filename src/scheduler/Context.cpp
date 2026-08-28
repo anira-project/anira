@@ -147,6 +147,30 @@ struct UnloadGuard {
 };
 [[maybe_unused]] UnloadGuard s_unload_guard;
 #endif
+
+// The real-time log path (thl::Logger::rt, used by everything reachable from an
+// ANIRA_REALTIME entry point and by the inference threads) needs a drain thread to
+// deliver its records. It follows the thread pool's policy: it runs exactly while
+// sessions exist, so a plugin host can unload the library right after the last
+// handler is destroyed (stop() joins the thread). tanh-lib restarts it lazily on
+// the next synchronous logger call, so a host that shares thl::Logger loses nothing
+// but a few milliseconds of latency. Not on WebAssembly: there is no thread to run
+// it on; the host pumps thl::Logger::rt::drain() itself if it wants those records.
+void start_rt_log_drain() {
+#if !defined(__EMSCRIPTEN__) && defined(ENABLE_LOGGING)
+    thl::Logger::rt::start();
+#endif
+}
+
+void stop_rt_log_drain() {
+#if !defined(__EMSCRIPTEN__) && defined(ENABLE_LOGGING)
+    // shutdown() also runs from the library-unload hook, i.e. possibly after tanh-lib's
+    // static logger state was torn down (which stops the drain thread itself). is_running()
+    // is a plain atomic that survives that; stop() would lock a destroyed mutex.
+    if (thl::Logger::rt::is_running()) { thl::Logger::rt::stop(); }
+#endif
+}
+
 }  // namespace
 
 Context::Core& Context::core() {
@@ -202,9 +226,9 @@ ContextConfig Context::sanitize_config(const ContextConfig& context_config) {
     // effect and the mismatch check stay meaningful.
     ContextConfig sanitized_config = context_config;
     if (sanitized_config.m_wait_strategy == WaitStrategy::Blocking) {
-        LOG_WARNING << "[WARNING] WaitStrategy::Blocking is not supported on WebAssembly builds. "
-                       "Using WaitStrategy::SpinBackoff."
-                    << '\n';
+        ANIRA_LOG_WARNING(log_group::k_context,
+                          "WaitStrategy::Blocking is not supported on WebAssembly builds. "
+                          "Using WaitStrategy::SpinBackoff.");
         sanitized_config.m_wait_strategy = WaitStrategy::SpinBackoff;
     }
     // The auto-managed thread pool cannot exist on WebAssembly either: an
@@ -214,11 +238,12 @@ ContextConfig Context::sanitize_config(const ContextConfig& context_config) {
     // supplied externally (JS Workers via AniraWeb.spinUpInferenceWorker(),
     // backed by Context::make_inference_thread()).
     if (sanitized_config.m_num_threads > 0) {
-        LOG_WARNING << "[WARNING] ContextConfig::m_num_threads = " << sanitized_config.m_num_threads
-                    << " is not supported on WebAssembly builds: the context cannot run "
-                       "inference threads; they must be supplied externally (e.g. "
-                       "AniraWeb.spinUpInferenceWorker()). Using num_threads = 0."
-                    << '\n';
+        ANIRA_LOG_WARNING(log_group::k_context,
+                          "ContextConfig::m_num_threads = %u is not supported on WebAssembly "
+                          "builds: the context cannot run inference threads; they must be "
+                          "supplied externally (e.g. AniraWeb.spinUpInferenceWorker()). Using "
+                          "num_threads = 0.",
+                          sanitized_config.m_num_threads);
         sanitized_config.m_num_threads = 0;
     }
     return sanitized_config;
@@ -246,13 +271,16 @@ void Context::apply_or_compare_config_locked(Core& c, const ContextConfig& conte
         // shutdown() clears it outright).
         assert(c.m_thread_pool.empty() && "pool alive without registered sessions");
         c.m_context_config = context_config;
-        LOG_INFO << "[INFO] Anira version: " << c.m_context_config.m_anira_version << '\n';
+        ANIRA_LOG_INFO(log_group::k_context,
+                       "Anira version: %s",
+                       c.m_context_config.m_anira_version.c_str());
         try {
             resize_pool_locked(c, context_config.m_num_threads);
         } catch (...) {
             c.m_thread_pool.clear();
             throw;
         }
+        start_rt_log_drain();
         return;
     }
 
@@ -263,54 +291,52 @@ void Context::apply_or_compare_config_locked(Core& c, const ContextConfig& conte
         // below that is only worth a warning.
         if (context_version.substr(0, context_version.find('.')) !=
             session_version.substr(0, session_version.find('.'))) {
-            LOG_ERROR << "[ERROR] Anira version mismatch: the context was created by anira "
-                         "version '"
-                      << context_version << "' but a new session was compiled against '"
-                      << session_version
-                      << "'. The major versions differ, so the API/ABI is likely "
-                         "incompatible. Make sure all components in this process use the "
-                         "same anira version."
-                      << '\n';
+            ANIRA_LOG_ERROR(log_group::k_context,
+                            "Anira version mismatch: the context was created by anira version "
+                            "'%s' but a new session was compiled against '%s'. The major "
+                            "versions differ, so the API/ABI is likely incompatible. Make sure "
+                            "all components in this process use the same anira version.",
+                            context_version.c_str(),
+                            session_version.c_str());
         } else {
-            LOG_WARNING << "[WARNING] Anira version mismatch: the context was created by "
-                           "anira version '"
-                        << context_version << "' but a new session was compiled against '"
-                        << session_version
-                        << "'. The major versions match, so this is likely compatible, but "
-                           "aligning the anira versions is recommended."
-                        << '\n';
+            ANIRA_LOG_WARNING(log_group::k_context,
+                              "Anira version mismatch: the context was created by anira version "
+                              "'%s' but a new session was compiled against '%s'. The major "
+                              "versions match, so this is likely compatible, but aligning the "
+                              "anira versions is recommended.",
+                              context_version.c_str(),
+                              session_version.c_str());
         }
     }
     if (c.m_context_config.m_enabled_backends != context_config.m_enabled_backends) {
-        LOG_ERROR << "[ERROR] Context already initialized with different backends enabled!" << '\n';
+        ANIRA_LOG_ERROR(log_group::k_context,
+                        "Context already initialized with different backends enabled!");
     }
     const LogLevel log_level = std::min(c.m_context_config.m_log_level, context_config.m_log_level);
     if (c.m_context_config.m_log_level != context_config.m_log_level) {
-        LOG_WARNING << "[WARNING] ContextConfig log level mismatch: the context is at log "
-                       "level '"
-                    << to_string(c.m_context_config.m_log_level)
-                    << "' but a new session requested '" << to_string(context_config.m_log_level)
-                    << "'. The log level is process-global and the lowest (most verbose) "
-                       "requested level wins, so '"
-                    << to_string(log_level)
-                    << "' is now in effect. Note that the inference backends were already "
-                       "initialized with the first context's log level and keep it. Align "
-                       "the ContextConfig of all sessions to silence this warning."
-                    << '\n';
+        ANIRA_LOG_WARNING(log_group::k_context,
+                          "ContextConfig log level mismatch: the context is at log level '%s' "
+                          "but a new session requested '%s'. The log level is process-global "
+                          "and the lowest (most verbose) requested level wins, so '%s' is now "
+                          "in effect. Note that the inference backends were already "
+                          "initialized with the first context's log level and keep it. Align "
+                          "the ContextConfig of all sessions to silence this warning.",
+                          to_string(c.m_context_config.m_log_level),
+                          to_string(context_config.m_log_level),
+                          to_string(log_level));
     }
     // Keep the stored config in sync with the level actually in effect (the
     // lowest requested one, applied by apply_log_level_locked).
     c.m_context_config.m_log_level = log_level;
     if (c.m_context_config.m_wait_strategy != context_config.m_wait_strategy) {
-        LOG_WARNING
-            << "[WARNING] ContextConfig wait strategy mismatch: the context was created with "
-               "wait_strategy '"
-            << to_string(c.m_context_config.m_wait_strategy) << "' but a new session requested '"
-            << to_string(context_config.m_wait_strategy)
-            << "'. All sessions in this process share one inference thread pool, so only one "
-               "strategy can be in effect and the originally configured one stays active. "
-               "Align the ContextConfig of all sessions to silence this warning."
-            << '\n';
+        ANIRA_LOG_WARNING(log_group::k_context,
+                          "ContextConfig wait strategy mismatch: the context was created with "
+                          "wait_strategy '%s' but a new session requested '%s'. All sessions in "
+                          "this process share one inference thread pool, so only one strategy "
+                          "can be in effect and the originally configured one stays active. "
+                          "Align the ContextConfig of all sessions to silence this warning.",
+                          to_string(c.m_context_config.m_wait_strategy),
+                          to_string(context_config.m_wait_strategy));
     }
     // num_threads == 0 means "I'm opting out of the auto-pool and bringing
     // my own threads via Context::make_inference_thread()" — not "shrink
@@ -402,7 +428,10 @@ void Context::unregister_session_locked(Core& c, const std::shared_ptr<SessionEl
     // and joining them here, inside the critical section that emptied the registry,
     // is what lets a plugin host unload the library right after the last handler is
     // destroyed. (Each InferenceThread's destructor stops and joins its OS thread.)
-    if (c.m_sessions.empty()) { c.m_thread_pool.clear(); }
+    if (c.m_sessions.empty()) {
+        c.m_thread_pool.clear();
+        stop_rt_log_drain();
+    }
 }
 
 std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_processor,
@@ -424,10 +453,11 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
     // will have. An empty pool means the caller brings its own threads: no clamp.
     const size_t pool_size = prospective_pool_size_locked(c, config);
     if (pool_size > 0 && inference_config.m_num_parallel_processors > pool_size) {
-        LOG_WARNING << "[WARNING] Session " << session_id
-                    << " requested more parallel processors than threads are available in "
-                       "Context. Using number of threads as number of parallel processors."
-                    << '\n';
+        ANIRA_LOG_WARNING(log_group::k_context,
+                          "Session %d requested more parallel processors than threads are "
+                          "available in Context. Using number of threads as number of parallel "
+                          "processors.",
+                          session_id);
         inference_config.m_num_parallel_processors = static_cast<unsigned int>(pool_size);
     }
 
@@ -592,13 +622,14 @@ void Context::shutdown() {
     Core& c = *static_cast<Core*>(existing);
     const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
     if (!c.m_sessions.empty()) {
-        LOG_ERROR << "[ERROR] Context::shutdown() called with " << c.m_sessions.size()
-                  << " registered session(s): the host is unloading anira while an inference "
-                     "handler is still alive. The inference threads are stopped; the "
-                     "sessions' memory is leaked."
-                  << '\n';
+        ANIRA_LOG_ERROR(log_group::k_context,
+                        "Context::shutdown() called with %zu registered session(s): the host is "
+                        "unloading anira while an inference handler is still alive. The "
+                        "inference threads are stopped; the sessions' memory is leaked.",
+                        c.m_sessions.size());
     }
     c.m_thread_pool.clear();
+    stop_rt_log_drain();
 }
 
 bool Context::release_core_if_idle() {
@@ -707,8 +738,9 @@ void Context::new_data_submitted(const std::shared_ptr<SessionElement>& session)
                     }
                 }
             }
-            LOG_WARNING << "[WARNING] No free inference queue found in session: "
-                        << session->m_session_id << "!" << '\n';
+            ANIRA_LOG_RT_WARNING(log_group::k_context,
+                                 "No free inference queue found in session: %d!",
+                                 session->m_session_id);
             return;
         }
     }
@@ -880,9 +912,9 @@ bool Context::enqueue_inference_or_drop(
         // The task keeps its struct and timestamp and completes as zeros at its
         // stream position, so the output stays time-aligned: exactly one chunk
         // was consumed and exactly one (silent) chunk will be produced.
-        LOG_ERROR << "[ERROR] Could not enqueue next inference to global context job queue! "
-                     "Dropping the inference and zero-filling its output."
-                  << '\n';
+        ANIRA_LOG_RT_ERROR(log_group::k_context,
+                           "Could not enqueue next inference to global context job queue! "
+                           "Dropping the inference and zero-filling its output.");
         session->complete_with_zeros(thread_safe_struct);
     }
     return enqueued;
@@ -949,9 +981,9 @@ void Context::drain_inference_queue(const std::shared_ptr<SessionElement>& sessi
                 // Requeue failed: complete the other session's task as silence so
                 // its stream stays time-aligned (previously it was silently lost),
                 // and unwedge its dispatch chain.
-                LOG_ERROR << "[ERROR] Could not requeue inference data! Dropping the "
-                             "inference and zero-filling its output."
-                          << '\n';
+                ANIRA_LOG_RT_ERROR(log_group::k_context,
+                                   "Could not requeue inference data! Dropping the inference and "
+                                   "zero-filling its output.");
                 other.m_session->complete_with_zeros(other.m_thread_safe_struct);
                 if (other.m_session->m_inference_config.m_session_exclusive_processor) {
                     other.m_session->release_dispatch(other.m_thread_safe_struct->m_dispatch_epoch);

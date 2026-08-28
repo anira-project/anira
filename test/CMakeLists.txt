@@ -34,6 +34,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	utils/test_PrePostProcessorWindow.cpp
 	utils/test_Semaphore.cpp
 	utils/test_JsonConfigLoader.cpp
+	utils/test_Logger.cpp
 	scheduler/test_ConcurrentLifecycle.cpp
 	scheduler/test_ContextLifecycle.cpp
 	scheduler/test_CreateSessionFailure.cpp

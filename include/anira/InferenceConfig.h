@@ -7,7 +7,6 @@
 #include <array>
 #include <cassert>
 #include <cstring>
-#include <iostream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -60,9 +59,9 @@ struct ANIRA_API ModelData {
             supported = supported || (backend == InferenceBackend::EXECUTORCH);
 #endif
             if (!supported) {
-                LOG_ERROR << "Model function is only applicable to the LIBTORCH and "
-                             "EXECUTORCH backends."
-                          << '\n';
+                ANIRA_LOG_ERROR(log_group::k_config,
+                                "Model function is only applicable to the LIBTORCH and "
+                                "EXECUTORCH backends.");
             }
         }
         if (!is_binary) {

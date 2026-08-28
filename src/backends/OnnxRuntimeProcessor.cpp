@@ -165,7 +165,7 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config)
                                        m_input_names.size(),
                                        m_output_names.data(),
                                        m_output_names.size());
-        } catch (Ort::Exception& e) { LOG_ERROR << e.what() << '\n'; }
+        } catch (Ort::Exception& e) { ANIRA_LOG_ERROR(log_group::k_backend_onnx, "%s", e.what()); }
     }
 }
 
@@ -198,7 +198,7 @@ void OnnxRuntimeProcessor::Instance::process(std::vector<BufferF>& input,
                                    m_input_names.size(),
                                    m_output_names.data(),
                                    m_output_names.size());
-    } catch (Ort::Exception& e) { LOG_ERROR << e.what() << '\n'; }
+    } catch (Ort::Exception& e) { ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what()); }
 
     for (size_t i = 0; i < m_outputs.size(); i++) {
         const auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();

@@ -61,8 +61,9 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
 #if WIN32
     if (is_main_process) {
         if (!SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS)) {
-            LOG_ERROR << "[ERROR] Failed to set real-time priority for process. Error: "
-                      << GetLastError() << std::endl;
+            ANIRA_LOG_ERROR(log_group::k_system,
+                            "Failed to set real-time priority for process. Error: %lu",
+                            GetLastError());
         }
     }
 
@@ -73,8 +74,9 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
         if (SetThreadPriority(thread_native_handle, priority)) {
             return;
         } else {
-            LOG_ERROR << "[ERROR] Failed to set thread priority for Thread. Current priority: "
-                      << priority << std::endl;
+            ANIRA_LOG_ERROR(log_group::k_system,
+                            "Failed to set thread priority for Thread. Current priority: %d",
+                            priority);
         }
     }
 #elif __linux__
@@ -93,13 +95,14 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
         pthread_getattr_np(thread_native_handle, &thread_attr);
         ret = pthread_attr_getinheritsched(&thread_attr, &attr_inheritsched);
         if (ret != 0) {
-            LOG_ERROR << "[ERROR] Failed to get Thread scheduling policy and params : " << errno
-                      << '\n';
+            ANIRA_LOG_ERROR(log_group::k_system,
+                            "Failed to get Thread scheduling policy and params : %d",
+                            errno);
         }
         if (attr_inheritsched != PTHREAD_EXPLICIT_SCHED) {
-            LOG_ERROR << "[ERROR] Thread scheduling policy is not PTHREAD_EXPLICIT_SCHED. Possibly "
-                         "thread attributes get inherited from the main process."
-                      << '\n';
+            ANIRA_LOG_ERROR(log_group::k_system,
+                            "Thread scheduling policy is not PTHREAD_EXPLICIT_SCHED. Possibly "
+                            "thread attributes get inherited from the main process.");
         }
         pthread_attr_destroy(&thread_attr);
     }
@@ -114,8 +117,9 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
 
     ret = pthread_getschedparam(thread_native_handle, &sch_policy, &sch_params);
     if (ret != 0) {
-        LOG_ERROR << "[ERROR] Failed to get Thread scheduling policy and params : " << errno
-                  << '\n';
+        ANIRA_LOG_ERROR(log_group::k_system,
+                        "Failed to get Thread scheduling policy and params : %d",
+                        errno);
     }
 
     // Pipewire uses SCHED_FIFO 60 and juce plugin host uses SCHED_FIFO 55 better stay below
@@ -123,20 +127,25 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
 
     ret = pthread_setschedparam(thread_native_handle, SCHED_FIFO, &sch_params);
     if (ret != 0) {
-        LOG_ERROR << "[ERROR] Failed to set Thread scheduling policy to SCHED_FIFO and increase "
-                     "the sched_priority to "
-                  << sch_params.sched_priority << ". Error : " << errno << '\n';
-        LOG_WARNING << "[WARNING] Give rtprio privileges to the user by adding the user to the "
-                       "realtime/audio group. Or run the application as root."
-                    << '\n';
-        LOG_WARNING << "[WARNING] Instead, trying to set increased nice value for SCHED_OTHER..."
-                    << '\n';
+        ANIRA_LOG_ERROR(log_group::k_system,
+                        "Failed to set Thread scheduling policy to SCHED_FIFO and increase "
+                        "the sched_priority to %d. Error : %d",
+                        sch_params.sched_priority,
+                        errno);
+        ANIRA_LOG_WARNING(log_group::k_system,
+                          "Give rtprio privileges to the user by adding the user to the "
+                          "realtime/audio group. Or run the application as root.");
+        ANIRA_LOG_WARNING(log_group::k_system,
+                          "Instead, trying to set increased nice value for SCHED_OTHER...");
 
         ret = setpriority(PRIO_PROCESS, 0, -10);
         if (ret != 0) {
-            LOG_ERROR << "[ERROR] Failed to set increased nice value. Error : " << errno << '\n';
-            LOG_WARNING << "[WARNING] Using default nice value: " << getpriority(PRIO_PROCESS, 0)
-                        << '\n';
+            ANIRA_LOG_ERROR(log_group::k_system,
+                            "Failed to set increased nice value. Error : %d",
+                            errno);
+            ANIRA_LOG_WARNING(log_group::k_system,
+                              "Using default nice value: %d",
+                              getpriority(PRIO_PROCESS, 0));
         }
     }
 
@@ -146,22 +155,25 @@ void HighPriorityThread::elevate_priority(std::thread::native_handle_type thread
 
     ret = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     if (ret != 0) {
-        LOG_ERROR
-            << "[ERROR] Failed to set Thread QOS class to QOS_CLASS_USER_INTERACTIVE. Error : "
-            << ret << std::endl;
+        ANIRA_LOG_ERROR(log_group::k_system,
+                        "Failed to set Thread QOS class to QOS_CLASS_USER_INTERACTIVE. Error : %d",
+                        ret);
     } else {
         return;
     }
 
-    LOG_ERROR << "[ERROR] Failed to set Thread QOS class and relative priority. Error: " << ret
-              << std::endl;
+    ANIRA_LOG_ERROR(log_group::k_system,
+                    "Failed to set Thread QOS class and relative priority. Error: %d",
+                    ret);
 
     qos_class_t qos_class;
     int relative_priority;
     pthread_get_qos_class_np(pthread_self(), &qos_class, &relative_priority);
 
-    LOG_WARNING << "[WARNING] Fallback to default QOS class and relative priority: " << qos_class
-                << " " << relative_priority << std::endl;
+    ANIRA_LOG_WARNING(log_group::k_system,
+                      "Fallback to default QOS class and relative priority: %u %d",
+                      static_cast<unsigned>(qos_class),
+                      relative_priority);
     return;
 #endif
 }

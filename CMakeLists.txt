@@ -229,6 +229,9 @@ set(TANH_WITH_TESTS OFF)
 set(TANH_WITH_EXAMPLES OFF)
 set(TANH_WITH_DOCS OFF)
 set(TANH_WITH_JOURNALD OFF)
+# tanh-lib's own [[clang::nonblocking]] annotations (thl::Logger::rt, the buffers)
+# are checked in the same RTSan build as anira's ANIRA_REALTIME entry points.
+set(TANH_WITH_RTSAN ${ANIRA_WITH_RTSAN})
 set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 
 FetchContent_Declare(

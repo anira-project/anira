@@ -172,7 +172,7 @@ Moreover, the following options are available:
 - Build example applications, plugins and populate example neural models: ``-DANIRA_WITH_EXAMPLES=ON``
 - Build anira with tests: ``-DANIRA_WITH_TESTS=ON``
 - Build anira with documentation: ``-DANIRA_WITH_DOCS=ON``
-- Disable the logging system: ``-DANIRA_WITH_LOGGING=OFF``
+- Disable the logging system (compiles every anira log call out; anira otherwise logs through tanh-lib's ``thl::Logger``): ``-DANIRA_WITH_LOGGING=OFF``
 
 ### Anira Web (Web / JavaScript)
 
