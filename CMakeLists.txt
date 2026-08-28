@@ -238,7 +238,7 @@ set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    GIT_TAG c0f20715e89da389f803cfd8a0b6bb9277e78c3b
+    GIT_TAG b90bf9808de6fd62687cc202d0caca12290157b6
 )
 FetchContent_MakeAvailable(tanh-lib)
 
