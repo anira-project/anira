@@ -1,23 +1,49 @@
 #ifndef ANIRA_ANIRAWINEXPORTS_H
 #define ANIRA_ANIRAWINEXPORTS_H
 
-// When anira is built and consumed as a STATIC library, ANIRA_STATIC_DEFINE is
-// defined (PUBLIC) by the build. In that case no dllexport/dllimport decoration
-// must be applied — otherwise consumers look for __imp_ symbols that a static
-// lib never provides (LNK2001).
-//
-// On ELF/Mach-O, anira is compiled with -fvisibility=hidden and ANIRA_API marks
-// the public API as default-visibility — the same allowlist model Windows DLLs
-// enforce via dllexport. Everything not annotated (backend runtimes such as
-// ONNX Runtime above all) stays private to the library/plugin binary, so a host
-// application that ships its own copy of a backend runtime can never interpose
-// or weak-coalesce against ours (see the symbol-visibility note in the build).
-#if defined(_WIN32) && !defined(ANIRA_STATIC_DEFINE)
-#ifdef ANIRA_EXPORTS
+/**
+ * @file AniraWinExports.h
+ * @brief ANIRA_API — the export decoration of anira's public API.
+ *
+ * anira is compiled with hidden symbol visibility; ANIRA_API is the allowlist that
+ * marks what a shared libanira exports (dllexport/dllimport on Windows,
+ * visibility("default") elsewhere), so that nothing else — above all the backend
+ * runtimes linked into it — ever appears in its export table.
+ *
+ * Two macros steer it, both set by anira's CMake build:
+ *
+ *  - ANIRA_STATIC: anira is built and consumed as a static library. Defined PUBLIC,
+ *    so consumers see it through the CMake package. ANIRA_API is then empty on every
+ *    platform: a static anira has no export table of its own — its objects become
+ *    part of the consumer, and a plugin embedding it must not export anira's API
+ *    (dllimport would look for __imp_ stubs a static library never provides, and
+ *    default visibility would leak the whole API into the plugin's export table).
+ *
+ *  - ANIRA_BUILDING: defined PRIVATE while compiling anira itself. Selects dllexport
+ *    over dllimport on Windows. Elsewhere the decoration is the same on both sides
+ *    on purpose: inline members and other vague-linkage entities a consumer
+ *    instantiates from these headers keep default visibility and are coalesced with
+ *    libanira's copies at load time instead of becoming private duplicates.
+ *
+ * ANIRA_STATIC_DEFINE, the previous spelling of ANIRA_STATIC, is still honoured for
+ * hand-written build systems.
+ */
+
+#if defined(ANIRA_STATIC_DEFINE) && !defined(ANIRA_STATIC)
+#define ANIRA_STATIC
+#endif
+
+#ifdef ANIRA_STATIC
+#define ANIRA_API  // static: no decoration, ever
+#elif defined(_WIN32)
+#ifdef ANIRA_BUILDING  // set only while compiling anira itself
 #define ANIRA_API __declspec(dllexport)
-#pragma warning(disable : 4251)
 #else
 #define ANIRA_API __declspec(dllimport)
+#endif
+#ifdef _MSC_VER
+// C4251 ("class needs to have dll-interface to be used by clients"): anira's exported
+// classes hold std:: members by design; both sides use the same toolchain.
 #pragma warning(disable : 4251)
 #endif
 #elif defined(__GNUC__) || defined(__clang__)

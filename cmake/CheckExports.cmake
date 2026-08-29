@@ -9,8 +9,11 @@
 #     typeinfo, thunks and guards of those classes — and nothing else. In particular
 #     no std::, Ort*, torch::/c10::, executorch::, xnn_*, TfLite*/LiteRt* symbol.
 #   * MODULE (the plugin-shaped test module embedding anira, shared or static):
-#     exports no backend-runtime symbol. Its own entry points and whatever its own
-#     translation units export are its business, as for any plugin.
+#     exports no backend-runtime symbol. In a static build (no LIBRARY) it exports
+#     nothing of namespace anira either: a static anira is compiled without export
+#     decoration (ANIRA_STATIC), so a plugin embedding it with hidden visibility
+#     cannot leak anira's API. Its own entry points and whatever its own translation
+#     units export are its business, as for any plugin.
 #   * ELF only: neither defines an STB_GNU_UNIQUE symbol (glibc never unloads an
 #     object that does; the module must be dlclose-able).
 #
@@ -135,8 +138,14 @@ endif()
 anira_exports("${MODULE}" _mod_exports _mod_unique)
 list(LENGTH _mod_exports _n)
 set(_bad "")
+set(_leaked "")
 foreach(_s IN LISTS _mod_exports)
     if(_s MATCHES "${_allow}")
+        # anira's API inside the module: an import of libanira's inline members in a
+        # shared build, a leak of the embedded static anira otherwise.
+        if(NOT LIBRARY)
+            list(APPEND _leaked "${_s}")
+        endif()
         continue()
     endif()
     anira_matches_any("${_s}" "${_forbid}" _hit)
@@ -145,12 +154,19 @@ foreach(_s IN LISTS _mod_exports)
     endif()
 endforeach()
 list(LENGTH _bad _nbad)
-message(STATUS "CheckExports: ${MODULE}: ${_n} exports, ${_nbad} backend-runtime symbols")
+list(LENGTH _leaked _nleaked)
+message(STATUS "CheckExports: ${MODULE}: ${_n} exports, ${_nbad} backend-runtime symbols, ${_nleaked} of a static anira")
 if(_nbad GREATER 0)
     list(SUBLIST _bad 0 40 _shown)
     string(REPLACE ";" "\n    " _shown "${_shown}")
     list(APPEND _failures
         "${MODULE} exports ${_nbad} backend-runtime symbol(s) (first 40):\n    ${_shown}")
+endif()
+if(_nleaked GREATER 0)
+    list(SUBLIST _leaked 0 40 _shown)
+    string(REPLACE ";" "\n    " _shown "${_shown}")
+    list(APPEND _failures
+        "${MODULE} exports ${_nleaked} symbol(s) of the statically linked anira (first 40):\n    ${_shown}")
 endif()
 if(_mod_unique)
     list(LENGTH _mod_unique _nu)

@@ -2,15 +2,6 @@
 # Windows specific settings
 # ==============================================================================
 
-# Define the export symbol for MSVC builds (shared library)
-target_compile_definitions(${PROJECT_NAME} PRIVATE ANIRA_EXPORTS)
-
-# When built statically, tell anira's export header (PUBLIC, so consumers see it
-# too) to skip dllexport/dllimport decoration — a static lib has no import stubs.
-if(NOT BUILD_SHARED_LIBS)
-    target_compile_definitions(${PROJECT_NAME} PUBLIC ANIRA_STATIC_DEFINE)
-endif()
-
 # The TFLite C API headers default to __declspec(dllimport) on Windows; linking the
 # static TFLite lib then leaves __imp_TfLite* unresolved (no import stubs). Defining
 # TFL_COMPILE_LIBRARY switches the decoration to a direct (static) reference. PUBLIC

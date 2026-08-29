@@ -240,6 +240,14 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     C_VISIBILITY_PRESET hidden
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON)
+# ANIRA_API's decoration (include/anira/system/AniraWinExports.h): ANIRA_BUILDING
+# selects dllexport while anira itself is compiled; ANIRA_STATIC — PUBLIC, so that it
+# reaches consumers through the CMake package — makes ANIRA_API empty for a static
+# anira, whose objects become part of the consumer and must not be exported from it.
+target_compile_definitions(${PROJECT_NAME} PRIVATE ANIRA_BUILDING)
+if(NOT BUILD_SHARED_LIBS)
+    target_compile_definitions(${PROJECT_NAME} PUBLIC ANIRA_STATIC)
+endif()
 # GCC binds exported vague-linkage data (inline variables, template statics, static
 # locals of inline functions — libstdc++ emits one from every make_shared TU) as
 # STB_GNU_UNIQUE, and glibc never unloads a shared object that defines a unique
@@ -432,14 +440,11 @@ if(ANIRA_WITH_EXECUTORCH)
             "${ANIRA_EXECUTORCH_ROOTDIR}/include/executorch/runtime/core/portable_type/c10")
         target_link_libraries(anira-executorch-objs PRIVATE
             concurrentqueue nlohmann_json::nlohmann_json)
-        if(MSVC)
-            # Match anira's export decoration (see cmake/msvc-support.cmake): the
-            # objects become part of anira, so ANIRA_API must resolve identically.
-            if(BUILD_SHARED_LIBS)
-                target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_EXPORTS)
-            else()
-                target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_STATIC_DEFINE)
-            endif()
+        # Match anira's export decoration (see the main target above): the objects
+        # become part of anira, so ANIRA_API must resolve identically.
+        target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_BUILDING)
+        if(NOT BUILD_SHARED_LIBS)
+            target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_STATIC)
         endif()
         target_sources(${PROJECT_NAME} PRIVATE $<TARGET_OBJECTS:anira-executorch-objs>)
         # XNNPACK's runtime-dispatch config tables reference its microkernel symbols
