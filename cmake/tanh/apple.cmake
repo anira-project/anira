@@ -63,7 +63,9 @@ function(tanh_apple_sysroot_from_xcrun)
     execute_process(COMMAND xcrun --show-sdk-path
         OUTPUT_VARIABLE _sysroot OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
     if(_sysroot)
-        set(CMAKE_OSX_SYSROOT "${_sysroot}" CACHE PATH "macOS SDK path")
+        # Same as the deployment target: the cache entry pre-exists empty, so FORCE is
+        # needed to write it — and it only ever replaces an empty value.
+        set(CMAKE_OSX_SYSROOT "${_sysroot}" CACHE PATH "macOS SDK path" FORCE)
     endif()
 endfunction()
 
