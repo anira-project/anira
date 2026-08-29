@@ -49,6 +49,16 @@ export class RingBuffer extends BaseWrapper {
     return this.wasmInstance._ringbuffer_get_past_sample(this.ptr, channel, offset)
   }
 
+  /** Mirrors :cpp:func:`anira::RingBuffer::get_num_channels`. */
+  getNumChannels(): number {
+    return this.wasmInstance._ringbuffer_get_num_channels(this.ptr)
+  }
+
+  /** Mirrors :cpp:func:`anira::RingBuffer::get_num_samples` (the capacity per channel). */
+  getNumSamples(): number {
+    return this.wasmInstance._ringbuffer_get_num_samples(this.ptr)
+  }
+
   /** Mirrors :cpp:func:`anira::RingBuffer::get_available_samples`. */
   getAvailableSamples(channel: number): number {
     return this.wasmInstance._ringbuffer_get_available_samples(this.ptr, channel)

@@ -3,9 +3,16 @@
 # One known pre-existing violation class is suppressed so the job can gate
 # everything else: anira's logging streams (LOG_ERROR/LOG_WARNING -> std::cerr/
 # std::cout) flush from real-time paths in rare fallback branches, e.g. the
-# "No free inference queue found" warning in Context::new_data_submitted and
-# the RingBuffer overflow log. The fix (no logging from the audio thread) is
-# tracked separately; suppressing by the ostream frames keeps the scope exactly
-# "logging via streams" — allocations, locks, sleeps, and semaphore syscalls on
-# real-time paths still abort the job.
-call-stack-contains:basic_ostream
+# "No free inference queue found" warning in Context::new_data_submitted. The
+# fix (no logging from the audio thread) is tracked separately; suppressing by
+# the ostream frames keeps the scope exactly "logging via streams" —
+# allocations, locks, sleeps, and semaphore syscalls on real-time paths still
+# abort the job. (The buffers are tanh-lib's logger-free containers: a ring
+# overflow overwrites silently, so no suppression is needed for them.)
+#
+# The pattern must match whichever demangler symbolizes the stack: GNU's
+# __cxa_demangle expands the `So` substitution to
+# `std::basic_ostream<char, std::char_traits<char> >::flush()`, LLVM's
+# (llvm-symbolizer) prints the same frame as `std::ostream::flush()`. `ostream`
+# is the common substring of both spellings (and of `__ostream_insert`).
+call-stack-contains:ostream

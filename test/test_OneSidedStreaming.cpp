@@ -19,6 +19,8 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
+#include <anira/utils/Logger.h>
+#include <anira/utils/RingBuffer.h>
 
 #include <array>
 #include <atomic>
@@ -687,47 +689,100 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     InferenceConfig config = two_sided_config();
     PrePostProcessor pp_processor(config);
     CountingCopyBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    // The warning asserted below is a LOG_WARNING, filtered by the process-global log
+    // level the Context applies from its ContextConfig (Error in release builds). The
+    // level has to travel through the ContextConfig: the runtime level lives in an
+    // inline function's static, of which a shared build has one copy per binary, so
+    // anira::set_log_level() called from the test never reaches the library's copy.
+    InferenceHandler handler(pp_processor,
+                             config,
+                             backend,
+                             ContextConfig(2, WaitStrategy::SpinBackoff, LogLevel::Warning));
     handler.prepare(HostConfig(512, 48000, false));
 
     unsigned int const latency = handler.get_latency(0);
     auto const sessions = Context::get_sessions();
     ASSERT_EQ(sessions.size(), 1u);
-    size_t const num_structs = sessions[0]->m_num_structs;
-
-    // Capture stderr: the gated pushes must warn, and nothing may overflow.
-    testing::internal::CaptureStderr();
+    SessionElement& session = *sessions[0];
+    size_t const num_structs = session.m_num_structs;
+    ASSERT_EQ(session.m_inference_queue.size(), num_structs);
+    RingBuffer& ring = session.m_receive_buffer[0];
+    size_t const ring_capacity = ring.get_num_samples();
+    ASSERT_EQ(ring_capacity, static_cast<size_t>(latency) + num_structs * k_hop)
+        << "The receive ring holds the latency pre-fill plus one hop per struct.";
 
     std::vector<float> fed;
-    size_t const total_windows = 2 * num_structs;
-    for (size_t window = 0; window < total_windows; ++window) {
+    auto push_window = [&](size_t window) {
         for (size_t block = 0; block < k_hop / 512; ++block) {
-            std::vector<float> audio(512,
-                                     static_cast<float>(window) + static_cast<float>(block) / 10.f);
+            std::vector<float> const audio(
+                512,
+                static_cast<float>(window) + static_cast<float>(block) / 10.f);
             std::array<const float*, 1> audio_channels{audio.data()};
             handler.push_data(audio_channels.data(), 512, 0);
             fed.insert(fed.end(), audio.begin(), audio.end());
         }
-        // Wait push-only for the inference to finish (results may stay in structs
-        // once the ring is full -- that is the point).
-        ASSERT_TRUE(wait_for([&] {
-            std::array<const float*, 1> empty_channels{nullptr};
-            handler.push_data(empty_channels.data(), 0, 0);
+    };
+    // A push without samples only collects; polling with it keeps the test push-only.
+    auto push_collect_only = [&] {
+        std::array<const float*, 1> empty_channels{nullptr};
+        handler.push_data(empty_channels.data(), 0, 0);
+    };
+    auto wait_for_window = [&](size_t window) {
+        return wait_for([&] {
+            push_collect_only();
             return static_cast<size_t>(backend.m_calls.load()) >= window + 1;
-        }));
-    }
-    // Let the workers publish the last done flags before draining, so the drain
-    // below never sees a completed-but-unpublished result as "not ready".
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        });
+    };
 
-    std::string const captured = testing::internal::GetCapturedStderr();
-    EXPECT_NE(captured.find("Output stream not consumed"), std::string::npos)
-        << "Over-pushing without popping must warn.";
-    EXPECT_EQ(captured.find("Buffer overflow"), std::string::npos)
-        << "The gate must prevent any receive-ring overflow.";
+    // Phase 1: one window per struct, never popped. Every result fits, so push_data
+    // places it (#99): the ring ends up exactly full, every struct is released and
+    // nothing is warned.
+    testing::internal::CaptureStderr();
+    for (size_t window = 0; window < num_structs; ++window) {
+        push_window(window);
+        ASSERT_TRUE(wait_for_window(window));
+    }
+    ASSERT_TRUE(wait_for([&] {
+        push_collect_only();
+        return ring.get_available_samples(0) == ring_capacity;
+    })) << "push_data must collect finished inferences while the receive ring has room.";
+    for (const auto& ts_struct : session.m_inference_queue) {
+        EXPECT_TRUE(ts_struct->m_free.load()) << "A placed result releases its struct.";
+    }
+    std::string const captured_fitting = testing::internal::GetCapturedStderr();
+    EXPECT_EQ(captured_fitting.find("Output stream not consumed"), std::string::npos)
+        << "No warning while every result fits into the receive ring.";
+
+    // Phase 2: one more window per struct with the ring full. The gate holds every
+    // finished result in its struct: the ring occupancy does not change, no unread
+    // sample is overwritten, and a push that cannot place a result warns.
+    testing::internal::CaptureStderr();
+    for (size_t window = num_structs; window < 2 * num_structs; ++window) {
+        push_window(window);
+        ASSERT_TRUE(wait_for_window(window));
+    }
+    // Let the workers publish the last done flags, so neither the checks below nor the
+    // drain see a completed-but-unpublished result as "not ready".
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    push_collect_only();
+    EXPECT_EQ(ring.get_available_samples(0), ring_capacity)
+        << "The gate must hold results in their structs instead of overwriting unread "
+           "output.";
+    for (const auto& ts_struct : session.m_inference_queue) {
+        EXPECT_FALSE(ts_struct->m_free.load())
+            << "Every struct holds a result the full ring cannot take.";
+    }
+    std::string const captured_gated = testing::internal::GetCapturedStderr();
+    if (is_logging_enabled()) {
+        EXPECT_NE(captured_gated.find("Output stream not consumed"), std::string::npos)
+            << "Over-pushing without popping must warn.";
+    }
+    EXPECT_EQ(captured_gated.find("No free inference queue"), std::string::npos)
+        << "One window per struct never exhausts the pool.";
 
     // Now pop everything: every window must come out intact, in order, after the
     // latency pre-fill -- nothing overwritten, nothing lost.
+    size_t const total_windows = 2 * num_structs;
     size_t const total_samples = static_cast<size_t>(latency) + total_windows * k_hop;
     std::vector<float> received_all;
     ASSERT_TRUE(wait_for([&] {
@@ -786,21 +841,24 @@ TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
     // With blocking_ratio > 0 the deadline is derived from the reference stream's
     // block size. Before the fix it read num_input_samples[m_tensor_index] -- the
     // params tensor's value count for a generator -- giving a deadline of
-    // 4/48000 s instead of 512/48000 s.
+    // 4/48000 s (83 us) instead of one host block. The backend sleeps longer than
+    // the buggy deadline; the host block is chosen large (4096 samples, 85 ms) so
+    // that worker wake-up jitter on a loaded CI runner cannot reach the correct
+    // deadline and turn this into a flaky test.
     InferenceConfig config = generator_config(/*session_exclusive=*/false,
                                               /*blocking_ratio=*/1.f);
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    backend.m_sleep_us = 1000;  // 1 ms per inference, well within the 10.6 ms deadline
+    backend.m_sleep_us = 1000;  // 1 ms per inference: > 83 us, << 85 ms
     InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
-    handler.prepare(HostConfig(512, 48000, false));
+    handler.prepare(HostConfig(4096, 48000, false));
 
     GeneratorModel model;
     model.m_latency = handler.get_latency(0);
 
     size_t global_index = 0;
-    for (size_t block = 0; block < 40; ++block) {
-        size_t const n = 512;
+    for (size_t block = 0; block < 20; ++block) {
+        size_t const n = 4096;
         float const param = 1.f + static_cast<float>(block);
         std::vector<float> params{param, 0.f, 0.f, 0.f};
         std::vector<float> out(n, -1.f);

@@ -25,9 +25,12 @@ export const fillBuffer = (buffer: BufferF): void => {
 /**
  * Mirrors `anira::push_buffer_to_ringbuffer(BufferF const&, RingBuffer&)` —
  * pushes every sample of every channel into the ring buffer in order.
+ *
+ * The `wasmInstance` parameter is kept for signature compatibility; both
+ * wrappers carry their own instance, so it is no longer read.
  */
 export const pushBufferToRingbuffer = (
-  wasmInstance: AniraWasmInstance,
+  _wasmInstance: AniraWasmInstance,
   buffer: BufferF,
   ringbuffer: RingBuffer
 ): void => {
@@ -36,9 +39,8 @@ export const pushBufferToRingbuffer = (
   if (numChannels === 0 || numSamples === 0) {
     throw new Error('Buffer is empty, cannot push to ring buffer.')
   }
-  const rbPtr = ringbuffer.getPointer()
-  const rbChannels = wasmInstance._bufferf_get_num_channels(rbPtr)
-  const rbSamples = wasmInstance._bufferf_get_num_samples(rbPtr)
+  const rbChannels = ringbuffer.getNumChannels()
+  const rbSamples = ringbuffer.getNumSamples()
   if (rbChannels === 0 || rbSamples === 0) {
     throw new Error('Ring buffer is not initialized, cannot push samples.')
   }
