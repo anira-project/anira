@@ -3,7 +3,6 @@
 
 #ifdef USE_LITERT
 
-#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -11,12 +10,6 @@
 #include "../scheduler/SessionElement.h"
 #include "../utils/Buffer.h"
 #include "BackendBase.h"
-#include "litert/c/litert_common.h"
-#include "litert/c/litert_compiled_model.h"
-#include "litert/c/litert_environment.h"
-#include "litert/c/litert_model.h"
-#include "litert/c/litert_options.h"
-#include "litert/c/litert_tensor_buffer.h"
 
 namespace anira {
 
@@ -29,8 +22,11 @@ namespace anira {
  * uses LiteRT's newer native API rather than the legacy `TfLite*` C API used by
  * TFLiteProcessor.
  *
+ * The LiteRT state lives behind the named pimpl `Instance`, defined only in
+ * LiteRtProcessor.cpp: this header includes no engine header (see BackendBase).
+ *
  * @warning This class is only available when compiled with USE_LITERT defined
- * @see BackendBase, LiteRtProcessor::Instance, InferenceConfig, ModelData, SessionElement
+ * @see BackendBase, InferenceConfig, ModelData, SessionElement
  */
 class ANIRA_API LiteRtProcessor : public BackendBase {
 public:
@@ -70,71 +66,15 @@ private:
     /**
      * @brief Internal processing instance for thread-safe LiteRT operations
      *
-     * Each Instance owns an independent LiteRT environment, model, compiled model and
-     * input/output tensor buffers. Each instance is used by only one thread at a time,
-     * so inference needs no locking; the atomic processing flag guards instance allocation.
-     *
-     * @see LiteRtProcessor
+     * Opaque here, defined in LiteRtProcessor.cpp. Each Instance owns an independent
+     * LiteRT environment, model, compiled model and input/output tensor buffers. Each
+     * instance is used by only one thread at a time, so inference needs no locking;
+     * an atomic processing flag guards instance allocation.
      */
-    struct Instance {
-        /**
-         * @brief Constructs a LiteRT processing instance
-         * @param inference_config Reference to inference configuration
-         */
-        Instance(InferenceConfig& inference_config);
-
-        /**
-         * @brief Destructor that cleans up LiteRT resources for this instance
-         */
-        ~Instance();
-
-        /**
-         * @brief Prepares this instance for inference operations
-         */
-        void prepare();
-
-        /**
-         * @brief Processes input through this instance's LiteRT compiled model
-         *
-         * @param input Input buffers to process
-         * @param output Output buffers to fill with results
-         * @param session Session element for context (unused in instance)
-         */
-        void process(std::vector<BufferF>& input,
-                     std::vector<BufferF>& output,
-                     const std::shared_ptr<SessionElement>& session);
-
-        /**
-         * @brief Destroys every LiteRT C-API handle this instance owns (no-op on
-         * nulls). Called by the destructor and on a throw during construction so a
-         * partially-built instance does not leak native runtime objects.
-         */
-        void release() noexcept;
-
-        LiteRtEnvironment m_env = nullptr;               ///< LiteRT runtime environment
-        LiteRtModel m_model = nullptr;                   ///< Model loaded from file or buffer
-        LiteRtOptions m_options = nullptr;               ///< Compilation options (CPU)
-        LiteRtCompiledModel m_compiled_model = nullptr;  ///< Compiled (executable) model
-
-        std::vector<LiteRtTensorBuffer> m_input_buffers;   ///< Managed input tensor buffers
-        std::vector<LiteRtTensorBuffer> m_output_buffers;  ///< Managed output tensor buffers
-
-        InferenceConfig& m_inference_config;    ///< Reference to inference configuration
-        std::atomic<bool> m_processing{false};  ///< Flag indicating if instance is currently
-                                                ///< processing
-
-#if DOXYGEN
-        // Since Doxygen does not find classes structures nested in std::shared_ptr
-        MemoryBlock<float>* __doxygen_force_0;  ///< Placeholder for Doxygen documentation
-#endif
-    };
+    struct Instance;
 
     std::vector<std::shared_ptr<Instance>> m_instances;  ///< Vector of parallel processing
                                                          ///< instances
-
-#if DOXYGEN
-    Instance* __doxygen_force_0;  ///< Placeholder for Doxygen documentation
-#endif
 };
 
 }  // namespace anira

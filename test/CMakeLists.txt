@@ -60,6 +60,33 @@ else()
     gtest_discover_tests(${PROJECT_NAME} DISCOVERY_TIMEOUT 90)
 endif()
 
+# Header-isolation check: anira's public headers must compile with anira's own include
+# directory (plus those of its public dependencies — the queue, JSON and tanh-lib
+# headers the public headers include) and no engine include directory at all. The
+# engine state lives behind the named pimpl of each backend processor (see
+# BackendBase.h); this is what lets anira link its backends PRIVATE and makes
+# "include an engine header -> link anira::<engine>" true at compile time. The object
+# is excluded from the default build and compiled by a CTest, so that a regression
+# shows up as a failed test with the compiler's error instead of a broken build.
+if(NOT CMAKE_SYSTEM_NAME MATCHES "Android|iOS" AND NOT EMSCRIPTEN)
+    add_library(anira_header_isolation OBJECT EXCLUDE_FROM_ALL header_isolation.cpp)
+    set_target_properties(anira_header_isolation PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON)
+    target_include_directories(anira_header_isolation PRIVATE
+        "${anira_SOURCE_DIR}/include"
+        $<TARGET_PROPERTY:concurrentqueue,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:tanh::Core,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_compile_definitions(anira_header_isolation PRIVATE
+        ${ANIRA_COMPILE_DEFINITIONS}
+        $<TARGET_PROPERTY:tanh::Core,INTERFACE_COMPILE_DEFINITIONS>
+        $<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:ANIRA_STATIC>)
+    add_test(NAME anira_header_isolation
+        COMMAND ${CMAKE_COMMAND} --build "${CMAKE_BINARY_DIR}" --config $<CONFIG>
+                --target anira_header_isolation)
+endif()
+
 # Host-shaped library-unload test: a plugin-like module embedding anira is dlopen'ed,
 # driven and dlclose'd by an executable that does not link anira. It proves that no
 # anira thread survives the unload (and that the library really gets unmapped). Not

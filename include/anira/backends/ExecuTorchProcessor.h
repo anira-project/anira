@@ -22,11 +22,10 @@ namespace anira {
  * small static runtime executes, with CPU execution delegated to XNNPACK. This makes
  * it the PyTorch path on mobile platforms, where LibTorch has no build.
  *
- * @note Unlike the other backend processors this header does not include the
- * engine's headers: ExecuTorch vendors its own copy of the c10 headers, which must
- * never shadow LibTorch's real c10 in translation units that use both backends. The
- * per-instance ExecuTorch state therefore lives behind an opaque Instance type that
- * only ExecuTorchProcessor.cpp defines.
+ * The ExecuTorch state lives behind the named pimpl `Instance`, defined only in
+ * ExecuTorchProcessor.cpp: this header includes no engine header (see BackendBase).
+ * For ExecuTorch that also keeps its vendored copy of the c10 headers from ever
+ * shadowing LibTorch's real c10 in another translation unit.
  *
  * @warning This class is only available when compiled with USE_EXECUTORCH defined
  * @see BackendBase, InferenceConfig, ModelData, SessionElement
@@ -69,20 +68,16 @@ private:
     /**
      * @brief Internal processing instance for thread-safe ExecuTorch operations
      *
-     * Opaque to keep the ExecuTorch headers out of this public header (see the class
-     * note). Each Instance owns an independent ExecuTorch Module (program + loaded
-     * 'forward' method) plus pre-built input tensors wrapping instance-owned host
-     * memory. Each instance is used by only one thread at a time, so inference needs
-     * no locking; an atomic processing flag guards instance allocation.
+     * Opaque here, defined in ExecuTorchProcessor.cpp. Each Instance owns an
+     * independent ExecuTorch Module (program + loaded method) plus pre-built input
+     * tensors wrapping instance-owned host memory. Each instance is used by only one
+     * thread at a time, so inference needs no locking; an atomic processing flag
+     * guards instance allocation.
      */
     struct Instance;
 
     std::vector<std::shared_ptr<Instance>> m_instances;  ///< Vector of parallel processing
                                                          ///< instances
-
-#if DOXYGEN
-    Instance* __doxygen_force_0;  ///< Placeholder for Doxygen documentation
-#endif
 };
 
 }  // namespace anira

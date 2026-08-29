@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -66,6 +67,35 @@ LiteRtRankedTensorType make_float32_type(const std::vector<int64_t>& shape) {
 }
 
 }  // namespace
+
+// Defined here, not in the header: it owns LiteRT handles, and the engine headers
+// stay out of anira's public headers (see the note on BackendBase).
+struct LiteRtProcessor::Instance {
+    Instance(InferenceConfig& inference_config);
+    ~Instance();
+
+    void prepare();
+    void process(std::vector<BufferF>& input,
+                 std::vector<BufferF>& output,
+                 const std::shared_ptr<SessionElement>& session);
+
+    /// Destroys every LiteRT C-API handle this instance owns (no-op on nulls). Called
+    /// by the destructor and on a throw during construction so a partially-built
+    /// instance does not leak native runtime objects.
+    void release() noexcept;
+
+    LiteRtEnvironment m_env = nullptr;               ///< LiteRT runtime environment
+    LiteRtModel m_model = nullptr;                   ///< Model loaded from file or buffer
+    LiteRtOptions m_options = nullptr;               ///< Compilation options (CPU)
+    LiteRtCompiledModel m_compiled_model = nullptr;  ///< Compiled (executable) model
+
+    std::vector<LiteRtTensorBuffer> m_input_buffers;   ///< Managed input tensor buffers
+    std::vector<LiteRtTensorBuffer> m_output_buffers;  ///< Managed output tensor buffers
+
+    InferenceConfig& m_inference_config;    ///< Reference to inference configuration
+    std::atomic<bool> m_processing{false};  ///< Flag indicating if instance is currently
+                                            ///< processing
+};
 
 LiteRtProcessor::LiteRtProcessor(InferenceConfig& inference_config)
     : BackendBase(inference_config) {

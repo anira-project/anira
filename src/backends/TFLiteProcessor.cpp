@@ -8,6 +8,7 @@
 #include <anira/utils/InferenceBackend.h>
 #include <tensorflow/lite/core/c/c_api.h>
 
+#include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -20,6 +21,31 @@
 #endif
 
 namespace anira {
+
+// Defined here, not in the header: it owns TensorFlow Lite objects, and the engine
+// headers stay out of anira's public headers (see the note on BackendBase).
+struct TFLiteProcessor::Instance {
+    Instance(InferenceConfig& inference_config);
+    ~Instance();
+
+    void prepare();
+    void process(std::vector<BufferF>& input,
+                 std::vector<BufferF>& output,
+                 const std::shared_ptr<SessionElement>& session);
+
+    TfLiteModel* m_model;                 ///< TensorFlow Lite model loaded from file
+    TfLiteInterpreterOptions* m_options;  ///< Interpreter configuration options
+    TfLiteInterpreter* m_interpreter;     ///< TensorFlow Lite interpreter instance
+
+    std::vector<MemoryBlock<float>> m_input_data;  ///< Pre-allocated input data buffers
+
+    std::vector<TfLiteTensor*> m_inputs;         ///< TensorFlow Lite input tensors
+    std::vector<const TfLiteTensor*> m_outputs;  ///< TensorFlow Lite output tensors
+
+    InferenceConfig& m_inference_config;    ///< Reference to inference configuration
+    std::atomic<bool> m_processing{false};  ///< Flag indicating if instance is currently
+                                            ///< processing
+};
 
 TFLiteProcessor::TFLiteProcessor(InferenceConfig& inference_config)
     : BackendBase(inference_config) {
