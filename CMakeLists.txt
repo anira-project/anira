@@ -80,8 +80,11 @@ project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
 # Platform axes (cmake/tanh/platform.cmake): TANH_OPERATING_SYSTEM, TANH_BINARY_FORMAT
 # (ELF | Mach-O | PE | Wasm), TANH_IOS_PLATFORM. Every OS/format decision below keys on
 # these, never on APPLE/UNIX/WIN32. tanh::Core carries the matching THL_PLATFORM_*
-# compile definitions for C++.
+# compile definitions for C++. The symbol-policy module comes with it: backends.cmake
+# (below, before the library target) already needs tanh_hidden_archive_link_items to
+# wire the static engine archives.
 include(cmake/tanh/platform.cmake)
+include(cmake/tanh/symbol-policy.cmake)
 
 if(APPLE)
     if(TANH_OPERATING_SYSTEM STREQUAL "iOS")
@@ -284,8 +287,6 @@ FetchContent_MakeAvailable(nlohmann_json)
 #    the ~400 of the API. test/unload registers the anira_exports CTest that diffs the
 #    real export table on every desktop platform.
 # ------------------------------------------------------------------------------
-include(cmake/tanh/symbol-policy.cmake)
-
 add_library(${PROJECT_NAME})
 set_target_properties(${PROJECT_NAME} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
 tanh_apply_symbol_policy(${PROJECT_NAME} EXPORT_PREFIX ANIRA)
