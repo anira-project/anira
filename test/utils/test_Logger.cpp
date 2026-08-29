@@ -37,8 +37,11 @@ InferenceConfig make_inference_config() {
         2);
 }
 
+// One blocking inference thread: spinning real-time-priority threads would starve the
+// low-priority drain thread on the small CI VMs (3 vCPUs), which is what Low means —
+// the tests are about the mechanism, not about CPU contention.
 ContextConfig make_context_config(LogDrain drain, LogLevel level = LogLevel::Error) {
-    ContextConfig config(2, WaitStrategy::SpinBackoff, level);
+    ContextConfig config(1, WaitStrategy::Blocking, level);
     config.m_log.m_drain = drain;
     config.m_log.m_drain_interval_ms = 1;
     return config;
@@ -77,7 +80,7 @@ struct RecordCollector {
     }
 
     bool wait_for(const char* message_fragment, const char* source = "rt") {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
         while (std::chrono::steady_clock::now() < deadline) {
             if (has(message_fragment, source)) { return true; }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));

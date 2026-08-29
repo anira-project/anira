@@ -25,6 +25,7 @@
 #include <anira/utils/Logger.h>
 #include <concurrentqueue.h>
 #include <tanh/core/Logger.h>
+#include <tanh/core/threading/Thread.h>
 
 #include <algorithm>
 #include <atomic>

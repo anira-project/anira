@@ -1,4 +1,5 @@
 #include <anira/utils/Logger.h>
+#include <tanh/core/Logger.h>
 
 #include <atomic>
 

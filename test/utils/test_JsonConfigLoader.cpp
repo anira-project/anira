@@ -1,3 +1,4 @@
+#include <anira/ContextConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/utils/JsonConfigLoader.h>
 
