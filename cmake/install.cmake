@@ -21,40 +21,19 @@ else()
     message(STATUS "CMAKE_INSTALL_PREFIX was already set to ${CMAKE_INSTALL_PREFIX}")
 endif()
 
-# at install the rpath is cleared by default so we have to set it again for the installed shared library to find the other libraries
-# in this case we set the rpath to the directories where the other libraries are installed
-# $ORIGIN in Linux is a special token that gets replaced by the directory of the library at runtime from that point we could navigate to the other libraries
-# The same token for macOS is @loader_path
-if(UNIX AND NOT APPLE)
-    set_target_properties(${PROJECT_NAME}
-        PROPERTIES
-            INSTALL_RPATH "$ORIGIN"
-    )
-    # This is necessary for the gtest_main library to find the gtest library at runtime
-    if (ANIRA_WITH_BENCHMARK)
-    set_target_properties(gtest_main
-        PROPERTIES
-            INSTALL_RPATH "$ORIGIN"
-    )
-    endif()
-elseif(APPLE)
-    set(OSX_RPATHS "@loader_path")
-    if (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
-        list(APPEND OSX_RPATHS "/opt/intel/oneapi/mkl/latest/lib")
-    elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-    endif()
-    set_target_properties(${PROJECT_NAME}
-        PROPERTIES
-            INSTALL_RPATH "${OSX_RPATHS}"
-    )
-    if (ANIRA_WITH_BENCHMARK)
-    set_target_properties(gtest_main
-        PROPERTIES
-            INSTALL_RPATH "@loader_path"
-    )
-    endif()
+# The install-time RPATH ($ORIGIN / @loader_path, cmake/tanh/install-helpers.cmake) so
+# the installed shared library finds its siblings; the MKL path for Intel macs.
+include(${CMAKE_CURRENT_LIST_DIR}/tanh/install-helpers.cmake)
+set(_anira_apple_rpaths "")
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    set(_anira_apple_rpaths EXTRA_APPLE_PATHS "/opt/intel/oneapi/mkl/latest/lib")
 endif()
-
+tanh_set_install_rpath(${PROJECT_NAME} ${_anira_apple_rpaths})
+if(ANIRA_WITH_BENCHMARK)
+    # gtest_main must find gtest at runtime from the install tree.
+    tanh_set_install_rpath(gtest_main)
+endif()
+unset(_anira_apple_rpaths)
 
 # the variant with PUBLIC_HEADER property unfortunately does not preserve the folder structure therefore we use the simple install directory command
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/anira
@@ -107,7 +86,7 @@ function(_anira_install_engine_libs rootdir)
     if(_ael_EXCLUDE_CMAKE)
         set(_exclude PATTERN "cmake" EXCLUDE)
     endif()
-    if(WIN32)
+    if(TANH_BINARY_FORMAT STREQUAL "PE")
         install(DIRECTORY "${rootdir}/lib/" DESTINATION "${CMAKE_INSTALL_LIBDIR}"
             COMPONENT deps-backends ${_exclude} PATTERN "*.dll" EXCLUDE)
         install(DIRECTORY "${rootdir}/lib/" DESTINATION "${CMAKE_INSTALL_BINDIR}"
@@ -141,7 +120,7 @@ endfunction()
 # install where neither applies.
 # ------------------------------------------------------------------------------
 function(_anira_install_cmake_package id src dest)
-    if(NOT WIN32 AND CMAKE_INSTALL_LIBDIR STREQUAL "lib")
+    if(NOT TANH_BINARY_FORMAT STREQUAL "PE" AND CMAKE_INSTALL_LIBDIR STREQUAL "lib")
         install(DIRECTORY "${src}/" DESTINATION "${dest}" COMPONENT deps-backends)
         return()
     endif()
@@ -151,7 +130,7 @@ function(_anira_install_cmake_package id src dest)
     foreach(_rel IN LISTS _files)
         if(_rel MATCHES "\\.cmake$")
             file(READ "${src}/${_rel}" _content)
-            if(WIN32)
+            if(TANH_BINARY_FORMAT STREQUAL "PE")
                 string(REGEX REPLACE "\\$\\{_IMPORT_PREFIX\\}/lib/([^\"]*\\.dll\")"
                     "\${_IMPORT_PREFIX}/${CMAKE_INSTALL_BINDIR}/\\1" _content "${_content}")
             endif()
@@ -178,7 +157,7 @@ if(ANIRA_WITH_LIBTORCH)
 endif()
 
 if(ANIRA_WITH_ONNXRUNTIME)
-    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    if(TANH_OPERATING_SYSTEM STREQUAL "iOS")
         # iOS ships an xcframework: install it whole (the static .a then sits at the
         # SUBPATH anira::onnxruntime expects) plus the active slice's headers.
         install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/onnxruntime.xcframework"
@@ -186,7 +165,7 @@ if(ANIRA_WITH_ONNXRUNTIME)
         install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/onnxruntime.xcframework/${ANIRA_ONNXRUNTIME_IOS_SLICE}/Headers/"
             DESTINATION "${_anira_backend_incdir}/onnxruntime" COMPONENT deps-backends)
     else()
-        if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
+        if(TANH_OPERATING_SYSTEM STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
             install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/include/onnxruntime/"
                 DESTINATION "${_anira_backend_incdir}/onnxruntime" COMPONENT deps-backends)
         else()
@@ -198,7 +177,7 @@ if(ANIRA_WITH_ONNXRUNTIME)
 endif()
 
 if(ANIRA_WITH_TFLITE)
-    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    if(TANH_OPERATING_SYSTEM STREQUAL "iOS")
         # iOS TFLite is a TensorFlowLiteC.framework xcframework: install it whole, plus
         # the framework's flat headers AND the generated <tensorflow/lite/...> shim that
         # forwards onto them (so the canonical include paths resolve for a consumer).
@@ -219,7 +198,7 @@ if(ANIRA_WITH_TFLITE)
 endif()
 
 if(ANIRA_WITH_LITERT)
-    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    if(TANH_OPERATING_SYSTEM STREQUAL "iOS")
         install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/LiteRt.xcframework"
             DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
         install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/LiteRt.xcframework/${ANIRA_LITERT_IOS_SLICE}/Headers/"
@@ -232,7 +211,7 @@ if(ANIRA_WITH_LITERT)
 endif()
 
 if(ANIRA_WITH_EXECUTORCH)
-    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    if(TANH_OPERATING_SYSTEM STREQUAL "iOS")
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/executorch.xcframework"
             DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/executorch.xcframework/${ANIRA_EXECUTORCH_IOS_SLICE}/Headers/"
@@ -274,7 +253,7 @@ foreach(_engine onnxruntime tflite litert)
     else()
         # The shared library sits in the libdir — on Windows, where it is a DLL, in the
         # bindir (_anira_install_engine_libs); the import library stays in the libdir.
-        if(WIN32)
+        if(TANH_BINARY_FORMAT STREQUAL "PE")
             set(_location_dir "\${_anira_bindir}")
         else()
             set(_location_dir "\${_anira_libdir}")
@@ -329,7 +308,7 @@ unset(_anira_imported_after)
 endif()
 
 if(ANIRA_WITH_EXECUTORCH)
-    if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    if(TANH_OPERATING_SYSTEM STREQUAL "Android" OR TANH_OPERATING_SYSTEM STREQUAL "iOS")
         string(APPEND _anira_installed_targets
             "anira_define_backend_target(executorch STATIC\n"
             "    LOCATION \"\${_anira_libdir}/${ANIRA_EXECUTORCH_STATIC_LIB_SUBPATH}\"\n"
@@ -359,6 +338,16 @@ install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/aniraBackendHelpers.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/aniraBackendTargets.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
+    COMPONENT dev
+)
+# The shared modules aniraBackendHelpers.cmake needs at a consumer's configure time
+# (platform axes, tanh_hidden_archive_link_items) — the same verbatim files as in the
+# build tree, included from aniraConfig.cmake before the helpers.
+install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tanh/modules-version.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tanh/platform.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tanh/symbol-policy.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}/tanh
     COMPONENT dev
 )
 

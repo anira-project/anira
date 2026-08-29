@@ -43,41 +43,14 @@ target_link_libraries(${PROJECT_NAME} clap-core clap-helpers anira)
 # bind no STB_GNU_UNIQUE symbol, so that the host can actually unload the plugin; and
 # let the linker drop what the plugin never references (anira's objects are compiled
 # with one section per function for exactly that).
-set_target_properties(${PROJECT_NAME} PROPERTIES
-        C_VISIBILITY_PRESET hidden
-        CXX_VISIBILITY_PRESET hidden
-        VISIBILITY_INLINES_HIDDEN ON)
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(${PROJECT_NAME} PRIVATE -fno-gnu-unique)
-endif()
-if(MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE /Gy)
-    target_link_options(${PROJECT_NAME} PRIVATE /OPT:REF)
-elseif(APPLE)
-    target_compile_options(${PROJECT_NAME} PRIVATE -ffunction-sections -fdata-sections)
-    target_link_options(${PROJECT_NAME} PRIVATE LINKER:-dead_strip)
-elseif(UNIX)
-    target_compile_options(${PROJECT_NAME} PRIVATE -ffunction-sections -fdata-sections)
-    target_link_options(${PROJECT_NAME} PRIVATE LINKER:--gc-sections)
-endif()
-# Finally pin the export table to the entry point at link time: hidden visibility
-# cannot hide what a header stamps default-visibility itself (libstdc++'s std::
-# instantiations, anira's inline members when libanira is shared), and on macOS
-# nothing short of an export list keeps a force-loaded static ExecuTorch out. PE
-# exports only what carries dllexport, so MSVC needs nothing.
-if(APPLE)
-    set(_clap_export_list "${CMAKE_CURRENT_SOURCE_DIR}/cmake/clap.exports")
-    target_link_options(${PROJECT_NAME} PRIVATE "LINKER:-exported_symbols_list,${_clap_export_list}")
-elseif(UNIX)
-    set(_clap_export_list "${CMAKE_CURRENT_SOURCE_DIR}/cmake/clap.map")
-    target_link_options(${PROJECT_NAME} PRIVATE "LINKER:--version-script=${_clap_export_list}")
-endif()
-if(_clap_export_list)
-    # Relink when the allowlist changes.
-    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${_clap_export_list}")
-endif()
+# All of that is the shared policy (cmake/tanh/symbol-policy.cmake, available from the
+# in-tree build and from the installed aniraConfig.cmake alike): hidden visibility,
+# -fno-gnu-unique, dead-code stripping, and an export table generated at configure
+# time and pinned to clap_entry.
+tanh_apply_symbol_policy(${PROJECT_NAME})
+tanh_set_export_allowlist(${PROJECT_NAME} SYMBOL clap_entry)
 
-if(APPLE)
+if(TANH_OPERATING_SYSTEM STREQUAL "macOS")
     set_target_properties(${PROJECT_NAME} PROPERTIES
             BUNDLE True
             BUNDLE_EXTENSION clap
@@ -89,7 +62,7 @@ if(APPLE)
     )
     target_link_libraries(${PROJECT_NAME} "-framework CoreFoundation" "-framework AppKit" "-framework CoreGraphics")
     target_compile_definitions(${PROJECT_NAME} PRIVATE IS_MAC=1)
-elseif(UNIX)
+elseif(TANH_OPERATING_SYSTEM STREQUAL "Linux")
     target_compile_definitions(${PROJECT_NAME} PRIVATE IS_LINUX=1)
     set_target_properties(${PROJECT_NAME} PROPERTIES SUFFIX ".clap" PREFIX "")
 else()

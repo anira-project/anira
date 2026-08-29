@@ -49,7 +49,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 
 target_link_libraries(${PROJECT_NAME} anira::anira)
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     # On mobile the test binary runs on a device/emulator/simulator, reached over a
     # single adb/simctl invocation. Per-test registration is wrong here: gtest_discover_tests
     # would have to run the cross-built binary on the host just to enumerate the cases
@@ -69,7 +69,7 @@ endif()
 # "include an engine header -> link anira::<engine>" true at compile time. The object
 # is excluded from the default build and compiled by a CTest, so that a regression
 # shows up as a failed test with the compiler's error instead of a broken build.
-if(NOT CMAKE_SYSTEM_NAME MATCHES "Android|iOS" AND NOT EMSCRIPTEN)
+if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$")
     add_library(anira_header_isolation OBJECT EXCLUDE_FROM_ALL header_isolation.cpp)
     set_target_properties(anira_header_isolation PROPERTIES
         CXX_STANDARD 20
@@ -93,7 +93,7 @@ endif()
 # anira thread survives the unload (and that the library really gets unmapped). Not
 # on mobile (no dlopen story on device) and not under RTSan (the module inherits
 # -fsanitize=realtime but an executable without the runtime cannot load it).
-if(NOT CMAKE_SYSTEM_NAME MATCHES "Android|iOS" AND NOT EMSCRIPTEN AND NOT ANIRA_WITH_RTSAN)
+if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$" AND NOT ANIRA_WITH_RTSAN)
     add_subdirectory(unload)
 endif()
 

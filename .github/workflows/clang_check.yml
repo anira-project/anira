@@ -10,10 +10,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Verifies the committed .clang-format / .clang-tidy / .clangd still match the
-  # pinned tanh-tooling release. Bumping the pin means re-running install.sh and
-  # committing the result (https://github.com/tanh-lab/tanh-tooling).
+  # Verifies the committed tanh-tooling files (.clang-format / .clang-tidy / .clangd
+  # and cmake/tanh/) still match the pinned release. Bumping the pin means re-running
+  # install.sh and committing the result (https://github.com/tanh-lab/tanh-tooling);
+  # the fetched tanh-lib must pin the same tag.
   clang-config:
-    uses: tanh-lab/tanh-tooling/.github/workflows/clang-check.yml@v0.1.4
+    uses: tanh-lab/tanh-tooling/.github/workflows/config-check.yml@v0.1.5
     with:
-      ref: v0.1.4
+      ref: v0.1.5
+      family: "clang cmake"
