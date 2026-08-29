@@ -167,3 +167,10 @@ jobs:
           fi
       - name: test
         uses: ./.github/actions/test
+        with:
+          # Windows builds with the multi-config Visual Studio generator, where ctest
+          # needs the configuration: without -C the gtest-discovered tests of that
+          # configuration are not even listed (the legs used to pass with "No tests
+          # were found") and the config-independent entries fail with "Test not
+          # available without configuration". Harmless on single-config generators.
+          CTEST_ARGS: "-C Release"

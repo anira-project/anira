@@ -53,3 +53,24 @@ if(ANIRA_WITH_ONNXRUNTIME)
     endif()
     message(STATUS "anira install consumer: engine header unreachable without anira::onnxruntime — OK")
 endif()
+
+# Windows: an application ships its DLLs next to its executable. The loader searches
+# the application directory first and System32 before PATH — and Windows itself ships
+# an onnxruntime.dll (Windows ML, ORT 1.17) in System32, so an executable that calls
+# ONNX Runtime with only <prefix>/bin on PATH binds to the wrong runtime and dies on
+# the first API call (the very "host ships its own backend runtime" failure anira's
+# symbol policy guards plugins against). $<TARGET_RUNTIME_DLLS> lists the DLLs of the
+# imported SHARED targets in the link closure — anira.dll, tanh_core.dll and, for the
+# engine consumers, onnxruntime.dll through anira::onnxruntime.
+if(WIN32)
+    foreach(_consumer consumer consumer_engine consumer_engine_module)
+        if(TARGET ${_consumer})
+            add_custom_command(TARGET ${_consumer} POST_BUILD
+                COMMAND ${CMAKE_COMMAND}
+                    "-DDLLS=$<TARGET_RUNTIME_DLLS:${_consumer}>"
+                    "-DDEST=$<TARGET_FILE_DIR:${_consumer}>"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/copy-runtime-dlls.cmake"
+                VERBATIM)
+        endif()
+    endforeach()
+endif()
