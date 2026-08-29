@@ -141,10 +141,10 @@ function(_anira_static_archive_link_items archive out_libs out_opts)
     # Mach-O: -load_hidden, PE/Wasm: nothing to hide) — cmake/tanh/symbol-policy.cmake.
     tanh_hidden_archive_link_items("${archive}" _libs _opts)
     # The OS decides which system libraries the archive needs on top.
-    if(TANH_OPERATING_SYSTEM STREQUAL "macOS")
-        # Static onnxruntime/tflite/litert pull in absl/CoreFoundation time-zone and
-        # Apple logging code (Foundation/CoreFoundation), and static LiteRT references
-        # Metal (LiteRtCreateMetalInfo -> MTLCreateSystemDefaultDevice).
+    if(TANH_BINARY_FORMAT STREQUAL "Mach-O")
+        # macOS and iOS alike: static onnxruntime/tflite/litert pull in absl/CoreFoundation
+        # time-zone and Apple logging code (Foundation/CoreFoundation), and static LiteRT
+        # references Metal (LiteRtCreateMetalInfo -> MTLCreateSystemDefaultDevice).
         list(APPEND _libs "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
     elseif(TANH_OPERATING_SYSTEM STREQUAL "Android")
         # Android's bionic folds pthread/dl/libm into libc, but the static LiteRT/TFLite
