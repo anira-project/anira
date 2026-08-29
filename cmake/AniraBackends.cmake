@@ -19,7 +19,12 @@
 # release metadata is unreachable (offline, rate-limited, CMake < 3.19), a backend
 # already present on disk is reused; only a missing backend then needs the network.
 #
-# Per call:  anira_setup_backend(<id>)        id = libtorch|onnxruntime|tflite|litert|executorch
+# Per engine: anira_setup_<engine>(<target>)   engine = libtorch|onnxruntime|tflite|litert|executorch
+#   fetches the prebuilt engine, adds its processor source and USE_<ENGINE> define to
+#   <target>, and links it. Call anira_setup_executorch() BEFORE anira_setup_libtorch()
+#   (both bundle XNNPACK; enforced at configure time).
+# Lower level: anira_setup_backend(<id>) only fetches + resolves the tree (sets the
+#   ANIRA_<ENGINE>_* variables and the BACKEND_BUILD_*_DIRS lists).
 #
 # Configurable cache variables (see CMakeLists.txt for the user-facing options):
 #   ANIRA_BACKENDS_VERSION          release tag to download from (default v2.1.1)
@@ -715,3 +720,45 @@ function(anira_target_link_static_backend target libpath)
             "$<BUILD_INTERFACE:${libpath}>" Threads::Threads ${CMAKE_DL_LIBS} m)
     endif()
 endfunction()
+
+# ==============================================================================
+# Shared by cmake/backends/<engine>.cmake
+# ==============================================================================
+# Add the tree's include/ and lib/ dirs (as resolved by anira_setup_backend) to the
+# target's build interface. Public because anira's headers include backend headers.
+macro(_anira_apply_backend_dirs target)
+    foreach(_ab_dir ${BACKEND_BUILD_HEADER_DIRS})
+        target_include_directories(${target} SYSTEM PUBLIC $<BUILD_INTERFACE:${_ab_dir}>)
+    endforeach()
+    foreach(_ab_dir ${BACKEND_BUILD_LIBRARY_DIRS})
+        target_link_directories(${target} PUBLIC $<BUILD_INTERFACE:${_ab_dir}>)
+    endforeach()
+    set(BACKEND_BUILD_HEADER_DIRS)
+    set(BACKEND_BUILD_LIBRARY_DIRS)
+endmacro()
+
+# Backends link PUBLIC: anira's public headers include the backend headers, and
+# (onnxruntime) "_OrtGetApiBase" is otherwise dropped. Static archives are linked
+# on-demand (NOT whole-archive — the onnxruntime/tflite archives carry duplicate
+# protobuf/absl symbols that force-loading would clash; anira only needs the C API,
+# which the linker resolves on demand) — see anira_target_link_static_backend.
+macro(_anira_link_backend target ID shared_target)
+    if(ANIRA_${ID}_IS_STATIC)
+        anira_target_link_static_backend(${target} "${ANIRA_${ID}_STATIC_LIB}")
+    else()
+        target_link_libraries(${target} PUBLIC ${shared_target})
+    endif()
+endmacro()
+
+# ==============================================================================
+# Per-engine setup: anira_setup_<engine>(<target>) — one file per engine. Macros
+# (not functions): anira_setup_backend() is a macro that sets the ANIRA_<ENGINE>_*
+# variables and, for libtorch, CMAKE_CXX_FLAGS / imported Torch targets in the
+# caller's directory scope — install.cmake, msvc-support.cmake, BuildWasm.cmake
+# and the examples read those variables.
+# ==============================================================================
+include(${CMAKE_CURRENT_LIST_DIR}/backends/executorch.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/backends/libtorch.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/backends/onnxruntime.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/backends/tflite.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/backends/litert.cmake)

@@ -143,39 +143,10 @@ endif()
 include(cmake/AniraValidate.cmake)
 
 # ==============================================================================
-# Download and install the selected inference engines
+# Backend download machinery + per-engine setup (cmake/backends/*.cmake)
 # ==============================================================================
 
-set(BACKEND_SOURCES)
-set(BACKEND_BUILD_HEADER_DIRS)
-set(BACKEND_BUILD_LIBRARY_DIRS)
-
 include(cmake/AniraBackends.cmake)
-
-if(ANIRA_WITH_LIBTORCH)
-    anira_setup_backend(libtorch)
-    list(APPEND BACKEND_SOURCES src/backends/LibTorchProcessor.cpp)
-endif()
-
-if(ANIRA_WITH_ONNXRUNTIME)
-    anira_setup_backend(onnxruntime)
-    list(APPEND BACKEND_SOURCES src/backends/OnnxRuntimeProcessor.cpp)
-endif()
-
-if(ANIRA_WITH_TFLITE)
-    anira_setup_backend(tflite)
-    list(APPEND BACKEND_SOURCES src/backends/TFLiteProcessor.cpp)
-endif()
-
-if(ANIRA_WITH_LITERT)
-    anira_setup_backend(litert)
-    list(APPEND BACKEND_SOURCES src/backends/LiteRtProcessor.cpp)
-endif()
-
-if(ANIRA_WITH_EXECUTORCH)
-    anira_setup_backend(executorch)
-    list(APPEND BACKEND_SOURCES src/backends/ExecuTorchProcessor.cpp)
-endif()
 
 ## ==============================================================================
 # Fetch threadsafe queue
@@ -293,7 +264,6 @@ target_sources(${PROJECT_NAME}
 
         # Backend
         src/backends/BackendBase.cpp
-        ${BACKEND_SOURCES}
 
         # Scheduler
         src/scheduler/InferenceManager.cpp
@@ -313,42 +283,18 @@ target_sources(${PROJECT_NAME}
         src/system/HighPriorityThread.cpp
 )
 
-# add the include directories for the backends to the build interface, public because the anira headers include the backend headers
-foreach(HEADER_DIR ${BACKEND_BUILD_HEADER_DIRS})
-    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
-        $<BUILD_INTERFACE:${HEADER_DIR}>
-    )
-endforeach()
-
 # include the public headers of the anira library in the top-level project include directory
 target_include_directories(${PROJECT_NAME}
     PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
-# include the link directories for all the backends to the build interface
-foreach(LIBRARY_DIR ${BACKEND_BUILD_LIBRARY_DIRS})
-    target_link_directories(${PROJECT_NAME} PUBLIC
-        $<BUILD_INTERFACE:${LIBRARY_DIR}>
-    )
-endforeach()
-
-set(ANIRA_COMPILE_DEFINITIONS
-    # Backend-specific definitions
-    $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
-    $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
-    $<$<BOOL:EMSDK_VERSION>:USE_ANIRA_WEB>
-    $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
-    $<$<BOOL:${ANIRA_WITH_LITERT}>:USE_LITERT>
-    $<$<BOOL:${ANIRA_WITH_EXECUTORCH}>:USE_EXECUTORCH>
-    $<$<BOOL:${ANIRA_WITH_LOGGING}>:ENABLE_LOGGING>
-    # Version number
-    -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
-)
-
+# Backend-specific USE_<ENGINE> definitions are added by anira_setup_<engine>() below.
 target_compile_definitions(${PROJECT_NAME}
     PUBLIC
-    ${ANIRA_COMPILE_DEFINITIONS}
+    $<$<BOOL:EMSDK_VERSION>:USE_ANIRA_WEB>
+    $<$<BOOL:${ANIRA_WITH_LOGGING}>:ENABLE_LOGGING>
+    -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
 )
 
 if(ANIRA_WITH_RTSAN)
@@ -358,127 +304,25 @@ endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
 
+# ==============================================================================
+# Inference backends — download, sources, defines and linking live in
+# cmake/AniraBackends.cmake (fetch) + cmake/backends/<engine>.cmake (wiring).
+# ==============================================================================
+
 if(ANIRA_WITH_EXECUTORCH)
-    # One merged libexecutorch.a per platform/ABI/xcframework slice (runtime +
-    # extensions + optimized/quantized CPU kernels + XNNPACK delegate), built by
-    # anira-project/backends with the kernel/backend registrations pre-linked into
-    # a single archive member, so it links on-demand like the other static
-    # backends — no force-load, no CMake package.
-    #
-    # Ordering: this must come BEFORE the libtorch link block. libtorch_cpu
-    # exports its own (different) XNNPACK, and if the torch dylibs precede the
-    # ExecuTorch archive on the link line, part of the delegate's xnn_* references
-    # bind to libtorch's copy and delegate init fails at runtime. The check below
-    # the libtorch block enforces this at configure time.
-    anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_EXECUTORCH_STATIC_LIB}")
-    if(WIN32)
-        # COFF has no partial link, so the pre-linked registration member does not
-        # exist there: the registration set (runtime core + kernel/backend
-        # registrations + XNNPACK microkernels) ships as a second, small lib that
-        # has to be whole-archived. Same scope rules as the archive itself.
-        target_link_libraries(${PROJECT_NAME} PUBLIC
-            "$<BUILD_INTERFACE:${ANIRA_EXECUTORCH_REGISTRATIONS_LIB}>")
-        # (install.cmake adds the matching $<INSTALL_INTERFACE> entries.)
-        target_link_options(${PROJECT_NAME} PUBLIC
-            "$<BUILD_INTERFACE:/WHOLEARCHIVE:${ANIRA_EXECUTORCH_REGISTRATIONS_LIB}>")
-    endif()
-
-    # ExecuTorchProcessor.cpp is the only TU that may see the ExecuTorch headers:
-    # they vendor a copy of c10 that must never shadow LibTorch's real c10 in the
-    # other backend TUs (it breaks the LibTorch backend at link time on MSVC). So
-    # the ExecuTorch include dirs are not on the target (anira_setup_backend keeps
-    # them out of BACKEND_BUILD_HEADER_DIRS); this one source gets them as plain
-    # -I flags, which are searched before every SYSTEM (-isystem / /external:I)
-    # dir of the target — so inside this TU the vendored c10 wins over LibTorch's.
-    set_source_files_properties(src/backends/ExecuTorchProcessor.cpp PROPERTIES
-        COMPILE_OPTIONS "-I${ANIRA_EXECUTORCH_INCLUDE_DIR};-I${ANIRA_EXECUTORCH_INCLUDE_DIR}/executorch/runtime/core/portable_type/c10"
-        COMPILE_DEFINITIONS "${ANIRA_EXECUTORCH_COMPILE_DEFINITIONS}")
+    anira_setup_executorch(${PROJECT_NAME})   # before libtorch: both bundle XNNPACK
 endif()
-
 if(ANIRA_WITH_LIBTORCH)
-    # The find_package(Torch) adds the libraries libc10.so and libkineto.a as full paths to ${TORCH_LIBRARIES}. This is no problem when we add anira as a subdirectory to another project, but when we install the library, the torch libraries will be link targets of the anira library with full paths and hence not found on other systems. Therefore, we link those libs privately and only add the torch target publicly.
-    # Also until cmake 3.26, there is a bug where the torch_cpu library is not found when linking publicly https://gitlab.kitware.com/cmake/cmake/-/issues/24163 and anira is added as a subdirectory to another project, see
-    # But this is necessary for when we install the library since otherwise symbols are not found
-    # Another problem are that on armv7l with benchmarking enabled, some symbols are not found when linking the torch_cpu library privately
-    if (CMAKE_VERSION VERSION_LESS "3.26.0" AND NOT (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR))
-        target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
-        set(TORCH_LIBRARIES_ALL_PRIVATE TRUE)
-        if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
-            target_link_libraries(${PROJECT_NAME} PUBLIC torch_cpu)
-        endif()
-    else()
-        foreach(TORCH_LIB ${TORCH_LIBRARIES})
-            if(TORCH_LIB STREQUAL "torch" OR TORCH_LIB STREQUAL "torch_library")
-                target_link_libraries(${PROJECT_NAME} PUBLIC ${TORCH_LIB})
-            else()
-                target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIB})
-            endif()
-        endforeach()
-    endif()
+    anira_setup_libtorch(${PROJECT_NAME})
 endif()
-
-# Internal error. LINK_LIBRARIES preserves the target_link_libraries call order,
-# so a future reshuffle of the ExecuTorch and libtorch blocks is caught here at
-# configure time instead of as a runtime failure (see the ExecuTorch block above).
-if(ANIRA_WITH_EXECUTORCH AND ANIRA_WITH_LIBTORCH)
-    get_target_property(_anira_link_order ${PROJECT_NAME} LINK_LIBRARIES)
-    set(_anira_executorch_index -1)
-    set(_anira_torch_index -1)
-    set(_anira_i 0)
-    foreach(_anira_entry IN LISTS _anira_link_order)
-        if(_anira_executorch_index EQUAL -1 AND _anira_entry MATCHES "libexecutorch\\.a|executorch\\.lib")
-            set(_anira_executorch_index ${_anira_i})
-        endif()
-        if(_anira_torch_index EQUAL -1 AND _anira_entry STREQUAL "torch")
-            set(_anira_torch_index ${_anira_i})
-        endif()
-        math(EXPR _anira_i "${_anira_i} + 1")
-    endforeach()
-    if(_anira_executorch_index EQUAL -1
-       OR (_anira_torch_index GREATER -1 AND _anira_executorch_index GREATER _anira_torch_index))
-        message(FATAL_ERROR
-            "anira: internal link-order violation — the ExecuTorch archive must be linked "
-            "before the LibTorch libraries (both bundle XNNPACK; see the comment at the "
-            "ExecuTorch link block). Restore the ExecuTorch block above the LibTorch block.")
-    endif()
-    unset(_anira_link_order)
-    unset(_anira_executorch_index)
-    unset(_anira_torch_index)
-    unset(_anira_i)
-    unset(_anira_entry)
-endif()
-
-# Backends link PUBLIC: anira's public headers include the backend headers, and
-# (onnxruntime) "_OrtGetApiBase" is otherwise dropped. Static archives are linked
-# on-demand (NOT whole-archive — the onnxruntime/tflite archives carry duplicate
-# protobuf/absl symbols that force-loading would clash; anira only needs the C API,
-# which the linker resolves on demand) — see anira_target_link_static_backend in
-# cmake/AniraBackends.cmake.
 if(ANIRA_WITH_ONNXRUNTIME)
-    if(ANIRA_ONNXRUNTIME_IS_STATIC)
-        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_ONNXRUNTIME_STATIC_LIB}")
-    else()
-        target_link_libraries(${PROJECT_NAME} PUBLIC onnxruntime)
-    endif()
+    anira_setup_onnxruntime(${PROJECT_NAME})
 endif()
-
 if(ANIRA_WITH_TFLITE)
-    if(ANIRA_TFLITE_IS_STATIC)
-        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_TFLITE_STATIC_LIB}")
-    else()
-        target_link_libraries(${PROJECT_NAME} PUBLIC tensorflowlite_c)
-    endif()
+    anira_setup_tflite(${PROJECT_NAME})
 endif()
-
 if(ANIRA_WITH_LITERT)
-    if(ANIRA_LITERT_IS_STATIC)
-        # The desktop static archives are pre-isolated to the LiteRt* C API at
-        # packaging (backends >= v2.3.0), so they coexist with ExecuTorch's
-        # force-loaded XNNPACK — see the note in AniraValidate.cmake.
-        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_LITERT_STATIC_LIB}")
-    else()
-        target_link_libraries(${PROJECT_NAME} PUBLIC LiteRt)
-    endif()
+    anira_setup_litert(${PROJECT_NAME})
 endif()
 
 if(ANIRA_WITH_BENCHMARK OR ANIRA_WITH_TESTS)
