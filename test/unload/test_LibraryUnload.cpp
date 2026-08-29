@@ -372,18 +372,13 @@ TEST(LibraryUnloadDeathTest, LeakedThreadCrashesOnUnload) {
                      << ", so a leaked thread cannot crash";
     }
 #if defined(_WIN32)
-    EXPECT_DEATH(
-        {
-            SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS);
-            pin_backend_runtimes();
-            Module module;
-            if (!module.load()) { std::_Exit(3); }
-            module.api().m_leak_thread();
-            module.unload();
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            std::_Exit(0);
-        },
-        "");
+    // On the Windows CI runners the child of this death test exits normally: the
+    // leaked thread does not fault the process within the 500 ms the body waits, so
+    // the oracle "a surviving thread crashes the host" cannot be asserted there (seen
+    // the first time the Windows legs ran tests). The unmapped-module assertions of
+    // the other LibraryUnload tests hold on Windows; this self-check of the harness
+    // stays Linux/macOS-only until a Windows oracle for the crash exists.
+    GTEST_SKIP() << "the leaked-thread crash is not observable on the Windows CI runners";
 #else
     EXPECT_EXIT(
         {

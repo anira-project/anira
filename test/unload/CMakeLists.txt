@@ -26,6 +26,23 @@ set_target_properties(anira_unload_module PROPERTIES
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(anira_unload_module PRIVATE -fno-gnu-unique)
 endif()
+# ... and an export list pinned to its entry points (module.exports on Mach-O,
+# module.map on ELF), like examples/clap-audio-plugin: hidden visibility cannot hide
+# what a header stamps default-visibility itself, and on macOS a static anira with
+# ExecuTorch force-loads archives ld64 cannot hide otherwise. The anira_exports check
+# below asserts the result. PE exports only what carries dllexport.
+if(APPLE)
+    set(_anira_unload_export_list "${CMAKE_CURRENT_SOURCE_DIR}/module.exports")
+    target_link_options(anira_unload_module PRIVATE
+        "LINKER:-exported_symbols_list,${_anira_unload_export_list}")
+elseif(UNIX)
+    set(_anira_unload_export_list "${CMAKE_CURRENT_SOURCE_DIR}/module.map")
+    target_link_options(anira_unload_module PRIVATE
+        "LINKER:--version-script=${_anira_unload_export_list}")
+endif()
+if(_anira_unload_export_list)
+    set_property(TARGET anira_unload_module APPEND PROPERTY LINK_DEPENDS "${_anira_unload_export_list}")
+endif()
 
 add_executable(anira_unload_test test_LibraryUnload.cpp)
 set_target_properties(anira_unload_test PROPERTIES
@@ -42,46 +59,23 @@ add_dependencies(anira_unload_test anira_unload_module)
 # LoadLibrary handle on Windows), so that unloading the module never unloads them: the
 # unmapped assertion is about anira's own binaries — libtorch's global destructors are
 # not safe to run on dlclose, and TLS-bearing runtimes may not be unloadable at all.
-# On Windows every runtime DLL is copied next to the executable (below), so bare file
-# names resolve through the application directory.
+# Always by full path: the shared engines are SHARED IMPORTED targets whose
+# $<TARGET_FILE> is the very file anira links (on Windows the DLL; a full path is
+# also what LOAD_WITH_ALTERED_SEARCH_PATH is defined for, and it resolves the DLL's
+# own dependencies next to it), LibTorch by its lib/ directory.
 set(_anira_unload_pinned "")
 if(ANIRA_WITH_LIBTORCH AND ANIRA_LIBTORCH_SHARED_LIB_PATH)
-    if(WIN32)
-        list(APPEND _anira_unload_pinned "torch.dll")
-    else()
-        list(APPEND _anira_unload_pinned
-            "${ANIRA_LIBTORCH_SHARED_LIB_PATH}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}torch${CMAKE_SHARED_LIBRARY_SUFFIX}")
-    endif()
+    list(APPEND _anira_unload_pinned
+        "${ANIRA_LIBTORCH_SHARED_LIB_PATH}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}torch${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
-if(ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_ONNXRUNTIME_IS_STATIC)
-    if(WIN32)
-        list(APPEND _anira_unload_pinned "${ANIRA_ONNXRUNTIME_LIB_BASENAME}.dll")
-    else()
-        list(APPEND _anira_unload_pinned
-            "${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}${ANIRA_ONNXRUNTIME_LIB_BASENAME}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+foreach(_anira_unload_engine onnxruntime litert tflite)
+    string(TOUPPER "${_anira_unload_engine}" _anira_unload_ENGINE)
+    if(ANIRA_WITH_${_anira_unload_ENGINE} AND NOT ANIRA_${_anira_unload_ENGINE}_IS_STATIC)
+        list(APPEND _anira_unload_pinned "$<TARGET_FILE:anira::${_anira_unload_engine}>")
     endif()
-endif()
-if(ANIRA_WITH_LITERT AND NOT ANIRA_LITERT_IS_STATIC)
-    if(WIN32)
-        list(APPEND _anira_unload_pinned "${ANIRA_LITERT_LIB_BASENAME}.dll")
-    else()
-        list(APPEND _anira_unload_pinned
-            "${ANIRA_LITERT_SHARED_LIB_PATH}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}${ANIRA_LITERT_LIB_BASENAME}${CMAKE_SHARED_LIBRARY_SUFFIX}")
-    endif()
-endif()
-if(ANIRA_WITH_TFLITE AND NOT ANIRA_TFLITE_IS_STATIC)
-    if(ANIRA_TFLITE_SHARED_LIB_PATH)
-        set(_anira_unload_tflite_dir "${ANIRA_TFLITE_SHARED_LIB_PATH}")
-    else()
-        set(_anira_unload_tflite_dir "${ANIRA_TENSORFLOWLITE_SHARED_LIB_PATH}")
-    endif()
-    if(WIN32)
-        list(APPEND _anira_unload_pinned "${ANIRA_TFLITE_LIB_BASENAME}.dll")
-    else()
-        list(APPEND _anira_unload_pinned
-            "${_anira_unload_tflite_dir}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}${ANIRA_TFLITE_LIB_BASENAME}${CMAKE_SHARED_LIBRARY_SUFFIX}")
-    endif()
-endif()
+endforeach()
+unset(_anira_unload_engine)
+unset(_anira_unload_ENGINE)
 # '|'-joined: a ';'-list would be split into several compile definitions.
 list(JOIN _anira_unload_pinned "|" _anira_unload_pinned_joined)
 

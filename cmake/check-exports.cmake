@@ -108,6 +108,23 @@ else()
     set(_forbid "${_itanium_forbid}")
 endif()
 
+# PE binds an import to a module by name at load time — there is no ELF-style
+# interposition and no Mach-O weak coalescing across images — so an engine symbol in
+# a DLL's export table cannot capture anyone else's call, and the invariant protects
+# nothing there. Two engines force such exports, and nothing short of a .def-only
+# export model (which cannot suppress a __declspec(dllexport)) would remove them:
+# LibTorch's headers decorate template specializations and inline members of
+# c10::/caffe2:: dllexport, so every DLL compiled against them exports them
+# (anira.dll: caffe2::TypeMeta::_typeMetaData<T>, c10::ivalue::*); and the static
+# LiteRT/TFLite archives hold objects built for the DLL, whose LiteRt*/TfLite*
+# definitions carry dllexport, so a plugin linking them exports them. Tolerated on
+# PE, and only there — the anira:: rules (nothing of a static anira leaks, the shared
+# libanira exports its API) still apply.
+set(_tolerate "")
+if(FORMAT STREQUAL "PE")
+    set(_tolerate "@(torch|c10|caffe2)@@" "^(TfLite|LiteRt)")
+endif()
+
 set(_failures "")
 
 if(LIBRARY)
@@ -116,7 +133,10 @@ if(LIBRARY)
     set(_bad "")
     foreach(_s IN LISTS _lib_exports)
         if(NOT _s MATCHES "${_allow}")
-            list(APPEND _bad "${_s}")
+            anira_matches_any("${_s}" "${_tolerate}" _tolerated)
+            if(NOT _tolerated)
+                list(APPEND _bad "${_s}")
+            endif()
         endif()
     endforeach()
     list(LENGTH _bad _nbad)
@@ -151,7 +171,10 @@ foreach(_s IN LISTS _mod_exports)
     endif()
     anira_matches_any("${_s}" "${_forbid}" _hit)
     if(_hit)
-        list(APPEND _bad "${_s}")
+        anira_matches_any("${_s}" "${_tolerate}" _tolerated)
+        if(NOT _tolerated)
+            list(APPEND _bad "${_s}")
+        endif()
     endif()
 endforeach()
 list(LENGTH _bad _nbad)
