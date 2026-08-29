@@ -407,10 +407,24 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
         }
     }
 
-    // Overwrite with custom latency if provided
+    // Overwrite with custom latency if provided. A custom value replaces the whole
+    // latency, so it must still cover the model's internal latency: the receive
+    // buffer is primed with (latency - internal_model_latency) zeros, and an
+    // unsigned underflow there would prime it with ~4G samples.
     if (custom_latency.size() == m_inference_config.get_tensor_output_shape().size()) {
         for (size_t i = 0; i < custom_latency.size(); ++i) {
-            if (custom_latency[i] >= 0) { m_latency[i] = custom_latency[i]; }
+            if (custom_latency[i] < 0) { continue; }
+            auto const internal_latency =
+                static_cast<unsigned int>(m_inference_config.get_internal_model_latency()[i]);
+            auto requested = static_cast<unsigned int>(custom_latency[i]);
+            if (m_inference_config.get_postprocess_output_size()[i] > 0 &&
+                requested < internal_latency) {
+                LOG_WARNING << "[WARNING] Custom latency " << requested << " for tensor " << i
+                            << " is below the internal model latency " << internal_latency
+                            << "; clamping." << '\n';
+                requested = internal_latency;
+            }
+            m_latency[i] = requested;
         }
     }
 
