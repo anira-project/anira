@@ -25,6 +25,7 @@ add_compile_definitions(
 add_executable(${PROJECT_NAME})
 
 target_sources(${PROJECT_NAME} PRIVATE
+	test_BackendLinkage.cpp
 	test_InferenceHandler.cpp
 	test_OneSidedStreaming.cpp
 	test_StatefulOrdering.cpp

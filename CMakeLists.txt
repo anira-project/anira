@@ -41,10 +41,12 @@ set(ANIRA_BACKENDS_VERSION "" CACHE STRING "anira-project/backends release tag t
 # reproducible builds; a backend already in modules/ is then reused as-is.
 option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for backend integrity at configure" OFF)
 
-# Backend linkage follows BUILD_SHARED_LIBS (shared anira -> shared backends, static
-# anira -> static backends). Decouple a single engine, bring your own, or use a custom
-# source via the per-engine variables (<ENGINE> = LIBTORCH | ONNXRUNTIME | TFLITE | LITERT | EXECUTORCH):
-#   -DANIRA_<ENGINE>_LINKAGE=shared|static
+# Backend linkage follows BUILD_SHARED_LIBS: a shared anira links shared backends, a
+# static anira links static backends, and an engine that does not ship the required
+# linkage (LibTorch in static builds, ExecuTorch in shared ones) is disabled with a
+# warning — see cmake/AniraValidate.cmake for why these are the only two shapes.
+# Bring your own engine, or use a custom source, via the per-engine variables
+# (<ENGINE> = LIBTORCH | ONNXRUNTIME | TFLITE | LITERT | EXECUTORCH):
 #   -DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt   (a tree with include/ + lib/)
 #   -DANIRA_<ENGINE>_URL=...  [-DANIRA_<ENGINE>_SHA256=...]
 
@@ -463,23 +465,14 @@ if(ANIRA_WITH_EXECUTORCH)
         # portable CPU execution, and their exported targets reference absolute
         # SDK paths from the machine that built the archives.
         #
-        # Two ordering/scope constraints:
-        #  * This block must come BEFORE the libtorch link block: libtorch_cpu
-        #    exports its own (different) XNNPACK, and if the torch dylibs precede
-        #    ExecuTorch's static archives on the link line, part of the delegate's
-        #    xnn_* references bind to libtorch's copy and delegate init fails at
-        #    runtime.
-        #  * The force-load options propagate to whatever links these targets, and
-        #    ExecuTorch aborts at static-init when its kernels register twice in
-        #    one process. A shared anira must therefore link them PRIVATE (the
-        #    registrations live inside libanira and consumers reach the runtime
-        #    through it); only a static anira propagates them to the consumer,
-        #    which is then the single place the runtime is linked.
-        if(BUILD_SHARED_LIBS)
-            set(ANIRA_EXECUTORCH_LINK_SCOPE PRIVATE)
-        else()
-            set(ANIRA_EXECUTORCH_LINK_SCOPE PUBLIC)
-        endif()
+        # The force-load options propagate to whatever links these targets, and
+        # ExecuTorch aborts at static-init when its kernels register twice in one
+        # process. ExecuTorch is static-only, so anira is static here
+        # (cmake/AniraValidate.cmake) and propagates them to the consumer, which is
+        # then the single place the runtime is linked. (LibTorch, whose libtorch_cpu
+        # exports a different XNNPACK that the delegate's xnn_* references could bind
+        # to, is shared-only and therefore never in the same image.)
+        set(ANIRA_EXECUTORCH_LINK_SCOPE PUBLIC)
         target_link_libraries(${PROJECT_NAME} ${ANIRA_EXECUTORCH_LINK_SCOPE}
             executorch executorch_extensions executorch_kernels xnnpack_backend)
         # The desktop archives are compiled with default visibility and (partly)
@@ -563,29 +556,6 @@ if(ANIRA_WITH_LIBTORCH)
             endif()
         endforeach()
     endif()
-endif()
-
-# Enforce the ExecuTorch-before-LibTorch ordering constraint documented above.
-# Both bundle their own XNNPACK; if the torch dylibs precede ExecuTorch's static
-# archives on the link line, part of the XNNPACK delegate's xnn_* references bind
-# to libtorch's (different) copy and delegate init fails at runtime with a bare
-# Internal error. LINK_LIBRARIES preserves the target_link_libraries call order,
-# so a future reshuffle of the two blocks above is caught here at configure time
-# instead of as a runtime failure.
-if(ANIRA_WITH_EXECUTORCH AND ANIRA_WITH_LIBTORCH AND TARGET executorch)
-    get_target_property(_anira_link_order ${PROJECT_NAME} LINK_LIBRARIES)
-    list(FIND _anira_link_order "executorch" _anira_executorch_index)
-    list(FIND _anira_link_order "torch" _anira_torch_index)
-    if(_anira_executorch_index EQUAL -1
-       OR (_anira_torch_index GREATER -1 AND _anira_executorch_index GREATER _anira_torch_index))
-        message(FATAL_ERROR
-            "anira: internal link-order violation — the ExecuTorch targets must be linked "
-            "before the LibTorch libraries (both bundle XNNPACK; see the comment at the "
-            "ExecuTorch link block). Restore the ExecuTorch block above the LibTorch block.")
-    endif()
-    unset(_anira_link_order)
-    unset(_anira_executorch_index)
-    unset(_anira_torch_index)
 endif()
 
 # Backends link PUBLIC: anira's public headers include the backend headers, and

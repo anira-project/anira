@@ -24,7 +24,6 @@
 # Configurable cache variables (see CMakeLists.txt for the user-facing options):
 #   ANIRA_BACKENDS_VERSION          release tag to download from (default v2.1.1)
 #   ANIRA_BACKENDS_SKIP_REMOTE_CHECK  skip the live integrity check (offline/reproducible)
-#   ANIRA_<ENGINE>_LINKAGE          per-engine linkage override (else follows BUILD_SHARED_LIBS)
 #   ANIRA_<ENGINE>_ROOTDIR          bring-your-own: use this prebuilt tree, skip download
 #   ANIRA_<ENGINE>_URL              override the download URL (custom mirror/build)
 #   ANIRA_<ENGINE>_SHA256           expected hash for ANIRA_<ENGINE>_URL
@@ -229,39 +228,23 @@ function(_anira_target_tokens out_os out_arch)
 endfunction()
 
 # ------------------------------------------------------------------------------
-# _anira_resolve_linkage(<id> <supported> <out>) — pick shared|static for an engine.
+# _anira_resolve_linkage(<id> <supported> <out>) — the linkage of an engine is the
+# linkage of anira itself (shared anira -> shared backends, static -> static), with
+# no per-engine override. cmake/AniraValidate.cmake has already disabled every
+# engine that does not ship the required linkage (LibTorch in static builds,
+# ExecuTorch in shared ones) and refused a shared build on the static-only platforms
+# (iOS, Emscripten), so a mismatch here is an internal error.
 # ------------------------------------------------------------------------------
 function(_anira_resolve_linkage id supported out)
-    string(TOUPPER "${id}" _ID)
-
-    if(DEFINED ANIRA_${_ID}_LINKAGE AND NOT ANIRA_${_ID}_LINKAGE STREQUAL "")
-        set(_linkage "${ANIRA_${_ID}_LINKAGE}") # per-engine override
-    elseif(BUILD_SHARED_LIBS)                   # else follow the anira library type
+    if(BUILD_SHARED_LIBS)
         set(_linkage "shared")
     else()
         set(_linkage "static")
     endif()
 
-    # WASM only ships static.
-    if(EMSDK_VERSION)
-        set(_linkage "static")
-    endif()
-
-    # iOS ships a single static xcframework regardless of BUILD_SHARED_LIBS.
-    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-        set(_linkage "static")
-    endif()
-
     if(NOT _linkage IN_LIST supported)
-        if(supported STREQUAL "shared")
-            message(STATUS "anira: ${id} ships shared-only — forcing shared linkage (requested '${_linkage}').")
-            set(_linkage "shared")
-        elseif(supported STREQUAL "static")
-            message(STATUS "anira: ${id} ships static-only — forcing static linkage (requested '${_linkage}').")
-            set(_linkage "static")
-        else()
-            message(FATAL_ERROR "anira: ${id} does not support '${_linkage}' linkage (supported: ${supported}).")
-        endif()
+        message(FATAL_ERROR "anira: internal error — ${id} ships ${supported} only, but a ${_linkage} "
+                            "anira is being configured; cmake/AniraValidate.cmake should have disabled it.")
     endif()
 
     set(${out} "${_linkage}" PARENT_SCOPE)
@@ -620,7 +603,6 @@ macro(anira_setup_backend id)
         set(LIBTORCH_ROOTDIR "${_ab_rootdir}")
         set(ANIRA_LIBTORCH_ROOTDIR "${_ab_rootdir}")
         set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
-        set(ANIRA_LIBTORCH_LINKAGE "shared")
     elseif(_ab_id STREQUAL "executorch" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         # The ExecuTorch desktop archives ship the full ExecuTorch CMake package
         # (lib/cmake/ExecuTorch), which exports each static library together with
@@ -674,7 +656,6 @@ macro(anira_setup_backend id)
         unset(_ab_loc)
         _anira_sanitize_executorch_targets()
         set(ANIRA_EXECUTORCH_ROOTDIR "${_ab_rootdir}")
-        set(ANIRA_EXECUTORCH_LINKAGE "static")
         set(ANIRA_EXECUTORCH_IS_STATIC TRUE)
         set(ANIRA_EXECUTORCH_LIB_BASENAME "executorch")
         set(ANIRA_EXECUTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
@@ -684,7 +665,6 @@ macro(anira_setup_backend id)
         # target (see CMakeLists.txt) gets them, explicitly.
     elseif(_ab_arch STREQUAL "armv7l")
         # legacy macro already populated header/lib dirs + ANIRA_<ID>_* vars
-        set(ANIRA_${_ab_ID}_LINKAGE "${_ab_linkage}")
     else()
         # onnxruntime / tflite / litert: uniform include/ + lib/ on desktop/WASM,
         # with per-ABI (Android) and per-xcframework-slice (iOS) layouts handled below.
@@ -694,7 +674,6 @@ macro(anira_setup_backend id)
             set(ANIRA_${_ab_ID}_IS_STATIC FALSE)
         endif()
         set(ANIRA_${_ab_ID}_ROOTDIR "${_ab_rootdir}")
-        set(ANIRA_${_ab_ID}_LINKAGE "${_ab_linkage}")
         set(ANIRA_${_ab_ID}_LIB_BASENAME "${_ab_libname}")
         # legacy shared-lib-path var consumed by msvc-support / BuildWasm / examples
         set(ANIRA_${_ab_ID}_SHARED_LIB_PATH "${_ab_rootdir}")

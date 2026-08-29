@@ -18,12 +18,48 @@ if(ANIRA_WITH_TFLITE AND ANIRA_WITH_LITERT)
         "-DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON.")
 endif()
 
-# LibTorch ships shared-only upstream (and its bundled XNNPACK collides with static
-# LiteRT), so it cannot be linked into a fully static anira. Auto-disable it there.
-if(NOT BUILD_SHARED_LIBS AND ANIRA_WITH_LIBTORCH)
-    message(WARNING "LibTorch is shared-only and cannot be linked into a fully static anira build "
-                    "(BUILD_SHARED_LIBS=OFF); disabling ANIRA_WITH_LIBTORCH. Build shared to use LibTorch.")
+# ------------------------------------------------------------------------------
+# Backend linkage follows the library type, with no per-engine override: a shared
+# anira links shared backends, a static anira links static backends
+# (ANIRA_BACKEND_LINKAGE). These are the only two shapes anira supports, because they
+# are the only ones in which every engine exists exactly once per process and a
+# consumer can still reach it: a shared anira that absorbed a static engine could
+# neither hand that engine to a consumer (its symbols are hidden inside libanira) nor
+# keep a consumer's own copy of it from becoming a second instance. An engine whose
+# prebuilt archives do not ship the required linkage is disabled with a warning:
+#   * LibTorch ships shared-only (and its bundled XNNPACK collides with static LiteRT).
+#   * ExecuTorch ships static-only (a force-loaded runtime that aborts when its
+#     kernels register twice in one process).
+# The rule is checked once more at compile time by the BackendLinkage test.
+# ------------------------------------------------------------------------------
+if(BUILD_SHARED_LIBS)
+    set(ANIRA_BACKEND_LINKAGE "shared")
+else()
+    set(ANIRA_BACKEND_LINKAGE "static")
+endif()
+
+# iOS ships a single static xcframework per engine and Emscripten links everything
+# into one wasm module: neither has a shared shape, so demand the static one
+# explicitly instead of silently building something else than what was asked for.
+if(BUILD_SHARED_LIBS AND (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR DEFINED EMSDK_VERSION))
+    message(FATAL_ERROR "anira is static-only on iOS and Emscripten (the backends ship static "
+                        "archives only there): configure with -DBUILD_SHARED_LIBS=OFF.")
+endif()
+
+# The messages start with the "disabling ..." phrase on purpose: CMake wraps message
+# text, and build_test.yml greps the configure output for exactly that phrase.
+if(ANIRA_WITH_LIBTORCH AND NOT ANIRA_BACKEND_LINKAGE STREQUAL "shared")
+    message(WARNING "disabling ANIRA_WITH_LIBTORCH: LibTorch is shared-only and cannot be linked "
+                    "into a fully static anira build (BUILD_SHARED_LIBS=OFF). Build shared to use LibTorch.")
     set(ANIRA_WITH_LIBTORCH OFF)
+endif()
+
+if(ANIRA_WITH_EXECUTORCH AND NOT ANIRA_BACKEND_LINKAGE STREQUAL "static")
+    message(WARNING "disabling ANIRA_WITH_EXECUTORCH: ExecuTorch is static-only and cannot be linked "
+                    "into a shared anira build (BUILD_SHARED_LIBS=ON) — anira links its backends in "
+                    "the linkage of the library itself, so that every engine exists exactly once per "
+                    "process. Build static (-DBUILD_SHARED_LIBS=OFF) to use ExecuTorch.")
+    set(ANIRA_WITH_EXECUTORCH OFF)
 endif()
 
 # Android / iOS: the anira backends release ships no LibTorch mobile build (LibTorch
