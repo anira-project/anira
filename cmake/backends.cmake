@@ -440,17 +440,31 @@ function(_anira_locate_shared_lib libdir rootdir libname out_location out_implib
     set(_implib "")
     if(WIN32)
         set(_implib "${libdir}/${libname}${CMAKE_STATIC_LIBRARY_SUFFIX}")
-        set(_location "${libdir}/${libname}.dll")
-        if(NOT EXISTS "${_location}")
-            file(GLOB_RECURSE _dlls "${rootdir}/${libname}.dll")
-            if(_dlls)
-                list(GET _dlls 0 _location)
-            else()
-                set(_location "")
-            endif()
-        endif()
         if(NOT EXISTS "${_implib}")
             message(FATAL_ERROR "anira: import library of ${libname} not found at ${_implib}")
+        endif()
+        # The DLL is not named uniformly across the backends archives: onnxruntime.dll
+        # next to onnxruntime.lib, but libLiteRt.dll next to LiteRt.lib. Try both
+        # spellings in lib/, then anywhere below the root.
+        set(_location "")
+        foreach(_candidate "${libdir}/${libname}.dll" "${libdir}/lib${libname}.dll")
+            if(EXISTS "${_candidate}")
+                set(_location "${_candidate}")
+                break()
+            endif()
+        endforeach()
+        if(_location STREQUAL "")
+            file(GLOB_RECURSE _dlls "${rootdir}/${libname}.dll" "${rootdir}/lib${libname}.dll")
+            if(_dlls)
+                list(GET _dlls 0 _location)
+            endif()
+        endif()
+        if(_location STREQUAL "")
+            # The archives always ship the DLL; a target without IMPORTED_LOCATION
+            # would only surface later as a '-NOTFOUND' $<TARGET_FILE> or a missing
+            # runtime, so fail here with the name that was looked for.
+            message(FATAL_ERROR "anira: DLL of ${libname} not found below ${rootdir} "
+                                "(looked for ${libname}.dll and lib${libname}.dll)")
         endif()
     else()
         set(_location "${libdir}/${CMAKE_SHARED_LIBRARY_PREFIX}${libname}${CMAKE_SHARED_LIBRARY_SUFFIX}")
