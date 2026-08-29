@@ -15,8 +15,10 @@
 # This anira: @ANIRA_BACKEND_LINKAGE@ backends (BUILD_SHARED_LIBS=@BUILD_SHARED_LIBS@).
 
 set(_anira_libdir "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@")
+set(_anira_bindir "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@")
 set(_anira_incdir "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@/anira-backends")
 
 @ANIRA_INSTALLED_BACKEND_TARGETS@
 unset(_anira_libdir)
+unset(_anira_bindir)
 unset(_anira_incdir)

@@ -63,14 +63,17 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/anira
 )
 
 # install the target and create export-set
+# GNUInstallDirs layout: shared libraries into the libdir; on Windows the DLL is a
+# RUNTIME artifact and goes to the bindir next to the executables (where the loader
+# looks), the import library into the libdir. tanh_core.dll and the engine DLLs
+# (below) follow the same rule, so one directory — bin/ — holds every DLL.
 install(TARGETS ${PROJECT_NAME} concurrentqueue nlohmann_json
     EXPORT "aniraTargets"
-    # these get default values from GNUInstallDirs
-    RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR} # .dll files 
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} # .dll files
     COMPONENT runtime
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} # .so or .dylib files
     COMPONENT runtime NAMELINK_COMPONENT dev
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} # .lib files
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} # .a or .lib (import library) files
     COMPONENT dev
 )
 
@@ -90,20 +93,55 @@ install(TARGETS ${PROJECT_NAME} concurrentqueue nlohmann_json
 set(_anira_backend_incdir "${CMAKE_INSTALL_INCLUDEDIR}/anira-backends")
 
 # ------------------------------------------------------------------------------
+# _anira_install_engine_libs(<rootdir> [EXCLUDE_CMAKE]) — an engine's lib/ tree into
+# the libdir. On Windows the DLLs go to the bindir instead — import libraries and
+# static archives stay in lib/ — like anira.dll and tanh_core.dll, so that the
+# loader finds every DLL next to the executables and a consumer needs one
+# directory on PATH, not two. (A few archives keep their DLLs in a bin/ of their
+# own; those go to the bindir as well.) EXCLUDE_CMAKE leaves out a lib/cmake
+# package, which _anira_install_cmake_package installs separately.
+# ------------------------------------------------------------------------------
+function(_anira_install_engine_libs rootdir)
+    cmake_parse_arguments(PARSE_ARGV 1 _ael "EXCLUDE_CMAKE" "" "")
+    set(_exclude "")
+    if(_ael_EXCLUDE_CMAKE)
+        set(_exclude PATTERN "cmake" EXCLUDE)
+    endif()
+    if(WIN32)
+        install(DIRECTORY "${rootdir}/lib/" DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+            COMPONENT deps-backends ${_exclude} PATTERN "*.dll" EXCLUDE)
+        install(DIRECTORY "${rootdir}/lib/" DESTINATION "${CMAKE_INSTALL_BINDIR}"
+            COMPONENT deps-backends FILES_MATCHING ${_exclude} PATTERN "*.dll")
+        if(IS_DIRECTORY "${rootdir}/bin")
+            install(DIRECTORY "${rootdir}/bin/" DESTINATION "${CMAKE_INSTALL_BINDIR}"
+                COMPONENT deps-backends FILES_MATCHING PATTERN "*.dll")
+        endif()
+    else()
+        install(DIRECTORY "${rootdir}/lib/" DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+            COMPONENT deps-backends ${_exclude})
+    endif()
+endfunction()
+
+# ------------------------------------------------------------------------------
 # _anira_install_cmake_package(<id> <src> <dest>) — install an engine's own CMake
 # package directory (LibTorch's share/cmake, ExecuTorch's lib/cmake) to <dest>
 # under the prefix. Those packages locate their libraries relative to their own
 # file as <prefix>/lib/... (Caffe2Targets/ExecuTorchTargets: ${_IMPORT_PREFIX}/lib/,
-# TorchConfig: ${TORCH_INSTALL_PREFIX}/lib), which is only right when the install
-# libdir is "lib". On hosts where GNUInstallDirs picks lib64 (Fedora) anira
-# installs the engine libraries into lib64 like everything else — a second
-# library directory would break libanira's $ORIGIN rpath and every consumer's
-# runtime search — so it installs patched copies of the package files that say
-# lib64 instead. The patch is a literal replacement of those two spellings and a
-# no-op (plain directory install) on "lib" hosts.
+# TorchConfig: ${TORCH_INSTALL_PREFIX}/lib), which is only right when everything
+# is in "lib". Two layouts differ, and anira installs patched copies of the
+# package files for them instead of bending its own layout to the packages:
+#  * hosts where GNUInstallDirs picks lib64 (Fedora): the engine libraries go to
+#    lib64 like everything else — a second library directory would break
+#    libanira's $ORIGIN rpath and every consumer's runtime search — so "lib"
+#    becomes the libdir in the package files;
+#  * Windows: the DLLs go to the bindir (_anira_install_engine_libs), so a DLL's
+#    IMPORTED_LOCATION becomes ${_IMPORT_PREFIX}/bin/<name>.dll; import libraries
+#    stay in lib/.
+# The patch is a literal replacement of those spellings and a plain directory
+# install where neither applies.
 # ------------------------------------------------------------------------------
 function(_anira_install_cmake_package id src dest)
-    if(CMAKE_INSTALL_LIBDIR STREQUAL "lib")
+    if(NOT WIN32 AND CMAKE_INSTALL_LIBDIR STREQUAL "lib")
         install(DIRECTORY "${src}/" DESTINATION "${dest}" COMPONENT deps-backends)
         return()
     endif()
@@ -113,6 +151,10 @@ function(_anira_install_cmake_package id src dest)
     foreach(_rel IN LISTS _files)
         if(_rel MATCHES "\\.cmake$")
             file(READ "${src}/${_rel}" _content)
+            if(WIN32)
+                string(REGEX REPLACE "\\$\\{_IMPORT_PREFIX\\}/lib/([^\"]*\\.dll\")"
+                    "\${_IMPORT_PREFIX}/${CMAKE_INSTALL_BINDIR}/\\1" _content "${_content}")
+            endif()
             string(REPLACE "\${_IMPORT_PREFIX}/lib/" "\${_IMPORT_PREFIX}/${CMAKE_INSTALL_LIBDIR}/"
                 _content "${_content}")
             string(REPLACE "\${TORCH_INSTALL_PREFIX}/lib\"" "\${TORCH_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\""
@@ -131,8 +173,7 @@ if(ANIRA_WITH_LIBTORCH)
     # headers (TorchConfig.cmake hardwires them to <prefix>/include).
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/include/"
         DESTINATION "${_anira_backend_incdir}/libtorch" COMPONENT deps-backends)
-    install(DIRECTORY "${LIBTORCH_ROOTDIR}/lib/"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
+    _anira_install_engine_libs("${LIBTORCH_ROOTDIR}")
     _anira_install_cmake_package(libtorch "${LIBTORCH_ROOTDIR}/share/cmake" "${CMAKE_INSTALL_LIBDIR}/cmake")
 endif()
 
@@ -152,8 +193,7 @@ if(ANIRA_WITH_ONNXRUNTIME)
             install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/include/"
                 DESTINATION "${_anira_backend_incdir}/onnxruntime" COMPONENT deps-backends)
         endif()
-        install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/lib/"
-            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
+        _anira_install_engine_libs("${ANIRA_ONNXRUNTIME_ROOTDIR}")
     endif()
 endif()
 
@@ -174,8 +214,7 @@ if(ANIRA_WITH_TFLITE)
     else()
         install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/include/"
             DESTINATION "${_anira_backend_incdir}/tflite" COMPONENT deps-backends)
-        install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/lib/"
-            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
+        _anira_install_engine_libs("${ANIRA_TFLITE_ROOTDIR}")
     endif()
 endif()
 
@@ -188,8 +227,7 @@ if(ANIRA_WITH_LITERT)
     else()
         install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/include/"
             DESTINATION "${_anira_backend_incdir}/litert" COMPONENT deps-backends)
-        install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/lib/"
-            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
+        _anira_install_engine_libs("${ANIRA_LITERT_ROOTDIR}")
     endif()
 endif()
 
@@ -206,9 +244,7 @@ if(ANIRA_WITH_EXECUTORCH)
         # analogous to LibTorch above, and installed through the same libdir patch.
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/include/"
             DESTINATION "${_anira_backend_incdir}/executorch" COMPONENT deps-backends)
-        install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/lib/"
-            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends
-            PATTERN "cmake" EXCLUDE)
+        _anira_install_engine_libs("${ANIRA_EXECUTORCH_ROOTDIR}" EXCLUDE_CMAKE)
         _anira_install_cmake_package(executorch "${ANIRA_EXECUTORCH_ROOTDIR}/lib/cmake" "${CMAKE_INSTALL_LIBDIR}/cmake")
     endif()
 endif()
@@ -236,9 +272,16 @@ foreach(_engine onnxruntime tflite litert)
             "    LOCATION \"\${_anira_libdir}/${ANIRA_${_ENGINE}_STATIC_LIB_SUBPATH}\"\n"
             "    INCLUDE_DIRS \"\${_anira_incdir}/${_engine}\"${_defs})\n")
     else()
+        # The shared library sits in the libdir — on Windows, where it is a DLL, in the
+        # bindir (_anira_install_engine_libs); the import library stays in the libdir.
+        if(WIN32)
+            set(_location_dir "\${_anira_bindir}")
+        else()
+            set(_location_dir "\${_anira_libdir}")
+        endif()
         set(_location "")
         if(ANIRA_${_ENGINE}_SHARED_LIB_SUBPATH)
-            set(_location "\n    LOCATION \"\${_anira_libdir}/${ANIRA_${_ENGINE}_SHARED_LIB_SUBPATH}\"")
+            set(_location "\n    LOCATION \"${_location_dir}/${ANIRA_${_ENGINE}_SHARED_LIB_SUBPATH}\"")
         endif()
         set(_implib "")
         if(ANIRA_${_ENGINE}_IMPLIB_SUBPATH)
@@ -253,6 +296,7 @@ unset(_engine)
 unset(_ENGINE)
 unset(_defs)
 unset(_location)
+unset(_location_dir)
 unset(_implib)
 
 if(ANIRA_WITH_LIBTORCH)

@@ -88,9 +88,10 @@ jobs:
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             cmake -S test/install -B build-consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"
             cmake --build build-consumer --config Release --parallel
-            # anira.dll installs to lib/ (anira's convention), tanh_core.dll to bin/.
-            PATH="$PWD/prefix/bin:$PWD/prefix/lib:$PATH" ./build-consumer/Release/consumer.exe
-            PATH="$PWD/prefix/bin:$PWD/prefix/lib:$PATH" ./build-consumer/Release/consumer_engine.exe
+            # Every DLL (anira, the engines, tanh_core) installs to bin/; only bin/ goes
+            # on PATH so that the run also proves the layout.
+            PATH="$PWD/prefix/bin:$PATH" ./build-consumer/Release/consumer.exe
+            PATH="$PWD/prefix/bin:$PATH" ./build-consumer/Release/consumer_engine.exe
           else
             cmake -S test/install -B build-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"
             cmake --build build-consumer --parallel

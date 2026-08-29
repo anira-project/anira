@@ -712,19 +712,24 @@ macro(anira_setup_backend id)
             anira_define_backend_target(${_ab_id} SHARED GLOBAL
                 LOCATION "${_ab_shared_lib}" IMPLIB "${_ab_implib}"
                 INCLUDE_DIRS ${_ab_incdir})
-            # Paths under the install libdir (install.cmake copies lib/ as-is), for the
-            # installed package's definition of the same target. Empty when the file
-            # lives outside lib/ and is therefore not installed.
+            # Paths under the install libdir (install.cmake copies lib/ as-is; on Windows
+            # the DLLs of lib/ and bin/ land in the bindir under the same relative path),
+            # for the installed package's definition of the same target. Empty when the
+            # file lives elsewhere and is therefore not installed.
             foreach(_ab_kind shared_lib implib)
                 string(TOUPPER "${_ab_kind}" _ab_KIND)
                 set(ANIRA_${_ab_ID}_${_ab_KIND}_SUBPATH "")
                 if(NOT _ab_${_ab_kind} STREQUAL "")
-                    file(RELATIVE_PATH _ab_rel "${_ab_rootdir}/lib" "${_ab_${_ab_kind}}")
-                    if(NOT _ab_rel MATCHES "^\\.\\.")
-                        set(ANIRA_${_ab_ID}_${_ab_KIND}_SUBPATH "${_ab_rel}")
-                    endif()
+                    foreach(_ab_dir lib bin)
+                        file(RELATIVE_PATH _ab_rel "${_ab_rootdir}/${_ab_dir}" "${_ab_${_ab_kind}}")
+                        if(NOT _ab_rel MATCHES "^\\.\\.")
+                            set(ANIRA_${_ab_ID}_${_ab_KIND}_SUBPATH "${_ab_rel}")
+                            break()
+                        endif()
+                    endforeach()
                 endif()
             endforeach()
+            unset(_ab_dir)
             unset(_ab_kind)
             unset(_ab_KIND)
             unset(_ab_rel)
