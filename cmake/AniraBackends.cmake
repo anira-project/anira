@@ -21,6 +21,12 @@
 #
 # Per call:  anira_setup_backend(<id>)        id = libtorch|onnxruntime|tflite|litert|executorch
 #
+# Every call ends by defining the engine's imported target anira::<id>
+# (aniraBackendHelpers.cmake): the file anira links, with the engine's include
+# directories and definitions as usage requirements. anira links it PRIVATE; a
+# consumer that calls the engine itself links anira::<id> explicitly. The installed
+# package defines the same targets from the install prefix (install.cmake).
+#
 # Configurable cache variables (see CMakeLists.txt for the user-facing options):
 #   ANIRA_BACKENDS_VERSION          release tag to download from (default v2.1.1)
 #   ANIRA_BACKENDS_SKIP_REMOTE_CHECK  skip the live integrity check (offline/reproducible)
@@ -36,6 +42,10 @@ include_guard(GLOBAL)
 # Repo-relative locations resolved once, robust to anira being a subproject.
 get_filename_component(ANIRA_BACKENDS_CMAKE_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
 get_filename_component(ANIRA_BACKENDS_MODULES_DIR "${ANIRA_BACKENDS_CMAKE_DIR}/../modules" ABSOLUTE)
+
+# anira_define_backend_target() and the ExecuTorch package helpers — shared with the
+# installed package, which ships the file next to aniraConfig.cmake.
+include("${ANIRA_BACKENDS_CMAKE_DIR}/aniraBackendHelpers.cmake")
 
 # Default backends release tag. Bump this (and the per-engine versions in
 # _anira_engine_version) when pointing anira at a new anira-project/backends release.
@@ -373,7 +383,8 @@ endfunction()
 # ------------------------------------------------------------------------------
 # _anira_setup_legacy_armv7l(<id>) — preserved pre-backends download paths for
 # 32-bit ARM (Bela). backends does not publish armv7l; these upstream mirrors do.
-# Sets ANIRA_<ID>_ROOTDIR + appends header/lib dirs in the calling scope.
+# Sets ANIRA_<ID>_ROOTDIR (+ _ab_incdir/_ab_libdir for the engines without a CMake
+# package) in the calling scope; the caller defines anira::<id> from those.
 # ------------------------------------------------------------------------------
 macro(_anira_setup_legacy_armv7l id)
     set(_la_id "${id}") # macro arg -> real variable for if() comparisons
@@ -386,12 +397,9 @@ macro(_anira_setup_legacy_armv7l id)
             "" "${_dir}" "pytorch-v${_lver}.tar.gz" TRUE)
         list(APPEND CMAKE_PREFIX_PATH "${_dir}")
         find_package(Torch REQUIRED)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
         set(LIBTORCH_ROOTDIR "${_dir}")
         set(ANIRA_LIBTORCH_ROOTDIR "${_dir}")
         set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${_dir}")
-        list(APPEND BACKEND_BUILD_HEADER_DIRS "${_dir}/include")
-        list(APPEND BACKEND_BUILD_HEADER_DIRS "${_dir}/include/torch/csrc/api/include")
     elseif(_la_id STREQUAL "onnxruntime")
         set(_lver "1.19.2")
         set(_dir "${ANIRA_BACKENDS_MODULES_DIR}/onnxruntime-${_lver}-Linux-armv7l")
@@ -402,8 +410,8 @@ macro(_anira_setup_legacy_armv7l id)
         set(ANIRA_ONNXRUNTIME_SHARED_LIB_PATH "${_dir}")
         set(ANIRA_ONNXRUNTIME_LIB_BASENAME "onnxruntime")
         set(ANIRA_ONNXRUNTIME_IS_STATIC FALSE)
-        list(APPEND BACKEND_BUILD_HEADER_DIRS "${_dir}/include/onnxruntime")
-        list(APPEND BACKEND_BUILD_LIBRARY_DIRS "${_dir}/lib")
+        set(_ab_incdir "${_dir}/include/onnxruntime")
+        set(_ab_libdir "${_dir}/lib")
     elseif(_la_id STREQUAL "tflite")
         set(_lver "2.17.0")
         set(_dir "${ANIRA_BACKENDS_MODULES_DIR}/tensorflowlite-${_lver}-Linux-armv7l")
@@ -414,82 +422,44 @@ macro(_anira_setup_legacy_armv7l id)
         set(ANIRA_TENSORFLOWLITE_SHARED_LIB_PATH "${_dir}")
         set(ANIRA_TFLITE_LIB_BASENAME "tensorflowlite_c")
         set(ANIRA_TFLITE_IS_STATIC FALSE)
-        list(APPEND BACKEND_BUILD_HEADER_DIRS "${_dir}/include")
-        list(APPEND BACKEND_BUILD_LIBRARY_DIRS "${_dir}/lib")
+        set(_ab_incdir "${_dir}/include")
+        set(_ab_libdir "${_dir}/lib")
     else()
         message(FATAL_ERROR "anira: ${id} has no armv7l (Bela) build.")
     endif()
 endmacro()
 
 # ------------------------------------------------------------------------------
-# _anira_sanitize_executorch_targets() — clean up the ExecuTorch package's exported
-# targets for use inside anira:
-#
-#  * They bake absolute system-library paths from the machine that built the
-#    archives into their INTERFACE_LINK_LIBRARIES (e.g.
-#    .../MacOSX15.5.sdk/usr/lib/libm.tbd, .../Frameworks/Foundation.framework,
-#    or Debian's multiarch /usr/lib/aarch64-linux-gnu/libm.so). Those paths
-#    rarely exist on the consuming machine (Fedora keeps libm in /usr/lib64), so
-#    rewrite them into portable equivalents the consumer's toolchain resolves:
-#    <sdk>/lib<name>.tbd -> <name>, /usr/lib[/<multiarch>]/lib<name>.so -> <name>,
-#    and <path>/<Name>.framework -> -framework <Name>.
-#
-#  * They carry compile usage requirements (include dirs — among them ExecuTorch's
-#    VENDORED c10 headers — compile definitions and options) that would leak into
-#    every TU of a target linking them. The vendored c10 headers shadow LibTorch's
-#    real c10 on MSVC (and C10_USING_CUSTOM_GENERATED_MACROS would corrupt the real
-#    c10's configuration), breaking the LibTorch backend. So strip all compile-side
-#    usage requirements — only ExecuTorchProcessor.cpp needs them, and it is
-#    compiled in an isolated object target with explicit include dirs. The compile
-#    definitions the headers DO need (collected before clearing) are exposed as
-#    ANIRA_EXECUTORCH_COMPILE_DEFINITIONS for that object target (and the
-#    minimal-executorch example) to apply explicitly.
+# _anira_locate_shared_lib(<libdir> <rootdir> <libname> <out-location> <out-implib>)
+# — the file(s) a shared engine is linked through: lib<name>.so / .dylib in <libdir>
+# on Unix; on Windows the import library <name>.lib in <libdir> and the DLL, which
+# is looked up anywhere below <rootdir> (the backends archives are not uniform about
+# its directory). A missing DLL is not fatal: linking needs the import library only.
 # ------------------------------------------------------------------------------
-function(_anira_sanitize_executorch_targets)
-    get_property(_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY IMPORTED_TARGETS)
-    set(_defs "")
-    foreach(_tgt IN LISTS _targets)
-        get_target_property(_tgt_defs "${_tgt}" INTERFACE_COMPILE_DEFINITIONS)
-        if(_tgt_defs)
-            list(APPEND _defs ${_tgt_defs})
-        endif()
-    endforeach()
-    list(REMOVE_DUPLICATES _defs)
-    set(ANIRA_EXECUTORCH_COMPILE_DEFINITIONS "${_defs}" PARENT_SCOPE)
-    foreach(_tgt IN LISTS _targets)
-        set_target_properties("${_tgt}" PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES ""
-            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ""
-            INTERFACE_COMPILE_OPTIONS ""
-            INTERFACE_COMPILE_DEFINITIONS "")
-        get_target_property(_libs "${_tgt}" INTERFACE_LINK_LIBRARIES)
-        if(NOT _libs)
-            continue()
-        endif()
-        set(_rewritten "")
-        set(_changed FALSE)
-        foreach(_lib IN LISTS _libs)
-            if(_lib MATCHES "^/.*/([A-Za-z0-9_]+)\\.framework$")
-                list(APPEND _rewritten "-framework ${CMAKE_MATCH_1}")
-                set(_changed TRUE)
-            elseif(_lib MATCHES "^/.*/lib([A-Za-z0-9_.+-]+)\\.tbd$")
-                list(APPEND _rewritten "${CMAKE_MATCH_1}")
-                set(_changed TRUE)
-            elseif(_lib MATCHES "^/usr/lib(64)?(/[A-Za-z0-9_-]+)?/lib([A-Za-z0-9_+-]+)\\.so(\\.[0-9.]+)?$")
-                # Linux system library referenced by absolute path from the build
-                # machine (e.g. Debian multiarch /usr/lib/aarch64-linux-gnu/libm.so).
-                # Keep only the library name so the consumer's toolchain resolves it
-                # (-lm) and no bogus -L / rpath entries leak into the link line.
-                list(APPEND _rewritten "${CMAKE_MATCH_3}")
-                set(_changed TRUE)
+function(_anira_locate_shared_lib libdir rootdir libname out_location out_implib)
+    set(_implib "")
+    if(WIN32)
+        set(_implib "${libdir}/${libname}${CMAKE_STATIC_LIBRARY_SUFFIX}")
+        set(_location "${libdir}/${libname}.dll")
+        if(NOT EXISTS "${_location}")
+            file(GLOB_RECURSE _dlls "${rootdir}/${libname}.dll")
+            if(_dlls)
+                list(GET _dlls 0 _location)
             else()
-                list(APPEND _rewritten "${_lib}")
+                set(_location "")
             endif()
-        endforeach()
-        if(_changed)
-            set_target_properties("${_tgt}" PROPERTIES INTERFACE_LINK_LIBRARIES "${_rewritten}")
         endif()
-    endforeach()
+        if(NOT EXISTS "${_implib}")
+            message(FATAL_ERROR "anira: import library of ${libname} not found at ${_implib}")
+        endif()
+    else()
+        set(_location "${libdir}/${CMAKE_SHARED_LIBRARY_PREFIX}${libname}${CMAKE_SHARED_LIBRARY_SUFFIX}")
+        if(NOT EXISTS "${_location}")
+            message(FATAL_ERROR "anira: shared library of ${libname} not found at ${_location}")
+        endif()
+    endif()
+    set(${out_location} "${_location}" PARENT_SCOPE)
+    set(${out_implib} "${_implib}" PARENT_SCOPE)
 endfunction()
 
 # ==============================================================================
@@ -589,9 +559,6 @@ macro(anira_setup_backend id)
         if(_ab_byo STREQUAL "" AND NOT _ab_arch STREQUAL "armv7l")
             list(APPEND CMAKE_PREFIX_PATH "${_ab_rootdir}")
             find_package(Torch REQUIRED)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
-            list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_rootdir}/include")
-            list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_rootdir}/include/torch/csrc/api/include")
         endif()
         # -w silences the (many) warnings from the prebuilt torch headers.
         if(TARGET torch)
@@ -603,6 +570,17 @@ macro(anira_setup_backend id)
         set(LIBTORCH_ROOTDIR "${_ab_rootdir}")
         set(ANIRA_LIBTORCH_ROOTDIR "${_ab_rootdir}")
         set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
+        # anira::libtorch wraps the package: torch + torch_library + what
+        # find_package(Torch) lists by absolute path (libc10, libkineto, ...), with the
+        # two-level include layout. TORCH_CXX_FLAGS (the libstdc++ ABI switch) rides
+        # on the torch target's interface; CMakeLists.txt additionally makes it a
+        # PUBLIC requirement of anira, since it decides anira's own std:: ABI.
+        set(_ab_torch_libs torch torch_library ${TORCH_LIBRARIES})
+        list(REMOVE_DUPLICATES _ab_torch_libs)
+        anira_define_backend_target(libtorch INTERFACE GLOBAL
+            LINK_LIBRARIES ${_ab_torch_libs}
+            INCLUDE_DIRS "${_ab_rootdir}/include" "${_ab_rootdir}/include/torch/csrc/api/include")
+        unset(_ab_torch_libs)
     elseif(_ab_id STREQUAL "executorch" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         # The ExecuTorch desktop archives ship the full ExecuTorch CMake package
         # (lib/cmake/ExecuTorch), which exports each static library together with
@@ -614,57 +592,27 @@ macro(anira_setup_backend id)
             message(FATAL_ERROR "anira: the ExecuTorch backend requires CMake >= 3.24 "
                                 "(demanded by ExecuTorch's exported package config).")
         endif()
-        # Imported targets are directory-scoped. A static anira links the
-        # ExecuTorch targets PUBLIC (the kernel registrations must reach the
-        # final image), so when anira is a subproject the consumer's directory
-        # must be able to resolve them too — promote everything the package
-        # imported to global.
-        get_property(_ab_imported_before DIRECTORY PROPERTY IMPORTED_TARGETS)
-        find_package(executorch REQUIRED CONFIG PATHS "${_ab_rootdir}/lib/cmake/ExecuTorch" NO_DEFAULT_PATH)
-        get_property(_ab_imported_after DIRECTORY PROPERTY IMPORTED_TARGETS)
-        if(_ab_imported_before)
-            list(REMOVE_ITEM _ab_imported_after ${_ab_imported_before})
-        endif()
-        # While at it, collect the basenames of every static archive the package
-        # imported: CMakeLists.txt localizes them with --exclude-libs (ELF) so that
-        # their default-visibility symbols never become dynamic exports.
-        set(ANIRA_EXECUTORCH_ARCHIVES "")
-        foreach(_ab_tgt IN LISTS _ab_imported_after)
-            set_target_properties(${_ab_tgt} PROPERTIES IMPORTED_GLOBAL TRUE)
-            get_target_property(_ab_tgt_type ${_ab_tgt} TYPE)
-            if(_ab_tgt_type STREQUAL "STATIC_LIBRARY")
-                get_target_property(_ab_tgt_configs ${_ab_tgt} IMPORTED_CONFIGURATIONS)
-                set(_ab_tgt_props IMPORTED_LOCATION)
-                foreach(_ab_cfg IN LISTS _ab_tgt_configs)
-                    list(APPEND _ab_tgt_props "IMPORTED_LOCATION_${_ab_cfg}")
-                endforeach()
-                foreach(_ab_prop IN LISTS _ab_tgt_props)
-                    get_target_property(_ab_loc ${_ab_tgt} ${_ab_prop})
-                    if(_ab_loc)
-                        get_filename_component(_ab_loc "${_ab_loc}" NAME)
-                        list(APPEND ANIRA_EXECUTORCH_ARCHIVES "${_ab_loc}")
-                    endif()
-                endforeach()
-            endif()
-        endforeach()
-        list(REMOVE_DUPLICATES ANIRA_EXECUTORCH_ARCHIVES)
-        unset(_ab_tgt_type)
-        unset(_ab_tgt_configs)
-        unset(_ab_tgt_props)
-        unset(_ab_cfg)
-        unset(_ab_prop)
-        unset(_ab_loc)
-        _anira_sanitize_executorch_targets()
+        # Imports the package (its targets promoted to GLOBAL: a static anira hands
+        # them to its consumer, possibly in another directory, as $<LINK_ONLY:...>),
+        # sanitizes its usage requirements and collects the archive basenames the ELF
+        # --exclude-libs of anira::executorch needs and the compile definitions its
+        # headers need — see aniraBackendHelpers.cmake.
+        anira_find_executorch_package("${_ab_rootdir}/lib/cmake/ExecuTorch"
+            _ab_executorch_targets ANIRA_EXECUTORCH_ARCHIVES ANIRA_EXECUTORCH_COMPILE_DEFINITIONS)
+        unset(_ab_executorch_targets)
         set(ANIRA_EXECUTORCH_ROOTDIR "${_ab_rootdir}")
         set(ANIRA_EXECUTORCH_IS_STATIC TRUE)
         set(ANIRA_EXECUTORCH_LIB_BASENAME "executorch")
         set(ANIRA_EXECUTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
-        # NB: the ExecuTorch include dirs are deliberately NOT added to
-        # BACKEND_BUILD_HEADER_DIRS — its vendored c10 headers must never be visible
-        # to the LibTorch backend's TUs. Only the isolated ExecuTorchProcessor object
-        # target (see CMakeLists.txt) gets them, explicitly.
+        anira_define_executorch_target("${_ab_rootdir}/include"
+            "${ANIRA_EXECUTORCH_ARCHIVES}" "${ANIRA_EXECUTORCH_COMPILE_DEFINITIONS}" GLOBAL)
     elseif(_ab_arch STREQUAL "armv7l")
-        # legacy macro already populated header/lib dirs + ANIRA_<ID>_* vars
+        # The legacy macro set ANIRA_<ID>_* plus _ab_incdir/_ab_libdir (shared engines only).
+        _anira_locate_shared_lib("${_ab_libdir}" "${_ab_rootdir}" "${_ab_libname}" _ab_shared_lib _ab_implib)
+        anira_define_backend_target(${_ab_id} SHARED GLOBAL
+            LOCATION "${_ab_shared_lib}" INCLUDE_DIRS "${_ab_incdir}")
+        unset(_ab_shared_lib)
+        unset(_ab_implib)
     else()
         # onnxruntime / tflite / litert: uniform include/ + lib/ on desktop/WASM,
         # with per-ABI (Android) and per-xcframework-slice (iOS) layouts handled below.
@@ -710,8 +658,7 @@ macro(anira_setup_backend id)
                 set(ANIRA_${_ab_ID}_IOS_SHIM "${_ab_shim}")
                 file(WRITE "${_ab_shim}/tensorflow/lite/c_api.h" "#include <c_api.h>\n")
                 file(WRITE "${_ab_shim}/tensorflow/lite/core/c/c_api.h" "#include <c_api.h>\n")
-                set(_ab_incdir "${_ab_shim}")
-                list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_fwk}/Headers")
+                set(_ab_incdir "${_ab_shim}" "${_ab_fwk}/Headers")
                 set(_ab_libdir "${_ab_fwk}")
             else()
                 # onnxruntime / LiteRT: xcframework named after the lib (onnxruntime /
@@ -743,66 +690,49 @@ macro(anira_setup_backend id)
             endif()
         endif()
 
-        list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_incdir}")
-        list(APPEND BACKEND_BUILD_LIBRARY_DIRS "${_ab_libdir}")
+        # ---- anira::<id>
+        if(_ab_linkage STREQUAL "static")
+            set(_ab_defs "")
+            if(_ab_id STREQUAL "tflite")
+                # The TFLite C API headers default to __declspec(dllimport) on Windows;
+                # linking the static archive then leaves __imp_TfLite* unresolved (no
+                # import stubs). TFL_COMPILE_LIBRARY switches the decoration to a
+                # direct reference (a no-op elsewhere). ONNX uses a function-pointer
+                # table and LiteRT's static lib ships import stubs, so only the legacy
+                # TFLite backend needs it.
+                set(_ab_defs TFL_COMPILE_LIBRARY)
+            endif()
+            anira_define_backend_target(${_ab_id} STATIC GLOBAL
+                LOCATION "${ANIRA_${_ab_ID}_STATIC_LIB}"
+                INCLUDE_DIRS ${_ab_incdir}
+                DEFINITIONS ${_ab_defs})
+            unset(_ab_defs)
+        else()
+            _anira_locate_shared_lib("${_ab_libdir}" "${_ab_rootdir}" "${_ab_libname}" _ab_shared_lib _ab_implib)
+            anira_define_backend_target(${_ab_id} SHARED GLOBAL
+                LOCATION "${_ab_shared_lib}" IMPLIB "${_ab_implib}"
+                INCLUDE_DIRS ${_ab_incdir})
+            # Paths under the install libdir (install.cmake copies lib/ as-is), for the
+            # installed package's definition of the same target. Empty when the file
+            # lives outside lib/ and is therefore not installed.
+            foreach(_ab_kind shared_lib implib)
+                string(TOUPPER "${_ab_kind}" _ab_KIND)
+                set(ANIRA_${_ab_ID}_${_ab_KIND}_SUBPATH "")
+                if(NOT _ab_${_ab_kind} STREQUAL "")
+                    file(RELATIVE_PATH _ab_rel "${_ab_rootdir}/lib" "${_ab_${_ab_kind}}")
+                    if(NOT _ab_rel MATCHES "^\\.\\.")
+                        set(ANIRA_${_ab_ID}_${_ab_KIND}_SUBPATH "${_ab_rel}")
+                    endif()
+                endif()
+            endforeach()
+            unset(_ab_kind)
+            unset(_ab_KIND)
+            unset(_ab_rel)
+            unset(_ab_shared_lib)
+            unset(_ab_implib)
+        endif()
     endif()
 
     message(STATUS "anira: ${id} ready (${_ab_linkage}) at ${_ab_rootdir}")
 endmacro()
 
-# ------------------------------------------------------------------------------
-# anira_target_link_static_backend(<target> <archive-path>) — link a static
-# backend archive on-demand, plus the system libraries it depends on. PUBLIC so
-# everything propagates to whatever links anira.
-#
-# NB: we deliberately do NOT whole-archive these. The onnxruntime/tflite static
-# archives vendor overlapping copies of protobuf/absl/onnx and contain multiple
-# members defining the same symbols (resolved on demand during a normal link);
-# force-loading them produces thousands of duplicate-symbol errors. anira drives
-# the engines through their C API, which the linker resolves on demand.
-#
-# The archive is linked through $<BUILD_INTERFACE> only — its absolute build-tree
-# path must not leak into the installed export. install.cmake adds the matching
-# $<INSTALL_INTERFACE> entry (relative to the consumer's install prefix) so the
-# installed package is relocatable. The system libs are unconditional (PUBLIC),
-# so they propagate to both the build tree and the installed package.
-# ------------------------------------------------------------------------------
-# Link a prebuilt static backend archive so that none of its symbols become
-# dynamic exports of the linking module. Hosts may ship their own copy of a
-# backend runtime (Ableton Live 12 bundles an ONNX Runtime dylib); any backend
-# symbol exported from a plugin can then be interposed (ELF) or weak-coalesced
-# (Mach-O) against the host's copy, which crashes the host on the first API
-# call when the versions differ. Mach-O uses -load_hidden (ld64, Xcode >= 14):
-# the archive is linked on-demand exactly like a plain input, but every symbol
-# it contributes is marked private_extern. ELF uses --exclude-libs on the
-# archive's basename, which localizes its symbols in the output; the option is
-# PUBLIC so it applies both to a shared libanira and to consumers linking the
-# static anira.
-function(anira_target_link_static_backend target libpath)
-    if(EMSDK_VERSION)
-        target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>")
-    elseif(MSVC)
-        # PE/COFF exports nothing without __declspec(dllexport): no hiding needed.
-        target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>")
-    elseif(APPLE)
-        # Static onnxruntime/tflite/litert pull in absl/CoreFoundation time-zone +
-        # Apple logging code (Foundation/CoreFoundation), and static LiteRT references
-        # Metal (LiteRtCreateMetalInfo -> MTLCreateSystemDefaultDevice), so link those
-        # system frameworks.
-        target_link_libraries(${target} PUBLIC
-            "$<BUILD_INTERFACE:-Wl,-load_hidden,${libpath}>" "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
-    elseif(ANDROID)
-        # Android's bionic folds pthread/dl/libm into libc, but the static LiteRT/TFLite
-        # archives vendor the GPU (GL ES) delegate and use Android logging, whose symbols
-        # (glClear, EGL*, __android_log_*) live in NDK system libs that must be linked.
-        get_filename_component(_anira_backend_archive "${libpath}" NAME)
-        target_link_options(${target} PUBLIC "LINKER:--exclude-libs,${_anira_backend_archive}")
-        target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>" EGL GLESv2 android log)
-    else() # Linux / other ELF
-        find_package(Threads REQUIRED)
-        get_filename_component(_anira_backend_archive "${libpath}" NAME)
-        target_link_options(${target} PUBLIC "LINKER:--exclude-libs,${_anira_backend_archive}")
-        target_link_libraries(${target} PUBLIC
-            "$<BUILD_INTERFACE:${libpath}>" Threads::Threads ${CMAKE_DL_LIBS} m)
-    endif()
-endfunction()

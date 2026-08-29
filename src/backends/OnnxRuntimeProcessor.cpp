@@ -47,8 +47,9 @@ void throw_if_foreign_onnxruntime() {
             "support the API version anira was built against. A different "
             "ONNX Runtime is already loaded in this process (e.g. shipped by "
             "the host application) and backend symbols were not kept private "
-            "to the module embedding anira. Link the ONNX Runtime archive "
-            "with hidden visibility (see anira_target_link_static_backend).");
+            "to the module embedding anira. Link ONNX Runtime only through "
+            "anira::onnxruntime and compile the translation units that include "
+            "its headers with hidden visibility (see the troubleshooting guide).");
     }
 }
 

@@ -7,9 +7,12 @@ add_executable(minimal-litert
   minimal-litert.cpp
 )
 
+# This example calls LiteRT directly, so it links the engine target next to anira:
+# anira::litert is the same file anira uses (one copy per process) and is what
+# makes the engine headers reachable — anira::anira alone carries none.
 target_link_libraries(minimal-litert
   anira::anira
-  LiteRt
+  anira::litert
 )
 
 if (MSVC)

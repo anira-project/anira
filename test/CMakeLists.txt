@@ -97,14 +97,16 @@ if(NOT CMAKE_SYSTEM_NAME MATCHES "Android|iOS" AND NOT EMSCRIPTEN AND NOT ANIRA_
 endif()
 
 # Installed-package smoke test: install anira to a throwaway prefix and build +
-# run a downstream find_package(anira) consumer against it. Only meaningful when
-# install targets exist, so gate on ANIRA_WITH_INSTALL (needs both that and
-# ANIRA_WITH_TESTS). This is the only coverage for the install/export path.
+# run the downstream find_package(anira) consumers of test/install against it —
+# anira alone, and an engine-calling consumer that links anira::onnxruntime (plus
+# the negative check that the engine header is unreachable without it). Only
+# meaningful when install targets exist, so gate on ANIRA_WITH_INSTALL (needs both
+# that and ANIRA_WITH_TESTS). This is the only coverage for the install/export path.
 if(ANIRA_WITH_INSTALL)
     add_test(NAME InstallConsumer
         COMMAND ${CMAKE_COMMAND}
             -DANIRA_BUILD_DIR=${CMAKE_BINARY_DIR}
-            -DCONSUMER_SRC=${CMAKE_CURRENT_SOURCE_DIR}/install/consumer
+            -DCONSUMER_SRC=${CMAKE_CURRENT_SOURCE_DIR}/install
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/install-test
             -DGENERATOR=${CMAKE_GENERATOR}
             -DBUILD_TYPE=$<CONFIG>

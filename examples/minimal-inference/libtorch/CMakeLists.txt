@@ -7,9 +7,13 @@ add_executable(minimal-libtorch
   minimal-libtorch.cpp
 )
 
+# This example calls LibTorch directly, so it links the engine target next to
+# anira: anira::libtorch wraps the same torch libraries anira uses (one copy per
+# process) and is what makes the torch headers reachable — anira::anira alone
+# carries none.
 target_link_libraries(minimal-libtorch
   anira::anira
-  "${TORCH_LIBRARIES}"
+  anira::libtorch
 )
 
 if (MSVC)

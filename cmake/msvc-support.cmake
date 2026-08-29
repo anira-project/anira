@@ -2,15 +2,8 @@
 # Windows specific settings
 # ==============================================================================
 
-# The TFLite C API headers default to __declspec(dllimport) on Windows; linking the
-# static TFLite lib then leaves __imp_TfLite* unresolved (no import stubs). Defining
-# TFL_COMPILE_LIBRARY switches the decoration to a direct (static) reference. PUBLIC
-# so a consumer including anira's TFLite processor header agrees. (ONNX uses a
-# function-pointer table and LiteRT's static lib ships import stubs, so only the
-# legacy TFLite backend needs this.)
-if(ANIRA_WITH_TFLITE AND ANIRA_TFLITE_IS_STATIC)
-    target_compile_definitions(${PROJECT_NAME} PUBLIC TFL_COMPILE_LIBRARY)
-endif()
+# (The static TFLite archive's TFL_COMPILE_LIBRARY definition rides on anira::tflite,
+# see cmake/AniraBackends.cmake.)
 
 if(NOT CMAKE_BUILD_TYPE)
     message(FATAL_ERROR "You need to specify CMAKE_BUILD_TYPE")

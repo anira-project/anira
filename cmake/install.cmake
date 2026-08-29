@@ -13,19 +13,6 @@ target_include_directories(${PROJECT_NAME}
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/concurrentqueue/moodycamel>
 )
 
-# This will be problematic anyway since symbols are not found when linking the torch libraries privately
-# Therefore, the install target will not work properly
-if (TORCH_LIBRARIES_ALL_PRIVATE)
-    target_include_directories(${PROJECT_NAME}
-        PUBLIC
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/torch/csrc/api/include>
-    )
-endif()
-
-target_link_directories(${PROJECT_NAME} PUBLIC
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_LIBDIR}>
-)
-
 # define the dircetory where the library will be installed CMAKE_INSTALL_PREFIX
 if(DEFINED CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     message( STATUS "CMAKE_INSTALL_PREFIX will be set to ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-${PROJECT_VERSION}" )
@@ -87,49 +74,51 @@ install(TARGETS ${PROJECT_NAME} concurrentqueue nlohmann_json
     COMPONENT dev
 )
 
-# libtorch has cmake config files that we can use to install the library later with find_package and then just link to it
+# ==============================================================================
+# The backends. Libraries go into the install libdir as they are (libanira's
+# INSTALL_RPATH $ORIGIN and the consumers' runtime search depend on that layout);
+# headers go per engine into <includedir>/anira-backends/<engine>/; and the
+# anira::<engine> targets are defined again from the install prefix by
+# aniraBackendTargets.cmake (generated below, included by aniraConfig.cmake before
+# aniraTargets.cmake, so that the $<LINK_ONLY:anira::<engine>> entries of a static
+# anira resolve). ANIRA_<ID>_ROOTDIR & co. are set by anira_setup_backend().
+#
+# The per-engine header directories are what makes "you need anira::<engine>" true
+# at compile time in the installed tree: only that target carries the directory, so
+# a consumer with anira::anira alone cannot include an engine header by accident.
+# ==============================================================================
+set(_anira_backend_incdir "${CMAKE_INSTALL_INCLUDEDIR}/anira-backends")
+
 if(ANIRA_WITH_LIBTORCH)
+    # LibTorch ships its own CMake package (lib/cmake/Torch + Caffe2), which the
+    # installed aniraBackendTargets.cmake re-resolves and re-points at the relocated
+    # headers (TorchConfig.cmake hardwires them to <prefix>/include).
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/include/"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-        COMPONENT deps-backends
-    )
+        DESTINATION "${_anira_backend_incdir}/libtorch" COMPONENT deps-backends)
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/lib/"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-        COMPONENT deps-backends
-    )
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/share/cmake/"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake"
-        COMPONENT deps-backends
-    )
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake" COMPONENT deps-backends)
 endif()
 
-# The other engines have no cmake config files, so install their include/ + lib/
-# trees manually. This copies whatever the linkage produced (shared .so/.dylib/.dll
-# or static .a/.lib). ANIRA_<ID>_ROOTDIR is set by anira_setup_backend().
 if(ANIRA_WITH_ONNXRUNTIME)
     if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
         # iOS ships an xcframework: install it whole (the static .a then sits at the
-        # SUBPATH the install-interface link expects) plus the active slice's headers.
+        # SUBPATH anira::onnxruntime expects) plus the active slice's headers.
         install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/onnxruntime.xcframework"
             DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
         install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/onnxruntime.xcframework/${ANIRA_ONNXRUNTIME_IOS_SLICE}/Headers/"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT deps-backends)
+            DESTINATION "${_anira_backend_incdir}/onnxruntime" COMPONENT deps-backends)
     else()
         if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
             install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/include/onnxruntime/"
-                DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-                COMPONENT deps-backends
-            )
+                DESTINATION "${_anira_backend_incdir}/onnxruntime" COMPONENT deps-backends)
         else()
             install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/include/"
-                DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-                COMPONENT deps-backends
-            )
+                DESTINATION "${_anira_backend_incdir}/onnxruntime" COMPONENT deps-backends)
         endif()
         install(DIRECTORY "${ANIRA_ONNXRUNTIME_ROOTDIR}/lib/"
-            DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-            COMPONENT deps-backends
-        )
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
     endif()
 endif()
 
@@ -141,21 +130,17 @@ if(ANIRA_WITH_TFLITE)
         install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/TensorFlowLiteC.xcframework"
             DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
         install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/TensorFlowLiteC.xcframework/${ANIRA_TFLITE_IOS_SLICE}/TensorFlowLiteC.framework/Headers/"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT deps-backends)
+            DESTINATION "${_anira_backend_incdir}/tflite" COMPONENT deps-backends)
         if(NOT ANIRA_TFLITE_IOS_SHIM)
             message(FATAL_ERROR "ANIRA_TFLITE_IOS_SHIM is empty — refusing to install (would copy the filesystem root).")
         endif()
         install(DIRECTORY "${ANIRA_TFLITE_IOS_SHIM}/"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT deps-backends)
+            DESTINATION "${_anira_backend_incdir}/tflite" COMPONENT deps-backends)
     else()
         install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/include/"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-            COMPONENT deps-backends
-        )
+            DESTINATION "${_anira_backend_incdir}/tflite" COMPONENT deps-backends)
         install(DIRECTORY "${ANIRA_TFLITE_ROOTDIR}/lib/"
-            DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-            COMPONENT deps-backends
-        )
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
     endif()
 endif()
 
@@ -164,16 +149,12 @@ if(ANIRA_WITH_LITERT)
         install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/LiteRt.xcframework"
             DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
         install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/LiteRt.xcframework/${ANIRA_LITERT_IOS_SLICE}/Headers/"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT deps-backends)
+            DESTINATION "${_anira_backend_incdir}/litert" COMPONENT deps-backends)
     else()
         install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/include/"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-            COMPONENT deps-backends
-        )
+            DESTINATION "${_anira_backend_incdir}/litert" COMPONENT deps-backends)
         install(DIRECTORY "${ANIRA_LITERT_ROOTDIR}/lib/"
-            DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-            COMPONENT deps-backends
-        )
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
     endif()
 endif()
 
@@ -182,37 +163,122 @@ if(ANIRA_WITH_EXECUTORCH)
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/executorch.xcframework"
             DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/executorch.xcframework/${ANIRA_EXECUTORCH_IOS_SLICE}/Headers/"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT deps-backends)
+            DESTINATION "${_anira_backend_incdir}/executorch" COMPONENT deps-backends)
     else()
         # On desktop the installed lib/ tree includes ExecuTorch's CMake package
-        # (lib/cmake/ExecuTorch), which aniraConfig.cmake re-resolves via
-        # find_package(executorch) — analogous to the libtorch handling above.
+        # (lib/cmake/ExecuTorch), which the installed aniraBackendTargets.cmake
+        # re-resolves via find_package(executorch) — analogous to LibTorch above.
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/include/"
-            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-            COMPONENT deps-backends
-        )
+            DESTINATION "${_anira_backend_incdir}/executorch" COMPONENT deps-backends)
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/lib/"
-            DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-            COMPONENT deps-backends
-        )
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
     endif()
 endif()
 
-# Relocatable static-backend linkage. anira_target_link_static_backend() linked each
-# backend archive through $<BUILD_INTERFACE> only, so its absolute build-tree path is
-# kept out of the exported targets. Add the matching $<INSTALL_INTERFACE> entry that
-# resolves against the consumer's own install prefix ($<INSTALL_PREFIX>), so a
-# downstream find_package(anira) links the archive shipped inside the package instead
-# of a path on the build machine. (Shared backends already link by name via the
-# installed lib dir, so they need nothing here. ANIRA_<ID>_STATIC_LIB_SUBPATH is the
-# archive's path under the install libdir, set by anira_setup_backend().)
-foreach(_engine ONNXRUNTIME TFLITE LITERT EXECUTORCH)
-    if(ANIRA_WITH_${_engine} AND ANIRA_${_engine}_IS_STATIC AND ANIRA_${_engine}_STATIC_LIB_SUBPATH)
-        target_link_libraries(${PROJECT_NAME} INTERFACE
-            "$<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_LIBDIR}/${ANIRA_${_engine}_STATIC_LIB_SUBPATH}>"
-        )
+# ------------------------------------------------------------------------------
+# aniraBackendTargets.cmake — the anira::<engine> definitions of this install,
+# generated from cmake/aniraBackendTargets.cmake.in with one
+# anira_define_backend_target() call per enabled engine. Every path is relative to
+# the package prefix (PACKAGE_PREFIX_DIR, set by aniraConfig.cmake), so the tree is
+# relocatable; the file names are exactly those install(DIRECTORY ...) copies.
+# ------------------------------------------------------------------------------
+set(_anira_installed_targets "")
+foreach(_engine onnxruntime tflite litert)
+    string(TOUPPER "${_engine}" _ENGINE)
+    if(NOT ANIRA_WITH_${_ENGINE})
+        continue()
+    endif()
+    if(ANIRA_${_ENGINE}_IS_STATIC)
+        set(_defs "")
+        if(_engine STREQUAL "tflite")
+            set(_defs "\n    DEFINITIONS TFL_COMPILE_LIBRARY")
+        endif()
+        string(APPEND _anira_installed_targets
+            "anira_define_backend_target(${_engine} STATIC\n"
+            "    LOCATION \"\${_anira_libdir}/${ANIRA_${_ENGINE}_STATIC_LIB_SUBPATH}\"\n"
+            "    INCLUDE_DIRS \"\${_anira_incdir}/${_engine}\"${_defs})\n")
+    else()
+        set(_location "")
+        if(ANIRA_${_ENGINE}_SHARED_LIB_SUBPATH)
+            set(_location "\n    LOCATION \"\${_anira_libdir}/${ANIRA_${_ENGINE}_SHARED_LIB_SUBPATH}\"")
+        endif()
+        set(_implib "")
+        if(ANIRA_${_ENGINE}_IMPLIB_SUBPATH)
+            set(_implib "\n    IMPLIB \"\${_anira_libdir}/${ANIRA_${_ENGINE}_IMPLIB_SUBPATH}\"")
+        endif()
+        string(APPEND _anira_installed_targets
+            "anira_define_backend_target(${_engine} SHARED${_location}${_implib}\n"
+            "    INCLUDE_DIRS \"\${_anira_incdir}/${_engine}\")\n")
     endif()
 endforeach()
+unset(_engine)
+unset(_ENGINE)
+unset(_defs)
+unset(_location)
+unset(_implib)
+
+if(ANIRA_WITH_LIBTORCH)
+    string(APPEND _anira_installed_targets [=[
+# LibTorch: its own CMake package, installed into lib/cmake/{Torch,Caffe2}. Its
+# TorchConfig.cmake hardwires the package's include directories to
+# <prefix>/include (+ torch/csrc/api/include), while the headers live under
+# <includedir>/anira-backends/libtorch here — so every target the package imported
+# (torch, torch_library, c10, ...) is re-pointed at the relocated directories.
+get_property(_anira_imported_before DIRECTORY PROPERTY IMPORTED_TARGETS)
+find_package(Torch REQUIRED CONFIG HINTS "${_anira_libdir}/cmake/Torch")
+get_property(_anira_imported_after DIRECTORY PROPERTY IMPORTED_TARGETS)
+if(_anira_imported_before)
+    list(REMOVE_ITEM _anira_imported_after ${_anira_imported_before})
+endif()
+anira_relocate_include_dirs("${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@"
+    "${_anira_incdir}/libtorch" ${_anira_imported_after})
+set(TORCH_INCLUDE_DIRS
+    "${_anira_incdir}/libtorch"
+    "${_anira_incdir}/libtorch/torch/csrc/api/include")
+set(_anira_torch_libs torch torch_library ${TORCH_LIBRARIES})
+list(REMOVE_DUPLICATES _anira_torch_libs)
+anira_define_backend_target(libtorch INTERFACE
+    LINK_LIBRARIES ${_anira_torch_libs}
+    INCLUDE_DIRS ${TORCH_INCLUDE_DIRS})
+unset(_anira_torch_libs)
+unset(_anira_imported_before)
+unset(_anira_imported_after)
+]=])
+endif()
+
+if(ANIRA_WITH_EXECUTORCH)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        string(APPEND _anira_installed_targets
+            "anira_define_backend_target(executorch STATIC\n"
+            "    LOCATION \"\${_anira_libdir}/${ANIRA_EXECUTORCH_STATIC_LIB_SUBPATH}\"\n"
+            "    INCLUDE_DIRS \"\${_anira_incdir}/executorch\")\n")
+    else()
+        string(APPEND _anira_installed_targets [=[
+# ExecuTorch: its own CMake package, installed into lib/cmake/ExecuTorch. Imported,
+# sanitized and wrapped exactly as in anira's build tree (aniraBackendHelpers.cmake).
+anira_find_executorch_package("${_anira_libdir}/cmake/ExecuTorch"
+    _anira_executorch_targets _anira_executorch_archives _anira_executorch_defs)
+anira_define_executorch_target("${_anira_incdir}/executorch"
+    "${_anira_executorch_archives}" "${_anira_executorch_defs}")
+unset(_anira_executorch_targets)
+unset(_anira_executorch_archives)
+unset(_anira_executorch_defs)
+]=])
+    endif()
+endif()
+
+set(ANIRA_INSTALLED_BACKEND_TARGETS "${_anira_installed_targets}")
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/aniraBackendTargets.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/aniraBackendTargets.cmake" @ONLY)
+unset(_anira_installed_targets)
+unset(_anira_backend_incdir)
+
+install(FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/aniraBackendHelpers.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/aniraBackendTargets.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
+    COMPONENT dev
+)
 
 # ==============================================================================
 # Generate cmake config files
