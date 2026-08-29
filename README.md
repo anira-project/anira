@@ -86,6 +86,11 @@ add_subdirectory(modules/anira)
 
 # Link your target to the anira library
 target_link_libraries(your_target anira::anira)
+
+# Only if your own code calls an engine (e.g. includes onnxruntime_cxx_api.h): link
+# its anira::<engine> target too — the same file anira uses, so the process holds
+# one copy of the engine. anira itself never needs this line.
+target_link_libraries(your_target anira::onnxruntime)
 ```
 
 #### Option 2: Use Pre-built Binaries
@@ -105,7 +110,16 @@ find_package(anira REQUIRED)
 
 # Link your target to the anira library
 target_link_libraries(your_target anira::anira)
+
+# Only if your own code calls an engine: link its anira::<engine> target too
+target_link_libraries(your_target anira::onnxruntime)
 ```
+
+`anira::anira` carries anira's headers and the `USE_<ENGINE>` definitions, but no engine header: the
+engines are linked privately. A target that calls an engine itself links the matching engine target —
+`anira::onnxruntime`, `anira::tflite`, `anira::litert`, `anira::libtorch` or `anira::executorch` — which
+exists both in the build tree and in the installed package, carries the engine's headers, and is the
+very file anira links, so the process never holds a second copy of the engine.
 
 #### Option 3: Build from Source
 

@@ -144,6 +144,69 @@ Once your custom backend is implemented, integrate it with the :cpp:class:`anira
     // Select the custom backend
     inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
 
+Using an engine directly in a custom backend
+--------------------------------------------
+
+A custom backend may drive one of the bundled inference engines itself — for example to use an
+ONNX Runtime execution provider or session option anira's own :cpp:class:`anira::OnnxRuntimeProcessor`
+does not expose. Two rules keep that safe, and they are the same rules anira's own backends follow.
+
+**Link the engine target.** ``anira::anira`` carries anira's headers and the ``USE_<ENGINE>``
+definitions, but no engine header: anira links its engines privately. The engine's include
+directory and library live on the matching engine target, which exists both in anira's build tree
+and in the installed package:
+
+.. code-block:: cmake
+
+    target_link_libraries(my_backend PRIVATE anira::anira anira::onnxruntime)
+
+``anira::onnxruntime``, ``anira::tflite``, ``anira::litert``, ``anira::libtorch`` and
+``anira::executorch`` are the very files anira links — a shared library in a shared anira build, a
+static archive (linked on demand and hidden) in a static one — so the process holds exactly one
+copy of the engine. Never link an engine by any other path next to anira.
+
+**Keep the engine out of your header.** Hold the engine state behind a named pimpl that only the
+``.cpp`` defines, exactly like anira's processors (see the note on :cpp:class:`anira::BackendBase`):
+
+.. code-block:: cpp
+
+    // MyOnnxBackend.h — no engine include here
+    #include <anira/anira.h>
+
+    class MyOnnxBackend : public anira::BackendBase {
+    public:
+        MyOnnxBackend(anira::InferenceConfig& inference_config);
+        ~MyOnnxBackend() override;   // declared here, defined in the .cpp
+        void prepare() override;
+        void process(std::vector<anira::BufferF>& input, std::vector<anira::BufferF>& output,
+                     std::shared_ptr<anira::SessionElement> session) override;
+    private:
+        struct Instance;                                    // opaque: owns the Ort:: objects
+        std::vector<std::shared_ptr<Instance>> m_instances; // shared_ptr needs no complete type
+    };
+
+.. code-block:: cpp
+
+    // MyOnnxBackend.cpp — the only place the engine header is included
+    #include "MyOnnxBackend.h"
+    #include <onnxruntime_cxx_api.h>
+
+    struct MyOnnxBackend::Instance {
+        Ort::Env m_env{ORT_LOGGING_LEVEL_WARNING, "my-backend"};
+        Ort::SessionOptions m_options;
+        std::unique_ptr<Ort::Session> m_session;
+        std::atomic<bool> m_processing{false};
+    };
+
+    MyOnnxBackend::~MyOnnxBackend() = default;  // Instance is complete here
+
+A ``std::shared_ptr<Instance>`` works with the incomplete type (its deleter is captured where the
+instance is created, in the ``.cpp``), and the out-of-line destructor keeps the header free of the
+engine. Whatever includes your header then compiles with anira's include directories alone, and
+only your ``.cpp`` needs the engine target's — which is what lets a plugin keep every engine symbol
+private: compile that ``.cpp`` with hidden visibility (see :doc:`troubleshooting`, "Host application
+ships its own backend runtime").
+
 Example: Bypass Backend
 -----------------------
 
