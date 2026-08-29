@@ -1,5 +1,5 @@
 # ==============================================================================
-# AniraBackends.cmake — data-driven download + setup of pre-built inference engines
+# backends.cmake — data-driven download + setup of pre-built inference engines
 # ==============================================================================
 #
 # Single entry point for fetching the pre-built backend binaries anira links
@@ -240,7 +240,7 @@ endfunction()
 # ------------------------------------------------------------------------------
 # _anira_resolve_linkage(<id> <supported> <out>) — the linkage of an engine is the
 # linkage of anira itself (shared anira -> shared backends, static -> static), with
-# no per-engine override. cmake/AniraValidate.cmake has already disabled every
+# no per-engine override. cmake/validate-options.cmake has already disabled every
 # engine that does not ship the required linkage (LibTorch in static builds,
 # ExecuTorch in shared ones) and refused a shared build on the static-only platforms
 # (iOS, Emscripten), so a mismatch here is an internal error.
@@ -254,7 +254,7 @@ function(_anira_resolve_linkage id supported out)
 
     if(NOT _linkage IN_LIST supported)
         message(FATAL_ERROR "anira: internal error — ${id} ships ${supported} only, but a ${_linkage} "
-                            "anira is being configured; cmake/AniraValidate.cmake should have disabled it.")
+                            "anira is being configured; cmake/validate-options.cmake should have disabled it.")
     endif()
 
     set(${out} "${_linkage}" PARENT_SCOPE)

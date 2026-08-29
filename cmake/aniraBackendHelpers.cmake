@@ -4,7 +4,7 @@
 #
 # One imported target per inference engine, named anira::<engine> with <engine> =
 # onnxruntime | tflite | litert | libtorch | executorch, defined by the one function
-# below both in anira's build tree (cmake/AniraBackends.cmake) and in the installed
+# below both in anira's build tree (cmake/backends.cmake) and in the installed
 # package (aniraBackendTargets.cmake, generated from aniraBackendTargets.cmake.in
 # and shipped next to this file), so that both trees expose the same names with the
 # same usage requirements.

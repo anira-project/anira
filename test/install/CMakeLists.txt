@@ -1,6 +1,6 @@
 # Consumers of an installed anira package. Built against a fresh install prefix by
 # the build_install CI workflow and by the InstallConsumer CTest
-# (run_install_test.cmake), so a header, exported target or dependency
+# (run-install-test.cmake), so a header, exported target or dependency
 # (tanh::Core, the backends) missing from the install tree fails here rather than
 # in a downstream project.
 cmake_minimum_required(VERSION 3.25)
@@ -22,7 +22,7 @@ if(ANIRA_WITH_ONNXRUNTIME)
     target_link_libraries(consumer_engine PRIVATE anira::anira anira::onnxruntime)
 
     # 3. The same TU as a plugin-shaped module, compiled hidden as the troubleshooting
-    #    guide recommends for TUs that include engine headers. run_install_test.cmake
+    #    guide recommends for TUs that include engine headers. run-install-test.cmake
     #    checks that its export table carries no engine symbol: the engine-calling
     #    consumer still exports nothing engine-shaped.
     add_library(consumer_engine_module MODULE main_engine.cpp)

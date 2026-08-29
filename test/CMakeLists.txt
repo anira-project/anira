@@ -110,7 +110,7 @@ if(ANIRA_WITH_INSTALL)
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/install-test
             -DGENERATOR=${CMAKE_GENERATOR}
             -DBUILD_TYPE=$<CONFIG>
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/install/run_install_test.cmake)
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/install/run-install-test.cmake)
     set_tests_properties(InstallConsumer PROPERTIES TIMEOUT 600)
 endif()
 

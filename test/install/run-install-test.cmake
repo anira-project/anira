@@ -90,7 +90,7 @@ if(NOT _engine_exe STREQUAL "")
 
     # Its plugin-shaped twin must export nothing engine-shaped: the engine archive is
     # linked hidden and the TU is compiled hidden. Same forbid list as
-    # cmake/CheckExports.cmake for ONNX Runtime; nm-based, so Linux and macOS only.
+    # cmake/check-exports.cmake for ONNX Runtime; nm-based, so Linux and macOS only.
     if(NOT WIN32)
         set(_module "${_consumer_build}/consumer_engine_module${CMAKE_SHARED_MODULE_SUFFIX}")
         if(NOT EXISTS "${_module}")

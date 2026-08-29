@@ -110,7 +110,7 @@ gtest_discover_tests(anira_unload_test
     DISCOVERY_TIMEOUT 90
     PROPERTIES TIMEOUT 120)
 
-# Export-table check (cmake/CheckExports.cmake): the shared libanira exports exactly
+# Export-table check (cmake/check-exports.cmake): the shared libanira exports exactly
 # the ANIRA_API surface (namespace anira, nothing else — no std::, backend or
 # STB_GNU_UNIQUE symbol), and the plugin-shaped module exports no backend-runtime
 # symbol. See the symbol-visibility notes in the top-level CMakeLists.txt.
@@ -147,7 +147,7 @@ if(_anira_exports_tool)
             ${_anira_exports_tool_arg}
             "-DLIBRARY=${_anira_exports_library}"
             "-DMODULE=$<TARGET_FILE:anira_unload_module>"
-            -P "${anira_SOURCE_DIR}/cmake/CheckExports.cmake")
+            -P "${anira_SOURCE_DIR}/cmake/check-exports.cmake")
 else()
     message(WARNING "anira: no nm/dumpbin found — the anira_exports test is not registered")
 endif()

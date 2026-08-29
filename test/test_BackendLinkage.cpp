@@ -1,4 +1,4 @@
-// The two linkage shapes anira supports (cmake/AniraValidate.cmake): a shared anira
+// The two linkage shapes anira supports (cmake/validate-options.cmake): a shared anira
 // links shared backends, a static anira links static backends. LibTorch ships
 // shared-only and ExecuTorch static-only, so each can only be compiled into the
 // matching shape — a mismatch here means the configure-time rule was bypassed.

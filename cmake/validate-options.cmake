@@ -1,5 +1,5 @@
 # ==============================================================================
-# AniraValidate.cmake — cross-option validation guards, in one place.
+# validate-options.cmake — cross-option validation guards, in one place.
 #
 # Included after project() AND after Emscripten detection (so EMSDK_VERSION is
 # resolved) but BEFORE the backends are set up / the library target is created,
@@ -123,7 +123,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND ANIRA_WITH_TFLITE AND ANIRA_WITH_ONNXRUN
 endif()
 
 # WebAssembly (Emscripten): only the ONNX Runtime backend is supported and the
-# component targets do not apply. EMSDK_VERSION is set by cmake/DetectEmscripten.cmake.
+# component targets do not apply. EMSDK_VERSION is set by cmake/detect-emscripten.cmake.
 if(DEFINED EMSDK_VERSION)
     if(ANIRA_WITH_EXAMPLES)
         message(FATAL_ERROR "WebAssembly support is not compatible with examples. Set -DANIRA_WITH_EXAMPLES=OFF.")

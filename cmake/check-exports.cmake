@@ -1,5 +1,5 @@
 # ==============================================================================
-# CheckExports.cmake — CTest check of the dynamic export tables (script mode).
+# check-exports.cmake — CTest check of the dynamic export tables (script mode).
 #
 # Verifies the symbol-visibility invariant described in the top-level
 # CMakeLists.txt on the binaries CMake actually produced:
@@ -20,7 +20,7 @@
 #
 # Usage:
 #   cmake -DFORMAT=ELF|MACHO|PE -DNM=<nm> -DDUMPBIN=<dumpbin>
-#         -DLIBRARY=<path or empty> -DMODULE=<path> -P CheckExports.cmake
+#         -DLIBRARY=<path or empty> -DMODULE=<path> -P check-exports.cmake
 # ==============================================================================
 
 if(NOT FORMAT MATCHES "^(ELF|MACHO|PE)$")

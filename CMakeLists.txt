@@ -13,7 +13,7 @@ cmake_policy(SET CMP0099 NEW)
 # ==============================================================================
 # Build options — every user-facing option lives here. Cross-option validation
 # (mutual exclusivity, libtorch auto-disable, WASM guards) is in
-# cmake/AniraValidate.cmake, included after project() / Emscripten detection.
+# cmake/validate-options.cmake, included after project() / Emscripten detection.
 # ==============================================================================
 
 # --- Library type --------------------------------------------------------------
@@ -33,7 +33,7 @@ option(ANIRA_BUILD_WASM     "Build WebAssembly module (requires Emscripten toolc
 # Multiple backends can be enabled. LiteRT (LiteRt* C API) is the default
 # TensorFlow-family backend; TFLite (legacy TfLite* C API) is the SAME underlying
 # runtime through the older API, so the two are mutually exclusive (their static
-# libraries export the same TfLite* symbols). Enforced in cmake/AniraValidate.cmake.
+# libraries export the same TfLite* symbols). Enforced in cmake/validate-options.cmake.
 option(ANIRA_WITH_LIBTORCH    "Build with the LibTorch backend" ON)
 option(ANIRA_WITH_ONNXRUNTIME "Build with the ONNX Runtime backend" ON)
 option(ANIRA_WITH_LITERT      "Build with the LiteRT backend (LiteRt* C API; runs .tflite via the CompiledModel runtime)" ON)
@@ -54,7 +54,7 @@ option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for backend integrit
 # Backend linkage follows BUILD_SHARED_LIBS: a shared anira links shared backends, a
 # static anira links static backends, and an engine that does not ship the required
 # linkage (LibTorch in static builds, ExecuTorch in shared ones) is disabled with a
-# warning — see cmake/AniraValidate.cmake for why these are the only two shapes.
+# warning — see cmake/validate-options.cmake for why these are the only two shapes.
 # Bring your own engine, or use a custom source, via the per-engine variables
 # (<ENGINE> = LIBTORCH | ONNXRUNTIME | TFLITE | LITERT | EXECUTORCH):
 #   -DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt   (a tree with include/ + lib/)
@@ -144,15 +144,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Detect Emscripten — must be after project() so CMAKE_CXX_COMPILER is set.
-# EMSDK_VERSION is needed by AniraBackends.cmake (WASM target selection) below.
+# EMSDK_VERSION is needed by backends.cmake (WASM target selection) below.
 if(ANIRA_BUILD_WASM)
-    include(cmake/DetectEmscripten.cmake)
+    include(cmake/detect-emscripten.cmake)
 endif()
 
 # Validate the option combination (mutual exclusivity, libtorch auto-disable, WASM
 # guards). After Emscripten detection so EMSDK_VERSION is known; before the backends
 # are set up so the libtorch auto-disable takes effect.
-include(cmake/AniraValidate.cmake)
+include(cmake/validate-options.cmake)
 
 # ==============================================================================
 # Download and install the selected inference engines
@@ -161,11 +161,11 @@ include(cmake/AniraValidate.cmake)
 set(BACKEND_SOURCES)
 
 # Each anira_setup_backend() call defines the engine's imported target anira::<id>
-# (see cmake/AniraBackends.cmake and cmake/aniraBackendHelpers.cmake): the file
+# (see cmake/backends.cmake and cmake/aniraBackendHelpers.cmake): the file
 # anira links, carrying the engine's include directories and definitions. anira
 # links them PRIVATE below; a consumer whose own code calls an engine links the
 # matching anira::<id> explicitly and gets the same file — one engine per process.
-include(cmake/AniraBackends.cmake)
+include(cmake/backends.cmake)
 
 if(ANIRA_WITH_LIBTORCH)
     anira_setup_backend(libtorch)
@@ -344,7 +344,7 @@ anira_apply_symbol_policy(${PROJECT_NAME})
 # namespace anira — functions, data, vtables, typeinfo, thunks — and nothing else.
 # cmake/anira.map (ELF version script) and cmake/anira.exports (Mach-O
 # -exported_symbols_list) carry the same pattern list; test/unload registers a CTest
-# check (cmake/CheckExports.cmake) that diffs the real export table against it on
+# check (cmake/check-exports.cmake) that diffs the real export table against it on
 # every desktop platform. MSVC needs nothing (PE exports only what carries
 # __declspec(dllexport)); Emscripten has no dynamic export table. MinGW is not a
 # supported toolchain (no prebuilt backends) and is left alone.
@@ -464,7 +464,7 @@ if(ANIRA_WITH_EXECUTORCH)
     # --exclude-libs per archive (see aniraBackendHelpers.cmake). Mobile: the single
     # merged libexecutorch.a (per ABI on Android, per xcframework slice on iOS),
     # wrapped like the other static engines. ExecuTorch is static-only, so anira is
-    # static here (cmake/AniraValidate.cmake) and hands the runtime on to its
+    # static here (cmake/validate-options.cmake) and hands the runtime on to its
     # consumer as $<LINK_ONLY:anira::executorch>: the single place it is linked,
     # which matters — the force-loaded kernels abort at static-init when they
     # register twice in one process.
@@ -556,5 +556,5 @@ endif()
 # ==============================================================================
 
 if(ANIRA_BUILD_WASM)
-    include(cmake/BuildWasm.cmake)
+    include(cmake/build-wasm.cmake)
 endif()
