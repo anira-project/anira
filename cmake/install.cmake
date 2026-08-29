@@ -89,16 +89,51 @@ install(TARGETS ${PROJECT_NAME} concurrentqueue nlohmann_json
 # ==============================================================================
 set(_anira_backend_incdir "${CMAKE_INSTALL_INCLUDEDIR}/anira-backends")
 
+# ------------------------------------------------------------------------------
+# _anira_install_cmake_package(<id> <src> <dest>) — install an engine's own CMake
+# package directory (LibTorch's share/cmake, ExecuTorch's lib/cmake) to <dest>
+# under the prefix. Those packages locate their libraries relative to their own
+# file as <prefix>/lib/... (Caffe2Targets/ExecuTorchTargets: ${_IMPORT_PREFIX}/lib/,
+# TorchConfig: ${TORCH_INSTALL_PREFIX}/lib), which is only right when the install
+# libdir is "lib". On hosts where GNUInstallDirs picks lib64 (Fedora) anira
+# installs the engine libraries into lib64 like everything else — a second
+# library directory would break libanira's $ORIGIN rpath and every consumer's
+# runtime search — so it installs patched copies of the package files that say
+# lib64 instead. The patch is a literal replacement of those two spellings and a
+# no-op (plain directory install) on "lib" hosts.
+# ------------------------------------------------------------------------------
+function(_anira_install_cmake_package id src dest)
+    if(CMAKE_INSTALL_LIBDIR STREQUAL "lib")
+        install(DIRECTORY "${src}/" DESTINATION "${dest}" COMPONENT deps-backends)
+        return()
+    endif()
+    set(_staged "${CMAKE_CURRENT_BINARY_DIR}/anira-backends-cmake/${id}")
+    file(REMOVE_RECURSE "${_staged}")
+    file(GLOB_RECURSE _files RELATIVE "${src}" "${src}/*")
+    foreach(_rel IN LISTS _files)
+        if(_rel MATCHES "\\.cmake$")
+            file(READ "${src}/${_rel}" _content)
+            string(REPLACE "\${_IMPORT_PREFIX}/lib/" "\${_IMPORT_PREFIX}/${CMAKE_INSTALL_LIBDIR}/"
+                _content "${_content}")
+            string(REPLACE "\${TORCH_INSTALL_PREFIX}/lib\"" "\${TORCH_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\""
+                _content "${_content}")
+            file(WRITE "${_staged}/${_rel}" "${_content}")
+        else()
+            configure_file("${src}/${_rel}" "${_staged}/${_rel}" COPYONLY)
+        endif()
+    endforeach()
+    install(DIRECTORY "${_staged}/" DESTINATION "${dest}" COMPONENT deps-backends)
+endfunction()
+
 if(ANIRA_WITH_LIBTORCH)
-    # LibTorch ships its own CMake package (lib/cmake/Torch + Caffe2), which the
+    # LibTorch ships its own CMake package (share/cmake/Torch + Caffe2), which the
     # installed aniraBackendTargets.cmake re-resolves and re-points at the relocated
     # headers (TorchConfig.cmake hardwires them to <prefix>/include).
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/include/"
         DESTINATION "${_anira_backend_incdir}/libtorch" COMPONENT deps-backends)
     install(DIRECTORY "${LIBTORCH_ROOTDIR}/lib/"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
-    install(DIRECTORY "${LIBTORCH_ROOTDIR}/share/cmake/"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake" COMPONENT deps-backends)
+    _anira_install_cmake_package(libtorch "${LIBTORCH_ROOTDIR}/share/cmake" "${CMAKE_INSTALL_LIBDIR}/cmake")
 endif()
 
 if(ANIRA_WITH_ONNXRUNTIME)
@@ -165,13 +200,16 @@ if(ANIRA_WITH_EXECUTORCH)
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/executorch.xcframework/${ANIRA_EXECUTORCH_IOS_SLICE}/Headers/"
             DESTINATION "${_anira_backend_incdir}/executorch" COMPONENT deps-backends)
     else()
-        # On desktop the installed lib/ tree includes ExecuTorch's CMake package
-        # (lib/cmake/ExecuTorch), which the installed aniraBackendTargets.cmake
-        # re-resolves via find_package(executorch) — analogous to LibTorch above.
+        # On desktop the lib/ tree carries ExecuTorch's CMake package (lib/cmake/
+        # ExecuTorch, plus the KleidiAI one it depends on), which the installed
+        # aniraBackendTargets.cmake re-resolves via find_package(executorch) —
+        # analogous to LibTorch above, and installed through the same libdir patch.
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/include/"
             DESTINATION "${_anira_backend_incdir}/executorch" COMPONENT deps-backends)
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/lib/"
-            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends)
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT deps-backends
+            PATTERN "cmake" EXCLUDE)
+        _anira_install_cmake_package(executorch "${ANIRA_EXECUTORCH_ROOTDIR}/lib/cmake" "${CMAKE_INSTALL_LIBDIR}/cmake")
     endif()
 endif()
 
