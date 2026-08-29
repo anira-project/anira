@@ -5,6 +5,7 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+#include <anira/utils/MemoryBlock.h>
 
 #include <algorithm>
 #include <atomic>
@@ -33,12 +34,12 @@
 #pragma GCC diagnostic ignored "-Wall"
 #endif
 
+#include <ATen/core/ATen_fwd.h>
 #include <c10/util/Exception.h>
 #include <c10/util/Logging.h>
 #include <torch/csrc/autograd/generated/variable_factories.h>
+#include <torch/csrc/jit/api/module.h>
 #include <torch/csrc/jit/serialization/import.h>
-#include <torch/script.h>
-#include <torch/torch.h>
 #include <torch/utils.h>
 
 #ifdef _MSC_VER

@@ -6,6 +6,7 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+#include <anira/utils/MemoryBlock.h>
 #include <onnxruntime_c_api.h>
 #include <onnxruntime_cxx_api.h>
 

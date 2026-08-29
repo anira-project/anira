@@ -6,4 +6,6 @@
 // so that every public header is covered.
 #include <anira/anira.h>  // NOLINT(misc-include-cleaner)
 
-static_assert(sizeof(anira::InferenceConfig) > 0);  // NOLINT(misc-include-cleaner)
+#include <type_traits>
+
+static_assert(std::is_class_v<anira::InferenceConfig>);  // NOLINT(misc-include-cleaner)
