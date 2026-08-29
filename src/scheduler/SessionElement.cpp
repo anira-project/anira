@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -73,6 +74,7 @@ void SessionElement::clear() {
     for (auto& buffer : m_receive_buffer) { buffer.clear_with_positions(); }
     m_time_stamps.clear();
     m_current_queue = 0;
+    m_pending_pull_samples = 0;
 
     for (auto& inference : m_inference_queue) {
         // Only a free struct is exclusively ours to reset; skip anything a worker may
@@ -88,9 +90,10 @@ void SessionElement::clear() {
         for (auto& output_data : inference->m_tensor_output_data) { output_data.clear(); }
     }
 
-    // Re-seed the latency zero-padding (matches prepare()'s seed).
+    // Re-seed the latency zero-padding (matches prepare()'s seed). Only a streamable
+    // output has a ring to seed.
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-        if (m_latency[i] > 0) {
+        if (m_inference_config.get_postprocess_output_size()[i] > 0 && m_latency[i] > 0) {
             for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
                 for (size_t k = 0;
                      k < m_latency[i] - m_inference_config.get_internal_model_latency()[i];
@@ -247,6 +250,12 @@ void SessionElement::complete_with_zeros(
 }
 
 void SessionElement::prepare(const HostConfig& host_config, std::vector<long> custom_latency) {
+    // Resolve the reference stream first: an unresolvable host config throws before any
+    // session state is touched. The result is read on the real-time path and never
+    // re-resolved there.
+    m_reference = host_config.resolve_reference(m_inference_config);
+    m_input_driven = has_streamable_input();
+    float const reference_size = host_config.get_reference_size(m_inference_config);
     m_host_config = host_config;
 
     // Calculate the latency, number of structs needed
@@ -301,10 +310,8 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
                 static_cast<float>(
                     m_inference_config.get_postprocess_output_size()[greatest_buffer_size_index]);
         }
-        min_config.m_buffer_size =
-            buffer_size_ratio *
-            static_cast<float>(
-                m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index]);
+        // Host buffer sizes are stated in samples of the reference stream (input or output).
+        min_config.m_buffer_size = buffer_size_ratio * reference_size;
 
         while (--greatest_buffer_size > 0) {
             float buffer_size_ratio;
@@ -320,71 +327,63 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
                         m_inference_config
                             .get_postprocess_output_size()[greatest_buffer_size_index]);
             }
-            adjusted_config.m_buffer_size =
-                buffer_size_ratio *
-                static_cast<float>(
-                    m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index]);
+            adjusted_config.m_buffer_size = buffer_size_ratio * reference_size;
 
-            std::vector<float> adjusted_latency;
-            for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-                if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-                    float const max_buffer_size =
-                        host_config.get_relative_buffer_size(m_inference_config, i, false);
-                    float const adjusted_buffer_size =
-                        adjusted_config.get_relative_buffer_size(m_inference_config, i, false);
-                    float const min_buffer_size =
-                        min_config.get_relative_buffer_size(m_inference_config, i, false);
-                    float const sample_rate =
-                        adjusted_config.get_relative_sample_rate(m_inference_config, i, false);
+            // Index-aligned with the output tensors (0 for non-streamable outputs), like the
+            // baseline pass, so the loops below can index by output tensor unconditionally.
+            std::vector<float> const adjusted_latency = collect_output_latencies([&](size_t i)
+                                                                                     -> float {
+                float const max_buffer_size =
+                    host_config.get_relative_buffer_size(m_inference_config, i, false);
+                float const adjusted_buffer_size =
+                    adjusted_config.get_relative_buffer_size(m_inference_config, i, false);
+                float const min_buffer_size =
+                    min_config.get_relative_buffer_size(m_inference_config, i, false);
+                float const sample_rate =
+                    adjusted_config.get_relative_sample_rate(m_inference_config, i, false);
 
-                    // When allowing smaller buffer sizes, the buffer adaptation is always the
-                    // post-process output size minus one Because we could have buffers of size one
-                    // only and this is the maximum adaptation possible
-                    int const buffer_adaptation = std::max(
-                        static_cast<int>(m_inference_config.get_postprocess_output_size()[i]) - 1,
-                        0);
+                // When allowing smaller buffer sizes, the buffer adaptation is always the
+                // post-process output size minus one Because we could have buffers of size one
+                // only and this is the maximum adaptation possible
+                int const buffer_adaptation = std::max(
+                    static_cast<int>(m_inference_config.get_postprocess_output_size()[i]) - 1,
+                    0);
 
-                    float const max_wait_time = calculate_wait_time(max_buffer_size, sample_rate);
-                    float const adjusted_wait_time =
-                        calculate_wait_time(adjusted_buffer_size, sample_rate);
-                    float const min_wait_time = calculate_wait_time(min_buffer_size, sample_rate);
+                float const max_wait_time = calculate_wait_time(max_buffer_size, sample_rate);
+                float const adjusted_wait_time =
+                    calculate_wait_time(adjusted_buffer_size, sample_rate);
+                float const min_wait_time = calculate_wait_time(min_buffer_size, sample_rate);
 
-                    float const max_possible_inferences =
-                        std::max(max_num_inferences(adjusted_config),
-                                 max_num_inferences(host_config));
+                float const max_possible_inferences =
+                    std::max(max_num_inferences(adjusted_config), max_num_inferences(host_config));
 
-                    int const inference_caused_latency_max_buffer =
-                        calculate_inference_caused_latency(
-                            max_possible_inferences,
-                            max_buffer_size,
-                            sample_rate,
-                            max_wait_time,
-                            m_inference_config.get_postprocess_output_size()[i]);
-                    int const inference_caused_latency_min_buffer =
-                        calculate_inference_caused_latency(
-                            1,
-                            min_buffer_size,
-                            sample_rate,
-                            min_wait_time,
-                            m_inference_config.get_postprocess_output_size()[i]);
-                    int const inference_caused_latency_adjusted_buffer =
-                        calculate_inference_caused_latency(
-                            max_num_inferences(adjusted_config),
-                            adjusted_buffer_size,
-                            sample_rate,
-                            adjusted_wait_time,
-                            m_inference_config.get_postprocess_output_size()[i]);
+                int const inference_caused_latency_max_buffer = calculate_inference_caused_latency(
+                    max_possible_inferences,
+                    max_buffer_size,
+                    sample_rate,
+                    max_wait_time,
+                    m_inference_config.get_postprocess_output_size()[i]);
+                int const inference_caused_latency_min_buffer = calculate_inference_caused_latency(
+                    1,
+                    min_buffer_size,
+                    sample_rate,
+                    min_wait_time,
+                    m_inference_config.get_postprocess_output_size()[i]);
+                int const inference_caused_latency_adjusted_buffer =
+                    calculate_inference_caused_latency(
+                        max_num_inferences(adjusted_config),
+                        adjusted_buffer_size,
+                        sample_rate,
+                        adjusted_wait_time,
+                        m_inference_config.get_postprocess_output_size()[i]);
 
-                    int inference_caused_latency =
-                        std::max(inference_caused_latency_max_buffer,
-                                 inference_caused_latency_adjusted_buffer);
-                    inference_caused_latency =
-                        std::max(inference_caused_latency, inference_caused_latency_min_buffer);
+                int inference_caused_latency = std::max(inference_caused_latency_max_buffer,
+                                                        inference_caused_latency_adjusted_buffer);
+                inference_caused_latency =
+                    std::max(inference_caused_latency, inference_caused_latency_min_buffer);
 
-                    adjusted_latency.push_back(
-                        static_cast<float>(inference_caused_latency + buffer_adaptation));
-                }
-            }
+                return static_cast<float>(inference_caused_latency + buffer_adaptation);
+            });
 
             // Sync the latencies when we have multiple outputs
             std::vector<unsigned int> adjusted_latency_synced = sync_latencies(adjusted_latency);
@@ -413,6 +412,13 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
         for (size_t i = 0; i < custom_latency.size(); ++i) {
             if (custom_latency[i] >= 0) { m_latency[i] = custom_latency[i]; }
         }
+    }
+
+    // A non-streamable output has no stream and therefore no stream latency, whatever a
+    // custom latency vector says: nothing downstream may assume m_latency[i] > 0 implies a
+    // ring buffer.
+    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+        if (m_inference_config.get_postprocess_output_size()[i] == 0) { m_latency[i] = 0; }
     }
 
     // Calculate the max size of the send and receive buffers
@@ -478,6 +484,7 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
 
     m_time_stamps.clear();
     m_time_stamps.reserve(m_num_structs);
+    m_pending_pull_samples = 0;
 }
 
 template <typename T>
@@ -513,8 +520,10 @@ size_t SessionElement::calculate_num_structs(const HostConfig& host_config) cons
     // Now calculate the number of structs necessary to keep the inference queues filled
     float const max_inference_time_in_samples =
         m_inference_config.m_max_inference_time * host_config.m_sample_rate / 1000;
-    int const new_samples_needed_for_inference = static_cast<int>(
-        m_inference_config.get_preprocess_input_size()[host_config.m_tensor_index]);
+    // Samples per inference in the unit the host buffer is stated in: the reference stream,
+    // an input hop for an effect or analyser, an output hop for a generator.
+    int const new_samples_needed_for_inference =
+        static_cast<int>(host_config.get_reference_size(m_inference_config));
     int const max_possible_inferences = (int)max_num_inferences(host_config);
     int const structs_per_max_inference_time =
         std::ceil((float)max_inference_time_in_samples / (float)new_samples_needed_for_inference);
@@ -526,34 +535,40 @@ size_t SessionElement::calculate_num_structs(const HostConfig& host_config) cons
 }
 
 std::vector<float> SessionElement::calculate_latency(const HostConfig& host_config) {
-    std::vector<float> result_float;
     float const max_possible_inferences = max_num_inferences(host_config);
-    for (size_t i = 0; i < m_inference_config.get_postprocess_output_size().size(); ++i) {
-        if (m_inference_config.get_postprocess_output_size()[i] <= 0) {
-            result_float.push_back(0);
+    return collect_output_latencies([&](size_t i) -> float {
+        float const host_output_size =
+            host_config.get_relative_buffer_size(m_inference_config, i, false);
+        float const sample_rate =
+            host_config.get_relative_sample_rate(m_inference_config, i, false);
+        // Calculate the different parts of the latency
+        int const buffer_adaptation = calculate_buffer_adaptation(
+            host_output_size,
+            static_cast<int>(m_inference_config.get_postprocess_output_size()[i]));
+        float const wait_time = calculate_wait_time(host_output_size, sample_rate);
+        int const inference_caused_latency =
+            calculate_inference_caused_latency(max_possible_inferences,
+                                               host_output_size,
+                                               sample_rate,
+                                               wait_time,
+                                               m_inference_config.get_postprocess_output_size()[i]);
+        // Add it all together
+        return static_cast<float>(buffer_adaptation + inference_caused_latency);
+    });
+}
+
+std::vector<float> SessionElement::collect_output_latencies(
+    const std::function<float(size_t)>& streamable_output_latency) const {
+    std::vector<float> result;
+    result.reserve(m_inference_config.get_tensor_output_shape().size());
+    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+        if (m_inference_config.get_postprocess_output_size()[i] > 0) {
+            result.push_back(streamable_output_latency(i));
         } else {
-            float const host_output_size =
-                host_config.get_relative_buffer_size(m_inference_config, i, false);
-            float const sample_rate =
-                host_config.get_relative_sample_rate(m_inference_config, i, false);
-            // Calculate the different parts of the latency
-            int const buffer_adaptation = calculate_buffer_adaptation(
-                host_output_size,
-                static_cast<int>(m_inference_config.get_postprocess_output_size()[i]));
-            float const wait_time = calculate_wait_time(host_output_size, sample_rate);
-            int const inference_caused_latency = calculate_inference_caused_latency(
-                max_possible_inferences,
-                host_output_size,
-                sample_rate,
-                wait_time,
-                m_inference_config.get_postprocess_output_size()[i]);
-            // Add it all together
-            result_float.push_back(
-                static_cast<float>(buffer_adaptation + inference_caused_latency));
+            result.push_back(0.f);  // No stream, no stream latency
         }
     }
-
-    return result_float;
+    return result;
 }
 
 std::vector<unsigned int> SessionElement::sync_latencies(
@@ -579,9 +594,12 @@ std::vector<unsigned int> SessionElement::sync_latencies(
                 result.push_back(0);  // If no output size, just return 0
             }
         }
-    } else {
-        result.push_back(std::ceil(latencies[0]));  // If only one output size, just return the
-                                                    // calculated value
+    } else if (!latencies.empty()) {
+        // One output tensor: nothing to synchronize against, keep the calculated value. A
+        // non-streamable output has no stream latency.
+        result.push_back(m_inference_config.get_postprocess_output_size()[0] > 0
+                             ? static_cast<unsigned int>(std::ceil(latencies[0]))
+                             : 0U);
     }
     return result;
 }
@@ -655,46 +673,77 @@ float SessionElement::calculate_wait_time(float host_buffer_size, float host_sam
     return wait_time;
 }
 
+bool SessionElement::has_streamable_input() const {
+    return std::ranges::any_of(m_inference_config.get_preprocess_input_size(),
+                               [](size_t size) { return size > 0; });
+}
+
 float SessionElement::max_num_inferences(const HostConfig& host_config) const {
+    // The driving side triggers inference: the streamable inputs when there are any (one
+    // inference per full input hop), otherwise the streamable outputs of a generator (one
+    // inference per hop of demanded output). Which tensor is the reference does not matter.
     float max_possible_inferences = 0.f;
-    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
-        if (m_inference_config.get_preprocess_input_size()[i] > 0) {
-            float const host_buffer_size =
-                host_config.get_relative_buffer_size(m_inference_config, i, true);
-            int const postprocess_input_size =
-                static_cast<int>(m_inference_config.get_preprocess_input_size()[i]);
-            float samples_in_buffer = host_buffer_size;
-            int res = (int)(samples_in_buffer / (float)postprocess_input_size);
-            res = std::max<int>(res, 1);
-            int num_inferences = 0;
-            // NOLINTNEXTLINE(clang-analyzer-security.FloatLoopCounter): fractional buffer step
-            for (float i = samples_in_buffer;
-                 i < static_cast<float>(least_common_multiple(std::floor(host_buffer_size),
-                                                              postprocess_input_size));
-                 i += host_buffer_size) {
-                num_inferences = (int)(samples_in_buffer / (float)postprocess_input_size);
-                res = std::max<int>(res, num_inferences);
-                samples_in_buffer +=
-                    host_buffer_size - static_cast<float>(num_inferences * postprocess_input_size);
+    if (has_streamable_input()) {
+        for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
+            if (m_inference_config.get_preprocess_input_size()[i] > 0) {
+                int const res = max_num_inferences_for_stream(
+                    host_config.get_relative_buffer_size(m_inference_config, i, true),
+                    static_cast<int>(m_inference_config.get_preprocess_input_size()[i]));
+                max_possible_inferences = std::max(max_possible_inferences, (float)res);
             }
-            // Here we handle the maximum number of inferences that can be done with a float buffer
-            // size
-            if (std::fmod(host_buffer_size, 1.f) > 1e-6f) {
-                samples_in_buffer = host_buffer_size;
-                float remainder = 0.f;
-                do {
-                    num_inferences = (int)(samples_in_buffer / (float)postprocess_input_size);
-                    res = std::max<int>(res, num_inferences);
-                    remainder = std::fmod(samples_in_buffer, 1.f);
-                    samples_in_buffer +=
-                        host_buffer_size -
-                        static_cast<float>(num_inferences * postprocess_input_size);
-                } while (remainder > std::fmod(samples_in_buffer, 1.f));
+        }
+    } else {
+        for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+            if (m_inference_config.get_postprocess_output_size()[i] > 0) {
+                int const res = max_num_inferences_for_stream(
+                    host_config.get_relative_buffer_size(m_inference_config, i, false),
+                    static_cast<int>(m_inference_config.get_postprocess_output_size()[i]));
+                max_possible_inferences = std::max(max_possible_inferences, (float)res);
             }
-            max_possible_inferences = std::max(max_possible_inferences, (float)res);
         }
     }
     return max_possible_inferences;
+}
+
+int SessionElement::max_num_inferences_for_stream(float host_buffer_size, int stream_size) const {
+    float samples_in_buffer = host_buffer_size;
+    int res = (int)(samples_in_buffer / (float)stream_size);
+    res = std::max<int>(res, 1);
+    int num_inferences = 0;
+    // NOLINTNEXTLINE(clang-analyzer-security.FloatLoopCounter): fractional buffer step
+    for (float i = samples_in_buffer;
+         i < static_cast<float>(least_common_multiple(std::floor(host_buffer_size), stream_size));
+         i += host_buffer_size) {
+        num_inferences = (int)(samples_in_buffer / (float)stream_size);
+        res = std::max<int>(res, num_inferences);
+        samples_in_buffer += host_buffer_size - static_cast<float>(num_inferences * stream_size);
+    }
+    // Here we handle the maximum number of inferences that can be done with a float buffer
+    // size
+    if (std::fmod(host_buffer_size, 1.f) > 1e-6f) {
+        samples_in_buffer = host_buffer_size;
+        float remainder = 0.f;
+        do {
+            num_inferences = (int)(samples_in_buffer / (float)stream_size);
+            res = std::max<int>(res, num_inferences);
+            remainder = std::fmod(samples_in_buffer, 1.f);
+            samples_in_buffer +=
+                host_buffer_size - static_cast<float>(num_inferences * stream_size);
+        } while (remainder > std::fmod(samples_in_buffer, 1.f));
+    }
+    return res;
+}
+
+bool SessionElement::receive_rings_have_room() {
+    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+        size_t const hop = m_inference_config.get_postprocess_output_size()[i];
+        if (hop == 0) { continue; }  // Non-streamable outputs have no ring
+        if (m_receive_buffer[i].get_num_samples() - m_receive_buffer[i].get_available_samples(0) <
+            hop) {
+            return false;
+        }
+    }
+    return true;
 }
 
 int SessionElement::greatest_common_divisor(int a, int b) const {

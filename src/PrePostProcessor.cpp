@@ -13,16 +13,20 @@ namespace anira {
 
 PrePostProcessor::PrePostProcessor(InferenceConfig& inference_config)
     : m_inference_config(inference_config) {
+    // Non-streamable tensors live here as single values; they read 0 until set (inputs) or
+    // until the first inference completes (outputs).
     m_inputs.resize(m_inference_config.get_tensor_input_shape().size());
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
         if (m_inference_config.get_preprocess_input_size()[i] <= 0) {
             m_inputs[i].resize(m_inference_config.get_tensor_input_size()[i]);
+            m_inputs[i].clear();
         }
     }
     m_outputs.resize(m_inference_config.get_tensor_output_shape().size());
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] <= 0) {
             m_outputs[i].resize(m_inference_config.get_tensor_output_size()[i]);
+            m_outputs[i].clear();
         }
     }
 }

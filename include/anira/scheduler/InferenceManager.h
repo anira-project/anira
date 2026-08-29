@@ -109,10 +109,16 @@ public:
      *
      * Queues input data for processing without waiting for results. This enables
      * decoupled input/output processing where data can be pushed and popped
-     * independently for buffered processing scenarios.
+     * independently for buffered processing scenarios. Finished inferences are
+     * collected here as well, as long as the receive buffers have room for them
+     * (Context::collect_completed()), so push-only usage never exhausts the
+     * inference structs; a host that never pops a streamed output is warned. On a
+     * generator session (no streamable input) this only stores the parameter
+     * values: inference is driven by the output demand of process()/pop_data().
      *
      * @param input_data Input data organized as data[tensor_index][channel][sample]
-     * @param num_input_samples Array of input sample counts for each tensor
+     * @param num_input_samples Array of input sample counts for each tensor (a value count,
+     * clamped to the tensor size, for non-streamable tensors)
      *
      * @note This method is real-time safe and should not allocate memory
      */
@@ -123,7 +129,10 @@ public:
      *
      * Retrieves available processed data from the inference pipeline. Should be used in
      * conjunction with push_data for decoupled processing patterns. This method does not block
-     * and returns immediately with any available output.
+     * and returns immediately with any available output. On a generator session (no
+     * streamable input) this is the pull that drives inference: the requested number of
+     * samples on the reference output is added to the demand and one inference is submitted
+     * per postprocess_output_size demanded samples, before results are collected.
      *
      * @param output_data Output buffers organized as data[tensor_index][channel][sample]
      * @param num_output_samples Array of maximum output sample counts for each tensor
@@ -174,11 +183,12 @@ public:
     /**
      * @brief Gets the processing latency for all tensors
      *
-     * Returns the latency introduced by the inference processing in samples for each tensor.
-     * This includes buffering delays, preprocessing/postprocessing latency, and
-     * model-specific processing latency.
+     * Returns the latency introduced by the inference processing in samples for each output
+     * tensor. This includes buffering delays, preprocessing/postprocessing latency, and
+     * model-specific processing latency. Non-streamable outputs carry no stream latency and
+     * report 0.
      *
-     * @return Vector containing latency values in samples for each tensor index
+     * @return Vector containing latency values in samples for each output tensor index
      */
     std::vector<unsigned int> get_latency() const;
 
@@ -281,6 +291,25 @@ private:
      * @return Array of actual output sample counts for each tensor
      */
     size_t* process_output(float* const* const* output_data, size_t* num_samples);
+
+    /**
+     * @brief Registers the host's output demand on a generator session
+     *
+     * For a session without streamable input the requested sample count of the
+     * reference output is what drives inference (see Context::new_data_submitted()).
+     * No-op for input-driven sessions.
+     *
+     * @param num_output_samples Array of requested output sample counts for each tensor
+     */
+    void request_output(const size_t* num_output_samples);
+
+    /**
+     * @brief Collects finished inferences without waiting
+     *
+     * Uses the completion signal the session actually runs on: the semaphore
+     * (try_acquire) for blocking_ratio > 0, the atomic flag otherwise.
+     */
+    void collect_nonblocking();
 
     /**
      * @brief Clears audio data buffers

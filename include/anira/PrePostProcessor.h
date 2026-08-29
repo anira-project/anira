@@ -146,7 +146,9 @@ public:
      * @brief Sets a non-streamable input value in thread-safe storage
      *
      * Used to store control parameters or static values that don't change sample-by-sample.
-     * The data is stored using atomic operations for thread safety.
+     * The data is stored using atomic operations for thread safety. The value is
+     * captured when an inference is submitted (pre_process()), so it applies to every
+     * inference submitted from then on; it reads 0 until set for the first time.
      *
      * @param input The value to store
      * @param i Tensor index (which input tensor)
@@ -190,6 +192,11 @@ public:
      * @brief Retrieves a non-streamable output value from thread-safe storage
      *
      * Used to read inference results or control parameters in a thread-safe manner.
+     * The value is that of the latest completed inference: it is written when a
+     * result is collected (post_process(), from process(), push_data(), pop_data() or
+     * get_available_samples()), so it can update in a later call than the one that
+     * supplied the last input sample of its window. It reads 0 before the first
+     * inference completes and is not cleared by reset() or prepare().
      *
      * @param i Tensor index (which output tensor)
      * @param j Sample index within the tensor

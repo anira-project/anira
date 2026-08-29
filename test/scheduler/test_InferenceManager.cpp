@@ -13,7 +13,9 @@
 #include <ios>
 #include <ostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -497,3 +499,67 @@ INSTANTIATE_TEST_SUITE_P(
                             2),
             {2048, 0}}),
     build_test_name);
+
+// =============================================================================
+// One-sided streaming through the public prepare()/get_latency() path
+// (redo of the reverted PR #101, see #110)
+// =============================================================================
+
+namespace {
+InferenceConfig make_one_sided_config(std::vector<TensorShape> shapes, ProcessingSpec spec) {
+    return InferenceConfig(
+        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        std::move(shapes),
+        std::move(spec),
+        10.f,   // max_inference_time
+        0,      // warm_up
+        false,  // session_exclusive_processor
+        0.f,    // blocking_ratio
+        2);     // num_parallel_processors
+}
+}  // namespace
+
+TEST(InferenceManagerOneSided, GeneratorLatencyEqualsTwoSidedTwin) {
+    InferenceConfig generator =
+        make_one_sided_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
+                              ProcessingSpec({1}, {1}, {0}, {2048}));
+    InferenceConfig twin =
+        make_one_sided_config(std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+                              ProcessingSpec({1}, {1}, {2048}, {2048}));
+
+    PrePostProcessor generator_pp(generator);
+    PrePostProcessor twin_pp(twin);
+    ContextConfig const context_config(2);
+    InferenceManager generator_manager(generator_pp, generator, nullptr, context_config);
+    InferenceManager twin_manager(twin_pp, twin, nullptr, context_config);
+
+    generator_manager.prepare(HostConfig(512, 48000, true));
+    twin_manager.prepare(HostConfig(512, 48000, true));
+
+    EXPECT_EQ(generator_manager.get_latency(), twin_manager.get_latency());
+}
+
+TEST(InferenceManagerOneSided, AnalyserLatencyIsZero) {
+    InferenceConfig analyser =
+        make_one_sided_config(std::vector<TensorShape>{TensorShape({{1, 2048}, {1, 1}}, {{1, 1}})},
+                              ProcessingSpec({1, 1}, {1}, {2048, 0}, {0}));
+
+    PrePostProcessor pp_processor(analyser);
+    InferenceManager manager(pp_processor, analyser, nullptr, ContextConfig(2));
+    manager.prepare(HostConfig(512, 48000, true));
+
+    EXPECT_EQ(manager.get_latency(), std::vector<unsigned int>{0});
+}
+
+TEST(InferenceManagerOneSided, InvalidReferenceThrowsFromPrepare) {
+    InferenceConfig generator =
+        make_one_sided_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
+                              ProcessingSpec({1}, {1}, {0}, {2048}));
+
+    PrePostProcessor pp_processor(generator);
+    InferenceManager manager(pp_processor, generator, nullptr, ContextConfig(2));
+
+    // Explicitly naming the non-streamable input as the reference is an error, not a
+    // silent fallback.
+    EXPECT_THROW(manager.prepare(HostConfig(512, 48000, true, 0, true)), std::invalid_argument);
+}

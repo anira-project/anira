@@ -26,6 +26,7 @@ add_executable(${PROJECT_NAME})
 
 target_sources(${PROJECT_NAME} PRIVATE
 	test_InferenceHandler.cpp
+	test_OneSidedStreaming.cpp
 	test_StatefulOrdering.cpp
 	backends/test_BackendBase.cpp
 	backends/test_ExecuTorchModelFunction.cpp

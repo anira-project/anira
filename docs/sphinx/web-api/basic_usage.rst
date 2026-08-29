@@ -142,7 +142,12 @@ allocate buffers and ``setInferenceBackend`` to pick the runtime.
 .. note::
    The buffer size you pass here is the host buffer size that the audio
    worklet will deliver per block (typically ``128`` samples in Web
-   Audio), not the model's tensor size.
+   Audio), not the model's tensor size. It is stated in samples of the
+   *reference stream*: by default the first streamable input tensor and, for
+   generator models with no streamable input, the first streamable output
+   tensor. Pass an explicit tensor index (fourth argument) and direction
+   (optional fifth argument, ``tensorIsInput``, default ``true``) to select
+   a different reference.
 
 8. Audio Worklet Wiring
 -----------------------

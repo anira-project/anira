@@ -9,4 +9,10 @@
 # allocations, locks, sleeps, and semaphore syscalls on real-time paths still
 # abort the job. (The buffers are tanh-lib's logger-free containers: a ring
 # overflow overwrites silently, so no suppression is needed for them.)
-call-stack-contains:basic_ostream
+#
+# The pattern must match whichever demangler symbolizes the stack: GNU's
+# __cxa_demangle expands the `So` substitution to
+# `std::basic_ostream<char, std::char_traits<char> >::flush()`, LLVM's
+# (llvm-symbolizer) prints the same frame as `std::ostream::flush()`. `ostream`
+# is the common substring of both spellings (and of `__ostream_insert`).
+call-stack-contains:ostream

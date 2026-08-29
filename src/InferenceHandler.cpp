@@ -10,6 +10,8 @@
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace anira {
@@ -87,13 +89,19 @@ void InferenceHandler::prepare(HostConfig new_audio_config,
                                size_t tensor_index) {
     std::vector<long> custom_latency_vector(m_inference_config.get_tensor_output_shape().size(),
                                             -1);
-    if (m_inference_config.get_postprocess_output_size()[tensor_index] <= 0) {
-        assert(false && "Tensor index is a non-streamable output.");
+    if (tensor_index >= m_inference_config.get_tensor_output_shape().size()) {
+        throw std::invalid_argument(
+            "InferenceHandler::prepare: custom latency tensor index " +
+            std::to_string(tensor_index) + " is out of range (the model has " +
+            std::to_string(m_inference_config.get_tensor_output_shape().size()) +
+            " output tensors).");
     }
-    if (tensor_index < m_inference_config.get_tensor_output_shape().size()) {
-        custom_latency_vector[tensor_index] = static_cast<long>(custom_latency);
+    if (m_inference_config.get_postprocess_output_size()[tensor_index] <= 0) {
+        // A non-streamable output has no stream latency; the entry stays -1 (ignored),
+        // like the vector overload below.
+        assert(false && "Tensor index is a non-streamable output.");
     } else {
-        assert(false && "Tensor index out of bounds for custom latency.");
+        custom_latency_vector[tensor_index] = static_cast<long>(custom_latency);
     }
     m_inference_manager.prepare(new_audio_config, custom_latency_vector);
 }

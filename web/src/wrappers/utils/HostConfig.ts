@@ -12,26 +12,32 @@ export class HostConfig extends BaseWrapper {
     bufferSize?: number,
     sampleRate?: number,
     allowSmallerBuffers?: boolean,
-    tensorIndex?: number
+    tensorIndex?: number,
+    tensorIsInput?: boolean
   ) {
-    if (
-      bufferSize !== undefined &&
-      sampleRate !== undefined &&
-      allowSmallerBuffers !== undefined &&
-      tensorIndex !== undefined
-    ) {
+    if (bufferSize !== undefined && sampleRate !== undefined) {
       super(
         wasmInstance,
         wasmInstance._hostconfig_create_with_params(
           bufferSize,
           sampleRate,
-          allowSmallerBuffers ? 1 : 0,
-          tensorIndex
+          (allowSmallerBuffers ?? false) ? 1 : 0,
+          tensorIndex ?? HostConfig.firstStreamable(wasmInstance),
+          (tensorIsInput ?? true) ? 1 : 0
         )
       )
     } else {
       super(wasmInstance, wasmInstance._hostconfig_create())
     }
+  }
+
+  /**
+   * The sentinel value of :cpp:member:`anira::HostConfig::m_tensor_index` that resolves
+   * the reference stream automatically (first streamable input, else first streamable
+   * output). Normalized to an unsigned 32-bit number.
+   */
+  static firstStreamable(wasmInstance: AniraWasmInstance): number {
+    return wasmInstance._hostconfig_first_streamable() >>> 0
   }
 
   /** Free the underlying C++ object. See :ref:`lifecycle-and-cleanup` for when to call this. */
@@ -58,7 +64,17 @@ export class HostConfig extends BaseWrapper {
 
   /** Mirrors the :cpp:member:`anira::HostConfig::m_tensor_index` field. */
   get tensorIndex(): number {
-    return this.wasmInstance._hostconfig_get_tensor_index(this.ptr)
+    return this.wasmInstance._hostconfig_get_tensor_index(this.ptr) >>> 0
+  }
+
+  /** Mirrors the :cpp:member:`anira::HostConfig::m_tensor_is_input` field. */
+  get tensorIsInput(): boolean {
+    return this.wasmInstance._hostconfig_get_tensor_is_input(this.ptr) === 1
+  }
+
+  /** True while the reference stream is resolved automatically (first streamable tensor). */
+  get isAutoReference(): boolean {
+    return this.tensorIndex === HostConfig.firstStreamable(this.wasmInstance)
   }
 
   // Property setters
@@ -81,6 +97,11 @@ export class HostConfig extends BaseWrapper {
   /** Mirrors the :cpp:member:`anira::HostConfig::m_tensor_index` field. */
   set tensorIndex(value: number) {
     this.wasmInstance._hostconfig_set_tensor_index(this.ptr, value)
+  }
+
+  /** Mirrors the :cpp:member:`anira::HostConfig::m_tensor_is_input` field. */
+  set tensorIsInput(value: boolean) {
+    this.wasmInstance._hostconfig_set_tensor_is_input(this.ptr, value ? 1 : 0)
   }
 
   equals(other: PossiblePointer<HostConfig>): boolean {

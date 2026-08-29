@@ -249,18 +249,42 @@ public:
      *
      * Signals to the inference system that new audio data is available for processing
      * by the specified session. This triggers the inference pipeline to begin
-     * processing the submitted data.
+     * processing the submitted data: an input-driven session (any streamable input)
+     * submits one inference per full hop of every streamable input; a generator
+     * session (no streamable input) submits one inference per hop of demanded
+     * reference-output samples (SessionElement::m_pending_pull_samples).
      *
      * @param session Shared pointer to the session that has new data available
      */
     void new_data_submitted(const std::shared_ptr<SessionElement>& session);
 
     /**
+     * @brief Collects completed inferences on the push side, as far as they fit
+     *
+     * Post-processes finished inferences in submission order and frees their
+     * structs, exactly like the non-waiting new_data_request(), with one extra
+     * guard: a result is only placed while every streamable receive ring can take
+     * it (SessionElement::receive_rings_have_room()). Otherwise the result stays in
+     * its struct and false is returned -- the host is producing streamed output it
+     * never pops. Called from InferenceManager::push_data() so that push-only hosts
+     * (an analyser reading its non-streamable outputs) never exhaust the struct
+     * pool. Non-blocking for both completion signals; in non-real-time mode it waits
+     * for the oldest in-flight inference like every other collection point.
+     *
+     * @param session Shared pointer to the session to collect for
+     * @return False if a completed result could not be placed because a receive ring is
+     *         full, true otherwise
+     */
+    bool collect_completed(const std::shared_ptr<SessionElement>& session);
+
+    /**
      * @brief Requests new data processing for a session
      *
      * Requests that the inference system process data for the specified session.
      * This is used for scheduling and managing inference operations. The request
-     * is processed immediately.
+     * is processed immediately. Completed results are placed only while the
+     * streamable receive rings have room for them (see collect_completed()), so
+     * unread output is never overwritten.
      *
      * @param session Shared pointer to the session requesting data processing
      *
@@ -275,6 +299,8 @@ public:
      *
      * Requests that the inference system process data for the specified session,
      * but waits for the data until the given time point before processing.
+     * Completed results are placed only while the streamable receive rings have
+     * room for them (see collect_completed()).
      *
      * @param session Shared pointer to the session requesting data processing
      * @param wait_until Time point at which to begin processing the data request
@@ -524,6 +550,14 @@ private:
      * @return True if preprocessing was successful, false otherwise
      */
     static bool pre_process(const std::shared_ptr<SessionElement>& session);
+
+    /**
+     * @brief Whether every streamable input ring holds a full hop for the next inference
+     *
+     * @param session Shared pointer to the session to check
+     * @return True if an inference can be pre-processed from the input rings
+     */
+    static bool inputs_ready(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Returns structs left over from a wait-free reset to the free pool.

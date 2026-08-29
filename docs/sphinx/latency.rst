@@ -45,10 +45,14 @@ Latency Synchronization
 
 When multiple outputs are present, the system synchronizes latencies across all outputs to ensure coherent processing. This is achieved by calculating a latency ratio and applying it uniformly across all output channels.
 
+The latency vector returned by :cpp:func:`anira::InferenceHandler::get_latency_vector` is index-aligned with the output tensor list. Non-streamable outputs (``postprocess_output_size == 0``) carry no stream latency and always report ``0``.
+
 Adaptive Buffer Handling
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For hosts that support variable buffer sizes (``allow_smaller_buffers``), the system performs additional calculations to handle worst-case scenarios across different buffer sizes, ensuring stable latency regardless of the actual buffer size used.
+
+These calculations count buffer sizes in samples of the *reference stream* selected by the :cpp:struct:`anira::HostConfig` — a streamable input for effects and analysers, the streamable output for a generator model with no streamable input (see the usage guide, section 4.1).
 
 Output Behavior
 ---------------
