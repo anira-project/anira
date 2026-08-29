@@ -665,6 +665,45 @@ TEST_P(OneSidedStreamingPrepareTest, AnalyserHasNoStreamLatency) {
     EXPECT_EQ(ana.m_num_structs, twin.m_num_structs);
 }
 
+// Issue #98: with allow_smaller_buffers the adjusted-latency pass collected entries for
+// streamable outputs only and then indexed the synced vector by output tensor index --
+// an empty vector when every output is non-streamable (crash in sync_latencies()), a
+// short one for a mixed output list (out-of-bounds read into m_latency). Both passes
+// now build one entry per output tensor. The configs are the issue's (Silero-VAD
+// shaped: probability + recurrent-state outputs); the oracle for the mixed case is the
+// non-adjusted pass, which always handled non-streamable outputs correctly.
+TEST_P(OneSidedStreamingPrepareTest, NonStreamableOutputsKeepLatencyIndexAligned) {
+    bool const smaller = GetParam();
+    std::vector<TensorShape> const shapes{
+        TensorShape({{1, 576}, {2, 1, 128}}, {{1, 1}, {2, 1, 128}})};
+    HostConfig const host(512, 16000, smaller);
+
+    // Case 1: every output non-streamable.
+    PrepareResult const all_static =
+        prepare_and_measure(make_config(shapes, ProcessingSpec({1, 1}, {1, 1}, {512, 0}, {0, 0})),
+                            host);
+    ASSERT_EQ(all_static.m_latency.size(), 2u);
+    EXPECT_EQ(all_static.m_latency, (std::vector<unsigned int>{0, 0}))
+        << "Non-streamable outputs carry no stream latency.";
+    EXPECT_EQ(all_static.m_receive, (std::vector<size_t>{0, 0}))
+        << "Non-streamable outputs have no receive rings.";
+
+    // Case 2: a streamable result plus a non-streamable state tensor.
+    InferenceConfig const mixed =
+        make_config(shapes, ProcessingSpec({1, 1}, {1, 1}, {512, 0}, {1, 0}));
+    PrepareResult const adjusted = prepare_and_measure(mixed, host);
+    PrepareResult const plain = prepare_and_measure(mixed, HostConfig(512, 16000, false));
+    ASSERT_EQ(adjusted.m_latency.size(), 2u);
+    ASSERT_EQ(plain.m_latency.size(), 2u);
+    EXPECT_EQ(adjusted.m_latency[1], 0u) << "The state tensor keeps a latency of 0.";
+    EXPECT_EQ(adjusted.m_receive[1], 0u);
+    EXPECT_GE(adjusted.m_latency[0], plain.m_latency[0])
+        << "The smaller-buffer pass may only raise the streamed output's latency.";
+    EXPECT_LE(adjusted.m_latency[0], plain.m_latency[0] + 512u)
+        << "and by at most one host block -- anything else is an out-of-bounds read.";
+    if (!smaller) { EXPECT_EQ(adjusted.m_latency, plain.m_latency); }
+}
+
 INSTANTIATE_TEST_SUITE_P(OneSidedStreaming,
                          OneSidedStreamingPrepareTest,
                          ::testing::Values(false, true),
