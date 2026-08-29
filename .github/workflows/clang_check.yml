@@ -15,9 +15,7 @@ jobs:
   # install.sh and committing the result (https://github.com/tanh-lab/tanh-tooling);
   # the fetched tanh-lib must pin the same tag.
   clang-config:
-    # TEMPORARY until tanh-tooling v0.1.5 is tagged: pinned to its feat/cmake-modules
-    # branch so CI can run; switch both lines back to the tag at release.
-    uses: tanh-lab/tanh-tooling/.github/workflows/config-check.yml@feat/cmake-modules
+    uses: tanh-lab/tanh-tooling/.github/workflows/config-check.yml@v0.1.5
     with:
-      ref: feat/cmake-modules
+      ref: v0.1.5
       family: "clang cmake"
