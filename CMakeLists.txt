@@ -213,7 +213,7 @@ FetchContent_MakeAvailable(concurrentqueue)
 # find_dependency(tanh COMPONENTS Core), so a consumer's find_package(anira)
 # links the exported tanh::Core.
 #
-# Pinned to a tagged tanh-lib release (temporarily a commit, see the TODO below).
+# Pinned to a tagged tanh-lib release.
 #
 # Plain (non-cache) variables on purpose: tanh-lib's cmake_minimum_required
 # puts CMP0077 in NEW mode, so these shadow its option() defaults while anira
@@ -234,9 +234,7 @@ set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    # TODO(#91): switch back to a release tag once tanh-lib tags the core WAV
-    # decoder (tanh-lab/tanh-lib#18) — this is that PR's head commit.
-    GIT_TAG b79cecc61b2c3362aedddcb84094cb4e23af3dfe
+    GIT_TAG v0.0.4
 )
 FetchContent_MakeAvailable(tanh-lib)
 
