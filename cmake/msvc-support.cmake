@@ -43,23 +43,19 @@ if (ANIRA_WITH_LIBTORCH)
     list(APPEND ANIRA_SHARED_LIBS_WIN ${INFERENCE_ENGINE_DLLS_LIBTORCH})
 endif(ANIRA_WITH_LIBTORCH)
 
-# Google Benchmark and Google Test DLLs (only built as DLLs in a shared build; with
-# BUILD_SHARED_LIBS=OFF gtest/benchmark are static and there is no .dll to copy).
-if ((ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK) AND BUILD_SHARED_LIBS)
-    if(CMAKE_GENERATOR MATCHES "Visual Studio")
-        list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}/gtest.dll")
-        list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}/gtest_main.dll")
-    else()
-        list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/bin/gtest.dll")
-        list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/bin/gtest_main.dll")
-    endif()
+# Google Test and Google Benchmark DLLs (only built as DLLs in a shared build; with
+# BUILD_SHARED_LIBS=OFF gtest/benchmark are static and there is no .dll to copy). Target
+# file generator expressions, not paths: the targets come from the shared
+# tanh-tooling module (cmake/tanh/test-deps.cmake) and their build directories are its
+# business.
+if(ANIRA_WITH_TESTS AND BUILD_SHARED_LIBS)
+    list(APPEND ANIRA_SHARED_LIBS_WIN "$<TARGET_FILE:gtest>" "$<TARGET_FILE:gtest_main>")
 endif()
-
-if (ANIRA_WITH_BENCHMARK AND BUILD_SHARED_LIBS)
-    if(CMAKE_GENERATOR MATCHES "Visual Studio")
-        list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/_deps/benchmark-build/src/${CMAKE_BUILD_TYPE}/benchmark.dll")
-    else()
-        list(APPEND ANIRA_SHARED_LIBS_WIN "${CMAKE_BINARY_DIR}/_deps/benchmark-build/src/benchmark.dll")
+if(ANIRA_WITH_BENCHMARK AND BUILD_SHARED_LIBS)
+    list(APPEND ANIRA_SHARED_LIBS_WIN "$<TARGET_FILE:benchmark::benchmark>")
+    if(NOT ANIRA_WITH_TESTS)
+        # gtest_main is linked into anira for the benchmark fixtures as well.
+        list(APPEND ANIRA_SHARED_LIBS_WIN "$<TARGET_FILE:gtest>" "$<TARGET_FILE:gtest_main>")
     endif()
 endif()
 
