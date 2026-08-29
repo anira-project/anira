@@ -120,16 +120,16 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config)
                 std::string(static_cast<const char*>(model_data->m_data), model_data->m_size));
             m_module = torch::jit::load(stream);
         } catch (const c10::Error& e) {
-            LOG_ERROR << "[ERROR] error loading the model\n";
-            LOG_ERROR << e.what() << '\n';
+            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "error loading the model");
+            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "%s", e.what());
         }
     } else {
         try {
             m_module = torch::jit::load(
                 m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
         } catch (const c10::Error& e) {
-            LOG_ERROR << "[ERROR] error loading the model\n";
-            LOG_ERROR << e.what() << '\n';
+            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "error loading the model");
+            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "%s", e.what());
         }
     }
     m_module.eval();

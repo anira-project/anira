@@ -1,6 +1,8 @@
 #ifndef ANIRA_CONTEXT_H
 #define ANIRA_CONTEXT_H
 
+#include <tanh/core/Logger.h>
+
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -190,6 +192,18 @@ public:
      *       memory is leaked, no thread is.
      */
     static void shutdown();
+
+    /**
+     * @brief Forwards the records anira's real-time paths have logged to the log sinks
+     *
+     * The audio thread and the inference threads log into a lock-free queue owned by
+     * the context (see LogConfig). With LogDrain::Manual the host calls this
+     * periodically (e.g. from a UI timer); with LogDrain::Thread the context's own
+     * thread does it and this call is just an extra flush. Returns the number of
+     * records delivered. Not real-time safe: the sinks (platform log, file, the host's
+     * callback) run on the calling thread.
+     */
+    static size_t drain_log();
 
     /**
      * @brief Frees the context core if nothing uses it
@@ -471,6 +485,17 @@ private:
     static void apply_log_level_locked(Core& core, const ContextConfig& context_config);
 
     /**
+     * @brief Makes sure the core owns the real-time log queue and, in LogDrain::Thread
+     * mode, starts its drain thread
+     *
+     * Called with the lifecycle lock held by the first session of a generation. The
+     * queue is created once per core (its capacity is fixed by the first session that
+     * ever builds it) and published to the real-time log sites; the drain thread runs
+     * at low priority exactly while sessions exist.
+     */
+    static void start_log_drain_locked(Core& core, const ContextConfig& context_config);
+
+    /**
      * @brief Applies a configuration into an empty registry, or reconciles it otherwise
      *
      * Called with the lifecycle lock held. Registry empty: the configuration becomes the
@@ -506,6 +531,15 @@ private:
      */
     static void unregister_session_locked(Core& core,
                                           const std::shared_ptr<SessionElement>& session);
+
+    /**
+     * @brief Takes the log drain thread out of the core so the caller can stop it
+     *
+     * Called with the lifecycle lock held. Stopping joins the thread and flushes the
+     * queue through the log sinks — and a host's log callback may call back into the
+     * context — so the returned object is destroyed after the lock is released.
+     */
+    static std::unique_ptr<thl::Logger::rt::DrainThread> take_log_drain_locked(Core& core);
 
     /**
      * @brief Size the pool will have once the given configuration has been applied

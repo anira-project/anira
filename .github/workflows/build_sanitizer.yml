@@ -22,14 +22,11 @@ concurrency:
 jobs:
   build_and_test_rtsan:
     # Gates the ANIRA_REALTIME ([[clang::nonblocking]]) hot path — process/
-    # push_data/pop_data/reset — at runtime. Of the two violations this job was
-    # originally parked on, the moodycamel first-enqueue allocation was fixed in
-    # v2.2.1 (explicit per-session producer tokens; verified clean under RTSan),
-    # and the remaining stream-logging-from-the-audio-path class (RingBuffer
-    # overflow log, new_data_submitted "no free inference queue" warning) is
-    # suppressed via .github/rtsan-suppressions.supp until logging is moved off
-    # the audio thread. Everything else — allocations, locks, sleeps, semaphore
-    # syscalls in a real-time context — fails the job.
+    # push_data/pop_data/reset — at runtime, with no suppressions: logging from
+    # real-time paths goes through thl::Logger::rt (lock-free, no syscalls), so
+    # any allocation, lock, sleep, semaphore or stream syscall in a real-time
+    # context fails the job. tanh-lib is built with TANH_WITH_RTSAN so its own
+    # nonblocking annotations are checked in the same build.
     name: Check real-time safety with RTSan
     strategy:
       matrix:
@@ -64,4 +61,3 @@ jobs:
       - name: test
         uses: ./.github/actions/test
         env:
-          RTSAN_OPTIONS: "suppressions=${{ github.workspace }}/.github/rtsan-suppressions.supp"

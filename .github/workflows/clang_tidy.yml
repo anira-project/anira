@@ -33,4 +33,4 @@ jobs:
       - uses: tanh-lab/ci-actions/clang-tidy-check@main
         with:
           PRESET: clang-tidy
-          SOURCES: "src/backends/ src/benchmark/ src/scheduler/ src/system/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/"
+          SOURCES: "src/backends/ src/benchmark/ src/scheduler/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/"

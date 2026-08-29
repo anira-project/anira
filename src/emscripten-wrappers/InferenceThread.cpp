@@ -8,7 +8,7 @@
  * C API wrapper over anira::InferenceThread for the Emscripten build.
  *
  * Under __EMSCRIPTEN__, anira::InferenceThread does not inherit from
- * HighPriorityThread and does not own an OS thread. JS Workers drive the
+ * thl::core::Thread and does not own an OS thread. JS Workers drive the
  * processing loop by calling inference_thread_run_loop(), and start/stop
  * just flip an atomic flag inside the class.
  *

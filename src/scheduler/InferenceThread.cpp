@@ -4,6 +4,7 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+#include <tanh/core/threading/Thread.h>
 
 // IWYU pragma: keep - processor methods are called through SessionElement's shared_ptr members
 #ifdef USE_LIBTORCH
@@ -48,8 +49,24 @@ InferenceThread::~InferenceThread() {
 }
 
 #ifndef __EMSCRIPTEN__
-void InferenceThread::run() {
-    run_loop();
+void InferenceThread::start() {
+    thl::core::ThreadOptions options;
+    options.m_priority = thl::core::ThreadPriority::RealTime;
+    options.m_name = "anira-inference";
+    m_thread.start(options, [this](const thl::core::Thread&) { run_loop(); });
+}
+
+void InferenceThread::stop() {
+    m_thread.request_stop();
+    m_thread.join();
+}
+
+bool InferenceThread::should_exit() const {
+    return m_thread.should_stop();
+}
+
+bool InferenceThread::is_running() const {
+    return m_thread.is_running();
 }
 #else
 void InferenceThread::start() {
@@ -231,9 +248,9 @@ void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement
                 InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
             // The task completes as zeros at its stream position, keeping
             // the output time-aligned instead of stalling the session.
-            LOG_ERROR << "[ERROR] Could not enqueue next inference! "
-                         "Dropping the inference and zero-filling its output."
-                      << '\n';
+            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                               "Could not enqueue next inference! "
+                               "Dropping the inference and zero-filling its output.");
             session->complete_with_zeros(next);
             session->release_dispatch(next->m_dispatch_epoch);
         }
@@ -274,8 +291,8 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
             session->m_libtorch_processor->process(input, output, session);
         } else {
             session->m_default_processor.process(input, output, session);
-            LOG_ERROR << "[ERROR] LibTorch model has not been provided. Using default processor."
-                      << '\n';
+            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                               "LibTorch model has not been provided. Using default processor.");
         }
     }
 #endif
@@ -285,8 +302,8 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
             session->m_onnx_processor->process(input, output, session);
         } else {
             session->m_default_processor.process(input, output, session);
-            LOG_ERROR << "[ERROR] OnnxRuntime model has not been provided. Using default processor."
-                      << '\n';
+            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                               "OnnxRuntime model has not been provided. Using default processor.");
         }
     }
 #endif
@@ -296,8 +313,8 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
             session->m_tflite_processor->process(input, output, session);
         } else {
             session->m_default_processor.process(input, output, session);
-            LOG_ERROR << "[ERROR] TFLite model has not been provided. Using default processor."
-                      << '\n';
+            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                               "TFLite model has not been provided. Using default processor.");
         }
     }
 #endif
@@ -307,8 +324,8 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
             session->m_litert_processor->process(input, output, session);
         } else {
             session->m_default_processor.process(input, output, session);
-            LOG_ERROR << "[ERROR] LiteRT model has not been provided. Using default processor."
-                      << '\n';
+            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                               "LiteRT model has not been provided. Using default processor.");
         }
     }
 #endif
@@ -318,8 +335,8 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
             session->m_executorch_processor->process(input, output, session);
         } else {
             session->m_default_processor.process(input, output, session);
-            LOG_ERROR << "[ERROR] ExecuTorch model has not been provided. Using default processor."
-                      << '\n';
+            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                               "ExecuTorch model has not been provided. Using default processor.");
         }
     }
 #endif

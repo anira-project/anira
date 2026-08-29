@@ -233,6 +233,10 @@ size_t InferenceHandler::get_available_samples(size_t tensor_index, size_t chann
     return m_inference_manager.get_available_samples(tensor_index, channel);
 }
 
+size_t InferenceHandler::drain_log() {
+    return m_inference_manager.drain_log();
+}
+
 void InferenceHandler::set_non_realtime(bool is_non_realtime) {
     m_inference_manager.set_non_realtime(is_non_realtime);
 }

@@ -72,7 +72,9 @@ if(APPLE)
 elseif(UNIX)
     set(ENV{LD_LIBRARY_PATH} "${_libdir}:${_prefix}/lib64:$ENV{LD_LIBRARY_PATH}")
 elseif(WIN32)
-    set(ENV{PATH} "${_libdir};$ENV{PATH}")
+    # anira.dll and the backend DLLs install to lib/, tanh-lib's tanh_core.dll (a
+    # load-time dependency of anira.dll) to bin/.
+    set(ENV{PATH} "${_prefix}/bin;${_libdir};$ENV{PATH}")
 endif()
 
 _find_built(consumer _exe)

@@ -126,9 +126,9 @@ size_t* InferenceManager::pop_data(float* const* const* output_data,
     if (m_inference_config.m_blocking_ratio > 0.f) {
         m_context.new_data_request(m_session, wait_until);
     } else {
-        LOG_ERROR << "[ERROR] InferenceConfig does not use blocking_ratio and does not use "
-                     "semaphores for data acquisition, cannot wait for data!"
-                  << '\n';
+        ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                           "InferenceConfig does not use blocking_ratio and does not use "
+                           "semaphores for data acquisition, cannot wait for data!");
     }
 
     return process_output(output_data, num_output_samples);
@@ -177,10 +177,12 @@ size_t* InferenceManager::process_output(float* const* const* output_data, size_
                 }
             }
             if (missing_samples_before - m_missing_samples[i] > 0) {
-                LOG_WARNING << "[WARNING] Catch up missing samples: "
-                            << missing_samples_before - m_missing_samples[i]
-                            << " in session: " << m_session->m_session_id
-                            << " for tensor index: " << i << "!" << '\n';
+                ANIRA_LOG_RT_WARNING(log_group::k_scheduler,
+                                     "Catch up missing samples: %zu in session: %d for tensor "
+                                     "index: %zu!",
+                                     missing_samples_before - m_missing_samples[i],
+                                     m_session->m_session_id,
+                                     i);
             }
         }
     }
@@ -224,9 +226,11 @@ size_t* InferenceManager::process_output(float* const* const* output_data, size_
         for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
             if (m_inference_config.get_postprocess_output_size()[i] > 0) {
                 m_missing_samples[i] += num_samples[i];
-                LOG_WARNING << "[WARNING] Missing samples: " << m_missing_samples[i]
-                            << " in session: " << m_session->m_session_id
-                            << " for tensor index: " << i << "!" << '\n';
+                ANIRA_LOG_RT_WARNING(log_group::k_scheduler,
+                                     "Missing samples: %zu in session: %d for tensor index: %zu!",
+                                     m_missing_samples[i],
+                                     m_session->m_session_id,
+                                     i);
             }
             num_samples[i] = 0;  // Set num_samples to 0 if not enough samples are available
         }
@@ -275,6 +279,10 @@ int InferenceManager::get_session_id() const {
     return m_session->m_session_id;
 }
 
+size_t InferenceManager::drain_log() const {
+    return Context::drain_log();
+}
+
 void InferenceManager::set_non_realtime(bool is_non_realtime) const {
     // The unbounded wait this flag triggers in Context::new_data_request() is
     // only ever satisfied by an inference thread completing the task. Without
@@ -283,12 +291,12 @@ void InferenceManager::set_non_realtime(bool is_non_realtime) const {
     // externally driven thread active — process()/pop_data() would hang
     // instead of blocking briefly. Refuse instead of arming a guaranteed hang.
     if (is_non_realtime && !Context::has_inference_threads()) {
-        LOG_WARNING << "[WARNING] set_non_realtime(true) refused: no inference threads are "
-                       "configured or running, so the resulting blocking waits could never "
-                       "complete. Configure ContextConfig::m_num_threads > 0, start a thread "
-                       "from Context::make_inference_thread(), or spin up an inference worker "
-                       "(web: AniraWeb.spinUpInferenceWorker()) first."
-                    << '\n';
+        ANIRA_LOG_WARNING(log_group::k_scheduler,
+                          "set_non_realtime(true) refused: no inference threads are "
+                          "configured or running, so the resulting blocking waits could never "
+                          "complete. Configure ContextConfig::m_num_threads > 0, start a thread "
+                          "from Context::make_inference_thread(), or spin up an inference worker "
+                          "(web: AniraWeb.spinUpInferenceWorker()) first.");
         return;
     }
     m_session->m_is_non_real_time.store(is_non_realtime, std::memory_order::release);

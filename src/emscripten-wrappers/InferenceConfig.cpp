@@ -1,5 +1,6 @@
 #include "anira/InferenceConfig.h"
 
+#include <anira/scheduler/Context.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/val.h>
 
@@ -26,6 +27,15 @@ int get_inference_backend_custom() {
 EMSCRIPTEN_KEEPALIVE
 const char* anira_get_version() {
     return ANIRA_VERSION;
+}
+
+// Forwards the records anira's real-time paths (process/push/pop, the inference
+// workers) queued through thl::Logger::rt to the log sinks. There is no drain thread
+// on the web, so the host pumps this from its message loop; returns the number of
+// records delivered. Not real-time safe.
+EMSCRIPTEN_KEEPALIVE
+size_t anira_drain_log() {
+    return anira::Context::drain_log();
 }
 
 // Debug helper
