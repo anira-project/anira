@@ -230,9 +230,9 @@ FetchContent_Declare(
     # tanh-lib main after PRs #17 (THL_LOG_*, thl::core::Thread, owned rt log
     # queues), #19 (RingBuffer push_fill/discard/peek_past_block) and #20 (RCU
     # thread-local registry, Windows DLL TLS); bump to the next tag once cut.
-    # tanh-lib feat/tanh-tooling-cmake (symbol policy + shared modules); re-point at the
-    # merge commit / tag once that PR lands. Must pin the same tanh-tooling tag as anira.
-    GIT_TAG e42aedcd1ce5519d4f998ba4b59105a07e4231b8
+    # tanh-lib v0.1.0: symbol policy on every component, shared tanh-tooling modules
+    # (pins tanh-tooling v0.1.5 — the same tag anira pins; see modules-version.cmake).
+    GIT_TAG v0.1.0
 )
 FetchContent_MakeAvailable(tanh-lib)
 
