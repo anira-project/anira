@@ -86,11 +86,10 @@ void InferenceManager::push_data(const float* const* const* input_data, size_t* 
     // that never pops a streamed output is told so instead of having unread output
     // overwritten.
     if (!m_context.collect_completed(m_session)) {
-        LOG_WARNING << "[WARNING] Output stream not consumed in session: "
-                    << m_session->m_session_id
-                    << "! A receive buffer is full; call pop_data() or process() to pop the "
-                       "output stream."
-                    << '\n';
+        ANIRA_LOG_RT_WARNING(log_group::k_scheduler,
+                             "Output stream not consumed in session: %d! A receive buffer is "
+                             "full; call pop_data() or process() to pop the output stream.",
+                             m_session->m_session_id);
     }
     m_context.new_data_submitted(m_session);
 }

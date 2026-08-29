@@ -247,7 +247,9 @@ set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    GIT_TAG b90bf9808de6fd62687cc202d0caca12290157b6
+    # tanh-lib PR #17 (feat/logger-macros) merged with main/v0.0.4 (read_wav): the
+    # branch's own commits predate the WAV decoder the test suite uses.
+    GIT_TAG 21c9b5f13647f83ed13375ff640a96b291f64237
 )
 FetchContent_MakeAvailable(tanh-lib)
 

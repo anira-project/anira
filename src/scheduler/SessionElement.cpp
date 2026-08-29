@@ -419,9 +419,12 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
             auto requested = static_cast<unsigned int>(custom_latency[i]);
             if (m_inference_config.get_postprocess_output_size()[i] > 0 &&
                 requested < internal_latency) {
-                LOG_WARNING << "[WARNING] Custom latency " << requested << " for tensor " << i
-                            << " is below the internal model latency " << internal_latency
-                            << "; clamping." << '\n';
+                ANIRA_LOG_WARNING(log_group::k_scheduler,
+                                  "Custom latency %u for tensor %zu is below the internal model "
+                                  "latency %u; clamping.",
+                                  requested,
+                                  i,
+                                  internal_latency);
                 requested = internal_latency;
             }
             m_latency[i] = requested;

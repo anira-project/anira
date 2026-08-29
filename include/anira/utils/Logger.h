@@ -6,7 +6,7 @@
 #include <atomic>
 
 #include "anira/ContextConfig.h"
-#include "anira/system/AniraWinExports.h"
+#include "anira/system/AniraExports.h"
 
 /**
  * @file Logger.h
@@ -73,7 +73,7 @@ inline constexpr thl::Logger::LogLevel to_thl_log_level(LogLevel log_level) {
 }
 
 /**
- * @brief Process-global minimum log severity, applied from ContextConfig::m_log_level
+ * @brief Process-global minimum log severity, applied from ContextConfig::m_log.m_level
  * whenever a context is created. Defaults to the build-type dependent
  * default_log_level() until then.
  *
