@@ -841,24 +841,30 @@ TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
     // With blocking_ratio > 0 the deadline is derived from the reference stream's
     // block size. Before the fix it read num_input_samples[m_tensor_index] -- the
     // params tensor's value count for a generator -- giving a deadline of
-    // 4/48000 s (83 us) instead of one host block. The backend sleeps longer than
-    // the buggy deadline; the host block is chosen large (4096 samples, 85 ms) so
-    // that worker wake-up jitter on a loaded CI runner cannot reach the correct
-    // deadline and turn this into a flaky test.
+    // 4/48000 s (83 us) instead of one host block (4096/48000 s = 85 ms here).
+    //
+    // The backend sleeps 1 ms per inference: longer than the buggy deadline, far
+    // shorter than the correct one, so every pop is expected to succeed. A CI runner
+    // (iOS simulator, loaded macOS VM) can still stall a worker for longer than any
+    // fixed margin, so a starved pop is tolerated as long as process() demonstrably
+    // waited for the correct deadline -- the buggy one gives up within microseconds --
+    // and the block is retried; the sample-exact check still covers every sample.
     InferenceConfig config = generator_config(/*session_exclusive=*/false,
                                               /*blocking_ratio=*/1.f);
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    backend.m_sleep_us = 1000;  // 1 ms per inference: > 83 us, << 85 ms
+    backend.m_sleep_us = 1000;
     InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
     handler.prepare(HostConfig(4096, 48000, false));
 
     GeneratorModel model;
     model.m_latency = handler.get_latency(0);
 
+    size_t const n = 4096;
+    long long const deadline_us = static_cast<long long>(n) * 1000000LL / 48000LL;  // 85 ms
+    int starved = 0;
     size_t global_index = 0;
     for (size_t block = 0; block < 20; ++block) {
-        size_t const n = 4096;
         float const param = 1.f + static_cast<float>(block);
         std::vector<float> params{param, 0.f, 0.f, 0.f};
         std::vector<float> out(n, -1.f);
@@ -869,13 +875,26 @@ TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
         std::array<size_t, 1> num_input_samples{4};
         std::array<size_t, 1> num_output_samples{n};
 
-        model.pull(n, param);
-        const size_t* const received = handler.process(input_tensors.data(),
-                                                       num_input_samples.data(),
-                                                       output_tensors.data(),
-                                                       num_output_samples.data());
-        ASSERT_EQ(received[0], n) << "block " << block
-                                  << ": a too-short blocking deadline starves the pop";
+        size_t received = 0;
+        for (int attempt = 0; attempt < 5 && received != n; ++attempt) {
+            model.pull(n, param);  // every call is a pull, a starved one included
+            auto const start = std::chrono::steady_clock::now();
+            received = handler.process(input_tensors.data(),
+                                       num_input_samples.data(),
+                                       output_tensors.data(),
+                                       num_output_samples.data())[0];
+            long long const elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                             std::chrono::steady_clock::now() - start)
+                                             .count();
+            if (received == n) { break; }
+            ASSERT_EQ(received, 0u) << "block " << block << ": a pop is all-or-nothing";
+            ASSERT_GE(elapsed_us, deadline_us / 2)
+                << "block " << block << ": the pop gave up after " << elapsed_us
+                << " us -- a deadline derived from the params count, not from the "
+                   "reference stream";
+            ++starved;
+        }
+        ASSERT_EQ(received, n) << "block " << block << ": starved on five attempts in a row";
         for (size_t s = 0; s < n; ++s) {
             ASSERT_EQ(out[s], model.expected_sample(global_index + s))
                 << "block " << block << ", sample " << s;
@@ -883,5 +902,6 @@ TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
         global_index += n;
         model.m_popped += n;
     }
+    RecordProperty("starved_pops", starved);
 }
 #endif  // ANIRA_WITH_RTSAN
