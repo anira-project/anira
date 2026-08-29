@@ -19,7 +19,7 @@
 #include <iostream>
 #include <thread>
 
-#include "AniraWinExports.h"
+#include "AniraExports.h"
 
 namespace anira {
 

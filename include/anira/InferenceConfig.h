@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "anira/system/AniraWinExports.h"
+#include "anira/system/AniraExports.h"
 
 namespace anira {
 

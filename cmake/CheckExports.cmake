@@ -7,7 +7,8 @@
 #   * LIBRARY (the shared libanira, empty for a static build): every exported
 #     symbol belongs to namespace anira — the ANIRA_API surface plus the vtables,
 #     typeinfo, thunks and guards of those classes — and nothing else. In particular
-#     no std::, Ort*, torch::/c10::, executorch::, xnn_*, TfLite*/LiteRt* symbol.
+#     no std::, Ort*, torch::/c10::, executorch::, xnn_*, TfLite*/LiteRt* symbol, and
+#     nothing of the bundled tanh-lib (thl::) either.
 #   * MODULE (the plugin-shaped test module embedding anira, shared or static):
 #     exports no backend-runtime symbol. In a static build (no LIBRARY) it exports
 #     nothing of namespace anira either: a static anira is compiled without export
@@ -37,10 +38,10 @@ set(_msvc_allow "@anira@@")
 # Backend runtimes, keyed on their namespace / prefix encodings so that anira's own
 # LiteRtProcessor/ExecuTorchProcessor/... names never trip it.
 set(_itanium_forbid
-    "^_?_ZN?(3Ort|11onnxruntime|5torch|3c10|6caffe2|10executorch|6tflite|6litert|11flatbuffers|5Eigen|4absl)"
+    "^_?_ZN?(3Ort|11onnxruntime|5torch|3c10|6caffe2|10executorch|6tflite|6litert|11flatbuffers|5Eigen|4absl|3thl)"
     "^_?(Ort|OrtApi|xnn_|pthreadpool_|cpuinfo_|kai_|TfLite|LiteRt)")
 set(_msvc_forbid
-    "@(Ort|onnxruntime|torch|c10|caffe2|executorch|tflite|litert|flatbuffers|Eigen|absl)@@"
+    "@(Ort|onnxruntime|torch|c10|caffe2|executorch|tflite|litert|flatbuffers|Eigen|absl|thl)@@"
     "^(Ort|OrtApi|xnn_|pthreadpool_|cpuinfo_|kai_|TfLite|LiteRt)")
 
 # anira_exports(<file> <out-var> <unique-out-var>): defined dynamic exports of a

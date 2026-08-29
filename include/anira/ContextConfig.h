@@ -7,7 +7,7 @@
 #include <thread>
 #include <vector>
 
-#include "anira/system/AniraWinExports.h"
+#include "anira/system/AniraExports.h"
 #include "anira/utils/InferenceBackend.h"
 
 namespace anira {

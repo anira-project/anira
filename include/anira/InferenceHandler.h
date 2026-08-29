@@ -3,7 +3,7 @@
 
 #include "InferenceConfig.h"
 #include "PrePostProcessor.h"
-#include "anira/system/AniraWinExports.h"
+#include "anira/system/AniraExports.h"
 #include "anira/utils/RealtimeSanitizer.h"
 #include "scheduler/InferenceManager.h"
 

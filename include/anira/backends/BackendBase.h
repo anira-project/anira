@@ -4,7 +4,7 @@
 #include <memory>
 
 #include "../InferenceConfig.h"
-#include "../system/AniraWinExports.h"
+#include "../system/AniraExports.h"
 #include "../utils/Buffer.h"
 
 namespace anira {

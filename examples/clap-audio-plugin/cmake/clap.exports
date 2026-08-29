@@ -1,0 +1,5 @@
+# Export allowlist of the CLAP plugin on Mach-O (ld64 -exported_symbols_list): the
+# entry point and nothing else — required on macOS with a static anira and the
+# ExecuTorch backend, whose force-loaded archives ld64 cannot hide otherwise. See
+# cmake/clap.map for the rationale.
+_clap_entry

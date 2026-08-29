@@ -262,43 +262,68 @@ FetchContent_MakeAvailable(nlohmann_json)
 # Build the library
 # ==============================================================================
 
+# ------------------------------------------------------------------------------
+# Symbol policy of anira's own objects — applied to the library target and to every
+# object library merged into it, static or shared alike (the rules are written up in
+# docs/sphinx/troubleshooting.rst, "Host application ships its own backend runtime"):
+#
+#  * Hidden symbol visibility on every platform; the public API is re-exported through
+#    ANIRA_API (include/anira/system/AniraExports.h) — the same allowlist model
+#    Windows enforces via dllexport. This keeps the backend runtimes private: without
+#    it, weak C++ symbols from the backend headers (e.g. ONNX Runtime's
+#    Ort::Global<void>::api_) are exported from any plugin that embeds anira and get
+#    weak-coalesced by the dynamic linker against a host application that ships its
+#    own copy of the runtime (Ableton Live 12 bundles an ONNX Runtime dylib), making
+#    Ort::GetApi() resolve against a mismatched runtime and crashing the host on the
+#    first Ort:: call. Hidden visibility survives static linking: a static anira's
+#    objects stay hidden inside the plugin that embeds them.
+#  * ANIRA_API's decoration: ANIRA_BUILDING (PRIVATE) selects dllexport while anira
+#    itself is compiled; ANIRA_STATIC (PUBLIC, so that it reaches consumers through
+#    the CMake package) makes ANIRA_API empty for a static anira, whose objects become
+#    part of the consumer and must neither be exported from it nor be dllimport'ed.
+#  * -fno-gnu-unique under GCC: GCC binds exported vague-linkage data (inline
+#    variables, template statics, static locals of inline functions — libstdc++ emits
+#    one from every make_shared TU) as STB_GNU_UNIQUE, and glibc never unloads a
+#    shared object that defines a unique symbol that was looked up: it is implicitly
+#    marked NODELETE. A plugin host's dlclose() would then silently keep libanira — or
+#    a plugin embedding it — mapped forever and hide any thread-at-unload bug behind
+#    it, and two plugins loaded RTLD_LOCAL would share those statics. Plain weak
+#    binding is all anira needs (the unload test asserts that the library really gets
+#    unmapped). Clang never emits unique symbols and rejects the flag.
+#  * One section per function and variable (-ffunction-sections -fdata-sections, /Gy),
+#    so that the link-time GC can drop each unreferenced one individually instead of
+#    keeping or dropping whole objects. The roots are the entry points and the
+#    exported symbols — which is why this only pays off together with the export
+#    allowlist. The shared libanira runs the GC on its own link (below). A static
+#    anira has no link step: these flags make the consumer's own
+#    --gc-sections/-dead_strip//OPT:REF effective, and whether to pass it stays the
+#    consumer's choice (an INTERFACE link option would act on its whole link).
+# ------------------------------------------------------------------------------
+function(anira_apply_symbol_policy target)
+    set_target_properties(${target} PROPERTIES
+        # so that the static variant can be linked into a shared library
+        POSITION_INDEPENDENT_CODE ON
+        C_VISIBILITY_PRESET hidden
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON)
+    target_compile_definitions(${target} PRIVATE ANIRA_BUILDING)
+    if(NOT BUILD_SHARED_LIBS)
+        target_compile_definitions(${target} PUBLIC ANIRA_STATIC)
+    endif()
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(${target} PRIVATE -fno-gnu-unique)
+    endif()
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /Gy)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE -ffunction-sections -fdata-sections)
+    endif()
+endfunction()
+
 # add the library as a shared or static library depending on the option BUILD_SHARED_LIBS
 add_library(${PROJECT_NAME})
-
-# enable position independent code because otherwise the static library cannot be linked into a shared library
-set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
-
-# Compile with hidden symbol visibility on every platform; the public API is
-# re-exported through ANIRA_API (AniraWinExports.h) — the same allowlist model
-# Windows enforces via dllexport. This keeps the backend runtimes private:
-# without it, weak C++ symbols from the backend headers (e.g. ONNX Runtime's
-# Ort::Global<void>::api_) are exported from any plugin that embeds anira and
-# get weak-coalesced by the dynamic linker against a host application that
-# ships its own copy of the runtime (Ableton Live 12 bundles an ONNX Runtime
-# dylib), making Ort::GetApi() resolve against a mismatched runtime and
-# crashing the host on the first Ort:: call.
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    C_VISIBILITY_PRESET hidden
-    CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN ON)
-# ANIRA_API's decoration (include/anira/system/AniraWinExports.h): ANIRA_BUILDING
-# selects dllexport while anira itself is compiled; ANIRA_STATIC — PUBLIC, so that it
-# reaches consumers through the CMake package — makes ANIRA_API empty for a static
-# anira, whose objects become part of the consumer and must not be exported from it.
-target_compile_definitions(${PROJECT_NAME} PRIVATE ANIRA_BUILDING)
-if(NOT BUILD_SHARED_LIBS)
-    target_compile_definitions(${PROJECT_NAME} PUBLIC ANIRA_STATIC)
-endif()
-# GCC binds exported vague-linkage data (inline variables, template statics, static
-# locals of inline functions — libstdc++ emits one from every make_shared TU) as
-# STB_GNU_UNIQUE, and glibc never unloads a shared object that defines a unique
-# symbol that was looked up: it is implicitly marked NODELETE. A plugin host's
-# dlclose() would then silently keep libanira — or a plugin embedding it — mapped
-# forever, and hide any thread-at-unload bug behind it. Plain weak binding is all
-# anira needs (the unload test asserts that the library really gets unmapped).
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(${PROJECT_NAME} PRIVATE -fno-gnu-unique)
-endif()
+set_target_properties(${PROJECT_NAME} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
+anira_apply_symbol_policy(${PROJECT_NAME})
 # Linker-side export allowlist for the shared library. -fvisibility=hidden cannot
 # hide what a header stamps default-visibility itself: libstdc++ wraps namespace std
 # in visibility("default"), LibTorch's C10_API classes emit default-visibility
@@ -324,6 +349,33 @@ if(BUILD_SHARED_LIBS AND NOT WIN32 AND NOT EMSDK_VERSION)
     endif()
     # Relink when the allowlist changes.
     set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${ANIRA_EXPORT_LIST}")
+endif()
+# Dead-code stripping of the shared library (the compile side — one section per
+# function and variable — is part of anira_apply_symbol_policy above). GC happens at
+# link time, and this is the only link a shared libanira has; a static anira leaves
+# it to the consumer's link. Static registrations of the force-loaded ExecuTorch
+# archives survive: initializers are GC roots.
+if(BUILD_SHARED_LIBS)
+    if(MSVC)
+        # link.exe defaults to /OPT:REF — except under /DEBUG, where it flips to
+        # /OPT:NOREF unless given explicitly.
+        target_link_options(${PROJECT_NAME} PRIVATE /OPT:REF)
+    elseif(APPLE)
+        target_link_options(${PROJECT_NAME} PRIVATE LINKER:-dead_strip)
+    elseif(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
+        target_link_options(${PROJECT_NAME} PRIVATE LINKER:--gc-sections)
+    endif()
+endif()
+# tanh-lib (tanh::Core, linked PUBLIC below) ships an export macro but no hidden
+# visibility preset, so the objects of a static libtanh_core.a are default visibility
+# and would become dynamic exports of a plugin that embeds a static anira. Same rule
+# as for the backend archives (anira_target_link_static_backend): localize the
+# archive on the consumer's link. INTERFACE only — a shared libanira pins its own
+# export table with the allowlist above and links libtanh_core.so, which is a
+# runtime dependency, not something to hide. ELF only; Mach-O consumers handle it
+# with their own export list (docs/sphinx/troubleshooting.rst).
+if(NOT BUILD_SHARED_LIBS AND NOT APPLE AND NOT WIN32 AND NOT EMSDK_VERSION)
+    target_link_options(${PROJECT_NAME} INTERFACE "LINKER:--exclude-libs,libtanh_core.a")
 endif()
 # add an alias so that the project can be used with add_subdirectory
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
@@ -459,16 +511,11 @@ if(ANIRA_WITH_EXECUTORCH)
         # include dirs and merge the objects into anira.
         add_library(anira-executorch-objs OBJECT src/backends/ExecuTorchProcessor.cpp)
         set_target_properties(anira-executorch-objs PROPERTIES
-            POSITION_INDEPENDENT_CODE ON
             CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED ON
-            # Same hidden-visibility policy as the main target (see above).
-            CXX_VISIBILITY_PRESET hidden
-            VISIBILITY_INLINES_HIDDEN ON)
-        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-            # Same unique-symbol policy as the main target (see above).
-            target_compile_options(anira-executorch-objs PRIVATE -fno-gnu-unique)
-        endif()
+            CXX_STANDARD_REQUIRED ON)
+        # The objects become part of anira: same visibility, export decoration,
+        # unique-symbol and section policy as the main target.
+        anira_apply_symbol_policy(anira-executorch-objs)
         target_compile_definitions(anira-executorch-objs PRIVATE
             ${ANIRA_COMPILE_DEFINITIONS}
             ${ANIRA_EXECUTORCH_COMPILE_DEFINITIONS})
@@ -479,12 +526,6 @@ if(ANIRA_WITH_EXECUTORCH)
             "${ANIRA_EXECUTORCH_ROOTDIR}/include/executorch/runtime/core/portable_type/c10")
         target_link_libraries(anira-executorch-objs PRIVATE
             concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
-        # Match anira's export decoration (see the main target above): the objects
-        # become part of anira, so ANIRA_API must resolve identically.
-        target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_BUILDING)
-        if(NOT BUILD_SHARED_LIBS)
-            target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_STATIC)
-        endif()
         target_sources(${PROJECT_NAME} PRIVATE $<TARGET_OBJECTS:anira-executorch-objs>)
         # XNNPACK's runtime-dispatch config tables reference its microkernel symbols
         # from data sections, which on-demand archive resolution does not satisfy
