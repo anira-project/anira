@@ -45,7 +45,7 @@ get_filename_component(ANIRA_BACKENDS_CMAKE_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSO
 get_filename_component(ANIRA_BACKENDS_MODULES_DIR "${ANIRA_BACKENDS_CMAKE_DIR}/../modules" ABSOLUTE)
 
 if(NOT DEFINED ANIRA_BACKENDS_VERSION OR ANIRA_BACKENDS_VERSION STREQUAL "")
-    set(ANIRA_BACKENDS_VERSION "v2.3.0")
+    set(ANIRA_BACKENDS_VERSION "v2.4.0")
 endif()
 
 function(_anira_backend_libname id out)
