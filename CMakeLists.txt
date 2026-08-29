@@ -247,10 +247,10 @@ set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    # tanh-lib PR #17 (feat/logger-macros: THL_LOG_*, thl::core::Thread, owned rt
-    # log queues) and PR #19 (feat/ringbuffer-bulk-ops: push_fill, discard,
-    # peek_past_block) merged with main/v0.0.4 (read_wav) — anira needs all three.
-    GIT_TAG 01cbdc1cdcec22e318505fc6abb5f0bafc8ceb65
+    # tanh-lib main after PRs #17 (THL_LOG_*, thl::core::Thread, owned rt log
+    # queues), #19 (RingBuffer push_fill/discard/peek_past_block) and #20 (RCU
+    # thread-local registry, Windows DLL TLS); bump to the next tag once cut.
+    GIT_TAG 1c992c0386a5168a5b4b2385d032aa162d182243
 )
 FetchContent_MakeAvailable(tanh-lib)
 
