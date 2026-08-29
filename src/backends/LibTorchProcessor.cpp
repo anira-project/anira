@@ -5,19 +5,74 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
-#include <c10/util/Exception.h>
-#include <c10/util/Logging.h>
-#include <torch/csrc/autograd/generated/variable_factories.h>
-#include <torch/csrc/jit/serialization/import.h>
-#include <torch/utils.h>
+#include <anira/utils/MemoryBlock.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <memory>
 #include <sstream>
 #include <vector>
 
+// Avoid min/max macro conflicts on Windows for LibTorch compatibility
+#ifdef _WIN32
+#ifdef min
+#undef min
+#endif
+
+#ifdef max
+#undef max
+#endif
+#endif
+
+// LibTorch headers trigger many warnings; disabling for cleaner build logs
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4244 4267 4996)
+#elif defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wall"
+#endif
+
+#include <ATen/core/ATen_fwd.h>
+#include <c10/util/Exception.h>
+#include <c10/util/Logging.h>
+#include <torch/csrc/autograd/generated/variable_factories.h>
+#include <torch/csrc/jit/api/module.h>
+#include <torch/csrc/jit/serialization/import.h>
+#include <torch/utils.h>
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#elif defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+
 namespace anira {
+
+// Defined here, not in the header: it owns LibTorch objects, and the engine headers
+// stay out of anira's public headers (see the note on BackendBase).
+struct LibtorchProcessor::Instance {
+    Instance(InferenceConfig& inference_config);
+
+    void prepare();
+    void process(std::vector<BufferF>& input,
+                 std::vector<BufferF>& output,
+                 const std::shared_ptr<SessionElement>& session);
+
+    torch::jit::script::Module m_module;  ///< Loaded TorchScript model for inference
+
+    std::vector<MemoryBlock<float>> m_input_data;  ///< Pre-allocated input data buffers
+
+    std::vector<c10::IValue> m_inputs;      ///< PyTorch input tensor values
+    c10::IValue m_outputs;                  ///< PyTorch output tensor values
+    torch::TensorOptions m_tensor_options;  ///< Tensor options for device, dtype and grad
+                                            ///< settings
+
+    InferenceConfig& m_inference_config;    ///< Reference to inference configuration
+    std::atomic<bool> m_processing{false};  ///< Flag indicating if instance is currently
+                                            ///< processing
+};
 
 LibtorchProcessor::LibtorchProcessor(InferenceConfig& inference_config)
     : BackendBase(inference_config) {
@@ -65,16 +120,16 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config)
                 std::string(static_cast<const char*>(model_data->m_data), model_data->m_size));
             m_module = torch::jit::load(stream);
         } catch (const c10::Error& e) {
-            LOG_ERROR << "[ERROR] error loading the model\n";
-            LOG_ERROR << e.what() << '\n';
+            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "error loading the model");
+            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "%s", e.what());
         }
     } else {
         try {
             m_module = torch::jit::load(
                 m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
         } catch (const c10::Error& e) {
-            LOG_ERROR << "[ERROR] error loading the model\n";
-            LOG_ERROR << e.what() << '\n';
+            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "error loading the model");
+            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "%s", e.what());
         }
     }
     m_module.eval();

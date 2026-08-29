@@ -1,0 +1,20 @@
+/* Export allowlist of the plugin-shaped unload module on ELF (GNU ld / lld version
+ * script): its C entry points and nothing else. module.exports is the Mach-O twin;
+ * keep both in sync with module.cpp. See docs/sphinx/troubleshooting.rst, "Host
+ * application ships its own backend runtime". */
+{
+  global:
+    anira_test_create;
+    anira_test_prepare;
+    anira_test_process;
+    anira_test_destroy;
+    anira_test_create_throwing;
+    anira_test_num_inference_threads;
+    anira_test_has_inference_threads;
+    anira_test_num_sessions;
+    anira_test_has_core;
+    anira_test_shutdown;
+    anira_test_leak_thread;
+  local:
+    *;
+};

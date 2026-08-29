@@ -82,13 +82,26 @@ jobs:
         run: |
           PREFIX="$PWD/prefix"
           if command -v cygpath > /dev/null; then PREFIX="$(cygpath -m "$PREFIX")"; fi
+          # test/install builds two consumers — anira alone, and one that calls ONNX
+          # Runtime itself through anira::onnxruntime — and asserts at configure
+          # time that the engine header is unreachable without that target.
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             cmake -S test/install -B build-consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"
             cmake --build build-consumer --config Release --parallel
-            # anira.dll installs to lib/ (anira's convention), tanh_core.dll to bin/.
-            PATH="$PWD/prefix/bin:$PWD/prefix/lib:$PATH" ./build-consumer/Release/consumer.exe
+            # Every DLL (anira, the engines, tanh_core) installs to bin/; only bin/ goes
+            # on PATH so that the run also proves the layout.
+            PATH="$PWD/prefix/bin:$PATH" ./build-consumer/Release/consumer.exe
+            PATH="$PWD/prefix/bin:$PATH" ./build-consumer/Release/consumer_engine.exe
           else
             cmake -S test/install -B build-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"
             cmake --build build-consumer --parallel
             ./build-consumer/consumer
+            ./build-consumer/consumer_engine
+            # The plugin-shaped engine consumer must export no engine symbol (the
+            # InstallConsumer CTest, test/install/run-install-test.cmake, runs the
+            # same check).
+            if [[ "$RUNNER_OS" == "macOS" ]]; then NM="nm -gU"; else NM="nm -D --defined-only"; fi
+            if $NM build-consumer/consumer_engine_module.so | grep -E "_ZN3Ort|_ZN11onnxruntime|[ _]Ort[A-Z]|OrtGetApiBase"; then
+              echo "consumer_engine_module exports engine symbols"; exit 1
+            fi
           fi

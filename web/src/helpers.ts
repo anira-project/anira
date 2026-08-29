@@ -62,3 +62,14 @@ export const getAniraVersion = (wasmInstance: AniraWasmInstance): string => {
   while (end < view.length && view[end] !== 0) end++
   return new TextDecoder().decode(view.subarray(0, end))
 }
+
+/**
+ * Mirrors `anira::_anira_drain_log()` — forwards the log records anira's
+ * real-time paths (process/push/pop, the inference workers) queued through
+ * tanh-lib's real-time logger to the log sinks (the console by default).
+ * There is no drain thread on the web, so call this periodically from the
+ * main thread, e.g. on a timer; returns the number of records delivered.
+ */
+export const drainAniraLog = (wasmInstance: AniraWasmInstance): number =>
+  wasmInstance._anira_drain_log()
+

@@ -2,24 +2,8 @@
 # Windows specific settings
 # ==============================================================================
 
-# Define the export symbol for MSVC builds (shared library)
-target_compile_definitions(${PROJECT_NAME} PRIVATE ANIRA_EXPORTS)
-
-# When built statically, tell anira's export header (PUBLIC, so consumers see it
-# too) to skip dllexport/dllimport decoration — a static lib has no import stubs.
-if(NOT BUILD_SHARED_LIBS)
-    target_compile_definitions(${PROJECT_NAME} PUBLIC ANIRA_STATIC_DEFINE)
-endif()
-
-# The TFLite C API headers default to __declspec(dllimport) on Windows; linking the
-# static TFLite lib then leaves __imp_TfLite* unresolved (no import stubs). Defining
-# TFL_COMPILE_LIBRARY switches the decoration to a direct (static) reference. PUBLIC
-# so a consumer including anira's TFLite processor header agrees. (ONNX uses a
-# function-pointer table and LiteRT's static lib ships import stubs, so only the
-# legacy TFLite backend needs this.)
-if(ANIRA_WITH_TFLITE AND ANIRA_TFLITE_IS_STATIC)
-    target_compile_definitions(${PROJECT_NAME} PUBLIC TFL_COMPILE_LIBRARY)
-endif()
+# (The static TFLite archive's TFL_COMPILE_LIBRARY definition rides on anira::tflite,
+# see cmake/backends.cmake.)
 
 if(NOT CMAKE_BUILD_TYPE)
     message(FATAL_ERROR "You need to specify CMAKE_BUILD_TYPE")
@@ -34,6 +18,10 @@ if(BUILD_SHARED_LIBS)
         set(ANIRA_DLL "${anira_BINARY_DIR}/anira.dll")
     endif()
     list(APPEND ANIRA_SHARED_LIBS_WIN ${ANIRA_DLL})
+    # tanh-lib's core component is a DLL in a shared build. anira calls into it
+    # (thl::Logger), so every executable linking anira needs it beside it — the
+    # generator expression resolves to the right per-generator/config path.
+    list(APPEND ANIRA_SHARED_LIBS_WIN "$<TARGET_FILE:tanh::Core>")
 endif()
 
 # Add all necessary DLLs to a list for later copying. Only shared backends ship a

@@ -75,7 +75,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_CNNSIZE)(::benchmark::State& state) {
     // Only report errors, so the log output of the backends does not pollute the
     // benchmark results.
     anira::ContextConfig context_config;
-    context_config.m_log_level = anira::LogLevel::Error;
+    context_config.m_log.m_level = anira::LogLevel::Error;
 
     m_inference_handler = std::make_unique<anira::InferenceHandler>(*my_pp_processor,
                                                                     inference_config,

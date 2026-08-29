@@ -2492,7 +2492,9 @@ PREDEFINED             = ANIRA_REALTIME= \
                          ANIRA_BLOCKING= \
                          USE_LIBTORCH=1 \
                          USE_TFLITE=1 \
+                         USE_LITERT=1 \
                          USE_ONNXRUNTIME=1 \
+                         USE_EXECUTORCH=1 \
                          DOXYGEN=1
 
 # If the MACRO_EXPANSION and EXPAND_ONLY_PREDEF tags are set to YES then this

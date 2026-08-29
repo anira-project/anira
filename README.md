@@ -86,6 +86,11 @@ add_subdirectory(modules/anira)
 
 # Link your target to the anira library
 target_link_libraries(your_target anira::anira)
+
+# Only if your own code calls an engine (e.g. includes onnxruntime_cxx_api.h): link
+# its anira::<engine> target too — the same file anira uses, so the process holds
+# one copy of the engine. anira itself never needs this line.
+target_link_libraries(your_target anira::onnxruntime)
 ```
 
 #### Option 2: Use Pre-built Binaries
@@ -105,7 +110,16 @@ find_package(anira REQUIRED)
 
 # Link your target to the anira library
 target_link_libraries(your_target anira::anira)
+
+# Only if your own code calls an engine: link its anira::<engine> target too
+target_link_libraries(your_target anira::onnxruntime)
 ```
+
+`anira::anira` carries anira's headers and the `USE_<ENGINE>` definitions, but no engine header: the
+engines are linked privately. A target that calls an engine itself links the matching engine target —
+`anira::onnxruntime`, `anira::tflite`, `anira::litert`, `anira::libtorch` or `anira::executorch` — which
+exists both in the build tree and in the installed package, carries the engine's headers, and is the
+very file anira links, so the process never holds a second copy of the engine.
 
 #### Option 3: Build from Source
 
@@ -132,7 +146,9 @@ By default, LibTorch, ONNXRuntime, LiteRT and ExecuTorch are enabled. You can di
 #### Platform / backend support
 
 anira builds on the targets below; the pre-built backends it downloads ship per target as `shared`
-and/or `static` (anira's linkage follows `BUILD_SHARED_LIBS`):
+and/or `static`. Backend linkage follows `BUILD_SHARED_LIBS`: a shared anira links shared backends,
+a static anira links static backends, and an engine that does not ship the required linkage is
+disabled with a warning:
 
 | Target                  | LibTorch | ONNXRuntime     | LiteRT          | TFLite (legacy) | ExecuTorch |
 | ----------------------- | -------- | --------------- | --------------- | --------------- | ---------- |
@@ -145,7 +161,8 @@ and/or `static` (anira's linkage follows `BUILD_SHARED_LIBS`):
 | Windows `arm64`         | shared   | shared · static | shared · static | shared · static | static     |
 | `WASM` (Emscripten)     | —        | static          | —               | —               | —          |
 
-LibTorch is shared-only (auto-disabled for fully static anira builds); ExecuTorch is static-only.
+LibTorch is shared-only (disabled in a static anira build); ExecuTorch is static-only (disabled in a
+shared anira build). iOS and WebAssembly are static-only altogether (`-DBUILD_SHARED_LIBS=OFF`).
 LiteRT and TFLite are the same runtime via two C APIs and are mutually exclusive (LiteRT is the
 default). In a fully static anira build ExecuTorch cannot be combined with LiteRT or TFLite
 (each bundles its own copy of XNNPACK, whose symbols collide in one static image) — ExecuTorch
@@ -158,10 +175,9 @@ Pre-built backend binaries are downloaded at configure time from the
 [anira-project/backends](https://github.com/anira-project/backends) release pinned by
 `ANIRA_BACKENDS_VERSION`. Integrity is checked live: when GitHub is reachable, anira fetches each
 asset's published SHA256 and re-downloads any backend whose archive changed upstream or downloaded
-incompletely (the download is verified against that hash). Nothing is pinned in-repo. Linkage and
-source are configurable:
+incompletely (the download is verified against that hash). Nothing is pinned in-repo. The source is
+configurable (the linkage is not: it follows ``BUILD_SHARED_LIBS``, see above):
 
-- Linkage follows ``BUILD_SHARED_LIBS`` (shared anira → shared backends, static → static). Decouple a single engine with ``-DANIRA_<ENGINE>_LINKAGE=shared|static`` where `<ENGINE>` is `LIBTORCH|ONNXRUNTIME|TFLITE|LITERT|EXECUTORCH`. LibTorch is shared-only; ExecuTorch is static-only.
 - Backends release tag: ``-DANIRA_BACKENDS_VERSION=v2.1.1``.
 - Offline / reproducible builds: ``-DANIRA_BACKENDS_SKIP_REMOTE_CHECK=ON`` skips the GitHub query and reuses whatever is already in `modules/`.
 - Bring your own backend (no fork): ``-DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt`` (a tree with `include/` + `lib/`), or a custom source via ``-DANIRA_<ENGINE>_URL=... -DANIRA_<ENGINE>_SHA256=...``.
@@ -172,7 +188,7 @@ Moreover, the following options are available:
 - Build example applications, plugins and populate example neural models: ``-DANIRA_WITH_EXAMPLES=ON``
 - Build anira with tests: ``-DANIRA_WITH_TESTS=ON``
 - Build anira with documentation: ``-DANIRA_WITH_DOCS=ON``
-- Disable the logging system: ``-DANIRA_WITH_LOGGING=OFF``
+- Disable the logging system (compiles every anira log call out; anira otherwise logs through tanh-lib's ``thl::Logger``): ``-DANIRA_WITH_LOGGING=OFF``
 
 ### Anira Web (Web / JavaScript)
 

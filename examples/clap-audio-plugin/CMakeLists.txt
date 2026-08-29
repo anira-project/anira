@@ -36,6 +36,47 @@ add_library(${PROJECT_NAME} MODULE
 )
 target_link_libraries(${PROJECT_NAME} clap-core clap-helpers anira)
 
+# What a plugin embedding anira should do (docs/sphinx/troubleshooting.rst, "Host application ships its own backend runtime"):
+# export nothing but its entry point — CLAP_EXPORT marks clap_entry
+# default-visibility/dllexport — so that the embedded anira and its backend runtimes
+# stay private and cannot be interposed by a host that ships its own copy; under GCC
+# bind no STB_GNU_UNIQUE symbol, so that the host can actually unload the plugin; and
+# let the linker drop what the plugin never references (anira's objects are compiled
+# with one section per function for exactly that).
+set_target_properties(${PROJECT_NAME} PROPERTIES
+        C_VISIBILITY_PRESET hidden
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(${PROJECT_NAME} PRIVATE -fno-gnu-unique)
+endif()
+if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /Gy)
+    target_link_options(${PROJECT_NAME} PRIVATE /OPT:REF)
+elseif(APPLE)
+    target_compile_options(${PROJECT_NAME} PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(${PROJECT_NAME} PRIVATE LINKER:-dead_strip)
+elseif(UNIX)
+    target_compile_options(${PROJECT_NAME} PRIVATE -ffunction-sections -fdata-sections)
+    target_link_options(${PROJECT_NAME} PRIVATE LINKER:--gc-sections)
+endif()
+# Finally pin the export table to the entry point at link time: hidden visibility
+# cannot hide what a header stamps default-visibility itself (libstdc++'s std::
+# instantiations, anira's inline members when libanira is shared), and on macOS
+# nothing short of an export list keeps a force-loaded static ExecuTorch out. PE
+# exports only what carries dllexport, so MSVC needs nothing.
+if(APPLE)
+    set(_clap_export_list "${CMAKE_CURRENT_SOURCE_DIR}/cmake/clap.exports")
+    target_link_options(${PROJECT_NAME} PRIVATE "LINKER:-exported_symbols_list,${_clap_export_list}")
+elseif(UNIX)
+    set(_clap_export_list "${CMAKE_CURRENT_SOURCE_DIR}/cmake/clap.map")
+    target_link_options(${PROJECT_NAME} PRIVATE "LINKER:--version-script=${_clap_export_list}")
+endif()
+if(_clap_export_list)
+    # Relink when the allowlist changes.
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${_clap_export_list}")
+endif()
+
 if(APPLE)
     set_target_properties(${PROJECT_NAME} PROPERTIES
             BUNDLE True

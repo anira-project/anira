@@ -26,8 +26,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -35,6 +37,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "tanh/core/Logger.h"
 
 using namespace anira;
 
@@ -228,6 +231,37 @@ void drive_generator_with_process(InferenceHandler& handler,
             << "block " << block << ": inference count differs from the demand rule";
     }
 }
+
+// Collects what thl::Logger delivers to its sinks, so a test can assert on records anira
+// logs from the real-time paths. Those go into the context's lock-free queue; under
+// LogDrain::Manual the test delivers them deterministically with
+// InferenceHandler::drain_log() before it looks (instead of a drain thread racing the
+// assertions, or a stderr capture that never sees the sinks).
+struct LogRecordCollector {
+    LogRecordCollector() {
+        thl::Logger::set_callback([this](const thl::Logger::LogRecord& record) {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            m_messages += record.m_message;
+            m_messages += '\n';
+        });
+    }
+    ~LogRecordCollector() { thl::Logger::clear_callback(); }
+    LogRecordCollector(const LogRecordCollector&) = delete;
+    LogRecordCollector& operator=(const LogRecordCollector&) = delete;
+    LogRecordCollector(LogRecordCollector&&) = delete;
+    LogRecordCollector& operator=(LogRecordCollector&&) = delete;
+
+    /// The messages collected so far, and starts over.
+    std::string take() {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        std::string out;
+        out.swap(m_messages);
+        return out;
+    }
+
+    std::mutex m_mutex;
+    std::string m_messages;
+};
 
 }  // namespace
 
@@ -689,16 +723,15 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     InferenceConfig config = two_sided_config();
     PrePostProcessor pp_processor(config);
     CountingCopyBackend backend(config);
-    // The warning asserted below is a LOG_WARNING, filtered by the process-global log
-    // level the Context applies from its ContextConfig (Error in release builds). The
-    // level has to travel through the ContextConfig: the runtime level lives in an
-    // inline function's static, of which a shared build has one copy per binary, so
-    // anira::set_log_level() called from the test never reaches the library's copy.
-    InferenceHandler handler(pp_processor,
-                             config,
-                             backend,
-                             ContextConfig(2, WaitStrategy::SpinBackoff, LogLevel::Warning));
+    // The warning asserted below is an ANIRA_LOG_RT_WARNING, filtered by the log level
+    // the Context applies from its ContextConfig (Error in release builds), and queued
+    // in the context's real-time log queue: with LogDrain::Manual the test drains it
+    // itself, right before each assertion, into the LogRecordCollector below.
+    ContextConfig context_config(2, WaitStrategy::SpinBackoff, LogLevel::Warning);
+    context_config.m_log.m_drain = LogDrain::Manual;
+    InferenceHandler handler(pp_processor, config, backend, context_config);
     handler.prepare(HostConfig(512, 48000, false));
+    LogRecordCollector log_records;
 
     unsigned int const latency = handler.get_latency(0);
     auto const sessions = Context::get_sessions();
@@ -737,7 +770,6 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     // Phase 1: one window per struct, never popped. Every result fits, so push_data
     // places it (#99): the ring ends up exactly full, every struct is released and
     // nothing is warned.
-    testing::internal::CaptureStderr();
     for (size_t window = 0; window < num_structs; ++window) {
         push_window(window);
         ASSERT_TRUE(wait_for_window(window));
@@ -749,14 +781,14 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     for (const auto& ts_struct : session.m_inference_queue) {
         EXPECT_TRUE(ts_struct->m_free.load()) << "A placed result releases its struct.";
     }
-    std::string const captured_fitting = testing::internal::GetCapturedStderr();
+    handler.drain_log();
+    std::string const captured_fitting = log_records.take();
     EXPECT_EQ(captured_fitting.find("Output stream not consumed"), std::string::npos)
         << "No warning while every result fits into the receive ring.";
 
     // Phase 2: one more window per struct with the ring full. The gate holds every
     // finished result in its struct: the ring occupancy does not change, no unread
     // sample is overwritten, and a push that cannot place a result warns.
-    testing::internal::CaptureStderr();
     for (size_t window = num_structs; window < 2 * num_structs; ++window) {
         push_window(window);
         ASSERT_TRUE(wait_for_window(window));
@@ -772,8 +804,15 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
         EXPECT_FALSE(ts_struct->m_free.load())
             << "Every struct holds a result the full ring cannot take.";
     }
-    std::string const captured_gated = testing::internal::GetCapturedStderr();
-    if (is_logging_enabled()) {
+    handler.drain_log();
+    std::string const captured_gated = log_records.take();
+    // tanh-lib compiles records above THL_LOG_COMPILED_MAX_LEVEL out (Error only in
+    // Release builds, see the note on ContextConfig::m_log), so the warning can only be
+    // asserted where Warning is compiled in; the gate itself is asserted either way.
+    constexpr bool k_warning_compiled_in =
+        static_cast<std::uint32_t>(THL_LOG_COMPILED_MAX_LEVEL) >=
+        static_cast<std::uint32_t>(thl::Logger::LogLevel::Warning);
+    if (is_logging_enabled() && k_warning_compiled_in) {
         EXPECT_NE(captured_gated.find("Output stream not consumed"), std::string::npos)
             << "Over-pushing without popping must warn.";
     }

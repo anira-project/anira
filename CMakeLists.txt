@@ -1,9 +1,19 @@
 cmake_minimum_required(VERSION 3.15)
 
+# CMP0099 (CMake 3.19): INTERFACE_LINK_OPTIONS (and _DIRECTORIES/_DEPENDS) of a
+# static library's PRIVATE dependencies are transitive to whoever links the static
+# library. A static anira links its engine archives PRIVATE through the
+# anira::<engine> targets, whose INTERFACE_LINK_OPTIONS carry the --exclude-libs
+# that keep the archives' symbols out of the consumer's export table; with the OLD
+# behaviour those options stopped at anira and the plugin embedding it exported
+# every LiteRt*/Ort*/executorch:: symbol. (The archives themselves travel as link
+# dependencies either way.) The installed export records the same policy.
+cmake_policy(SET CMP0099 NEW)
+
 # ==============================================================================
 # Build options — every user-facing option lives here. Cross-option validation
 # (mutual exclusivity, libtorch auto-disable, WASM guards) is in
-# cmake/AniraValidate.cmake, included after project() / Emscripten detection.
+# cmake/validate-options.cmake, included after project() / Emscripten detection.
 # ==============================================================================
 
 # --- Library type --------------------------------------------------------------
@@ -23,7 +33,7 @@ option(ANIRA_BUILD_WASM     "Build WebAssembly module (requires Emscripten toolc
 # Multiple backends can be enabled. LiteRT (LiteRt* C API) is the default
 # TensorFlow-family backend; TFLite (legacy TfLite* C API) is the SAME underlying
 # runtime through the older API, so the two are mutually exclusive (their static
-# libraries export the same TfLite* symbols). Enforced in cmake/AniraValidate.cmake.
+# libraries export the same TfLite* symbols). Enforced in cmake/validate-options.cmake.
 option(ANIRA_WITH_LIBTORCH    "Build with the LibTorch backend" ON)
 option(ANIRA_WITH_ONNXRUNTIME "Build with the ONNX Runtime backend" ON)
 option(ANIRA_WITH_LITERT      "Build with the LiteRT backend (LiteRt* C API; runs .tflite via the CompiledModel runtime)" ON)
@@ -41,10 +51,12 @@ set(ANIRA_BACKENDS_VERSION "" CACHE STRING "anira-project/backends release tag t
 # reproducible builds; a backend already in modules/ is then reused as-is.
 option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for backend integrity at configure" OFF)
 
-# Backend linkage follows BUILD_SHARED_LIBS (shared anira -> shared backends, static
-# anira -> static backends). Decouple a single engine, bring your own, or use a custom
-# source via the per-engine variables (<ENGINE> = LIBTORCH | ONNXRUNTIME | TFLITE | LITERT | EXECUTORCH):
-#   -DANIRA_<ENGINE>_LINKAGE=shared|static
+# Backend linkage follows BUILD_SHARED_LIBS: a shared anira links shared backends, a
+# static anira links static backends, and an engine that does not ship the required
+# linkage (LibTorch in static builds, ExecuTorch in shared ones) is disabled with a
+# warning — see cmake/validate-options.cmake for why these are the only two shapes.
+# Bring your own engine, or use a custom source, via the per-engine variables
+# (<ENGINE> = LIBTORCH | ONNXRUNTIME | TFLITE | LITERT | EXECUTORCH):
 #   -DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt   (a tree with include/ + lib/)
 #   -DANIRA_<ENGINE>_URL=...  [-DANIRA_<ENGINE>_SHA256=...]
 
@@ -132,25 +144,28 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Detect Emscripten — must be after project() so CMAKE_CXX_COMPILER is set.
-# EMSDK_VERSION is needed by AniraBackends.cmake (WASM target selection) below.
+# EMSDK_VERSION is needed by backends.cmake (WASM target selection) below.
 if(ANIRA_BUILD_WASM)
-    include(cmake/DetectEmscripten.cmake)
+    include(cmake/detect-emscripten.cmake)
 endif()
 
 # Validate the option combination (mutual exclusivity, libtorch auto-disable, WASM
 # guards). After Emscripten detection so EMSDK_VERSION is known; before the backends
 # are set up so the libtorch auto-disable takes effect.
-include(cmake/AniraValidate.cmake)
+include(cmake/validate-options.cmake)
 
 # ==============================================================================
 # Download and install the selected inference engines
 # ==============================================================================
 
 set(BACKEND_SOURCES)
-set(BACKEND_BUILD_HEADER_DIRS)
-set(BACKEND_BUILD_LIBRARY_DIRS)
 
-include(cmake/AniraBackends.cmake)
+# Each anira_setup_backend() call defines the engine's imported target anira::<id>
+# (see cmake/backends.cmake and cmake/aniraBackendHelpers.cmake): the file
+# anira links, carrying the engine's include directories and definitions. anira
+# links them PRIVATE below; a consumer whose own code calls an engine links the
+# matching anira::<id> explicitly and gets the same file — one engine per process.
+include(cmake/backends.cmake)
 
 if(ANIRA_WITH_LIBTORCH)
     anira_setup_backend(libtorch)
@@ -174,13 +189,7 @@ endif()
 
 if(ANIRA_WITH_EXECUTORCH)
     anira_setup_backend(executorch)
-    if(NOT TARGET executorch)
-        # Mobile merged-lib path: LibTorch has no mobile build, so ExecuTorch's
-        # vendored c10 headers cannot clash there and the processor compiles as a
-        # regular anira source. On desktop it is compiled in an isolated object
-        # target instead (see the ExecuTorch link block below).
-        list(APPEND BACKEND_SOURCES src/backends/ExecuTorchProcessor.cpp)
-    endif()
+    list(APPEND BACKEND_SOURCES src/backends/ExecuTorchProcessor.cpp)
 endif()
 
 ## ==============================================================================
@@ -213,7 +222,8 @@ FetchContent_MakeAvailable(concurrentqueue)
 # find_dependency(tanh COMPONENTS Core), so a consumer's find_package(anira)
 # links the exported tanh::Core.
 #
-# Pinned to a tagged tanh-lib release.
+# Pinned to a tagged tanh-lib release. (Temporarily a commit on tanh-lib PR #17 —
+# THL_LOG_* macros, thl::core::Thread, owned rt log queues; bump to the v0.1.0 tag once cut.)
 #
 # Plain (non-cache) variables on purpose: tanh-lib's cmake_minimum_required
 # puts CMP0077 in NEW mode, so these shadow its option() defaults while anira
@@ -229,12 +239,18 @@ set(TANH_WITH_TESTS OFF)
 set(TANH_WITH_EXAMPLES OFF)
 set(TANH_WITH_DOCS OFF)
 set(TANH_WITH_JOURNALD OFF)
+# tanh-lib's own [[clang::nonblocking]] annotations (thl::Logger::rt, the buffers)
+# are checked in the same RTSan build as anira's ANIRA_REALTIME entry points.
+set(TANH_WITH_RTSAN ${ANIRA_WITH_RTSAN})
 set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    GIT_TAG v0.0.4
+    # tanh-lib main after PRs #17 (THL_LOG_*, thl::core::Thread, owned rt log
+    # queues), #19 (RingBuffer push_fill/discard/peek_past_block) and #20 (RCU
+    # thread-local registry, Windows DLL TLS); bump to the next tag once cut.
+    GIT_TAG 1c992c0386a5168a5b4b2385d032aa162d182243
 )
 FetchContent_MakeAvailable(tanh-lib)
 
@@ -262,34 +278,120 @@ FetchContent_MakeAvailable(nlohmann_json)
 # Build the library
 # ==============================================================================
 
+# ------------------------------------------------------------------------------
+# Symbol policy of anira's own objects — applied to the library target and to every
+# object library merged into it, static or shared alike (the rules are written up in
+# docs/sphinx/troubleshooting.rst, "Host application ships its own backend runtime"):
+#
+#  * Hidden symbol visibility on every platform; the public API is re-exported through
+#    ANIRA_API (include/anira/system/AniraExports.h) — the same allowlist model
+#    Windows enforces via dllexport. This keeps the backend runtimes private: without
+#    it, weak C++ symbols from the backend headers (e.g. ONNX Runtime's
+#    Ort::Global<void>::api_) are exported from any plugin that embeds anira and get
+#    weak-coalesced by the dynamic linker against a host application that ships its
+#    own copy of the runtime (Ableton Live 12 bundles an ONNX Runtime dylib), making
+#    Ort::GetApi() resolve against a mismatched runtime and crashing the host on the
+#    first Ort:: call. Hidden visibility survives static linking: a static anira's
+#    objects stay hidden inside the plugin that embeds them.
+#  * ANIRA_API's decoration: ANIRA_BUILDING (PRIVATE) selects dllexport while anira
+#    itself is compiled; ANIRA_STATIC (PUBLIC, so that it reaches consumers through
+#    the CMake package) makes ANIRA_API empty for a static anira, whose objects become
+#    part of the consumer and must neither be exported from it nor be dllimport'ed.
+#  * -fno-gnu-unique under GCC: GCC binds exported vague-linkage data (inline
+#    variables, template statics, static locals of inline functions — libstdc++ emits
+#    one from every make_shared TU) as STB_GNU_UNIQUE, and glibc never unloads a
+#    shared object that defines a unique symbol that was looked up: it is implicitly
+#    marked NODELETE. A plugin host's dlclose() would then silently keep libanira — or
+#    a plugin embedding it — mapped forever and hide any thread-at-unload bug behind
+#    it, and two plugins loaded RTLD_LOCAL would share those statics. Plain weak
+#    binding is all anira needs (the unload test asserts that the library really gets
+#    unmapped). Clang never emits unique symbols and rejects the flag.
+#  * One section per function and variable (-ffunction-sections -fdata-sections, /Gy),
+#    so that the link-time GC can drop each unreferenced one individually instead of
+#    keeping or dropping whole objects. The roots are the entry points and the
+#    exported symbols — which is why this only pays off together with the export
+#    allowlist. The shared libanira runs the GC on its own link (below). A static
+#    anira has no link step: these flags make the consumer's own
+#    --gc-sections/-dead_strip//OPT:REF effective, and whether to pass it stays the
+#    consumer's choice (an INTERFACE link option would act on its whole link).
+# ------------------------------------------------------------------------------
+function(anira_apply_symbol_policy target)
+    set_target_properties(${target} PROPERTIES
+        # so that the static variant can be linked into a shared library
+        POSITION_INDEPENDENT_CODE ON
+        C_VISIBILITY_PRESET hidden
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON)
+    target_compile_definitions(${target} PRIVATE ANIRA_BUILDING)
+    if(NOT BUILD_SHARED_LIBS)
+        target_compile_definitions(${target} PUBLIC ANIRA_STATIC)
+    endif()
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(${target} PRIVATE -fno-gnu-unique)
+    endif()
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /Gy)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE -ffunction-sections -fdata-sections)
+    endif()
+endfunction()
+
 # add the library as a shared or static library depending on the option BUILD_SHARED_LIBS
 add_library(${PROJECT_NAME})
-
-# enable position independent code because otherwise the static library cannot be linked into a shared library
-set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
-
-# Compile with hidden symbol visibility on every platform; the public API is
-# re-exported through ANIRA_API (AniraWinExports.h) — the same allowlist model
-# Windows enforces via dllexport. This keeps the backend runtimes private:
-# without it, weak C++ symbols from the backend headers (e.g. ONNX Runtime's
-# Ort::Global<void>::api_) are exported from any plugin that embeds anira and
-# get weak-coalesced by the dynamic linker against a host application that
-# ships its own copy of the runtime (Ableton Live 12 bundles an ONNX Runtime
-# dylib), making Ort::GetApi() resolve against a mismatched runtime and
-# crashing the host on the first Ort:: call.
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    C_VISIBILITY_PRESET hidden
-    CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN ON)
-# GCC binds exported vague-linkage data (inline variables, template statics, static
-# locals of inline functions — libstdc++ emits one from every make_shared TU) as
-# STB_GNU_UNIQUE, and glibc never unloads a shared object that defines a unique
-# symbol that was looked up: it is implicitly marked NODELETE. A plugin host's
-# dlclose() would then silently keep libanira — or a plugin embedding it — mapped
-# forever, and hide any thread-at-unload bug behind it. Plain weak binding is all
-# anira needs (the unload test asserts that the library really gets unmapped).
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(${PROJECT_NAME} PRIVATE -fno-gnu-unique)
+set_target_properties(${PROJECT_NAME} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
+anira_apply_symbol_policy(${PROJECT_NAME})
+# Linker-side export allowlist for the shared library. -fvisibility=hidden cannot
+# hide what a header stamps default-visibility itself: libstdc++ wraps namespace std
+# in visibility("default"), LibTorch's C10_API classes emit default-visibility
+# vtables/typeinfo into anira's own objects, and the prebuilt ExecuTorch desktop
+# archives are compiled with default visibility and force-loaded (Mach-O has no
+# hidden variant of -force_load). Without this, libanira exported ~4000 std::,
+# executorch::, xnn_*, c10:: and BLAS symbols next to the ~400 of the API. So the
+# shared libanira additionally pins its dynamic export table at link time to
+# namespace anira — functions, data, vtables, typeinfo, thunks — and nothing else.
+# cmake/anira.map (ELF version script) and cmake/anira.exports (Mach-O
+# -exported_symbols_list) carry the same pattern list; test/unload registers a CTest
+# check (cmake/check-exports.cmake) that diffs the real export table against it on
+# every desktop platform. MSVC needs nothing (PE exports only what carries
+# __declspec(dllexport)); Emscripten has no dynamic export table. MinGW is not a
+# supported toolchain (no prebuilt backends) and is left alone.
+if(BUILD_SHARED_LIBS AND NOT WIN32 AND NOT EMSDK_VERSION)
+    if(APPLE)
+        set(ANIRA_EXPORT_LIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/anira.exports")
+        target_link_options(${PROJECT_NAME} PRIVATE "LINKER:-exported_symbols_list,${ANIRA_EXPORT_LIST}")
+    else()
+        set(ANIRA_EXPORT_LIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/anira.map")
+        target_link_options(${PROJECT_NAME} PRIVATE "LINKER:--version-script=${ANIRA_EXPORT_LIST}")
+    endif()
+    # Relink when the allowlist changes.
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${ANIRA_EXPORT_LIST}")
+endif()
+# Dead-code stripping of the shared library (the compile side — one section per
+# function and variable — is part of anira_apply_symbol_policy above). GC happens at
+# link time, and this is the only link a shared libanira has; a static anira leaves
+# it to the consumer's link. Static registrations of the force-loaded ExecuTorch
+# archives survive: initializers are GC roots.
+if(BUILD_SHARED_LIBS)
+    if(MSVC)
+        # link.exe defaults to /OPT:REF — except under /DEBUG, where it flips to
+        # /OPT:NOREF unless given explicitly.
+        target_link_options(${PROJECT_NAME} PRIVATE /OPT:REF)
+    elseif(APPLE)
+        target_link_options(${PROJECT_NAME} PRIVATE LINKER:-dead_strip)
+    elseif(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
+        target_link_options(${PROJECT_NAME} PRIVATE LINKER:--gc-sections)
+    endif()
+endif()
+# tanh-lib (tanh::Core, linked PUBLIC below) ships an export macro but no hidden
+# visibility preset, so the objects of a static libtanh_core.a are default visibility
+# and would become dynamic exports of a plugin that embeds a static anira. Same rule
+# as for the engine archives (cmake/aniraBackendHelpers.cmake): localize the
+# archive on the consumer's link. INTERFACE only — a shared libanira pins its own
+# export table with the allowlist above and links libtanh_core.so, which is a
+# runtime dependency, not something to hide. ELF only; Mach-O consumers handle it
+# with their own export list (docs/sphinx/troubleshooting.rst).
+if(NOT BUILD_SHARED_LIBS AND NOT APPLE AND NOT WIN32 AND NOT EMSDK_VERSION)
+    target_link_options(${PROJECT_NAME} INTERFACE "LINKER:--exclude-libs,libtanh_core.a")
 endif()
 # add an alias so that the project can be used with add_subdirectory
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
@@ -309,6 +411,7 @@ target_sources(${PROJECT_NAME}
 
         # Utils
         src/utils/JsonConfigLoader.cpp
+        src/utils/Logger.cpp
 
         # Interface
         src/InferenceHandler.cpp
@@ -316,15 +419,7 @@ target_sources(${PROJECT_NAME}
         src/InferenceConfig.cpp
 
         # System
-        src/system/HighPriorityThread.cpp
 )
-
-# add the include directories for the backends to the build interface, public because the anira headers include the backend headers
-foreach(HEADER_DIR ${BACKEND_BUILD_HEADER_DIRS})
-    target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
-        $<BUILD_INTERFACE:${HEADER_DIR}>
-    )
-endforeach()
 
 # include the public headers of the anira library in the top-level project include directory
 target_include_directories(${PROJECT_NAME}
@@ -332,20 +427,13 @@ target_include_directories(${PROJECT_NAME}
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
-# include the link directories for all the backends to the build interface
-foreach(LIBRARY_DIR ${BACKEND_BUILD_LIBRARY_DIRS})
-    target_link_directories(${PROJECT_NAME} PUBLIC
-        $<BUILD_INTERFACE:${LIBRARY_DIR}>
-    )
-endforeach()
-
 # Shared between the anira target and the isolated ExecuTorch object target below —
 # the two must agree on every USE_* define (they shape the anira class layouts).
 set(ANIRA_COMPILE_DEFINITIONS
     # Backend-specific definitions
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
-    $<$<BOOL:EMSDK_VERSION>:USE_ANIRA_WEB>
+    $<$<BOOL:${EMSDK_VERSION}>:USE_ANIRA_WEB>
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
     $<$<BOOL:${ANIRA_WITH_LITERT}>:USE_LITERT>
     $<$<BOOL:${ANIRA_WITH_EXECUTORCH}>:USE_EXECUTORCH>
@@ -366,168 +454,63 @@ endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
 
+# ------------------------------------------------------------------------------
+# Backends link PRIVATE, through their anira::<engine> targets. No public header
+# includes an engine header (BackendBase.h), and a consumer's own use of an engine
+# is its own explicit link of anira::<engine>. For a static anira the engine
+# archives still reach the consumer's link line as $<LINK_ONLY:anira::<engine>> —
+# link dependencies (archive, --exclude-libs, system libraries) without compile
+# usage requirements — so the installed package defines the same targets before
+# importing anira (cmake/install.cmake). How each engine is linked — on demand,
+# hidden, never whole-archive — is documented in cmake/aniraBackendHelpers.cmake.
+# ------------------------------------------------------------------------------
 if(ANIRA_WITH_EXECUTORCH)
-    if(TARGET executorch)
-        # Desktop: the ExecuTorch CMake package was found by anira_setup_backend.
-        # Link the runtime plus the extension (Module/TensorPtr/data loader),
-        # kernel (optimized + quantized CPU ops) and XNNPACK-delegate targets —
-        # the ops/backend targets carry the per-platform force-load options that
-        # their static-initializer registration requires. The CoreML/MPS/MLX
-        # delegates are deliberately not linked: anira pins its backends to
-        # portable CPU execution, and their exported targets reference absolute
-        # SDK paths from the machine that built the archives.
-        #
-        # Two ordering/scope constraints:
-        #  * This block must come BEFORE the libtorch link block: libtorch_cpu
-        #    exports its own (different) XNNPACK, and if the torch dylibs precede
-        #    ExecuTorch's static archives on the link line, part of the delegate's
-        #    xnn_* references bind to libtorch's copy and delegate init fails at
-        #    runtime.
-        #  * The force-load options propagate to whatever links these targets, and
-        #    ExecuTorch aborts at static-init when its kernels register twice in
-        #    one process. A shared anira must therefore link them PRIVATE (the
-        #    registrations live inside libanira and consumers reach the runtime
-        #    through it); only a static anira propagates them to the consumer,
-        #    which is then the single place the runtime is linked.
-        if(BUILD_SHARED_LIBS)
-            set(ANIRA_EXECUTORCH_LINK_SCOPE PRIVATE)
-        else()
-            set(ANIRA_EXECUTORCH_LINK_SCOPE PUBLIC)
-        endif()
-        target_link_libraries(${PROJECT_NAME} ${ANIRA_EXECUTORCH_LINK_SCOPE}
-            executorch executorch_extensions executorch_kernels xnnpack_backend)
-
-        # ExecuTorchProcessor.cpp is the only TU that may see the ExecuTorch headers:
-        # they vendor a copy of c10 that must never shadow LibTorch's real c10 in the
-        # other backend TUs (it breaks the LibTorch backend at link time on MSVC).
-        # anira_setup_backend stripped the compile usage requirements off the imported
-        # ExecuTorch targets, so compile it in its own object target with explicit
-        # include dirs and merge the objects into anira.
-        add_library(anira-executorch-objs OBJECT src/backends/ExecuTorchProcessor.cpp)
-        set_target_properties(anira-executorch-objs PROPERTIES
-            POSITION_INDEPENDENT_CODE ON
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED ON
-            # Same hidden-visibility policy as the main target (see above).
-            CXX_VISIBILITY_PRESET hidden
-            VISIBILITY_INLINES_HIDDEN ON)
-        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-            # Same unique-symbol policy as the main target (see above).
-            target_compile_options(anira-executorch-objs PRIVATE -fno-gnu-unique)
-        endif()
-        target_compile_definitions(anira-executorch-objs PRIVATE
-            ${ANIRA_COMPILE_DEFINITIONS}
-            ${ANIRA_EXECUTORCH_COMPILE_DEFINITIONS})
-        target_include_directories(anira-executorch-objs PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/include")
-        target_include_directories(anira-executorch-objs SYSTEM PRIVATE
-            "${ANIRA_EXECUTORCH_ROOTDIR}/include"
-            "${ANIRA_EXECUTORCH_ROOTDIR}/include/executorch/runtime/core/portable_type/c10")
-        target_link_libraries(anira-executorch-objs PRIVATE
-            concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
-        if(MSVC)
-            # Match anira's export decoration (see cmake/msvc-support.cmake): the
-            # objects become part of anira, so ANIRA_API must resolve identically.
-            if(BUILD_SHARED_LIBS)
-                target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_EXPORTS)
-            else()
-                target_compile_definitions(anira-executorch-objs PRIVATE ANIRA_STATIC_DEFINE)
-            endif()
-        endif()
-        target_sources(${PROJECT_NAME} PRIVATE $<TARGET_OBJECTS:anira-executorch-objs>)
-        # XNNPACK's runtime-dispatch config tables reference its microkernel symbols
-        # from data sections, which on-demand archive resolution does not satisfy
-        # (Apple's linker fails with "does not have address" fixup errors on archive
-        # members it never materialized). The microkernel archive is a leaf with no
-        # dependencies or colliding symbols, so link it whole-archive.
-        if(TARGET xnnpack-microkernels-prod)
-            target_link_libraries(${PROJECT_NAME} ${ANIRA_EXECUTORCH_LINK_SCOPE}
-                "$<LINK_LIBRARY:WHOLE_ARCHIVE,xnnpack-microkernels-prod>")
-        endif()
-    else()
-        # Mobile: a single merged libexecutorch.a (per ABI on Android, per
-        # xcframework slice on iOS), linked like the other static backends.
-        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_EXECUTORCH_STATIC_LIB}")
-    endif()
+    # Desktop: anira::executorch wraps the ExecuTorch CMake package found by
+    # anira_setup_backend — runtime, extensions, kernels and XNNPACK delegate with
+    # their force-load options, the whole-archive microkernels and the ELF
+    # --exclude-libs per archive (see aniraBackendHelpers.cmake). Mobile: the single
+    # merged libexecutorch.a (per ABI on Android, per xcframework slice on iOS),
+    # wrapped like the other static engines. ExecuTorch is static-only, so anira is
+    # static here (cmake/validate-options.cmake) and hands the runtime on to its
+    # consumer as $<LINK_ONLY:anira::executorch>: the single place it is linked,
+    # which matters — the force-loaded kernels abort at static-init when they
+    # register twice in one process.
+    #
+    # The ExecuTorch headers vendor a copy of c10 that used to be kept out of every
+    # TU but ExecuTorchProcessor.cpp, so that it could not shadow LibTorch's real
+    # c10 (which broke the LibTorch backend at link time on MSVC). LibTorch is
+    # shared-only and ExecuTorch static-only, so the two can no longer share an
+    # image and the processor is a regular anira source.
+    target_link_libraries(${PROJECT_NAME} PRIVATE anira::executorch)
 endif()
 
 if(ANIRA_WITH_LIBTORCH)
-    # The find_package(Torch) adds the libraries libc10.so and libkineto.a as full paths to ${TORCH_LIBRARIES}. This is no problem when we add anira as a subdirectory to another project, but when we install the library, the torch libraries will be link targets of the anira library with full paths and hence not found on other systems. Therefore, we link those libs privately and only add the torch target publicly.
-    # Also until cmake 3.26, there is a bug where the torch_cpu library is not found when linking publicly https://gitlab.kitware.com/cmake/cmake/-/issues/24163 and anira is added as a subdirectory to another project, see
-    # But this is necessary for when we install the library since otherwise symbols are not found
-    # Another problem are that on armv7l with benchmarking enabled, some symbols are not found when linking the torch_cpu library privately
-    if (CMAKE_VERSION VERSION_LESS "3.26.0" AND NOT (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR))
-        target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIBRARIES})
-        set(TORCH_LIBRARIES_ALL_PRIVATE TRUE)
-        if(UNIX AND NOT APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
-            target_link_libraries(${PROJECT_NAME} PUBLIC torch_cpu)
-        endif()
-    else()
-        foreach(TORCH_LIB ${TORCH_LIBRARIES})
-            if(TORCH_LIB STREQUAL "torch" OR TORCH_LIB STREQUAL "torch_library")
-                target_link_libraries(${PROJECT_NAME} PUBLIC ${TORCH_LIB})
-            else()
-                target_link_libraries(${PROJECT_NAME} PRIVATE ${TORCH_LIB})
-            endif()
-        endforeach()
+    # anira::libtorch wraps torch, torch_library and what find_package(Torch) lists
+    # by absolute path (libc10, libkineto, ...). PRIVATE: LibTorch is shared-only,
+    # so anira is shared here and none of it reaches a consumer or the installed
+    # export. (The CMake < 3.26 subproject special case that once split
+    # torch/torch_library PUBLIC from the rest is the same thing now.)
+    target_link_libraries(${PROJECT_NAME} PRIVATE anira::libtorch)
+    # TORCH_CXX_FLAGS is LibTorch's libstdc++ ABI switch (-D_GLIBCXX_USE_CXX11_ABI=...;
+    # empty in the current prebuilds). Compiling anira against LibTorch means
+    # compiling anira with it, and it then decides the std::string ABI of anira's
+    # own public API — so it is a PUBLIC requirement of anira, in the build tree and
+    # in the installed export, not only of anira::libtorch.
+    if(TORCH_CXX_FLAGS)
+        separate_arguments(_anira_torch_cxx_flags NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
+        target_compile_options(${PROJECT_NAME} PUBLIC ${_anira_torch_cxx_flags})
+        unset(_anira_torch_cxx_flags)
     endif()
 endif()
 
-# Enforce the ExecuTorch-before-LibTorch ordering constraint documented above.
-# Both bundle their own XNNPACK; if the torch dylibs precede ExecuTorch's static
-# archives on the link line, part of the XNNPACK delegate's xnn_* references bind
-# to libtorch's (different) copy and delegate init fails at runtime with a bare
-# Internal error. LINK_LIBRARIES preserves the target_link_libraries call order,
-# so a future reshuffle of the two blocks above is caught here at configure time
-# instead of as a runtime failure.
-if(ANIRA_WITH_EXECUTORCH AND ANIRA_WITH_LIBTORCH AND TARGET executorch)
-    get_target_property(_anira_link_order ${PROJECT_NAME} LINK_LIBRARIES)
-    list(FIND _anira_link_order "executorch" _anira_executorch_index)
-    list(FIND _anira_link_order "torch" _anira_torch_index)
-    if(_anira_executorch_index EQUAL -1
-       OR (_anira_torch_index GREATER -1 AND _anira_executorch_index GREATER _anira_torch_index))
-        message(FATAL_ERROR
-            "anira: internal link-order violation — the ExecuTorch targets must be linked "
-            "before the LibTorch libraries (both bundle XNNPACK; see the comment at the "
-            "ExecuTorch link block). Restore the ExecuTorch block above the LibTorch block.")
+foreach(_anira_engine onnxruntime tflite litert)
+    string(TOUPPER "${_anira_engine}" _anira_ENGINE)
+    if(ANIRA_WITH_${_anira_ENGINE})
+        target_link_libraries(${PROJECT_NAME} PRIVATE anira::${_anira_engine})
     endif()
-    unset(_anira_link_order)
-    unset(_anira_executorch_index)
-    unset(_anira_torch_index)
-endif()
-
-# Backends link PUBLIC: anira's public headers include the backend headers, and
-# (onnxruntime) "_OrtGetApiBase" is otherwise dropped. Static archives are linked
-# on-demand (NOT whole-archive — the onnxruntime/tflite archives carry duplicate
-# protobuf/absl symbols that force-loading would clash; anira only needs the C API,
-# which the linker resolves on demand) — see anira_target_link_static_backend in
-# cmake/AniraBackends.cmake.
-if(ANIRA_WITH_ONNXRUNTIME)
-    if(ANIRA_ONNXRUNTIME_IS_STATIC)
-        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_ONNXRUNTIME_STATIC_LIB}")
-    else()
-        target_link_libraries(${PROJECT_NAME} PUBLIC onnxruntime)
-    endif()
-endif()
-
-if(ANIRA_WITH_TFLITE)
-    if(ANIRA_TFLITE_IS_STATIC)
-        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_TFLITE_STATIC_LIB}")
-    else()
-        target_link_libraries(${PROJECT_NAME} PUBLIC tensorflowlite_c)
-    endif()
-endif()
-
-if(ANIRA_WITH_LITERT)
-    if(ANIRA_LITERT_IS_STATIC)
-        # The desktop static archives are pre-isolated to the LiteRt* C API at
-        # packaging (backends >= v2.3.0), so they coexist with ExecuTorch's
-        # force-loaded XNNPACK — see the note in AniraValidate.cmake.
-        anira_target_link_static_backend(${PROJECT_NAME} "${ANIRA_LITERT_STATIC_LIB}")
-    else()
-        target_link_libraries(${PROJECT_NAME} PUBLIC LiteRt)
-    endif()
-endif()
+endforeach()
+unset(_anira_engine)
+unset(_anira_ENGINE)
 
 if(ANIRA_WITH_BENCHMARK OR ANIRA_WITH_TESTS)
     include(cmake/test-deps.cmake)
@@ -580,5 +563,5 @@ endif()
 # ==============================================================================
 
 if(ANIRA_BUILD_WASM)
-    include(cmake/BuildWasm.cmake)
+    include(cmake/build-wasm.cmake)
 endif()

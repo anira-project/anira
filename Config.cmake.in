@@ -4,41 +4,43 @@ include(CMakeFindDependencyMacro)
 
 message(STATUS "Configuring anira")
 
+# What this anira was built with. Backend linkage follows BUILD_SHARED_LIBS (a
+# shared anira links shared backends, a static anira static ones), so
+# ANIRA_BACKEND_LINKAGE is also the linkage of every anira::<engine> below.
 set(ANIRA_WITH_LIBTORCH @ANIRA_WITH_LIBTORCH@)
+set(ANIRA_WITH_ONNXRUNTIME @ANIRA_WITH_ONNXRUNTIME@)
+set(ANIRA_WITH_TFLITE @ANIRA_WITH_TFLITE@)
+set(ANIRA_WITH_LITERT @ANIRA_WITH_LITERT@)
 set(ANIRA_WITH_EXECUTORCH @ANIRA_WITH_EXECUTORCH@)
+set(ANIRA_BACKEND_LINKAGE "@ANIRA_BACKEND_LINKAGE@")
 set(ANIRA_WITH_BENCHMARK @ANIRA_WITH_BENCHMARK@)
 set(ANIRA_WITH_TESTS @ANIRA_WITH_TESTS@)
 set(ANIRA_VERSION @PROJECT_VERSION_FULL@)
 
 find_package(concurrentqueue REQUIRED)
 find_package(nlohmann_json REQUIRED)
-# Statically linked backends put Threads::Threads on anira's link interface.
+# Statically linked backends put Threads::Threads on their target's link interface.
 find_dependency(Threads)
 
 # anira's Buffer / RingBuffer / MemoryBlock are aliases over tanh-lib's
 # Apache-2.0 core component, installed alongside anira into the same prefix.
 find_dependency(tanh COMPONENTS Core)
 
-# Find the dependencies
-if (ANIRA_WITH_LIBTORCH)
-    find_package(Torch REQUIRED)
-endif()
-
-# Desktop only: the installed lib dir carries ExecuTorch's CMake package, which
-# defines the executorch/executorch_extensions/executorch_kernels/xnnpack_backend
-# targets the exported anira target links. Mobile links the merged archive by
-# install-relative path instead, so there is no package to resolve there.
-if (ANIRA_WITH_EXECUTORCH AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    find_package(executorch REQUIRED CONFIG PATHS "${CMAKE_CURRENT_LIST_DIR}/../ExecuTorch" NO_DEFAULT_PATH)
-endif()
-
 if (ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK)
     find_package(GTest REQUIRED)
 endif()
-    
+
 if (ANIRA_WITH_BENCHMARK)
     find_package(benchmark REQUIRED)
 endif()
+
+# The engine targets anira::<engine> — the same files anira links, with the engine's
+# include directories and definitions — defined from this prefix. anira links them
+# PRIVATE; link one yourself only if your own code calls that engine. Before
+# aniraTargets.cmake, whose $<LINK_ONLY:anira::<engine>> entries (static anira)
+# refer to them.
+include("${CMAKE_CURRENT_LIST_DIR}/aniraBackendHelpers.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/aniraBackendTargets.cmake")
 
 include("${CMAKE_CURRENT_LIST_DIR}/aniraTargets.cmake")
 

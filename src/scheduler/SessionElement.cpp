@@ -95,11 +95,10 @@ void SessionElement::clear() {
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0 && m_latency[i] > 0) {
             for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
-                for (size_t k = 0;
-                     k < m_latency[i] - m_inference_config.get_internal_model_latency()[i];
-                     ++k) {
-                    m_receive_buffer[i].push_sample(j, 0.f);
-                }
+                m_receive_buffer[i].push_fill(
+                    j,
+                    0.f,
+                    m_latency[i] - m_inference_config.get_internal_model_latency()[i]);
             }
         }
     }
@@ -114,9 +113,9 @@ void SessionElement::enqueue_pending_dispatch(
     if (!m_dispatch_pending.try_enqueue(m_dispatch_producer_token, std::move(thread_safe_struct))) {
         // Unreachable while the capacity bound holds (pending entries are
         // distinct ThreadSafeStructs); handled like any other queue-full drop.
-        LOG_ERROR << "[ERROR] Could not enqueue pending stateful dispatch! "
-                     "Dropping the inference and zero-filling its output."
-                  << '\n';
+        ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                           "Could not enqueue pending stateful dispatch! Dropping the inference "
+                           "and zero-filling its output.");
         complete_with_zeros(thread_safe_struct);
     }
 }
@@ -419,9 +418,12 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
             auto requested = static_cast<unsigned int>(custom_latency[i]);
             if (m_inference_config.get_postprocess_output_size()[i] > 0 &&
                 requested < internal_latency) {
-                LOG_WARNING << "[WARNING] Custom latency " << requested << " for tensor " << i
-                            << " is below the internal model latency " << internal_latency
-                            << "; clamping." << '\n';
+                ANIRA_LOG_WARNING(log_group::k_scheduler,
+                                  "Custom latency %u for tensor %zu is below the internal model "
+                                  "latency %u; clamping.",
+                                  requested,
+                                  i,
+                                  internal_latency);
                 requested = internal_latency;
             }
             m_latency[i] = requested;
@@ -470,11 +472,10 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_latency[i] > 0) {
             for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
-                for (size_t k = 0;
-                     k < m_latency[i] - m_inference_config.get_internal_model_latency()[i];
-                     ++k) {
-                    m_receive_buffer[i].push_sample(j, 0.f);
-                }
+                m_receive_buffer[i].push_fill(
+                    j,
+                    0.f,
+                    m_latency[i] - m_inference_config.get_internal_model_latency()[i]);
             }
         }
     }

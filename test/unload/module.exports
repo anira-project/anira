@@ -1,0 +1,19 @@
+# Export allowlist of the plugin-shaped unload module on Mach-O (ld64
+# -exported_symbols_list): its C entry points and nothing else. What a plugin
+# embedding anira should do (docs/sphinx/troubleshooting.rst, "Host application
+# ships its own backend runtime"), and required on macOS with a static anira and
+# the ExecuTorch backend: its archives are force-loaded, and ld64 has no hidden
+# variant of -force_load, so nothing short of an export list keeps executorch::/
+# xnn_* out of the export table — which the anira_exports CTest asserts. Keep in
+# sync with module.cpp and module.map.
+_anira_test_create
+_anira_test_prepare
+_anira_test_process
+_anira_test_destroy
+_anira_test_create_throwing
+_anira_test_num_inference_threads
+_anira_test_has_inference_threads
+_anira_test_num_sessions
+_anira_test_has_core
+_anira_test_shutdown
+_anira_test_leak_thread

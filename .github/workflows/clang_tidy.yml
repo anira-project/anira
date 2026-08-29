@@ -29,8 +29,12 @@ jobs:
           PRESET: clang-tidy
       # SOURCES excludes src/emscripten-wrappers/ because those translation
       # units are only built by the wasm presets (Emscripten toolchain) and are
-      # therefore absent from this build's compilation database.
+      # therefore absent from this build's compilation database — and test/install/,
+      # a separate consumer project built against an *installed* anira: it has no
+      # compile command here either, and clang-tidy would guess one from a nearby
+      # test file, which lacks the engine include directory its engine consumer
+      # needs (build_install is what checks it).
       - uses: tanh-lab/ci-actions/clang-tidy-check@main
         with:
           PRESET: clang-tidy
-          SOURCES: "src/backends/ src/benchmark/ src/scheduler/ src/system/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/"
+          SOURCES: "src/backends/ src/benchmark/ src/scheduler/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/backends/ test/scheduler/ test/utils/ test/unload/ test/*.cpp"

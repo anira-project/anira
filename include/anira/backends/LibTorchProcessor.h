@@ -3,43 +3,13 @@
 
 #ifdef USE_LIBTORCH
 
-// Avoid min/max macro conflicts on Windows for LibTorch compatibility
-#ifdef _WIN32
-#ifdef min
-#undef min
-#endif
-
-#ifdef max
-#undef max
-#endif
-#endif
-
-#include <stdlib.h>
-
 #include <memory>
+#include <vector>
 
 #include "../InferenceConfig.h"
 #include "../scheduler/SessionElement.h"
 #include "../utils/Buffer.h"
 #include "BackendBase.h"
-
-// LibTorch headers trigger many warnings; disabling for cleaner build logs
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable : 4244 4267 4996)
-#elif defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wall"
-#endif
-
-#include <torch/script.h>
-#include <torch/torch.h>
-
-#ifdef _MSC_VER
-#pragma warning(pop)
-#elif defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
 
 namespace anira {
 
@@ -50,8 +20,11 @@ namespace anira {
  * Facebook's PyTorch C++ API (LibTorch). It supports loading TorchScript models
  * and performing real-time inference with parallel processing capabilities.
  *
+ * The LibTorch state lives behind the named pimpl `Instance`, defined only in
+ * LibTorchProcessor.cpp: this header includes no engine header (see BackendBase).
+ *
  * @warning This class is only available when compiled with USE_LIBTORCH defined
- * @see BackendBase, LibtorchProcessor::Instance, InferenceConfig, ModelData, SessionElement
+ * @see BackendBase, InferenceConfig, ModelData, SessionElement
  */
 class ANIRA_API LibtorchProcessor : public BackendBase {
 public:
@@ -105,68 +78,15 @@ private:
     /**
      * @brief Internal processing instance for thread-safe LibTorch operations
      *
-     * Each Instance represents an independent LibTorch processing context with its own
-     * model, tensors, and memory allocation. This design enables parallel processing
-     * without shared state or synchronization overhead.
-     *
-     * @par Thread Safety:
-     * Each instance is used by only one thread at a time, eliminating the need for
-     * locks during inference operations. The atomic processing flag ensures safe
-     * instance allocation across threads.
-     *
-     * @see LibtorchProcessor
+     * Opaque here, defined in LibTorchProcessor.cpp. Each Instance owns an
+     * independent TorchScript module and its tensors. Each instance is used by only
+     * one thread at a time, so inference needs no locking; an atomic processing flag
+     * guards instance allocation.
      */
-    struct Instance {
-        /**
-         * @brief Constructs a LibTorch processing instance
-         *
-         * @param inference_config Reference to inference configuration
-         */
-        Instance(InferenceConfig& inference_config);
-
-        /**
-         * @brief Prepares this instance for inference operations
-         *
-         * Loads the TorchScript model, allocates tensors, and performs initialization.
-         */
-        void prepare();
-
-        /**
-         * @brief Processes input through this instance's model
-         *
-         * @param input Input buffers to process
-         * @param output Output buffers to fill with results
-         * @param session Session element for context (unused in instance)
-         */
-        void process(std::vector<BufferF>& input,
-                     std::vector<BufferF>& output,
-                     const std::shared_ptr<SessionElement>& session);
-
-        torch::jit::script::Module m_module;  ///< Loaded TorchScript model for inference
-
-        std::vector<MemoryBlock<float>> m_input_data;  ///< Pre-allocated input data buffers
-
-        std::vector<c10::IValue> m_inputs;      ///< PyTorch input tensor values
-        c10::IValue m_outputs;                  ///< PyTorch output tensor values
-        torch::TensorOptions m_tensor_options;  ///< Tensor options for device, dtype and grad
-                                                ///< settings
-
-        InferenceConfig& m_inference_config;    ///< Reference to inference configuration
-        std::atomic<bool> m_processing{false};  ///< Flag indicating if instance is currently
-                                                ///< processing
-
-#if DOXYGEN
-        // Since Doxygen does not find classes structures nested in std::shared_ptr
-        MemoryBlock<float>* __doxygen_force_0;  ///< Placeholder for Doxygen documentation
-#endif
-    };
+    struct Instance;
 
     std::vector<std::shared_ptr<Instance>> m_instances;  ///< Vector of parallel processing
                                                          ///< instances
-
-#if DOXYGEN
-    Instance* __doxygen_force_0;  ///< Placeholder for Doxygen documentation
-#endif
 };
 
 }  // namespace anira

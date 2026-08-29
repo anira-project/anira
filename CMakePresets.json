@@ -152,6 +152,7 @@
       "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
       "cacheVariables": {
         "ANIRA_BUILD_WASM": "ON",
+        "BUILD_SHARED_LIBS": "OFF",
         "ANIRA_WITH_LIBTORCH": "OFF",
         "ANIRA_WITH_TFLITE": "OFF",
         "ANIRA_WITH_LITERT": "OFF",
@@ -169,6 +170,7 @@
       "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
       "cacheVariables": {
         "ANIRA_BUILD_WASM": "ON",
+        "BUILD_SHARED_LIBS": "OFF",
         "ANIRA_WITH_LIBTORCH": "OFF",
         "ANIRA_WITH_TFLITE": "OFF",
         "ANIRA_WITH_LITERT": "OFF",

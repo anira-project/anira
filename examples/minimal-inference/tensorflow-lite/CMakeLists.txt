@@ -7,9 +7,13 @@ add_executable(minimal-tflite
   minimal-tflite.cpp
 )
 
+# This example calls the TensorFlow Lite C API directly, so it links the engine
+# target next to anira: anira::tflite is the same file anira uses (one copy per
+# process) and is what makes the engine headers reachable — anira::anira alone
+# carries none.
 target_link_libraries(minimal-tflite
   anira::anira
-  tensorflowlite_c
+  anira::tflite
 )
 
 if (MSVC)

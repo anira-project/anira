@@ -2,12 +2,14 @@
 #define ANIRA_CONTEXTCONFIG_H
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include "anira/system/AniraWinExports.h"
+#include "anira/system/AniraExports.h"
 #include "anira/utils/InferenceBackend.h"
 
 namespace anira {
@@ -51,11 +53,13 @@ inline const char* to_string(WaitStrategy wait_strategy) {
 /**
  * @brief Minimum severity of log messages that are emitted
  *
- * One level for the whole inference stack: it gates anira's own LOG_DEBUG /
- * LOG_INFO / LOG_WARNING / LOG_ERROR output and is forwarded to the logging facilities of
+ * One level for the whole inference stack: it is applied as the runtime level of
+ * thl::Logger (tanh-lib), through which all of anira's own output goes (tagged
+ * with `anira.<component>` groups), and is forwarded to the logging facilities of
  * the enabled backends (ONNX Runtime environment severity, LiteRT environment
  * min-logger severity, LibTorch/c10 log level). A message is emitted when its
- * severity is at or above the configured level.
+ * severity is at or above the configured level — and, for anira's own messages,
+ * at or above tanh-lib's compile-time level (Release builds compile in Error only).
  *
  * @note The TFLite backend is exempt: the prebuilt TFLite C library does not
  * export any runtime logging control, so its (rare) log lines are unaffected.
@@ -94,6 +98,71 @@ inline constexpr LogLevel default_log_level() {
     return LogLevel::Info;
 #endif
 }
+
+/**
+ * @brief How the records anira's real-time paths log are delivered
+ *
+ * Everything reachable from InferenceHandler::process()/push_data()/pop_data() and
+ * from the inference threads logs into a lock-free queue owned by the context
+ * (see LogConfig). Somebody has to drain that queue into the log sinks:
+ * - Thread: a low-priority thread owned by the context, running exactly while
+ *   inference sessions exist (started with the first, stopped and joined with the
+ *   last, and by Context::shutdown()).
+ * - Manual: no thread. The host pumps the queue itself by calling
+ *   InferenceHandler::drain_log() (or Context::drain_log()) periodically, e.g. from
+ *   a UI timer. The only mode on WebAssembly.
+ */
+enum class LogDrain { Thread = 0, Manual = 1 };
+
+inline const char* to_string(LogDrain log_drain) {
+    switch (log_drain) {
+        case LogDrain::Thread: return "thread";
+        case LogDrain::Manual: return "manual";
+    }
+    return "unknown";
+}
+
+/**
+ * @brief Platform-dependent default log drain: Thread natively, Manual on
+ * WebAssembly (no thread can run there).
+ */
+inline constexpr LogDrain default_log_drain() {
+#ifdef __EMSCRIPTEN__
+    return LogDrain::Manual;
+#else
+    return LogDrain::Thread;
+#endif
+}
+
+/**
+ * @brief Logging configuration of the inference context
+ *
+ * Process-global like the thread pool: applied by the first session, reconciled
+ * against later sessions' configurations while sessions exist (the level follows
+ * "most verbose wins", the other fields must match and a mismatch is reported with
+ * a warning). The queue capacity is fixed the first time the context is built in
+ * a process.
+ */
+struct ANIRA_API LogConfig {
+    /// Minimum severity emitted by anira and forwarded to the backends (see LogLevel).
+    LogLevel m_level = default_log_level();
+    /// Who drains the real-time log queue (see LogDrain).
+    LogDrain m_drain = default_log_drain();
+    /// Records the real-time queue holds; rounded up to a power of two, clamped to
+    /// [64, 65536]. A full queue drops (and counts) further records until drained.
+    /// Rule of thumb: capacity >= expected burst rate x drain interval.
+    size_t m_queue_capacity = 512;
+    /// Interval of the drain thread (LogDrain::Thread only). Bounds the delivery
+    /// latency and the burst the queue must absorb between two passes.
+    uint32_t m_drain_interval_ms = 10;
+
+    bool operator==(const LogConfig& other) const {
+        return m_level == other.m_level && m_drain == other.m_drain &&
+               m_queue_capacity == other.m_queue_capacity &&
+               m_drain_interval_ms == other.m_drain_interval_ms;
+    }
+    bool operator!=(const LogConfig& other) const { return !(*this == other); }
+};
 
 /**
  * @brief Platform-dependent default thread count: half of the available CPU
@@ -165,8 +234,9 @@ struct ANIRA_API ContextConfig {
      *                   trade-offs). Must be identical across all ContextConfigs in
      *                   a process, since all sessions share one thread pool.
      * @param log_level Minimum severity of log messages emitted by anira and its
-     *                   backends (see LogLevel). Default: LogLevel::Info in debug
-     *                   builds, LogLevel::Error in release builds.
+     *                   backends (see LogLevel); stored in m_log.m_level. Default:
+     *                   LogLevel::Info in debug builds, LogLevel::Error in release
+     *                   builds. The other logging settings live in m_log.
      *
      * @note The constructor automatically detects and registers available inference
      * backends based on compile-time definitions (USE_LIBTORCH, USE_ONNXRUNTIME, USE_TFLITE)
@@ -174,7 +244,8 @@ struct ANIRA_API ContextConfig {
     ContextConfig(unsigned int num_threads = default_num_threads(),
                   WaitStrategy wait_strategy = WaitStrategy::SpinBackoff,
                   LogLevel log_level = default_log_level())
-        : m_num_threads(num_threads), m_wait_strategy(wait_strategy), m_log_level(log_level) {
+        : m_num_threads(num_threads), m_wait_strategy(wait_strategy) {
+        m_log.m_level = log_level;
 #ifdef USE_LIBTORCH
         m_enabled_backends.push_back(InferenceBackend::LIBTORCH);
 #endif
@@ -221,15 +292,16 @@ struct ANIRA_API ContextConfig {
     WaitStrategy m_wait_strategy = WaitStrategy::SpinBackoff;
 
     /**
-     * @brief Minimum severity of log messages emitted by anira and its backends
+     * @brief Logging configuration: level, real-time queue capacity and who drains it
      *
-     * Applied process-globally when the context is created and forwarded to the
-     * logging facilities of the backend runtimes (see LogLevel for details and
-     * the TFLite exemption). When ContextConfigs disagree, the lowest (most
-     * verbose) requested level wins and a warning is logged. Defaults to
-     * LogLevel::Info in debug builds and LogLevel::Error in release builds.
+     * See LogConfig. The level is applied process-globally when the context is
+     * created and forwarded to the backend runtimes (see LogLevel); when
+     * ContextConfigs disagree, the lowest (most verbose) requested level wins and a
+     * warning is logged. The drain mode, queue capacity and interval are those of the
+     * first session; later sessions requesting different values are reported with a
+     * warning.
      */
-    LogLevel m_log_level = default_log_level();
+    LogConfig m_log;
 
     /**
      * @brief Version string of the anira library
@@ -273,7 +345,7 @@ private:
      **/
     bool operator==(const ContextConfig& other) const {
         return m_num_threads == other.m_num_threads && m_wait_strategy == other.m_wait_strategy &&
-               m_log_level == other.m_log_level && m_anira_version == other.m_anira_version &&
+               m_log == other.m_log && m_anira_version == other.m_anira_version &&
                m_enabled_backends == other.m_enabled_backends;
     }
 

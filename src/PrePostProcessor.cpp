@@ -6,7 +6,6 @@
 
 #include <cassert>
 #include <cstddef>
-#include <utility>
 #include <vector>
 
 namespace anira {
@@ -98,12 +97,10 @@ void PrePostProcessor::post_process(std::vector<BufferF>& input,
 void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input,
                                                BufferF& output,
                                                size_t num_samples) {
+    // The output buffer is always a single channel buffer; channel i of the ring
+    // buffer lands at [i * num_samples, (i + 1) * num_samples).
     for (size_t i = 0; i < input.get_num_channels(); i++) {
-        for (size_t j = 0; j < num_samples; j++) {
-            output.set_sample(0, j + (i * num_samples), input.pop_sample(i));  // The output buffer
-                                                                               // is always a single
-                                                                               // channel buffer
-        }
+        input.pop_block(i, output.get_write_pointer(0, i * num_samples), num_samples);
     }
 }
 
@@ -119,20 +116,13 @@ void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input,
                                                size_t num_new_samples,
                                                size_t num_old_samples,
                                                size_t offset) {
-    int const num_total_samples = static_cast<int>(num_new_samples + num_old_samples);
+    // Window layout per channel: [num_old history samples][num_new fresh samples].
+    // The history is the num_old_samples that precede the read position, so it
+    // has to be read before pop_block() advances it.
     for (size_t i = 0; i < input.get_num_channels(); i++) {
-        // int j is important to be signed, because it is used in the condition j >= 0
-        for (int j = num_total_samples - 1; j >= 0; j--) {
-            if (std::cmp_greater_equal(j, num_old_samples)) {
-                output.set_sample(0,
-                                  (size_t)(num_total_samples - j + num_old_samples - 1) + offset,
-                                  input.pop_sample(i));
-            } else {
-                output.set_sample(0,
-                                  (size_t)j + offset,
-                                  input.get_past_sample(i, num_total_samples - (size_t)j));
-            }
-        }
+        float* window = output.get_write_pointer(0, offset);
+        input.peek_past_block(i, window, num_old_samples);
+        input.pop_block(i, window + num_old_samples, num_new_samples);
     }
 }
 
@@ -156,9 +146,7 @@ void PrePostProcessor::push_samples_to_buffer(const BufferF& input,
                                               RingBuffer& output,
                                               size_t num_samples) {
     for (size_t i = 0; i < output.get_num_channels(); i++) {
-        for (size_t j = 0; j < num_samples; j++) {
-            output.push_sample(i, input.get_sample(0, j + (i * num_samples)));
-        }
+        output.push_block(i, input.get_read_pointer(0, i * num_samples), num_samples);
     }
 }
 

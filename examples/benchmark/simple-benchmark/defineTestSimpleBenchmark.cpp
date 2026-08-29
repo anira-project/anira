@@ -3,12 +3,8 @@
 #include <gtest/gtest.h>
 
 TEST(Benchmark, Simple) {
-#if __linux__ || __APPLE__
-    pthread_t self = pthread_self();
-#elif WIN32
-    HANDLE self = GetCurrentThread();
-#endif
-    anira::HighPriorityThread::elevate_priority(self, true);
+    // Elevate this thread's priority for more consistent timing
+    thl::core::Thread::set_current_priority(thl::core::ThreadPriority::RealTime);
 
     benchmark::RunSpecifiedBenchmarks();
 }

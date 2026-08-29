@@ -6,9 +6,11 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+#include <anira/utils/MemoryBlock.h>
 #include <onnxruntime_c_api.h>
 #include <onnxruntime_cxx_api.h>
 
+#include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <memory>
@@ -46,12 +48,48 @@ void throw_if_foreign_onnxruntime() {
             "support the API version anira was built against. A different "
             "ONNX Runtime is already loaded in this process (e.g. shipped by "
             "the host application) and backend symbols were not kept private "
-            "to the module embedding anira. Link the ONNX Runtime archive "
-            "with hidden visibility (see anira_target_link_static_backend).");
+            "to the module embedding anira. Link ONNX Runtime only through "
+            "anira::onnxruntime and compile the translation units that include "
+            "its headers with hidden visibility (see the troubleshooting guide).");
     }
 }
 
 }  // namespace
+
+// Defined here, not in the header: it owns ONNX Runtime objects, and the engine
+// headers stay out of anira's public headers (see the note on BackendBase).
+struct OnnxRuntimeProcessor::Instance {
+    Instance(InferenceConfig& inference_config);
+    ~Instance();
+
+    void prepare();
+    void process(std::vector<BufferF>& input,
+                 std::vector<BufferF>& output,
+                 const std::shared_ptr<SessionElement>& session);
+
+    Ort::MemoryInfo m_memory_info;                 ///< Memory information for tensor allocation
+    Ort::Env m_env;                                ///< ONNX Runtime environment
+    Ort::AllocatorWithDefaultOptions m_ort_alloc;  ///< Default allocator for ONNX Runtime
+    Ort::SessionOptions m_session_options;         ///< Session configuration options
+
+    std::unique_ptr<Ort::Session> m_session;  ///< ONNX Runtime inference session
+
+    std::vector<MemoryBlock<float>> m_input_data;  ///< Pre-allocated input data buffers
+    std::vector<Ort::Value> m_inputs;              ///< ONNX Runtime input tensors
+    std::vector<Ort::Value> m_outputs;             ///< ONNX Runtime output tensors
+
+    std::vector<Ort::AllocatedStringPtr> m_input_name;   ///< Input tensor names (allocated
+                                                         ///< strings)
+    std::vector<Ort::AllocatedStringPtr> m_output_name;  ///< Output tensor names (allocated
+                                                         ///< strings)
+
+    std::vector<const char*> m_output_names;  ///< Output tensor name pointers for API calls
+    std::vector<const char*> m_input_names;   ///< Input tensor name pointers for API calls
+
+    InferenceConfig& m_inference_config;    ///< Reference to inference configuration
+    std::atomic<bool> m_processing{false};  ///< Flag indicating if instance is currently
+                                            ///< processing
+};
 
 OnnxRuntimeProcessor::OnnxRuntimeProcessor(InferenceConfig& inference_config)
     : BackendBase(inference_config) {
@@ -165,7 +203,7 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config)
                                        m_input_names.size(),
                                        m_output_names.data(),
                                        m_output_names.size());
-        } catch (Ort::Exception& e) { LOG_ERROR << e.what() << '\n'; }
+        } catch (Ort::Exception& e) { ANIRA_LOG_ERROR(log_group::k_backend_onnx, "%s", e.what()); }
     }
 }
 
@@ -198,7 +236,7 @@ void OnnxRuntimeProcessor::Instance::process(std::vector<BufferF>& input,
                                    m_input_names.size(),
                                    m_output_names.data(),
                                    m_output_names.size());
-    } catch (Ort::Exception& e) { LOG_ERROR << e.what() << '\n'; }
+    } catch (Ort::Exception& e) { ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what()); }
 
     for (size_t i = 0; i < m_outputs.size(); i++) {
         const auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();

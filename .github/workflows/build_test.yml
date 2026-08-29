@@ -151,5 +151,26 @@ jobs:
           # Backends resolve per-leg: explicit matrix override first, else the shared
           # `inference_engines` toggle, else OFF (TFLite defaults OFF — legacy, opt-in).
           CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.onnxruntime || matrix.inference_engines }} -DANIRA_WITH_LITERT=${{ matrix.litert || matrix.inference_engines }} -DANIRA_WITH_EXECUTORCH=${{ matrix.executorch || matrix.inference_engines }} -DANIRA_WITH_TFLITE=${{ matrix.tflite || 'OFF' }}"
+      - name: assert the backend linkage rule
+        # Backend linkage follows BUILD_SHARED_LIBS (cmake/validate-options.cmake): a
+        # shared anira cannot link the static-only ExecuTorch, a static anira not the
+        # shared-only LibTorch. Every leg that asks for the full engine set must
+        # therefore have configured with the unsupported engine disabled and a
+        # warning saying so (the configure output is kept by the build action).
+        if: matrix.inference_engines == 'ON'
+        shell: bash
+        run: |
+          if [[ "${{ matrix.shared }}" == "ON" ]]; then
+            grep -q "disabling ANIRA_WITH_EXECUTORCH" configure.log
+          else
+            grep -q "disabling ANIRA_WITH_LIBTORCH" configure.log
+          fi
       - name: test
         uses: ./.github/actions/test
+        with:
+          # Windows builds with the multi-config Visual Studio generator, where ctest
+          # needs the configuration: without -C the gtest-discovered tests of that
+          # configuration are not even listed (the legs used to pass with "No tests
+          # were found") and the config-independent entries fail with "Test not
+          # available without configuration". Harmless on single-config generators.
+          CTEST_ARGS: "-C Release"

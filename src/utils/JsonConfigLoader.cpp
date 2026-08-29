@@ -17,7 +17,9 @@
 
 anira::JsonConfigLoader::JsonConfigLoader(const std::string& file_path) {
     std::ifstream config_file(file_path);
-    if (!config_file.is_open()) { LOG_ERROR << "Could not open file at " + file_path << '\n'; }
+    if (!config_file.is_open()) {
+        ANIRA_LOG_ERROR(anira::log_group::k_config, "Could not open file at %s", file_path.c_str());
+    }
     initialize_from_stream(config_file);
 }
 
@@ -39,7 +41,7 @@ void anira::JsonConfigLoader::initialize_from_stream(std::istream& stream) {
         stream >> json_config;
         parse(json_config);
     } catch (const nlohmann::json::parse_error& e) {
-        LOG_ERROR << "JSON parse error: " << e.what() << '\n';
+        ANIRA_LOG_ERROR(anira::log_group::k_config, "JSON parse error: %s", e.what());
     }
 }
 
@@ -62,16 +64,17 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
             // Accept the (valid) value so shared config files keep working, but
             // coerce it.
             if (context_json.at("num_threads").get<unsigned int>() > 0) {
-                LOG_WARNING << "[WARNING] 'num_threads' > 0 is not supported on WebAssembly "
-                               "builds: inference threads must be supplied externally (e.g. "
-                               "AniraWeb.spinUpInferenceWorker()). Using num_threads = 0."
-                            << '\n';
+                ANIRA_LOG_WARNING(anira::log_group::k_config,
+                                  "'num_threads' > 0 is not supported on WebAssembly builds: "
+                                  "inference threads must be supplied externally (e.g. "
+                                  "AniraWeb.spinUpInferenceWorker()). Using num_threads = 0.");
             }
 #else
             m_context_config->m_num_threads = context_json.at("num_threads").get<unsigned int>();
 #endif
         } else {
-            LOG_ERROR << "Invalid 'num_threads' value: expected an unsigned integer." << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'num_threads' value: expected an unsigned integer.");
         }
     }
 
@@ -87,42 +90,99 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
             // driven cooperatively by JS Workers, and there is no pthreads
             // runtime to block on. Accept the (valid) value so shared config
             // files keep working, but coerce it.
-            LOG_WARNING << "[WARNING] wait_strategy 'blocking' is not supported on WebAssembly "
-                           "builds. Using 'spin_backoff'."
-                        << '\n';
+            ANIRA_LOG_WARNING(anira::log_group::k_config,
+                              "wait_strategy 'blocking' is not supported on WebAssembly builds. "
+                              "Using 'spin_backoff'.");
 #else
             m_context_config->m_wait_strategy = anira::WaitStrategy::Blocking;
 #endif
         } else {
-            LOG_ERROR << "Invalid 'wait_strategy' value: expected \"spin_backoff\" or "
-                         "\"blocking\". Defaulting to \"spin_backoff\"."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'wait_strategy' value: expected \"spin_backoff\" or "
+                            "\"blocking\". Defaulting to \"spin_backoff\".");
         }
     }
 
-    if (context_json.contains("log_level")) {
-        const auto& level_json = context_json.at("log_level");
+    const auto parse_level = [this](const nlohmann::json& level_json, const char* key) {
         std::string const level =
             level_json.is_string() ? level_json.get<std::string>() : std::string();
         if (level == "debug") {
-            m_context_config->m_log_level = anira::LogLevel::Debug;
+            m_context_config->m_log.m_level = anira::LogLevel::Debug;
         } else if (level == "info") {
-            m_context_config->m_log_level = anira::LogLevel::Info;
+            m_context_config->m_log.m_level = anira::LogLevel::Info;
         } else if (level == "warning") {
-            m_context_config->m_log_level = anira::LogLevel::Warning;
+            m_context_config->m_log.m_level = anira::LogLevel::Warning;
         } else if (level == "error") {
-            m_context_config->m_log_level = anira::LogLevel::Error;
+            m_context_config->m_log.m_level = anira::LogLevel::Error;
         } else {
-            LOG_ERROR << "Invalid 'log_level' value: expected \"debug\", \"info\", "
-                         "\"warning\" or \"error\". Using the default log level."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid '%s' value: expected \"debug\", \"info\", \"warning\" or "
+                            "\"error\". Using the default log level.",
+                            key);
+        }
+    };
+
+    // Legacy key (anira <= 2.2): the level alone. Superseded by the "log" block.
+    if (context_json.contains("log_level")) {
+        parse_level(context_json.at("log_level"), "log_level");
+    }
+
+    if (context_json.contains("log")) {
+        const auto& log_json = context_json.at("log");
+        if (!log_json.is_object()) {
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'log' value: expected an object with the optional keys "
+                            "'level', 'drain', 'queue_capacity' and 'drain_interval_ms'.");
+            return;
+        }
+        if (log_json.contains("level")) { parse_level(log_json.at("level"), "log.level"); }
+        if (log_json.contains("drain")) {
+            const auto& drain_json = log_json.at("drain");
+            std::string const drain =
+                drain_json.is_string() ? drain_json.get<std::string>() : std::string();
+            if (drain == "thread") {
+#ifdef __EMSCRIPTEN__
+                ANIRA_LOG_WARNING(anira::log_group::k_config,
+                                  "log.drain 'thread' is not supported on WebAssembly builds: "
+                                  "no thread can drain the log queue there. Using 'manual'.");
+                m_context_config->m_log.m_drain = anira::LogDrain::Manual;
+#else
+                m_context_config->m_log.m_drain = anira::LogDrain::Thread;
+#endif
+            } else if (drain == "manual") {
+                m_context_config->m_log.m_drain = anira::LogDrain::Manual;
+            } else {
+                ANIRA_LOG_ERROR(anira::log_group::k_config,
+                                "Invalid 'log.drain' value: expected \"thread\" or \"manual\". "
+                                "Using the default.");
+            }
+        }
+        if (log_json.contains("queue_capacity")) {
+            const auto& capacity_json = log_json.at("queue_capacity");
+            if (capacity_json.is_number_unsigned()) {
+                m_context_config->m_log.m_queue_capacity = capacity_json.get<size_t>();
+            } else {
+                ANIRA_LOG_ERROR(anira::log_group::k_config,
+                                "Invalid 'log.queue_capacity' value: expected an unsigned "
+                                "integer. Using the default.");
+            }
+        }
+        if (log_json.contains("drain_interval_ms")) {
+            const auto& interval_json = log_json.at("drain_interval_ms");
+            if (interval_json.is_number_unsigned()) {
+                m_context_config->m_log.m_drain_interval_ms = interval_json.get<uint32_t>();
+            } else {
+                ANIRA_LOG_ERROR(anira::log_group::k_config,
+                                "Invalid 'log.drain_interval_ms' value: expected an unsigned "
+                                "integer. Using the default.");
+            }
         }
     }
 }
 
 void anira::JsonConfigLoader::parse_inference_config(const nlohmann::json& config) {
     if (!config.contains("inference_config")) {
-        LOG_ERROR << "Missing 'inference_config' key." << '\n';
+        ANIRA_LOG_ERROR(anira::log_group::k_config, "Missing 'inference_config' key.");
         return;
     }
 
@@ -184,30 +244,33 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
     std::vector<anira::ModelData> model_data;
 
     if (!config.is_array()) {
-        LOG_ERROR << "Invalid 'model_data' value: expected an array." << '\n';
+        ANIRA_LOG_ERROR(anira::log_group::k_config,
+                        "Invalid 'model_data' value: expected an array.");
         return model_data;
     }
 
     if (config.empty()) {
-        LOG_ERROR << "Invalid 'model_data' array: empty array." << '\n';
+        ANIRA_LOG_ERROR(anira::log_group::k_config, "Invalid 'model_data' array: empty array.");
         return model_data;
     }
 
     for (const auto& item : config) {
         if (!item.contains("model_path") || !item.contains("inference_backend")) {
-            LOG_ERROR << "Missing key pair 'model_path' and 'inference_backend' in "
-                         "'model_data' array entry."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Missing key pair 'model_path' and 'inference_backend' in 'model_data' "
+                            "array entry.");
             continue;
         }
 
         if (!item.at("model_path").is_string()) {
-            LOG_ERROR << "Invalid 'model_path' value: expected a string." << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'model_path' value: expected a string.");
             continue;
         }
 
         if (!item.at("inference_backend").is_string()) {
-            LOG_ERROR << "Invalid 'inference_backend' value: expected a string." << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'inference_backend' value: expected a string.");
             continue;
         }
 
@@ -218,33 +281,33 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
 #if USE_ONNXRUNTIME
             model_data.emplace_back(model_path, anira::InferenceBackend::ONNX);
 #else
-            LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
-                         "entry : ONNX currently disabled in config."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Disabled 'inference_backend' value in 'model_data' array entry : ONNX "
+                            "currently disabled in config.");
 #endif
         } else if (model_backend == "TFLITE") {
 #if USE_TFLITE
             model_data.emplace_back(model_path, anira::InferenceBackend::TFLITE);
 #else
-            LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
-                         "entry : TFLITE currently disabled in config."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Disabled 'inference_backend' value in 'model_data' array entry : "
+                            "TFLITE currently disabled in config.");
 #endif
         } else if (model_backend == "LITERT") {
 #if USE_LITERT
             model_data.emplace_back(model_path, anira::InferenceBackend::LITERT);
 #else
-            LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
-                         "entry : LITERT currently disabled in config."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Disabled 'inference_backend' value in 'model_data' array entry : "
+                            "LITERT currently disabled in config.");
 #endif
         } else if (model_backend == "EXECUTORCH") {
 #if USE_EXECUTORCH
             if (item.contains("model_function")) {
                 if (!item.at("model_function").is_string()) {
-                    LOG_ERROR << "Invalid 'model_function' value in 'model_data' array "
-                                 "entry: expected a string."
-                              << '\n';
+                    ANIRA_LOG_ERROR(anira::log_group::k_config,
+                                    "Invalid 'model_function' value in 'model_data' array entry: "
+                                    "expected a string.");
                     continue;
                 }
                 const std::string model_function = item.at("model_function").get<std::string>();
@@ -255,17 +318,17 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
                 model_data.emplace_back(model_path, anira::InferenceBackend::EXECUTORCH);
             }
 #else
-            LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
-                         "entry : EXECUTORCH currently disabled in config."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Disabled 'inference_backend' value in 'model_data' array entry : "
+                            "EXECUTORCH currently disabled in config.");
 #endif
         } else if (model_backend == "LIBTORCH") {
 #if USE_LIBTORCH
             if (item.contains("model_function")) {
                 if (!item.at("model_function").is_string()) {
-                    LOG_ERROR << "Invalid 'model_function' value in 'model_data' array "
-                                 "entry: expected a string."
-                              << '\n';
+                    ANIRA_LOG_ERROR(anira::log_group::k_config,
+                                    "Invalid 'model_function' value in 'model_data' array entry: "
+                                    "expected a string.");
                     continue;
                 }
                 const std::string model_function = item.at("model_function").get<std::string>();
@@ -276,17 +339,17 @@ std::vector<anira::ModelData> anira::JsonConfigLoader::create_model_data_from_co
                 model_data.emplace_back(model_path, anira::InferenceBackend::LIBTORCH);
             }
 #else
-            LOG_ERROR << "Disabled 'inference_backend' value in 'model_data' array "
-                         "entry : LIBTORCH currently disabled in config."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Disabled 'inference_backend' value in 'model_data' array entry : "
+                            "LIBTORCH currently disabled in config.");
 #endif
         } else if (model_backend == "CUSTOM") {
             model_data.emplace_back(model_path, anira::InferenceBackend::CUSTOM);
         } else {
-            LOG_ERROR << "Invalid 'inference_backend' value in 'model_data' array "
-                         "entry : expected a string of the following list ['ONNX', "
-                         "'TFLITE', 'LITERT', 'EXECUTORCH', 'LIBTORCH', 'CUSTOM']."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'inference_backend' value in 'model_data' array entry : "
+                            "expected a string of the following list ['ONNX', 'TFLITE', 'LITERT', "
+                            "'EXECUTORCH', 'LIBTORCH', 'CUSTOM'].");
         }
     }
 
@@ -298,20 +361,21 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
     std::vector<anira::TensorShape> tensor_shape;
 
     if (!config.is_array()) {
-        LOG_ERROR << "Invalid 'tensor_shape' value: expected an array." << '\n';
+        ANIRA_LOG_ERROR(anira::log_group::k_config,
+                        "Invalid 'tensor_shape' value: expected an array.");
         return tensor_shape;
     }
 
     if (config.empty()) {
-        LOG_ERROR << "Invalid 'tensor_shape' array: empty array." << '\n';
+        ANIRA_LOG_ERROR(anira::log_group::k_config, "Invalid 'tensor_shape' array: empty array.");
         return tensor_shape;
     }
 
     for (const auto& item : config) {
         if (!item.contains("input_shape") || !item.contains("output_shape")) {
-            LOG_ERROR << "Missing key pair 'input_shape' and 'output_shape' in "
-                         "'tensor_shape' array entry."
-                      << '\n';
+            ANIRA_LOG_ERROR(
+                anira::log_group::k_config,
+                "Missing key pair 'input_shape' and 'output_shape' in 'tensor_shape' array entry.");
             continue;
         }
 
@@ -327,9 +391,9 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
             if (item.at("inference_backend").is_string()) {
                 tensor_backend = item.at("inference_backend").get<std::string>();
             } else {
-                LOG_ERROR << "Invalid 'inference_backend' value in 'tensor_shape' "
-                             "array entry: expected a string."
-                          << '\n';
+                ANIRA_LOG_ERROR(anira::log_group::k_config,
+                                "Invalid 'inference_backend' value in 'tensor_shape' array entry: "
+                                "expected a string.");
             }
         }
 
@@ -339,9 +403,9 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
                                       output_shape_list,
                                       anira::InferenceBackend::ONNX);
 #else
-            LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array "
-                         "entry : ONNX currently disabled in config."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Disabled 'inference_backend' value in 'tensor_shape' array entry : "
+                            "ONNX currently disabled in config.");
 #endif
         } else if (tensor_backend == "TFLITE") {
 #if USE_TFLITE
@@ -349,9 +413,9 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
                                       output_shape_list,
                                       anira::InferenceBackend::TFLITE);
 #else
-            LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array "
-                         "entry : TFLITE currently disabled in config."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Disabled 'inference_backend' value in 'tensor_shape' array entry : "
+                            "TFLITE currently disabled in config.");
 #endif
         } else if (tensor_backend == "LITERT") {
 #if USE_LITERT
@@ -359,9 +423,9 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
                                       output_shape_list,
                                       anira::InferenceBackend::LITERT);
 #else
-            LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array "
-                         "entry : LITERT currently disabled in config."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Disabled 'inference_backend' value in 'tensor_shape' array entry : "
+                            "LITERT currently disabled in config.");
 #endif
         } else if (tensor_backend == "EXECUTORCH") {
 #if USE_EXECUTORCH
@@ -369,9 +433,9 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
                                       output_shape_list,
                                       anira::InferenceBackend::EXECUTORCH);
 #else
-            LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array "
-                         "entry : EXECUTORCH currently disabled in config."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Disabled 'inference_backend' value in 'tensor_shape' array entry : "
+                            "EXECUTORCH currently disabled in config.");
 #endif
         } else if (tensor_backend == "LIBTORCH") {
 #if USE_LIBTORCH
@@ -379,9 +443,9 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
                                       output_shape_list,
                                       anira::InferenceBackend::LIBTORCH);
 #else
-            LOG_ERROR << "Disabled 'inference_backend' value in 'tensor_shape' array "
-                         "entry : LIBTORCH currently disabled in config."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Disabled 'inference_backend' value in 'tensor_shape' array entry : "
+                            "LIBTORCH currently disabled in config.");
 #endif
         } else if (tensor_backend == "CUSTOM") {
             tensor_shape.emplace_back(input_shape_list,
@@ -390,10 +454,10 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
         } else if (tensor_backend == "UNIVERSAL") {
             tensor_shape.emplace_back(input_shape_list, output_shape_list);
         } else {
-            LOG_ERROR << "Invalid 'inference_backend' value in 'tensor_shape' array "
-                         "entry : expected a string of the following list ['ONNX', "
-                         "'TFLITE', 'LITERT', 'EXECUTORCH', 'LIBTORCH']."
-                      << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'inference_backend' value in 'tensor_shape' array entry : "
+                            "expected a string of the following list ['ONNX', 'TFLITE', 'LITERT', "
+                            "'EXECUTORCH', 'LIBTORCH'].");
         }
     }
 
@@ -403,13 +467,13 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
 anira::TensorShapeList anira::JsonConfigLoader::parse_tensor_json_shape(
     const nlohmann::json& shape_node) {
     if (!shape_node.is_array()) {
-        LOG_ERROR << "Invalid 'shape' value in 'tensor_shape' array entry: "
-                     "expected an array."
-                  << '\n';
+        ANIRA_LOG_ERROR(anira::log_group::k_config,
+                        "Invalid 'shape' value in 'tensor_shape' array entry: expected an array.");
     }
 
     if (shape_node.empty()) {
-        LOG_ERROR << "Invalid 'shape' value in 'tensor_shape' array entry: empty array." << '\n';
+        ANIRA_LOG_ERROR(anira::log_group::k_config,
+                        "Invalid 'shape' value in 'tensor_shape' array entry: empty array.");
         return {};
     }
 
@@ -420,9 +484,8 @@ anira::TensorShapeList anira::JsonConfigLoader::parse_tensor_json_shape(
         return {flat_shape};
     }
 
-    LOG_ERROR << "Invalid 'shape' value inside 'tensor_shape' array entry: "
-                 "expected an array."
-              << '\n';
+    ANIRA_LOG_ERROR(anira::log_group::k_config,
+                    "Invalid 'shape' value inside 'tensor_shape' array entry: expected an array.");
     return {};
 }
 
@@ -473,19 +536,24 @@ std::vector<size_t> anira::JsonConfigLoader::parse_size_t_json_shape(
     const nlohmann::json& shape_node,
     const std::string& json_key_name) {
     if (!shape_node.is_array()) {
-        LOG_ERROR << "Invalid '" << json_key_name << "' value: expected an array." << '\n';
+        ANIRA_LOG_ERROR(anira::log_group::k_config,
+                        "Invalid '%s' value: expected an array.",
+                        json_key_name.c_str());
         return {};
     }
 
     if (shape_node.empty()) {
-        LOG_ERROR << "Invalid '" << json_key_name << "' array: empty array." << '\n';
+        ANIRA_LOG_ERROR(anira::log_group::k_config,
+                        "Invalid '%s' array: empty array.",
+                        json_key_name.c_str());
         return {};
     }
 
     if (shape_node.front().is_number_unsigned()) { return shape_node.get<std::vector<size_t>>(); }
 
-    LOG_ERROR << "Invalid '" << json_key_name << "' array: expected an unsigned integer array."
-              << '\n';
+    ANIRA_LOG_ERROR(anira::log_group::k_config,
+                    "Invalid '%s' array: expected an unsigned integer array.",
+                    json_key_name.c_str());
     return {};
 }
 
@@ -502,10 +570,11 @@ anira::JsonConfigLoader::SingleParameterStruct
             single_parameters.m_max_inference_time = max_inference_time;
             necessary_parameter_set = true;
         } else {
-            LOG_ERROR << "Invalid 'max_inference_time' value: expected a float." << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'max_inference_time' value: expected a float.");
         }
     } else {
-        LOG_ERROR << "Missing 'max_inference_time' key." << '\n';
+        ANIRA_LOG_ERROR(anira::log_group::k_config, "Missing 'max_inference_time' key.");
     }
 
     if (config.contains("warm_up")) {
@@ -514,7 +583,8 @@ anira::JsonConfigLoader::SingleParameterStruct
             const unsigned int warm_up = warm_up_json.get<unsigned int>();
             single_parameters.m_warm_up = warm_up;
         } else {
-            LOG_ERROR << "Invalid 'warm_up' value: expected an unsigned integer." << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'warm_up' value: expected an unsigned integer.");
         }
     }
 
@@ -524,7 +594,8 @@ anira::JsonConfigLoader::SingleParameterStruct
             const bool session_exclusive_processor = session_exclusive_processor_json.get<bool>();
             single_parameters.m_session_exclusive_processor = session_exclusive_processor;
         } else {
-            LOG_ERROR << "Invalid 'session_exclusive_processor' value: expected a bool." << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'session_exclusive_processor' value: expected a bool.");
         }
     }
 
@@ -534,7 +605,8 @@ anira::JsonConfigLoader::SingleParameterStruct
             const float blocking_ratio = blocking_ratio_json.get<float>();
             single_parameters.m_blocking_ratio = blocking_ratio;
         } else {
-            LOG_ERROR << "Invalid 'blocking_ratio' value: expected a float." << '\n';
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Invalid 'blocking_ratio' value: expected a float.");
         }
     }
 
@@ -545,9 +617,9 @@ anira::JsonConfigLoader::SingleParameterStruct
                 num_parallel_processors_json.get<unsigned int>();
             single_parameters.m_num_parallel_processors = num_parallel_processors;
         } else {
-            LOG_ERROR << "Invalid 'num_parallel_processors' value: expected an "
-                         "unsigned integer."
-                      << '\n';
+            ANIRA_LOG_ERROR(
+                anira::log_group::k_config,
+                "Invalid 'num_parallel_processors' value: expected an unsigned integer.");
         }
     }
 

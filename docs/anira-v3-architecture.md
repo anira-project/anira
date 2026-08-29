@@ -966,3 +966,7 @@ Exit: `v3.0.0`.
 - **GPU CI hardware** for M4: which machines run the functional-probe suite, and whether the probe cache is shipped as a fixture so CPU-only CI can exercise the planner against a recorded registry.
 - **`ext::Entry`**: chosen in this revision (section 1b) over one extension per adapter; revisited only if a third adapter needs a different shape.
 - **Anchor override on `Hard`** stays deferred until a multi-rate model exists.
+
+## TODO
+
+- Batching?
