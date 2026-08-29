@@ -1,9 +1,4 @@
-# ==============================================================================
-# backends/tflite.cmake — anira_setup_tflite(<target>)
-# Legacy TensorFlow Lite (TfLite* C API) — shared or static libtensorflowlite_c.
-# Included by cmake/AniraBackends.cmake, which provides anira_setup_backend() and the
-# shared _anira_apply_backend_dirs / _anira_link_backend / anira_target_link_static_backend.
-# ==============================================================================
+# anira_setup_tflite(<target>) — legacy TensorFlow Lite (TfLite* C API), shared or static.
 
 macro(anira_setup_tflite target)
     anira_setup_backend(tflite)

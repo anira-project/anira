@@ -1,16 +1,11 @@
-# ==============================================================================
-# backends/libtorch.cmake — anira_setup_libtorch(<target>)
-# LibTorch — shared-only, wired through its own CMake package (find_package(Torch)).
-# Included by cmake/AniraBackends.cmake, which provides anira_setup_backend() and the
-# shared _anira_apply_backend_dirs / _anira_link_backend / anira_target_link_static_backend.
-# ==============================================================================
+# anira_setup_libtorch(<target>) — LibTorch, shared-only, via find_package(Torch).
+# Fails at configure if ExecuTorch is enabled but not linked yet (XNNPACK ordering).
+# TORCH_LIBRARIES holds absolute paths (libc10, kineto) that must not leak into the
+# installed export: only torch / torch_library link PUBLIC, the rest PRIVATE. CMake < 3.26
+# as a subproject cannot link torch_cpu publicly (cmake#24163) -> everything PRIVATE,
+# TORCH_LIBRARIES_ALL_PRIVATE tells install.cmake; armv7l still needs torch_cpu PUBLIC.
 
 macro(anira_setup_libtorch target)
-    # Must come AFTER anira_setup_executorch(): libtorch_cpu exports its own
-    # (different) XNNPACK, and if the torch dylibs precede the ExecuTorch archive
-    # on the link line, part of the delegate's xnn_* references bind to libtorch's
-    # copy and delegate init fails at runtime. LINK_LIBRARIES preserves call order,
-    # so a wrong order is caught here at configure time.
     if(ANIRA_WITH_EXECUTORCH)
         get_target_property(_ab_links ${target} LINK_LIBRARIES)
         if(NOT _ab_links MATCHES "libexecutorch\\.a|executorch\\.lib")
@@ -23,10 +18,6 @@ macro(anira_setup_libtorch target)
     _anira_apply_backend_dirs(${target})
     target_sources(${target} PRIVATE "${ANIRA_BACKENDS_CMAKE_DIR}/../src/backends/LibTorchProcessor.cpp")
     target_compile_definitions(${target} PUBLIC USE_LIBTORCH)
-    # The find_package(Torch) adds the libraries libc10.so and libkineto.a as full paths to ${TORCH_LIBRARIES}. This is no problem when we add anira as a subdirectory to another project, but when we install the library, the torch libraries will be link targets of the anira library with full paths and hence not found on other systems. Therefore, we link those libs privately and only add the torch target publicly.
-    # Also until cmake 3.26, there is a bug where the torch_cpu library is not found when linking publicly https://gitlab.kitware.com/cmake/cmake/-/issues/24163 and anira is added as a subdirectory to another project, see
-    # But this is necessary for when we install the library since otherwise symbols are not found
-    # Another problem are that on armv7l with benchmarking enabled, some symbols are not found when linking the torch_cpu library privately
     if (CMAKE_VERSION VERSION_LESS "3.26.0" AND NOT (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR))
         target_link_libraries(${target} PRIVATE ${TORCH_LIBRARIES})
         set(TORCH_LIBRARIES_ALL_PRIVATE TRUE)

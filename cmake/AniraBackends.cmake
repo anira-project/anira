@@ -1,60 +1,53 @@
 # ==============================================================================
-# AniraBackends.cmake — data-driven download + setup of pre-built inference engines
+# AniraBackends.cmake — prebuilt inference engines for anira
 # ==============================================================================
 #
-# Single entry point for fetching the pre-built backend binaries anira links
-# against. Replaces the per-engine SetupOnnxRuntime / SetupLibTorch /
-# SetupTensorflowLite scripts.
+# Entry points (called from the top-level CMakeLists):
+#   anira_setup_<engine>(<target>)   engine = executorch|libtorch|onnxruntime|tflite|litert
+#     Fetches the engine, adds its processor source + USE_<ENGINE> define to <target>,
+#     applies its include/link dirs and links it. Defined in cmake/backends/<engine>.cmake.
+#     anira_setup_executorch() must run before anira_setup_libtorch() (both bundle XNNPACK).
 #
-# Binaries come from the anira-project/backends GitHub release whose tag is
-# ANIRA_BACKENDS_VERSION. Every archive is named
-#   <libname>-<version>-<OS>-<arch>[-<extra>]-<linkage>[-debug].zip
-# and unpacks to a uniform tree (include/ + lib/, plus share/ + bin/ for libtorch).
+# This file provides what those need:
+#   anira_setup_backend(<id>)  download/resolve one engine tree, set ANIRA_<ENGINE>_*:
+#     _ROOTDIR _LINKAGE _IS_STATIC _LIB_BASENAME _SHARED_LIB_PATH _VERSION,
+#     _STATIC_LIB / _STATIC_LIB_SUBPATH (static), _IOS_SLICE (iOS),
+#     EXECUTORCH: _INCLUDE_DIR _COMPILE_DEFINITIONS [_REGISTRATIONS_LIB (Windows)];
+#     and BACKEND_BUILD_HEADER_DIRS / BACKEND_BUILD_LIBRARY_DIRS for the caller.
+#   anira_target_link_static_backend(<target> <archive>)  on-demand static link with
+#     hidden symbols (-load_hidden / --exclude-libs) + the platform system libs.
+#   _anira_apply_backend_dirs / _anira_link_backend  small helpers for the per-engine files.
 #
-# Integrity is checked live: at configure time anira asks the GitHub release for
-# each asset's published sha256 (when reachable) and re-downloads any backend whose
-# archive changed upstream or downloaded incompletely. Nothing is pinned in-repo —
-# no lockfile, no hashes to maintain. The download itself is verified with that
-# sha256 so a partial/corrupt fetch can never be mistaken for a good one. When the
-# release metadata is unreachable (offline, rate-limited, CMake < 3.19), a backend
-# already present on disk is reused; only a missing backend then needs the network.
+# Assets: anira-project/backends release ANIRA_BACKENDS_VERSION, named
+#   <libname>-<version>-<OS>-<arch>-<shared|static[-debug]>.zip   (desktop / WASM)
+#   <libname>-<version>-Android-<linkage>.zip   (all ABIs under lib/<abi>/)
+#   <libname>-<version>-iOS-xcframework.zip     (device + simulator slices, static)
+# unpacking to include/ + lib/ (libtorch: its CMake package; iOS: the xcframework).
+# Integrity: the asset sha256 published by GitHub is fetched at configure (skipped by
+# ANIRA_BACKENDS_SKIP_REMOTE_CHECK / offline / CMake < 3.19); a <dest>.sha256 stamp
+# next to the extracted tree triggers a re-download when it differs.
+# Linkage follows BUILD_SHARED_LIBS; libtorch is shared-only, executorch static-only,
+# WASM and iOS are always static. Static archives are linked on-demand, never
+# whole-archive (onnxruntime/tflite carry duplicate protobuf/absl members).
+# armv7l (Bela) has no backends asset and uses legacy upstream mirrors.
 #
-# Per engine: anira_setup_<engine>(<target>)   engine = libtorch|onnxruntime|tflite|litert|executorch
-#   fetches the prebuilt engine, adds its processor source and USE_<ENGINE> define to
-#   <target>, and links it. Call anira_setup_executorch() BEFORE anira_setup_libtorch()
-#   (both bundle XNNPACK; enforced at configure time).
-# Lower level: anira_setup_backend(<id>) only fetches + resolves the tree (sets the
-#   ANIRA_<ENGINE>_* variables and the BACKEND_BUILD_*_DIRS lists).
-#
-# Configurable cache variables (see CMakeLists.txt for the user-facing options):
-#   ANIRA_BACKENDS_VERSION          release tag to download from (default v2.1.1)
-#   ANIRA_BACKENDS_SKIP_REMOTE_CHECK  skip the live integrity check (offline/reproducible)
-#   ANIRA_<ENGINE>_LINKAGE          per-engine linkage override (else follows BUILD_SHARED_LIBS)
-#   ANIRA_<ENGINE>_ROOTDIR          bring-your-own: use this prebuilt tree, skip download
-#   ANIRA_<ENGINE>_URL              override the download URL (custom mirror/build)
-#   ANIRA_<ENGINE>_SHA256           expected hash for ANIRA_<ENGINE>_URL
-#   ANIRA_<ENGINE>_VERSION          override the engine version baked into the asset name
-# where <ENGINE> is LIBTORCH | ONNXRUNTIME | TFLITE | LITERT | EXECUTORCH.
+# User overrides (<ENGINE> = LIBTORCH|ONNXRUNTIME|TFLITE|LITERT|EXECUTORCH):
+#   ANIRA_BACKENDS_VERSION, ANIRA_BACKENDS_SKIP_REMOTE_CHECK,
+#   ANIRA_<ENGINE>_LINKAGE=shared|static, ANIRA_<ENGINE>_ROOTDIR=<tree>,
+#   ANIRA_<ENGINE>_URL=... [ANIRA_<ENGINE>_SHA256=...], ANIRA_<ENGINE>_VERSION=...
+#   (legacy: LIBTORCH_ROOTDIR, TENSORFLOWLITE_ROOTDIR)
+# Bump ANIRA_BACKENDS_VERSION and _anira_engine_version together on a new release.
 # ==============================================================================
 
 include_guard(GLOBAL)
 
-# Repo-relative locations resolved once, robust to anira being a subproject.
 get_filename_component(ANIRA_BACKENDS_CMAKE_DIR "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
 get_filename_component(ANIRA_BACKENDS_MODULES_DIR "${ANIRA_BACKENDS_CMAKE_DIR}/../modules" ABSOLUTE)
 
-# Default backends release tag. Bump this (and the per-engine versions in
-# _anira_engine_version) when pointing anira at a new anira-project/backends release.
-# v2.3.0 ships the static desktop LiteRT archives pre-isolated to their LiteRt* C
-# API (vendored XNNPACK/cpuinfo/pthreadpool internals localized/renamed at
-# packaging), which is what allows static LiteRT + ExecuTorch in one image.
 if(NOT DEFINED ANIRA_BACKENDS_VERSION OR ANIRA_BACKENDS_VERSION STREQUAL "")
     set(ANIRA_BACKENDS_VERSION "v2.3.0")
 endif()
 
-# ------------------------------------------------------------------------------
-# _anira_backend_libname(<id> <out>) — archive/lib prefix for an engine id.
-# ------------------------------------------------------------------------------
 function(_anira_backend_libname id out)
     if(id STREQUAL "libtorch")
         set(${out} "libtorch" PARENT_SCOPE)
@@ -71,10 +64,6 @@ function(_anira_backend_libname id out)
     endif()
 endfunction()
 
-# ------------------------------------------------------------------------------
-# _anira_engine_version(<libname> <out>) — the engine version baked into asset
-# names. Bump together with ANIRA_BACKENDS_VERSION on a new backends release.
-# ------------------------------------------------------------------------------
 function(_anira_engine_version libname out)
     if(libname STREQUAL "libtorch")
         set(${out} "2.12.0" PARENT_SCOPE)
@@ -91,11 +80,6 @@ function(_anira_engine_version libname out)
     endif()
 endfunction()
 
-# ------------------------------------------------------------------------------
-# _anira_release_json(<out>) — download the backends release metadata once per
-# configure and cache the path (empty if the check is disabled / unreachable /
-# CMake too old for string(JSON)). Honors $GITHUB_TOKEN to dodge API rate limits.
-# ------------------------------------------------------------------------------
 function(_anira_release_json out)
     get_property(_done GLOBAL PROPERTY _ANIRA_RELEASE_JSON_DONE)
     if(_done)
@@ -130,10 +114,6 @@ function(_anira_release_json out)
     set(${out} "${_json}" PARENT_SCOPE)
 endfunction()
 
-# ------------------------------------------------------------------------------
-# _anira_asset_digest(<asset-basename> <out>) — the sha256 GitHub publishes for
-# <asset-basename>.zip in the release, or "" if unavailable.
-# ------------------------------------------------------------------------------
 function(_anira_asset_digest asset out)
     set(${out} "" PARENT_SCOPE)
     _anira_release_json(_json)
@@ -162,11 +142,6 @@ function(_anira_asset_digest asset out)
     endforeach()
 endfunction()
 
-# ------------------------------------------------------------------------------
-# _anira_target_tokens(<out_os> <out_arch>) — map this build's platform/arch to
-# the (OS, arch) tokens used in asset names. Sets arch to "" for WASM and the
-# special "armv7l" sentinel for the legacy Bela path.
-# ------------------------------------------------------------------------------
 function(_anira_target_tokens out_os out_arch)
     if(EMSDK_VERSION)
         set(${out_os} "WASM" PARENT_SCOPE)
@@ -175,23 +150,18 @@ function(_anira_target_tokens out_os out_arch)
     endif()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Android")
-        # One archive per linkage bundles every ABI under lib/<abi>/; the ABI is
-        # picked at wiring time from CMAKE_ANDROID_ARCH_ABI, so there is no arch token.
         set(${out_os} "Android" PARENT_SCOPE)
         set(${out_arch} "" PARENT_SCOPE)
         return()
     endif()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-        # The backends ship a single iOS xcframework (device + simulator slices); the
-        # slice is selected at wiring time, so there is no arch token here either.
         set(${out_os} "iOS" PARENT_SCOPE)
         set(${out_arch} "" PARENT_SCOPE)
         return()
     endif()
 
     if(APPLE)
-        # Prefer the explicit OSX architecture selection; supports universal.
         if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64" AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
             set(_arch "universal")
         elseif(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
@@ -206,11 +176,11 @@ function(_anira_target_tokens out_os out_arch)
         return()
     endif()
 
-    if(UNIX) # Linux
+    if(UNIX)
         if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
             set(_arch "aarch64")
         elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
-            set(_arch "armv7l") # legacy sentinel — no backends asset
+            set(_arch "armv7l")
         else()
             set(_arch "x86_64")
         endif()
@@ -233,26 +203,21 @@ function(_anira_target_tokens out_os out_arch)
     message(FATAL_ERROR "anira backends: unsupported platform")
 endfunction()
 
-# ------------------------------------------------------------------------------
-# _anira_resolve_linkage(<id> <supported> <out>) — pick shared|static for an engine.
-# ------------------------------------------------------------------------------
 function(_anira_resolve_linkage id supported out)
     string(TOUPPER "${id}" _ID)
 
     if(DEFINED ANIRA_${_ID}_LINKAGE AND NOT ANIRA_${_ID}_LINKAGE STREQUAL "")
-        set(_linkage "${ANIRA_${_ID}_LINKAGE}") # per-engine override
-    elseif(BUILD_SHARED_LIBS)                   # else follow the anira library type
+        set(_linkage "${ANIRA_${_ID}_LINKAGE}")
+    elseif(BUILD_SHARED_LIBS)
         set(_linkage "shared")
     else()
         set(_linkage "static")
     endif()
 
-    # WASM only ships static.
     if(EMSDK_VERSION)
         set(_linkage "static")
     endif()
 
-    # iOS ships a single static xcframework regardless of BUILD_SHARED_LIBS.
     if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
         set(_linkage "static")
     endif()
@@ -272,11 +237,6 @@ function(_anira_resolve_linkage id supported out)
     set(${out} "${_linkage}" PARENT_SCOPE)
 endfunction()
 
-# ------------------------------------------------------------------------------
-# _anira_download_extract(<url> <sha256> <dest> <archive> <flatten>) — fetch +
-# unpack an archive into <dest> (skips if already present). <sha256> may be ""
-# (legacy/override with no hash). <flatten> moves a single nested top dir up.
-# ------------------------------------------------------------------------------
 function(_anira_download_extract url sha256 dest archive flatten)
     if(EXISTS "${dest}/")
         message(STATUS "anira: backend found at ${dest}")
@@ -296,12 +256,11 @@ function(_anira_download_extract url sha256 dest archive flatten)
     list(GET _st 0 _code)
     list(GET _st 1 _msg)
 
-    # file(DOWNLOAD) treats a 404's small HTML body as a success, so also size-check.
     set(_size 0)
     if(EXISTS "${_zip}")
         file(SIZE "${_zip}" _size)
     endif()
-    if(NOT _code EQUAL 0 OR _size LESS 1024)
+    if(NOT _code EQUAL 0 OR _size LESS 1024)   # file(DOWNLOAD) accepts a 404 HTML body
         file(REMOVE_RECURSE "${dest}")
         file(REMOVE "${_zip}")
         message(FATAL_ERROR "anira: failed to download backend archive.\n  URL: ${url}\n  Reason: ${_msg}")
@@ -310,7 +269,6 @@ function(_anira_download_extract url sha256 dest archive flatten)
     file(ARCHIVE_EXTRACT INPUT "${_zip}" DESTINATION "${dest}")
 
     if(flatten)
-        # Some legacy archives nest everything under a single top-level dir.
         string(REGEX REPLACE "\\.(zip|tgz|tar\\.gz)$" "" _stem "${archive}")
         if(EXISTS "${dest}/${_stem}/")
             file(COPY "${dest}/${_stem}/" DESTINATION "${dest}/")
@@ -319,16 +277,6 @@ function(_anira_download_extract url sha256 dest archive flatten)
     endif()
 endfunction()
 
-# ------------------------------------------------------------------------------
-# _anira_acquire_backend(<url> <asset-basename> <dest>) — fetch a backends-release
-# archive into <dest> with a live integrity check:
-#   * look up the asset's published sha256 (empty if the check is off/unreachable);
-#   * reuse <dest> when a sibling .sha256 stamp matches that digest (or, with no
-#     digest available, when <dest> simply exists);
-#   * otherwise (re)download, verifying against the digest so a corrupt/partial
-#     download fails, extract, then write the stamp LAST so a half-extracted tree
-#     is never taken for complete. The stamp doubles as the re-download trigger.
-# ------------------------------------------------------------------------------
 function(_anira_acquire_backend url asset dest)
     set(_stamp "${dest}.sha256")
     set(_zip "${CMAKE_BINARY_DIR}/import/${asset}.zip")
@@ -338,7 +286,7 @@ function(_anira_acquire_backend url asset dest)
     set(_reuse FALSE)
     if(EXISTS "${dest}/" AND EXISTS "${_stamp}")
         if(_digest STREQUAL "")
-            set(_reuse TRUE) # no upstream digest to compare against — trust the cache
+            set(_reuse TRUE)
         else()
             file(READ "${_stamp}" _cached)
             string(STRIP "${_cached}" _cached)
@@ -367,7 +315,6 @@ function(_anira_acquire_backend url asset dest)
     list(GET _st 0 _code)
     list(GET _st 1 _msg)
 
-    # file(DOWNLOAD) treats a 404's small HTML body as success, so also size-check.
     set(_size 0)
     if(EXISTS "${_zip}")
         file(SIZE "${_zip}" _size)
@@ -383,22 +330,15 @@ function(_anira_acquire_backend url asset dest)
 
     file(ARCHIVE_EXTRACT INPUT "${_zip}" DESTINATION "${dest}")
 
-    # Record the verified digest (or compute it when upstream metadata was absent)
-    # AFTER a successful extract, so the stamp marks a known-good tree.
-    if(_digest STREQUAL "")
+    if(_digest STREQUAL "")   # stamp written last: marks a fully extracted tree
         file(SHA256 "${_zip}" _digest)
     endif()
     file(WRITE "${_stamp}" "${_digest}\n")
     file(REMOVE "${_zip}")
 endfunction()
 
-# ------------------------------------------------------------------------------
-# _anira_setup_legacy_armv7l(<id>) — preserved pre-backends download paths for
-# 32-bit ARM (Bela). backends does not publish armv7l; these upstream mirrors do.
-# Sets ANIRA_<ID>_ROOTDIR + appends header/lib dirs in the calling scope.
-# ------------------------------------------------------------------------------
 macro(_anira_setup_legacy_armv7l id)
-    set(_la_id "${id}") # macro arg -> real variable for if() comparisons
+    set(_la_id "${id}")
     string(TOUPPER "${_la_id}" _LID)
     if(_la_id STREQUAL "libtorch")
         set(_lver "2.5.1")
@@ -443,22 +383,14 @@ macro(_anira_setup_legacy_armv7l id)
     endif()
 endmacro()
 
-# ==============================================================================
-# anira_setup_backend(<id>) — main entry point. A macro so find_package(Torch),
-# CMAKE_CXX_FLAGS, and the BACKEND_BUILD_*_DIRS accumulators all act on the
-# including (directory) scope.
-# ==============================================================================
+# ---- fetch + resolve one engine --------------------------------------------
 macro(anira_setup_backend id)
-    # Bind the macro argument to a real variable: macro args are string
-    # substitutions, not variables, so `if(id STREQUAL ...)` would test the
-    # literal "id". Use _ab_id in all comparisons below.
     set(_ab_id "${id}")
     string(TOUPPER "${_ab_id}" _ab_ID)
     _anira_backend_libname("${_ab_id}" _ab_libname)
 
-    # Supported linkages per engine (libtorch is shared-only, executorch static-only).
     if(_ab_id STREQUAL "libtorch")
-        set(_ab_supported "shared")
+        set(_ab_supported "shared")   # libtorch: shared-only; executorch: static-only
     elseif(_ab_id STREQUAL "executorch")
         set(_ab_supported "static")
     else()
@@ -466,7 +398,6 @@ macro(anira_setup_backend id)
     endif()
     _anira_resolve_linkage("${_ab_id}" "${_ab_supported}" _ab_linkage)
 
-    # ---- Bring-your-own: ANIRA_<ID>_ROOTDIR (or legacy LIBTORCH_ROOTDIR / TENSORFLOWLITE_ROOTDIR).
     set(_ab_byo "")
     if(DEFINED ANIRA_${_ab_ID}_ROOTDIR AND NOT ANIRA_${_ab_ID}_ROOTDIR STREQUAL "")
         set(_ab_byo "${ANIRA_${_ab_ID}_ROOTDIR}")
@@ -479,15 +410,12 @@ macro(anira_setup_backend id)
     _anira_target_tokens(_ab_os _ab_arch)
 
     if(NOT _ab_byo STREQUAL "")
-        # Use the provided tree as-is.
         message(STATUS "anira: using bring-your-own ${_ab_id} at ${_ab_byo}")
         set(_ab_rootdir "${_ab_byo}")
     elseif(_ab_arch STREQUAL "armv7l")
-        # Legacy Bela path (no backends asset).
         _anira_setup_legacy_armv7l("${_ab_id}")
         set(_ab_rootdir "${ANIRA_${_ab_ID}_ROOTDIR}")
     else()
-        # ---- Normal path: resolve version + asset name, then download from backends.
         if(DEFINED ANIRA_${_ab_ID}_VERSION AND NOT ANIRA_${_ab_ID}_VERSION STREQUAL "")
             set(_ab_version "${ANIRA_${_ab_ID}_VERSION}")
         else()
@@ -496,20 +424,14 @@ macro(anira_setup_backend id)
         if(_ab_version STREQUAL "")
             message(FATAL_ERROR "anira: no known version for ${_ab_libname}. Set ANIRA_${_ab_ID}_VERSION or ANIRA_${_ab_ID}_ROOTDIR.")
         endif()
-        set(ANIRA_${_ab_ID}_VERSION "${_ab_version}") # expose the resolved version (e.g. for BuildWasm license bundling)
+        set(ANIRA_${_ab_ID}_VERSION "${_ab_version}")
 
-        # Windows static additionally ships a Debug variant (except executorch,
-        # which publishes a single static archive per platform).
         set(_ab_linktoken "${_ab_linkage}")
         if(_ab_linkage STREQUAL "static" AND WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug"
            AND NOT _ab_id STREQUAL "executorch")
             set(_ab_linktoken "static-debug")
         endif()
 
-        # Asset name: <libname>-<version>-<OS>[-<arch>]-<linktoken>. The mobile OSes
-        # bundle their architectures inside one archive: Android has no arch token
-        # (every ABI lives under lib/<abi>/) and iOS is a single -xcframework asset
-        # (device + simulator slices, always static), so neither carries an arch.
         if(_ab_os STREQUAL "WASM")
             set(_ab_asset "${_ab_libname}-${_ab_version}-WASM-${_ab_linktoken}")
         elseif(_ab_os STREQUAL "Android")
@@ -522,20 +444,17 @@ macro(anira_setup_backend id)
 
         set(_ab_rootdir "${ANIRA_BACKENDS_MODULES_DIR}/${_ab_asset}")
         if(DEFINED ANIRA_${_ab_ID}_URL AND NOT ANIRA_${_ab_ID}_URL STREQUAL "")
-            # Custom mirror/build: download once, verify against the user's hash if given.
             set(_ab_sha "")
             if(DEFINED ANIRA_${_ab_ID}_SHA256 AND NOT ANIRA_${_ab_ID}_SHA256 STREQUAL "")
                 set(_ab_sha "${ANIRA_${_ab_ID}_SHA256}")
             endif()
             _anira_download_extract("${ANIRA_${_ab_ID}_URL}" "${_ab_sha}" "${_ab_rootdir}" "${_ab_asset}.zip" FALSE)
         else()
-            # backends release: live integrity check + self-healing re-download.
             set(_ab_url "https://github.com/anira-project/backends/releases/download/${ANIRA_BACKENDS_VERSION}/${_ab_asset}.zip")
             _anira_acquire_backend("${_ab_url}" "${_ab_asset}" "${_ab_rootdir}")
         endif()
     endif()
 
-    # ---- Wire the engine into the build (libtorch is special: it has CMake config files).
     if(_ab_id STREQUAL "libtorch")
         if(_ab_byo STREQUAL "" AND NOT _ab_arch STREQUAL "armv7l")
             list(APPEND CMAKE_PREFIX_PATH "${_ab_rootdir}")
@@ -544,7 +463,6 @@ macro(anira_setup_backend id)
             list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_rootdir}/include")
             list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_rootdir}/include/torch/csrc/api/include")
         endif()
-        # -w silences the (many) warnings from the prebuilt torch headers.
         if(TARGET torch)
             target_link_options(torch INTERFACE "-w")
         endif()
@@ -556,11 +474,8 @@ macro(anira_setup_backend id)
         set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
         set(ANIRA_LIBTORCH_LINKAGE "shared")
     elseif(_ab_arch STREQUAL "armv7l")
-        # legacy macro already populated header/lib dirs + ANIRA_<ID>_* vars
         set(ANIRA_${_ab_ID}_LINKAGE "${_ab_linkage}")
     else()
-        # onnxruntime / tflite / litert: uniform include/ + lib/ on desktop/WASM,
-        # with per-ABI (Android) and per-xcframework-slice (iOS) layouts handled below.
         if(_ab_linkage STREQUAL "static")
             set(ANIRA_${_ab_ID}_IS_STATIC TRUE)
         else()
@@ -569,28 +484,17 @@ macro(anira_setup_backend id)
         set(ANIRA_${_ab_ID}_ROOTDIR "${_ab_rootdir}")
         set(ANIRA_${_ab_ID}_LINKAGE "${_ab_linkage}")
         set(ANIRA_${_ab_ID}_LIB_BASENAME "${_ab_libname}")
-        # legacy shared-lib-path var consumed by msvc-support / BuildWasm / examples
         set(ANIRA_${_ab_ID}_SHARED_LIB_PATH "${_ab_rootdir}")
 
         if(CMAKE_SYSTEM_NAME STREQUAL "Android")
-            # One archive holds every ABI under lib/<abi>/; select this build's ABI.
             set(_ab_incdir "${_ab_rootdir}/include")
             set(_ab_libdir "${_ab_rootdir}/lib/${CMAKE_ANDROID_ARCH_ABI}")
             if(_ab_linkage STREQUAL "static")
                 set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/lib${_ab_libname}.a")
-                # Path under the install libdir (install.cmake copies lib/<abi>/ as-is).
                 set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${CMAKE_ANDROID_ARCH_ABI}/lib${_ab_libname}.a")
             endif()
         elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-            # Pick the xcframework slice matching the active SDK (device vs simulator).
             if(_ab_id STREQUAL "tflite")
-                # TFLite ships a TensorFlowLiteC.framework xcframework: a static
-                # (pre-linked Mach-O) framework binary plus flat module headers, and a
-                # fat arm64+x86_64 simulator slice. anira includes the headers by their
-                # canonical <tensorflow/lite/...c_api.h> paths, which the flat Headers/
-                # don't provide, so generate a tiny shim tree that forwards onto the
-                # framework's flat c_api.h and add Headers/ for its (quote-included)
-                # siblings.
                 if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
                     set(_ab_slice "ios-arm64_x86_64-simulator")
                 else()
@@ -608,8 +512,6 @@ macro(anira_setup_backend id)
                 list(APPEND BACKEND_BUILD_HEADER_DIRS "${_ab_fwk}/Headers")
                 set(_ab_libdir "${_ab_fwk}")
             else()
-                # onnxruntime / LiteRT: xcframework named after the lib (onnxruntime /
-                # LiteRt) with a plain static .a plus a flat Headers/ dir per slice.
                 if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
                     set(_ab_slice "ios-arm64-simulator")
                 else()
@@ -623,7 +525,6 @@ macro(anira_setup_backend id)
                 set(ANIRA_${_ab_ID}_IOS_SLICE "${_ab_slice}")
             endif()
         else()
-            # Desktop / WASM: flat include/ + lib/.
             set(_ab_incdir "${_ab_rootdir}/include")
             set(_ab_libdir "${_ab_rootdir}/lib")
             if(_ab_linkage STREQUAL "static")
@@ -638,21 +539,10 @@ macro(anira_setup_backend id)
         endif()
 
         if(_ab_id STREQUAL "executorch")
-            # The ExecuTorch headers vendor a copy of c10 that must never be visible
-            # to the LibTorch backend's TUs (it shadows LibTorch's real c10 and breaks
-            # that backend at link time on MSVC), and anira's public headers do not
-            # include them. So they stay off the anira target; only
-            # ExecuTorchProcessor.cpp gets them, per-source (see CMakeLists.txt).
             set(ANIRA_EXECUTORCH_INCLUDE_DIR "${_ab_incdir}")
-            # The compile interface the runtime was built with (mirrors what its
-            # exported targets carried): the vendored c10 must not look for a
-            # generated cmake_macros.h, logging is compiled out of the runtime, and
-            # the threadpool extension is built in.
             set(ANIRA_EXECUTORCH_COMPILE_DEFINITIONS
                 C10_USING_CUSTOM_GENERATED_MACROS ET_LOG_ENABLED=0 ET_USE_THREADPOOL)
             if(WIN32)
-                # No partial link on COFF, so the registration set ships as a second
-                # lib that must be whole-archived (see the ExecuTorch link block).
                 set(ANIRA_EXECUTORCH_REGISTRATIONS_LIB "${_ab_libdir}/executorch_registrations.lib")
             endif()
         else()
@@ -664,55 +554,20 @@ macro(anira_setup_backend id)
     message(STATUS "anira: ${id} ready (${_ab_linkage}) at ${_ab_rootdir}")
 endmacro()
 
-# ------------------------------------------------------------------------------
-# anira_target_link_static_backend(<target> <archive-path>) — link a static
-# backend archive on-demand, plus the system libraries it depends on. PUBLIC so
-# everything propagates to whatever links anira.
-#
-# NB: we deliberately do NOT whole-archive these. The onnxruntime/tflite static
-# archives vendor overlapping copies of protobuf/absl/onnx and contain multiple
-# members defining the same symbols (resolved on demand during a normal link);
-# force-loading them produces thousands of duplicate-symbol errors. anira drives
-# the engines through their C API, which the linker resolves on demand.
-#
-# The archive is linked through $<BUILD_INTERFACE> only — its absolute build-tree
-# path must not leak into the installed export. install.cmake adds the matching
-# $<INSTALL_INTERFACE> entry (relative to the consumer's install prefix) so the
-# installed package is relocatable. The system libs are unconditional (PUBLIC),
-# so they propagate to both the build tree and the installed package.
-# ------------------------------------------------------------------------------
-# Link a prebuilt static backend archive so that none of its symbols become
-# dynamic exports of the linking module. Hosts may ship their own copy of a
-# backend runtime (Ableton Live 12 bundles an ONNX Runtime dylib); any backend
-# symbol exported from a plugin can then be interposed (ELF) or weak-coalesced
-# (Mach-O) against the host's copy, which crashes the host on the first API
-# call when the versions differ. Mach-O uses -load_hidden (ld64, Xcode >= 14):
-# the archive is linked on-demand exactly like a plain input, but every symbol
-# it contributes is marked private_extern. ELF uses --exclude-libs on the
-# archive's basename, which localizes its symbols in the output; the option is
-# PUBLIC so it applies both to a shared libanira and to consumers linking the
-# static anira.
+# ---- link helpers shared by cmake/backends/*.cmake ---------------------------
 function(anira_target_link_static_backend target libpath)
     if(EMSDK_VERSION)
         target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>")
     elseif(MSVC)
-        # PE/COFF exports nothing without __declspec(dllexport): no hiding needed.
         target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>")
-    elseif(APPLE)
-        # Static onnxruntime/tflite/litert pull in absl/CoreFoundation time-zone +
-        # Apple logging code (Foundation/CoreFoundation), and static LiteRT references
-        # Metal (LiteRtCreateMetalInfo -> MTLCreateSystemDefaultDevice), so link those
-        # system frameworks.
+    elseif(APPLE)   # -load_hidden / --exclude-libs: keep backend symbols out of the plugin's exports
         target_link_libraries(${target} PUBLIC
             "$<BUILD_INTERFACE:-Wl,-load_hidden,${libpath}>" "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
     elseif(ANDROID)
-        # Android's bionic folds pthread/dl/libm into libc, but the static LiteRT/TFLite
-        # archives vendor the GPU (GL ES) delegate and use Android logging, whose symbols
-        # (glClear, EGL*, __android_log_*) live in NDK system libs that must be linked.
         get_filename_component(_anira_backend_archive "${libpath}" NAME)
         target_link_options(${target} PUBLIC "LINKER:--exclude-libs,${_anira_backend_archive}")
         target_link_libraries(${target} PUBLIC "$<BUILD_INTERFACE:${libpath}>" EGL GLESv2 android log)
-    else() # Linux / other ELF
+    else()
         find_package(Threads REQUIRED)
         get_filename_component(_anira_backend_archive "${libpath}" NAME)
         target_link_options(${target} PUBLIC "LINKER:--exclude-libs,${_anira_backend_archive}")
@@ -721,11 +576,6 @@ function(anira_target_link_static_backend target libpath)
     endif()
 endfunction()
 
-# ==============================================================================
-# Shared by cmake/backends/<engine>.cmake
-# ==============================================================================
-# Add the tree's include/ and lib/ dirs (as resolved by anira_setup_backend) to the
-# target's build interface. Public because anira's headers include backend headers.
 macro(_anira_apply_backend_dirs target)
     foreach(_ab_dir ${BACKEND_BUILD_HEADER_DIRS})
         target_include_directories(${target} SYSTEM PUBLIC $<BUILD_INTERFACE:${_ab_dir}>)
@@ -737,11 +587,6 @@ macro(_anira_apply_backend_dirs target)
     set(BACKEND_BUILD_LIBRARY_DIRS)
 endmacro()
 
-# Backends link PUBLIC: anira's public headers include the backend headers, and
-# (onnxruntime) "_OrtGetApiBase" is otherwise dropped. Static archives are linked
-# on-demand (NOT whole-archive — the onnxruntime/tflite archives carry duplicate
-# protobuf/absl symbols that force-loading would clash; anira only needs the C API,
-# which the linker resolves on demand) — see anira_target_link_static_backend.
 macro(_anira_link_backend target ID shared_target)
     if(ANIRA_${ID}_IS_STATIC)
         anira_target_link_static_backend(${target} "${ANIRA_${ID}_STATIC_LIB}")
@@ -750,13 +595,7 @@ macro(_anira_link_backend target ID shared_target)
     endif()
 endmacro()
 
-# ==============================================================================
-# Per-engine setup: anira_setup_<engine>(<target>) — one file per engine. Macros
-# (not functions): anira_setup_backend() is a macro that sets the ANIRA_<ENGINE>_*
-# variables and, for libtorch, CMAKE_CXX_FLAGS / imported Torch targets in the
-# caller's directory scope — install.cmake, msvc-support.cmake, BuildWasm.cmake
-# and the examples read those variables.
-# ==============================================================================
+# ---- anira_setup_<engine>(<target>) ------------------------------------------
 include(${CMAKE_CURRENT_LIST_DIR}/backends/executorch.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/backends/libtorch.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/backends/onnxruntime.cmake)
