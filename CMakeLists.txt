@@ -247,9 +247,10 @@ set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    # tanh-lib PR #17 (feat/logger-macros) merged with main/v0.0.4 (read_wav): the
-    # branch's own commits predate the WAV decoder the test suite uses.
-    GIT_TAG 21c9b5f13647f83ed13375ff640a96b291f64237
+    # tanh-lib PR #17 (feat/logger-macros: THL_LOG_*, thl::core::Thread, owned rt
+    # log queues) and PR #19 (feat/ringbuffer-bulk-ops: push_fill, discard,
+    # peek_past_block) merged with main/v0.0.4 (read_wav) — anira needs all three.
+    GIT_TAG 01cbdc1cdcec22e318505fc6abb5f0bafc8ceb65
 )
 FetchContent_MakeAvailable(tanh-lib)
 
