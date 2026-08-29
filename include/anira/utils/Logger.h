@@ -6,7 +6,7 @@
 #include <atomic>
 
 #include "anira/ContextConfig.h"
-#include "anira/system/AniraExports.h"
+#include "anira/system/Exports.h"
 
 /**
  * @file Logger.h

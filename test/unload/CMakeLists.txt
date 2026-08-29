@@ -12,37 +12,22 @@
 # unmapped memory and kill the process. A death test that deliberately leaks a thread
 # proves the harness can see exactly that.
 
+include(${anira_SOURCE_DIR}/cmake/tanh/check-exports.cmake)
+
 add_library(anira_unload_module MODULE module.cpp)
 target_link_libraries(anira_unload_module PRIVATE anira::anira)
 set_target_properties(anira_unload_module PROPERTIES
     PREFIX ""
     CXX_STANDARD 20
-    CXX_STANDARD_REQUIRED ON
-    # What a plugin should do (see docs/sphinx/troubleshooting.rst): hidden symbol
-    # visibility, and — under GCC — no STB_GNU_UNIQUE symbols, since glibc never
-    # unloads an object that defines one.
-    CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN ON)
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(anira_unload_module PRIVATE -fno-gnu-unique)
-endif()
-# ... and an export list pinned to its entry points (module.exports on Mach-O,
-# module.map on ELF), like examples/clap-audio-plugin: hidden visibility cannot hide
-# what a header stamps default-visibility itself, and on macOS a static anira with
-# ExecuTorch force-loads archives ld64 cannot hide otherwise. The anira_exports check
-# below asserts the result. PE exports only what carries dllexport.
-if(APPLE)
-    set(_anira_unload_export_list "${CMAKE_CURRENT_SOURCE_DIR}/module.exports")
-    target_link_options(anira_unload_module PRIVATE
-        "LINKER:-exported_symbols_list,${_anira_unload_export_list}")
-elseif(UNIX)
-    set(_anira_unload_export_list "${CMAKE_CURRENT_SOURCE_DIR}/module.map")
-    target_link_options(anira_unload_module PRIVATE
-        "LINKER:--version-script=${_anira_unload_export_list}")
-endif()
-if(_anira_unload_export_list)
-    set_property(TARGET anira_unload_module APPEND PROPERTY LINK_DEPENDS "${_anira_unload_export_list}")
-endif()
+    CXX_STANDARD_REQUIRED ON)
+# What a plugin should do (see docs/sphinx/troubleshooting.rst): hidden symbol
+# visibility, no STB_GNU_UNIQUE symbols under GCC (glibc never unloads an object that
+# defines one), dead-code stripping, and an export table pinned to its entry points —
+# hidden visibility cannot hide what a header stamps default-visibility itself, and on
+# macOS a static anira with ExecuTorch force-loads archives ld64 cannot hide otherwise.
+# The anira_exports check below asserts the result.
+tanh_apply_symbol_policy(anira_unload_module)
+tanh_set_export_allowlist(anira_unload_module SYMBOL anira_test_*)
 
 add_executable(anira_unload_test test_LibraryUnload.cpp)
 set_target_properties(anira_unload_test PROPERTIES
@@ -83,7 +68,7 @@ target_compile_definitions(anira_unload_test PRIVATE
     ANIRA_UNLOAD_MODULE_PATH="$<TARGET_FILE:anira_unload_module>"
     ANIRA_UNLOAD_PINNED_LIBS="${_anira_unload_pinned_joined}")
 if(BUILD_SHARED_LIBS)
-    if(WIN32)
+    if(TANH_BINARY_FORMAT STREQUAL "PE")
         # GetModuleHandleEx works on the file name.
         target_compile_definitions(anira_unload_test PRIVATE
             ANIRA_UNLOAD_LIB_PATH="$<TARGET_FILE_NAME:anira>")
@@ -104,47 +89,18 @@ gtest_discover_tests(anira_unload_test
     DISCOVERY_TIMEOUT 90
     PROPERTIES TIMEOUT 120)
 
-# Export-table check (cmake/check-exports.cmake): the shared libanira exports exactly
-# the ANIRA_API surface (namespace anira, nothing else — no std::, backend or
+# Export-table check (cmake/tanh/check-exports.cmake): the shared libanira exports
+# exactly the ANIRA_API surface (namespace anira, nothing else — no std::, backend or
 # STB_GNU_UNIQUE symbol), and the plugin-shaped module exports no backend-runtime
-# symbol. See the symbol-visibility notes in the top-level CMakeLists.txt.
-if(WIN32)
-    set(_anira_exports_format PE)
-    # dumpbin lives next to link.exe; it is not on PATH outside a developer shell.
-    get_filename_component(_anira_linker_dir "${CMAKE_LINKER}" DIRECTORY)
-    find_program(ANIRA_DUMPBIN dumpbin HINTS "${_anira_linker_dir}")
-    set(_anira_exports_tool "${ANIRA_DUMPBIN}")
-    set(_anira_exports_tool_arg "-DDUMPBIN=${ANIRA_DUMPBIN}")
-else()
-    if(APPLE)
-        set(_anira_exports_format MACHO)
-    else()
-        set(_anira_exports_format ELF)
-    endif()
-    if(CMAKE_NM)
-        set(ANIRA_NM "${CMAKE_NM}")
-    else()
-        find_program(ANIRA_NM NAMES nm llvm-nm)
-    endif()
-    set(_anira_exports_tool "${ANIRA_NM}")
-    set(_anira_exports_tool_arg "-DNM=${ANIRA_NM}")
-endif()
-if(_anira_exports_tool)
-    if(BUILD_SHARED_LIBS)
-        set(_anira_exports_library "$<TARGET_FILE:anira>")
-    else()
-        set(_anira_exports_library "")
-    endif()
-    add_test(NAME anira_exports
-        COMMAND ${CMAKE_COMMAND}
-            -DFORMAT=${_anira_exports_format}
-            ${_anira_exports_tool_arg}
-            "-DLIBRARY=${_anira_exports_library}"
-            "-DMODULE=$<TARGET_FILE:anira_unload_module>"
-            -P "${anira_SOURCE_DIR}/cmake/check-exports.cmake")
-else()
-    message(WARNING "anira: no nm/dumpbin found — the anira_exports test is not registered")
-endif()
+# symbol and, with a static anira, nothing of namespace anira either. See the
+# symbol-policy notes in the top-level CMakeLists.txt. On PE, which cannot interpose,
+# the dllexports LibTorch's headers and the LiteRT/TFLite archives force are tolerated.
+tanh_add_export_check(NAME anira_exports
+    LIBRARY anira MODULE anira_unload_module
+    NAMESPACES anira
+    FORBID_NAMESPACES Ort onnxruntime torch c10 caffe2 executorch tflite litert flatbuffers Eigen absl thl
+    FORBID_PREFIXES Ort OrtApi xnn_ pthreadpool_ cpuinfo_ kai_ TfLite LiteRt
+    TOLERATE_REGEX_PE "@(torch|c10|caffe2)@@" "^(TfLite|LiteRt)")
 
 # Windows: the module, anira.dll and every runtime DLL are searched relative to the
 # application, so copy them next to the executable (the module is built into the same

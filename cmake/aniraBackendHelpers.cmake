@@ -137,30 +137,23 @@ endfunction()
 # libraries it depends on.
 # ------------------------------------------------------------------------------
 function(_anira_static_archive_link_items archive out_libs out_opts)
-    set(_libs "")
-    set(_opts "")
-    get_filename_component(_basename "${archive}" NAME)
-    if(EMSCRIPTEN OR EMSDK_VERSION)
-        list(APPEND _libs "${archive}")
-    elseif(WIN32)
-        # PE/COFF exports nothing without __declspec(dllexport): no hiding needed.
-        list(APPEND _libs "${archive}")
-    elseif(APPLE)
+    # The format decides how the archive is hidden (ELF: --exclude-libs on the basename,
+    # Mach-O: -load_hidden, PE/Wasm: nothing to hide) — cmake/tanh/symbol-policy.cmake.
+    tanh_hidden_archive_link_items("${archive}" _libs _opts)
+    # The OS decides which system libraries the archive needs on top.
+    if(TANH_OPERATING_SYSTEM STREQUAL "macOS")
         # Static onnxruntime/tflite/litert pull in absl/CoreFoundation time-zone and
         # Apple logging code (Foundation/CoreFoundation), and static LiteRT references
         # Metal (LiteRtCreateMetalInfo -> MTLCreateSystemDefaultDevice).
-        list(APPEND _libs "-Wl,-load_hidden,${archive}"
-            "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
-    elseif(ANDROID)
+        list(APPEND _libs "-framework Foundation" "-framework CoreFoundation" "-framework Metal")
+    elseif(TANH_OPERATING_SYSTEM STREQUAL "Android")
         # Android's bionic folds pthread/dl/libm into libc, but the static LiteRT/TFLite
         # archives vendor the GPU (GL ES) delegate and use Android logging, whose symbols
         # (glClear, EGL*, __android_log_*) live in NDK system libs that must be linked.
-        list(APPEND _opts "LINKER:--exclude-libs,${_basename}")
-        list(APPEND _libs "${archive}" EGL GLESv2 android log)
-    else() # Linux / other ELF
+        list(APPEND _libs EGL GLESv2 android log)
+    elseif(TANH_BINARY_FORMAT STREQUAL "ELF")
         find_package(Threads REQUIRED)
-        list(APPEND _opts "LINKER:--exclude-libs,${_basename}")
-        list(APPEND _libs "${archive}" Threads::Threads ${CMAKE_DL_LIBS} m)
+        list(APPEND _libs Threads::Threads ${CMAKE_DL_LIBS} m)
     endif()
     set(${out_libs} "${_libs}" PARENT_SCOPE)
     set(${out_opts} "${_opts}" PARENT_SCOPE)
@@ -336,7 +329,7 @@ function(anira_define_executorch_target incdir archives defs)
         list(APPEND _libs "$<LINK_LIBRARY:WHOLE_ARCHIVE,xnnpack-microkernels-prod>")
     endif()
     set(_opts "")
-    if(NOT APPLE AND NOT WIN32 AND NOT EMSCRIPTEN AND NOT EMSDK_VERSION)
+    if(TANH_BINARY_FORMAT STREQUAL "ELF")
         foreach(_archive IN LISTS archives)
             list(APPEND _opts "LINKER:--exclude-libs,${_archive}")
         endforeach()

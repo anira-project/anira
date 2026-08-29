@@ -6,7 +6,7 @@
 #include <atomic>
 #include <thread>
 
-#include "AniraExports.h"
+#include "Exports.h"
 
 namespace anira {
 

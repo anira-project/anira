@@ -61,29 +61,13 @@ option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for backend integrit
 #   -DANIRA_<ENGINE>_URL=...  [-DANIRA_<ENGINE>_SHA256=...]
 
 # ==============================================================================
-# Get project version from git
+# Project version from git (cmake/tanh/git-version.cmake)
 # ==============================================================================
 
-execute_process(COMMAND git describe --dirty
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-                OUTPUT_VARIABLE PROJECT_VERSION_FULL
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                RESULT_VARIABLE GIT_DESCRIBE_RESULT)
-
-execute_process(COMMAND git describe --tags --abbrev=0
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-                OUTPUT_VARIABLE PROJECT_VERSION_SHORT
-                OUTPUT_STRIP_TRAILING_WHITESPACE)
-
-if(GIT_DESCRIBE_RESULT EQUAL 0 AND PROJECT_VERSION_SHORT)
-  # Retrieve the v from the short version string
-  string(SUBSTRING ${PROJECT_VERSION_SHORT} 1 -1 PROJECT_VERSION_SHORT)
-  string(SUBSTRING ${PROJECT_VERSION_FULL} 1 -1 PROJECT_VERSION_FULL)
-else()
-  set(PROJECT_VERSION_SHORT "0.0.0")
-  set(PROJECT_VERSION_FULL "0.0.0-unknown")
-  message(WARNING "git describe failed - no tags found. Using fallback version ${PROJECT_VERSION_SHORT}")
-endif()
+include(cmake/tanh/git-version.cmake)
+tanh_git_version(${CMAKE_CURRENT_SOURCE_DIR})
+set(PROJECT_VERSION_SHORT "${TANH_VERSION_SHORT}")
+set(PROJECT_VERSION_FULL "${TANH_VERSION_FULL}")
 
 # ==============================================================================
 # Setup the project
@@ -93,8 +77,14 @@ set (PROJECT_NAME anira)
 
 project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
 
+# Platform axes (cmake/tanh/platform.cmake): TANH_OPERATING_SYSTEM, TANH_BINARY_FORMAT
+# (ELF | Mach-O | PE | Wasm), TANH_IOS_PLATFORM. Every OS/format decision below keys on
+# these, never on APPLE/UNIX/WIN32. tanh::Core carries the matching THL_PLATFORM_*
+# compile definitions for C++.
+include(cmake/tanh/platform.cmake)
+
 if(APPLE)
-    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    if(TANH_OPERATING_SYSTEM STREQUAL "iOS")
         # iOS targets a single architecture per xcframework slice; default to arm64
         # (device and, on Apple Silicon, simulator) when the caller didn't pick one.
         # Note: the prebuilt ONNX/LiteRT iOS xcframeworks ship an arm64-only simulator
@@ -116,29 +106,16 @@ if(APPLE)
     endif()
 endif()
 
-if(APPLE)
-    set(ANIRA_OPERATING_SYSTEM "macOS")
-elseif(UNIX)
-    set(ANIRA_OPERATING_SYSTEM "Linux")
-elseif(WIN32)
-    set(ANIRA_OPERATING_SYSTEM "Windows")
-endif()
-
 # Print the processor architecture selected for build. Defaults to CMAKE_HOST_SYSTEM_PROCESSOR when no crosscompile tolchain is defined. CMAKE_HOST_SYSTEM_PROCESSOR is only defined after the project() call. For OSX this value can be overwritten by the CMAKE_OSX_ARCHITECTURES.
 
 message(STATUS "Building ${PROJECT_NAME} for ${CMAKE_SYSTEM_NAME} on ${CMAKE_SYSTEM_PROCESSOR}")
 message(STATUS "Project version: ${PROJECT_VERSION_SHORT} (${PROJECT_VERSION_FULL})")
 
-# Sets the minimum macOS version. Defaults to 11.0 (the first release with full
-# C++20 <semaphore> support), but respects a user-provided value so the library
-# can target older systems (e.g. -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13). On targets
-# below 11.0, anira::Semaphore automatically falls back to a portable backend.
-if (APPLE)
-	if (NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
-		set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum version of the target platform" FORCE)
-	endif()
-	message(STATUS "The minimum macOS version is set to ${CMAKE_OSX_DEPLOYMENT_TARGET}")
-endif ()
+# Minimum macOS version 11.0 (the first release with full C++20 <semaphore> support)
+# unless the caller set one — anira::Semaphore falls back to a portable backend below
+# 11.0 (e.g. -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13). Never FORCE'd (cmake/tanh/apple.cmake).
+include(cmake/tanh/apple.cmake)
+tanh_apple_deployment_target(MACOS 11.0)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -250,7 +227,9 @@ FetchContent_Declare(
     # tanh-lib main after PRs #17 (THL_LOG_*, thl::core::Thread, owned rt log
     # queues), #19 (RingBuffer push_fill/discard/peek_past_block) and #20 (RCU
     # thread-local registry, Windows DLL TLS); bump to the next tag once cut.
-    GIT_TAG 1c992c0386a5168a5b4b2385d032aa162d182243
+    # tanh-lib feat/tanh-tooling-cmake (symbol policy + shared modules); re-point at the
+    # merge commit / tag once that PR lands. Must pin the same tanh-tooling tag as anira.
+    GIT_TAG e42aedcd1ce5519d4f998ba4b59105a07e4231b8
 )
 FetchContent_MakeAvailable(tanh-lib)
 
@@ -279,118 +258,46 @@ FetchContent_MakeAvailable(nlohmann_json)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# Symbol policy of anira's own objects — applied to the library target and to every
-# object library merged into it, static or shared alike (the rules are written up in
+# Symbol policy (cmake/tanh/symbol-policy.cmake; the rules are written up in
 # docs/sphinx/troubleshooting.rst, "Host application ships its own backend runtime"):
 #
 #  * Hidden symbol visibility on every platform; the public API is re-exported through
-#    ANIRA_API (include/anira/system/AniraExports.h) — the same allowlist model
-#    Windows enforces via dllexport. This keeps the backend runtimes private: without
-#    it, weak C++ symbols from the backend headers (e.g. ONNX Runtime's
-#    Ort::Global<void>::api_) are exported from any plugin that embeds anira and get
-#    weak-coalesced by the dynamic linker against a host application that ships its
-#    own copy of the runtime (Ableton Live 12 bundles an ONNX Runtime dylib), making
-#    Ort::GetApi() resolve against a mismatched runtime and crashing the host on the
-#    first Ort:: call. Hidden visibility survives static linking: a static anira's
-#    objects stay hidden inside the plugin that embeds them.
-#  * ANIRA_API's decoration: ANIRA_BUILDING (PRIVATE) selects dllexport while anira
-#    itself is compiled; ANIRA_STATIC (PUBLIC, so that it reaches consumers through
+#    ANIRA_API (include/anira/system/Exports.h) — the same allowlist model Windows
+#    enforces via dllexport. This keeps the backend runtimes private: without it, weak
+#    C++ symbols from the backend headers (e.g. ONNX Runtime's Ort::Global<void>::api_)
+#    are exported from any plugin that embeds anira and get weak-coalesced by the
+#    dynamic linker against a host that ships its own copy of the runtime (Ableton
+#    Live 12 bundles an ONNX Runtime dylib), making Ort::GetApi() resolve against a
+#    mismatched runtime and crashing the host on the first Ort:: call. ANIRA_BUILDING
+#    (PRIVATE) selects dllexport while anira is compiled; ANIRA_STATIC (PUBLIC, through
 #    the CMake package) makes ANIRA_API empty for a static anira, whose objects become
 #    part of the consumer and must neither be exported from it nor be dllimport'ed.
-#  * -fno-gnu-unique under GCC: GCC binds exported vague-linkage data (inline
-#    variables, template statics, static locals of inline functions — libstdc++ emits
-#    one from every make_shared TU) as STB_GNU_UNIQUE, and glibc never unloads a
-#    shared object that defines a unique symbol that was looked up: it is implicitly
-#    marked NODELETE. A plugin host's dlclose() would then silently keep libanira — or
-#    a plugin embedding it — mapped forever and hide any thread-at-unload bug behind
-#    it, and two plugins loaded RTLD_LOCAL would share those statics. Plain weak
-#    binding is all anira needs (the unload test asserts that the library really gets
-#    unmapped). Clang never emits unique symbols and rejects the flag.
-#  * One section per function and variable (-ffunction-sections -fdata-sections, /Gy),
-#    so that the link-time GC can drop each unreferenced one individually instead of
-#    keeping or dropping whole objects. The roots are the entry points and the
-#    exported symbols — which is why this only pays off together with the export
-#    allowlist. The shared libanira runs the GC on its own link (below). A static
-#    anira has no link step: these flags make the consumer's own
-#    --gc-sections/-dead_strip//OPT:REF effective, and whether to pass it stays the
-#    consumer's choice (an INTERFACE link option would act on its whole link).
+#  * -fno-gnu-unique under GCC (glibc never unloads an object defining a unique symbol),
+#    one section per function/variable and link-time GC of the shared library.
+#  * The shared libanira pins its export table to namespace anira at link time with a
+#    generated version script / -exported_symbols_list: -fvisibility=hidden cannot hide
+#    what a header stamps default-visibility itself (libstdc++ wraps namespace std in
+#    visibility("default"), LibTorch's C10_API classes emit default-visibility
+#    vtables/typeinfo into anira's own objects, and the prebuilt ExecuTorch desktop
+#    archives are compiled with default visibility and force-loaded). Without it
+#    libanira exported ~4000 std::, executorch::, xnn_*, c10:: and BLAS symbols next to
+#    the ~400 of the API. test/unload registers the anira_exports CTest that diffs the
+#    real export table on every desktop platform.
 # ------------------------------------------------------------------------------
-function(anira_apply_symbol_policy target)
-    set_target_properties(${target} PROPERTIES
-        # so that the static variant can be linked into a shared library
-        POSITION_INDEPENDENT_CODE ON
-        C_VISIBILITY_PRESET hidden
-        CXX_VISIBILITY_PRESET hidden
-        VISIBILITY_INLINES_HIDDEN ON)
-    target_compile_definitions(${target} PRIVATE ANIRA_BUILDING)
-    if(NOT BUILD_SHARED_LIBS)
-        target_compile_definitions(${target} PUBLIC ANIRA_STATIC)
-    endif()
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_compile_options(${target} PRIVATE -fno-gnu-unique)
-    endif()
-    if(MSVC)
-        target_compile_options(${target} PRIVATE /Gy)
-    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(${target} PRIVATE -ffunction-sections -fdata-sections)
-    endif()
-endfunction()
+include(cmake/tanh/symbol-policy.cmake)
 
-# add the library as a shared or static library depending on the option BUILD_SHARED_LIBS
 add_library(${PROJECT_NAME})
 set_target_properties(${PROJECT_NAME} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
-anira_apply_symbol_policy(${PROJECT_NAME})
-# Linker-side export allowlist for the shared library. -fvisibility=hidden cannot
-# hide what a header stamps default-visibility itself: libstdc++ wraps namespace std
-# in visibility("default"), LibTorch's C10_API classes emit default-visibility
-# vtables/typeinfo into anira's own objects, and the prebuilt ExecuTorch desktop
-# archives are compiled with default visibility and force-loaded (Mach-O has no
-# hidden variant of -force_load). Without this, libanira exported ~4000 std::,
-# executorch::, xnn_*, c10:: and BLAS symbols next to the ~400 of the API. So the
-# shared libanira additionally pins its dynamic export table at link time to
-# namespace anira — functions, data, vtables, typeinfo, thunks — and nothing else.
-# cmake/anira.map (ELF version script) and cmake/anira.exports (Mach-O
-# -exported_symbols_list) carry the same pattern list; test/unload registers a CTest
-# check (cmake/check-exports.cmake) that diffs the real export table against it on
-# every desktop platform. MSVC needs nothing (PE exports only what carries
-# __declspec(dllexport)); Emscripten has no dynamic export table. MinGW is not a
-# supported toolchain (no prebuilt backends) and is left alone.
-if(BUILD_SHARED_LIBS AND NOT WIN32 AND NOT EMSDK_VERSION)
-    if(APPLE)
-        set(ANIRA_EXPORT_LIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/anira.exports")
-        target_link_options(${PROJECT_NAME} PRIVATE "LINKER:-exported_symbols_list,${ANIRA_EXPORT_LIST}")
-    else()
-        set(ANIRA_EXPORT_LIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/anira.map")
-        target_link_options(${PROJECT_NAME} PRIVATE "LINKER:--version-script=${ANIRA_EXPORT_LIST}")
-    endif()
-    # Relink when the allowlist changes.
-    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${ANIRA_EXPORT_LIST}")
-endif()
-# Dead-code stripping of the shared library (the compile side — one section per
-# function and variable — is part of anira_apply_symbol_policy above). GC happens at
-# link time, and this is the only link a shared libanira has; a static anira leaves
-# it to the consumer's link. Static registrations of the force-loaded ExecuTorch
-# archives survive: initializers are GC roots.
-if(BUILD_SHARED_LIBS)
-    if(MSVC)
-        # link.exe defaults to /OPT:REF — except under /DEBUG, where it flips to
-        # /OPT:NOREF unless given explicitly.
-        target_link_options(${PROJECT_NAME} PRIVATE /OPT:REF)
-    elseif(APPLE)
-        target_link_options(${PROJECT_NAME} PRIVATE LINKER:-dead_strip)
-    elseif(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")
-        target_link_options(${PROJECT_NAME} PRIVATE LINKER:--gc-sections)
-    endif()
-endif()
-# tanh-lib (tanh::Core, linked PUBLIC below) ships an export macro but no hidden
-# visibility preset, so the objects of a static libtanh_core.a are default visibility
-# and would become dynamic exports of a plugin that embeds a static anira. Same rule
-# as for the engine archives (cmake/aniraBackendHelpers.cmake): localize the
-# archive on the consumer's link. INTERFACE only — a shared libanira pins its own
-# export table with the allowlist above and links libtanh_core.so, which is a
-# runtime dependency, not something to hide. ELF only; Mach-O consumers handle it
-# with their own export list (docs/sphinx/troubleshooting.rst).
-if(NOT BUILD_SHARED_LIBS AND NOT APPLE AND NOT WIN32 AND NOT EMSDK_VERSION)
+tanh_apply_symbol_policy(${PROJECT_NAME} EXPORT_PREFIX ANIRA)
+tanh_set_export_allowlist(${PROJECT_NAME} NAMESPACE anira)
+# tanh-lib's components are compiled hidden with an empty TANH_API when static, so the
+# objects of libtanh_core.a are already hidden inside a plugin that embeds a static
+# anira. Localizing the archive on the consumer's link on top of that is
+# defense-in-depth against a tanh-lib built without that policy and against the
+# default-visibility libstdc++ instantiations its objects carry; ELF only (Mach-O
+# consumers own their export list), INTERFACE only (a shared libanira links
+# libtanh_core.so, a runtime dependency, not something to hide).
+if(NOT BUILD_SHARED_LIBS AND TANH_BINARY_FORMAT STREQUAL "ELF")
     target_link_options(${PROJECT_NAME} INTERFACE "LINKER:--exclude-libs,libtanh_core.a")
 endif()
 # add an alias so that the project can be used with add_subdirectory
@@ -448,8 +355,8 @@ target_compile_definitions(${PROJECT_NAME}
 )
 
 if(ANIRA_WITH_RTSAN)
-    include(cmake/real-time-sanitizers.cmake)
-    anira_rtsan_configure(${PROJECT_NAME})
+    include(cmake/tanh/sanitizers.cmake)
+    tanh_add_sanitizer(${PROJECT_NAME} rtsan DEFINE ANIRA_WITH_RTSAN)
 endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
@@ -526,7 +433,7 @@ endif()
 
 if(ANIRA_WITH_INSTALL)
     include(cmake/install.cmake)
-    include(cmake/package.cmake)
+    include(cmake/package.cmake)   # CPack (cmake/tanh/package.cmake), after every install() rule
 endif()
 
 # ==============================================================================

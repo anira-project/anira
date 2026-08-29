@@ -39,6 +39,10 @@ endif()
 # PRIVATE; link one yourself only if your own code calls that engine. Before
 # aniraTargets.cmake, whose $<LINK_ONLY:anira::<engine>> entries (static anira)
 # refer to them.
+# The shared tanh-tooling modules the helpers rely on (platform axes, hidden archive
+# linking); the same files as in anira's build tree, so one code path serves both.
+include("${CMAKE_CURRENT_LIST_DIR}/tanh/platform.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/tanh/symbol-policy.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/aniraBackendHelpers.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/aniraBackendTargets.cmake")
 

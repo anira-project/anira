@@ -172,13 +172,13 @@ endfunction()
 # special "armv7l" sentinel for the legacy Bela path.
 # ------------------------------------------------------------------------------
 function(_anira_target_tokens out_os out_arch)
-    if(EMSDK_VERSION)
+    if(TANH_BINARY_FORMAT STREQUAL "Wasm")
         set(${out_os} "WASM" PARENT_SCOPE)
         set(${out_arch} "" PARENT_SCOPE)
         return()
     endif()
 
-    if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    if(TANH_OPERATING_SYSTEM STREQUAL "Android")
         # One archive per linkage bundles every ABI under lib/<abi>/; the ABI is
         # picked at wiring time from CMAKE_ANDROID_ARCH_ABI, so there is no arch token.
         set(${out_os} "Android" PARENT_SCOPE)
@@ -186,7 +186,7 @@ function(_anira_target_tokens out_os out_arch)
         return()
     endif()
 
-    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    if(TANH_OPERATING_SYSTEM STREQUAL "iOS")
         # The backends ship a single iOS xcframework (device + simulator slices); the
         # slice is selected at wiring time, so there is no arch token here either.
         set(${out_os} "iOS" PARENT_SCOPE)
@@ -194,7 +194,7 @@ function(_anira_target_tokens out_os out_arch)
         return()
     endif()
 
-    if(APPLE)
+    if(TANH_OPERATING_SYSTEM STREQUAL "macOS")
         # Prefer the explicit OSX architecture selection; supports universal.
         if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64" AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
             set(_arch "universal")
@@ -210,7 +210,7 @@ function(_anira_target_tokens out_os out_arch)
         return()
     endif()
 
-    if(UNIX) # Linux
+    if(TANH_OPERATING_SYSTEM STREQUAL "Linux")
         if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
             set(_arch "aarch64")
         elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "armv7l")
@@ -223,7 +223,7 @@ function(_anira_target_tokens out_os out_arch)
         return()
     endif()
 
-    if(WIN32)
+    if(TANH_OPERATING_SYSTEM STREQUAL "Windows")
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64")
             set(_arch "arm64")
         else()
@@ -438,7 +438,7 @@ endmacro()
 # ------------------------------------------------------------------------------
 function(_anira_locate_shared_lib libdir rootdir libname out_location out_implib)
     set(_implib "")
-    if(WIN32)
+    if(TANH_BINARY_FORMAT STREQUAL "PE")
         set(_implib "${libdir}/${libname}${CMAKE_STATIC_LIBRARY_SUFFIX}")
         if(NOT EXISTS "${_implib}")
             message(FATAL_ERROR "anira: import library of ${libname} not found at ${_implib}")
@@ -534,7 +534,7 @@ macro(anira_setup_backend id)
         # Windows static additionally ships a Debug variant (except executorch,
         # which publishes a single static archive per platform).
         set(_ab_linktoken "${_ab_linkage}")
-        if(_ab_linkage STREQUAL "static" AND WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug"
+        if(_ab_linkage STREQUAL "static" AND TANH_BINARY_FORMAT STREQUAL "PE" AND CMAKE_BUILD_TYPE STREQUAL "Debug"
            AND NOT _ab_id STREQUAL "executorch")
             set(_ab_linktoken "static-debug")
         endif()
@@ -595,7 +595,7 @@ macro(anira_setup_backend id)
             LINK_LIBRARIES ${_ab_torch_libs}
             INCLUDE_DIRS "${_ab_rootdir}/include" "${_ab_rootdir}/include/torch/csrc/api/include")
         unset(_ab_torch_libs)
-    elseif(_ab_id STREQUAL "executorch" AND NOT CMAKE_SYSTEM_NAME STREQUAL "Android" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    elseif(_ab_id STREQUAL "executorch" AND NOT TANH_OPERATING_SYSTEM STREQUAL "Android" AND NOT TANH_OPERATING_SYSTEM STREQUAL "iOS")
         # The ExecuTorch desktop archives ship the full ExecuTorch CMake package
         # (lib/cmake/ExecuTorch), which exports each static library together with
         # the per-platform force-load options its kernel/backend registration
@@ -640,7 +640,7 @@ macro(anira_setup_backend id)
         # legacy shared-lib-path var consumed by msvc-support / BuildWasm / examples
         set(ANIRA_${_ab_ID}_SHARED_LIB_PATH "${_ab_rootdir}")
 
-        if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+        if(TANH_OPERATING_SYSTEM STREQUAL "Android")
             # One archive holds every ABI under lib/<abi>/; select this build's ABI.
             set(_ab_incdir "${_ab_rootdir}/include")
             set(_ab_libdir "${_ab_rootdir}/lib/${CMAKE_ANDROID_ARCH_ABI}")
@@ -649,7 +649,7 @@ macro(anira_setup_backend id)
                 # Path under the install libdir (install.cmake copies lib/<abi>/ as-is).
                 set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${CMAKE_ANDROID_ARCH_ABI}/lib${_ab_libname}.a")
             endif()
-        elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        elseif(TANH_OPERATING_SYSTEM STREQUAL "iOS")
             # Pick the xcframework slice matching the active SDK (device vs simulator).
             if(_ab_id STREQUAL "tflite")
                 # TFLite ships a TensorFlowLiteC.framework xcframework: a static
@@ -694,7 +694,7 @@ macro(anira_setup_backend id)
             set(_ab_incdir "${_ab_rootdir}/include")
             set(_ab_libdir "${_ab_rootdir}/lib")
             if(_ab_linkage STREQUAL "static")
-                if(WIN32)
+                if(TANH_BINARY_FORMAT STREQUAL "PE")
                     set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/${_ab_libname}.lib")
                     set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${_ab_libname}.lib")
                 else()

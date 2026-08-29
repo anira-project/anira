@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "InferenceConfig.h"
-#include "anira/system/AniraExports.h"
+#include "anira/system/Exports.h"
 #include "utils/InferenceBackend.h"
 #include "utils/RingBuffer.h"
 
