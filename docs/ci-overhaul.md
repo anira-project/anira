@@ -287,3 +287,5 @@ Each implementing PR carries its CHANGELOG entry (CI/build changes are in-policy
 5. **Windows-arm64 presets**: the vcvars reinterpretation stands — native arm64 vcvars + Ninja worked first try across the full-tier run.
 6. **Extended sanitizers**: nightly-only, noengines scope.
 7. **macOS consolidation**: see §3.6 — universal-only dual-arch legs, one iOS job, one tflite leg, one install job.
+
+> **Queue-entry semantics (measured 2026-08-31)**: required status checks are expected on the PR head before a pull request may enter the queue — `enqueuePullRequest` is refused while a required check has not reported. Consequently the required set may contain only checks that report on every PR (`build_test result`; path-filtered or queue-only workflow results are enforced by their queue runs but must not be required). A queued PR's head branch is push-locked; dequeue via GraphQL `dequeuePullRequest`.
