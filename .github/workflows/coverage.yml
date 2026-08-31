@@ -13,6 +13,12 @@ on:
   push:
     branches:
       - main
+  # Self-validating: runs on a PR exactly when this workflow itself changes
+  # (dispatch cannot target a workflow absent from the default branch), dormant
+  # on every other PR per the tier policy.
+  pull_request:
+    paths:
+      - ".github/workflows/coverage.yml"
 
 concurrency:
   group: coverage-${{ github.ref }}
