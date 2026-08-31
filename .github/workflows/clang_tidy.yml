@@ -20,6 +20,19 @@ jobs:
             os: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      # The clang-tidy preset enables tests, so the configure fetches the model
+      # fixtures — restore them from the shared cache like the build workflows.
+      - name: restore the model fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
       - uses: tanh-lab/ci-actions/setup-cpp-build-tools@main
       # clang-tidy needs a compile_commands.json, so the library is configured
       # and built first. The clang-tidy preset enables tests, the benchmark

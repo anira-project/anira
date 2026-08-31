@@ -39,7 +39,7 @@ concurrency:
 jobs:
   # ---------------------------------------------------------------------------
   # iOS: per backend set, build the device library (wiring check) and the simulator
-  # test executable, then run the whole suite once on the simulator.
+  # test executables, then run each suite once on the simulator.
   # ---------------------------------------------------------------------------
   ios:
     name: iOS-${{ matrix.name }}
@@ -65,7 +65,12 @@ jobs:
       - name: restore the model fixtures
         uses: actions/cache/restore@v4
         with:
-          path: extras/models
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
 
@@ -86,7 +91,7 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=OFF ${{ matrix.backends }}
           cmake --build build-ios-device --parallel 4
 
-      # Simulator — full test executable, then run the whole bundled suite once.
+      # Simulator — the per-component test binaries, each spawned once below.
       - name: build simulator tests
         run: |
           cmake -B build-ios-sim -G Ninja \
@@ -105,10 +110,14 @@ jobs:
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
           # The simulator shares the host filesystem, so the model paths baked into
-          # the binaries resolve as-is — one spawn per component binary runs its suite.
+          # the binaries resolve as-is — one spawn per component binary runs its
+          # suite. Failures are collected, not fail-fast, so one run reports every
+          # broken suite.
+          rc=0
           for t in test_utils test_scheduler test_backends test_handler; do
-            xcrun simctl spawn "$UDID" "$PWD/build-ios-sim/test/$t.app/$t" --gtest_brief=1
+            xcrun simctl spawn "$UDID" "$PWD/build-ios-sim/test/$t.app/$t" --gtest_brief=1 || rc=1
           done
+          exit $rc
 
   # ---------------------------------------------------------------------------
   # Android: per backend set + linkage, build arm64-v8a (build-only; no accelerated
@@ -146,7 +155,12 @@ jobs:
       - name: restore the model fixtures
         uses: actions/cache/restore@v4
         with:
-          path: extras/models
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
 

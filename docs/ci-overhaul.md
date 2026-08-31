@@ -5,7 +5,9 @@
 
 > The roadmap text this plan implements is the current v3 architecture draft (section 11, M0 items 3 and 4). The copy at `docs/anira-v3-architecture.md` is an older revision — where they differ (e.g. the old draft's `test/fixtures/` directory, since dropped), the newer draft governs: WAV fixtures come from `thl::core::read_wav`, model paths stay compile definitions from `extras/CMakeLists.txt`.
 
-> **Beyond-mandate items needing explicit sign-off** (marked ⚠ where they appear): PR-tier coverage reduction (§3.6 — in tension with the roadmap's "merges with the full test suite green" rule), the model-repo pinning (§3.5 — changes configure behaviour for every consumer, not just CI), the on_tag toolchain switch for release artifacts (§3.2), and the nightly cron / merge queue (§3.6). Everything else is either the letter of items 3–4 or pure mechanics.
+> **Beyond-mandate items needing explicit sign-off** (marked ⚠ where they appear): PR-tier coverage reduction (§3.6 — in tension with the roadmap's "merges with the full test suite green" rule), the model-repo pinning (§3.5 — changes configure behaviour for every consumer, not just CIs; ships with the PR that carries this document), the on_tag toolchain switch for release artifacts (§3.2), and the nightly cron / merge queue (§3.6). Everything else is either the letter of items 3–4 or pure mechanics.
+>
+> **Status**: steps 0a, 0b, 0d and 1 are implemented in the PR carrying this document. Step 0c (the sccache 0%-hit diagnosis) needs live runs — this PR's own CI provides the first data points. Steps 2–7 follow.
 
 ---
 
@@ -156,10 +158,11 @@ Budget: 10 GB per repo, 7-day eviction, branch-scoped restores (PR runs restore 
 
 **Models cache design** (the naive version has three failure modes — cross-OS, thundering herd, restore cost):
 
-- ⚠ **Pin the clones first** (beyond-mandate: changes configure behaviour for every consumer). The current `git clone --branch main --depth 1` cannot check out an arbitrary SHA — the mechanism is per-repo `git init` + `git fetch --depth 1 origin ${ANIRA_MODELS_<X>_REF}` + `checkout FETCH_HEAD` in `extras/CMakeLists.txt`, with the four `ANIRA_MODELS_<X>_REF` cache variables defaulting to pinned SHAs. Unpinned clones under a cache would freeze silently; pinning is also a reproducibility fix on its own. New user-facing variables → CHANGELOG (`### Added`/`### Changed`) + usage docs (step 8).
-- **Seed once, restore everywhere**: a single job on main pushes saves the cache (`actions/cache` with `enableCrossOsArchive: true` — without it a Linux-saved entry is invisible to Windows); every other job uses `actions/cache/restore` only, falling back to the pinned clone on miss. Never let 40 parallel jobs race to save 1.6 GB.
-- **Gate on measurement**: before rollout, compare restore time vs. clone time per OS (Windows tar/zstd extraction of 1.6 GB may approach the 55–72 s configure it replaces). Adopt per-OS only where restore wins.
-- **Eviction budget**: models (~1.6 GB) + sccache (~4–6 GB) + emsdk/npm (~1 GB) fit in 10 GB, but monitor `gh api .../actions/caches` after step 4; if churn appears, sccache gets priority (it saves more minutes).
+- ⚠ **Pin the clones first** (beyond-mandate: changes configure behaviour for every consumer). A shallow clone cannot check out an arbitrary SHA — the implemented mechanism (`extras/fetch-models.cmake`) stages per-repo `git init` + `fetch --depth 1 <url> <sha>` + `checkout FETCH_HEAD` into a `.fetching` dir and renames into place only after success (an interrupted fetch can never leave a half tree the exists-check accepts), strips the `.git` object stores (pinned snapshots, ~half the size), and pins the RAVE download's URL and SHA-256. `ANIRA_MODELS_<NAME>_REF` defaults are `-D`-overridable. Unpinned clones under a cache would freeze silently; pinning is also a reproducibility fix on its own.
+- **Seed once, restore everywhere**: a single job on main pushes saves the cache (`actions/cache` with `enableCrossOsArchive: true` — without it a Linux-saved entry is invisible to Windows; `continue-on-error` and skipped on tag refs, since on_tag gates releases on the workflow's conclusion and a tag-scoped entry is restorable by nothing). Every configuring job uses `actions/cache/restore` only, falling back to the pinned fetch on miss. **Cache exactly the five gitignored fetch destinations, never `extras/models/` wholesale** — the tree also holds git-tracked fixture headers and `.json.in` templates a restore must not clobber.
+- **Measure in flight**: the restore step shipped unconditionally on all OSes (deviation from the original per-OS gate); the PR's own runs provide the restore-vs-clone numbers per OS, and the step is trivially removable per-OS where it loses (Windows tar extraction is the candidate).
+- **Eviction budget**: models (~0.8 GB with `.git` stripped) + sccache (~4–6 GB) + emsdk/npm (~1 GB) fit in 10 GB, but monitor `gh api .../actions/caches` after step 4; if churn appears, sccache gets priority (it saves more minutes).
+- **Alternative if this underdelivers** (noted per Valentin, 2026-08-31): publish the fixture trees as release assets on `anira-project/example-models` and download them directly, like the backend archives — one hashed asset, no git at all, and the cache becomes optional. The pinned-SHA fetch is compatible with moving there later; adopt it if cache eviction or restore times prove annoying.
 
 sccache diagnosis (step 0c): re-run the same commit twice via `workflow_dispatch` — hits on the second run mean scope/eviction; still 0% means a volatile input poisoning every key (a generated header or define that changes per commit — `__DATE__`, version stamps). Fix at the source; keep `SCCACHE_GHA_VERSION` stable.
 
@@ -185,18 +188,18 @@ The queueing problem is solved by running fewer jobs per event, not faster jobs.
 
 Keep `build_test_mobile` as anira's own workflow through this overhaul (the roadmap explicitly allows it), updated for four binaries by step 1. Adopting `cmake-test-android`/`cmake-test-ios-simulator` needs three upstream inputs first (U5): extra push paths (backend `.so`s from `modules/`, `libc++_shared.so`, `extras/models`), a device staging dir matching `ANIRA_EXTRAS_MODELS_DIR`, and `LD_LIBRARY_PATH` on the run command. iOS needs no pushes (simulator shares the host FS) but does need the `.app` bundle convention. Migrate in step 7 once those inputs exist in a tagged ci-actions — or stay on the anira workflow indefinitely; both end-states satisfy M0 item 3.
 
-### 3.8 Upstream changes to ci-actions (split: what the tag waits for)
+### 3.8 Changes to ci-actions (ours to make; tanh-lib moves in lockstep)
 
-Nothing is tagged in `tanh-lab/ci-actions` today — every consumer is `@main`, which M0 item 3 explicitly ends. To keep item 3 unblockable by upstream review, split the asks:
+`tanh-lab/ci-actions` is maintained by this team and freely changeable at any time — the one rule is that `tanh-lab/tanh-lib` consumes every action `@main` (pr-checks.yml), so a breaking change there updates tanh-lib in the same motion. Nothing is tagged in ci-actions today, which M0 item 3 explicitly ends: with the first tag the repo also gains a **`CHANGELOG.md`** (Keep a Changelog, like anira's), and from then on every change carries an entry and consumers pin tags.
 
-**Minimum to tag** (blocks steps 4–6):
-- **U2 — keep `configure.log`**: `cmake-build` tees configure output in both modes (anira's linkage assertion depends on it).
-- **Cut the first tag** (proposal: `v0.1.0`). *Fallback if upstream stalls past the review deadline (§4 step 3): pin a fork tag under anira-project and re-point when upstream tags.*
+**What anira's migration needs before its pin** (step 3, ~0.5 day, no external gate):
+- **U2 — keep `configure.log`**: `cmake-build` tees configure output in both modes (anira's linkage assertion depends on it). Backward-compatible.
+- **Cut the first tag** (proposal: `v0.1.0`) with the CHANGELOG, and bump tanh-lib's `@main` uses to it — tanh-lib's first pin.
 
-**Nice-to-have** (can ride a later tag; none blocks the migration):
+**Worth doing, on their own schedule** (each rides a later tag with its changelog entry):
 - **U1 — ctest parallelism**: not needed by anira (test presets carry `execution.jobs`); an optional `CTEST_ARGS` input on `cmake-test` would let tanh-lib parallelise too.
-- **U3 — extra configure args in preset mode**: `cmake-build` appends `CMAKE_BUILD_ARGS` after `--preset`. Keeps anira's catalog at ~15 instead of ~40 presets (§6 Q3 if rejected).
-- **U4 — Windows generator note**: manual mode's Windows branch inherits the sccache-inert VS generator; document or fix (tanh-lib's own `windows-*` presets have the same dead cache).
+- **U3 — extra configure args in preset mode**: `cmake-build` appends `CMAKE_BUILD_ARGS` after `--preset`. Keeps anira's catalog at ~15 instead of ~40 presets (§6 Q3 is the design choice).
+- **U4 — Windows generator fix**: manual mode's Windows branch inherits the sccache-inert VS generator; tanh-lib's own `windows-*` presets have the same dead cache.
 - **U5 — mobile inputs** (enables §3.7 migration); **U6 — preset parser resolves `inherits`** (or documents the literal-`binaryDir` requirement).
 
 ---
@@ -206,7 +209,7 @@ Nothing is tagged in `tanh-lab/ci-actions` today — every consumer is `@main`, 
 Dependency graph: **steps 0, 1, 2 are independent and parallelisable**; step 3 blocks 4–6; step 4 needs **2+3** (not 1); step 5 needs 4; step 6 needs 5; step 7 needs **1** + U5/U6 in a tagged ci-actions.
 
 **Step 0 — quick wins on the current workflows** *(anira, Valentin; ~0.5 day + a soak week)*
-- a. `CTEST_ARGS: "-C Release -j 4"` in build_test (and `-j 4` in build_sanitizer). Works today: gtest discovery registers per-case CTest entries. Up-front serialization of the build-invoking tests (`anira_header_isolation`, `InstallConsumer` → `RUN_SERIAL`/`RESOURCE_LOCK`), and the post-discovery `set_tests_properties` include as the mechanism for pinning any timing-flaky discovered case (§3.1).
+- a. `CTEST_ARGS: "-C Release -j 4"` in build_test (and `-j 4` in build_sanitizer). Works today: gtest discovery registers per-case CTest entries. Up-front serialization of the build-invoking tests (`anira_header_isolation`, `InstallConsumer` → shared `RESOURCE_LOCK`); the post-discovery `set_tests_properties` include (§3.1) is the documented mechanism for pinning a timing-flaky discovered case and is added reactively on the first flake, not speculatively.
 - b. macOS-x86_64 legs → `runs-on: macos-15-intel` (build_test, build_examples, build_benchmark; on_tag untouched until 5b).
 - c. sccache diagnosis per §3.5; fix the identified cause. If Linux/macOS hit rates stay ~0 after diagnosis, disable sccache there rather than paying setup overhead for nothing — Windows gets its cache in step 4.
 - d. ⚠ Model pinning + cache per §3.5 (pin mechanism spelled there; seed-once/restore-only; `enableCrossOsArchive`; measured restore-vs-clone gate). CHANGELOG + docs for `ANIRA_MODELS_<X>_REF`.
@@ -218,8 +221,8 @@ As §3.4, strictly mechanical. Acceptance: per-leg CTest totals equal (307 on de
 **Step 2 — CI preset catalog** *(anira, Valentin; independent; ~1 day)*
 As §3.1 (presets carry no test lists — this does not wait for step 1). Pure `CMakePresets.json` addition — no workflow change, zero CI risk, immediately usable locally. Acceptance: each preset configures+builds+tests locally on at least its primary platform.
 
-**Step 3 — upstream ci-actions: U2 + first tag** *(tanh-lab/ci-actions, Fares + Valentin; blocks 4–6)*
-File U2 (small) and the nice-to-haves as separate PRs; agree a review deadline with Fares (proposal: one week). If no tag by then, the fork-tag fallback (§3.8) unblocks step 4 — item 3's letter is satisfied when the final pin points at a tanh-lab tag, which can happen in a later one-line PR.
+**Step 3 — ci-actions: U2, CHANGELOG, first tag** *(tanh-lab/ci-actions + tanh-lib, Valentin; blocks 4–6; ~0.5 day)*
+ci-actions is ours to change directly (§3.8). Land U2 (backward-compatible), add `CHANGELOG.md` (first entry: U2 and the tagging policy), cut `v0.1.0`, and bump tanh-lib's pr-checks.yml `@main` uses to the tag in the same motion. The remaining items (U1/U3–U6) land whenever needed and ride later tags with their entries.
 
 **Step 4 — migrate `build_test`** *(anira, Valentin; needs 2+3; ~1 day + the arm64 spike)*
 §3.3 shape: shared actions `@v0.1.0`, presets, job-level `GITHUB_TOKEN`, vcvars on Windows (x64: `msvc-dev-cmd`; **arm64: spike per §3.2 with VS-generator fallback**), `/Z7` invariant in `ci-base`, new push-tier legs `ci-tests-gcc` + `windows-clang-tests-shared`, tier plan-job with the explicit event mapping and `tier` input, event-keyed concurrency groups, **required-checks rewrite to the single aggregating result job**. Delete nothing yet. Acceptance: one full-tier `workflow_dispatch` run green across all legs; linkage assertions firing; Windows x64 sccache nonzero hits on a re-run; a PR-tier run ≤ 10 min wall.
@@ -260,7 +263,7 @@ Each implementing PR carries its CHANGELOG entry (CI/build changes are in-policy
 
 1. **Org plan** — Free (20 concurrent) or Team (60)? Changes how tight the PR tier must be; macOS cap is 5 either way. *(Check org billing settings.)*
 2. ⚠ **Release-artifact toolchain** (step 5b) — switch on_tag's Windows builds to Ninja+cl (consistent with CI, enables caching) or keep the VS generator for artifact continuity? And pin `windows-2022` vs follow `windows-latest` (VS 2026)?
-3. **U3 (args-in-preset-mode)** — if rejected upstream, anira's catalog grows ~15 → ~40 presets; plan works either way.
+3. **U3 (args-in-preset-mode)** — a design choice we make ourselves: preset+args keeps anira's catalog at ~15; pure presets grow it to ~40. Plan works either way.
 4. ⚠ **Tier policy sign-off** — reduced per-PR coverage vs the roadmap's full-suite-green rule; recommendation: adopt the merge queue with `merge_group` in the full tier so merges stay fully gated (§3.6).
 5. **Windows-arm64 presets** — accept the vcvars reinterpretation (§3.1) or add `windows-arm64-tests-*` presets for local reproducibility?
 6. **Extended sanitizers** (asan/tsan/lsan, noengines scope): nightly-only (proposed) or also on push?

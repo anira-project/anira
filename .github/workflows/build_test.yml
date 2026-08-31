@@ -26,12 +26,18 @@ concurrency:
 jobs:
   # Fetch the pinned model fixtures (~1.7 GB) once and publish them as a single
   # cross-OS cache entry; the build jobs restore it instead of every job cloning
-  # the repos at configure time. Only non-PR runs seed (PR runs restore the
-  # default branch's entry — Actions cache scoping); on a miss nothing breaks,
-  # the configure fetches the pins itself (extras/fetch-models.cmake).
+  # the repos at configure time. Only push runs seed: PR runs restore the default
+  # branch's entry (Actions cache scoping), and tag runs skip — an entry saved
+  # under a tag ref would be restorable by nothing else. On a miss nothing
+  # breaks, the configure fetches the pins itself (extras/fetch-models.cmake);
+  # for the same reason the build jobs carry no `needs:` on this job (the first
+  # run per key misses everywhere by design — a hard dependency would serialize
+  # the whole matrix behind the clone) and a seed failure never fails the run
+  # (continue-on-error) — on_tag gates releases on this workflow's conclusion.
   seed_models_cache:
     name: seed the model-fixture cache
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
+    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +45,12 @@ jobs:
         id: models_cache
         uses: actions/cache@v4
         with:
-          path: extras/models
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
       - name: fetch the pinned model repositories
@@ -170,7 +181,12 @@ jobs:
       - name: restore the model fixtures
         uses: actions/cache/restore@v4
         with:
-          path: extras/models
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
       - name: setup

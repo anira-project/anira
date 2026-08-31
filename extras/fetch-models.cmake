@@ -6,20 +6,30 @@
 #
 # A destination directory that already exists is left untouched (this is what
 # lets the CI cache — and a developer's existing checkout — short-circuit the
-# fetch; delete a subdirectory to refetch it at the pin). Bump a pin by editing
-# its default here or overriding the cache variable; the CI cache key hashes
-# this file, so editing it invalidates the cached tree.
+# fetch; delete a subdirectory to refetch it at the pin). Each fetch stages into
+# <dest>.fetching and renames into place only after a completed checkout, so an
+# interrupted or failed fetch can never leave a half tree the exists-check would
+# accept; the .git metadata is dropped from the result (the trees are pinned
+# snapshots, not working clones). Bump a pin by editing its default here or
+# passing -DANIRA_MODELS_<NAME>_REF=<sha>; the CI cache key hashes this file,
+# so editing it invalidates the cached tree.
 
-set(ANIRA_MODELS_GUITARLSTM_REF "08c74183cc16878194b827f8b27304466da145f0" CACHE STRING
-    "Pinned commit of faressc/GuitarLSTM (hybrid-nn model fixtures)")
-set(ANIRA_MODELS_STEERABLENAFX_REF "e49546773b5f7e6dbb299d6820c9c53bd4e6a2f3" CACHE STRING
-    "Pinned commit of faressc/steerable-nafx (cnn model fixtures)")
-set(ANIRA_MODELS_STATEFULLSTM_REF "3ce7bec9bebaf9e4ab2327971cae1be722ded78c" CACHE STRING
-    "Pinned commit of vackva/stateful-lstm (stateful-rnn model fixtures)")
-set(ANIRA_MODELS_EXAMPLE_MODELS_REF "6162b0aa82acb9da0d8e753d55bb3b6f6b3c325b" CACHE STRING
-    "Pinned commit of anira-project/example-models (model-pool fixtures)")
-set(ANIRA_MODELS_RAVE_REF "4800f15ab86c3ba091ef1505001c1e234df69980" CACHE STRING
-    "Pinned commit of anira-project/example-models' third-party branch (RAVE model)")
+if(NOT DEFINED ANIRA_MODELS_GUITARLSTM_REF)
+    set(ANIRA_MODELS_GUITARLSTM_REF "08c74183cc16878194b827f8b27304466da145f0") # faressc/GuitarLSTM (hybrid-nn)
+endif()
+if(NOT DEFINED ANIRA_MODELS_STEERABLENAFX_REF)
+    set(ANIRA_MODELS_STEERABLENAFX_REF "e49546773b5f7e6dbb299d6820c9c53bd4e6a2f3") # faressc/steerable-nafx (cnn)
+endif()
+if(NOT DEFINED ANIRA_MODELS_STATEFULLSTM_REF)
+    set(ANIRA_MODELS_STATEFULLSTM_REF "3ce7bec9bebaf9e4ab2327971cae1be722ded78c") # vackva/stateful-lstm (stateful-rnn)
+endif()
+if(NOT DEFINED ANIRA_MODELS_EXAMPLE_MODELS_REF)
+    set(ANIRA_MODELS_EXAMPLE_MODELS_REF "6162b0aa82acb9da0d8e753d55bb3b6f6b3c325b") # anira-project/example-models (model-pool)
+endif()
+if(NOT DEFINED ANIRA_MODELS_RAVE_REF)
+    set(ANIRA_MODELS_RAVE_REF "4800f15ab86c3ba091ef1505001c1e234df69980") # anira-project/example-models, third-party branch (RAVE)
+endif()
+set(_anira_rave_sha256 "1d50ba64fb0bc2d43ec10dda8414b37379a4a9b48b82c228fce5af8524d06507") # rave_funk_drum.ts at ANIRA_MODELS_RAVE_REF
 
 set(_anira_models_fetch_dir "${CMAKE_CURRENT_LIST_DIR}/models")
 
@@ -45,26 +55,34 @@ foreach(_repo IN LISTS _anira_model_repos)
 
     if(NOT EXISTS "${_dest}")
         message(STATUS "Fetching ${_url} @ ${_ref} into ${_dest}")
+        set(_staging "${_dest}.fetching")
+        file(REMOVE_RECURSE "${_staging}")
         # A shallow clone cannot check out an arbitrary commit, so init + fetch
         # the pinned ref directly (GitHub serves reachable SHAs to fetch).
         execute_process(
-            COMMAND ${GIT_EXECUTABLE} init -q "${_dest}"
+            COMMAND ${GIT_EXECUTABLE} init -q "${_staging}"
             RESULT_VARIABLE _init_result)
         if(NOT _init_result EQUAL "0")
-            message(FATAL_ERROR "git init of ${_dest} failed with ${_init_result}")
+            message(FATAL_ERROR "git init of ${_staging} failed with ${_init_result}")
         endif()
         execute_process(
-            COMMAND ${GIT_EXECUTABLE} -C "${_dest}" fetch -q --depth 1 "${_url}" "${_ref}"
+            COMMAND ${GIT_EXECUTABLE} -C "${_staging}" fetch -q --depth 1 "${_url}" "${_ref}"
             RESULT_VARIABLE _fetch_result)
         if(NOT _fetch_result EQUAL "0")
             message(FATAL_ERROR "git fetch of ${_url} @ ${_ref} failed with ${_fetch_result}")
         endif()
         execute_process(
-            COMMAND ${GIT_EXECUTABLE} -C "${_dest}" -c advice.detachedHead=false checkout -q FETCH_HEAD
+            COMMAND ${GIT_EXECUTABLE} -C "${_staging}" -c advice.detachedHead=false checkout -q FETCH_HEAD
             RESULT_VARIABLE _checkout_result)
         if(NOT _checkout_result EQUAL "0")
             message(FATAL_ERROR "git checkout of ${_url} @ ${_ref} failed with ${_checkout_result}")
         endif()
+        # Pinned snapshot, not a working clone — drop the object store (it would
+        # double the CI cache entry and the on-device staging on Android).
+        file(REMOVE_RECURSE "${_staging}/.git")
+        get_filename_component(_dest_parent "${_dest}" DIRECTORY)
+        file(MAKE_DIRECTORY "${_dest_parent}")
+        file(RENAME "${_staging}" "${_dest}")
     endif()
 endforeach()
 
@@ -79,20 +97,25 @@ if(ANIRA_MODELS_FETCH_RAVE)
     set(_rave_dir "${_anira_models_fetch_dir}/third-party/ircam-acids/RAVE")
     set(_rave_url "https://github.com/anira-project/example-models/raw/${ANIRA_MODELS_RAVE_REF}/third-party/ircam-acids/RAVE/rave_funk_drum.ts")
 
-    file(MAKE_DIRECTORY "${_rave_dir}")
-
     if(NOT EXISTS "${_rave_dir}/rave_funk_drum.ts")
         message(STATUS "Downloading RAVE model from ${_rave_url}")
+        file(MAKE_DIRECTORY "${_rave_dir}")
+        # Download to a partial name and rename on success, so an interrupted
+        # download never leaves a truncated model the exists-check accepts.
+        file(REMOVE "${_rave_dir}/rave_funk_drum.ts.part")
         file(DOWNLOAD
             "${_rave_url}"
-            "${_rave_dir}/rave_funk_drum.ts"
+            "${_rave_dir}/rave_funk_drum.ts.part"
             SHOW_PROGRESS
+            EXPECTED_HASH SHA256=${_anira_rave_sha256}
             STATUS _rave_status
             LOG _rave_log
         )
         list(GET _rave_status 0 _rave_result)
         if(NOT _rave_result EQUAL 0)
+            file(REMOVE "${_rave_dir}/rave_funk_drum.ts.part")
             message(FATAL_ERROR "Failed to download RAVE model: ${_rave_log}")
         endif()
+        file(RENAME "${_rave_dir}/rave_funk_drum.ts.part" "${_rave_dir}/rave_funk_drum.ts")
     endif()
 endif()

@@ -32,12 +32,18 @@ find build-x86_64 -name '*.so' -exec adb push {} "$DEV/" \;
 adb push "$NDK_SYSROOT_LIB/libc++_shared.so" "$DEV/"
 
 # Model tree staged to the path baked into the build (ANIRA_EXTRAS_MODELS_DIR).
+# LibTorch has no mobile build, so the (cache-restored) 75 MB RAVE model is
+# dead weight on the device — drop it before staging.
+rm -rf extras/models/third-party/ircam-acids/RAVE
 adb push extras/models "$DEV/models"
 
 # One launch per binary runs its whole suite; assert each device-side exit code
 # is 0 (adb shell does not propagate exit codes, hence the echoed marker).
+# Failures are collected, not fail-fast, so one run reports every broken suite.
+FAILED=0
 for t in $TEST_BINARIES; do
     adb shell "chmod 755 $DEV/$t"
     adb shell "cd $DEV && LD_LIBRARY_PATH=$DEV ./$t --gtest_brief=1; echo ANIRA_EXIT=\$?" | tee "/tmp/out_$t.txt"
-    grep -q "ANIRA_EXIT=0" "/tmp/out_$t.txt"
+    grep -q "ANIRA_EXIT=0" "/tmp/out_$t.txt" || FAILED=1
 done
+exit $FAILED
