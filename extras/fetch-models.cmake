@@ -103,15 +103,26 @@ if(ANIRA_MODELS_FETCH_RAVE)
         # Download to a partial name and rename on success, so an interrupted
         # download never leaves a truncated model the exists-check accepts.
         file(REMOVE "${_rave_dir}/rave_funk_drum.ts.part")
-        file(DOWNLOAD
-            "${_rave_url}"
-            "${_rave_dir}/rave_funk_drum.ts.part"
-            SHOW_PROGRESS
-            EXPECTED_HASH SHA256=${_anira_rave_sha256}
-            STATUS _rave_status
-            LOG _rave_log
-        )
-        list(GET _rave_status 0 _rave_result)
+        # One retry: transient TLS/connect errors against GitHub happen.
+        foreach(_attempt RANGE 1 2)
+            file(DOWNLOAD
+                "${_rave_url}"
+                "${_rave_dir}/rave_funk_drum.ts.part"
+                SHOW_PROGRESS
+                EXPECTED_HASH SHA256=${_anira_rave_sha256}
+                STATUS _rave_status
+                LOG _rave_log
+            )
+            list(GET _rave_status 0 _rave_result)
+            if(_rave_result EQUAL 0)
+                break()
+            endif()
+            if(_attempt EQUAL 1)
+                message(STATUS "RAVE download failed, retrying once")
+                file(REMOVE "${_rave_dir}/rave_funk_drum.ts.part")
+                execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 3)
+            endif()
+        endforeach()
         if(NOT _rave_result EQUAL 0)
             file(REMOVE "${_rave_dir}/rave_funk_drum.ts.part")
             message(FATAL_ERROR "Failed to download RAVE model: ${_rave_log}")
