@@ -3,6 +3,23 @@ name: clang_tidy
 on:
   merge_group:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    # Diff-based early warning: only when C++/build/config sources change does
+    # the job even spawn; the merge queue always runs the full sweep and is the
+    # enforcement point (this workflow's result is deliberately NOT a required
+    # check — a path-skipped required check would block queue entry forever).
+    paths:
+      - "**.cpp"
+      - "**.h"
+      - "**.hpp"
+      - "**.cmake"
+      - "**/CMakeLists.txt"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - ".clang-tidy"
+      - ".github/workflows/clang_tidy.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,6 +56,26 @@ jobs:
       - uses: tanh-lab/ci-actions/cmake-build@v0.2.2
         with:
           PRESET: clang-tidy
+      # PRs analyse only their changed files; a header, CMake/tidy-config, or
+      # this-workflow change (which pins the tidy tool) falls back to the full
+      # sweep, and queue runs always sweep everything.
+      - name: collect the PR's changed files
+        id: diff
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate -q '.[].filename')
+          if echo "$FILES" | grep -qE '\.(h|hpp)$|CMakeLists\.txt$|\.cmake$|CMakePresets\.json$|\.clang-tidy$|\.github/workflows/clang_tidy\.yml$'; then
+            echo "A header, build/config file, or this workflow changed — full sweep."
+            echo "files=" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo 'files<<ANIRA_EOF'
+              echo "$FILES"
+              echo 'ANIRA_EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
       # SOURCES excludes src/emscripten-wrappers/ because those translation
       # units are only built by the wasm presets (Emscripten toolchain) and are
       # therefore absent from this build's compilation database — and test/install/,
@@ -50,6 +87,8 @@ jobs:
         with:
           PRESET: clang-tidy
           SOURCES: "src/backends/ src/benchmark/ src/scheduler/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/backends/ test/scheduler/ test/utils/ test/unload/ test/*.cpp"
+          # Empty on queue runs -> the action sweeps SOURCES.
+          FILES: ${{ steps.diff.outputs.files }}
 
   # The queue's required status for this workflow.
   result:
