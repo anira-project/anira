@@ -173,4 +173,7 @@ jobs:
           # configuration are not even listed (the legs used to pass with "No tests
           # were found") and the config-independent entries fail with "Test not
           # available without configuration". Harmless on single-config generators.
-          CTEST_ARGS: "-C Release"
+          # -j 4: gtest discovery registers one CTest entry per case, so the suite
+          # parallelizes; the runners have 3-4 vCPUs. Tests that drive the build
+          # tree carry a RESOURCE_LOCK (test/CMakeLists.txt).
+          CTEST_ARGS: "-C Release -j 4"

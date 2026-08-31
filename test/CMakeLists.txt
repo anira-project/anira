@@ -86,6 +86,9 @@ if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$")
     add_test(NAME anira_header_isolation
         COMMAND ${CMAKE_COMMAND} --build "${CMAKE_BINARY_DIR}" --config $<CONFIG>
                 --target anira_header_isolation)
+    # The test drives the build tree; keep build-invoking tests mutually
+    # exclusive under a parallel ctest (-j).
+    set_tests_properties(anira_header_isolation PROPERTIES RESOURCE_LOCK anira_build_tree)
 endif()
 
 # Host-shaped library-unload test: a plugin-like module embedding anira is dlopen'ed,
@@ -112,7 +115,8 @@ if(ANIRA_WITH_INSTALL)
             -DGENERATOR=${CMAKE_GENERATOR}
             -DBUILD_TYPE=$<CONFIG>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/install/run-install-test.cmake)
-    set_tests_properties(InstallConsumer PROPERTIES TIMEOUT 600)
+    # RESOURCE_LOCK: installs from the build tree — see anira_header_isolation.
+    set_tests_properties(InstallConsumer PROPERTIES TIMEOUT 600 RESOURCE_LOCK anira_build_tree)
 endif()
 
 # Only copy runtime DLLs when there are any (a fully static build has none).

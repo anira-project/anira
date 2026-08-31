@@ -60,3 +60,5 @@ jobs:
           CMAKE_BUILD_ARGS: "-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_RTSAN=ON"
       - name: test
         uses: ./.github/actions/test
+        with:
+          CTEST_ARGS: "-j 4"
