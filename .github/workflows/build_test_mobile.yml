@@ -27,9 +27,7 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
-  # sccache speaks the retired v1 cache API without this and every write fails
-  # read-only ("Cannot write to read-only storage" — the cause of the permanent
-  # 0% hit rate); v2 became the only protocol in 2025.
+  # Without this, sccache speaks the retired v1 cache API and every write fails.
   ACTIONS_CACHE_SERVICE_V2: "on"
 
 # Hardcode the workflow name (not ${{ github.workflow }}): when on_tag.yml calls this
@@ -113,10 +111,8 @@ jobs:
           echo "Booting simulator $UDID"
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
-          # The simulator shares the host filesystem, so the model paths baked into
-          # the binaries resolve as-is — one spawn per component binary runs its
-          # suite. Failures are collected, not fail-fast, so one run reports every
-          # broken suite.
+          # The simulator shares the host filesystem, so the baked model paths
+          # resolve as-is; failures are collected so one run reports every suite.
           rc=0
           for t in test_utils test_scheduler test_backends test_handler; do
             xcrun simctl spawn "$UDID" "$PWD/build-ios-sim/test/$t.app/$t" --gtest_brief=1 || rc=1
