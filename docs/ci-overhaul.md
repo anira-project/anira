@@ -7,7 +7,7 @@
 
 > **Beyond-mandate items needing explicit sign-off** (marked ⚠ where they appear): PR-tier coverage reduction (§3.6 — in tension with the roadmap's "merges with the full test suite green" rule), the model-repo pinning (§3.5 — changes configure behaviour for every consumer, not just CIs; ships with the PR that carries this document), the on_tag toolchain switch for release artifacts (§3.2), and the nightly cron / merge queue (§3.6). Everything else is either the letter of items 3–4 or pure mechanics.
 >
-> **Status**: steps 0–3 are done — #129 (steps 0+1, incl. the resolved 0c: sccache spoke the retired v1 cache API without `ACTIONS_CACHE_SERVICE_V2=on`, every write failed read-only), #130 (diff-based clang-tidy), #131 (step 2, the preset catalog), ci-actions tagged `v0.1.0`→`v0.2.1` with tanh-lib pinned (tanh-lib#23). **Step 4 ships with the PR carrying this note**: build_test on the shared actions `@v0.2.1` in preset mode, the PR/full tier split (10/23 legs), MSVC under Ninja+vcvars, the gcc and clang-cl coverage legs, and the `build_test result` aggregation job (the one check branch protection should require). Steps 5–7 follow.
+> **Status**: steps 0–4 are merged — #129 (steps 0+1, incl. the resolved 0c: sccache spoke the retired v1 cache API without `ACTIONS_CACHE_SERVICE_V2=on`, every write failed read-only), #130 (diff-based clang-tidy), #131 (step 2, the preset catalog), ci-actions tagged `v0.1.0`→`v0.2.1` with tanh-lib pinned (tanh-lib#23). Step 4 (#132): build_test on the shared actions in preset mode, the PR/full tier split, MSVC under Ninja+vcvars (incl. native Windows-arm64), the gcc and clang-cl coverage legs, and the `build_test result` aggregation job — PR tier and full 23-leg tier validated green. Steps 5–7 follow; all open questions are resolved (§6), incl. the macOS consolidation (§3.6).
 
 ---
 
@@ -184,6 +184,15 @@ The queueing problem is solved by running fewer jobs per event, not faster jobs.
 - macOS-x86_64 legs move to **`macos-15-intel`** (native x64, 4 vCPU, free, available until ~Aug 2027) — kills the 9:30 Rosetta test step; universal legs stay on Apple Silicon. Note the Intel pool is smaller, so watch its queue behaviour; revisit before the image retires.
 - ⚠ **Nightly** (proposed addition, same sign-off as tiering): weekly cron on main running the full tier plus the extended sanitizer presets. Scheduled workflows run on the default branch only and auto-disable after 60 days of inactivity — fine for anira.
 
+**macOS consolidation (decided 2026-08-31)** — the 5-concurrent macOS cap is the scarcest resource, so fewer-but-longer jobs win; this supersedes the macOS rows above and the `macos-15-intel` bullet:
+
+- **Universal-only engine legs**: the four arch-specific macOS engine legs are dropped; `macos-universal-tests-{shared,static}` run the suite twice on one runner — natively (arm64) and as `arch -x86_64 ctest --preset …` (the x86_64 slice under Rosetta). Both slices of the artifact mac users actually get are executed, and the Intel-runner escape hatch (image retires ~Aug 2027) is no longer needed in build_test.
+- **One macOS tflite leg** (static — the iOS-relevant linkage) instead of two; Linux/Windows keep both linkages. Precondition: a universal `tensorflowlite_c` archive in the backends release (verify before folding).
+- **One iOS job**: the three backend sets run sequentially in a single job (onnx-litert device+sim+tests, tflite sim+tests, no-backend build) — one simulator boot instead of three.
+- **One macOS install job**: shared and static installs sequentially.
+- Effect: push-tier macOS **13 jobs / ~3 waves → 5 jobs / one wave**; PR tier: **2 macOS jobs** (universal-shared dual-arch + the iOS job), and x86_64 execution returns to PRs via the Rosetta pass.
+- Deliberate trade-offs: no native-Intel execution (Rosetta instead), the second tflite linkage only in full runs, per-arch failures point at a step rather than a job. on_tag's release builds still produce the separate x86_64/arm64/universal artifacts.
+
 ### 3.7 Mobile
 
 **Decision (Valentin, 2026-08-31): one shared mobile runner.** The mobile test runners live in ci-actions (`cmake-test-android` / `cmake-test-ios-simulator`) and anira and tanh-lib use the same ones — anira does not keep a separate mobile implementation long-term; when the runner needs to grow, it grows upstream and both consumers update. What the shared actions still need for anira (U5/U6, the next tag after the first): extra push paths (backend `.so`s from `modules/`, `libc++_shared.so`, the model tree), a device staging dir matching `ANIRA_EXTRAS_MODELS_DIR`, `LD_LIBRARY_PATH` on the run command, per-binary failure collection (report every broken suite in one run, as anira's loops do today), and an `inherits`-aware preset parser. iOS needs no pushes (simulator shares the host FS) but keeps the `.app` convention. Until those land in a tagged ci-actions, `build_test_mobile` keeps anira's own scripting as a stopgap (updated for the four binaries in step 1); step 7 then replaces it and deletes `.github/scripts/android_emulator_test.sh`.
@@ -259,11 +268,12 @@ Each implementing PR carries its CHANGELOG entry (CI/build changes are in-policy
 
 ---
 
-## 6. Open questions
+## 6. Decisions (all resolved 2026-08-31)
 
-1. **Org plan** — Free (20 concurrent) or Team (60)? Changes how tight the PR tier must be; macOS cap is 5 either way. *(Check org billing settings.)*
-2. ⚠ **Release-artifact toolchain** (step 5b) — switch on_tag's Windows builds to Ninja+cl (consistent with CI, enables caching) or keep the VS generator for artifact continuity? And pin `windows-2022` vs follow `windows-latest` (VS 2026)?
-3. **U3 (args-in-preset-mode)** — a design choice we make ourselves: preset+args keeps anira's catalog at ~15; pure presets grow it to ~40. Plan works either way.
-4. ⚠ **Tier policy sign-off** — reduced per-PR coverage vs the roadmap's full-suite-green rule; recommendation: adopt the merge queue with `merge_group` in the full tier so merges stay fully gated (§3.6).
-5. **Windows-arm64 presets** — accept the vcvars reinterpretation (§3.1) or add `windows-arm64-tests-*` presets for local reproducibility?
-6. **Extended sanitizers** (asan/tsan/lsan, noengines scope): nightly-only (proposed) or also on push?
+1. **Org plan**: Free — 20 concurrent jobs, 5 macOS. The design already assumed this worst case; PR tiers are sized to ≤20 total jobs across all workflows.
+2. **Release-artifact toolchain** (step 5b): Ninja + cl, following `windows-latest`/VS — the configuration CI tests is what ships; the step-5b binary comparison validates the first release.
+3. **U3**: implemented (ci-actions v0.2.0+ appends `CMAKE_BUILD_ARGS` in preset mode); the catalog stays at ~14 presets.
+4. **Tier policy**: adopted, gated by the **merge queue** — `merge_group` runs the full tier on the merged result before landing (step 6 wires the trigger and branch protection).
+5. **Windows-arm64 presets**: the vcvars reinterpretation stands — native arm64 vcvars + Ninja worked first try across the full-tier run.
+6. **Extended sanitizers**: nightly-only, noengines scope.
+7. **macOS consolidation**: see §3.6 — universal-only dual-arch legs, one iOS job, one tflite leg, one install job.
