@@ -1,9 +1,27 @@
 name: build_test
 
+# Desktop build + test over the CI presets and the shared tanh-lab/ci-actions.
+# The matrix lives in .github/build_test_matrix.json; pull requests run the
+# "pr": true subset, every other event runs all legs. Design rationale and
+# tiering policy: docs/ci-overhaul.md. Two constraints worth repeating here:
+# Windows must build under Ninja inside a vcvars environment (the VS generator
+# ignores compiler launchers, so sccache would silently stop caching cl), and
+# Release must stay free of /Zi and PCH for the same reason.
+
 on:
   workflow_call:
-  workflow_dispatch: # lets you run a build from github.com
-  # Runs the workflow on all push events
+    inputs:
+      tier:
+        description: "Matrix tier: 'full' (default) or 'pr'"
+        type: string
+        default: "full"
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "Matrix tier"
+        type: choice
+        options: ["full", "pr"]
+        default: "full"
   push:
     branches:
       - main
@@ -13,31 +31,22 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
-  # sccache speaks the retired v1 cache API without this and every write fails
-  # read-only ("Cannot write to read-only storage" — the cause of the permanent
-  # 0% hit rate); v2 became the only protocol in 2025.
+  # Without this, sccache speaks the retired v1 cache API and every write fails.
   ACTIONS_CACHE_SERVICE_V2: "on"
 
-# When pushing new commits, cancel any workflows with the same name on that branch
-# Hardcode the workflow name (not ${{ github.workflow }}): when on_tag.yml calls this
-# as a reusable workflow, github.workflow becomes "on_tag" — shared with the other
-# reusable test workflow, so cancel-in-progress would cancel one of them. A literal
-# keeps the group distinct in both the standalone (PR/push) and reused (tag) cases.
+# The event is in the group so a dispatched full run and a push run on the same
+# ref never cancel each other. The name stays hardcoded (not github.workflow):
+# on_tag's reusable call would otherwise share a group with build_test_mobile.
 concurrency:
-  group: build_test-${{ github.ref }}
+  group: build_test-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Fetch the pinned model fixtures (~1.7 GB) once and publish them as a single
-  # cross-OS cache entry; the build jobs restore it instead of every job cloning
-  # the repos at configure time. Only push runs seed: PR runs restore the default
-  # branch's entry (Actions cache scoping), and tag runs skip — an entry saved
-  # under a tag ref would be restorable by nothing else. On a miss nothing
-  # breaks, the configure fetches the pins itself (extras/fetch-models.cmake);
-  # for the same reason the build jobs carry no `needs:` on this job (the first
-  # run per key misses everywhere by design — a hard dependency would serialize
-  # the whole matrix behind the clone) and a seed failure never fails the run
-  # (continue-on-error) — on_tag gates releases on this workflow's conclusion.
+  # Seeds the cross-OS model-fixture cache the build jobs restore. Push runs
+  # only (PRs restore the default branch's entry; a tag-scoped entry would be
+  # restorable by nothing). Deliberately no `needs:` from the build jobs (a
+  # miss just refetches at configure) and continue-on-error (on_tag gates
+  # releases on this workflow's conclusion).
   seed_models_cache:
     name: seed the model-fixture cache
     if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
@@ -61,121 +70,33 @@ jobs:
         if: steps.models_cache.outputs.cache-hit != 'true'
         run: cmake -P extras/fetch-models.cmake
 
+  # Emits the tier's matrix include-list from .github/build_test_matrix.json.
+  plan:
+    name: plan the matrix tier
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.tier.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: select the tier
+        id: tier
+        run: |
+          TIER="full"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then TIER="pr"; fi
+          if [ -n "${{ inputs.tier }}" ]; then TIER="${{ inputs.tier }}"; fi
+          echo "Tier: $TIER"
+          echo "matrix=$(jq -c --arg tier "$TIER" '[ .[] | select($tier != "pr" or .pr == true) ]' .github/build_test_matrix.json)" >> "$GITHUB_OUTPUT"
+
   build_test:
     name: ${{ matrix.name }}
+    needs: plan
     strategy:
       fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
       matrix:
-        include:
-          # Every platform/arch is built both shared and static as its own runner.
-          # `inference_engines` toggles LibTorch + ONNX Runtime + LiteRT together;
-          # LibTorch is shared-only, so anira's CMake auto-disables it for static builds.
-          # Per-leg `onnxruntime` / `litert` / `tflite` overrides cover the legacy TFLite
-          # backend (mutually exclusive with LiteRT) — see the *-tflite-* legs below.
-          - name: Linux-x86_64-no_inference_engines
-            os: ubuntu-latest
-            inference_engines: OFF
-            shared: ON
-          - name: Linux-x86_64-shared
-            os: ubuntu-latest
-            inference_engines: ON
-            shared: ON
-          - name: Linux-x86_64-static
-            os: ubuntu-latest
-            inference_engines: ON
-            shared: OFF
-          - name: Linux-arm64-shared
-            os: ubuntu-24.04-arm
-            inference_engines: ON
-            shared: ON
-          - name: Linux-arm64-static
-            os: ubuntu-24.04-arm
-            inference_engines: ON
-            shared: OFF
-          - name: Windows-x86_64-shared
-            os: windows-latest
-            inference_engines: ON
-            shared: ON
-          - name: Windows-x86_64-static
-            os: windows-latest
-            inference_engines: ON
-            shared: OFF
-          - name: Windows-arm64-shared
-            os: windows-11-arm
-            inference_engines: ON
-            shared: ON
-          - name: Windows-arm64-static
-            os: windows-11-arm
-            inference_engines: ON
-            shared: OFF
-          # x86_64 runs natively on the Intel runner image (macos-15-intel, free for
-          # public repos until ~Aug 2027) — on the Apple-Silicon runners the same
-          # test step took 2-4x longer under Rosetta. The universal legs stay on
-          # Apple Silicon and cover the arm64 slice natively.
-          - name: macOS-x86_64-shared
-            os: macos-15-intel
-            inference_engines: ON
-            shared: ON
-          - name: macOS-x86_64-static
-            os: macos-15-intel
-            inference_engines: ON
-            shared: OFF
-          - name: macOS-arm64-shared
-            os: macOS-latest
-            inference_engines: ON
-            shared: ON
-          - name: macOS-arm64-static
-            os: macOS-latest
-            inference_engines: ON
-            shared: OFF
-          - name: macOS-universal-shared
-            os: macOS-latest
-            inference_engines: ON
-            shared: ON
-          - name: macOS-universal-static
-            os: macOS-latest
-            inference_engines: ON
-            shared: OFF
-          # Legacy TFLite backend (ONNX + TFLite; LiteRT/LibTorch off since TFLite is
-          # mutually exclusive with LiteRT). One x86_64 leg per desktop OS, shared+static.
-          - name: Linux-x86_64-tflite-shared
-            os: ubuntu-latest
-            inference_engines: OFF
-            onnxruntime: ON
-            tflite: ON
-            shared: ON
-          - name: Linux-x86_64-tflite-static
-            os: ubuntu-latest
-            inference_engines: OFF
-            onnxruntime: ON
-            tflite: ON
-            shared: OFF
-          - name: macOS-arm64-tflite-shared
-            os: macOS-latest
-            inference_engines: OFF
-            onnxruntime: ON
-            tflite: ON
-            shared: ON
-          - name: macOS-arm64-tflite-static
-            os: macOS-latest
-            inference_engines: OFF
-            onnxruntime: ON
-            tflite: ON
-            shared: OFF
-          - name: Windows-x86_64-tflite-shared
-            os: windows-latest
-            inference_engines: OFF
-            onnxruntime: ON
-            tflite: ON
-            shared: ON
-          - name: Windows-x86_64-tflite-static
-            os: windows-latest
-            inference_engines: OFF
-            onnxruntime: ON
-            tflite: ON
-            shared: OFF
-
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
     steps:
       - name: get repo and submodules
         uses: actions/checkout@v4
@@ -193,39 +114,45 @@ jobs:
             extras/models/third-party/ircam-acids/RAVE
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
-      - name: setup
-        uses: ./.github/actions/setup
-      - name: build
-        uses: ./.github/actions/build
+      - name: setup build tools
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.2.1
+      # Ninja needs cl.exe and its headers/libs from a vcvars environment.
+      - name: MSVC environment
+        if: matrix.vcvars
+        uses: ilammy/msvc-dev-cmd@v1
         with:
-          BUILD_TYPE: Release
-          CMAKE_BUILD_PARALLEL_LEVEL: 4
-          # Backends resolve per-leg: explicit matrix override first, else the shared
-          # `inference_engines` toggle, else OFF (TFLite defaults OFF — legacy, opt-in).
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_TESTS=ON -DANIRA_WITH_LIBTORCH=${{ matrix.inference_engines }} -DANIRA_WITH_ONNXRUNTIME=${{ matrix.onnxruntime || matrix.inference_engines }} -DANIRA_WITH_LITERT=${{ matrix.litert || matrix.inference_engines }} -DANIRA_WITH_EXECUTORCH=${{ matrix.executorch || matrix.inference_engines }} -DANIRA_WITH_TFLITE=${{ matrix.tflite || 'OFF' }}"
+          arch: ${{ matrix.vcvars }}
+      - name: build
+        uses: tanh-lab/ci-actions/cmake-build@v0.2.1
+        with:
+          PRESET: ${{ matrix.preset }}
+          CMAKE_BUILD_ARGS: ${{ matrix.args }}
       - name: assert the backend linkage rule
-        # Backend linkage follows BUILD_SHARED_LIBS (cmake/validate-options.cmake): a
-        # shared anira cannot link the static-only ExecuTorch, a static anira not the
-        # shared-only LibTorch. Every leg that asks for the full engine set must
-        # therefore have configured with the unsupported engine disabled and a
-        # warning saying so (the configure output is kept by the build action).
-        if: matrix.inference_engines == 'ON'
+        # Every engines-on leg must have auto-disabled the engine its linkage
+        # cannot carry (cmake/validate-options.cmake) — asserted on the
+        # configure.log that cmake-build keeps.
+        if: matrix.assert
         shell: bash
         run: |
-          if [[ "${{ matrix.shared }}" == "ON" ]]; then
+          if [[ "${{ matrix.assert }}" == "shared" ]]; then
             grep -q "disabling ANIRA_WITH_EXECUTORCH" configure.log
           else
             grep -q "disabling ANIRA_WITH_LIBTORCH" configure.log
           fi
       - name: test
-        uses: ./.github/actions/test
+        uses: tanh-lab/ci-actions/cmake-test@v0.2.1
         with:
-          # Windows builds with the multi-config Visual Studio generator, where ctest
-          # needs the configuration: without -C the gtest-discovered tests of that
-          # configuration are not even listed (the legs used to pass with "No tests
-          # were found") and the config-independent entries fail with "Test not
-          # available without configuration". Harmless on single-config generators.
-          # -j 4: gtest discovery registers one CTest entry per case, so the suite
-          # parallelizes; the runners have 3-4 vCPUs. Tests that drive the build
-          # tree carry a RESOURCE_LOCK (test/CMakeLists.txt).
-          CTEST_ARGS: "-C Release -j 4"
+          PRESET: ${{ matrix.preset }}
+
+  # The one status branch protection should require — per-leg names change
+  # with the tier, so requiring them directly would leave PRs pending forever.
+  result:
+    name: build_test result
+    needs: [plan, build_test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          echo "matrix result: ${{ needs.build_test.result }}"
+          [ "${{ needs.build_test.result }}" = "success" ] || exit 1
