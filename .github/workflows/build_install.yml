@@ -9,6 +9,11 @@ name: build_install
 # static sequentially in one job (the 5-concurrent macOS cap, ci-overhaul §3.6).
 
 on:
+  # PR runs are stubs: only the result job reports (queue entry requires it);
+  # the real jobs run in the merge queue.
+  pull_request:
+    branches:
+      - main
   merge_group:
   workflow_dispatch:
 
@@ -41,6 +46,7 @@ jobs:
 
   build_install:
     name: install / ${{ matrix.name }}
+    if: github.event_name != 'pull_request'
     needs: plan
     strategy:
       fail-fast: false
@@ -110,6 +116,7 @@ jobs:
   build_install_macos:
     name: install / macOS-arm64
     if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request'
     runs-on: macOS-latest
     env:
       GITHUB_TOKEN: ${{ github.token }}
@@ -153,5 +160,6 @@ jobs:
     steps:
       - name: aggregate
         run: |
+          [ "${{ github.event_name }}" = "pull_request" ] && { echo "stub: the real jobs run in the merge queue"; exit 0; }
           [ "${{ needs.build_install.result }}" = "success" ] || exit 1
           [ "${{ needs.build_install_macos.result }}" = "success" ] || exit 1

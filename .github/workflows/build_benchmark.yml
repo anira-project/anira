@@ -4,6 +4,11 @@ name: build_benchmark
 # requests run the Linux leg only; dispatches run everything.
 
 on:
+  # PR runs are stubs: only the result job reports (queue entry requires it);
+  # the real jobs run in the merge queue.
+  pull_request:
+    branches:
+      - main
   merge_group:
   workflow_dispatch: # lets you run a build from github.com
   # Runs on pull requests only: the regular tests already run in build_test.yml
@@ -37,6 +42,7 @@ jobs:
 
   build_benchmark:
     name: benchmark / ${{ matrix.name }}
+    if: github.event_name != 'pull_request'
     needs: plan
     strategy:
       fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
@@ -103,4 +109,5 @@ jobs:
     steps:
       - name: aggregate
         run: |
+          [ "${{ github.event_name }}" = "pull_request" ] && { echo "stub: the real jobs run in the merge queue"; exit 0; }
           [ "${{ needs.build_benchmark.result }}" = "success" ] || exit 1
