@@ -23,10 +23,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Two legs, merged by Codecov into one report: llvm-cov only sees files
-  # compiled into the uploaded binaries, so the shared leg misses ExecuTorch
-  # (static-only) and TFLite (mutually exclusive with LiteRT) — the static leg
-  # covers both. Wasm-only and benchmark sources are excluded in codecov.yml.
+  # Three legs, merged by Codecov into one report: llvm-cov only sees files
+  # compiled into the uploaded binaries. The shared leg misses ExecuTorch
+  # (static-only) and TFLite; the static leg adds ExecuTorch (paired with the
+  # pre-isolated LiteRT — combining it with TFLite silently auto-disables
+  # ExecuTorch, see cmake/validate-options.cmake); a small shared leg adds
+  # TFLite. Wasm-only and benchmark sources are excluded in codecov.yml.
   coverage:
     name: coverage / ${{ matrix.name }}
     strategy:
@@ -35,8 +37,10 @@ jobs:
         include:
           - name: shared-litert
             args: "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
-          - name: static-executorch-tflite
-            args: "-DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=ON"
+          - name: static-executorch
+            args: "-DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+          - name: shared-tflite
+            args: "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"
     uses: tanh-lab/ci-actions/.github/workflows/coverage.yml@v0.3.6
     permissions:
       contents: read
