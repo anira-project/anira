@@ -22,13 +22,13 @@
 
 using namespace anira;
 
+namespace {
 struct InferenceManagerTestParams {
     HostConfig m_host_config;
     InferenceConfig m_inference_config;
     std::vector<unsigned int> m_expected_latency;
 };
 
-namespace {
 std::ostream& operator<<(std::ostream& stream, const InferenceManagerTestParams& params) {
     stream << "{ ";
     stream << "Host Config: { ";
@@ -45,8 +45,8 @@ std::ostream& operator<<(std::ostream& stream, const InferenceManagerTestParams&
 // custom-latency subset instantiation below — one source of truth.
 InferenceManagerTestParams single_tensor_param() {
     return InferenceManagerTestParams{
-        HostConfig(2048, 48000, true),
-        InferenceConfig(
+        .m_host_config = HostConfig(2048, 48000, true),
+        .m_inference_config = InferenceConfig(
             std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
             std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
             1.f,
@@ -54,13 +54,13 @@ InferenceManagerTestParams single_tensor_param() {
             false,
             0.f,
             2),
-        {4095}};
+        .m_expected_latency = {4095}};
 }
 
 InferenceManagerTestParams multi_tensor_param() {
     return InferenceManagerTestParams{
-        HostConfig(1500, 44100. / 8., false, 1),
-        InferenceConfig(
+        .m_host_config = HostConfig(1500, 44100. / 8., false, 1),
+        .m_inference_config = InferenceConfig(
             std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
             std::vector<TensorShape>{TensorShape({{1, 4, 1}, {2, 128}}, {{1, 1, 512}, {3, 64}})},
             ProcessingSpec({4, 2}, {1, 1}),
@@ -69,13 +69,13 @@ InferenceManagerTestParams multi_tensor_param() {
             false,
             0.f,
             2),
-        {12800, 4800}};
+        .m_expected_latency = {12800, 4800}};
 }
 
 InferenceManagerTestParams non_streamable_mix_param() {
     return InferenceManagerTestParams{
-        HostConfig(256., 48000. / 8, false, 1),
-        InferenceConfig(
+        .m_host_config = HostConfig(256., 48000. / 8, false, 1),
+        .m_inference_config = InferenceConfig(
             std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
             std::vector<TensorShape>{TensorShape({{1, 4, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
             ProcessingSpec({1, 2}, {1, 1}, {0, 256}, {2048, 0}),
@@ -84,10 +84,8 @@ InferenceManagerTestParams non_streamable_mix_param() {
             false,
             0.f,
             2),
-        {2048, 0}};
+        .m_expected_latency = {2048, 0}};
 }
-}  // namespace
-
 // // Test fixture for paramterized inference tests
 class InferenceManagerTest : public ::testing::TestWithParam<InferenceManagerTestParams> {};
 
@@ -99,6 +97,7 @@ class InferenceManagerTest : public ::testing::TestWithParam<InferenceManagerTes
 // the full sweep re-ran identical code 20+ times (audit, docs/ci-overhaul.md §7).
 class InferenceManagerCustomLatencySubset
     : public ::testing::TestWithParam<InferenceManagerTestParams> {};
+}  // namespace
 
 TEST_P(InferenceManagerTest, Simple) {
     auto test_params = GetParam();
