@@ -7,7 +7,7 @@
 
 > **Beyond-mandate items needing explicit sign-off** (marked ⚠ where they appear): PR-tier coverage reduction (§3.6 — in tension with the roadmap's "merges with the full test suite green" rule), the model-repo pinning (§3.5 — changes configure behaviour for every consumer, not just CIs; ships with the PR that carries this document), the on_tag toolchain switch for release artifacts (§3.2), and the nightly cron / merge queue (§3.6). Everything else is either the letter of items 3–4 or pure mechanics.
 >
-> **Status**: steps 0a, 0b, 0d and 1 are implemented in the PR carrying this document. Step 0c (the sccache 0%-hit diagnosis) needs live runs — this PR's own CI provides the first data points. Steps 2–7 follow.
+> **Status**: steps 0 and 1 are merged (PR #129). Step 0c is **resolved**: sccache spoke the retired v1 cache API without `ACTIONS_CACHE_SERVICE_V2=on` — every write failed read-only (44/44 write errors, a permanent 0% hit rate); the flag is set in every anira workflow and in ci-actions' `cmake-build`. ci-actions is tagged `v0.1.0` (step 3 done; tanh-lib pin: tanh-lib#23), and clang-tidy runs diff-based on PRs (ci-actions#2 + the follow-up PR carrying this note). Steps 2 and 4–7 follow.
 
 ---
 
