@@ -477,6 +477,10 @@
             "configurePreset": "ci-tests-gcc"
         },
         {
+            "name": "ci-tests-coverage",
+            "configurePreset": "ci-tests-coverage"
+        },
+        {
             "name": "windows-msvc-tests-shared",
             "configurePreset": "windows-msvc-tests-shared"
         },
