@@ -33,7 +33,7 @@ jobs:
           tsc --version
 
       - name: build wasm
-        uses: tanh-lab/ci-actions/cmake-build-wasm@feat/v0.3-mobile-and-reusable
+        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.0
         with:
           PRESET: wasm-release
 

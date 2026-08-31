@@ -161,13 +161,13 @@ jobs:
           enableCrossOsArchive: true
 
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@feat/v0.3-mobile-and-reusable
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.0
 
       # arm64-v8a: build the full test executables to verify they compile + link
       # for the ABI we ship most. Not run here (no accelerated arm emulator on an
       # x86 host); the x86_64 emulator below provides the execution coverage.
       - name: build arm64-v8a
-        uses: tanh-lab/ci-actions/cmake-build@feat/v0.3-mobile-and-reusable
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.0
         with:
           PRESET: android-arm64-build
           CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} ${{ matrix.backends }}"
@@ -175,7 +175,7 @@ jobs:
       # x86_64: the preset bakes the model paths to the on-device staging dir so
       # the binaries + JSON configs reference where the model tree is pushed.
       - name: build x86_64
-        uses: tanh-lab/ci-actions/cmake-build@feat/v0.3-mobile-and-reusable
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.0
         with:
           PRESET: android-emulator-tests
           CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} ${{ matrix.backends }}"
@@ -199,7 +199,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: run x86_64 suite on the emulator
-        uses: tanh-lab/ci-actions/cmake-test-android@feat/v0.3-mobile-and-reusable
+        uses: tanh-lab/ci-actions/cmake-test-android@v0.3.0
         with:
           PRESET: android-emulator-tests
           TEST_BINARIES: "test_utils test_scheduler test_backends test_handler"

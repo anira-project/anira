@@ -18,7 +18,7 @@ concurrency:
 jobs:
   warm:
     name: warm
-    uses: tanh-lab/ci-actions/.github/workflows/warm-caches.yml@feat/v0.3-mobile-and-reusable
+    uses: tanh-lab/ci-actions/.github/workflows/warm-caches.yml@v0.3.0
     with:
       # One build-only leg per platform family (the PR-tier presets), so PR and
       # queue runs restore warm compile caches from main's scope.
