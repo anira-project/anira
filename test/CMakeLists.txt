@@ -1,5 +1,4 @@
-set(PROJECT_NAME tests)
-project (${PROJECT_NAME} VERSION ${PROJECT_VERSION})
+project(anira-tests VERSION ${PROJECT_VERSION})
 
 
 # Sets the cpp language minimum
@@ -22,21 +21,50 @@ add_compile_definitions(
 		RAVE_MODEL_DIR="${RAVE_MODEL_DIR}"
 )
 
-add_executable(${PROJECT_NAME})
+# One test binary per component, over the existing source grouping; the root-file
+# integration suite stays together as test_handler. The test_* naming is load-bearing:
+# it is what the shared ci-actions mobile runners auto-discover, and per-component
+# binaries are where the v3 milestones' suites slot in.
+function(anira_add_test_binary TARGET)
+    add_executable(${TARGET} ${ARGN})
+    target_link_libraries(${TARGET} anira::anira)
 
-target_sources(${PROJECT_NAME} PRIVATE
-	test_BackendLinkage.cpp
-	test_InferenceHandler.cpp
-	test_OneSidedStreaming.cpp
-	test_StatefulOrdering.cpp
-	backends/test_BackendBase.cpp
-	backends/test_ExecuTorchModelFunction.cpp
-    utils/test_Buffer.cpp
+    if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
+        # On mobile the test binary runs on a device/emulator/simulator, reached over a
+        # single adb/simctl invocation. Per-test registration is wrong here: gtest_discover_tests
+        # would have to run the cross-built binary on the host just to enumerate the cases
+        # (impossible), and even if it could, each case would re-spawn the target. Register
+        # one CTest entry per binary that runs it in a single on-device launch.
+        add_test(NAME ${TARGET} COMMAND ${TARGET})
+    else()
+        # gtest_discover_tests will register a CTest test for each gtest and run them all in parallel with the rest of the Test.
+        gtest_discover_tests(${TARGET} DISCOVERY_TIMEOUT 90)
+    endif()
+
+    # Only copy runtime DLLs when there are any (a fully static build has none).
+    if (MSVC AND ANIRA_SHARED_LIBS_WIN)
+        add_custom_command(TARGET ${TARGET}
+                PRE_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${ANIRA_SHARED_LIBS_WIN}
+                $<TARGET_FILE_DIR:${TARGET}>
+        )
+    endif ()
+endfunction()
+
+# test_WavReader.cpp sits with the utils suite: it exercises the header-only
+# thl::core::read_wav, not the handler.
+anira_add_test_binary(test_utils
+	utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
 	utils/test_PrePostProcessorWindow.cpp
 	utils/test_Semaphore.cpp
 	utils/test_JsonConfigLoader.cpp
 	utils/test_Logger.cpp
+	test_WavReader.cpp
+)
+
+anira_add_test_binary(test_scheduler
 	scheduler/test_ConcurrentLifecycle.cpp
 	scheduler/test_ContextLifecycle.cpp
 	scheduler/test_CreateSessionFailure.cpp
@@ -44,22 +72,19 @@ target_sources(${PROJECT_NAME} PRIVATE
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp
 	scheduler/test_UserManagedThread.cpp
-	test_WavReader.cpp
 )
 
-target_link_libraries(${PROJECT_NAME} anira::anira)
+anira_add_test_binary(test_backends
+	backends/test_BackendBase.cpp
+	backends/test_ExecuTorchModelFunction.cpp
+)
 
-if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
-    # On mobile the test binary runs on a device/emulator/simulator, reached over a
-    # single adb/simctl invocation. Per-test registration is wrong here: gtest_discover_tests
-    # would have to run the cross-built binary on the host just to enumerate the cases
-    # (impossible), and even if it could, each case would re-spawn the target. Register
-    # one CTest entry that runs the whole bundled binary in a single on-device launch.
-    add_test(NAME ${PROJECT_NAME} COMMAND ${PROJECT_NAME})
-else()
-    # gtest_discover_tests will register a CTest test for each gtest and run them all in parallel with the rest of the Test.
-    gtest_discover_tests(${PROJECT_NAME} DISCOVERY_TIMEOUT 90)
-endif()
+anira_add_test_binary(test_handler
+	test_BackendLinkage.cpp
+	test_InferenceHandler.cpp
+	test_OneSidedStreaming.cpp
+	test_StatefulOrdering.cpp
+)
 
 # Header-isolation check: anira's public headers must compile with anira's own include
 # directory (plus those of its public dependencies — the queue, JSON and tanh-lib
@@ -86,6 +111,9 @@ if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$")
     add_test(NAME anira_header_isolation
         COMMAND ${CMAKE_COMMAND} --build "${CMAKE_BINARY_DIR}" --config $<CONFIG>
                 --target anira_header_isolation)
+    # The test drives the build tree; keep build-invoking tests mutually
+    # exclusive under a parallel ctest (-j).
+    set_tests_properties(anira_header_isolation PROPERTIES RESOURCE_LOCK anira_build_tree)
 endif()
 
 # Host-shaped library-unload test: a plugin-like module embedding anira is dlopen'ed,
@@ -112,15 +140,6 @@ if(ANIRA_WITH_INSTALL)
             -DGENERATOR=${CMAKE_GENERATOR}
             -DBUILD_TYPE=$<CONFIG>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/install/run-install-test.cmake)
-    set_tests_properties(InstallConsumer PROPERTIES TIMEOUT 600)
+    # RESOURCE_LOCK: installs from the build tree — see anira_header_isolation.
+    set_tests_properties(InstallConsumer PROPERTIES TIMEOUT 600 RESOURCE_LOCK anira_build_tree)
 endif()
-
-# Only copy runtime DLLs when there are any (a fully static build has none).
-if (MSVC AND ANIRA_SHARED_LIBS_WIN)
-	add_custom_command(TARGET ${PROJECT_NAME}
-			PRE_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-			${ANIRA_SHARED_LIBS_WIN}
-			$<TARGET_FILE_DIR:${PROJECT_NAME}>
-	)
-endif ()

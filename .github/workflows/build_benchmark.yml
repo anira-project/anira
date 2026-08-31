@@ -9,6 +9,10 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # sccache speaks the retired v1 cache API without this and every write fails
+  # read-only ("Cannot write to read-only storage" — the cause of the permanent
+  # 0% hit rate); v2 became the only protocol in 2025.
+  ACTIONS_CACHE_SERVICE_V2: "on"
 
 # When pushing new commits, cancel any workflows with the same name on that branch
 concurrency:
@@ -24,8 +28,9 @@ jobs:
         include:
           - name: Linux-x86_64
             os: ubuntu-latest
+          # Native Intel runner — x86_64 under Rosetta on the arm64 runners is 2-4x slower.
           - name: macOS-x86_64
-            os: macOS-latest
+            os: macos-15-intel
           - name: macOS-arm64
             os: macOS-latest
           - name: Windows-x86_64
@@ -38,6 +43,17 @@ jobs:
         with:
           submodules: true
           fetch-depth: 0
+      - name: restore the model fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
       - name: setup
         uses: ./.github/actions/setup
       - name: add juce deps

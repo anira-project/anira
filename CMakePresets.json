@@ -232,13 +232,13 @@
       "name": "desktop-benchmark-tests-debug",
       "configurePreset": "desktop-benchmark-tests-debug",
       "configuration": "Debug",
-      "targets": ["tests", "simple-benchmark", "advanced-benchmark", "cnn-size-benchmark"]
+      "targets": ["test_utils", "test_scheduler", "test_backends", "test_handler", "simple-benchmark", "advanced-benchmark", "cnn-size-benchmark"]
     },
     {
       "name": "desktop-benchmark-tests-release",
       "configurePreset": "desktop-benchmark-tests-release",
       "configuration": "Release",
-      "targets": ["tests", "simple-benchmark", "advanced-benchmark", "cnn-size-benchmark"]
+      "targets": ["test_utils", "test_scheduler", "test_backends", "test_handler", "simple-benchmark", "advanced-benchmark", "cnn-size-benchmark"]
     },
     {
       "name": "desktop-examples-debug",

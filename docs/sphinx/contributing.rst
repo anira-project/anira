@@ -59,6 +59,12 @@ Run tests to verify your setup:
     cd build
     ctest
 
+A test-enabled configure fetches the example-model fixtures into
+``extras/models/``, pinned to fixed commits by the ``ANIRA_MODELS_<NAME>_REF``
+variables in ``extras/fetch-models.cmake`` (override with
+``-DANIRA_MODELS_<NAME>_REF=<sha>``). An existing subdirectory is never
+touched — delete it to refetch at the pin.
+
 Coding Guidelines
 -----------------
 

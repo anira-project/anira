@@ -13,6 +13,16 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # sccache speaks the retired v1 cache API without this and every write fails
+  # read-only ("Cannot write to read-only storage" — the cause of the permanent
+  # 0% hit rate); v2 became the only protocol in 2025.
+  ACTIONS_CACHE_SERVICE_V2: "on"
+  # Temporary (CI-overhaul step 0c): every sccache GHA write fails (stats show
+  # "Cache write errors: 44/44" on every leg — the cause of the permanent 0%
+  # hit rate). Capture the server log on this single-job workflow to see the
+  # actual error; remove once diagnosed.
+  SCCACHE_LOG: "debug"
+  SCCACHE_ERROR_LOG: "/tmp/sccache_debug.log"
 
 # When pushing new commits, cancel any workflows with the same name on that branch
 concurrency:
@@ -42,6 +52,17 @@ jobs:
           submodules: true
           fetch-depth: 0
           fetch-tags: true
+      - name: restore the model fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
       # RTSan (-fsanitize=realtime) instruments the ANIRA_REALTIME ([[clang::nonblocking]])
       # hot path and requires clang >= 20, so install it before configuring.
       - name: install clang 20
@@ -60,3 +81,8 @@ jobs:
           CMAKE_BUILD_ARGS: "-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_RTSAN=ON"
       - name: test
         uses: ./.github/actions/test
+        with:
+          CTEST_ARGS: "-j 4"
+      - name: sccache write-error diagnosis (temporary, step 0c)
+        if: always()
+        run: grep -iE "error|warn|cache" /tmp/sccache_debug.log | tail -60 || true

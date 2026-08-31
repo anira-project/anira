@@ -2,9 +2,10 @@ name: build_test_mobile
 
 # Mobile build + test. The desktop matrix lives in build_test.yml; mobile is split
 # out because it cross-compiles and runs the suite on a simulator/emulator rather
-# than natively. The whole gtest binary is launched once per target (see the single
-# CTest entry registered for Android/iOS in test/CMakeLists.txt) instead of one
-# launch per case, so a run is one simctl/adb invocation.
+# than natively. Each per-component gtest binary (test_utils, test_scheduler,
+# test_backends, test_handler) is launched once per target (see the per-binary
+# CTest entries registered for Android/iOS in test/CMakeLists.txt) instead of one
+# launch per case, so a run is one simctl/adb invocation per binary.
 #
 # Backend coverage (LibTorch has no mobile build, so it is never enabled here):
 #   - ONNX Runtime + LiteRT (the default pairing)
@@ -26,6 +27,10 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # sccache speaks the retired v1 cache API without this and every write fails
+  # read-only ("Cannot write to read-only storage" — the cause of the permanent
+  # 0% hit rate); v2 became the only protocol in 2025.
+  ACTIONS_CACHE_SERVICE_V2: "on"
 
 # Hardcode the workflow name (not ${{ github.workflow }}): when on_tag.yml calls this
 # as a reusable workflow, github.workflow becomes "on_tag" — shared with build_test,
@@ -38,7 +43,7 @@ concurrency:
 jobs:
   # ---------------------------------------------------------------------------
   # iOS: per backend set, build the device library (wiring check) and the simulator
-  # test executable, then run the whole suite once on the simulator.
+  # test executables, then run each suite once on the simulator.
   # ---------------------------------------------------------------------------
   ios:
     name: iOS-${{ matrix.name }}
@@ -61,6 +66,18 @@ jobs:
           submodules: true
           fetch-depth: 0
 
+      - name: restore the model fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
+
       - name: install deps
         run: brew install ninja
 
@@ -78,7 +95,7 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=OFF ${{ matrix.backends }}
           cmake --build build-ios-device --parallel 4
 
-      # Simulator — full test executable, then run the whole bundled suite once.
+      # Simulator — the per-component test binaries, each spawned once below.
       - name: build simulator tests
         run: |
           cmake -B build-ios-sim -G Ninja \
@@ -97,8 +114,14 @@ jobs:
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
           # The simulator shares the host filesystem, so the model paths baked into
-          # the binary resolve as-is — one spawn runs the whole bundled suite.
-          xcrun simctl spawn "$UDID" "$PWD/build-ios-sim/test/tests.app/tests" --gtest_brief=1
+          # the binaries resolve as-is — one spawn per component binary runs its
+          # suite. Failures are collected, not fail-fast, so one run reports every
+          # broken suite.
+          rc=0
+          for t in test_utils test_scheduler test_backends test_handler; do
+            xcrun simctl spawn "$UDID" "$PWD/build-ios-sim/test/$t.app/$t" --gtest_brief=1 || rc=1
+          done
+          exit $rc
 
   # ---------------------------------------------------------------------------
   # Android: per backend set + linkage, build arm64-v8a (build-only; no accelerated
@@ -132,6 +155,18 @@ jobs:
         with:
           submodules: true
           fetch-depth: 0
+
+      - name: restore the model fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
 
       - name: install deps
         run: sudo apt-get update && sudo apt-get install -y ninja-build

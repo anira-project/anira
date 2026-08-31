@@ -1,33 +1,10 @@
-set(MODEL_REPOSITORIES
-        "https://github.com/faressc/GuitarLSTM.git hybrid-nn/GuitarLSTM"
-        "https://github.com/faressc/steerable-nafx.git cnn/steerable-nafx"
-        "https://github.com/vackva/stateful-lstm.git stateful-rnn/stateful-lstm"
-        "https://github.com/anira-project/example-models.git model-pool/example-models"
-)
-
-find_package(Git QUIET)
-if(NOT GIT_FOUND)
-    message(FATAL_ERROR "Git not found")
-endif()
-
-foreach(repo IN LISTS MODEL_REPOSITORIES)
-    string(REPLACE " " ";" SPLIT_REPO_DETAILS ${repo})
-    list(GET SPLIT_REPO_DETAILS 0 REPO_URL)
-    list(GET SPLIT_REPO_DETAILS 1 INSTALL_PATH)
-
-    set(GIT_CLONE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/models/${INSTALL_PATH}")
-
-    if(NOT EXISTS "${GIT_CLONE_DIR}")
-        message(STATUS "Cloning ${REPO_URL} (main branch, latest state) into ${GIT_CLONE_DIR}")
-        execute_process(
-            COMMAND ${GIT_EXECUTABLE} clone --branch main --single-branch --depth 1 ${REPO_URL} ${GIT_CLONE_DIR}
-            RESULT_VARIABLE GIT_CLONE_RESULT
-        )
-        if(NOT GIT_CLONE_RESULT EQUAL "0")
-            message(FATAL_ERROR "Git clone of ${REPO_URL} failed with ${GIT_CLONE_RESULT}")
-        endif()
-    endif()
-endforeach()
+# The model fixtures come from pinned commits of the example-model repositories,
+# fetched by fetch-models.cmake (shared with the CI cache-seed job — see the pins
+# and the refetch/override story there). RAVE is a LibTorch-only fixture, so its
+# (large) download is requested only when that backend is enabled; the
+# RAVE-specific tests are #ifdef USE_LIBTORCH-gated too.
+set(ANIRA_MODELS_FETCH_RAVE ${ANIRA_WITH_LIBTORCH})
+include("${CMAKE_CURRENT_SOURCE_DIR}/fetch-models.cmake")
 
 # Physical location of the model tree on the build host: where the repos are
 # cloned (above) and the JSON configs are generated (below).
@@ -54,30 +31,10 @@ set(STATEFULLSTM_MODELS_PATH_PYTORCH "${ANIRA_EXTRAS_MODELS_DIR}/stateful-rnn/st
 
 set(SIMPLEGAIN_MODEL_PATH "${ANIRA_EXTRAS_MODELS_DIR}/model-pool/example-models/SimpleGainNetwork/models/" CACHE PATH "Path to the SimpleGainNetwork models")
 
-# RAVE is a TorchScript (.ts) model exercised only by the LibTorch backend, which
-# has no mobile build — so the (large) download and its configs are skipped unless
-# LibTorch is enabled. The RAVE-specific tests are #ifdef USE_LIBTORCH-gated too.
+# RAVE config generation (the model itself was fetched above, LibTorch-only).
 if(ANIRA_WITH_LIBTORCH)
-    set(RAVE_FUNK_DRUM_MODEL_URL "https://github.com/anira-project/example-models/raw/refs/heads/third-party/third-party/ircam-acids/RAVE/rave_funk_drum.ts")
     set(RAVE_MODEL_DIR "${ANIRA_EXTRAS_MODELS_DIR}/third-party/ircam-acids/RAVE" CACHE PATH "Path to the RAVE model")
     set(RAVE_FUNK_DRUM_MODEL_PATH "${RAVE_MODEL_DIR}/rave_funk_drum.ts")
-
-    file(MAKE_DIRECTORY "${_anira_models_host}/third-party/ircam-acids/RAVE")
-
-    if(NOT EXISTS "${_anira_models_host}/third-party/ircam-acids/RAVE/rave_funk_drum.ts")
-        message(STATUS "Downloading RAVE model from ${RAVE_FUNK_DRUM_MODEL_URL}")
-        file(DOWNLOAD
-        "${RAVE_FUNK_DRUM_MODEL_URL}"
-        "${_anira_models_host}/third-party/ircam-acids/RAVE/rave_funk_drum.ts"
-        SHOW_PROGRESS
-        STATUS DOWNLOAD_STATUS
-        LOG DOWNLOAD_LOG
-        )
-        list(GET DOWNLOAD_STATUS 0 DOWNLOAD_RESULT)
-        if(NOT DOWNLOAD_RESULT EQUAL 0)
-            message(FATAL_ERROR "Failed to download RAVE model: ${DOWNLOAD_LOG}")
-        endif()
-    endif()
 
     configure_file(
             "${_anira_models_host}/third-party/ircam-acids/RaveFunkDrumConfig.json.in"
