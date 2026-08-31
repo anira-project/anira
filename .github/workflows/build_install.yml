@@ -116,7 +116,6 @@ jobs:
   build_install_macos:
     name: install / macOS-arm64
     if: github.event_name != 'pull_request'
-    if: github.event_name != 'pull_request'
     runs-on: macOS-latest
     env:
       GITHUB_TOKEN: ${{ github.token }}
