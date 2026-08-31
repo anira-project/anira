@@ -72,7 +72,7 @@ jobs:
 
   # Emits the tier's matrix include-list from .github/build_test_matrix.json.
   plan:
-    name: plan the matrix tier
+    name: plan (build_test)
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}

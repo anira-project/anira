@@ -29,7 +29,7 @@ concurrency:
 jobs:
   # Emits the tier's matrix include-list (job-level `if` cannot see `matrix`).
   plan:
-    name: plan the matrix tier
+    name: plan (install)
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}
@@ -45,7 +45,7 @@ jobs:
           echo "matrix=$(echo "$LEGS" | jq -c .)" >> "$GITHUB_OUTPUT"
 
   build_install:
-    name: ${{ matrix.name }}
+    name: install / ${{ matrix.name }}
     needs: plan
     strategy:
       fail-fast: false
@@ -113,7 +113,7 @@ jobs:
   # One macOS runner does shared and static sequentially (raw cmake over the ci
   # presets — their distinct binaryDirs keep the two configurations apart).
   build_install_macos:
-    name: macOS-arm64
+    name: install / macOS-arm64
     if: github.event_name != 'pull_request'
     runs-on: macOS-latest
     env:

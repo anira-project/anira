@@ -112,7 +112,7 @@ jobs:
 
   # Emits the tier's matrix include-list (job-level `if` cannot see `matrix`).
   plan:
-    name: plan the matrix tier
+    name: plan (mobile)
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}

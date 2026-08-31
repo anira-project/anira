@@ -22,7 +22,7 @@ concurrency:
 jobs:
   # Emits the tier's matrix include-list (job-level `if` cannot see `matrix`).
   plan:
-    name: plan the matrix tier
+    name: plan (benchmark)
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}
@@ -38,7 +38,7 @@ jobs:
           echo "matrix=$(echo "$LEGS" | jq -c .)" >> "$GITHUB_OUTPUT"
 
   build_benchmark:
-    name: ${{ matrix.name }}
+    name: benchmark / ${{ matrix.name }}
     needs: plan
     strategy:
       fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
