@@ -17,12 +17,6 @@ env:
   # read-only ("Cannot write to read-only storage" — the cause of the permanent
   # 0% hit rate); v2 became the only protocol in 2025.
   ACTIONS_CACHE_SERVICE_V2: "on"
-  # Temporary (CI-overhaul step 0c): every sccache GHA write fails (stats show
-  # "Cache write errors: 44/44" on every leg — the cause of the permanent 0%
-  # hit rate). Capture the server log on this single-job workflow to see the
-  # actual error; remove once diagnosed.
-  SCCACHE_LOG: "debug"
-  SCCACHE_ERROR_LOG: "/tmp/sccache_debug.log"
 
 # When pushing new commits, cancel any workflows with the same name on that branch
 concurrency:
@@ -83,6 +77,3 @@ jobs:
         uses: ./.github/actions/test
         with:
           CTEST_ARGS: "-j 4"
-      - name: sccache write-error diagnosis (temporary, step 0c)
-        if: always()
-        run: grep -iE "error|warn|cache" /tmp/sccache_debug.log | tail -60 || true
