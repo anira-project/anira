@@ -49,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The backend-archive, release-metadata and RAVE-model downloads retry once after a transient failure (SSL connect errors against GitHub occasionally failed a CI configure).
+
 - The JUCE example links under clang on Linux (JUCE's recommended LTO flags produced undefined vtable references with clang + GNU ld and are dropped — an example gains nothing from LTO) and stages its Windows runtime DLLs generator-agnostically (the helper-tool and per-format paths assumed the Visual Studio generator's per-config layout; Ninja has none).
 
 - Backend runtime symbols are no longer exported from binaries embedding anira, which crashed hosts that ship their own runtime (Ableton Live 12 bundles ONNX Runtime): the engine archives are linked hidden, `libanira` exports exactly the `anira::` API (previously ~3800 `std::`/`c10::`/`executorch::`/`xnn_*` symbols leaked past `-fvisibility=hidden`), a static anira leaks nothing (`ANIRA_API` used to expand to `visibility("default")` on ELF/Mach-O even when static), and `OnnxRuntimeProcessor` throws a descriptive error instead of crashing when `OrtGetApiBase()` resolved to a foreign runtime. On macOS a plugin embedding a static anira with ExecuTorch must restrict its own exports (`-exported_symbols_list`; see the troubleshooting guide).

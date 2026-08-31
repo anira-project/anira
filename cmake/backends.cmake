@@ -100,6 +100,26 @@ endfunction()
 # configure and cache the path (empty if the check is disabled / unreachable /
 # CMake too old for string(JSON)). Honors $GITHUB_TOKEN to dodge API rate limits.
 # ------------------------------------------------------------------------------
+# _anira_download(<url> <out-file> <status-var> [extra file(DOWNLOAD) args...])
+# file(DOWNLOAD) with one retry after a short pause: transient TLS/connect
+# errors against GitHub happen often enough to fail a CI leg.
+function(_anira_download url dest out_status)
+    foreach(_attempt RANGE 1 2)
+        file(DOWNLOAD "${url}" "${dest}" STATUS _st ${ARGN})
+        list(GET _st 0 _code)
+        if(_code EQUAL 0)
+            break()
+        endif()
+        if(_attempt EQUAL 1)
+            list(GET _st 1 _msg)
+            message(STATUS "anira: download failed (${_msg}), retrying once: ${url}")
+            file(REMOVE "${dest}")
+            execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 3)
+        endif()
+    endforeach()
+    set(${out_status} "${_st}" PARENT_SCOPE)
+endfunction()
+
 function(_anira_release_json out)
     get_property(_done GLOBAL PROPERTY _ANIRA_RELEASE_JSON_DONE)
     if(_done)
@@ -120,9 +140,9 @@ function(_anira_release_json out)
     if(DEFINED ENV{GITHUB_TOKEN} AND NOT "$ENV{GITHUB_TOKEN}" STREQUAL "")
         list(APPEND _hdrs HTTPHEADER "Authorization: Bearer $ENV{GITHUB_TOKEN}")
     endif()
-    file(DOWNLOAD
+    _anira_download(
         "https://api.github.com/repos/anira-project/backends/releases/tags/${ANIRA_BACKENDS_VERSION}"
-        "${_json}" STATUS _st TIMEOUT 20 ${_hdrs})
+        "${_json}" _st TIMEOUT 20 ${_hdrs})
     list(GET _st 0 _code)
     if(NOT _code EQUAL 0)
         list(GET _st 1 _m)
@@ -280,7 +300,7 @@ function(_anira_download_extract url sha256 dest archive flatten)
         set(_hash_args EXPECTED_HASH "SHA256=${sha256}")
     endif()
 
-    file(DOWNLOAD "${url}" "${_zip}" STATUS _st SHOW_PROGRESS ${_hash_args})
+    _anira_download("${url}" "${_zip}" _st SHOW_PROGRESS ${_hash_args})
     list(GET _st 0 _code)
     list(GET _st 1 _msg)
 
@@ -351,7 +371,7 @@ function(_anira_acquire_backend url asset dest)
     if(NOT _digest STREQUAL "")
         set(_hash_args EXPECTED_HASH "SHA256=${_digest}")
     endif()
-    file(DOWNLOAD "${url}" "${_zip}" STATUS _st SHOW_PROGRESS ${_hash_args})
+    _anira_download("${url}" "${_zip}" _st SHOW_PROGRESS ${_hash_args})
     list(GET _st 0 _code)
     list(GET _st 1 _msg)
 
