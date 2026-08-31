@@ -2,9 +2,10 @@ name: build_test_mobile
 
 # Mobile build + test. The desktop matrix lives in build_test.yml; mobile is split
 # out because it cross-compiles and runs the suite on a simulator/emulator rather
-# than natively. The whole gtest binary is launched once per target (see the single
-# CTest entry registered for Android/iOS in test/CMakeLists.txt) instead of one
-# launch per case, so a run is one simctl/adb invocation.
+# than natively. Each per-component gtest binary (test_utils, test_scheduler,
+# test_backends, test_handler) is launched once per target (see the per-binary
+# CTest entries registered for Android/iOS in test/CMakeLists.txt) instead of one
+# launch per case, so a run is one simctl/adb invocation per binary.
 #
 # Backend coverage (LibTorch has no mobile build, so it is never enabled here):
 #   - ONNX Runtime + LiteRT (the default pairing)
@@ -104,8 +105,10 @@ jobs:
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
           # The simulator shares the host filesystem, so the model paths baked into
-          # the binary resolve as-is — one spawn runs the whole bundled suite.
-          xcrun simctl spawn "$UDID" "$PWD/build-ios-sim/test/tests.app/tests" --gtest_brief=1
+          # the binaries resolve as-is — one spawn per component binary runs its suite.
+          for t in test_utils test_scheduler test_backends test_handler; do
+            xcrun simctl spawn "$UDID" "$PWD/build-ios-sim/test/$t.app/$t" --gtest_brief=1
+          done
 
   # ---------------------------------------------------------------------------
   # Android: per backend set + linkage, build arm64-v8a (build-only; no accelerated
