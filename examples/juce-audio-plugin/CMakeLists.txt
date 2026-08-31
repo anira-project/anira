@@ -127,7 +127,9 @@ target_link_libraries(${TARGET_NAME}
         juce::juce_core
     PUBLIC
         juce::juce_recommended_config_flags
-        juce::juce_recommended_lto_flags
+        # No juce_recommended_lto_flags: JUCE's LTO breaks the link under
+        # clang + GNU ld (undefined vtable references), and an example gains
+        # nothing from LTO.
         juce::juce_recommended_warning_flags
 )
 
@@ -152,15 +154,23 @@ endif()
 if (MSVC AND ANIRA_SHARED_LIBS_WIN)
 	foreach(FORMAT IN LISTS FORMATS_TO_BUILD)
 		string(CONCAT CONCATENATED_TARGET ${TARGET_NAME}_${FORMAT})
+		# The format target's own directory — generator-agnostic (the base
+		# target's dir plus /<FORMAT> only matched the VS generator's layout).
 		add_custom_command(TARGET ${CONCATENATED_TARGET}
 				POST_BUILD
 				COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				${ANIRA_SHARED_LIBS_WIN}
-				$<TARGET_FILE_DIR:${TARGET_NAME}>/${FORMAT}
+				$<TARGET_FILE_DIR:${CONCATENATED_TARGET}>
 		)
 	endforeach()
 
-	set(JUCE_MANIFEST_GENERATOR_PATH "${CMAKE_BINARY_DIR}/examples/juce-audio-plugin/${CMAKE_BUILD_TYPE}")
+	# The VS generator puts JUCE's helper tools in a per-config subdirectory;
+	# single-config generators (Ninja) do not.
+	if(CMAKE_GENERATOR MATCHES "Visual Studio")
+		set(JUCE_MANIFEST_GENERATOR_PATH "${CMAKE_BINARY_DIR}/examples/juce-audio-plugin/${CMAKE_BUILD_TYPE}")
+	else()
+		set(JUCE_MANIFEST_GENERATOR_PATH "${CMAKE_BINARY_DIR}/examples/juce-audio-plugin")
+	endif()
 
 	add_custom_command(TARGET ${TARGET_NAME}_VST3
 			PRE_BUILD
