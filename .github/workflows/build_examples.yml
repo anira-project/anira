@@ -21,35 +21,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Emits the tier's matrix include-list (job-level `if` cannot see `matrix`).
+  plan:
+    name: plan the matrix tier
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.tier.outputs.matrix }}
+    steps:
+      - name: select the tier
+        id: tier
+        shell: bash
+        run: |
+          LEGS='[{"name":"Linux-x86_64-shared","os":"ubuntu-latest","preset":"ci-tests-shared","pr":true},{"name":"Linux-x86_64-static","os":"ubuntu-latest","preset":"ci-tests-static"},{"name":"macOS-arm64-shared","os":"macOS-latest","preset":"ci-tests-shared"},{"name":"macOS-arm64-static","os":"macOS-latest","preset":"ci-tests-static"},{"name":"Windows-x86_64-shared","os":"windows-latest","preset":"windows-msvc-tests-shared","vcvars":"x64","pr":true},{"name":"Windows-x86_64-static","os":"windows-latest","preset":"windows-msvc-tests-static","vcvars":"x64"}]'
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            LEGS=$(echo "$LEGS" | jq -c '[ .[] | select(.pr == true) ]')
+          fi
+          echo "matrix=$(echo "$LEGS" | jq -c .)" >> "$GITHUB_OUTPUT"
+
   build_examples:
     name: ${{ matrix.name }}
-    if: github.event_name != 'pull_request' || matrix.pr == true
+    needs: plan
     strategy:
       fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
       matrix:
-        include:
-          - name: Linux-x86_64-shared
-            os: ubuntu-latest
-            preset: ci-tests-shared
-            pr: true
-          - name: Linux-x86_64-static
-            os: ubuntu-latest
-            preset: ci-tests-static
-          - name: macOS-arm64-shared
-            os: macOS-latest
-            preset: ci-tests-shared
-          - name: macOS-arm64-static
-            os: macOS-latest
-            preset: ci-tests-static
-          - name: Windows-x86_64-shared
-            os: windows-latest
-            preset: windows-msvc-tests-shared
-            vcvars: x64
-            pr: true
-          - name: Windows-x86_64-static
-            os: windows-latest
-            preset: windows-msvc-tests-static
-            vcvars: x64
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     env:
       GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check

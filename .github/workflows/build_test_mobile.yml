@@ -110,6 +110,23 @@ jobs:
           done
           exit $rc
 
+  # Emits the tier's matrix include-list (job-level `if` cannot see `matrix`).
+  plan:
+    name: plan the matrix tier
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.tier.outputs.matrix }}
+    steps:
+      - name: select the tier
+        id: tier
+        shell: bash
+        run: |
+          LEGS='[{"name":"onnx-litert-shared","shared":"ON","pr":true,"backends":"-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"},{"name":"onnx-litert-static","shared":"OFF","backends":"-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"},{"name":"tflite-shared","shared":"ON","backends":"-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON -DANIRA_WITH_EXECUTORCH=OFF"},{"name":"no-backend-shared","shared":"ON","backends":"-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"}]'
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            LEGS=$(echo "$LEGS" | jq -c '[ .[] | select(.pr == true) ]')
+          fi
+          echo "matrix=$(echo "$LEGS" | jq -c .)" >> "$GITHUB_OUTPUT"
+
   # ---------------------------------------------------------------------------
   # Android: per backend set + linkage, build arm64-v8a (build-only; no
   # accelerated arm emulator on x86 CI) and x86_64, then run the x86_64 suite on
@@ -119,24 +136,11 @@ jobs:
   android:
     name: Android-${{ matrix.name }}
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || matrix.pr == true
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: onnx-litert-shared
-            shared: ON
-            pr: true
-            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
-          - name: onnx-litert-static
-            shared: OFF
-            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
-          - name: tflite-shared
-            shared: ON
-            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON -DANIRA_WITH_EXECUTORCH=OFF"
-          - name: no-backend-shared
-            shared: ON
-            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       GITHUB_TOKEN: ${{ github.token }}
       ANDROID_PLATFORM: android-24
