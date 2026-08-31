@@ -42,8 +42,10 @@ jobs:
           PRESET: clang-tidy
       # On pull requests, analyse only the files the PR touches (a full sweep is
       # ~6 min of analysis; most PRs touch a handful of files). A change to a
-      # header, CMake file or the tidy config can affect any TU, so those fall
-      # back to the full sweep. Push runs always sweep everything.
+      # header, CMake file, the tidy config, or this workflow itself (which pins
+      # the tidy tool via the ci-actions ref / CLANG_VERSION) can affect any TU,
+      # so those fall back to the full sweep. Push runs always sweep everything,
+      # so tool drift with no anira commit surfaces at latest on the next merge.
       - name: collect the PR's changed files
         id: diff
         if: github.event_name == 'pull_request'
@@ -51,8 +53,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate -q '.[].filename')
-          if echo "$FILES" | grep -qE '\.(h|hpp)$|CMakeLists\.txt$|\.cmake$|CMakePresets\.json$|\.clang-tidy$'; then
-            echo "A header or build/config file changed — full sweep."
+          if echo "$FILES" | grep -qE '\.(h|hpp)$|CMakeLists\.txt$|\.cmake$|CMakePresets\.json$|\.clang-tidy$|\.github/workflows/clang_tidy\.yml$'; then
+            echo "A header, build/config file, or this workflow changed — full sweep."
             echo "files=" >> "$GITHUB_OUTPUT"
           else
             {
