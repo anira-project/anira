@@ -11,7 +11,7 @@
   "os": "ubuntu-latest",
   "preset": "ci-tests-shared",
   "pr": true,
-  "assert": "shared",
+  "assert_grep": "disabling ANIRA_WITH_EXECUTORCH",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  },
  {
@@ -19,7 +19,7 @@
   "os": "ubuntu-latest",
   "preset": "ci-tests-static",
   "pr": false,
-  "assert": "static",
+  "assert_grep": "disabling ANIRA_WITH_LIBTORCH",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  },
  {
@@ -27,7 +27,7 @@
   "os": "ubuntu-24.04-arm",
   "preset": "ci-tests-shared",
   "pr": false,
-  "assert": "shared",
+  "assert_grep": "disabling ANIRA_WITH_EXECUTORCH",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  },
  {
@@ -35,7 +35,7 @@
   "os": "ubuntu-24.04-arm",
   "preset": "ci-tests-static",
   "pr": false,
-  "assert": "static",
+  "assert_grep": "disabling ANIRA_WITH_LIBTORCH",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  },
  {
@@ -43,7 +43,7 @@
   "os": "windows-latest",
   "preset": "windows-msvc-tests-shared",
   "pr": true,
-  "assert": "shared",
+  "assert_grep": "disabling ANIRA_WITH_EXECUTORCH",
   "vcvars": "x64",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  },
@@ -52,7 +52,7 @@
   "os": "windows-latest",
   "preset": "windows-msvc-tests-static",
   "pr": false,
-  "assert": "static",
+  "assert_grep": "disabling ANIRA_WITH_LIBTORCH",
   "vcvars": "x64",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  },
@@ -61,7 +61,7 @@
   "os": "windows-11-arm",
   "preset": "windows-msvc-tests-shared",
   "pr": false,
-  "assert": "shared",
+  "assert_grep": "disabling ANIRA_WITH_EXECUTORCH",
   "vcvars": "arm64",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  },
@@ -70,7 +70,7 @@
   "os": "windows-11-arm",
   "preset": "windows-msvc-tests-static",
   "pr": false,
-  "assert": "static",
+  "assert_grep": "disabling ANIRA_WITH_LIBTORCH",
   "vcvars": "arm64",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  },
@@ -79,18 +79,18 @@
   "os": "macOS-latest",
   "preset": "macos-universal-tests-shared",
   "pr": true,
-  "assert": "shared",
+  "assert_grep": "disabling ANIRA_WITH_EXECUTORCH",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF",
-  "dualarch": "macos-universal-shared"
+  "dualarch": "build/ci/macos-universal-shared"
  },
  {
   "name": "macOS-universal-static",
   "os": "macOS-latest",
   "preset": "macos-universal-tests-static",
   "pr": false,
-  "assert": "static",
+  "assert_grep": "disabling ANIRA_WITH_LIBTORCH",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF",
-  "dualarch": "macos-universal-static"
+  "dualarch": "build/ci/macos-universal-static"
  },
  {
   "name": "Linux-x86_64-tflite-shared",
@@ -134,7 +134,7 @@
   "os": "ubuntu-latest",
   "preset": "ci-tests-gcc",
   "pr": false,
-  "assert": "shared",
+  "assert_grep": "disabling ANIRA_WITH_EXECUTORCH",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  },
  {
@@ -142,7 +142,7 @@
   "os": "windows-latest",
   "preset": "windows-clang-tests-shared",
   "pr": false,
-  "assert": "shared",
+  "assert_grep": "disabling ANIRA_WITH_EXECUTORCH",
   "vcvars": "x64",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  }

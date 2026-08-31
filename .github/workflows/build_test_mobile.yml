@@ -127,9 +127,10 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Android: per backend set + linkage, build arm64-v8a (build-only; no
-  # accelerated arm emulator on x86 CI) and x86_64, then run the x86_64 suite on
-  # a hardware-accelerated emulator. Pull requests run the onnx-litert-shared
-  # leg only.
+  # accelerated arm emulator on x86 CI) and x86_64 via the android presets, then
+  # run the x86_64 suite on a hardware-accelerated emulator through the shared
+  # cmake-test-android action (staging, marker-based exit codes and failure
+  # collection live there). Pull requests run the onnx-litert-shared leg only.
   # ---------------------------------------------------------------------------
   android:
     name: Android-${{ matrix.name }}
@@ -141,7 +142,6 @@ jobs:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       GITHUB_TOKEN: ${{ github.token }}
-      ANDROID_PLATFORM: android-24
     steps:
       - uses: actions/checkout@v4
         with:
@@ -160,58 +160,55 @@ jobs:
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
 
-      - name: install deps
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
-
-      - name: cache the build
-        uses: mozilla-actions/sccache-action@v0.0.8
+      - name: setup build tools
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@feat/v0.3-mobile-and-reusable
 
       # arm64-v8a: build the full test executables to verify they compile + link
       # for the ABI we ship most. Not run here (no accelerated arm emulator on an
       # x86 host); the x86_64 emulator below provides the execution coverage.
       - name: build arm64-v8a
-        run: |
-          cmake -B build-arm64 -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=$ANDROID_PLATFORM \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_LIBTORCH=OFF ${{ matrix.backends }} \
-            -DANIRA_WITH_TESTS=ON
-          cmake --build build-arm64 --parallel 4
+        uses: tanh-lab/ci-actions/cmake-build@feat/v0.3-mobile-and-reusable
+        with:
+          PRESET: android-arm64-build
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} ${{ matrix.backends }}"
 
-      # x86_64: model paths pointed at the on-device staging dir so the binaries
-      # + JSON configs reference where the model tree is pushed.
+      # x86_64: the preset bakes the model paths to the on-device staging dir so
+      # the binaries + JSON configs reference where the model tree is pushed.
       - name: build x86_64
-        run: |
-          cmake -B build-x86_64 -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=x86_64 -DANDROID_PLATFORM=$ANDROID_PLATFORM \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_LIBTORCH=OFF ${{ matrix.backends }} \
-            -DANIRA_WITH_TESTS=ON \
-            -DANIRA_EXTRAS_MODELS_DIR=/data/local/tmp/anira/models
-          cmake --build build-x86_64 --parallel 4
+        uses: tanh-lab/ci-actions/cmake-build@feat/v0.3-mobile-and-reusable
+        with:
+          PRESET: android-emulator-tests
+          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} ${{ matrix.backends }}"
 
-      - name: enable KVM
+      # What lands on the device is anira policy: whatever .so the build emitted
+      # (libanira.so + libgtest*.so for a shared build, none for static), the
+      # enabled backend libs for this ABI, the NDK C++ runtime (needed even for
+      # static builds), and the model tree — minus the 75 MB RAVE model, dead
+      # weight on the device since LibTorch has no mobile build.
+      - name: collect the device push list
+        id: push_paths
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
+          rm -rf extras/models/third-party/ircam-acids/RAVE
+          {
+            echo "paths<<ANIRA_EOF"
+            find build/ci/android-emulator -name '*.so'
+            if [ -d modules ]; then find modules -path '*x86_64/*.so'; fi
+            echo "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/libc++_shared.so"
+            echo "extras/models"
+            echo "ANIRA_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: run x86_64 suite on the emulator
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: tanh-lab/ci-actions/cmake-test-android@feat/v0.3-mobile-and-reusable
         with:
-          api-level: 34
-          arch: x86_64
-          target: google_apis
-          emulator-options: -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect
-          disable-animations: true
-          # android-emulator-runner runs each line of an inline script in its own
-          # shell, so the staging + run logic lives in one committed script where
-          # the variables persist.
-          script: bash .github/scripts/android_emulator_test.sh
+          PRESET: android-emulator-tests
+          TEST_BINARIES: "test_utils test_scheduler test_backends test_handler"
+          API_LEVEL: "34"
+          ARCH: x86_64
+          TARGET: google_apis
+          DEVICE_DIR: /data/local/tmp/anira
+          EXTRA_PUSH_PATHS: ${{ steps.push_paths.outputs.paths }}
+          RUN_ENV: "LD_LIBRARY_PATH=/data/local/tmp/anira"
 
   # The queue's required status for this workflow.
   result:
