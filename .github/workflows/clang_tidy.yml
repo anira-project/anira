@@ -51,11 +51,11 @@ jobs:
             extras/models/third-party/ircam-acids/RAVE
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
-      - uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.5
+      - uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.6
       # clang-tidy needs a compile_commands.json, so the library is configured
       # and built first. The clang-tidy preset enables tests, the benchmark
       # fixture and all backends so every analysed translation unit compiles.
-      - uses: tanh-lab/ci-actions/cmake-build@v0.3.5
+      - uses: tanh-lab/ci-actions/cmake-build@v0.3.6
         with:
           PRESET: clang-tidy
       # PRs analyse only their changed files; a header, CMake/tidy-config, or
@@ -85,7 +85,7 @@ jobs:
       # compile command here either, and clang-tidy would guess one from a nearby
       # test file, which lacks the engine include directory its engine consumer
       # needs (build_install is what checks it).
-      - uses: tanh-lab/ci-actions/clang-tidy-check@v0.3.5
+      - uses: tanh-lab/ci-actions/clang-tidy-check@v0.3.6
         with:
           PRESET: clang-tidy
           SOURCES: "src/backends/ src/benchmark/ src/scheduler/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/backends/ test/scheduler/ test/utils/ test/unload/ test/*.cpp"

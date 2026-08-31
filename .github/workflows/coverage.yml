@@ -37,7 +37,7 @@ jobs:
             args: "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
           - name: static-executorch-tflite
             args: "-DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=ON"
-    uses: tanh-lab/ci-actions/.github/workflows/coverage.yml@v0.3.5
+    uses: tanh-lab/ci-actions/.github/workflows/coverage.yml@v0.3.6
     permissions:
       contents: read
       id-token: write # Codecov's tokenless OIDC upload
