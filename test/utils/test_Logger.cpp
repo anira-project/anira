@@ -80,7 +80,11 @@ struct RecordCollector {
     }
 
     bool wait_for(const char* message_fragment, const char* source = "rt") {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+        // Generous upper bound, only ever reached on failure: a passing wait
+        // returns as soon as the record arrives. The margin absorbs a starved
+        // low-priority drain thread on cold CI simulators (the iOS legs spawn
+        // this binary right after boot, where 20 s was observed to flake).
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
         while (std::chrono::steady_clock::now() < deadline) {
             if (has(message_fragment, source)) { return true; }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
