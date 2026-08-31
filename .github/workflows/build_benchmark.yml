@@ -1,5 +1,8 @@
 name: build_benchmark
 
+# Builds the benchmark executables and runs the Benchmark.* suites. Pull
+# requests run the Linux leg only; dispatches run everything.
+
 on:
   workflow_dispatch: # lets you run a build from github.com
   # Runs on pull requests only: the regular tests already run in build_test.yml
@@ -9,34 +12,41 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
-  # sccache speaks the retired v1 cache API without this and every write fails
-  # read-only ("Cannot write to read-only storage" — the cause of the permanent
-  # 0% hit rate); v2 became the only protocol in 2025.
+  # Without this, sccache speaks the retired v1 cache API and every write fails.
   ACTIONS_CACHE_SERVICE_V2: "on"
 
-# When pushing new commits, cancel any workflows with the same name on that branch
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build_test:
-    name: ${{ matrix.name }}
+  # Emits the tier's matrix include-list (job-level `if` cannot see `matrix`).
+  plan:
+    name: plan (benchmark)
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.tier.outputs.matrix }}
+    steps:
+      - name: select the tier
+        id: tier
+        shell: bash
+        run: |
+          LEGS='[{"name":"Linux-x86_64","os":"ubuntu-latest","preset":"ci-tests-shared","pr":true},{"name":"macOS-arm64","os":"macOS-latest","preset":"ci-tests-shared"},{"name":"Windows-x86_64","os":"windows-latest","preset":"windows-msvc-tests-shared","vcvars":"x64"}]'
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            LEGS=$(echo "$LEGS" | jq -c '[ .[] | select(.pr == true) ]')
+          fi
+          echo "matrix=$(echo "$LEGS" | jq -c .)" >> "$GITHUB_OUTPUT"
+
+  build_benchmark:
+    name: benchmark / ${{ matrix.name }}
+    needs: plan
     strategy:
       fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
       matrix:
-        include:
-          - name: Linux-x86_64
-            os: ubuntu-latest
-          # Native Intel runner — x86_64 under Rosetta on the arm64 runners is 2-4x slower.
-          - name: macOS-x86_64
-            os: macos-15-intel
-          - name: macOS-arm64
-            os: macOS-latest
-          - name: Windows-x86_64
-            os: windows-latest
-
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
     steps:
       - name: get repo and submodules
         uses: actions/checkout@v4
@@ -54,8 +64,8 @@ jobs:
             extras/models/third-party/ircam-acids/RAVE
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
-      - name: setup
-        uses: ./.github/actions/setup
+      - name: setup build tools
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.2.2
       - name: add juce deps
         shell: bash
         run: |
@@ -65,18 +75,23 @@ jobs:
             sudo ln -s /usr/include/freetype2/ft2build.h /usr/include/ft2build.h
             sudo ln -s /usr/include/freetype2/freetype /usr/include/freetype
           fi
-      
+      # Ninja needs cl.exe and its headers/libs from a vcvars environment.
+      - name: MSVC environment
+        if: matrix.vcvars
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.vcvars }}
       - name: build
-        uses: ./.github/actions/build
+        uses: tanh-lab/ci-actions/cmake-build@v0.2.2
         with:
-          BUILD_TYPE: Release
-          CMAKE_BUILD_PARALLEL_LEVEL: 4
-          TARGETS: (cnn-size-benchmark advanced-benchmark simple-benchmark)
-          # Benchmark + tests + examples: same combination as the desktop-benchmark-tests preset
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_EXAMPLES=ON"
+          PRESET: ${{ matrix.preset }}
+          TARGETS: cnn-size-benchmark advanced-benchmark simple-benchmark
+          # Benchmark + tests + examples: the combination the benchmark fixture needs.
+          CMAKE_BUILD_ARGS: "-DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_EXAMPLES=ON"
       - name: test
-        uses: ./.github/actions/test
+        uses: tanh-lab/ci-actions/cmake-test@v0.2.2
         with:
-          # Only run the benchmark tests (Benchmark.Advanced/CNNSize/Simple): the unit
-          # tests registered by ANIRA_WITH_TESTS already run in build_test.yml
-          CTEST_ARGS: "-R ^Benchmark"
+          PRESET: ${{ matrix.preset }}
+          # Only the Benchmark.* suites (the unit tests run in build_test), and
+          # serially — the test preset's -j4 would distort benchmark timing.
+          CTEST_ARGS: "-R ^Benchmark -j 1"

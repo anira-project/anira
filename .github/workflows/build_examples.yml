@@ -1,60 +1,53 @@
 name: build_examples
 
+# Builds every enabled example (JUCE/CLAP plugins, minimal-inference) per
+# platform and linkage. Pull requests run the Linux and Windows shared legs;
+# pushes to example-relevant PR bases and dispatches run everything.
+
 on:
   workflow_call:
   workflow_dispatch: # lets you run a build from github.com
-  # Runs the workflow on all push events
   pull_request:
     branches:
       - main
 
 env:
   SCCACHE_GHA_ENABLED: "true"
-  # sccache speaks the retired v1 cache API without this and every write fails
-  # read-only ("Cannot write to read-only storage" — the cause of the permanent
-  # 0% hit rate); v2 became the only protocol in 2025.
+  # Without this, sccache speaks the retired v1 cache API and every write fails.
   ACTIONS_CACHE_SERVICE_V2: "on"
 
-# When pushing new commits, cancel any workflows with the same name on that branch
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build_test:
-    name: ${{ matrix.name }}
+  # Emits the tier's matrix include-list (job-level `if` cannot see `matrix`).
+  plan:
+    name: plan (examples)
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.tier.outputs.matrix }}
+    steps:
+      - name: select the tier
+        id: tier
+        shell: bash
+        run: |
+          LEGS='[{"name":"Linux-x86_64-shared","os":"ubuntu-latest","preset":"ci-tests-shared","pr":true},{"name":"Linux-x86_64-static","os":"ubuntu-latest","preset":"ci-tests-static"},{"name":"macOS-arm64-shared","os":"macOS-latest","preset":"ci-tests-shared"},{"name":"macOS-arm64-static","os":"macOS-latest","preset":"ci-tests-static"},{"name":"Windows-x86_64-shared","os":"windows-latest","preset":"windows-msvc-tests-shared","vcvars":"x64","pr":true},{"name":"Windows-x86_64-static","os":"windows-latest","preset":"windows-msvc-tests-static","vcvars":"x64"}]'
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            LEGS=$(echo "$LEGS" | jq -c '[ .[] | select(.pr == true) ]')
+          fi
+          echo "matrix=$(echo "$LEGS" | jq -c .)" >> "$GITHUB_OUTPUT"
+
+  build_examples:
+    name: examples / ${{ matrix.name }}
+    needs: plan
     strategy:
       fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
       matrix:
-        include:
-          # Each platform builds the examples both shared and static as its own runner.
-          - name: Linux-x86_64-shared
-            os: ubuntu-latest
-            shared: ON
-          - name: Linux-x86_64-static
-            os: ubuntu-latest
-            shared: OFF
-          # Native Intel runner — x86_64 under Rosetta on the arm64 runners is 2-4x slower.
-          - name: macOS-x86_64-shared
-            os: macos-15-intel
-            shared: ON
-          - name: macOS-x86_64-static
-            os: macos-15-intel
-            shared: OFF
-          - name: macOS-arm64-shared
-            os: macOS-latest
-            shared: ON
-          - name: macOS-arm64-static
-            os: macOS-latest
-            shared: OFF
-          - name: Windows-x86_64-shared
-            os: windows-latest
-            shared: ON
-          - name: Windows-x86_64-static
-            os: windows-latest
-            shared: OFF
-
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
     steps:
       - name: get repo and submodules
         uses: actions/checkout@v4
@@ -72,8 +65,8 @@ jobs:
             extras/models/third-party/ircam-acids/RAVE
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
-      - name: setup
-        uses: ./.github/actions/setup
+      - name: setup build tools
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.2.2
       - name: add juce deps
         shell: bash
         run: |
@@ -83,12 +76,16 @@ jobs:
             sudo ln -s /usr/include/freetype2/ft2build.h /usr/include/ft2build.h
             sudo ln -s /usr/include/freetype2/freetype /usr/include/freetype
           fi
-      - name: build
-        uses: ./.github/actions/build
+      # Ninja needs cl.exe and its headers/libs from a vcvars environment.
+      - name: MSVC environment
+        if: matrix.vcvars
+        uses: ilammy/msvc-dev-cmd@v1
         with:
-          BUILD_TYPE: Release
-          CMAKE_BUILD_PARALLEL_LEVEL: 4
-          # Build all enabled example targets. The exact set depends on which backends are
-          # active (libtorch is auto-disabled for static builds, TFLite is legacy/off), so we
-          # let CMake build everything rather than naming targets that may not exist per leg.
-          CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_EXAMPLES=ON"
+          arch: ${{ matrix.vcvars }}
+      - name: build
+        uses: tanh-lab/ci-actions/cmake-build@v0.2.2
+        with:
+          PRESET: ${{ matrix.preset }}
+          # The exact example set depends on the active backends (libtorch is
+          # auto-disabled for static builds), so build everything.
+          CMAKE_BUILD_ARGS: "-DANIRA_WITH_EXAMPLES=ON -DANIRA_WITH_TESTS=OFF"

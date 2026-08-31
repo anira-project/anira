@@ -10,12 +10,15 @@ on:
   pull_request:
     branches:
       - main
+    # Docs only matter to a PR when doc sources change; pushes always build.
+    paths:
+      - "docs/**"
+      - "include/**"
+      - ".github/workflows/build_docs_and_deploy.yml"
 
 env:
   SCCACHE_GHA_ENABLED: "true"
-  # sccache speaks the retired v1 cache API without this and every write fails
-  # read-only ("Cannot write to read-only storage" — the cause of the permanent
-  # 0% hit rate); v2 became the only protocol in 2025.
+  # Without this, sccache speaks the retired v1 cache API and every write fails.
   ACTIONS_CACHE_SERVICE_V2: "on"
 
 # When pushing new commits, cancel any workflows with the same name on that branch
@@ -25,23 +28,27 @@ concurrency:
 
 jobs:
   build_docs:
-    runs-on: ubuntu-latest
+    # One-leg matrix: the shared ci-actions branch on matrix.name.
+    strategy:
+      matrix:
+        name: [Linux-x86_64]
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: get repo and submodules
         uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 0
-      - name: setup
-        uses: ./.github/actions/setup
+      - name: setup build tools
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.2.2
       - name: dependencies
         run: |
           sudo apt-get install -y doxygen graphviz
       - name: build
-        uses: ./.github/actions/build
+        uses: tanh-lab/ci-actions/cmake-build@v0.2.2
         with:
           BUILD_TYPE: Release
-          CMAKE_BUILD_PARALLEL_LEVEL: 4
           CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_DOCS=ON"
           TARGETS: "sphinx-docs"
       - name: upload docs

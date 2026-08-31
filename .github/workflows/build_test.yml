@@ -72,7 +72,7 @@ jobs:
 
   # Emits the tier's matrix include-list from .github/build_test_matrix.json.
   plan:
-    name: plan the matrix tier
+    name: plan (build_test)
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}
@@ -115,7 +115,7 @@ jobs:
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.2.1
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.2.2
       # Ninja needs cl.exe and its headers/libs from a vcvars environment.
       - name: MSVC environment
         if: matrix.vcvars
@@ -123,7 +123,7 @@ jobs:
         with:
           arch: ${{ matrix.vcvars }}
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.2.1
+        uses: tanh-lab/ci-actions/cmake-build@v0.2.2
         with:
           PRESET: ${{ matrix.preset }}
           CMAKE_BUILD_ARGS: ${{ matrix.args }}
@@ -140,9 +140,21 @@ jobs:
             grep -q "disabling ANIRA_WITH_LIBTORCH" configure.log
           fi
       - name: test
-        uses: tanh-lab/ci-actions/cmake-test@v0.2.1
+        uses: tanh-lab/ci-actions/cmake-test@v0.2.2
         with:
           PRESET: ${{ matrix.preset }}
+      - name: test the x86_64 slice under Rosetta
+        # Universal legs run the suite twice on one runner — an x86_64 process
+        # spawns fat children as x86_64, so the second slice executes without a
+        # second macOS job (docs/ci-overhaul.md §3.6).
+        if: matrix.dualarch
+        shell: bash
+        run: |
+          rc=0
+          for t in test_utils test_scheduler test_backends test_handler; do
+            arch -x86_64 "build/ci/${{ matrix.dualarch }}/test/$t" --gtest_brief=1 || rc=1
+          done
+          exit $rc
 
   # The one status branch protection should require — per-leg names change
   # with the tier, so requiring them directly would leave PRs pending forever.
