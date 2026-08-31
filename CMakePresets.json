@@ -1,661 +1,686 @@
 {
-  "version": 6,
-  "cmakeMinimumRequired": {
-    "major": 3,
-    "minor": 15,
-    "patch": 0
-  },
-  "configurePresets": [
-    {
-      "name": "desktop-base",
-      "hidden": true,
-      "generator": "Ninja",
-      "cacheVariables": {
-        "CMAKE_C_COMPILER": "clang",
-        "CMAKE_CXX_COMPILER": "clang++"
-      }
-    },
-    {
-      "name": "desktop-debug",
-      "displayName": "Desktop Debug",
-      "inherits": "desktop-base",
-      "binaryDir": "${sourceDir}/build/desktop/Debug",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
-    },
-    {
-      "name": "desktop-release",
-      "displayName": "Desktop Release",
-      "inherits": "desktop-base",
-      "binaryDir": "${sourceDir}/build/desktop/Release",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
-      }
-    },
-    {
-      "name": "desktop-tests-debug",
-      "displayName": "Desktop Tests Debug",
-      "description": "Debug build with ANIRA_WITH_TESTS enabled",
-      "inherits": "desktop-base",
-      "binaryDir": "${sourceDir}/build/desktop/Tests/Debug",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "ANIRA_WITH_TESTS": "ON"
-      }
-    },
-    {
-      "name": "desktop-tests-release",
-      "displayName": "Desktop Tests Release",
-      "description": "Release build with ANIRA_WITH_TESTS enabled",
-      "inherits": "desktop-base",
-      "binaryDir": "${sourceDir}/build/desktop/Tests/Release",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "ANIRA_WITH_TESTS": "ON"
-      }
-    },
-    {
-      "name": "desktop-benchmark-debug",
-      "displayName": "Desktop Benchmark Debug",
-      "description": "Debug build with ANIRA_WITH_BENCHMARK enabled",
-      "inherits": "desktop-base",
-      "binaryDir": "${sourceDir}/build/desktop/Benchmark/Debug",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "ANIRA_WITH_BENCHMARK": "ON"
-      }
-    },
-    {
-      "name": "desktop-benchmark-release",
-      "displayName": "Desktop Benchmark Release",
-      "description": "Release build with ANIRA_WITH_BENCHMARK enabled",
-      "inherits": "desktop-base",
-      "binaryDir": "${sourceDir}/build/desktop/Benchmark/Release",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "ANIRA_WITH_BENCHMARK": "ON"
-      }
-    },
-    {
-      "name": "desktop-benchmark-tests-debug",
-      "displayName": "Desktop Benchmark + Tests Debug",
-      "description": "Debug build with tests and the example benchmarks enabled, so benchmarks can be run via ctest (ANIRA_WITH_EXAMPLES is required to build the benchmark executables)",
-      "inherits": "desktop-base",
-      "binaryDir": "${sourceDir}/build/desktop/BenchmarkTests/Debug",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "ANIRA_WITH_BENCHMARK": "ON",
-        "ANIRA_WITH_TESTS": "ON",
-        "ANIRA_WITH_EXAMPLES": "ON"
-      }
-    },
-    {
-      "name": "desktop-benchmark-tests-release",
-      "displayName": "Desktop Benchmark + Tests Release",
-      "description": "Release build with tests and the example benchmarks enabled, so benchmarks can be run via ctest (ANIRA_WITH_EXAMPLES is required to build the benchmark executables)",
-      "inherits": "desktop-base",
-      "binaryDir": "${sourceDir}/build/desktop/BenchmarkTests/Release",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "ANIRA_WITH_BENCHMARK": "ON",
-        "ANIRA_WITH_TESTS": "ON",
-        "ANIRA_WITH_EXAMPLES": "ON"
-      }
-    },
-    {
-      "name": "desktop-examples-debug",
-      "displayName": "Desktop Examples Debug",
-      "description": "Debug build with ANIRA_WITH_EXAMPLES enabled",
-      "inherits": "desktop-base",
-      "binaryDir": "${sourceDir}/build/desktop/Examples/Debug",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "ANIRA_WITH_EXAMPLES": "ON"
-      }
-    },
-    {
-      "name": "desktop-examples-release",
-      "displayName": "Desktop Examples Release",
-      "description": "Release build with ANIRA_WITH_EXAMPLES enabled",
-      "inherits": "desktop-base",
-      "binaryDir": "${sourceDir}/build/desktop/Examples/Release",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "ANIRA_WITH_EXAMPLES": "ON"
-      }
-    },
-    {
-      "name": "clang-tidy",
-      "displayName": "Clang-Tidy",
-      "description": "Library + tests + benchmark build with all backends, used for clang-tidy analysis (exports compile_commands.json)",
-      "inherits": "desktop-base",
-      "binaryDir": "${sourceDir}/build/clang-tidy",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "ANIRA_WITH_TESTS": "ON",
-        "ANIRA_WITH_BENCHMARK": "ON",
-        "ANIRA_WITH_LIBTORCH": "ON",
-        "ANIRA_WITH_ONNXRUNTIME": "ON",
-        "ANIRA_WITH_TFLITE": "OFF",
-        "ANIRA_WITH_LITERT": "ON",
-        "ANIRA_WITH_EXECUTORCH": "ON"
-      }
-    },
-    {
-      "name": "wasm-debug",
-      "displayName": "Wasm Debug",
-      "description": "Build AniraWeb WASM module (debug)",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/wasm/Debug",
-      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
-      "cacheVariables": {
-        "ANIRA_BUILD_WASM": "ON",
-        "BUILD_SHARED_LIBS": "OFF",
-        "ANIRA_WITH_LIBTORCH": "OFF",
-        "ANIRA_WITH_TFLITE": "OFF",
-        "ANIRA_WITH_LITERT": "OFF",
-        "ANIRA_WITH_EXECUTORCH": "OFF",
-        "ANIRA_WITH_ONNXRUNTIME": "ON",
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
-    },
-    {
-      "name": "wasm-release",
-      "displayName": "Wasm Release",
-      "description": "Build AniraWeb WASM module (release)",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/wasm/Release",
-      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
-      "cacheVariables": {
-        "ANIRA_BUILD_WASM": "ON",
-        "BUILD_SHARED_LIBS": "OFF",
-        "ANIRA_WITH_LIBTORCH": "OFF",
-        "ANIRA_WITH_TFLITE": "OFF",
-        "ANIRA_WITH_LITERT": "OFF",
-        "ANIRA_WITH_EXECUTORCH": "OFF",
-        "ANIRA_WITH_ONNXRUNTIME": "ON",
-        "CMAKE_BUILD_TYPE": "Release"
-      }
-    },
-    {
-      "name": "docs",
-      "displayName": "Documentation",
-      "description": "Build C++ (Doxygen+Breathe) and Anira Web (TypeDoc+sphinx-js) docs via Sphinx",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/docs",
-      "cacheVariables": {
-        "ANIRA_WITH_DOCS": "ON",
-        "ANIRA_WITH_LIBTORCH": "OFF",
-        "ANIRA_WITH_TFLITE": "OFF",
-        "ANIRA_WITH_LITERT": "OFF",
-        "ANIRA_WITH_EXECUTORCH": "OFF",
-        "ANIRA_WITH_ONNXRUNTIME": "OFF",
-        "CMAKE_BUILD_TYPE": "Release",
-        "Python3_EXECUTABLE": "/usr/bin/python3"
-      }
-    },
-    {
-      "name": "ci-base",
-      "hidden": true,
-      "generator": "Ninja",
-      "description": "Base for the CI presets: Release + tests. Backend sets and per-leg flags ride on top via the workflow's configure args (ci-actions cmake-build appends CMAKE_BUILD_ARGS in preset mode), so one preset serves several legs.",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "ANIRA_WITH_TESTS": "ON"
-      }
-    },
-    {
-      "name": "ci-clang-base",
-      "hidden": true,
-      "inherits": "ci-base",
-      "description": "CI base with the clang pin (Linux and macOS legs).",
-      "cacheVariables": {
-        "CMAKE_C_COMPILER": "clang",
-        "CMAKE_CXX_COMPILER": "clang++"
-      }
-    },
-    {
-      "name": "ci-tests-shared",
-      "inherits": "ci-clang-base",
-      "description": "Shared-library test build, clang (Linux x64/arm64, macOS arm64, macOS x64 on the Intel runner).",
-      "binaryDir": "${sourceDir}/build/ci/tests-shared",
-      "cacheVariables": {
-        "BUILD_SHARED_LIBS": "ON"
-      }
-    },
-    {
-      "name": "ci-tests-static",
-      "inherits": "ci-clang-base",
-      "description": "Static test build, clang.",
-      "binaryDir": "${sourceDir}/build/ci/tests-static",
-      "cacheVariables": {
-        "BUILD_SHARED_LIBS": "OFF"
-      }
-    },
-    {
-      "name": "ci-tests-gcc",
-      "inherits": "ci-base",
-      "description": "The one explicit gcc job (Linux): the preset family pins clang, this keeps gcc coverage.",
-      "binaryDir": "${sourceDir}/build/ci/tests-gcc",
-      "cacheVariables": {
-        "CMAKE_C_COMPILER": "gcc",
-        "CMAKE_CXX_COMPILER": "g++",
-        "BUILD_SHARED_LIBS": "ON"
-      }
-    },
-    {
-      "name": "windows-msvc-tests-shared",
-      "inherits": "ci-base",
-      "description": "MSVC cl.exe under Ninja (run inside a vcvars environment; Ninja is what lets sccache cache cl).",
-      "binaryDir": "${sourceDir}/build/ci/windows-msvc-shared",
-      "cacheVariables": {
-        "BUILD_SHARED_LIBS": "ON"
-      }
-    },
-    {
-      "name": "windows-msvc-tests-static",
-      "inherits": "ci-base",
-      "description": "MSVC cl.exe under Ninja, static.",
-      "binaryDir": "${sourceDir}/build/ci/windows-msvc-static",
-      "cacheVariables": {
-        "BUILD_SHARED_LIBS": "OFF"
-      }
-    },
-    {
-      "name": "windows-clang-tests-shared",
-      "inherits": "ci-base",
-      "description": "Secondary Windows coverage: clang-cl (keeps MSVC=TRUE, so DLL staging and the symbol policy apply); needs a vcvars environment too.",
-      "binaryDir": "${sourceDir}/build/ci/windows-clang-shared",
-      "cacheVariables": {
-        "CMAKE_C_COMPILER": "clang-cl",
-        "CMAKE_CXX_COMPILER": "clang-cl",
-        "BUILD_SHARED_LIBS": "ON"
-      }
-    },
-    {
-      "name": "macos-universal-tests-shared",
-      "inherits": "ci-clang-base",
-      "description": "macOS universal (arm64 + x86_64) shared test build.",
-      "binaryDir": "${sourceDir}/build/ci/macos-universal-shared",
-      "cacheVariables": {
-        "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64",
-        "BUILD_SHARED_LIBS": "ON"
-      }
-    },
-    {
-      "name": "macos-universal-tests-static",
-      "inherits": "ci-clang-base",
-      "description": "macOS universal static test build.",
-      "binaryDir": "${sourceDir}/build/ci/macos-universal-static",
-      "cacheVariables": {
-        "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64",
-        "BUILD_SHARED_LIBS": "OFF"
-      }
-    },
-    {
-      "name": "desktop-tests-rtsan",
-      "inherits": "ci-clang-base",
-      "description": "RTSan gate for the ANIRA_REALTIME hot path (clang >= 20; tanh-lib built with TANH_WITH_RTSAN).",
-      "binaryDir": "${sourceDir}/build/ci/rtsan",
-      "cacheVariables": {
-        "BUILD_SHARED_LIBS": "ON",
-        "ANIRA_WITH_RTSAN": "ON"
-      }
-    },
-    {
-      "name": "android-emulator-tests",
-      "inherits": "ci-base",
-      "description": "Android x86_64 for the emulator run; model paths baked to the on-device staging dir. Linkage/backends per leg via configure args.",
-      "binaryDir": "${sourceDir}/build/ci/android-emulator",
-      "cacheVariables": {
-        "ANDROID_ABI": "x86_64",
-        "ANDROID_PLATFORM": "android-24",
-        "BUILD_SHARED_LIBS": "OFF",
-        "ANIRA_WITH_LIBTORCH": "OFF",
-        "ANIRA_EXTRAS_MODELS_DIR": "/data/local/tmp/anira/models"
-      },
-      "toolchainFile": "$env{ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake"
-    },
-    {
-      "name": "android-arm64-build",
-      "inherits": "ci-base",
-      "description": "Android arm64-v8a build coverage (no accelerated arm emulator on x86 CI hosts).",
-      "binaryDir": "${sourceDir}/build/ci/android-arm64",
-      "cacheVariables": {
-        "ANDROID_ABI": "arm64-v8a",
-        "ANDROID_PLATFORM": "android-24",
-        "BUILD_SHARED_LIBS": "OFF",
-        "ANIRA_WITH_LIBTORCH": "OFF"
-      },
-      "toolchainFile": "$env{ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake"
-    },
-    {
-      "name": "ios-simulator-tests",
-      "inherits": "ci-base",
-      "description": "iOS simulator (arm64) test build; the test_* binaries bundle as .app for the shared mobile runner.",
-      "binaryDir": "${sourceDir}/build/ci/ios-simulator",
-      "cacheVariables": {
-        "CMAKE_SYSTEM_NAME": "iOS",
-        "CMAKE_OSX_SYSROOT": "iphonesimulator",
-        "CMAKE_OSX_ARCHITECTURES": "arm64",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
-        "BUILD_SHARED_LIBS": "OFF",
-        "ANIRA_WITH_LIBTORCH": "OFF"
-      }
-    },
-    {
-      "name": "ios-device-build",
-      "inherits": "ci-base",
-      "description": "iOS device (iphoneos) library build coverage \u2014 wiring check, nothing runs.",
-      "binaryDir": "${sourceDir}/build/ci/ios-device",
-      "cacheVariables": {
-        "CMAKE_SYSTEM_NAME": "iOS",
-        "CMAKE_OSX_SYSROOT": "iphoneos",
-        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
-        "BUILD_SHARED_LIBS": "OFF",
-        "ANIRA_WITH_LIBTORCH": "OFF",
-        "ANIRA_WITH_TESTS": "OFF"
-      }
-    }
-  ],
-  "buildPresets": [
-    {
-      "name": "desktop-debug",
-      "configurePreset": "desktop-debug",
-      "configuration": "Debug"
-    },
-    {
-      "name": "desktop-release",
-      "configurePreset": "desktop-release",
-      "configuration": "Release"
-    },
-    {
-      "name": "desktop-tests-debug",
-      "configurePreset": "desktop-tests-debug",
-      "configuration": "Debug"
-    },
-    {
-      "name": "desktop-tests-release",
-      "configurePreset": "desktop-tests-release",
-      "configuration": "Release"
-    },
-    {
-      "name": "desktop-benchmark-debug",
-      "configurePreset": "desktop-benchmark-debug",
-      "configuration": "Debug"
-    },
-    {
-      "name": "desktop-benchmark-release",
-      "configurePreset": "desktop-benchmark-release",
-      "configuration": "Release"
-    },
-    {
-      "name": "desktop-benchmark-tests-debug",
-      "configurePreset": "desktop-benchmark-tests-debug",
-      "configuration": "Debug",
-      "targets": [
-        "test_utils",
-        "test_scheduler",
-        "test_backends",
-        "test_handler",
-        "simple-benchmark",
-        "advanced-benchmark",
-        "cnn-size-benchmark"
-      ]
-    },
-    {
-      "name": "desktop-benchmark-tests-release",
-      "configurePreset": "desktop-benchmark-tests-release",
-      "configuration": "Release",
-      "targets": [
-        "test_utils",
-        "test_scheduler",
-        "test_backends",
-        "test_handler",
-        "simple-benchmark",
-        "advanced-benchmark",
-        "cnn-size-benchmark"
-      ]
-    },
-    {
-      "name": "desktop-examples-debug",
-      "configurePreset": "desktop-examples-debug",
-      "configuration": "Debug"
-    },
-    {
-      "name": "desktop-examples-release",
-      "configurePreset": "desktop-examples-release",
-      "configuration": "Release"
-    },
-    {
-      "name": "clang-tidy",
-      "configurePreset": "clang-tidy",
-      "configuration": "Debug"
-    },
-    {
-      "name": "wasm-debug",
-      "configurePreset": "wasm-debug",
-      "configuration": "Debug",
-      "description": "Build AniraWeb WASM module (debug)"
-    },
-    {
-      "name": "wasm-release",
-      "configurePreset": "wasm-release",
-      "configuration": "Release",
-      "description": "Build AniraWeb WASM module (release)"
-    },
-    {
-      "name": "docs",
-      "configurePreset": "docs",
-      "description": "Build the full HTML documentation",
-      "targets": [
-        "sphinx-docs"
-      ]
-    },
-    {
-      "name": "ci-tests-shared",
-      "configurePreset": "ci-tests-shared"
-    },
-    {
-      "name": "ci-tests-static",
-      "configurePreset": "ci-tests-static"
-    },
-    {
-      "name": "ci-tests-gcc",
-      "configurePreset": "ci-tests-gcc"
-    },
-    {
-      "name": "windows-msvc-tests-shared",
-      "configurePreset": "windows-msvc-tests-shared"
-    },
-    {
-      "name": "windows-msvc-tests-static",
-      "configurePreset": "windows-msvc-tests-static"
-    },
-    {
-      "name": "windows-clang-tests-shared",
-      "configurePreset": "windows-clang-tests-shared"
-    },
-    {
-      "name": "macos-universal-tests-shared",
-      "configurePreset": "macos-universal-tests-shared"
-    },
-    {
-      "name": "macos-universal-tests-static",
-      "configurePreset": "macos-universal-tests-static"
-    },
-    {
-      "name": "desktop-tests-rtsan",
-      "configurePreset": "desktop-tests-rtsan"
-    },
-    {
-      "name": "android-emulator-tests",
-      "configurePreset": "android-emulator-tests"
-    },
-    {
-      "name": "android-arm64-build",
-      "configurePreset": "android-arm64-build"
-    },
-    {
-      "name": "ios-simulator-tests",
-      "configurePreset": "ios-simulator-tests"
-    },
-    {
-      "name": "ios-device-build",
-      "configurePreset": "ios-device-build"
-    }
-  ],
-  "testPresets": [
-    {
-      "name": "desktop-debug",
-      "configurePreset": "desktop-debug",
-      "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "desktop-release",
-      "configurePreset": "desktop-release",
-      "configuration": "Release",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "desktop-tests-debug",
-      "configurePreset": "desktop-tests-debug",
-      "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "desktop-tests-release",
-      "configurePreset": "desktop-tests-release",
-      "configuration": "Release",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "desktop-benchmark-tests-debug",
-      "configurePreset": "desktop-benchmark-tests-debug",
-      "configuration": "Debug",
-      "output": {
-        "outputOnFailure": true,
-        "verbosity": "verbose"
-      }
-    },
-    {
-      "name": "desktop-benchmark-tests-release",
-      "configurePreset": "desktop-benchmark-tests-release",
-      "configuration": "Release",
-      "output": {
-        "outputOnFailure": true,
-        "verbosity": "verbose"
-      }
-    },
-    {
-      "name": "ci-tests-shared",
-      "configurePreset": "ci-tests-shared",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "jobs": 4,
-        "timeout": 600
-      }
-    },
-    {
-      "name": "ci-tests-static",
-      "configurePreset": "ci-tests-static",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "jobs": 4,
-        "timeout": 600
-      }
-    },
-    {
-      "name": "ci-tests-gcc",
-      "configurePreset": "ci-tests-gcc",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "jobs": 4,
-        "timeout": 600
-      }
-    },
-    {
-      "name": "windows-msvc-tests-shared",
-      "configurePreset": "windows-msvc-tests-shared",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "jobs": 4,
-        "timeout": 600
-      }
-    },
-    {
-      "name": "windows-msvc-tests-static",
-      "configurePreset": "windows-msvc-tests-static",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "jobs": 4,
-        "timeout": 600
-      }
-    },
-    {
-      "name": "windows-clang-tests-shared",
-      "configurePreset": "windows-clang-tests-shared",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "jobs": 4,
-        "timeout": 600
-      }
-    },
-    {
-      "name": "macos-universal-tests-shared",
-      "configurePreset": "macos-universal-tests-shared",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "jobs": 4,
-        "timeout": 600
-      }
-    },
-    {
-      "name": "macos-universal-tests-static",
-      "configurePreset": "macos-universal-tests-static",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "jobs": 4,
-        "timeout": 600
-      }
-    },
-    {
-      "name": "desktop-tests-rtsan",
-      "configurePreset": "desktop-tests-rtsan",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "jobs": 4,
-        "timeout": 600
-      }
-    }
-  ]
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 15,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "desktop-base",
+            "hidden": true,
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        },
+        {
+            "name": "desktop-debug",
+            "displayName": "Desktop Debug",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/Debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "desktop-release",
+            "displayName": "Desktop Release",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/Release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "desktop-tests-debug",
+            "displayName": "Desktop Tests Debug",
+            "description": "Debug build with ANIRA_WITH_TESTS enabled",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/Tests/Debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ANIRA_WITH_TESTS": "ON"
+            }
+        },
+        {
+            "name": "desktop-tests-release",
+            "displayName": "Desktop Tests Release",
+            "description": "Release build with ANIRA_WITH_TESTS enabled",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/Tests/Release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "ANIRA_WITH_TESTS": "ON"
+            }
+        },
+        {
+            "name": "desktop-benchmark-debug",
+            "displayName": "Desktop Benchmark Debug",
+            "description": "Debug build with ANIRA_WITH_BENCHMARK enabled",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/Benchmark/Debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ANIRA_WITH_BENCHMARK": "ON"
+            }
+        },
+        {
+            "name": "desktop-benchmark-release",
+            "displayName": "Desktop Benchmark Release",
+            "description": "Release build with ANIRA_WITH_BENCHMARK enabled",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/Benchmark/Release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "ANIRA_WITH_BENCHMARK": "ON"
+            }
+        },
+        {
+            "name": "desktop-benchmark-tests-debug",
+            "displayName": "Desktop Benchmark + Tests Debug",
+            "description": "Debug build with tests and the example benchmarks enabled, so benchmarks can be run via ctest (ANIRA_WITH_EXAMPLES is required to build the benchmark executables)",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/BenchmarkTests/Debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ANIRA_WITH_BENCHMARK": "ON",
+                "ANIRA_WITH_TESTS": "ON",
+                "ANIRA_WITH_EXAMPLES": "ON"
+            }
+        },
+        {
+            "name": "desktop-benchmark-tests-release",
+            "displayName": "Desktop Benchmark + Tests Release",
+            "description": "Release build with tests and the example benchmarks enabled, so benchmarks can be run via ctest (ANIRA_WITH_EXAMPLES is required to build the benchmark executables)",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/BenchmarkTests/Release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "ANIRA_WITH_BENCHMARK": "ON",
+                "ANIRA_WITH_TESTS": "ON",
+                "ANIRA_WITH_EXAMPLES": "ON"
+            }
+        },
+        {
+            "name": "desktop-examples-debug",
+            "displayName": "Desktop Examples Debug",
+            "description": "Debug build with ANIRA_WITH_EXAMPLES enabled",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/Examples/Debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ANIRA_WITH_EXAMPLES": "ON"
+            }
+        },
+        {
+            "name": "desktop-examples-release",
+            "displayName": "Desktop Examples Release",
+            "description": "Release build with ANIRA_WITH_EXAMPLES enabled",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/Examples/Release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "ANIRA_WITH_EXAMPLES": "ON"
+            }
+        },
+        {
+            "name": "clang-tidy",
+            "displayName": "Clang-Tidy",
+            "description": "Library + tests + benchmark build with all backends, used for clang-tidy analysis (exports compile_commands.json)",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/clang-tidy",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "ANIRA_WITH_TESTS": "ON",
+                "ANIRA_WITH_BENCHMARK": "ON",
+                "ANIRA_WITH_LIBTORCH": "ON",
+                "ANIRA_WITH_ONNXRUNTIME": "ON",
+                "ANIRA_WITH_TFLITE": "OFF",
+                "ANIRA_WITH_LITERT": "ON",
+                "ANIRA_WITH_EXECUTORCH": "ON"
+            }
+        },
+        {
+            "name": "wasm-debug",
+            "displayName": "Wasm Debug",
+            "description": "Build AniraWeb WASM module (debug)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/wasm/Debug",
+            "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+            "cacheVariables": {
+                "ANIRA_BUILD_WASM": "ON",
+                "BUILD_SHARED_LIBS": "OFF",
+                "ANIRA_WITH_LIBTORCH": "OFF",
+                "ANIRA_WITH_TFLITE": "OFF",
+                "ANIRA_WITH_LITERT": "OFF",
+                "ANIRA_WITH_EXECUTORCH": "OFF",
+                "ANIRA_WITH_ONNXRUNTIME": "ON",
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "wasm-release",
+            "displayName": "Wasm Release",
+            "description": "Build AniraWeb WASM module (release)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/wasm/Release",
+            "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+            "cacheVariables": {
+                "ANIRA_BUILD_WASM": "ON",
+                "BUILD_SHARED_LIBS": "OFF",
+                "ANIRA_WITH_LIBTORCH": "OFF",
+                "ANIRA_WITH_TFLITE": "OFF",
+                "ANIRA_WITH_LITERT": "OFF",
+                "ANIRA_WITH_EXECUTORCH": "OFF",
+                "ANIRA_WITH_ONNXRUNTIME": "ON",
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "docs",
+            "displayName": "Documentation",
+            "description": "Build C++ (Doxygen+Breathe) and Anira Web (TypeDoc+sphinx-js) docs via Sphinx",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/docs",
+            "cacheVariables": {
+                "ANIRA_WITH_DOCS": "ON",
+                "ANIRA_WITH_LIBTORCH": "OFF",
+                "ANIRA_WITH_TFLITE": "OFF",
+                "ANIRA_WITH_LITERT": "OFF",
+                "ANIRA_WITH_EXECUTORCH": "OFF",
+                "ANIRA_WITH_ONNXRUNTIME": "OFF",
+                "CMAKE_BUILD_TYPE": "Release",
+                "Python3_EXECUTABLE": "/usr/bin/python3"
+            }
+        },
+        {
+            "name": "ci-base",
+            "hidden": true,
+            "generator": "Ninja",
+            "description": "Base for the CI presets: Release + tests. Backend sets and per-leg flags ride on top via the workflow's configure args (ci-actions cmake-build appends CMAKE_BUILD_ARGS in preset mode), so one preset serves several legs.",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "ANIRA_WITH_TESTS": "ON"
+            }
+        },
+        {
+            "name": "ci-clang-base",
+            "hidden": true,
+            "inherits": "ci-base",
+            "description": "CI base with the clang pin (Linux and macOS legs).",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        },
+        {
+            "name": "ci-tests-shared",
+            "inherits": "ci-clang-base",
+            "description": "Shared-library test build, clang (Linux x64/arm64, macOS arm64, macOS x64 on the Intel runner).",
+            "binaryDir": "${sourceDir}/build/ci/tests-shared",
+            "cacheVariables": {
+                "BUILD_SHARED_LIBS": "ON"
+            }
+        },
+        {
+            "name": "ci-tests-static",
+            "inherits": "ci-clang-base",
+            "description": "Static test build, clang.",
+            "binaryDir": "${sourceDir}/build/ci/tests-static",
+            "cacheVariables": {
+                "BUILD_SHARED_LIBS": "OFF"
+            }
+        },
+        {
+            "name": "ci-tests-gcc",
+            "inherits": "ci-base",
+            "description": "The one explicit gcc job (Linux): the preset family pins clang, this keeps gcc coverage.",
+            "binaryDir": "${sourceDir}/build/ci/tests-gcc",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++",
+                "BUILD_SHARED_LIBS": "ON"
+            }
+        },
+        {
+            "name": "ci-tests-coverage",
+            "inherits": "ci-tests-shared",
+            "description": "Instrumented coverage build (clang source-based coverage; accurate under optimization, so Release stays). llvm-profdata/llvm-cov consume the output.",
+            "binaryDir": "${sourceDir}/build/ci/coverage",
+            "cacheVariables": {
+                "CMAKE_C_FLAGS": "-fprofile-instr-generate -fcoverage-mapping",
+                "CMAKE_CXX_FLAGS": "-fprofile-instr-generate -fcoverage-mapping"
+            }
+        },
+        {
+            "name": "windows-msvc-tests-shared",
+            "inherits": "ci-base",
+            "description": "MSVC cl.exe under Ninja (run inside a vcvars environment; Ninja is what lets sccache cache cl).",
+            "binaryDir": "${sourceDir}/build/ci/windows-msvc-shared",
+            "cacheVariables": {
+                "BUILD_SHARED_LIBS": "ON"
+            }
+        },
+        {
+            "name": "windows-msvc-tests-static",
+            "inherits": "ci-base",
+            "description": "MSVC cl.exe under Ninja, static.",
+            "binaryDir": "${sourceDir}/build/ci/windows-msvc-static",
+            "cacheVariables": {
+                "BUILD_SHARED_LIBS": "OFF"
+            }
+        },
+        {
+            "name": "windows-clang-tests-shared",
+            "inherits": "ci-base",
+            "description": "Secondary Windows coverage: clang-cl (keeps MSVC=TRUE, so DLL staging and the symbol policy apply); needs a vcvars environment too.",
+            "binaryDir": "${sourceDir}/build/ci/windows-clang-shared",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang-cl",
+                "CMAKE_CXX_COMPILER": "clang-cl",
+                "BUILD_SHARED_LIBS": "ON"
+            }
+        },
+        {
+            "name": "macos-universal-tests-shared",
+            "inherits": "ci-clang-base",
+            "description": "macOS universal (arm64 + x86_64) shared test build.",
+            "binaryDir": "${sourceDir}/build/ci/macos-universal-shared",
+            "cacheVariables": {
+                "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64",
+                "BUILD_SHARED_LIBS": "ON"
+            }
+        },
+        {
+            "name": "macos-universal-tests-static",
+            "inherits": "ci-clang-base",
+            "description": "macOS universal static test build.",
+            "binaryDir": "${sourceDir}/build/ci/macos-universal-static",
+            "cacheVariables": {
+                "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64",
+                "BUILD_SHARED_LIBS": "OFF"
+            }
+        },
+        {
+            "name": "desktop-tests-rtsan",
+            "inherits": "ci-clang-base",
+            "description": "RTSan gate for the ANIRA_REALTIME hot path (clang >= 20; tanh-lib built with TANH_WITH_RTSAN).",
+            "binaryDir": "${sourceDir}/build/ci/rtsan",
+            "cacheVariables": {
+                "BUILD_SHARED_LIBS": "ON",
+                "ANIRA_WITH_RTSAN": "ON"
+            }
+        },
+        {
+            "name": "android-emulator-tests",
+            "inherits": "ci-base",
+            "description": "Android x86_64 for the emulator run; model paths baked to the on-device staging dir. Linkage/backends per leg via configure args.",
+            "binaryDir": "${sourceDir}/build/ci/android-emulator",
+            "cacheVariables": {
+                "ANDROID_ABI": "x86_64",
+                "ANDROID_PLATFORM": "android-24",
+                "BUILD_SHARED_LIBS": "OFF",
+                "ANIRA_WITH_LIBTORCH": "OFF",
+                "ANIRA_EXTRAS_MODELS_DIR": "/data/local/tmp/anira/models"
+            },
+            "toolchainFile": "$env{ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake"
+        },
+        {
+            "name": "android-arm64-build",
+            "inherits": "ci-base",
+            "description": "Android arm64-v8a build coverage (no accelerated arm emulator on x86 CI hosts).",
+            "binaryDir": "${sourceDir}/build/ci/android-arm64",
+            "cacheVariables": {
+                "ANDROID_ABI": "arm64-v8a",
+                "ANDROID_PLATFORM": "android-24",
+                "BUILD_SHARED_LIBS": "OFF",
+                "ANIRA_WITH_LIBTORCH": "OFF"
+            },
+            "toolchainFile": "$env{ANDROID_NDK_LATEST_HOME}/build/cmake/android.toolchain.cmake"
+        },
+        {
+            "name": "ios-simulator-tests",
+            "inherits": "ci-base",
+            "description": "iOS simulator (arm64) test build; the test_* binaries bundle as .app for the shared mobile runner.",
+            "binaryDir": "${sourceDir}/build/ci/ios-simulator",
+            "cacheVariables": {
+                "CMAKE_SYSTEM_NAME": "iOS",
+                "CMAKE_OSX_SYSROOT": "iphonesimulator",
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
+                "BUILD_SHARED_LIBS": "OFF",
+                "ANIRA_WITH_LIBTORCH": "OFF"
+            }
+        },
+        {
+            "name": "ios-device-build",
+            "inherits": "ci-base",
+            "description": "iOS device (iphoneos) library build coverage \u2014 wiring check, nothing runs.",
+            "binaryDir": "${sourceDir}/build/ci/ios-device",
+            "cacheVariables": {
+                "CMAKE_SYSTEM_NAME": "iOS",
+                "CMAKE_OSX_SYSROOT": "iphoneos",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
+                "BUILD_SHARED_LIBS": "OFF",
+                "ANIRA_WITH_LIBTORCH": "OFF",
+                "ANIRA_WITH_TESTS": "OFF"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "desktop-debug",
+            "configurePreset": "desktop-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "desktop-release",
+            "configurePreset": "desktop-release",
+            "configuration": "Release"
+        },
+        {
+            "name": "desktop-tests-debug",
+            "configurePreset": "desktop-tests-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "desktop-tests-release",
+            "configurePreset": "desktop-tests-release",
+            "configuration": "Release"
+        },
+        {
+            "name": "desktop-benchmark-debug",
+            "configurePreset": "desktop-benchmark-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "desktop-benchmark-release",
+            "configurePreset": "desktop-benchmark-release",
+            "configuration": "Release"
+        },
+        {
+            "name": "desktop-benchmark-tests-debug",
+            "configurePreset": "desktop-benchmark-tests-debug",
+            "configuration": "Debug",
+            "targets": [
+                "test_utils",
+                "test_scheduler",
+                "test_backends",
+                "test_handler",
+                "simple-benchmark",
+                "advanced-benchmark",
+                "cnn-size-benchmark"
+            ]
+        },
+        {
+            "name": "desktop-benchmark-tests-release",
+            "configurePreset": "desktop-benchmark-tests-release",
+            "configuration": "Release",
+            "targets": [
+                "test_utils",
+                "test_scheduler",
+                "test_backends",
+                "test_handler",
+                "simple-benchmark",
+                "advanced-benchmark",
+                "cnn-size-benchmark"
+            ]
+        },
+        {
+            "name": "desktop-examples-debug",
+            "configurePreset": "desktop-examples-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "desktop-examples-release",
+            "configurePreset": "desktop-examples-release",
+            "configuration": "Release"
+        },
+        {
+            "name": "clang-tidy",
+            "configurePreset": "clang-tidy",
+            "configuration": "Debug"
+        },
+        {
+            "name": "wasm-debug",
+            "configurePreset": "wasm-debug",
+            "configuration": "Debug",
+            "description": "Build AniraWeb WASM module (debug)"
+        },
+        {
+            "name": "wasm-release",
+            "configurePreset": "wasm-release",
+            "configuration": "Release",
+            "description": "Build AniraWeb WASM module (release)"
+        },
+        {
+            "name": "docs",
+            "configurePreset": "docs",
+            "description": "Build the full HTML documentation",
+            "targets": [
+                "sphinx-docs"
+            ]
+        },
+        {
+            "name": "ci-tests-shared",
+            "configurePreset": "ci-tests-shared"
+        },
+        {
+            "name": "ci-tests-static",
+            "configurePreset": "ci-tests-static"
+        },
+        {
+            "name": "ci-tests-gcc",
+            "configurePreset": "ci-tests-gcc"
+        },
+        {
+            "name": "ci-tests-coverage",
+            "configurePreset": "ci-tests-coverage"
+        },
+        {
+            "name": "windows-msvc-tests-shared",
+            "configurePreset": "windows-msvc-tests-shared"
+        },
+        {
+            "name": "windows-msvc-tests-static",
+            "configurePreset": "windows-msvc-tests-static"
+        },
+        {
+            "name": "windows-clang-tests-shared",
+            "configurePreset": "windows-clang-tests-shared"
+        },
+        {
+            "name": "macos-universal-tests-shared",
+            "configurePreset": "macos-universal-tests-shared"
+        },
+        {
+            "name": "macos-universal-tests-static",
+            "configurePreset": "macos-universal-tests-static"
+        },
+        {
+            "name": "desktop-tests-rtsan",
+            "configurePreset": "desktop-tests-rtsan"
+        },
+        {
+            "name": "android-emulator-tests",
+            "configurePreset": "android-emulator-tests"
+        },
+        {
+            "name": "android-arm64-build",
+            "configurePreset": "android-arm64-build"
+        },
+        {
+            "name": "ios-simulator-tests",
+            "configurePreset": "ios-simulator-tests"
+        },
+        {
+            "name": "ios-device-build",
+            "configurePreset": "ios-device-build"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "desktop-debug",
+            "configurePreset": "desktop-debug",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "desktop-release",
+            "configurePreset": "desktop-release",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "desktop-tests-debug",
+            "configurePreset": "desktop-tests-debug",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "desktop-tests-release",
+            "configurePreset": "desktop-tests-release",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "desktop-benchmark-tests-debug",
+            "configurePreset": "desktop-benchmark-tests-debug",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true,
+                "verbosity": "verbose"
+            }
+        },
+        {
+            "name": "desktop-benchmark-tests-release",
+            "configurePreset": "desktop-benchmark-tests-release",
+            "configuration": "Release",
+            "output": {
+                "outputOnFailure": true,
+                "verbosity": "verbose"
+            }
+        },
+        {
+            "name": "ci-tests-shared",
+            "configurePreset": "ci-tests-shared",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 600
+            }
+        },
+        {
+            "name": "ci-tests-static",
+            "configurePreset": "ci-tests-static",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 600
+            }
+        },
+        {
+            "name": "ci-tests-gcc",
+            "configurePreset": "ci-tests-gcc",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 600
+            }
+        },
+        {
+            "name": "ci-tests-coverage",
+            "configurePreset": "ci-tests-coverage",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 900
+            }
+        },
+        {
+            "name": "windows-msvc-tests-shared",
+            "configurePreset": "windows-msvc-tests-shared",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 600
+            }
+        },
+        {
+            "name": "windows-msvc-tests-static",
+            "configurePreset": "windows-msvc-tests-static",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 600
+            }
+        },
+        {
+            "name": "windows-clang-tests-shared",
+            "configurePreset": "windows-clang-tests-shared",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 600
+            }
+        },
+        {
+            "name": "macos-universal-tests-shared",
+            "configurePreset": "macos-universal-tests-shared",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 600
+            }
+        },
+        {
+            "name": "macos-universal-tests-static",
+            "configurePreset": "macos-universal-tests-static",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 600
+            }
+        },
+        {
+            "name": "desktop-tests-rtsan",
+            "configurePreset": "desktop-tests-rtsan",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 600
+            }
+        }
+    ]
 }

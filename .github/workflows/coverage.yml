@@ -1,0 +1,43 @@
+name: coverage
+
+# Full-suite coverage on every push to main (docs/ci-overhaul.md, step 9) —
+# the pipeline is tanh-lab/ci-actions' reusable coverage workflow; this file
+# keeps anira's facts. A new build, not a repeat of the queue's runs, so the
+# "main re-runs nothing" rule holds. Not queue-gated: a coverage dip is
+# information, never a merge blocker.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  # Self-validating: runs on a PR exactly when this workflow itself changes
+  # (dispatch cannot target a workflow absent from the default branch), dormant
+  # on every other PR per the tier policy.
+  pull_request:
+    paths:
+      - ".github/workflows/coverage.yml"
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: coverage
+    uses: tanh-lab/ci-actions/.github/workflows/coverage.yml@v0.3.2
+    permissions:
+      contents: read
+      id-token: write # Codecov's tokenless OIDC upload
+    with:
+      preset: ci-tests-coverage
+      build_args: "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+      lib_pattern: "libanira.so*"
+      models_cache_prefix: anira-models-v1
+      models_hash_glob: extras/fetch-models.cmake
+      models_cache_paths: |
+        extras/models/hybrid-nn/GuitarLSTM
+        extras/models/cnn/steerable-nafx
+        extras/models/stateful-rnn/stateful-lstm
+        extras/models/model-pool/example-models
+        extras/models/third-party/ircam-acids/RAVE
