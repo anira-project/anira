@@ -15,7 +15,7 @@
 
 **Goals**, in order:
 
-1. **M0 item 3**: replace anira's local `setup`/`build`/`test` composites (`.github/actions/`) with the shared `tanh-lab/ci-actions` actions in preset mode; per-platform presets (sanitizers, Android, iOS, Windows-arm64, macOS-universal, shared/static × backend sets); one explicit gcc job; `GITHUB_TOKEN` at job level everywhere; mobile test actions gain inputs for anira's extra pushes *or* anira keeps its mobile workflow; the install/codesign/release action stays anira's; ci-actions pinned to a tag like tanh-tooling.
+1. **M0 item 3**: replace anira's local `setup`/`build`/`test` composites (`.github/actions/`) with the shared `tanh-lab/ci-actions` actions in preset mode; per-platform presets (sanitizers, Android, iOS, Windows-arm64, macOS-universal, shared/static × backend sets); one explicit gcc job; `GITHUB_TOKEN` at job level everywhere; mobile test actions gain inputs for anira's extra pushes *or* anira keeps its mobile workflow (decided: the former — one shared mobile runner, §3.7); the install/codesign/release action stays anira's; ci-actions pinned to a tag like tanh-tooling.
 2. **M0 item 4**: the single `tests` binary becomes `test_utils`, `test_scheduler`, `test_backends`, `test_handler`. No behaviour change; equal test counts before and after are the acceptance.
 3. **Runner efficiency**: anira is open source and runs on free GitHub-hosted runners — the constraint is not minutes (free for public repos) but **concurrency**, and the job is to use the free pool well.
 
@@ -186,7 +186,7 @@ The queueing problem is solved by running fewer jobs per event, not faster jobs.
 
 ### 3.7 Mobile
 
-Keep `build_test_mobile` as anira's own workflow through this overhaul (the roadmap explicitly allows it), updated for four binaries by step 1. Adopting `cmake-test-android`/`cmake-test-ios-simulator` needs three upstream inputs first (U5): extra push paths (backend `.so`s from `modules/`, `libc++_shared.so`, `extras/models`), a device staging dir matching `ANIRA_EXTRAS_MODELS_DIR`, and `LD_LIBRARY_PATH` on the run command. iOS needs no pushes (simulator shares the host FS) but does need the `.app` bundle convention. Migrate in step 7 once those inputs exist in a tagged ci-actions — or stay on the anira workflow indefinitely; both end-states satisfy M0 item 3.
+**Decision (Valentin, 2026-08-31): one shared mobile runner.** The mobile test runners live in ci-actions (`cmake-test-android` / `cmake-test-ios-simulator`) and anira and tanh-lib use the same ones — anira does not keep a separate mobile implementation long-term; when the runner needs to grow, it grows upstream and both consumers update. What the shared actions still need for anira (U5/U6, the next tag after the first): extra push paths (backend `.so`s from `modules/`, `libc++_shared.so`, the model tree), a device staging dir matching `ANIRA_EXTRAS_MODELS_DIR`, `LD_LIBRARY_PATH` on the run command, per-binary failure collection (report every broken suite in one run, as anira's loops do today), and an `inherits`-aware preset parser. iOS needs no pushes (simulator shares the host FS) but keeps the `.app` convention. Until those land in a tagged ci-actions, `build_test_mobile` keeps anira's own scripting as a stopgap (updated for the four binaries in step 1); step 7 then replaces it and deletes `.github/scripts/android_emulator_test.sh`.
 
 ### 3.8 Changes to ci-actions (ours to make; tanh-lib moves in lockstep)
 
@@ -200,7 +200,7 @@ Keep `build_test_mobile` as anira's own workflow through this overhaul (the road
 - **U1 — ctest parallelism**: not needed by anira (test presets carry `execution.jobs`); an optional `CTEST_ARGS` input on `cmake-test` would let tanh-lib parallelise too.
 - **U3 — extra configure args in preset mode**: `cmake-build` appends `CMAKE_BUILD_ARGS` after `--preset`. Keeps anira's catalog at ~15 instead of ~40 presets (§6 Q3 is the design choice).
 - **U4 — Windows generator fix**: manual mode's Windows branch inherits the sccache-inert VS generator; tanh-lib's own `windows-*` presets have the same dead cache.
-- **U5 — mobile inputs** (enables §3.7 migration); **U6 — preset parser resolves `inherits`** (or documents the literal-`binaryDir` requirement).
+- **U5 — mobile inputs** and **U6 — `inherits`-aware preset parser**: required for step 7 (§3.7 — one shared mobile runner for anira and tanh-lib); they ride the next tag after the first.
 
 ---
 
@@ -236,8 +236,8 @@ build_sanitizer is a full composite→shared-actions migration (§3.3), not a pi
 **Step 6 — tiering for install/mobile + nightly** *(anira, Valentin; needs 5a; ~0.5 day)* ⚠
 PR/full tiers for build_install and mobile per §3.6; weekly cron with the extended sanitizer presets — **engines-OFF scope**: asan/tsan/lsan run the noengines configuration (anira's own scheduler/utils/handler code); prebuilt engines are uninstrumented and would drown the jobs in false positives. Engine-on sanitizer coverage is explicitly out of scope. Acceptance: synthetic PR shows ≤ 5 concurrent macOS jobs, ≤ 10 min wall; push to main ~18 min p50 / 25 min p90.
 
-**Step 7 — mobile onto shared actions** *(optional; needs 1 + U5/U6 in a tagged ci-actions)*
-Replace anira's emulator/simulator scripting with `cmake-test-android`/`cmake-test-ios-simulator` + the new inputs. Skip indefinitely if the anira-owned workflow serves better — M0 item 3 allows both.
+**Step 7 — mobile onto the shared actions** *(ci-actions + anira + tanh-lib; needs 1, and U5/U6 in a tagged ci-actions)*
+The decided end state (§3.7): extend `cmake-test-android`/`cmake-test-ios-simulator` with the U5 inputs and the U6 parser fix, tag, point anira's `build_test_mobile` at them, and delete the local emulator/simulator scripting. tanh-lib moves to the same tag in the same motion.
 
 **Step 8 — docs + changelog sweep** *(with each step, not after)*
 Each implementing PR carries its CHANGELOG entry (CI/build changes are in-policy) and updates `docs/sphinx/` where it names workflows, the `tests` target, local presets, or the new `ANIRA_MODELS_<X>_REF` variables.
