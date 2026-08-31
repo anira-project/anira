@@ -4,6 +4,7 @@ name: build_benchmark
 # requests run the Linux leg only; dispatches run everything.
 
 on:
+  merge_group:
   workflow_dispatch: # lets you run a build from github.com
   # Runs on pull requests only: the regular tests already run in build_test.yml
   pull_request:

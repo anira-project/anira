@@ -5,6 +5,7 @@ name: build_examples
 # pushes to example-relevant PR bases and dispatches run everything.
 
 on:
+  merge_group:
   workflow_call:
   workflow_dispatch: # lets you run a build from github.com
   pull_request:

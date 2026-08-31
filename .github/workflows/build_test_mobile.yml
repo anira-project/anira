@@ -14,6 +14,7 @@ name: build_test_mobile
 # ONNX+LiteRT shared leg.
 
 on:
+  merge_group:
   workflow_call:
   workflow_dispatch:
   push:

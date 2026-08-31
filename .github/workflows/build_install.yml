@@ -9,6 +9,7 @@ name: build_install
 # static sequentially in one job (the 5-concurrent macOS cap, ci-overhaul §3.6).
 
 on:
+  merge_group:
   workflow_dispatch:
   push:
     branches:

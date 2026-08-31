@@ -1,6 +1,7 @@
 name: clang_check
 
 on:
+  merge_group:
   workflow_dispatch:
   push:
   pull_request:

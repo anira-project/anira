@@ -9,6 +9,7 @@ name: build_test
 # Release must stay free of /Zi and PCH for the same reason.
 
 on:
+  merge_group:
   workflow_call:
     inputs:
       tier:
