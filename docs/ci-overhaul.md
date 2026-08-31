@@ -252,7 +252,13 @@ build_sanitizer is a full composite→shared-actions migration (§3.3), not a pi
 **Step 7 — mobile onto the shared actions** *(ci-actions + anira + tanh-lib; needs 1, and U5/U6 in a tagged ci-actions)*
 The decided end state (§3.7): extend `cmake-test-android`/`cmake-test-ios-simulator` with the U5 inputs and the U6 parser fix, tag, point anira's `build_test_mobile` at them, and delete the local emulator/simulator scripting. tanh-lib moves to the same tag in the same motion.
 
-**Step 8 — docs + changelog sweep** *(with each step, not after)*
+**Step 8 — tanh-lib convergence: one CI, zero duplicate code** *(tanh-lib + ci-actions; after step 7)*
+tanh-lib adopts the identical setup — tier policy v2, merge queue, warm caches, result checks — and the de-duplication mechanism is the previously deferred **reusable-workflows consolidation**: the workflow *logic* (build-test with plan/tiers/result, warm-caches, the mobile runner drivers) moves into ci-actions as `workflow_call` reusable workflows, so anira and tanh-lib each keep only their *facts* — triggers, the matrix JSON, presets, repo-specific steps (models cache, linkage assertion, JUCE deps) — and every behavioral change lands once, upstream, tagged. The merge-queue ruleset template in tanh-tooling is applied to both repos. End state: **anira and tanh-lib "just" use tanh-ci + tanh-tooling; no duplicated CI code.**
+
+**Step 9 — test-suite audit, coverage, and the badge** *(anira first, tanh-lib after)*
+Three parts: (a) **audit the suite** — do all 307 tests carry weight? The 111 heavy model-inference tests are parameter sweeps (`InferenceTest` × backend × config); measure per-test value (unique failures caught, runtime cost) and prune or merge redundant parameterizations. (b) **coverage measurement** — an instrumented Linux leg (clang source-based coverage, `-fprofile-instr-generate`/`llvm-cov`) running the full suite and emitting a percentage; it runs in the merge queue (the full-suite moment that already exists) or on demand. (c) **the number on the README** — a coverage badge at the top of the main README (Codecov's free open-source tier gives upload + badge in one step; the self-hosted alternative is a shields.io endpoint badge fed from a gist the coverage job updates). Coverage becomes visible, and the audit gets its baseline metric.
+
+**Step 10 — docs + changelog sweep** *(with each step, not after)*
 Each implementing PR carries its CHANGELOG entry (CI/build changes are in-policy) and updates `docs/sphinx/` where it names workflows, the `tests` target, local presets, or the new `ANIRA_MODELS_<X>_REF` variables.
 
 ---
