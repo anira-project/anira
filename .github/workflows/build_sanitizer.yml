@@ -4,12 +4,6 @@ on:
   merge_group:
   workflow_call:
   workflow_dispatch: # lets you run a build from github.com
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
 
 env:
   SCCACHE_GHA_ENABLED: "true"
@@ -67,3 +61,14 @@ jobs:
         uses: tanh-lab/ci-actions/cmake-test@v0.2.2
         with:
           PRESET: desktop-tests-rtsan
+
+  # The queue's required status for this workflow.
+  result:
+    name: sanitizer result
+    needs: [build_and_test_rtsan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          [ "${{ needs.build_and_test_rtsan.result }}" = "success" ] || exit 1

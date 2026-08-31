@@ -7,9 +7,6 @@ on:
   merge_group:
   workflow_dispatch: # lets you run a build from github.com
   # Runs on pull requests only: the regular tests already run in build_test.yml
-  pull_request:
-    branches:
-      - main
 
 env:
   SCCACHE_GHA_ENABLED: "true"
@@ -96,3 +93,14 @@ jobs:
           # Only the Benchmark.* suites (the unit tests run in build_test), and
           # serially — the test preset's -j4 would distort benchmark timing.
           CTEST_ARGS: "-R ^Benchmark -j 1"
+
+  # The queue's required status for this workflow.
+  result:
+    name: benchmark result
+    needs: [build_benchmark]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          [ "${{ needs.build_benchmark.result }}" = "success" ] || exit 1

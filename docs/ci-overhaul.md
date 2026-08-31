@@ -168,6 +168,8 @@ sccache diagnosis (step 0c): re-run the same commit twice via `workflow_dispatch
 
 ### 3.6 Matrix tiers ⚠
 
+> **Tier policy v2 (decided 2026-08-31, supersedes the tables below).** PR = build one leg per platform family (Linux-x64, Windows-x64, macOS-universal native-only, 1 iOS, 1 Android, web) + fast tests only (heavy model-inference binaries are label-excluded). Merge queue = the full sweep of everything, docs build included — the queue is the *only* gate for install/examples/benchmark/lint, so every workflow carries a `<name> result` status and all of them are required by the ruleset. Push to main = docs deploy + a build-only `warm_caches` job (cache scoping: queue/PR-side writes are not restorable elsewhere). The same merge-queue configuration is templated in tanh-tooling for tanh-lib.
+
 The queueing problem is solved by running fewer jobs per event, not faster jobs. Full coverage never leaves — it moves to where nobody is waiting on it. **This is a deliberate policy change against the roadmap's "merges with the full test suite green" rule and needs sign-off**: either adopt the **merge queue** in the same step (free for org-owned public repos; the `merge_group` event joins the full tier, so merges are still full-suite-gated and PRs stay fast), or accept that a full-tier failure surfaces on main/v3 and by convention blocks the next merge. Recommendation: merge queue.
 
 **Tiering must cover build_examples and build_benchmark too** — they are PR-only today (~12 jobs, 6 of them macOS), so tiering build_test alone would leave PR macOS load at ~10 against the cap of 5.

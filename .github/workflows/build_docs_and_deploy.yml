@@ -1,21 +1,13 @@
 name: build_docs_and_deploy
 
 on:
+  merge_group:
   workflow_call:
   workflow_dispatch: # lets you run a build from github.com
   # Runs the workflow on all push events
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
-    # Docs only matter to a PR when doc sources change; pushes always build.
-    paths:
-      - "docs/**"
-      - "include/**"
-      - ".github/workflows/build_docs_and_deploy.yml"
-
 env:
   SCCACHE_GHA_ENABLED: "true"
   # Without this, sccache speaks the retired v1 cache API and every write fails.
@@ -71,3 +63,14 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # The queue's required status for this workflow.
+  result:
+    name: docs result
+    needs: [build_docs]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          [ "${{ needs.build_docs.result }}" = "success" ] || exit 1

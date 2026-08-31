@@ -11,12 +11,6 @@ name: build_install
 on:
   merge_group:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
 
 env:
   SCCACHE_GHA_ENABLED: "true"
@@ -149,3 +143,15 @@ jobs:
               echo "consumer_engine_module exports engine symbols"; exit 1
             fi
           done
+
+  # The queue's required status for this workflow.
+  result:
+    name: install result
+    needs: [build_install, build_install_macos]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          [ "${{ needs.build_install.result }}" = "success" ] || exit 1
+          [ "${{ needs.build_install_macos.result }}" = "success" ] || exit 1

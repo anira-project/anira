@@ -17,9 +17,6 @@ on:
   merge_group:
   workflow_call:
   workflow_dispatch:
-  push:
-    branches:
-      - main
   pull_request:
     branches:
       - main
@@ -215,3 +212,15 @@ jobs:
           # shell, so the staging + run logic lives in one committed script where
           # the variables persist.
           script: bash .github/scripts/android_emulator_test.sh
+
+  # The queue's required status for this workflow.
+  result:
+    name: mobile result
+    needs: [ios, android]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          [ "${{ needs.ios.result }}" = "success" ] || exit 1
+          [ "${{ needs.android.result }}" = "success" ] || exit 1
