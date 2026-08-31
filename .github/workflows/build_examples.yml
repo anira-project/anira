@@ -30,11 +30,12 @@ jobs:
           - name: Linux-x86_64-static
             os: ubuntu-latest
             shared: OFF
+          # Native Intel runner — x86_64 under Rosetta on the arm64 runners is 2-4x slower.
           - name: macOS-x86_64-shared
-            os: macOS-latest
+            os: macos-15-intel
             shared: ON
           - name: macOS-x86_64-static
-            os: macOS-latest
+            os: macos-15-intel
             shared: OFF
           - name: macOS-arm64-shared
             os: macOS-latest

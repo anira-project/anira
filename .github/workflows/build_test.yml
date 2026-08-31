@@ -71,12 +71,16 @@ jobs:
             os: windows-11-arm
             inference_engines: ON
             shared: OFF
+          # x86_64 runs natively on the Intel runner image (macos-15-intel, free for
+          # public repos until ~Aug 2027) — on the Apple-Silicon runners the same
+          # test step took 2-4x longer under Rosetta. The universal legs stay on
+          # Apple Silicon and cover the arm64 slice natively.
           - name: macOS-x86_64-shared
-            os: macOS-latest
+            os: macos-15-intel
             inference_engines: ON
             shared: ON
           - name: macOS-x86_64-static
-            os: macOS-latest
+            os: macos-15-intel
             inference_engines: ON
             shared: OFF
           - name: macOS-arm64-shared

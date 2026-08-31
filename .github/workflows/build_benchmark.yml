@@ -24,8 +24,9 @@ jobs:
         include:
           - name: Linux-x86_64
             os: ubuntu-latest
+          # Native Intel runner — x86_64 under Rosetta on the arm64 runners is 2-4x slower.
           - name: macOS-x86_64
-            os: macOS-latest
+            os: macos-15-intel
           - name: macOS-arm64
             os: macOS-latest
           - name: Windows-x86_64
