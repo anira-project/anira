@@ -8,8 +8,7 @@ on:
       - main
   merge_group:
   workflow_call:
-  workflow_dispatch: # lets you run a build from github.com
-  # Runs the workflow on all push events
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -18,7 +17,6 @@ env:
   # Without this, sccache speaks the retired v1 cache API and every write fails.
   ACTIONS_CACHE_SERVICE_V2: "on"
 
-# When pushing new commits, cancel any workflows with the same name on that branch
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -26,6 +24,8 @@ concurrency:
 jobs:
   build_docs:
     if: github.event_name != 'pull_request'
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
     # One-leg matrix: the shared ci-actions branch on matrix.name.
     strategy:
       matrix:
@@ -39,22 +39,21 @@ jobs:
           submodules: true
           fetch-depth: 0
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.0
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.3
       - name: dependencies
         run: |
           sudo apt-get install -y doxygen graphviz
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.0
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.3
         with:
           BUILD_TYPE: Release
           CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=ON -DANIRA_WITH_DOCS=ON"
           TARGETS: "sphinx-docs"
       - name: upload docs
-        uses: actions/upload-pages-artifact@v3 # or specific "vX.X.X" version tag for this action
+        uses: actions/upload-pages-artifact@v3
         with:
           path: build/docs/sphinx/html
 
-  # Deployment job
   deploy:
     needs: build_docs
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

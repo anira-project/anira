@@ -6,27 +6,26 @@ on:
     tags:
       - 'v*.*.*'
 
+permissions:
+  contents: read
+
 env:
   SCCACHE_GHA_ENABLED: "true"
-  # sccache speaks the retired v1 cache API without this and every write fails
-  # read-only ("Cannot write to read-only storage" — the cause of the permanent
-  # 0% hit rate); v2 became the only protocol in 2025.
+  # Without this, sccache speaks the retired v1 cache API and every write fails.
   ACTIONS_CACHE_SERVICE_V2: "on"
 
 jobs:
+  # Every artifact and the npm package are gated on the desktop and mobile
+  # suites.
   build_test:
     uses: ./.github/workflows/build_test.yml
-    secrets: inherit
-  # Gate releases on the mobile suites too: a tag now runs the iOS simulator and
-  # Android emulator test runs before any artifact is published.
   build_test_mobile:
     uses: ./.github/workflows/build_test_mobile.yml
-    secrets: inherit
   build_release:
     needs: [build_test, build_test_mobile]
     name: ${{ matrix.name }}
     strategy:
-      fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
+      fail-fast: false
       matrix:
         # Every desktop platform/arch, both shared and static — mirroring what
         # build_test validates, so the published artifacts == the tested set
@@ -60,7 +59,7 @@ jobs:
           submodules: true
           fetch-depth: 0
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.0
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.3
       # Ninja needs cl.exe and its headers/libs from a vcvars environment.
       - name: MSVC environment
         if: matrix.vcvars
@@ -68,7 +67,7 @@ jobs:
         with:
           arch: ${{ matrix.vcvars }}
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.0
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.3
         with:
           PRESET: ${{ matrix.preset }}
           CMAKE_BUILD_ARGS: "-DANIRA_WITH_TESTS=OFF -DANIRA_WITH_INSTALL=ON ${{ matrix.arch && format('-DCMAKE_OSX_ARCHITECTURES={0}', matrix.arch) || '' }}"
@@ -102,12 +101,14 @@ jobs:
       - name: install deps
         run: brew install ninja
       - name: import certificate
-        uses: apple-actions/import-codesign-certs@v3
+        uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3
         with:
           p12-file-base64: ${{ secrets.DEV_ID_APP_CERT }}
           p12-password: ${{ secrets.DEV_ID_APP_PWD }}
       - name: build + sign anira.xcframework
         id: xcf
+        env:
+          IDENTITY: ${{ secrets.DEV_ID_APP }}
         run: |
           VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
           [ -z "$VERSION" ] && VERSION="0.0.0"
@@ -115,7 +116,6 @@ jobs:
           OUT="artefacts/${PRODUCT}"
           # A published xcframework must be Developer-ID signed; fail loudly rather than
           # let the script fall back to an ad-hoc signature on a missing/empty secret.
-          IDENTITY="${{ secrets.DEV_ID_APP }}"
           if [ -z "$IDENTITY" ]; then
             echo "::error::DEV_ID_APP secret is empty — refusing to publish an ad-hoc-signed xcframework"; exit 1
           fi
@@ -186,6 +186,8 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # creates the GitHub release
     needs:
       - build_release
       - build_release_ios
@@ -194,8 +196,76 @@ jobs:
     - name: Get Artifacts
       uses: actions/download-artifact@v4
     - name: Create Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
       with:
         files: |
           */*.zip
+
+  # npm, gated like every other release artifact. Trusted Publishing (OIDC):
+  # no NPM_TOKEN — npm >= 11.5.1 exchanges the GitHub OIDC token for publish
+  # credentials and emits provenance automatically.
+  publish_npm:
+    name: npm publish
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build_test, build_test_mobile]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # the npm OIDC trusted-publishing handshake
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+          fetch-depth: 0
+      # emcc emits the .d.ts during the build (--emit-tsd), so the pin must
+      # precede it.
+      - name: pin global typescript for emscripten --emit-tsd
+        run: |
+          sudo npm i -g typescript@5.9
+          tsc --version
+      - name: build wasm
+        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.3
+        with:
+          PRESET: wasm-release
+      - name: setup node
+        uses: actions/setup-node@v5
+        with:
+          # Node 24 ships npm >= 11, required for the npm OIDC
+          # trusted-publishing handshake; npm 10 authenticates anonymously and
+          # the publish fails with a misleading E404.
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      # Use the npm version pinned via "packageManager" in web/package.json
+      # so contributors and CI produce identical lockfile shapes.
+      - name: enable corepack
+        run: corepack enable
+      - name: install js deps
+        working-directory: web
+        run: npm ci
+      - name: derive version + dist-tag
+        id: meta
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" == *-* ]]; then
+            tag="next"
+          else
+            tag="latest"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$tag"   >> "$GITHUB_OUTPUT"
+      - name: stamp package version
+        working-directory: web
+        run: npm version "${{ steps.meta.outputs.version }}" --no-git-tag-version --allow-same-version
+      - name: build js package
+        working-directory: web
+        run: npm run build
+      - name: npm publish
+        working-directory: web
+        run: |
+          npm --version   # must be >= 11.5.1 for OIDC trusted publishing
+          npm publish --access public --tag "${{ steps.meta.outputs.dist_tag }}"
       

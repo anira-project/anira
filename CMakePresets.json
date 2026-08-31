@@ -200,10 +200,11 @@
             "name": "ci-base",
             "hidden": true,
             "generator": "Ninja",
-            "description": "Base for the CI presets: Release + tests. Backend sets and per-leg flags ride on top via the workflow's configure args (ci-actions cmake-build appends CMAKE_BUILD_ARGS in preset mode), so one preset serves several legs.",
+            "description": "Base for the CI presets: Release + tests. Backend sets and per-leg flags ride on top via the workflow's configure args (ci-actions cmake-build appends CMAKE_BUILD_ARGS in preset mode), so one preset serves several legs. /Z7 keeps MSVC debug info out of central PDBs so a debug-info leg can never zero the sccache hit rate.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "ANIRA_WITH_TESTS": "ON"
+                "ANIRA_WITH_TESTS": "ON",
+                "CMAKE_MSVC_DEBUG_INFORMATION_FORMAT": "Embedded"
             }
         },
         {

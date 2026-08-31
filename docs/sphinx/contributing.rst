@@ -79,7 +79,7 @@ General
 Install tree
 ~~~~~~~~~~~~
 
-``test/install`` is a minimal external project that consumes an installed anira package through ``find_package(anira)``. The ``build_install`` workflow installs anira into a fresh prefix on every pull request and builds and runs it against that prefix; run the same flow locally with::
+``test/install`` is a minimal external project that consumes an installed anira package through ``find_package(anira)``. The ``build_install`` workflow installs anira into a fresh prefix in the merge queue (and on tags) and builds and runs it against that prefix; run the same flow locally with::
 
     cmake -S . -B build -DANIRA_WITH_INSTALL=ON -DCMAKE_INSTALL_PREFIX=$PWD/prefix
     cmake --build build --target anira && cmake --install build

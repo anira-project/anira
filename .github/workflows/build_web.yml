@@ -17,6 +17,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
     steps:
       - name: checkout
         uses: actions/checkout@v5
@@ -33,7 +35,7 @@ jobs:
           tsc --version
 
       - name: build wasm
-        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.0
+        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.3
         with:
           PRESET: wasm-release
 
