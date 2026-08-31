@@ -1,0 +1,94 @@
+name: coverage
+
+# Full-suite coverage on every push to main (docs/ci-overhaul.md, step 9): an
+# instrumented clang leg (source-based coverage stays accurate under
+# optimization, so the ci-tests-coverage preset keeps Release) whose lcov
+# export feeds Codecov — the README badge and the per-file drill-down for the
+# test-suite audit. This is a new build, not a repeat of the queue's runs, so
+# it does not violate the "main re-runs nothing" rule. Not queue-gated: a
+# coverage dip is information, never a merge blocker.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov's tokenless OIDC upload
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
+      SCCACHE_GHA_ENABLED: "true"
+      ACTIONS_CACHE_SERVICE_V2: "on"
+      # One .profraw per test process (%p), merged below.
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/build/ci/coverage/profraw/%p.profraw
+    steps:
+      - name: get repo and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: restore the model fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
+
+      - name: setup build tools
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.0
+
+      # llvm-profdata/llvm-cov matching the default clang major.
+      - name: install llvm tools
+        run: sudo apt-get update && sudo apt-get install -y llvm
+
+      - name: build
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.0
+        with:
+          PRESET: ci-tests-coverage
+          CMAKE_BUILD_ARGS: "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+
+      - name: test
+        uses: tanh-lab/ci-actions/cmake-test@v0.3.0
+        with:
+          PRESET: ci-tests-coverage
+
+      - name: export lcov
+        run: |
+          BUILD=build/ci/coverage
+          llvm-profdata merge -sparse "$BUILD"/profraw/*.profraw -o "$BUILD"/merged.profdata
+          # anira's code lives in libanira.so (shared build) and the test
+          # binaries; everything fetched or generated is filtered out.
+          mapfile -t OBJECTS < <(
+            find "$BUILD" -name 'libanira.so*' -type f
+            find "$BUILD"/test -maxdepth 1 -name 'test_*' -type f -perm -u+x
+          )
+          FIRST="${OBJECTS[0]}"
+          REST=()
+          for o in "${OBJECTS[@]:1}"; do REST+=(-object "$o"); done
+          llvm-cov export -format=lcov -instr-profile "$BUILD"/merged.profdata \
+            -ignore-filename-regex='(^|/)(build|modules|extras|test|examples|_deps)/' \
+            "$FIRST" "${REST[@]}" > coverage.lcov
+          wc -l coverage.lcov
+
+      - name: upload to Codecov
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          use_oidc: true
+          files: coverage.lcov
+          fail_ci_if_error: true

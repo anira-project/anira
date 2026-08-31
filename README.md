@@ -1,6 +1,7 @@
 # ![anira Logo](https://raw.githubusercontent.com/anira-project/anira/main/docs/img/anira-logo.png)
 
 ![build_test](https://github.com/anira-project/anira/actions/workflows/build_test.yml/badge.svg)
+[![codecov](https://codecov.io/gh/anira-project/anira/branch/main/graph/badge.svg)](https://codecov.io/gh/anira-project/anira)
 ![build_benchmark](https://github.com/anira-project/anira/actions/workflows/build_benchmark.yml/badge.svg)
 ![build_examples](https://github.com/anira-project/anira/actions/workflows/build_examples.yml/badge.svg)
 ![build_docs](https://github.com/anira-project/anira/actions/workflows/build_docs_and_deploy.yml/badge.svg)
