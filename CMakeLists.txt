@@ -38,7 +38,7 @@ option(ANIRA_WITH_LIBTORCH    "Build with the LibTorch backend" ON)
 option(ANIRA_WITH_ONNXRUNTIME "Build with the ONNX Runtime backend" ON)
 option(ANIRA_WITH_LITERT      "Build with the LiteRT backend (LiteRt* C API; runs .tflite via the CompiledModel runtime)" ON)
 option(ANIRA_WITH_TFLITE      "Build with the legacy TensorFlow Lite backend (TfLite* C API); mutually exclusive with ANIRA_WITH_LITERT" OFF)
-option(ANIRA_WITH_EXECUTORCH  "Build with the ExecuTorch backend (runs .pte models; static-only, requires CMake >= 3.24 on desktop)" ON)
+option(ANIRA_WITH_EXECUTORCH  "Build with the ExecuTorch backend (runs .pte models; static-only)" ON)
 
 # --- Pre-built backend download ------------------------------------------------
 # Backends are downloaded from the anira-project/backends release with this tag.
@@ -373,16 +373,15 @@ target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nloh
 # hidden, never whole-archive — is documented in cmake/aniraBackendHelpers.cmake.
 # ------------------------------------------------------------------------------
 if(ANIRA_WITH_EXECUTORCH)
-    # Desktop: anira::executorch wraps the ExecuTorch CMake package found by
-    # anira_setup_backend — runtime, extensions, kernels and XNNPACK delegate with
-    # their force-load options, the whole-archive microkernels and the ELF
-    # --exclude-libs per archive (see aniraBackendHelpers.cmake). Mobile: the single
-    # merged libexecutorch.a (per ABI on Android, per xcframework slice on iOS),
-    # wrapped like the other static engines. ExecuTorch is static-only, so anira is
+    # anira::executorch wraps ONE merged libexecutorch.a per platform (runtime +
+    # extensions + kernels + XNNPACK delegate, registrations pre-linked into one
+    # archive member; Windows whole-archives the separate registrations lib), so
+    # it links on demand like the other static engines — see
+    # cmake/backends/executorch.cmake. ExecuTorch is static-only, so anira is
     # static here (cmake/validate-options.cmake) and hands the runtime on to its
     # consumer as $<LINK_ONLY:anira::executorch>: the single place it is linked,
-    # which matters — the force-loaded kernels abort at static-init when they
-    # register twice in one process.
+    # which matters — the pre-linked registrations abort at static-init when
+    # they register twice in one process.
     #
     # The ExecuTorch headers vendor a copy of c10 that used to be kept out of every
     # TU but ExecuTorchProcessor.cpp, so that it could not shadow LibTorch's real

@@ -40,7 +40,7 @@
 #    has no dynamic export table.
 #
 # The INTERFACE kind is for engines that come with their own CMake package
-# (LibTorch via find_package(Torch), desktop ExecuTorch via find_package(executorch)):
+# (LibTorch via find_package(Torch)):
 # anira::<engine> then wraps the package's targets through LINK_LIBRARIES and adds
 # the include directories and definitions the package does not carry correctly.
 # ==============================================================================
@@ -159,112 +159,6 @@ function(_anira_static_archive_link_items archive out_libs out_opts)
     set(${out_opts} "${_opts}" PARENT_SCOPE)
 endfunction()
 
-# ------------------------------------------------------------------------------
-# anira_sanitize_executorch_targets(<target>...) — clean up the targets the
-# ExecuTorch CMake package imported, for use inside anira and by its consumers:
-#
-#  * They bake absolute system-library paths from the machine that built the
-#    archives into their INTERFACE_LINK_LIBRARIES (e.g.
-#    .../MacOSX15.5.sdk/usr/lib/libm.tbd, .../Frameworks/Foundation.framework,
-#    or Debian's multiarch /usr/lib/aarch64-linux-gnu/libm.so). Those paths
-#    rarely exist on the consuming machine (Fedora keeps libm in /usr/lib64), so
-#    rewrite them into portable equivalents the consumer's toolchain resolves:
-#    <sdk>/lib<name>.tbd -> <name>, /usr/lib[/<multiarch>]/lib<name>.so -> <name>,
-#    and <path>/<Name>.framework -> -framework <Name>.
-#
-#  * They carry compile usage requirements (include dirs — among them ExecuTorch's
-#    VENDORED c10 headers — compile definitions and options) that would leak into
-#    every TU of a target linking them, and whose include paths do not even survive
-#    anira's install layout. Strip all compile-side usage requirements; the compile
-#    definitions the headers DO need are collected first and returned in <out-defs>,
-#    and anira::executorch carries them together with the right include dirs.
-# ------------------------------------------------------------------------------
-function(anira_sanitize_executorch_targets out_defs)
-    set(_defs "")
-    foreach(_tgt IN LISTS ARGN)
-        get_target_property(_tgt_defs "${_tgt}" INTERFACE_COMPILE_DEFINITIONS)
-        if(_tgt_defs)
-            list(APPEND _defs ${_tgt_defs})
-        endif()
-    endforeach()
-    list(REMOVE_DUPLICATES _defs)
-    set(${out_defs} "${_defs}" PARENT_SCOPE)
-    foreach(_tgt IN LISTS ARGN)
-        set_target_properties("${_tgt}" PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES ""
-            INTERFACE_SYSTEM_INCLUDE_DIRECTORIES ""
-            INTERFACE_COMPILE_OPTIONS ""
-            INTERFACE_COMPILE_DEFINITIONS "")
-        get_target_property(_libs "${_tgt}" INTERFACE_LINK_LIBRARIES)
-        if(NOT _libs)
-            continue()
-        endif()
-        set(_rewritten "")
-        set(_changed FALSE)
-        foreach(_lib IN LISTS _libs)
-            if(_lib MATCHES "^/.*/([A-Za-z0-9_]+)\\.framework$")
-                list(APPEND _rewritten "-framework ${CMAKE_MATCH_1}")
-                set(_changed TRUE)
-            elseif(_lib MATCHES "^/.*/lib([A-Za-z0-9_.+-]+)\\.tbd$")
-                list(APPEND _rewritten "${CMAKE_MATCH_1}")
-                set(_changed TRUE)
-            elseif(_lib MATCHES "^/usr/lib(64)?(/[A-Za-z0-9_-]+)?/lib([A-Za-z0-9_+-]+)\\.so(\\.[0-9.]+)?$")
-                # Linux system library referenced by absolute path from the build
-                # machine (e.g. Debian multiarch /usr/lib/aarch64-linux-gnu/libm.so).
-                # Keep only the library name so the consumer's toolchain resolves it
-                # (-lm) and no bogus -L / rpath entries leak into the link line.
-                list(APPEND _rewritten "${CMAKE_MATCH_3}")
-                set(_changed TRUE)
-            else()
-                list(APPEND _rewritten "${_lib}")
-            endif()
-        endforeach()
-        if(_changed)
-            set_target_properties("${_tgt}" PROPERTIES INTERFACE_LINK_LIBRARIES "${_rewritten}")
-        endif()
-    endforeach()
-endfunction()
-
-# ------------------------------------------------------------------------------
-# anira_find_executorch_package(<path> <out-targets> <out-archives>) — find_package
-# the ExecuTorch CMake package at <path>, return the imported targets it defined
-# (sanitized, see above) and the basenames of the static archives among them — the
-# ELF --exclude-libs list of anira::executorch. Promotes the targets to GLOBAL:
-# imported targets are directory-scoped, and a consumer of a static anira in another
-# directory resolves $<LINK_ONLY:anira::executorch> -> executorch ... at its own link.
-# ------------------------------------------------------------------------------
-function(anira_find_executorch_package path out_targets out_archives out_defs)
-    get_property(_before DIRECTORY PROPERTY IMPORTED_TARGETS)
-    find_package(executorch REQUIRED CONFIG PATHS "${path}" NO_DEFAULT_PATH)
-    get_property(_after DIRECTORY PROPERTY IMPORTED_TARGETS)
-    if(_before)
-        list(REMOVE_ITEM _after ${_before})
-    endif()
-    set(_archives "")
-    foreach(_tgt IN LISTS _after)
-        set_target_properties(${_tgt} PROPERTIES IMPORTED_GLOBAL TRUE)
-        get_target_property(_type ${_tgt} TYPE)
-        if(_type STREQUAL "STATIC_LIBRARY")
-            get_target_property(_configs ${_tgt} IMPORTED_CONFIGURATIONS)
-            set(_props IMPORTED_LOCATION)
-            foreach(_cfg IN LISTS _configs)
-                list(APPEND _props "IMPORTED_LOCATION_${_cfg}")
-            endforeach()
-            foreach(_prop IN LISTS _props)
-                get_target_property(_loc ${_tgt} ${_prop})
-                if(_loc)
-                    get_filename_component(_loc "${_loc}" NAME)
-                    list(APPEND _archives "${_loc}")
-                endif()
-            endforeach()
-        endif()
-    endforeach()
-    list(REMOVE_DUPLICATES _archives)
-    anira_sanitize_executorch_targets(_defs ${_after})
-    set(${out_targets} "${_after}" PARENT_SCOPE)
-    set(${out_archives} "${_archives}" PARENT_SCOPE)
-    set(${out_defs} "${_defs}" PARENT_SCOPE)
-endfunction()
 
 # ------------------------------------------------------------------------------
 # anira_relocate_include_dirs(<from> <to> <target>...) — rewrite every interface
@@ -297,46 +191,3 @@ function(anira_relocate_include_dirs from to)
     endforeach()
 endfunction()
 
-# ------------------------------------------------------------------------------
-# anira_define_executorch_target(<incdir> <archives> <defs> [GLOBAL]) — the desktop
-# anira::executorch: the runtime plus the extension (Module/TensorPtr/data loader),
-# kernel (optimized + quantized CPU ops) and XNNPACK-delegate targets of the package
-# found by anira_find_executorch_package — the ops/backend targets carry the
-# per-platform force-load options their static-initializer registration requires.
-# The CoreML/MPS/MLX delegates are deliberately not linked: anira pins its backends
-# to portable CPU execution, and their exported targets reference absolute SDK
-# paths from the machine that built the archives.
-#
-# XNNPACK's runtime-dispatch config tables reference its microkernel symbols from
-# data sections, which on-demand archive resolution does not satisfy (Apple's
-# linker fails with "does not have address" fixup errors on archive members it
-# never materialized). The microkernel archive is a leaf with no dependencies or
-# colliding symbols, so it is linked whole-archive.
-#
-# The desktop archives are compiled with default visibility and (partly)
-# force-loaded, so every symbol they contribute would become a dynamic export of
-# whatever links them (executorch::, xnn_*, pthreadpool_*, cpuinfo_*, kai_*, the
-# vendored c10:: and Eigen/BLAS). A host that ships its own XNNPACK (LibTorch does)
-# could then interpose the delegate's kernels. ELF localizes them with
-# --exclude-libs per archive basename, which composes with --whole-archive
-# (basenames only, so the installed export stays relocatable). Mach-O has no hidden
-# variant of -force_load: there a plugin embedding a static anira relies on its own
-# -exported_symbols_list (docs/sphinx/troubleshooting.rst).
-# ------------------------------------------------------------------------------
-function(anira_define_executorch_target incdir archives defs)
-    set(_libs executorch executorch_extensions executorch_kernels xnnpack_backend)
-    if(TARGET xnnpack-microkernels-prod)
-        list(APPEND _libs "$<LINK_LIBRARY:WHOLE_ARCHIVE,xnnpack-microkernels-prod>")
-    endif()
-    set(_opts "")
-    if(TANH_BINARY_FORMAT STREQUAL "ELF")
-        foreach(_archive IN LISTS archives)
-            list(APPEND _opts "LINKER:--exclude-libs,${_archive}")
-        endforeach()
-    endif()
-    anira_define_backend_target(executorch INTERFACE ${ARGN}
-        LINK_LIBRARIES ${_libs}
-        LINK_OPTIONS ${_opts}
-        INCLUDE_DIRS "${incdir}" "${incdir}/executorch/runtime/core/portable_type/c10"
-        DEFINITIONS ${defs})
-endfunction()

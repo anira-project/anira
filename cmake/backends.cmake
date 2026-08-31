@@ -28,7 +28,7 @@
 # package defines the same targets from the install prefix (install.cmake).
 #
 # Configurable cache variables (see CMakeLists.txt for the user-facing options):
-#   ANIRA_BACKENDS_VERSION          release tag to download from (default v2.1.1)
+#   ANIRA_BACKENDS_VERSION          release tag to download from (default v2.4.0)
 #   ANIRA_BACKENDS_SKIP_REMOTE_CHECK  skip the live integrity check (offline/reproducible)
 #   ANIRA_<ENGINE>_ROOTDIR          bring-your-own: use this prebuilt tree, skip download
 #   ANIRA_<ENGINE>_URL              override the download URL (custom mirror/build)
@@ -46,6 +46,10 @@ get_filename_component(ANIRA_BACKENDS_MODULES_DIR "${ANIRA_BACKENDS_CMAKE_DIR}/.
 # anira_define_backend_target() and the ExecuTorch package helpers — shared with the
 # installed package, which ships the file next to aniraConfig.cmake.
 include("${ANIRA_BACKENDS_CMAKE_DIR}/aniraBackendHelpers.cmake")
+foreach(_ab_engine onnxruntime tflite litert libtorch executorch)
+    include("${CMAKE_CURRENT_LIST_DIR}/backends/${_ab_engine}.cmake")
+endforeach()
+unset(_ab_engine)
 
 # Default backends release tag. Bump this (and the per-engine versions in
 # _anira_engine_version) when pointing anira at a new anira-project/backends release.
@@ -53,7 +57,7 @@ include("${ANIRA_BACKENDS_CMAKE_DIR}/aniraBackendHelpers.cmake")
 # API (vendored XNNPACK/cpuinfo/pthreadpool internals localized/renamed at
 # packaging), which is what allows static LiteRT + ExecuTorch in one image.
 if(NOT DEFINED ANIRA_BACKENDS_VERSION OR ANIRA_BACKENDS_VERSION STREQUAL "")
-    set(ANIRA_BACKENDS_VERSION "v2.3.0")
+    set(ANIRA_BACKENDS_VERSION "v2.4.0")
 endif()
 
 # ------------------------------------------------------------------------------
@@ -588,58 +592,117 @@ macro(anira_setup_backend id)
         endif()
     endif()
 
-    # ---- Wire the engine into the build (libtorch is special: it has CMake config files).
+
+# ------------------------------------------------------------------------------
+# _anira_resolve_backend_layout() — the uniform prebuilt-archive layout: flat
+# include/ + lib/ on desktop/WASM, lib/<abi>/ on Android, one xcframework slice
+# on iOS. Sets the legacy ANIRA_<ID>_* facts and _ab_incdir/_ab_libdir for the
+# engine wiring macros (cmake/backends/<engine>.cmake). Runs inside
+# anira_setup_backend, so every _ab_* variable is in scope.
+# ------------------------------------------------------------------------------
+macro(_anira_resolve_backend_layout)
+    # onnxruntime / tflite / litert: uniform include/ + lib/ on desktop/WASM,
+    # with per-ABI (Android) and per-xcframework-slice (iOS) layouts handled below.
+    if(_ab_linkage STREQUAL "static")
+        set(ANIRA_${_ab_ID}_IS_STATIC TRUE)
+    else()
+        set(ANIRA_${_ab_ID}_IS_STATIC FALSE)
+    endif()
+    set(ANIRA_${_ab_ID}_ROOTDIR "${_ab_rootdir}")
+    set(ANIRA_${_ab_ID}_LIB_BASENAME "${_ab_libname}")
+    # legacy shared-lib-path var consumed by msvc-support / BuildWasm / examples
+    set(ANIRA_${_ab_ID}_SHARED_LIB_PATH "${_ab_rootdir}")
+
+    if(TANH_OPERATING_SYSTEM STREQUAL "Android")
+        # One archive holds every ABI under lib/<abi>/; select this build's ABI.
+        set(_ab_incdir "${_ab_rootdir}/include")
+        set(_ab_libdir "${_ab_rootdir}/lib/${CMAKE_ANDROID_ARCH_ABI}")
+        if(_ab_linkage STREQUAL "static")
+            set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/lib${_ab_libname}.a")
+            # Path under the install libdir (install.cmake copies lib/<abi>/ as-is).
+            set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${CMAKE_ANDROID_ARCH_ABI}/lib${_ab_libname}.a")
+        endif()
+    elseif(TANH_OPERATING_SYSTEM STREQUAL "iOS")
+        # Pick the xcframework slice matching the active SDK (device vs simulator).
+        if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+            set(_ab_slice "ios-arm64-simulator")
+        else()
+            set(_ab_slice "ios-arm64")
+        endif()
+        set(_ab_xcfwk "${_ab_rootdir}/${_ab_libname}.xcframework/${_ab_slice}")
+        set(_ab_incdir "${_ab_xcfwk}/Headers")
+        set(_ab_libdir "${_ab_xcfwk}")
+        set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_xcfwk}/lib${_ab_libname}.a")
+        set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${_ab_libname}.xcframework/${_ab_slice}/lib${_ab_libname}.a")
+        set(ANIRA_${_ab_ID}_IOS_SLICE "${_ab_slice}")
+    else()
+        # Desktop / WASM: flat include/ + lib/.
+        set(_ab_incdir "${_ab_rootdir}/include")
+        set(_ab_libdir "${_ab_rootdir}/lib")
+        if(_ab_linkage STREQUAL "static")
+            if(TANH_BINARY_FORMAT STREQUAL "PE")
+                set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/${_ab_libname}.lib")
+                set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${_ab_libname}.lib")
+            else()
+                set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/lib${_ab_libname}.a")
+                set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "lib${_ab_libname}.a")
+            endif()
+        endif()
+    endif()
+endmacro()
+
+# ------------------------------------------------------------------------------
+# _anira_define_generic_target() — anira::<id> over the resolved layout: a STATIC
+# archive wrap or a located SHARED library, plus the install-subpath facts. The
+# engine wiring may contribute _ab_extra_incdirs/_ab_extra_defs/
+# _ab_extra_link_libs/_ab_extra_link_opts before calling this.
+# ------------------------------------------------------------------------------
+macro(_anira_define_generic_target)
+    # ---- anira::<id>
+    if(_ab_linkage STREQUAL "static")
+        anira_define_backend_target(${_ab_id} STATIC GLOBAL
+            LOCATION "${ANIRA_${_ab_ID}_STATIC_LIB}"
+            INCLUDE_DIRS ${_ab_incdir} ${_ab_extra_incdirs}
+            DEFINITIONS ${_ab_extra_defs}
+            LINK_LIBRARIES ${_ab_extra_link_libs}
+            LINK_OPTIONS ${_ab_extra_link_opts})
+    else()
+        _anira_locate_shared_lib("${_ab_libdir}" "${_ab_rootdir}" "${_ab_libname}" _ab_shared_lib _ab_implib)
+        anira_define_backend_target(${_ab_id} SHARED GLOBAL
+            LOCATION "${_ab_shared_lib}" IMPLIB "${_ab_implib}"
+            INCLUDE_DIRS ${_ab_incdir})
+        # Paths under the install libdir (install.cmake copies lib/ as-is; on Windows
+        # the DLLs of lib/ and bin/ land in the bindir under the same relative path),
+        # for the installed package's definition of the same target. Empty when the
+        # file lives elsewhere and is therefore not installed.
+        foreach(_ab_kind shared_lib implib)
+            string(TOUPPER "${_ab_kind}" _ab_KIND)
+            set(ANIRA_${_ab_ID}_${_ab_KIND}_SUBPATH "")
+            if(NOT _ab_${_ab_kind} STREQUAL "")
+                foreach(_ab_dir lib bin)
+                    file(RELATIVE_PATH _ab_rel "${_ab_rootdir}/${_ab_dir}" "${_ab_${_ab_kind}}")
+                    if(NOT _ab_rel MATCHES "^\\.\\.")
+                        set(ANIRA_${_ab_ID}_${_ab_KIND}_SUBPATH "${_ab_rel}")
+                        break()
+                    endif()
+                endforeach()
+            endif()
+        endforeach()
+        unset(_ab_dir)
+        unset(_ab_kind)
+        unset(_ab_KIND)
+        unset(_ab_rel)
+        unset(_ab_shared_lib)
+        unset(_ab_implib)
+    endif()
+endmacro()
+
+    # ---- Wire the engine into the build: each engine's wiring lives in
+    # cmake/backends/<engine>.cmake (included at the top of this file); the shared
+    # layout resolution and target definition are the two macros below. armv7l
+    # keeps the legacy shared-engine path (no per-engine assets on that arch).
     if(_ab_id STREQUAL "libtorch")
-        if(_ab_byo STREQUAL "" AND NOT _ab_arch STREQUAL "armv7l")
-            list(APPEND CMAKE_PREFIX_PATH "${_ab_rootdir}")
-            find_package(Torch REQUIRED)
-        endif()
-        # -w silences the (many) warnings from the prebuilt torch headers.
-        if(TARGET torch)
-            target_link_options(torch INTERFACE "-w")
-        endif()
-        if(TARGET torch_library)
-            target_link_options(torch_library INTERFACE "-w")
-        endif()
-        set(LIBTORCH_ROOTDIR "${_ab_rootdir}")
-        set(ANIRA_LIBTORCH_ROOTDIR "${_ab_rootdir}")
-        set(ANIRA_LIBTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
-        # anira::libtorch wraps the package: torch + torch_library + what
-        # find_package(Torch) lists by absolute path (libc10, libkineto, ...), with the
-        # two-level include layout. TORCH_CXX_FLAGS (the libstdc++ ABI switch) rides
-        # on the torch target's interface; CMakeLists.txt additionally makes it a
-        # PUBLIC requirement of anira, since it decides anira's own std:: ABI.
-        set(_ab_torch_libs torch torch_library ${TORCH_LIBRARIES})
-        list(REMOVE_DUPLICATES _ab_torch_libs)
-        anira_define_backend_target(libtorch INTERFACE GLOBAL
-            LINK_LIBRARIES ${_ab_torch_libs}
-            INCLUDE_DIRS "${_ab_rootdir}/include" "${_ab_rootdir}/include/torch/csrc/api/include")
-        unset(_ab_torch_libs)
-    elseif(_ab_id STREQUAL "executorch" AND NOT TANH_OPERATING_SYSTEM STREQUAL "Android" AND NOT TANH_OPERATING_SYSTEM STREQUAL "iOS")
-        # The ExecuTorch desktop archives ship the full ExecuTorch CMake package
-        # (lib/cmake/ExecuTorch), which exports each static library together with
-        # the per-platform force-load options its kernel/backend registration
-        # requires — so wire it via find_package, like libtorch. The mobile
-        # archives ship a single merged libexecutorch.a instead and take the
-        # generic per-ABI / xcframework paths below.
-        if(CMAKE_VERSION VERSION_LESS "3.24")
-            message(FATAL_ERROR "anira: the ExecuTorch backend requires CMake >= 3.24 "
-                                "(demanded by ExecuTorch's exported package config).")
-        endif()
-        # Imports the package (its targets promoted to GLOBAL: a static anira hands
-        # them to its consumer, possibly in another directory, as $<LINK_ONLY:...>),
-        # sanitizes its usage requirements and collects the archive basenames the ELF
-        # --exclude-libs of anira::executorch needs and the compile definitions its
-        # headers need — see aniraBackendHelpers.cmake.
-        anira_find_executorch_package("${_ab_rootdir}/lib/cmake/ExecuTorch"
-            _ab_executorch_targets ANIRA_EXECUTORCH_ARCHIVES ANIRA_EXECUTORCH_COMPILE_DEFINITIONS)
-        unset(_ab_executorch_targets)
-        set(ANIRA_EXECUTORCH_ROOTDIR "${_ab_rootdir}")
-        set(ANIRA_EXECUTORCH_IS_STATIC TRUE)
-        set(ANIRA_EXECUTORCH_LIB_BASENAME "executorch")
-        set(ANIRA_EXECUTORCH_SHARED_LIB_PATH "${_ab_rootdir}")
-        anira_define_executorch_target("${_ab_rootdir}/include"
-            "${ANIRA_EXECUTORCH_ARCHIVES}" "${ANIRA_EXECUTORCH_COMPILE_DEFINITIONS}" GLOBAL)
+        cmake_language(CALL _anira_wire_libtorch)
     elseif(_ab_arch STREQUAL "armv7l")
         # The legacy macro set ANIRA_<ID>_* plus _ab_incdir/_ab_libdir (shared engines only).
         _anira_locate_shared_lib("${_ab_libdir}" "${_ab_rootdir}" "${_ab_libname}" _ab_shared_lib _ab_implib)
@@ -648,128 +711,15 @@ macro(anira_setup_backend id)
         unset(_ab_shared_lib)
         unset(_ab_implib)
     else()
-        # onnxruntime / tflite / litert: uniform include/ + lib/ on desktop/WASM,
-        # with per-ABI (Android) and per-xcframework-slice (iOS) layouts handled below.
-        if(_ab_linkage STREQUAL "static")
-            set(ANIRA_${_ab_ID}_IS_STATIC TRUE)
-        else()
-            set(ANIRA_${_ab_ID}_IS_STATIC FALSE)
-        endif()
-        set(ANIRA_${_ab_ID}_ROOTDIR "${_ab_rootdir}")
-        set(ANIRA_${_ab_ID}_LIB_BASENAME "${_ab_libname}")
-        # legacy shared-lib-path var consumed by msvc-support / BuildWasm / examples
-        set(ANIRA_${_ab_ID}_SHARED_LIB_PATH "${_ab_rootdir}")
-
-        if(TANH_OPERATING_SYSTEM STREQUAL "Android")
-            # One archive holds every ABI under lib/<abi>/; select this build's ABI.
-            set(_ab_incdir "${_ab_rootdir}/include")
-            set(_ab_libdir "${_ab_rootdir}/lib/${CMAKE_ANDROID_ARCH_ABI}")
-            if(_ab_linkage STREQUAL "static")
-                set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/lib${_ab_libname}.a")
-                # Path under the install libdir (install.cmake copies lib/<abi>/ as-is).
-                set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${CMAKE_ANDROID_ARCH_ABI}/lib${_ab_libname}.a")
-            endif()
-        elseif(TANH_OPERATING_SYSTEM STREQUAL "iOS")
-            # Pick the xcframework slice matching the active SDK (device vs simulator).
-            if(_ab_id STREQUAL "tflite")
-                # TFLite ships a TensorFlowLiteC.framework xcframework: a static
-                # (pre-linked Mach-O) framework binary plus flat module headers, and a
-                # fat arm64+x86_64 simulator slice. anira includes the headers by their
-                # canonical <tensorflow/lite/...c_api.h> paths, which the flat Headers/
-                # don't provide, so generate a tiny shim tree that forwards onto the
-                # framework's flat c_api.h and add Headers/ for its (quote-included)
-                # siblings.
-                if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
-                    set(_ab_slice "ios-arm64_x86_64-simulator")
-                else()
-                    set(_ab_slice "ios-arm64")
-                endif()
-                set(_ab_fwk "${_ab_rootdir}/TensorFlowLiteC.xcframework/${_ab_slice}/TensorFlowLiteC.framework")
-                set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_fwk}/TensorFlowLiteC")
-                set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "TensorFlowLiteC.xcframework/${_ab_slice}/TensorFlowLiteC.framework/TensorFlowLiteC")
-                set(ANIRA_${_ab_ID}_IOS_SLICE "${_ab_slice}")
-                set(_ab_shim "${CMAKE_BINARY_DIR}/anira-tflite-ios-shim")
-                set(ANIRA_${_ab_ID}_IOS_SHIM "${_ab_shim}")
-                file(WRITE "${_ab_shim}/tensorflow/lite/c_api.h" "#include <c_api.h>\n")
-                file(WRITE "${_ab_shim}/tensorflow/lite/core/c/c_api.h" "#include <c_api.h>\n")
-                set(_ab_incdir "${_ab_shim}" "${_ab_fwk}/Headers")
-                set(_ab_libdir "${_ab_fwk}")
-            else()
-                # onnxruntime / LiteRT: xcframework named after the lib (onnxruntime /
-                # LiteRt) with a plain static .a plus a flat Headers/ dir per slice.
-                if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
-                    set(_ab_slice "ios-arm64-simulator")
-                else()
-                    set(_ab_slice "ios-arm64")
-                endif()
-                set(_ab_xcfwk "${_ab_rootdir}/${_ab_libname}.xcframework/${_ab_slice}")
-                set(_ab_incdir "${_ab_xcfwk}/Headers")
-                set(_ab_libdir "${_ab_xcfwk}")
-                set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_xcfwk}/lib${_ab_libname}.a")
-                set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${_ab_libname}.xcframework/${_ab_slice}/lib${_ab_libname}.a")
-                set(ANIRA_${_ab_ID}_IOS_SLICE "${_ab_slice}")
-            endif()
-        else()
-            # Desktop / WASM: flat include/ + lib/.
-            set(_ab_incdir "${_ab_rootdir}/include")
-            set(_ab_libdir "${_ab_rootdir}/lib")
-            if(_ab_linkage STREQUAL "static")
-                if(TANH_BINARY_FORMAT STREQUAL "PE")
-                    set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/${_ab_libname}.lib")
-                    set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "${_ab_libname}.lib")
-                else()
-                    set(ANIRA_${_ab_ID}_STATIC_LIB "${_ab_libdir}/lib${_ab_libname}.a")
-                    set(ANIRA_${_ab_ID}_STATIC_LIB_SUBPATH "lib${_ab_libname}.a")
-                endif()
-            endif()
-        endif()
-
-        # ---- anira::<id>
-        if(_ab_linkage STREQUAL "static")
-            set(_ab_defs "")
-            if(_ab_id STREQUAL "tflite")
-                # The TFLite C API headers default to __declspec(dllimport) on Windows;
-                # linking the static archive then leaves __imp_TfLite* unresolved (no
-                # import stubs). TFL_COMPILE_LIBRARY switches the decoration to a
-                # direct reference (a no-op elsewhere). ONNX uses a function-pointer
-                # table and LiteRT's static lib ships import stubs, so only the legacy
-                # TFLite backend needs it.
-                set(_ab_defs TFL_COMPILE_LIBRARY)
-            endif()
-            anira_define_backend_target(${_ab_id} STATIC GLOBAL
-                LOCATION "${ANIRA_${_ab_ID}_STATIC_LIB}"
-                INCLUDE_DIRS ${_ab_incdir}
-                DEFINITIONS ${_ab_defs})
-            unset(_ab_defs)
-        else()
-            _anira_locate_shared_lib("${_ab_libdir}" "${_ab_rootdir}" "${_ab_libname}" _ab_shared_lib _ab_implib)
-            anira_define_backend_target(${_ab_id} SHARED GLOBAL
-                LOCATION "${_ab_shared_lib}" IMPLIB "${_ab_implib}"
-                INCLUDE_DIRS ${_ab_incdir})
-            # Paths under the install libdir (install.cmake copies lib/ as-is; on Windows
-            # the DLLs of lib/ and bin/ land in the bindir under the same relative path),
-            # for the installed package's definition of the same target. Empty when the
-            # file lives elsewhere and is therefore not installed.
-            foreach(_ab_kind shared_lib implib)
-                string(TOUPPER "${_ab_kind}" _ab_KIND)
-                set(ANIRA_${_ab_ID}_${_ab_KIND}_SUBPATH "")
-                if(NOT _ab_${_ab_kind} STREQUAL "")
-                    foreach(_ab_dir lib bin)
-                        file(RELATIVE_PATH _ab_rel "${_ab_rootdir}/${_ab_dir}" "${_ab_${_ab_kind}}")
-                        if(NOT _ab_rel MATCHES "^\\.\\.")
-                            set(ANIRA_${_ab_ID}_${_ab_KIND}_SUBPATH "${_ab_rel}")
-                            break()
-                        endif()
-                    endforeach()
-                endif()
-            endforeach()
-            unset(_ab_dir)
-            unset(_ab_kind)
-            unset(_ab_KIND)
-            unset(_ab_rel)
-            unset(_ab_shared_lib)
-            unset(_ab_implib)
-        endif()
+        set(_ab_extra_incdirs "")
+        set(_ab_extra_defs "")
+        set(_ab_extra_link_libs "")
+        set(_ab_extra_link_opts "")
+        cmake_language(CALL _anira_wire_${_ab_id})
+        unset(_ab_extra_incdirs)
+        unset(_ab_extra_defs)
+        unset(_ab_extra_link_libs)
+        unset(_ab_extra_link_opts)
     endif()
 
     message(STATUS "anira: ${id} ready (${_ab_linkage}) at ${_ab_rootdir}")

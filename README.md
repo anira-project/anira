@@ -142,7 +142,7 @@ By default, LibTorch, ONNXRuntime, LiteRT and ExecuTorch are enabled. You can di
 - OnnxRuntime: ``-DANIRA_WITH_ONNXRUNTIME=OFF``
 - LiteRT (`LiteRt*` C API): ``-DANIRA_WITH_LITERT=OFF`` — runs `.tflite` models through LiteRT's native CompiledModel runtime. Enabled by default; it is the modern TensorFlow-Lite-family backend.
 - TensorFlow Lite (legacy `TfLite*` C API): ``-DANIRA_WITH_TFLITE=ON`` — the **same runtime** as LiteRT exposed through the older C API, so the two are **mutually exclusive**. To use it, disable LiteRT: ``-DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON``.
-- ExecuTorch: ``-DANIRA_WITH_EXECUTORCH=OFF`` — runs `.pte` programs exported ahead-of-time with `torch.export`; PyTorch's edge/mobile inference stack (CPU execution via XNNPACK). Enabled by default; static-only and requires CMake ≥ 3.24 on desktop (disable it to build with an older CMake).
+- ExecuTorch: ``-DANIRA_WITH_EXECUTORCH=OFF`` — runs `.pte` programs exported ahead-of-time with `torch.export`; PyTorch's edge/mobile inference stack (CPU execution via XNNPACK). Enabled by default; static-only.
 
 #### Platform / backend support
 
