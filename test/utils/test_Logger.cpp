@@ -62,14 +62,14 @@ struct Instance {
 struct RecordCollector {
     RecordCollector() {
         thl::Logger::set_callback([this](const thl::Logger::LogRecord& record) {
-            const std::lock_guard<std::mutex> lock(m_mutex);
+            const std::scoped_lock<std::mutex> lock(m_mutex);
             m_records.push_back(record);
         });
     }
     ~RecordCollector() { thl::Logger::clear_callback(); }
 
     bool has(const char* message_fragment, const char* source = "rt") {
-        const std::lock_guard<std::mutex> lock(m_mutex);
+        const std::scoped_lock<std::mutex> lock(m_mutex);
         for (const auto& record : m_records) {
             if (record.m_message.find(message_fragment) != std::string::npos &&
                 record.m_source == source) {
@@ -151,7 +151,7 @@ TEST(Logger, ThreadDrainDeliversRtRecordsWhileASessionExists) {
     ANIRA_LOG_ERROR(log_group::k_scheduler, "sync record from the test");
     EXPECT_TRUE(collector.wait_for("sync record from the test", "native"));
 
-    const std::lock_guard<std::mutex> lock(collector.m_mutex);
+    const std::scoped_lock<std::mutex> lock(collector.m_mutex);
     for (const auto& record : collector.m_records) {
         if (record.m_message.find("from the test") != std::string::npos) {
             EXPECT_EQ(record.m_group, "anira.scheduler");

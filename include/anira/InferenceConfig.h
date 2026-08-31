@@ -86,7 +86,7 @@ struct ANIRA_API ModelData {
               InferenceBackend backend,
               const std::string& model_function = "",
               bool is_binary = false)
-        : ModelData((void*)model_path.data(),
+        : ModelData(const_cast<char*>(model_path.data()),
                     model_path.size(),
                     backend,
                     model_function,
