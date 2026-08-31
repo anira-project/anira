@@ -7,7 +7,7 @@
 
 > **Beyond-mandate items needing explicit sign-off** (marked ⚠ where they appear): PR-tier coverage reduction (§3.6 — in tension with the roadmap's "merges with the full test suite green" rule), the model-repo pinning (§3.5 — changes configure behaviour for every consumer, not just CIs; ships with the PR that carries this document), the on_tag toolchain switch for release artifacts (§3.2), and the nightly cron / merge queue (§3.6). Everything else is either the letter of items 3–4 or pure mechanics.
 >
-> **Status**: steps 0 and 1 are merged (PR #129). Step 0c is **resolved**: sccache spoke the retired v1 cache API without `ACTIONS_CACHE_SERVICE_V2=on` — every write failed read-only (44/44 write errors, a permanent 0% hit rate); the flag is set in every anira workflow and in ci-actions' `cmake-build`. ci-actions is tagged `v0.1.0` (step 3 done; tanh-lib pin: tanh-lib#23), and clang-tidy runs diff-based on PRs (ci-actions#2 + the follow-up PR carrying this note). Steps 2 and 4–7 follow.
+> **Status**: steps 0–3 are done — #129 (steps 0+1, incl. the resolved 0c: sccache spoke the retired v1 cache API without `ACTIONS_CACHE_SERVICE_V2=on`, every write failed read-only), #130 (diff-based clang-tidy), #131 (step 2, the preset catalog), ci-actions tagged `v0.1.0`→`v0.2.1` with tanh-lib pinned (tanh-lib#23). **Step 4 ships with the PR carrying this note**: build_test on the shared actions `@v0.2.1` in preset mode, the PR/full tier split (10/23 legs), MSVC under Ninja+vcvars, the gcc and clang-cl coverage legs, and the `build_test result` aggregation job (the one check branch protection should require). Steps 5–7 follow.
 
 ---
 
