@@ -211,6 +211,8 @@ The queueing problem is solved by running fewer jobs per event, not faster jobs.
 - **U4 — Windows generator fix**: manual mode's Windows branch inherits the sccache-inert VS generator; tanh-lib's own `windows-*` presets have the same dead cache.
 - **U5 — mobile inputs** and **U6 — `inherits`-aware preset parser**: required for step 7 (§3.7 — one shared mobile runner for anira and tanh-lib); they ride the next tag after the first.
 
+**Future consolidation — reusable workflows** (raised 2026-08-31: "why does this YAML live in anira at all?"): the *step* layer is fully shared, but GitHub only runs workflows from a repo's own `.github/workflows/`, so each consumer still carries job scaffolding (triggers, matrices, wiring) plus its repo-specific facts (backend matrix, model cache, linkage assertion, JUCE deps, mobile staging). The next consolidation level is `workflow_call` **reusable workflows** in ci-actions — e.g. a shared build-test workflow taking the matrix JSON and pin as inputs, shrinking each consumer's file to triggers + a `uses:` line (the config-check.yml pattern tanh-tooling already uses). Deliberately deferred until the shapes stop moving (post step 7) and tanh-lib/anira converge enough that the shared workflow doesn't become a parameter jungle.
+
 ---
 
 ## 4. Execution plan — single steps
