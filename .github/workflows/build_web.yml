@@ -1,6 +1,7 @@
 name: build_web
 
 on:
+  merge_group:
   push:
   pull_request:
 

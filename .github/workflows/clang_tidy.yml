@@ -1,6 +1,7 @@
 name: clang_tidy
 
 on:
+  merge_group:
   workflow_dispatch:
   push:
   pull_request:

@@ -9,6 +9,10 @@ name: build_test
 # Release must stay free of /Zi and PCH for the same reason.
 
 on:
+  merge_group:
+  schedule:
+    # Weekly full-tier run (plan §3.6): scheduled events select the full matrix.
+    - cron: "0 3 * * 1"
   workflow_call:
     inputs:
       tier:

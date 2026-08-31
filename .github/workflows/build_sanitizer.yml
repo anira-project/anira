@@ -1,6 +1,7 @@
 name: build_sanitizer
 
 on:
+  merge_group:
   workflow_call:
   workflow_dispatch: # lets you run a build from github.com
   push:

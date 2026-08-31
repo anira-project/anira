@@ -1,6 +1,7 @@
 name: clang_format
 
 on:
+  merge_group:
   workflow_dispatch:
   push:
   pull_request:
