@@ -52,15 +52,15 @@ jobs:
           enableCrossOsArchive: true
       # RTSan (-fsanitize=realtime) requires clang >= 20.
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.4
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.5
         with:
           CLANG_VERSION: "20"
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.4
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.5
         with:
           PRESET: desktop-tests-rtsan
       - name: test
-        uses: tanh-lab/ci-actions/cmake-test@v0.3.4
+        uses: tanh-lab/ci-actions/cmake-test@v0.3.5
         with:
           PRESET: desktop-tests-rtsan
 
