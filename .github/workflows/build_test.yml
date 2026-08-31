@@ -24,6 +24,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fetch the pinned model fixtures (~1.7 GB) once and publish them as a single
+  # cross-OS cache entry; the build jobs restore it instead of every job cloning
+  # the repos at configure time. Only non-PR runs seed (PR runs restore the
+  # default branch's entry — Actions cache scoping); on a miss nothing breaks,
+  # the configure fetches the pins itself (extras/fetch-models.cmake).
+  seed_models_cache:
+    name: seed the model-fixture cache
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: restore or create the cache entry
+        id: models_cache
+        uses: actions/cache@v4
+        with:
+          path: extras/models
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
+      - name: fetch the pinned model repositories
+        if: steps.models_cache.outputs.cache-hit != 'true'
+        run: cmake -P extras/fetch-models.cmake
+
   build_test:
     name: ${{ matrix.name }}
     strategy:
@@ -145,6 +167,12 @@ jobs:
         with:
           submodules: true
           fetch-depth: 0
+      - name: restore the model fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: extras/models
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
       - name: setup
         uses: ./.github/actions/setup
       - name: build

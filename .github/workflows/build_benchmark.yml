@@ -39,6 +39,12 @@ jobs:
         with:
           submodules: true
           fetch-depth: 0
+      - name: restore the model fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: extras/models
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
       - name: setup
         uses: ./.github/actions/setup
       - name: add juce deps
