@@ -1,8 +1,8 @@
 name: build_examples
 
 # Builds every enabled example (JUCE/CLAP plugins, minimal-inference) per
-# platform and linkage. Pull requests run the Linux and Windows shared legs;
-# pushes to example-relevant PR bases and dispatches run everything.
+# platform and linkage in the merge queue; pull requests report only the
+# result stub.
 
 on:
   # PR runs are stubs: only the result job reports (queue entry requires it);
@@ -12,7 +12,7 @@ on:
       - main
   merge_group:
   workflow_call:
-  workflow_dispatch: # lets you run a build from github.com
+  workflow_dispatch:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
@@ -27,6 +27,7 @@ jobs:
   # Emits the tier's matrix include-list (job-level `if` cannot see `matrix`).
   plan:
     name: plan (examples)
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}
@@ -35,10 +36,7 @@ jobs:
         id: tier
         shell: bash
         run: |
-          LEGS='[{"name":"Linux-x86_64-shared","os":"ubuntu-latest","preset":"ci-tests-shared","pr":true},{"name":"Linux-x86_64-static","os":"ubuntu-latest","preset":"ci-tests-static"},{"name":"macOS-arm64-shared","os":"macOS-latest","preset":"ci-tests-shared"},{"name":"macOS-arm64-static","os":"macOS-latest","preset":"ci-tests-static"},{"name":"Windows-x86_64-shared","os":"windows-latest","preset":"windows-msvc-tests-shared","vcvars":"x64","pr":true},{"name":"Windows-x86_64-static","os":"windows-latest","preset":"windows-msvc-tests-static","vcvars":"x64"}]'
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            LEGS=$(echo "$LEGS" | jq -c '[ .[] | select(.pr == true) ]')
-          fi
+          LEGS='[{"name":"Linux-x86_64-shared","os":"ubuntu-latest","preset":"ci-tests-shared"},{"name":"Linux-x86_64-static","os":"ubuntu-latest","preset":"ci-tests-static"},{"name":"macOS-arm64-shared","os":"macOS-latest","preset":"ci-tests-shared"},{"name":"macOS-arm64-static","os":"macOS-latest","preset":"ci-tests-static"},{"name":"Windows-x86_64-shared","os":"windows-latest","preset":"windows-msvc-tests-shared","vcvars":"x64"},{"name":"Windows-x86_64-static","os":"windows-latest","preset":"windows-msvc-tests-static","vcvars":"x64"}]'
           echo "matrix=$(echo "$LEGS" | jq -c .)" >> "$GITHUB_OUTPUT"
 
   build_examples:
@@ -46,7 +44,7 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: plan
     strategy:
-      fail-fast: false # show all errors for each platform (vs. cancel jobs on error)
+      fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
@@ -70,7 +68,7 @@ jobs:
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.0
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.3
       - name: add juce deps
         shell: bash
         run: |
@@ -87,7 +85,7 @@ jobs:
         with:
           arch: ${{ matrix.vcvars }}
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.0
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.3
         with:
           PRESET: ${{ matrix.preset }}
           # The exact example set depends on the active backends (libtorch is

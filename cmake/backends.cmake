@@ -95,11 +95,6 @@ function(_anira_engine_version libname out)
     endif()
 endfunction()
 
-# ------------------------------------------------------------------------------
-# _anira_release_json(<out>) — download the backends release metadata once per
-# configure and cache the path (empty if the check is disabled / unreachable /
-# CMake too old for string(JSON)). Honors $GITHUB_TOKEN to dodge API rate limits.
-# ------------------------------------------------------------------------------
 # _anira_download(<url> <out-file> <status-var> [extra file(DOWNLOAD) args...])
 # file(DOWNLOAD) with one retry after a short pause: transient TLS/connect
 # errors against GitHub happen often enough to fail a CI leg.
@@ -120,6 +115,11 @@ function(_anira_download url dest out_status)
     set(${out_status} "${_st}" PARENT_SCOPE)
 endfunction()
 
+# ------------------------------------------------------------------------------
+# _anira_release_json(<out>) — download the backends release metadata once per
+# configure and cache the path (empty if the check is disabled / unreachable /
+# CMake too old for string(JSON)). Honors $GITHUB_TOKEN to dodge API rate limits.
+# ------------------------------------------------------------------------------
 function(_anira_release_json out)
     get_property(_done GLOBAL PROPERTY _ANIRA_RELEASE_JSON_DONE)
     if(_done)

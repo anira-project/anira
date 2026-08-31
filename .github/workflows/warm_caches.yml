@@ -1,6 +1,6 @@
 name: warm_caches
 
-# The only push-to-main workflow besides docs — the logic lives in
+# The push-to-main cache warmer — the logic lives in
 # tanh-lab/ci-actions' reusable warm-caches workflow (build-only legs plus the
 # model-fixture seed); this file keeps only anira's legs and cache facts. See
 # the reusable workflow's header for why warming must happen on main's scope.
@@ -18,7 +18,7 @@ concurrency:
 jobs:
   warm:
     name: warm
-    uses: tanh-lab/ci-actions/.github/workflows/warm-caches.yml@v0.3.0
+    uses: tanh-lab/ci-actions/.github/workflows/warm-caches.yml@v0.3.3
     with:
       # One build-only leg per platform family (the PR-tier presets), so PR and
       # queue runs restore warm compile caches from main's scope.

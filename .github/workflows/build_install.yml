@@ -4,9 +4,9 @@ name: build_install
 # into a fresh prefix and build + run test/install (an external project using
 # find_package(anira)) against that prefix. Catches headers, exported targets or
 # dependencies (tanh::Core, backends) missing from what `cmake --install`
-# produces — the regular jobs only ever link against the build tree.
-# Pull requests run the Linux legs; pushes run everything. macOS runs shared and
-# static sequentially in one job (the 5-concurrent macOS cap, ci-overhaul §3.6).
+# produces — the regular jobs only ever link against the build tree. Runs in
+# the merge queue; pull requests report only the result stub. macOS runs shared
+# and static sequentially in one job (the 5-concurrent macOS cap, §3.6).
 
 on:
   # PR runs are stubs: only the result job reports (queue entry requires it);
@@ -30,6 +30,7 @@ jobs:
   # Emits the tier's matrix include-list (job-level `if` cannot see `matrix`).
   plan:
     name: plan (install)
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}
@@ -38,10 +39,7 @@ jobs:
         id: tier
         shell: bash
         run: |
-          LEGS='[{"name":"Linux-x86_64-shared","os":"ubuntu-latest","shared":"ON","pr":true},{"name":"Linux-x86_64-static","os":"ubuntu-latest","shared":"OFF","pr":true},{"name":"Windows-x86_64-shared","os":"windows-latest","shared":"ON"},{"name":"Windows-x86_64-static","os":"windows-latest","shared":"OFF"}]'
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            LEGS=$(echo "$LEGS" | jq -c '[ .[] | select(.pr == true) ]')
-          fi
+          LEGS='[{"name":"Linux-x86_64-shared","os":"ubuntu-latest","shared":"ON"},{"name":"Linux-x86_64-static","os":"ubuntu-latest","shared":"OFF"},{"name":"Windows-x86_64-shared","os":"windows-latest","shared":"ON"},{"name":"Windows-x86_64-static","os":"windows-latest","shared":"OFF"}]'
           echo "matrix=$(echo "$LEGS" | jq -c .)" >> "$GITHUB_OUTPUT"
 
   build_install:
@@ -64,9 +62,9 @@ jobs:
           submodules: true
           fetch-depth: 0
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.0
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.3
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.0
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.3
         with:
           BUILD_TYPE: Release
           TARGETS: anira
