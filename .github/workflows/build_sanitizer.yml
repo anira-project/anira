@@ -13,6 +13,10 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # sccache speaks the retired v1 cache API without this and every write fails
+  # read-only ("Cannot write to read-only storage" — the cause of the permanent
+  # 0% hit rate); v2 became the only protocol in 2025.
+  ACTIONS_CACHE_SERVICE_V2: "on"
   # Temporary (CI-overhaul step 0c): every sccache GHA write fails (stats show
   # "Cache write errors: 44/44" on every leg — the cause of the permanent 0%
   # hit rate). Capture the server log on this single-job workflow to see the

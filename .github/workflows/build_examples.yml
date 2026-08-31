@@ -10,6 +10,10 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
+  # sccache speaks the retired v1 cache API without this and every write fails
+  # read-only ("Cannot write to read-only storage" — the cause of the permanent
+  # 0% hit rate); v2 became the only protocol in 2025.
+  ACTIONS_CACHE_SERVICE_V2: "on"
 
 # When pushing new commits, cancel any workflows with the same name on that branch
 concurrency:
