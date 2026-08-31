@@ -1,9 +1,11 @@
 name: build_test
 
 # Desktop build + test over the CI presets and the shared tanh-lab/ci-actions.
-# The matrix lives in .github/build_test_matrix.json; pull requests run the
-# "pr": true subset, every other event runs all legs. Design rationale and
-# tiering policy: docs/ci-overhaul.md. Two constraints worth repeating here:
+# The matrix lives in .github/build_test_matrix.json. Pull requests run the
+# "pr": true subset with the fast tests; the merge queue (and on_tag's call)
+# runs every leg with the full suite; pushes to main run nothing here — the
+# queue already validated the identical tree (docs/ci-overhaul.md §3.6).
+# Two constraints worth repeating:
 # Windows must build under Ninja inside a vcvars environment (the VS generator
 # ignores compiler launchers, so sccache would silently stop caching cl), and
 # Release must stay free of /Zi and PCH for the same reason.
@@ -23,9 +25,6 @@ on:
         type: choice
         options: ["full", "pr"]
         default: "full"
-  push:
-    branches:
-      - main
   pull_request:
     branches:
       - main
@@ -43,34 +42,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Seeds the cross-OS model-fixture cache the build jobs restore. Push runs
-  # only (PRs restore the default branch's entry; a tag-scoped entry would be
-  # restorable by nothing). Deliberately no `needs:` from the build jobs (a
-  # miss just refetches at configure) and continue-on-error (on_tag gates
-  # releases on this workflow's conclusion).
-  seed_models_cache:
-    name: seed the model-fixture cache
-    if: github.event_name != 'pull_request' && !startsWith(github.ref, 'refs/tags/')
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: restore or create the cache entry
-        id: models_cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            extras/models/hybrid-nn/GuitarLSTM
-            extras/models/cnn/steerable-nafx
-            extras/models/stateful-rnn/stateful-lstm
-            extras/models/model-pool/example-models
-            extras/models/third-party/ircam-acids/RAVE
-          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
-          enableCrossOsArchive: true
-      - name: fetch the pinned model repositories
-        if: steps.models_cache.outputs.cache-hit != 'true'
-        run: cmake -P extras/fetch-models.cmake
-
   # Emits the tier's matrix include-list from .github/build_test_matrix.json.
   plan:
     name: plan (build_test)
@@ -144,11 +115,14 @@ jobs:
         uses: tanh-lab/ci-actions/cmake-test@v0.2.2
         with:
           PRESET: ${{ matrix.preset }}
+          # PRs run the fast tests only; the heavy model-inference binaries
+          # (test_handler, test_backends - labeled by binary) run in the queue.
+          CTEST_ARGS: ${{ github.event_name == 'pull_request' && '-LE ''test_handler|test_backends''' || '' }}
       - name: test the x86_64 slice under Rosetta
         # Universal legs run the suite twice on one runner — an x86_64 process
         # spawns fat children as x86_64, so the second slice executes without a
         # second macOS job (docs/ci-overhaul.md §3.6).
-        if: matrix.dualarch
+        if: matrix.dualarch && github.event_name != 'pull_request'
         shell: bash
         run: |
           rc=0

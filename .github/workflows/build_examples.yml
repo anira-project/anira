@@ -8,9 +8,6 @@ on:
   merge_group:
   workflow_call:
   workflow_dispatch: # lets you run a build from github.com
-  pull_request:
-    branches:
-      - main
 
 env:
   SCCACHE_GHA_ENABLED: "true"
@@ -90,3 +87,14 @@ jobs:
           # The exact example set depends on the active backends (libtorch is
           # auto-disabled for static builds), so build everything.
           CMAKE_BUILD_ARGS: "-DANIRA_WITH_EXAMPLES=ON -DANIRA_WITH_TESTS=OFF"
+
+  # The queue's required status for this workflow.
+  result:
+    name: examples result
+    needs: [build_examples]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          [ "${{ needs.build_examples.result }}" = "success" ] || exit 1

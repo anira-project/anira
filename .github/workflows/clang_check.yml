@@ -3,8 +3,6 @@ name: clang_check
 on:
   merge_group:
   workflow_dispatch:
-  push:
-  pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,3 +18,14 @@ jobs:
     with:
       ref: v0.1.5
       family: "clang cmake"
+
+  # The queue's required status for this workflow.
+  result:
+    name: clang_check result
+    needs: [clang-config]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          [ "${{ needs.clang-config.result }}" = "success" ] || exit 1

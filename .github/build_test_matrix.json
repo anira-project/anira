@@ -3,7 +3,7 @@
   "name": "Linux-x86_64-no_inference_engines",
   "os": "ubuntu-latest",
   "preset": "ci-tests-shared",
-  "pr": true,
+  "pr": false,
   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=OFF"
  },
  {
@@ -18,7 +18,7 @@
   "name": "Linux-x86_64-static",
   "os": "ubuntu-latest",
   "preset": "ci-tests-static",
-  "pr": true,
+  "pr": false,
   "assert": "static",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  },
@@ -26,7 +26,7 @@
   "name": "Linux-arm64-shared",
   "os": "ubuntu-24.04-arm",
   "preset": "ci-tests-shared",
-  "pr": true,
+  "pr": false,
   "assert": "shared",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
  },
@@ -51,7 +51,7 @@
   "name": "Windows-x86_64-static",
   "os": "windows-latest",
   "preset": "windows-msvc-tests-static",
-  "pr": true,
+  "pr": false,
   "assert": "static",
   "vcvars": "x64",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
@@ -96,7 +96,7 @@
   "name": "Linux-x86_64-tflite-shared",
   "os": "ubuntu-latest",
   "preset": "ci-tests-shared",
-  "pr": true,
+  "pr": false,
   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"
  },
  {

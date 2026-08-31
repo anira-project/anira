@@ -38,7 +38,10 @@ function(anira_add_test_binary TARGET)
         add_test(NAME ${TARGET} COMMAND ${TARGET})
     else()
         # gtest_discover_tests will register a CTest test for each gtest and run them all in parallel with the rest of the Test.
-        gtest_discover_tests(${TARGET} DISCOVERY_TIMEOUT 90)
+        # Every discovered test carries its binary name as a CTest label, so a
+        # run can select by component (PR CI excludes the heavy model-inference
+        # binaries with -LE "test_handler|test_backends"; the merge queue runs all).
+        gtest_discover_tests(${TARGET} DISCOVERY_TIMEOUT 90 PROPERTIES LABELS ${TARGET})
     endif()
 
     # Only copy runtime DLLs when there are any (a fully static build has none).

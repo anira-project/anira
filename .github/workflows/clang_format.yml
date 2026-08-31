@@ -3,8 +3,6 @@ name: clang_format
 on:
   merge_group:
   workflow_dispatch:
-  push:
-  pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,3 +23,14 @@ jobs:
       - uses: tanh-lab/ci-actions/clang-format-check@v0.2.2
         with:
           SOURCES: "src/ include/ test/ examples/"
+
+  # The queue's required status for this workflow.
+  result:
+    name: clang_format result
+    needs: [format]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          [ "${{ needs.format.result }}" = "success" ] || exit 1
