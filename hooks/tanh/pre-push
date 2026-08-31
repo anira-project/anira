@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# pre-push — diff-based clang-tidy gate (tanh-tooling `hooks` family).
+#
+# Runs clang-tidy over the .cpp files the push changes, against the newest
+# compile_commands.json under build/ (configure a compile-DB-enabled preset —
+# e.g. the repo's clang-tidy preset — once to arm it). Files the compile DB
+# does not know are ignored, which keeps out-of-scope TUs (wasm-only sources,
+# install-consumer projects) out automatically. The gate degrades to a skip —
+# it never blocks a push — when clang-tidy or a compile DB is missing;
+# TANH_SKIP_TIDY=1 skips explicitly.
+#
+# Activation (git does not version hooks):
+#   default setup:   ln -sf ../../hooks/tanh/pre-push .git/hooks/pre-push
+#   core.hooksPath:  chain from your hooks-path pre-push to the repo's
+#                    .git/hooks/pre-push, passing stdin through — pre-push
+#                    hooks read the pushed refs from stdin.
+set -u
+
+[ "${TANH_SKIP_TIDY:-0}" = "1" ] && exit 0
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$repo_root" || exit 0
+
+if ! command -v clang-tidy >/dev/null 2>&1; then
+    echo "pre-push: clang-tidy not found — skipping the tidy gate" >&2
+    exit 0
+fi
+
+# stdin: one "<local ref> <local sha> <remote ref> <remote sha>" line per ref.
+zero=0000000000000000000000000000000000000000
+changed=""
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    [ -z "${local_sha:-}" ] && continue
+    [ "$local_sha" = "$zero" ] && continue # deleting the remote ref
+    if [ "$remote_sha" = "$zero" ]; then
+        # New remote branch: diff against the merge-base with the default branch.
+        base=$(git merge-base "$local_sha" origin/HEAD 2>/dev/null) \
+            || base=$(git merge-base "$local_sha" origin/main 2>/dev/null) \
+            || continue
+        range="$base..$local_sha"
+    else
+        range="$remote_sha..$local_sha"
+    fi
+    changed="$changed
+$(git diff --name-only --diff-filter=d "$range" -- '*.cpp' 2>/dev/null)"
+done
+
+candidates=""
+for f in $(printf '%s\n' "$changed" | sort -u); do
+    [ -f "$f" ] || continue
+    candidates="$candidates $f"
+done
+[ -n "$candidates" ] || exit 0
+
+# Pick the compile DB that knows the most of the changed files — a stale or
+# partial DB (e.g. a configure-only build dir) must not shadow the canonical
+# one (the clang-tidy preset's). DB paths are absolute.
+best_db=""
+best_n=0
+for db in $(ls -t build/*/compile_commands.json build/*/*/compile_commands.json 2>/dev/null); do
+    n=0
+    for f in $candidates; do
+        grep -Fq "$repo_root/$f" "$db" && n=$((n + 1))
+    done
+    if [ "$n" -gt "$best_n" ]; then best_n=$n; best_db=$db; fi
+done
+if [ -z "$best_db" ]; then
+    echo "pre-push: no compile_commands.json under build/ knows the changed files — skipping the tidy gate" >&2
+    echo "          (configure the clang-tidy preset once to arm it)" >&2
+    exit 0
+fi
+db_dir=$(dirname "$best_db")
+
+run=""
+skipped=""
+for f in $candidates; do
+    if grep -Fq "$repo_root/$f" "$best_db"; then run="$run $f"; else skipped="$skipped $f"; fi
+done
+[ -z "$skipped" ] || echo "pre-push: not in $best_db — skipping:$skipped" >&2
+[ -n "$run" ] || exit 0
+
+# Wildcarded check groups mean a newer local clang-tidy can flag what the
+# CI version accepts (and vice versa) — the version matters when verdicts differ.
+echo "pre-push: $(clang-tidy --version | grep -m1 -i version | sed 's/^ *//') ($db_dir) on:$run"
+jobs=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+# shellcheck disable=SC2086
+printf '%s\n' $run | xargs -P "$jobs" -n 1 clang-tidy -p "$db_dir" --warnings-as-errors='*'

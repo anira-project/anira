@@ -65,6 +65,19 @@ variables in ``extras/fetch-models.cmake`` (override with
 ``-DANIRA_MODELS_<NAME>_REF=<sha>``). An existing subdirectory is never
 touched — delete it to refetch at the pin.
 
+An optional pre-push hook runs clang-tidy over the ``.cpp`` files a push
+changes (``hooks/tanh/pre-push``, installed from tanh-tooling like the clang
+configs). Git does not version hooks, so activate it once per clone:
+
+.. code-block:: bash
+
+    ln -sf ../../hooks/tanh/pre-push .git/hooks/pre-push
+
+(or chain to it from your ``core.hooksPath`` pre-push, passing stdin through).
+It needs a compile database — configure the ``clang-tidy`` preset once — and
+skips, never blocking a push, when clang-tidy or the database is missing;
+``TANH_SKIP_TIDY=1`` skips explicitly.
+
 Coding Guidelines
 -----------------
 
