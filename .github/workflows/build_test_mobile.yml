@@ -1,19 +1,17 @@
 name: build_test_mobile
 
-# Mobile build + test. The desktop matrix lives in build_test.yml; mobile is split
-# out because it cross-compiles and runs the suite on a simulator/emulator rather
-# than natively. Each per-component gtest binary (test_utils, test_scheduler,
-# test_backends, test_handler) is launched once per target (see the per-binary
-# CTest entries registered for Android/iOS in test/CMakeLists.txt) instead of one
-# launch per case, so a run is one simctl/adb invocation per binary.
+# Mobile build + test. The desktop matrix lives in build_test.yml; mobile is
+# split out because it cross-compiles and runs the suite on a simulator/emulator.
+# Each per-component gtest binary (test_utils, test_scheduler, test_backends,
+# test_handler) is launched once per target instead of one launch per case.
 #
 # Backend coverage (LibTorch has no mobile build, so it is never enabled here):
-#   - ONNX Runtime + LiteRT (the default pairing)
-#   - TFLite (legacy) on its own — it is mutually exclusive with LiteRT, and on iOS
-#     it also collides with ONNX, so it is built alone
-#   - no backend (core only)
-# Android additionally covers both shared and static linkage (iOS is static-only:
-# the backend xcframeworks ship static).
+# ONE iOS job runs the sets sequentially — ONNX+LiteRT (device build + simulator
+# tests), TFLite alone (mutually exclusive with LiteRT; collides with ONNX on
+# iOS; simulator tests), no-backend (build) — with a single simulator boot: the
+# 5-concurrent macOS cap is the scarce resource (docs/ci-overhaul.md §3.6).
+# Android covers the sets as separate Linux jobs; pull requests run only the
+# ONNX+LiteRT shared leg.
 
 on:
   workflow_call:
@@ -30,34 +28,26 @@ env:
   # Without this, sccache speaks the retired v1 cache API and every write fails.
   ACTIONS_CACHE_SERVICE_V2: "on"
 
-# Hardcode the workflow name (not ${{ github.workflow }}): when on_tag.yml calls this
-# as a reusable workflow, github.workflow becomes "on_tag" — shared with build_test,
-# so cancel-in-progress would cancel one of them. A literal keeps the group distinct
-# in both the standalone (PR/push) and reused (tag) cases.
+# Hardcoded name (not github.workflow): on_tag's reusable call would otherwise
+# share a group with build_test; the event keeps dispatched and push runs apart.
 concurrency:
-  group: build_test_mobile-${{ github.ref }}
+  group: build_test_mobile-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # iOS: per backend set, build the device library (wiring check) and the simulator
-  # test executables, then run each suite once on the simulator.
-  # ---------------------------------------------------------------------------
   ios:
-    name: iOS-${{ matrix.name }}
+    name: iOS
     runs-on: macos-latest # Apple Silicon -> arm64 device + arm64 simulator slices
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: onnx-litert
-            backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
-          - name: tflite
-            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON -DANIRA_WITH_EXECUTORCH=OFF"
-          - name: no-backend
-            backends: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
     env:
-      GITHUB_TOKEN: ${{ github.token }} # lets anira's backend integrity check avoid API rate limits
+      GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
+      IOS_FLAGS: >-
+        -G Ninja -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=sccache
+        -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DBUILD_SHARED_LIBS=OFF
+        -DANIRA_WITH_LIBTORCH=OFF
+      ONNX_LITERT: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
+      TFLITE: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON -DANIRA_WITH_EXECUTORCH=OFF"
+      NO_BACKEND: "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,27 +72,26 @@ jobs:
       - name: cache the build
         uses: mozilla-actions/sccache-action@v0.0.8
 
-      # Device (arm64) — library only: verifies the backend wiring compiles for
-      # iphoneos. No executable is linked, so it is build-coverage, not a run.
-      - name: build device library
+      # Device (arm64) — library only: wiring check, nothing runs.
+      - name: build device library (onnx-litert)
         run: |
-          cmake -B build-ios-device -G Ninja \
-            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=OFF ${{ matrix.backends }}
+          cmake -B build-ios-device ${IOS_FLAGS} -DCMAKE_OSX_SYSROOT=iphoneos ${ONNX_LITERT}
           cmake --build build-ios-device --parallel 4
 
-      # Simulator — the per-component test binaries, each spawned once below.
-      - name: build simulator tests
+      - name: build simulator tests (onnx-litert)
         run: |
-          cmake -B build-ios-sim -G Ninja \
-            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=OFF ${{ matrix.backends }} \
-            -DANIRA_WITH_TESTS=ON
+          cmake -B build-ios-sim ${IOS_FLAGS} -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 ${ONNX_LITERT} -DANIRA_WITH_TESTS=ON
           cmake --build build-ios-sim --parallel 4
+
+      - name: build simulator tests (tflite)
+        run: |
+          cmake -B build-ios-sim-tflite ${IOS_FLAGS} -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 ${TFLITE} -DANIRA_WITH_TESTS=ON
+          cmake --build build-ios-sim-tflite --parallel 4
+
+      - name: build simulator library (no-backend)
+        run: |
+          cmake -B build-ios-sim-nobackend ${IOS_FLAGS} -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 ${NO_BACKEND}
+          cmake --build build-ios-sim-nobackend --parallel 4
 
       - name: run tests on the simulator
         run: |
@@ -114,25 +103,30 @@ jobs:
           # The simulator shares the host filesystem, so the baked model paths
           # resolve as-is; failures are collected so one run reports every suite.
           rc=0
-          for t in test_utils test_scheduler test_backends test_handler; do
-            xcrun simctl spawn "$UDID" "$PWD/build-ios-sim/test/$t.app/$t" --gtest_brief=1 || rc=1
+          for build in build-ios-sim build-ios-sim-tflite; do
+            for t in test_utils test_scheduler test_backends test_handler; do
+              xcrun simctl spawn "$UDID" "$PWD/$build/test/$t.app/$t" --gtest_brief=1 || rc=1
+            done
           done
           exit $rc
 
   # ---------------------------------------------------------------------------
-  # Android: per backend set + linkage, build arm64-v8a (build-only; no accelerated
-  # arm emulator on x86 CI) and x86_64, then run the x86_64 suite on a hardware-
-  # accelerated emulator.
+  # Android: per backend set + linkage, build arm64-v8a (build-only; no
+  # accelerated arm emulator on x86 CI) and x86_64, then run the x86_64 suite on
+  # a hardware-accelerated emulator. Pull requests run the onnx-litert-shared
+  # leg only.
   # ---------------------------------------------------------------------------
   android:
     name: Android-${{ matrix.name }}
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || matrix.pr == true
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: onnx-litert-shared
             shared: ON
+            pr: true
             backends: "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"
           - name: onnx-litert-static
             shared: OFF
@@ -170,9 +164,9 @@ jobs:
       - name: cache the build
         uses: mozilla-actions/sccache-action@v0.0.8
 
-      # arm64-v8a: build the full test executable to verify it compiles + links for
-      # the ABI we ship most. Not run here (no accelerated arm emulator on an x86
-      # host); the x86_64 emulator below provides the actual execution coverage.
+      # arm64-v8a: build the full test executables to verify they compile + link
+      # for the ABI we ship most. Not run here (no accelerated arm emulator on an
+      # x86 host); the x86_64 emulator below provides the execution coverage.
       - name: build arm64-v8a
         run: |
           cmake -B build-arm64 -G Ninja \
@@ -184,8 +178,8 @@ jobs:
             -DANIRA_WITH_TESTS=ON
           cmake --build build-arm64 --parallel 4
 
-      # x86_64: build with the model paths pointed at the on-device staging dir so
-      # the binary + JSON configs reference where the model tree is pushed.
+      # x86_64: model paths pointed at the on-device staging dir so the binaries
+      # + JSON configs reference where the model tree is pushed.
       - name: build x86_64
         run: |
           cmake -B build-x86_64 -G Ninja \
@@ -213,6 +207,6 @@ jobs:
           emulator-options: -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
           # android-emulator-runner runs each line of an inline script in its own
-          # shell, so the staging + run logic lives in one committed script where the
-          # variables persist.
+          # shell, so the staging + run logic lives in one committed script where
+          # the variables persist.
           script: bash .github/scripts/android_emulator_test.sh

@@ -1,53 +1,149 @@
 [
-  {"name": "Linux-x86_64-no_inference_engines", "os": "ubuntu-latest", "preset": "ci-tests-shared", "pr": true,
-   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=OFF"},
-
-  {"name": "Linux-x86_64-shared", "os": "ubuntu-latest", "preset": "ci-tests-shared", "pr": true, "assert": "shared",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "Linux-x86_64-static", "os": "ubuntu-latest", "preset": "ci-tests-static", "pr": true, "assert": "static",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "Linux-arm64-shared", "os": "ubuntu-24.04-arm", "preset": "ci-tests-shared", "pr": true, "assert": "shared",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "Linux-arm64-static", "os": "ubuntu-24.04-arm", "preset": "ci-tests-static", "pr": false, "assert": "static",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-
-  {"name": "Windows-x86_64-shared", "os": "windows-latest", "preset": "windows-msvc-tests-shared", "pr": true, "assert": "shared", "vcvars": "x64",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "Windows-x86_64-static", "os": "windows-latest", "preset": "windows-msvc-tests-static", "pr": true, "assert": "static", "vcvars": "x64",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "Windows-arm64-shared", "os": "windows-11-arm", "preset": "windows-msvc-tests-shared", "pr": false, "assert": "shared", "vcvars": "arm64",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "Windows-arm64-static", "os": "windows-11-arm", "preset": "windows-msvc-tests-static", "pr": false, "assert": "static", "vcvars": "arm64",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-
-  {"name": "macOS-x86_64-shared", "os": "macos-15-intel", "preset": "ci-tests-shared", "pr": true, "assert": "shared",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "macOS-x86_64-static", "os": "macos-15-intel", "preset": "ci-tests-static", "pr": false, "assert": "static",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "macOS-arm64-shared", "os": "macOS-latest", "preset": "ci-tests-shared", "pr": true, "assert": "shared",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "macOS-arm64-static", "os": "macOS-latest", "preset": "ci-tests-static", "pr": true, "assert": "static",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "macOS-universal-shared", "os": "macOS-latest", "preset": "macos-universal-tests-shared", "pr": false, "assert": "shared",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "macOS-universal-static", "os": "macOS-latest", "preset": "macos-universal-tests-static", "pr": false, "assert": "static",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-
-  {"name": "Linux-x86_64-tflite-shared", "os": "ubuntu-latest", "preset": "ci-tests-shared", "pr": true,
-   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"},
-  {"name": "Linux-x86_64-tflite-static", "os": "ubuntu-latest", "preset": "ci-tests-static", "pr": false,
-   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"},
-  {"name": "macOS-arm64-tflite-shared", "os": "macOS-latest", "preset": "ci-tests-shared", "pr": false,
-   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"},
-  {"name": "macOS-arm64-tflite-static", "os": "macOS-latest", "preset": "ci-tests-static", "pr": false,
-   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"},
-  {"name": "Windows-x86_64-tflite-shared", "os": "windows-latest", "preset": "windows-msvc-tests-shared", "pr": false, "vcvars": "x64",
-   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"},
-  {"name": "Windows-x86_64-tflite-static", "os": "windows-latest", "preset": "windows-msvc-tests-static", "pr": false, "vcvars": "x64",
-   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"},
-
-  {"name": "Linux-x86_64-gcc", "os": "ubuntu-latest", "preset": "ci-tests-gcc", "pr": false, "assert": "shared",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
-  {"name": "Windows-x86_64-clang", "os": "windows-latest", "preset": "windows-clang-tests-shared", "pr": false, "assert": "shared", "vcvars": "x64",
-   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"}
+ {
+  "name": "Linux-x86_64-no_inference_engines",
+  "os": "ubuntu-latest",
+  "preset": "ci-tests-shared",
+  "pr": true,
+  "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=OFF"
+ },
+ {
+  "name": "Linux-x86_64-shared",
+  "os": "ubuntu-latest",
+  "preset": "ci-tests-shared",
+  "pr": true,
+  "assert": "shared",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+ },
+ {
+  "name": "Linux-x86_64-static",
+  "os": "ubuntu-latest",
+  "preset": "ci-tests-static",
+  "pr": true,
+  "assert": "static",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+ },
+ {
+  "name": "Linux-arm64-shared",
+  "os": "ubuntu-24.04-arm",
+  "preset": "ci-tests-shared",
+  "pr": true,
+  "assert": "shared",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+ },
+ {
+  "name": "Linux-arm64-static",
+  "os": "ubuntu-24.04-arm",
+  "preset": "ci-tests-static",
+  "pr": false,
+  "assert": "static",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+ },
+ {
+  "name": "Windows-x86_64-shared",
+  "os": "windows-latest",
+  "preset": "windows-msvc-tests-shared",
+  "pr": true,
+  "assert": "shared",
+  "vcvars": "x64",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+ },
+ {
+  "name": "Windows-x86_64-static",
+  "os": "windows-latest",
+  "preset": "windows-msvc-tests-static",
+  "pr": true,
+  "assert": "static",
+  "vcvars": "x64",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+ },
+ {
+  "name": "Windows-arm64-shared",
+  "os": "windows-11-arm",
+  "preset": "windows-msvc-tests-shared",
+  "pr": false,
+  "assert": "shared",
+  "vcvars": "arm64",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+ },
+ {
+  "name": "Windows-arm64-static",
+  "os": "windows-11-arm",
+  "preset": "windows-msvc-tests-static",
+  "pr": false,
+  "assert": "static",
+  "vcvars": "arm64",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+ },
+ {
+  "name": "macOS-universal-shared",
+  "os": "macOS-latest",
+  "preset": "macos-universal-tests-shared",
+  "pr": true,
+  "assert": "shared",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF",
+  "dualarch": "macos-universal-shared"
+ },
+ {
+  "name": "macOS-universal-static",
+  "os": "macOS-latest",
+  "preset": "macos-universal-tests-static",
+  "pr": false,
+  "assert": "static",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF",
+  "dualarch": "macos-universal-static"
+ },
+ {
+  "name": "Linux-x86_64-tflite-shared",
+  "os": "ubuntu-latest",
+  "preset": "ci-tests-shared",
+  "pr": true,
+  "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"
+ },
+ {
+  "name": "Linux-x86_64-tflite-static",
+  "os": "ubuntu-latest",
+  "preset": "ci-tests-static",
+  "pr": false,
+  "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"
+ },
+ {
+  "name": "Windows-x86_64-tflite-shared",
+  "os": "windows-latest",
+  "preset": "windows-msvc-tests-shared",
+  "pr": false,
+  "vcvars": "x64",
+  "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"
+ },
+ {
+  "name": "Windows-x86_64-tflite-static",
+  "os": "windows-latest",
+  "preset": "windows-msvc-tests-static",
+  "pr": false,
+  "vcvars": "x64",
+  "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"
+ },
+ {
+  "name": "macOS-universal-tflite-static",
+  "os": "macOS-latest",
+  "preset": "macos-universal-tests-static",
+  "pr": false,
+  "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"
+ },
+ {
+  "name": "Linux-x86_64-gcc",
+  "os": "ubuntu-latest",
+  "preset": "ci-tests-gcc",
+  "pr": false,
+  "assert": "shared",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+ },
+ {
+  "name": "Windows-x86_64-clang",
+  "os": "windows-latest",
+  "preset": "windows-clang-tests-shared",
+  "pr": false,
+  "assert": "shared",
+  "vcvars": "x64",
+  "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+ }
 ]

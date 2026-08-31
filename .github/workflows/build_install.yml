@@ -5,6 +5,8 @@ name: build_install
 # find_package(anira)) against that prefix. Catches headers, exported targets or
 # dependencies (tanh::Core, backends) missing from what `cmake --install`
 # produces — the regular jobs only ever link against the build tree.
+# Pull requests run the Linux legs; pushes run everything. macOS runs shared and
+# static sequentially in one job (the 5-concurrent macOS cap, ci-overhaul §3.6).
 
 on:
   workflow_dispatch:
@@ -17,18 +19,17 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
-  # sccache speaks the retired v1 cache API without this and every write fails
-  # read-only ("Cannot write to read-only storage" — the cause of the permanent
-  # 0% hit rate); v2 became the only protocol in 2025.
+  # Without this, sccache speaks the retired v1 cache API and every write fails.
   ACTIONS_CACHE_SERVICE_V2: "on"
 
 concurrency:
-  group: build_install-${{ github.ref }}
+  group: build_install-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build_install:
     name: ${{ matrix.name }}
+    if: github.event_name != 'pull_request' || matrix.pr == true
     strategy:
       fail-fast: false
       matrix:
@@ -38,15 +39,11 @@ jobs:
           - name: Linux-x86_64-shared
             os: ubuntu-latest
             shared: ON
+            pr: true
           - name: Linux-x86_64-static
             os: ubuntu-latest
             shared: OFF
-          - name: macOS-arm64-shared
-            os: macOS-latest
-            shared: ON
-          - name: macOS-arm64-static
-            os: macOS-latest
-            shared: OFF
+            pr: true
           - name: Windows-x86_64-shared
             os: windows-latest
             shared: ON
@@ -54,24 +51,25 @@ jobs:
             os: windows-latest
             shared: OFF
     runs-on: ${{ matrix.os }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
     steps:
       - name: get repo and submodules
         uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 0
-      - name: setup
-        uses: ./.github/actions/setup
+      - name: setup build tools
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.2.2
       - name: build
-        uses: ./.github/actions/build
+        uses: tanh-lab/ci-actions/cmake-build@v0.2.2
         with:
           BUILD_TYPE: Release
-          CMAKE_BUILD_PARALLEL_LEVEL: 4
-          TARGETS: (anira)
+          TARGETS: anira
           CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} -DANIRA_WITH_INSTALL=ON -DANIRA_WITH_TESTS=OFF -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF"
       # The prefix is passed at install time rather than through CMAKE_BUILD_ARGS:
-      # the composite build action expands that string unquoted in bash, which
-      # strips the backslashes out of a Windows workspace path.
+      # the build action expands that string unquoted in bash, which strips the
+      # backslashes out of a Windows workspace path.
       - name: install
         shell: bash
         run: |
@@ -104,8 +102,46 @@ jobs:
             # The plugin-shaped engine consumer must export no engine symbol (the
             # InstallConsumer CTest, test/install/run-install-test.cmake, runs the
             # same check).
-            if [[ "$RUNNER_OS" == "macOS" ]]; then NM="nm -gU"; else NM="nm -D --defined-only"; fi
-            if $NM build-consumer/consumer_engine_module.so | grep -E "_ZN3Ort|_ZN11onnxruntime|[ _]Ort[A-Z]|OrtGetApiBase"; then
+            if nm -D --defined-only build-consumer/consumer_engine_module.so | grep -E "_ZN3Ort|_ZN11onnxruntime|[ _]Ort[A-Z]|OrtGetApiBase"; then
               echo "consumer_engine_module exports engine symbols"; exit 1
             fi
           fi
+
+  # One macOS runner does shared and static sequentially (raw cmake over the ci
+  # presets — their distinct binaryDirs keep the two configurations apart).
+  build_install_macos:
+    name: macOS-arm64
+    if: github.event_name != 'pull_request'
+    runs-on: macOS-latest
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - name: install deps
+        run: brew install ninja
+      - name: cache the build
+        uses: mozilla-actions/sccache-action@v0.0.8
+      - name: build, install, and run the consumers (shared + static)
+        shell: bash
+        run: |
+          set -e
+          for cfg in shared static; do
+            if [ "$cfg" = "shared" ]; then SHARED=ON; else SHARED=OFF; fi
+            cmake --preset "ci-tests-$cfg" \
+              -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+              -DANIRA_WITH_TESTS=OFF -DANIRA_WITH_INSTALL=ON \
+              -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF
+            cmake --build "build/ci/tests-$cfg" --target anira --parallel 4
+            PREFIX="$PWD/prefix-$cfg"
+            cmake --install "build/ci/tests-$cfg" --prefix "$PREFIX"
+            cmake -S test/install -B "build-consumer-$cfg" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"
+            cmake --build "build-consumer-$cfg" --parallel
+            "./build-consumer-$cfg/consumer"
+            "./build-consumer-$cfg/consumer_engine"
+            if nm -gU "build-consumer-$cfg/consumer_engine_module.so" | grep -E "_ZN3Ort|_ZN11onnxruntime|[ _]Ort[A-Z]|OrtGetApiBase"; then
+              echo "consumer_engine_module exports engine symbols"; exit 1
+            fi
+          done

@@ -3,7 +3,6 @@ name: build_sanitizer
 on:
   workflow_call:
   workflow_dispatch: # lets you run a build from github.com
-  # Runs the workflow on all push events
   push:
     branches:
       - main
@@ -13,14 +12,11 @@ on:
 
 env:
   SCCACHE_GHA_ENABLED: "true"
-  # sccache speaks the retired v1 cache API without this and every write fails
-  # read-only ("Cannot write to read-only storage" — the cause of the permanent
-  # 0% hit rate); v2 became the only protocol in 2025.
+  # Without this, sccache speaks the retired v1 cache API and every write fails.
   ACTIONS_CACHE_SERVICE_V2: "on"
 
-# When pushing new commits, cancel any workflows with the same name on that branch
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -36,9 +32,9 @@ jobs:
       matrix:
         name: [Linux-x86_64]
         os: [ubuntu-latest]
-
     runs-on: ${{ matrix.os }}
-
+    env:
+      GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
     steps:
       - name: get repo and submodules
         uses: actions/checkout@v4
@@ -57,23 +53,16 @@ jobs:
             extras/models/third-party/ircam-acids/RAVE
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
-      # RTSan (-fsanitize=realtime) instruments the ANIRA_REALTIME ([[clang::nonblocking]])
-      # hot path and requires clang >= 20, so install it before configuring.
-      - name: install clang 20
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@main
+      # RTSan (-fsanitize=realtime) requires clang >= 20.
+      - name: setup build tools
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.2.2
         with:
           CLANG_VERSION: "20"
-      - name: setup
-        uses: ./.github/actions/setup
       - name: build
-        uses: ./.github/actions/build
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+        uses: tanh-lab/ci-actions/cmake-build@v0.2.2
         with:
-          BUILD_TYPE: Release
-          CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_BUILD_ARGS: "-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBUILD_SHARED_LIBS=ON -DANIRA_WITH_TESTS=ON -DANIRA_WITH_RTSAN=ON"
+          PRESET: desktop-tests-rtsan
       - name: test
-        uses: ./.github/actions/test
+        uses: tanh-lab/ci-actions/cmake-test@v0.2.2
         with:
-          CTEST_ARGS: "-j 4"
+          PRESET: desktop-tests-rtsan
