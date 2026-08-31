@@ -35,20 +35,20 @@ jobs:
         # auto-disables LibTorch (shared-only upstream), so a *-static zip ships
         # ONNX Runtime + LiteRT only.
         include:
-          - { name: Linux-x86_64-shared,      os: ubuntu-latest,    preset: ci-tests-shared,             builddir: build/ci/tests-shared }
-          - { name: Linux-x86_64-static,      os: ubuntu-latest,    preset: ci-tests-static,             builddir: build/ci/tests-static }
-          - { name: Linux-aarch64-shared,     os: ubuntu-24.04-arm, preset: ci-tests-shared,             builddir: build/ci/tests-shared }
-          - { name: Linux-aarch64-static,     os: ubuntu-24.04-arm, preset: ci-tests-static,             builddir: build/ci/tests-static }
-          - { name: Windows-x86_64-shared,    os: windows-latest,   preset: windows-msvc-tests-shared,   builddir: build/ci/windows-msvc-shared, vcvars: x64 }
-          - { name: Windows-x86_64-static,    os: windows-latest,   preset: windows-msvc-tests-static,   builddir: build/ci/windows-msvc-static, vcvars: x64 }
-          - { name: Windows-arm64-shared,     os: windows-11-arm,   preset: windows-msvc-tests-shared,   builddir: build/ci/windows-msvc-shared, vcvars: arm64 }
-          - { name: Windows-arm64-static,     os: windows-11-arm,   preset: windows-msvc-tests-static,   builddir: build/ci/windows-msvc-static, vcvars: arm64 }
-          - { name: macOS-x86_64-shared,      os: macOS-latest,     preset: ci-tests-shared,             builddir: build/ci/tests-shared, arch: x86_64 }
-          - { name: macOS-x86_64-static,      os: macOS-latest,     preset: ci-tests-static,             builddir: build/ci/tests-static, arch: x86_64 }
-          - { name: macOS-arm64-shared,       os: macOS-latest,     preset: ci-tests-shared,             builddir: build/ci/tests-shared }
-          - { name: macOS-arm64-static,       os: macOS-latest,     preset: ci-tests-static,             builddir: build/ci/tests-static }
-          - { name: macOS-universal-shared,   os: macOS-latest,     preset: macos-universal-tests-shared, builddir: build/ci/macos-universal-shared }
-          - { name: macOS-universal-static,   os: macOS-latest,     preset: macos-universal-tests-static, builddir: build/ci/macos-universal-static }
+          - { name: Linux-x86_64-shared,      os: ubuntu-latest,    preset: ci-tests-shared}
+          - { name: Linux-x86_64-static,      os: ubuntu-latest,    preset: ci-tests-static}
+          - { name: Linux-aarch64-shared,     os: ubuntu-24.04-arm, preset: ci-tests-shared}
+          - { name: Linux-aarch64-static,     os: ubuntu-24.04-arm, preset: ci-tests-static}
+          - { name: Windows-x86_64-shared,    os: windows-latest,   preset: windows-msvc-tests-shared, vcvars: x64 }
+          - { name: Windows-x86_64-static,    os: windows-latest,   preset: windows-msvc-tests-static, vcvars: x64 }
+          - { name: Windows-arm64-shared,     os: windows-11-arm,   preset: windows-msvc-tests-shared, vcvars: arm64 }
+          - { name: Windows-arm64-static,     os: windows-11-arm,   preset: windows-msvc-tests-static, vcvars: arm64 }
+          - { name: macOS-x86_64-shared,      os: macOS-latest,     preset: ci-tests-shared, arch: x86_64 }
+          - { name: macOS-x86_64-static,      os: macOS-latest,     preset: ci-tests-static, arch: x86_64 }
+          - { name: macOS-arm64-shared,       os: macOS-latest,     preset: ci-tests-shared}
+          - { name: macOS-arm64-static,       os: macOS-latest,     preset: ci-tests-static}
+          - { name: macOS-universal-shared,   os: macOS-latest,     preset: macos-universal-tests-shared}
+          - { name: macOS-universal-static,   os: macOS-latest,     preset: macos-universal-tests-static}
     runs-on: ${{ matrix.os }}
     env:
       GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
@@ -59,7 +59,7 @@ jobs:
           submodules: true
           fetch-depth: 0
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.3
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.4
       # Ninja needs cl.exe and its headers/libs from a vcvars environment.
       - name: MSVC environment
         if: matrix.vcvars
@@ -67,16 +67,21 @@ jobs:
         with:
           arch: ${{ matrix.vcvars }}
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.3
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.4
         with:
           PRESET: ${{ matrix.preset }}
           CMAKE_BUILD_ARGS: "-DANIRA_WITH_TESTS=OFF -DANIRA_WITH_INSTALL=ON ${{ matrix.arch && format('-DCMAKE_OSX_ARCHITECTURES={0}', matrix.arch) || '' }}"
+      - name: resolve the build directory
+        id: bdir
+        uses: tanh-lab/ci-actions/preset-binary-dir@v0.3.4
+        with:
+          PRESET: ${{ matrix.preset }}
       - name: install
         id: install
         uses: ./.github/actions/install
         with:
           BUILD_TYPE: Release
-          BUILD_DIR: ${{ matrix.builddir }}
+          BUILD_DIR: ${{ steps.bdir.outputs.BUILD_DIR }}
           PROJECT_NAME: anira
           DEV_ID_APP_CERT: ${{ secrets.DEV_ID_APP_CERT }}
           DEV_ID_APP_PWD: ${{ secrets.DEV_ID_APP_PWD }}
@@ -225,7 +230,7 @@ jobs:
           sudo npm i -g typescript@5.9
           tsc --version
       - name: build wasm
-        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.3
+        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.4
         with:
           PRESET: wasm-release
       - name: setup node

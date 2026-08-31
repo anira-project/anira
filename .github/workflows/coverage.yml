@@ -23,15 +23,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Two legs, merged by Codecov into one report: llvm-cov only sees files
+  # compiled into the uploaded binaries, so the shared leg misses ExecuTorch
+  # (static-only) and TFLite (mutually exclusive with LiteRT) — the static leg
+  # covers both. Wasm-only and benchmark sources are excluded in codecov.yml.
   coverage:
-    name: coverage
-    uses: tanh-lab/ci-actions/.github/workflows/coverage.yml@v0.3.2
+    name: coverage / ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: shared-litert
+            args: "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+          - name: static-executorch-tflite
+            args: "-DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=ON"
+    uses: tanh-lab/ci-actions/.github/workflows/coverage.yml@v0.3.4
     permissions:
       contents: read
       id-token: write # Codecov's tokenless OIDC upload
     with:
       preset: ci-tests-coverage
-      build_args: "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
+      build_args: ${{ matrix.args }}
       lib_pattern: "libanira.so*"
       models_cache_prefix: anira-models-v1
       models_hash_glob: extras/fetch-models.cmake

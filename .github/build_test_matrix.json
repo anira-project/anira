@@ -81,7 +81,8 @@
   "pr": true,
   "assert_grep": "disabling ANIRA_WITH_EXECUTORCH",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF",
-  "dualarch": "build/ci/macos-universal-shared"
+  "dualarch": "build/ci/macos-universal-shared",
+  "multiarch": true
  },
  {
   "name": "macOS-universal-static",
@@ -90,7 +91,8 @@
   "pr": false,
   "assert_grep": "disabling ANIRA_WITH_LIBTORCH",
   "args": "-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF",
-  "dualarch": "build/ci/macos-universal-static"
+  "dualarch": "build/ci/macos-universal-static",
+  "multiarch": true
  },
  {
   "name": "Linux-x86_64-tflite-shared",
@@ -127,7 +129,8 @@
   "os": "macOS-latest",
   "preset": "macos-universal-tests-static",
   "pr": false,
-  "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"
+  "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON",
+  "multiarch": true
  },
  {
   "name": "Linux-x86_64-gcc",

@@ -12,10 +12,6 @@ on:
   merge_group:
   workflow_dispatch:
 
-env:
-  SCCACHE_GHA_ENABLED: "true"
-  # Without this, sccache speaks the retired v1 cache API and every write fails.
-  ACTIONS_CACHE_SERVICE_V2: "on"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
@@ -66,7 +62,7 @@ jobs:
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.3
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.4
       - name: add juce deps
         shell: bash
         run: |
@@ -83,14 +79,14 @@ jobs:
         with:
           arch: ${{ matrix.vcvars }}
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.3
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.4
         with:
           PRESET: ${{ matrix.preset }}
           TARGETS: cnn-size-benchmark advanced-benchmark simple-benchmark
           # Benchmark + tests + examples: the combination the benchmark fixture needs.
           CMAKE_BUILD_ARGS: "-DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_EXAMPLES=ON"
       - name: test
-        uses: tanh-lab/ci-actions/cmake-test@v0.3.3
+        uses: tanh-lab/ci-actions/cmake-test@v0.3.4
         with:
           PRESET: ${{ matrix.preset }}
           # Only the Benchmark.* suites (the unit tests run in build_test), and
