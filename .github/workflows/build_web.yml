@@ -1,5 +1,10 @@
 name: build_web
 
+# The wasm build runs through the shared cmake-build-wasm action — the emsdk
+# pin lives there, shared across tanh-lab repos. The JS/TS npm package build
+# that follows is anira product code and stays here, in the same job, because
+# it consumes the wasm build outputs.
+
 on:
   workflow_dispatch:
   merge_group:
@@ -19,32 +24,18 @@ jobs:
           submodules: true
           fetch-depth: 0
 
-      - name: install system deps
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
-
-      - name: setup emsdk
-        uses: mymindstorm/setup-emsdk@v14
-        with:
-          version: 4.0.23
-          actions-cache-folder: emsdk-cache-4.0.23
-
-      - name: verify EMSDK env
-        run: |
-          echo "EMSDK=$EMSDK"
-          test -n "$EMSDK"
-          emcc --version
-
+      # emcc emits the .d.ts during the build (--emit-tsd), so the pin must
+      # precede it.
       - name: pin global typescript for emscripten --emit-tsd
         run: |
           sudo npm i -g typescript@5.9
           which tsc
           tsc --version
 
-      - name: configure wasm
-        run: cmake --preset wasm-release
-
       - name: build wasm
-        run: cmake --build --preset wasm-release -j
+        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.0
+        with:
+          PRESET: wasm-release
 
       - name: setup node
         uses: actions/setup-node@v5

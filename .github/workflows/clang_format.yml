@@ -25,8 +25,8 @@ jobs:
             os: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.2.2
-      - uses: tanh-lab/ci-actions/clang-format-check@v0.2.2
+      - uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.0
+      - uses: tanh-lab/ci-actions/clang-format-check@v0.3.0
         with:
           SOURCES: "src/ include/ test/ examples/"
 
