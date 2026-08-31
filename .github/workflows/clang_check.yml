@@ -1,6 +1,11 @@
 name: clang_check
 
 on:
+  # PR runs are stubs: only the result job reports (queue entry requires it);
+  # the real jobs run in the merge queue.
+  pull_request:
+    branches:
+      - main
   merge_group:
   workflow_dispatch:
 
@@ -14,6 +19,7 @@ jobs:
   # install.sh and committing the result (https://github.com/tanh-lab/tanh-tooling);
   # the fetched tanh-lib must pin the same tag.
   clang-config:
+    if: github.event_name != 'pull_request'
     uses: tanh-lab/tanh-tooling/.github/workflows/config-check.yml@v0.1.5
     with:
       ref: v0.1.5
@@ -28,4 +34,5 @@ jobs:
     steps:
       - name: aggregate
         run: |
+          [ "${{ github.event_name }}" = "pull_request" ] && { echo "stub: the real jobs run in the merge queue"; exit 0; }
           [ "${{ needs.clang-config.result }}" = "success" ] || exit 1

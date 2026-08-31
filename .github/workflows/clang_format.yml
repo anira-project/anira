@@ -1,6 +1,11 @@
 name: clang_format
 
 on:
+  # PR runs are stubs: only the result job reports (queue entry requires it);
+  # the real jobs run in the merge queue.
+  pull_request:
+    branches:
+      - main
   merge_group:
   workflow_dispatch:
 
@@ -11,6 +16,7 @@ concurrency:
 jobs:
   format:
     name: clang-format
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -33,4 +39,5 @@ jobs:
     steps:
       - name: aggregate
         run: |
+          [ "${{ github.event_name }}" = "pull_request" ] && { echo "stub: the real jobs run in the merge queue"; exit 0; }
           [ "${{ needs.format.result }}" = "success" ] || exit 1
