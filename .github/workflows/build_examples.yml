@@ -6,9 +6,6 @@ name: build_examples
 
 on:
   merge_group:
-  schedule:
-    # Weekly full-tier run (plan §3.6): scheduled events select the full matrix.
-    - cron: "0 3 * * 1"
   workflow_call:
   workflow_dispatch: # lets you run a build from github.com
   pull_request:
