@@ -22,8 +22,11 @@ namespace anira {
  * @deprecated Use thl::core::Thread. For elevating a thread you did not create
  * (elevate_priority()), use thl::core::Thread::set_current_priority().
  */
-class [[deprecated("use thl::core::Thread with ThreadPriority::RealTime")]] ANIRA_API
-    HighPriorityThread {
+// No ANIRA_API: every member is inline and no anira translation unit includes this
+// header, so there is nothing in the shared library to export. A class-scope
+// dllimport would make MSVC look for members the DLL never defines, which is an
+// unresolved-externals link error in any consumer that instantiates the class.
+class [[deprecated("use thl::core::Thread with ThreadPriority::RealTime")]] HighPriorityThread {
 public:
     HighPriorityThread() = default;
     virtual ~HighPriorityThread() { stop(); }
