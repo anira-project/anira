@@ -1,0 +1,15 @@
+[
+    {
+        "name": "RTSan",
+        "preset": "desktop-tests-rtsan",
+        "models": true
+    },
+    {
+        "name": "ASan-UBSan",
+        "preset": "desktop-tests-asan"
+    },
+    {
+        "name": "TSan",
+        "preset": "desktop-tests-tsan"
+    }
+]

@@ -115,6 +115,50 @@ Testing
 - Ensure all tests pass before submitting
 - If fixing a bug, add a test that reproduces the bug
 
+Sanitizers
+~~~~~~~~~~
+
+Three sanitizer presets gate the merge queue, and each reproduces locally with
+``cmake --preset <name> && cmake --build --preset <name> && ctest --preset <name>``:
+
+``desktop-tests-rtsan``
+   RealtimeSanitizer over the full backend set. Gates the ``ANIRA_REALTIME``
+   (``[[clang::nonblocking]]``) hot path — ``process``/``push_data``/``pop_data``/
+   ``reset`` — with no suppressions, so any allocation, lock, sleep, semaphore or
+   stream syscall reached from a real-time context fails. Requires clang ≥ 20.
+
+``desktop-tests-asan``
+   AddressSanitizer + UndefinedBehaviorSanitizer.
+
+``desktop-tests-tsan``
+   ThreadSanitizer.
+
+The ASan and TSan presets build no engines: the prebuilt backend runtimes are
+uninstrumented, so a sanitized build linking them would report on frames it cannot
+see into. They are ``RelWithDebInfo`` with ``-DNDEBUG`` dropped from the build-type
+flags — ``-O0`` costs roughly 2.4× the test time for no extra signal, and
+``CMAKE_<LANG>_FLAGS`` cannot switch ``assert()`` back on because the build-type
+flags are appended last.
+
+Set ``UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`` when running the ASan
+preset by hand. UndefinedBehaviorSanitizer defaults to print-and-continue, so
+without it a diagnosed undefined behaviour scrolls past and ``ctest`` still passes.
+CI sets this for every leg.
+
+The individual sanitizers are also available as options on any configuration —
+``ANIRA_WITH_RTSAN``, ``ANIRA_WITH_ASAN``, ``ANIRA_WITH_UBSAN``, ``ANIRA_WITH_TSAN``,
+``ANIRA_WITH_LSAN`` — each of which also instruments the tanh-lib built alongside
+anira. ThreadSanitizer cannot be combined with AddressSanitizer or LeakSanitizer.
+
+.. note::
+
+   On macOS 26 with Apple clang, the ASan and TSan runtimes are broken: a
+   hello-world hangs under ``-fsanitize=address`` and crashes under
+   ``-fsanitize=thread``. Use a Homebrew LLVM toolchain with an explicit SDK path
+   (``-DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++``
+   ``-DCMAKE_OSX_SYSROOT=$(xcrun --show-sdk-path)``) to run these presets locally.
+   LeakSanitizer does not exist on macOS at all.
+
 Submitting Changes
 ------------------
 

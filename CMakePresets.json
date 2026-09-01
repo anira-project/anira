@@ -316,6 +316,43 @@
             }
         },
         {
+            "name": "desktop-tests-asan",
+            "inherits": "ci-clang-base",
+            "description": "ASan+UBSan over the engine-free suite (the prebuilt backends are uninstrumented - noengines scope by decision Q6).",
+            "binaryDir": "${sourceDir}/build/ci/asan",
+            "cacheVariables": {
+                "BUILD_SHARED_LIBS": "ON",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_C_FLAGS_RELWITHDEBINFO": "-O2 -g -fno-omit-frame-pointer",
+                "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -fno-omit-frame-pointer",
+                "ANIRA_WITH_LIBTORCH": "OFF",
+                "ANIRA_WITH_ONNXRUNTIME": "OFF",
+                "ANIRA_WITH_LITERT": "OFF",
+                "ANIRA_WITH_EXECUTORCH": "OFF",
+                "ANIRA_WITH_TFLITE": "OFF",
+                "ANIRA_WITH_ASAN": "ON",
+                "ANIRA_WITH_UBSAN": "ON"
+            }
+        },
+        {
+            "name": "desktop-tests-tsan",
+            "inherits": "ci-clang-base",
+            "description": "TSan over the engine-free suite (noengines scope).",
+            "binaryDir": "${sourceDir}/build/ci/tsan",
+            "cacheVariables": {
+                "BUILD_SHARED_LIBS": "ON",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_C_FLAGS_RELWITHDEBINFO": "-O2 -g -fno-omit-frame-pointer",
+                "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -fno-omit-frame-pointer",
+                "ANIRA_WITH_LIBTORCH": "OFF",
+                "ANIRA_WITH_ONNXRUNTIME": "OFF",
+                "ANIRA_WITH_LITERT": "OFF",
+                "ANIRA_WITH_EXECUTORCH": "OFF",
+                "ANIRA_WITH_TFLITE": "OFF",
+                "ANIRA_WITH_TSAN": "ON"
+            }
+        },
+        {
             "name": "android-emulator-tests",
             "inherits": "ci-base",
             "description": "Android x86_64 for the emulator run; model paths baked to the on-device staging dir. Linkage/backends per leg via configure args.",
@@ -506,6 +543,14 @@
             "configurePreset": "desktop-tests-rtsan"
         },
         {
+            "name": "desktop-tests-asan",
+            "configurePreset": "desktop-tests-asan"
+        },
+        {
+            "name": "desktop-tests-tsan",
+            "configurePreset": "desktop-tests-tsan"
+        },
+        {
             "name": "android-emulator-tests",
             "configurePreset": "android-emulator-tests"
         },
@@ -681,6 +726,28 @@
             "execution": {
                 "jobs": 4,
                 "timeout": 600
+            }
+        },
+        {
+            "name": "desktop-tests-asan",
+            "configurePreset": "desktop-tests-asan",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 900
+            }
+        },
+        {
+            "name": "desktop-tests-tsan",
+            "configurePreset": "desktop-tests-tsan",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "jobs": 4,
+                "timeout": 900
             }
         }
     ]

@@ -5,6 +5,10 @@
 #include <anira/utils/InferenceBackend.h>
 #include <concurrentqueue.h>
 
+#if defined(ANIRA_WITH_ASAN) || defined(ANIRA_WITH_LSAN)
+#include <sanitizer/lsan_interface.h>
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -24,6 +28,7 @@
 
 using namespace anira;
 
+namespace {
 struct SessionElementTestParams {
     HostConfig m_host_config;
     InferenceConfig m_inference_config;
@@ -32,6 +37,7 @@ struct SessionElementTestParams {
     std::vector<size_t> m_expected_send_buffer_sizes;
     std::vector<size_t> m_expected_receive_buffer_sizes;
 };
+}  // namespace
 
 namespace {
 template <typename T>
@@ -61,7 +67,9 @@ std::ostream& operator<<(std::ostream& stream, const SessionElementTestParams& p
 }  // namespace
 
 // Test fixture for parameterized SessionElement tests
+namespace {
 class SessionElementTest : public ::testing::TestWithParam<SessionElementTestParams> {};
+}  // namespace
 
 TEST_P(SessionElementTest, LatencyStructAndRingbuffers) {
     auto test_params = GetParam();
@@ -500,6 +508,19 @@ INSTANTIATE_TEST_SUITE_P(
         }),
     build_test_name);
 
+namespace {
+// The two fixtures below outlive their tests on purpose (a detached thread may still be
+// inside the code under test). Tell LeakSanitizer so, or it fails the binary at exit
+// over a leak the tests intend.
+template <typename T>
+T* leak_intentionally(T* p) {
+#if defined(ANIRA_WITH_ASAN) || defined(ANIRA_WITH_LSAN)
+    __lsan_ignore_object(p);
+#endif
+    return p;
+}
+}  // namespace
+
 // =============================================================================
 // Regression: clear() must drain the done-semaphores without blocking
 // =============================================================================
@@ -529,7 +550,8 @@ struct ClearDeadlockFixture {
 }  // namespace
 
 TEST(SessionElementClearTest, ClearWithBlockingRatioDoesNotFreeze) {
-    auto* fixture = new ClearDeadlockFixture();  // leaked deliberately, see above
+    // leaked deliberately, see above
+    auto* fixture = leak_intentionally(new ClearDeadlockFixture());
     fixture->m_session.prepare(HostConfig(2048, 48000));
 
     // Mixed signal state: one struct carries a stale unconsumed completion
@@ -632,7 +654,9 @@ InferenceConfig analyser_twin_config() {
 }
 }  // namespace
 
+namespace {
 class OneSidedStreamingPrepareTest : public ::testing::TestWithParam<bool> {};
+}  // namespace
 
 TEST_P(OneSidedStreamingPrepareTest, GeneratorEqualsTwoSidedTwin) {
     bool const smaller = GetParam();
@@ -729,7 +753,8 @@ struct GeneratorPrepareFixture {
 }  // namespace
 
 TEST(OneSidedStreamingPrepareStandalone, GeneratorPrepareTerminates) {
-    auto* fixture = new GeneratorPrepareFixture();  // leaked deliberately, see above
+    // leaked deliberately, see above
+    auto* fixture = leak_intentionally(new GeneratorPrepareFixture());
 
     std::thread([fixture] {
         fixture->m_session.prepare(HostConfig(512, 48000, true));

@@ -37,6 +37,20 @@ set_target_properties(anira_unload_test PROPERTIES
 # targets (cmake/test-deps.cmake links gtest_main into anira only as a convenience for
 # the in-process test binary).
 target_link_libraries(anira_unload_test PRIVATE gtest gtest_main ${CMAKE_DL_LIBS})
+# The harness deliberately does not link anira (it drives the module via
+# dlopen), so it inherits no sanitizer flags — but the module it loads is
+# instrumented, and a sanitizer runtime arriving via dlopen aborts ("loaded
+# too late"). Instrument the host with the same sanitizers. RTSan is absent
+# from this list on purpose: the parent excludes this whole directory under
+# ANIRA_WITH_RTSAN, so a branch for it here would be unreachable.
+foreach(_ul_kind asan ubsan tsan lsan)
+    string(TOUPPER "${_ul_kind}" _ul_KIND)
+    if(ANIRA_WITH_${_ul_KIND})
+        tanh_add_sanitizer(anira_unload_test ${_ul_kind})
+    endif()
+endforeach()
+unset(_ul_kind)
+unset(_ul_KIND)
 add_dependencies(anira_unload_test anira_unload_module)
 
 # The shared backend runtimes the module links transitively. The test executable pins

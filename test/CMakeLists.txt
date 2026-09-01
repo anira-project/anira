@@ -26,7 +26,9 @@ add_compile_definitions(
 # it is what the shared ci-actions mobile runners auto-discover, and per-component
 # binaries are where the v3 milestones' suites slot in.
 function(anira_add_test_binary TARGET)
-    add_executable(${TARGET} ${ARGN})
+    # CoreReclaim.cpp releases the context core after the binary's last test, so the
+    # immortal-by-design core is not reported as a leak under LeakSanitizer.
+    add_executable(${TARGET} ${ARGN} "${CMAKE_CURRENT_SOURCE_DIR}/CoreReclaim.cpp")
     target_link_libraries(${TARGET} anira::anira)
 
     if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
@@ -124,7 +126,13 @@ endif()
 # anira thread survives the unload (and that the library really gets unmapped). Not
 # on mobile (no dlopen story on device) and not under RTSan (the module inherits
 # -fsanitize=realtime but an executable without the runtime cannot load it).
-if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$" AND NOT ANIRA_WITH_RTSAN)
+# Not under ASan/TSan/LSan either: the suite's premise is that the library's memory goes
+# away underneath code that may still touch it — LeakedThreadCrashesOnUnload leaks a
+# thread on purpose, dlcloses the module and asserts the leaked thread dies on the freed
+# queue. A sanitizer diagnoses exactly that and fails the run. The unload contract is
+# covered on the uninstrumented build_test legs.
+if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$"
+   AND NOT ANIRA_WITH_RTSAN AND NOT ANIRA_WITH_ASAN AND NOT ANIRA_WITH_TSAN AND NOT ANIRA_WITH_LSAN)
     add_subdirectory(unload)
 endif()
 
