@@ -38,7 +38,7 @@ concurrency:
 jobs:
   build_test:
     name: build_test
-    uses: tanh-lab/ci-actions/.github/workflows/build-test.yml@v0.3.6
+    uses: tanh-lab/ci-actions/.github/workflows/build-test.yml@v0.3.7
     with:
       tier: ${{ inputs.tier || '' }}
       # PRs run the fast tests only; the heavy model-inference binaries

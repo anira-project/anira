@@ -83,3 +83,23 @@ if(NOT TANH_OPERATING_SYSTEM STREQUAL "Unknown")
     endif()
     unset(_tanh_os_upper)
 endif()
+
+# ------------------------------------------------------------------------------
+# tanh_detect_emscripten() — when the compiler is em++: WASM=TRUE, EMSDK_VERSION
+# (from `emcc --version`), and .js as the executable suffix. A macro — the
+# variables land in the caller's scope. Compile flags stay the caller's business.
+# ------------------------------------------------------------------------------
+macro(tanh_detect_emscripten)
+    if("${CMAKE_CXX_COMPILER}" MATCHES "em\\+\\+")
+        set(WASM TRUE)
+        execute_process(
+            COMMAND ${CMAKE_C_COMPILER} --version
+            OUTPUT_VARIABLE _tanh_emsdk_version_output
+        )
+        string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" EMSDK_VERSION "${_tanh_emsdk_version_output}")
+        unset(_tanh_emsdk_version_output)
+        message(STATUS "Emscripten ${EMSDK_VERSION}: ${CMAKE_CXX_COMPILER}")
+        set(CMAKE_EXECUTABLE_SUFFIX ".js")
+    endif()
+endmacro()
+

@@ -1,0 +1,63 @@
+name: lint
+
+# clang-format over the sources and the tanh-tooling config drift check
+# (.clang-*, cmake/tanh/ must match the pinned release; the fetched tanh-lib
+# must pin the same tag). Queue-gated: pull requests report only the two
+# instant result stubs. The result-job names are the ruleset's required
+# contexts, unchanged from the former clang_format.yml / clang_check.yml.
+
+on:
+  merge_group:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: lint-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: clang-format
+    if: github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        name: [Linux-x86_64]
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.7
+      - uses: tanh-lab/ci-actions/clang-format-check@v0.3.7
+        with:
+          SOURCES: "src/ include/ test/ examples/"
+
+  tooling-config:
+    if: github.event_name != 'pull_request'
+    uses: tanh-lab/tanh-tooling/.github/workflows/config-check.yml@v0.2.4
+    with:
+      ref: v0.2.4
+      family: "clang cmake"
+
+  clang_format_result:
+    name: clang_format result
+    needs: format
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          [ "${{ github.event_name }}" = "pull_request" ] && { echo "stub: real run happens in the merge queue"; exit 0; }
+          [ "${{ needs.format.result }}" = "success" ] || exit 1
+
+  clang_check_result:
+    name: clang_check result
+    needs: tooling-config
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          [ "${{ github.event_name }}" = "pull_request" ] && { echo "stub: real run happens in the merge queue"; exit 0; }
+          [ "${{ needs.tooling-config.result }}" = "success" ] || exit 1
