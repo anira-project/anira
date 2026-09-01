@@ -1,22 +1,31 @@
 name: coverage
 
-# Full-suite coverage on every push to main (docs/ci-overhaul.md, step 9) —
-# the pipeline is tanh-lab/ci-actions' reusable coverage workflow; this file
-# keeps anira's facts. A new build, not a repeat of the queue's runs, so the
-# "main re-runs nothing" rule holds. Not queue-gated: a coverage dip is
-# information, never a merge blocker.
+# Full-suite coverage — the pipeline is tanh-lab/ci-actions' reusable coverage
+# workflow; this file keeps anira's facts.
+#
+# A coverage *dip* is still information and never a merge blocker: codecov.yml
+# turns the project and patch statuses off, so no number Codecov computes can
+# fail anything. What this workflow's own success reports is different — whether
+# the pipeline still works at all: the instrumented build links, the suite
+# passes, llvm-profdata can merge the profiles and llvm-cov can export them.
+# That is a real breakage and it does belong in the queue. It used to run only
+# on push to main, so a change to the preset it builds (CMakePresets.json is not
+# in the path filter below either) first executed after merging, and landed a
+# red main.
 
 on:
   workflow_dispatch:
+  merge_group:
   push:
     branches:
       - main
-  # Self-validating: runs on a PR exactly when this workflow itself changes
-  # (dispatch cannot target a workflow absent from the default branch), dormant
-  # on every other PR per the tier policy.
+  # Self-validating: runs on a PR when this workflow, or the preset it builds,
+  # changes. Dormant on every other PR per the tier policy — the queue is where
+  # it runs for everything else.
   pull_request:
     paths:
       - ".github/workflows/coverage.yml"
+      - "CMakePresets.json"
 
 concurrency:
   group: coverage-${{ github.ref }}
@@ -57,3 +66,16 @@ jobs:
         extras/models/stateful-rnn/stateful-lstm
         extras/models/model-pool/example-models
         extras/models/third-party/ircam-acids/RAVE
+
+  # The single status the merge queue can require: one job that is green only if
+  # every leg is. Matches the "<name> result" convention of the other workflows.
+  result:
+    name: coverage result
+    if: always()
+    needs: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: aggregate
+        run: |
+          echo "workflow result: ${{ needs.coverage.result }}"
+          [ "${{ needs.coverage.result }}" = "success" ] || exit 1
