@@ -550,7 +550,8 @@ struct ClearDeadlockFixture {
 }  // namespace
 
 TEST(SessionElementClearTest, ClearWithBlockingRatioDoesNotFreeze) {
-    auto* fixture = leak_intentionally(new ClearDeadlockFixture());  // leaked deliberately, see above
+    // leaked deliberately, see above
+    auto* fixture = leak_intentionally(new ClearDeadlockFixture());
     fixture->m_session.prepare(HostConfig(2048, 48000));
 
     // Mixed signal state: one struct carries a stale unconsumed completion
@@ -752,7 +753,8 @@ struct GeneratorPrepareFixture {
 }  // namespace
 
 TEST(OneSidedStreamingPrepareStandalone, GeneratorPrepareTerminates) {
-    auto* fixture = leak_intentionally(new GeneratorPrepareFixture());  // leaked deliberately, see above
+    // leaked deliberately, see above
+    auto* fixture = leak_intentionally(new GeneratorPrepareFixture());
 
     std::thread([fixture] {
         fixture->m_session.prepare(HostConfig(512, 48000, true));
