@@ -1,0 +1,9 @@
+# Coverage scope: measured by the Linux coverage legs (.github/workflows/
+# coverage.yml — a shared and a static leg; Codecov merges the uploads).
+# llvm-cov can only report files compiled into the uploaded binaries, so code
+# that never builds on those legs is excluded EXPLICITLY here rather than
+# silently missing — the percentage means what it says.
+ignore:
+  - "src/emscripten-wrappers" # compiles only under Emscripten (build_web covers the build)
+  - "src/benchmark" # benchmark fixture — exercised by the benchmark jobs, not ctest
+comment: false

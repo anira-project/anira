@@ -14,10 +14,6 @@ on:
   workflow_call:
   workflow_dispatch:
 
-env:
-  SCCACHE_GHA_ENABLED: "true"
-  # Without this, sccache speaks the retired v1 cache API and every write fails.
-  ACTIONS_CACHE_SERVICE_V2: "on"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
@@ -68,7 +64,7 @@ jobs:
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.3
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.6
       - name: add juce deps
         shell: bash
         run: |
@@ -85,7 +81,7 @@ jobs:
         with:
           arch: ${{ matrix.vcvars }}
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.3
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.6
         with:
           PRESET: ${{ matrix.preset }}
           # The exact example set depends on the active backends (libtorch is

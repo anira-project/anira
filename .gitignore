@@ -27,3 +27,5 @@ extras/**/*.json
 # Auto-generated TypeDoc artifacts for the Anira Web docs (consumed by sphinx-js).
 docs/typedoc/node_modules/
 docs/typedoc/package-lock.json
+# The CI overhaul plan is a local working document (kept out of the repo by decision, 2026-08-31)
+docs/ci-overhaul.md
