@@ -34,9 +34,10 @@ static float random_sample() {
 /**
  * @brief Calculates a specific percentile value from a dataset
  *
- * Computes the specified percentile from a vector of double values using
- * linear interpolation when necessary. The function sorts the input data
- * and calculates the percentile using standard statistical methods.
+ * Computes the specified percentile from a vector of double values by the
+ * nearest-rank method: the input is sorted and the value at the truncated index
+ * `percentile * (size - 1)` is returned. The result is therefore always one of
+ * the input values, never a value interpolated between two of them.
  *
  * This function is useful for statistical analysis of performance metrics,
  * latency measurements, and other quantitative data analysis tasks.
@@ -58,21 +59,11 @@ static double calculate_percentile(const std::vector<double>& v, double percenti
     std::vector<double> sorted_data = v;
     std::ranges::sort(sorted_data);
 
-    // Calculate the index for the 99th percentile
+    // Nearest rank: truncating the index is what makes the result an input value.
     size_t const n = sorted_data.size();
     auto const percentile_index = static_cast<size_t>(percentile * static_cast<double>(n - 1));
 
-    // Check if the index is an integer
-    if (percentile_index == static_cast<size_t>(percentile_index)) {
-        // The index is an integer, return the value at that index
-        return sorted_data[static_cast<size_t>(percentile_index)];
-    } else {
-        // Interpolate between the two nearest values
-        auto const lower_index = static_cast<size_t>(percentile_index);
-        size_t const upper_index = lower_index + 1;
-        auto const fraction = static_cast<double>(percentile_index - lower_index);
-        return (1.0 - fraction) * sorted_data[lower_index] + fraction * sorted_data[upper_index];
-    }
+    return sorted_data[percentile_index];
 }
 
 /**
