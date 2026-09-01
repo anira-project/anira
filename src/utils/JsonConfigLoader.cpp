@@ -385,6 +385,13 @@ std::vector<anira::TensorShape> anira::JsonConfigLoader::create_tensor_shape_fro
         anira::TensorShapeList const input_shape_list = parse_tensor_json_shape(input_shape);
         anira::TensorShapeList const output_shape_list = parse_tensor_json_shape(output_shape);
 
+        if (input_shape_list.empty() || output_shape_list.empty()) {
+            ANIRA_LOG_ERROR(anira::log_group::k_config,
+                            "Skipping 'tensor_shape' array entry: it has no usable input or "
+                            "output shape.");
+            continue;
+        }
+
         std::string tensor_backend = "UNIVERSAL";
 
         if (item.contains("inference_backend")) {
@@ -469,6 +476,7 @@ anira::TensorShapeList anira::JsonConfigLoader::parse_tensor_json_shape(
     if (!shape_node.is_array()) {
         ANIRA_LOG_ERROR(anira::log_group::k_config,
                         "Invalid 'shape' value in 'tensor_shape' array entry: expected an array.");
+        return {};
     }
 
     if (shape_node.empty()) {

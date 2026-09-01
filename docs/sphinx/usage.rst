@@ -250,6 +250,9 @@ Then load the file and move the configurations out of the loader:
 .. tip::
     See the JUCE plugin example (``MODEL_TO_USE == 8``), which loads the RAVE model entirely from ``RaveFunkDrumConfig.json`` via :cpp:class:`anira::JsonConfigLoader`.
 
+.. note::
+    A malformed value is reported through the log and skipped — never fatal. An unparseable ``model_data`` or ``tensor_shape`` entry is dropped, an out-of-range or wrongly typed scalar falls back to its default, and only a configuration that still has model data, a tensor shape and ``max_inference_time`` yields an :cpp:struct:`anira::InferenceConfig`; anything less returns ``nullptr``, which the caller must check before dereferencing. :cpp:func:`anira::JsonConfigLoader::get_context_config` returns ``nullptr`` only when the document itself does not parse.
+
 2. Pre and Post Processing
 --------------------------
 

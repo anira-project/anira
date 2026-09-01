@@ -65,6 +65,11 @@ anira_add_test_binary(test_utils
 	utils/test_PrePostProcessorWindow.cpp
 	utils/test_Semaphore.cpp
 	utils/test_JsonConfigLoader.cpp
+	utils/test_JsonConfigLoaderErrors.cpp
+	utils/test_ContextConfig.cpp
+	utils/test_HelperFunctions.cpp
+	utils/test_InferenceConfig.cpp
+	utils/test_HighPriorityThread.cpp
 	utils/test_Logger.cpp
 	test_WavReader.cpp
 )
@@ -82,11 +87,14 @@ anira_add_test_binary(test_scheduler
 anira_add_test_binary(test_backends
 	backends/test_BackendBase.cpp
 	backends/test_ExecuTorchModelFunction.cpp
+	backends/test_ExecuTorchProcessor.cpp
+	backends/test_LibTorchProcessor.cpp
 )
 
 anira_add_test_binary(test_handler
 	test_BackendLinkage.cpp
 	test_InferenceHandler.cpp
+	test_InferenceHandlerApi.cpp
 	test_OneSidedStreaming.cpp
 	test_StatefulOrdering.cpp
 )

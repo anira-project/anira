@@ -38,9 +38,12 @@ public:
      *                        tensor shapes, and processing parameters
      *
      * @par Model Loading:
-     * The constructor attempts to load the TorchScript model specified in the configuration.
-     * If a model function is specified, it will be used; otherwise, the default forward
-     * method is called.
+     * The constructor loads the TorchScript model specified in the configuration — from
+     * the file path, or from the bytes of a binary ModelData. If a model function is
+     * specified, it will be used; otherwise, the default forward method is called.
+     *
+     * @throws std::runtime_error if the model cannot be loaded. Session creation fails
+     * and is rolled back, like for the other backends.
      */
     LibtorchProcessor(InferenceConfig& inference_config);
 

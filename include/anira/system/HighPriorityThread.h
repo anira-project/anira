@@ -19,11 +19,20 @@ namespace anira {
  * for one minor release as a thin wrapper with the old interface: derive, implement
  * run(), call start()/stop(). It will be removed afterwards.
  *
+ * @warning A derived class must call stop() in its own destructor. This class's
+ * destructor also calls it, but a base destructor runs only after the derived part
+ * of the object has been destroyed — so a worker still executing run() would touch
+ * members that no longer exist. Relying on ~HighPriorityThread() alone is undefined
+ * behaviour for any run() that reads or writes the derived object's own state.
+ *
  * @deprecated Use thl::core::Thread. For elevating a thread you did not create
  * (elevate_priority()), use thl::core::Thread::set_current_priority().
  */
-class [[deprecated("use thl::core::Thread with ThreadPriority::RealTime")]] ANIRA_API
-    HighPriorityThread {
+// No ANIRA_API: every member is inline and no anira translation unit includes this
+// header, so there is nothing in the shared library to export. A class-scope
+// dllimport would make MSVC look for members the DLL never defines, which is an
+// unresolved-externals link error in any consumer that instantiates the class.
+class [[deprecated("use thl::core::Thread with ThreadPriority::RealTime")]] HighPriorityThread {
 public:
     HighPriorityThread() = default;
     virtual ~HighPriorityThread() { stop(); }
