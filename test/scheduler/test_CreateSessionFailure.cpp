@@ -83,26 +83,6 @@ void expect_next_handler_lifecycle_intact() {
 
 }  // namespace
 
-TEST(CreateSessionFailureTest, ThrowingCustomProcessorLeaksNothing) {
-    ASSERT_EQ(Context::get_num_sessions(), 0);
-
-    InferenceConfig inference_config = make_custom_config();
-    PrePostProcessor pp_processor(inference_config);
-    ThrowingProcessor throwing_processor(inference_config);
-
-    EXPECT_THROW(
-        {
-            const InferenceHandler handler(pp_processor,
-                                           inference_config,
-                                           throwing_processor,
-                                           ContextConfig(2));
-        },
-        std::runtime_error);
-
-    expect_clean_slate();
-    expect_next_handler_lifecycle_intact();
-}
-
 // Several failures in a row must not accumulate anything either (the original
 // report: "each failed load adds another increment").
 TEST(CreateSessionFailureTest, RepeatedFailuresLeakNothing) {
@@ -113,12 +93,25 @@ TEST(CreateSessionFailureTest, RepeatedFailuresLeakNothing) {
     ThrowingProcessor throwing_processor(inference_config);
 
     for (int i = 0; i < 3; ++i) {
-        EXPECT_ANY_THROW({
-            const InferenceHandler handler(pp_processor,
-                                           inference_config,
-                                           throwing_processor,
-                                           ContextConfig(2));
-        });
+        // The first iteration also pins the exception type (the standalone
+        // single-failure test it absorbed — audit, docs/ci-overhaul.md step 9a).
+        if (i == 0) {
+            EXPECT_THROW(
+                {
+                    const InferenceHandler handler(pp_processor,
+                                                   inference_config,
+                                                   throwing_processor,
+                                                   ContextConfig(2));
+                },
+                std::runtime_error);
+        } else {
+            EXPECT_ANY_THROW({
+                const InferenceHandler handler(pp_processor,
+                                               inference_config,
+                                               throwing_processor,
+                                               ContextConfig(2));
+            });
+        }
         expect_clean_slate();
     }
     expect_next_handler_lifecycle_intact();
