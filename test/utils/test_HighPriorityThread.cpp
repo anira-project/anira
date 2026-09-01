@@ -25,6 +25,13 @@ namespace {
 
 class CountingThread : public anira::HighPriorityThread {
 public:
+    // stop() belongs in the *derived* destructor. ~HighPriorityThread() also calls
+    // it, but a base destructor runs after the derived part is gone, so a worker
+    // still inside run() would touch members that no longer exist — UBSan reports
+    // exactly that ("member access within address ... which does not point to an
+    // object of type CountingThread").
+    ~CountingThread() override { stop(); }
+
     void run() override {
         m_entered = true;
         while (!should_exit()) {
@@ -71,8 +78,9 @@ TEST(HighPriorityThread, StartRunsAndStopJoins) {
     EXPECT_TRUE(thread.should_exit());
 }
 
-// The destructor calls stop(), so a thread left running must still be joined.
-TEST(HighPriorityThread, DestructorStopsARunningThread) {
+// A thread left running is joined by destruction, through the derived
+// destructor's stop().
+TEST(HighPriorityThread, DerivedDestructorStopsARunningThread) {
     std::shared_ptr<std::atomic<bool>> left;
     {
         CountingThread thread;

@@ -19,6 +19,12 @@ namespace anira {
  * for one minor release as a thin wrapper with the old interface: derive, implement
  * run(), call start()/stop(). It will be removed afterwards.
  *
+ * @warning A derived class must call stop() in its own destructor. This class's
+ * destructor also calls it, but a base destructor runs only after the derived part
+ * of the object has been destroyed — so a worker still executing run() would touch
+ * members that no longer exist. Relying on ~HighPriorityThread() alone is undefined
+ * behaviour for any run() that reads or writes the derived object's own state.
+ *
  * @deprecated Use thl::core::Thread. For elevating a thread you did not create
  * (elevate_priority()), use thl::core::Thread::set_current_priority().
  */
