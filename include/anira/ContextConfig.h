@@ -331,35 +331,6 @@ struct ANIRA_API ContextConfig {
      * always available for use with custom backend implementations.
      */
     std::vector<InferenceBackend> m_enabled_backends;
-
-private:
-    /**
-     * @brief Equality comparison operator
-     *
-     * Compares two ContextConfig instances for equality by checking all member
-     * variables. This is used internally for configuration validation and
-     * context management.
-     *
-     * @param other The ContextConfig to compare against
-     * @return true if all configuration parameters match, false otherwise
-     **/
-    bool operator==(const ContextConfig& other) const {
-        return m_num_threads == other.m_num_threads && m_wait_strategy == other.m_wait_strategy &&
-               m_log == other.m_log && m_anira_version == other.m_anira_version &&
-               m_enabled_backends == other.m_enabled_backends;
-    }
-
-    /**
-     * @brief Inequality comparison operator
-     *
-     * Compares two ContextConfig instances for inequality. This is the logical
-     * inverse of the equality operator.
-     *
-     * @param other The ContextConfig to compare against
-     * @return true if any configuration parameters differ, false otherwise
-     *
-     **/
-    bool operator!=(const ContextConfig& other) const { return !(*this == other); }
 };
 
 }  // namespace anira

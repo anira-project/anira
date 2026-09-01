@@ -6,4 +6,19 @@
 ignore:
   - "src/emscripten-wrappers" # compiles only under Emscripten (build_web covers the build)
   - "src/benchmark" # benchmark fixture — exercised by the benchmark jobs, not ctest
+
+# Codecov is a metric, never a gate. It reports and nothing else: no commit
+# status that can fail a pull request or block the merge queue, no bot comment,
+# no inline annotations on the diff. The number is there to be looked at when
+# someone wants it — the merge queue's own checks are what decide whether code
+# lands. This matches coverage.yml's stance ("a coverage dip is information,
+# never a merge blocker").
+coverage:
+  status:
+    project: off
+    patch: off
+
 comment: false
+
+github_checks:
+  annotations: false

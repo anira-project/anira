@@ -29,3 +29,9 @@ docs/typedoc/node_modules/
 docs/typedoc/package-lock.json
 # The CI overhaul plan is a local working document (kept out of the repo by decision, 2026-08-31)
 docs/ci-overhaul.md
+
+# Clang source-based coverage artifacts. A test binary built with
+# -fprofile-instr-generate writes default.profraw into whatever directory it is
+# run from, so a run from the repo root drops one here.
+*.profraw
+*.profdata
