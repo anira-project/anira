@@ -11,6 +11,11 @@
 #     macOS with a non-Apple clang: CMake sets no sysroot, so the compile database
 #     lacks -isysroot and clang-tidy cannot find system headers. Fills CMAKE_OSX_SYSROOT
 #     from `xcrun --show-sdk-path` when unset.
+#   tanh_apple_default_architectures()
+#     Defaults CMAKE_OSX_ARCHITECTURES when unset (iOS: arm64 — device and, on Apple
+#     Silicon, simulator; macOS: the host arch) and mirrors a single-arch macOS
+#     selection into CMAKE_SYSTEM_PROCESSOR so arch-keyed asset pickers see it; a
+#     universal selection is left as-is.
 #   tanh_ios_disable_code_signing(<target>...)
 #     Library targets need no signature (only apps do); clears the Xcode attributes.
 #   tanh_ios_test_bundle(<target> BUNDLE_ID_PREFIX <com.example> [DEVELOPMENT_TEAM <id>])
@@ -102,5 +107,24 @@ function(tanh_ios_test_bundle target)
             XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${arg_DEVELOPMENT_TEAM}")
     endif()
 endfunction()
+
+# See the header. A macro: it writes CMAKE_OSX_ARCHITECTURES / CMAKE_SYSTEM_PROCESSOR
+# in the caller's scope.
+macro(tanh_apple_default_architectures)
+    if(APPLE)
+        if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            if(NOT CMAKE_OSX_ARCHITECTURES)
+                set(CMAKE_OSX_ARCHITECTURES "arm64")
+            endif()
+        else()
+            if(NOT CMAKE_OSX_ARCHITECTURES)
+                set(CMAKE_OSX_ARCHITECTURES "${CMAKE_SYSTEM_PROCESSOR}")
+            endif()
+            if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+                set(CMAKE_SYSTEM_PROCESSOR "${CMAKE_OSX_ARCHITECTURES}")
+            endif()
+        endif()
+    endif()
+endmacro()
 
 cmake_policy(POP)

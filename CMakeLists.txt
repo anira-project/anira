@@ -1,13 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 
-# CMP0099 (CMake 3.19): INTERFACE_LINK_OPTIONS (and _DIRECTORIES/_DEPENDS) of a
-# static library's PRIVATE dependencies are transitive to whoever links the static
-# library. A static anira links its engine archives PRIVATE through the
-# anira::<engine> targets, whose INTERFACE_LINK_OPTIONS carry the --exclude-libs
-# that keep the archives' symbols out of the consumer's export table; with the OLD
-# behaviour those options stopped at anira and the plugin embedding it exported
-# every LiteRt*/Ort*/executorch:: symbol. (The archives themselves travel as link
-# dependencies either way.) The installed export records the same policy.
+# CMP0099 NEW (3.19): a static anira's PRIVATE engine link options (the
+# --exclude-libs hiding) must reach the consumer's link.
 cmake_policy(SET CMP0099 NEW)
 
 # ==============================================================================
@@ -29,36 +23,21 @@ option(ANIRA_WITH_LOGGING   "Enable logging printouts" ON)
 option(ANIRA_WITH_RTSAN     "Enable RealtimeSanitizer (rtsan) checks (requires clang 20)" OFF)
 option(ANIRA_BUILD_WASM     "Build WebAssembly module (requires Emscripten toolchain)" OFF)
 
-# --- Inference backends --------------------------------------------------------
-# Multiple backends can be enabled. LiteRT (LiteRt* C API) is the default
-# TensorFlow-family backend; TFLite (legacy TfLite* C API) is the SAME underlying
-# runtime through the older API, so the two are mutually exclusive (their static
-# libraries export the same TfLite* symbols). Enforced in cmake/validate-options.cmake.
+# ==============================================================================
+# Inference backends — wiring per engine in cmake/backends/<engine>.cmake,
+# prebuilts from anira-project/backends (cmake/backends.cmake). LiteRT and
+# TFLite are the same runtime through different C APIs — mutually exclusive.
+# ==============================================================================
 option(ANIRA_WITH_LIBTORCH    "Build with the LibTorch backend" ON)
 option(ANIRA_WITH_ONNXRUNTIME "Build with the ONNX Runtime backend" ON)
 option(ANIRA_WITH_LITERT      "Build with the LiteRT backend (LiteRt* C API; runs .tflite via the CompiledModel runtime)" ON)
 option(ANIRA_WITH_TFLITE      "Build with the legacy TensorFlow Lite backend (TfLite* C API); mutually exclusive with ANIRA_WITH_LITERT" OFF)
 option(ANIRA_WITH_EXECUTORCH  "Build with the ExecuTorch backend (runs .pte models; static-only)" ON)
 
-# --- Pre-built backend download ------------------------------------------------
-# Backends are downloaded from the anira-project/backends release with this tag.
-# Integrity is checked live: anira fetches each asset's published sha256 from GitHub
-# at configure (when reachable) and re-downloads anything that changed upstream or
-# downloaded incompletely — nothing is pinned in-repo. Empty -> built-in default tag.
 set(ANIRA_BACKENDS_VERSION "" CACHE STRING "anira-project/backends release tag to download (default: built-in)")
-
-# Skip the live integrity check (no GitHub query at configure). For fully offline /
-# reproducible builds; a backend already in modules/ is then reused as-is.
 option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for backend integrity at configure" OFF)
-
-# Backend linkage follows BUILD_SHARED_LIBS: a shared anira links shared backends, a
-# static anira links static backends, and an engine that does not ship the required
-# linkage (LibTorch in static builds, ExecuTorch in shared ones) is disabled with a
-# warning — see cmake/validate-options.cmake for why these are the only two shapes.
-# Bring your own engine, or use a custom source, via the per-engine variables
-# (<ENGINE> = LIBTORCH | ONNXRUNTIME | TFLITE | LITERT | EXECUTORCH):
-#   -DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt   (a tree with include/ + lib/)
-#   -DANIRA_<ENGINE>_URL=...  [-DANIRA_<ENGINE>_SHA256=...]
+# Linkage follows BUILD_SHARED_LIBS (cmake/validate-options.cmake). Bring your own
+# engine via -DANIRA_<ENGINE>_ROOTDIR / _URL [+ _SHA256].
 
 # ==============================================================================
 # Project version from git (cmake/tanh/git-version.cmake)
@@ -86,30 +65,6 @@ project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
 include(cmake/tanh/platform.cmake)
 include(cmake/tanh/symbol-policy.cmake)
 
-if(APPLE)
-    if(TANH_OPERATING_SYSTEM STREQUAL "iOS")
-        # iOS targets a single architecture per xcframework slice; default to arm64
-        # (device and, on Apple Silicon, simulator) when the caller didn't pick one.
-        # Note: the prebuilt ONNX/LiteRT iOS xcframeworks ship an arm64-only simulator
-        # slice, so an x86_64 (Intel) simulator build is only viable with no backend
-        # (or the TFLite framework, which ships a fat simulator slice).
-        if(NOT CMAKE_OSX_ARCHITECTURES)
-            set(CMAKE_OSX_ARCHITECTURES "arm64")
-        endif()
-    else()
-        # macOS: default to the host architecture when unset. A single-arch selection is
-        # mirrored into CMAKE_SYSTEM_PROCESSOR for the backend asset picker; a universal
-        # (arm64;x86_64) selection is left as-is and maps to the universal backend archives.
-        if(NOT CMAKE_OSX_ARCHITECTURES)
-            set(CMAKE_OSX_ARCHITECTURES "${CMAKE_SYSTEM_PROCESSOR}")
-        endif()
-        if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
-            set(CMAKE_SYSTEM_PROCESSOR "${CMAKE_OSX_ARCHITECTURES}")
-        endif()
-    endif()
-endif()
-
-# Print the processor architecture selected for build. Defaults to CMAKE_HOST_SYSTEM_PROCESSOR when no crosscompile tolchain is defined. CMAKE_HOST_SYSTEM_PROCESSOR is only defined after the project() call. For OSX this value can be overwritten by the CMAKE_OSX_ARCHITECTURES.
 
 message(STATUS "Building ${PROJECT_NAME} for ${CMAKE_SYSTEM_NAME} on ${CMAKE_SYSTEM_PROCESSOR}")
 message(STATUS "Project version: ${PROJECT_VERSION_SHORT} (${PROJECT_VERSION_FULL})")
@@ -119,6 +74,10 @@ message(STATUS "Project version: ${PROJECT_VERSION_SHORT} (${PROJECT_VERSION_FUL
 # 11.0 (e.g. -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13). Never FORCE'd (cmake/tanh/apple.cmake).
 include(cmake/tanh/apple.cmake)
 tanh_apple_deployment_target(MACOS 11.0)
+# Arch defaults + CMAKE_SYSTEM_PROCESSOR mirror for the backend asset picker. The
+# prebuilt ONNX/LiteRT iOS xcframeworks ship an arm64-only simulator slice; an
+# Intel simulator build needs no backend (or TFLite's fat framework).
+tanh_apple_default_architectures()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -190,26 +149,10 @@ FetchContent_MakeAvailable(concurrentqueue)
 # Fetch tanh-lib (Apache-2.0 core component only)
 # ==============================================================================
 
-# anira's Buffer / RingBuffer / MemoryBlock are aliases over thl::core (see
-# include/anira/utils/*.h). Only the core component is built: tanh::Core is
-# tanh-lib's dedicated Apache-2.0 target — the AGPL components (state, dsp,
-# modulation, audio-io) are never fetched into the build. tanh::Core links no
-# platform library (the Linux journald sink stays opt-in and off here), so
-# anira's system-dependency footprint is unchanged on every target incl. WASM.
-#
-# When anira installs, tanh's core component installs into the same prefix
-# with its own CMake package; aniraConfig.cmake re-resolves it through
-# find_dependency(tanh COMPONENTS Core), so a consumer's find_package(anira)
-# links the exported tanh::Core.
-#
-# Pinned to a tagged tanh-lib release. (Temporarily a commit on tanh-lib PR #17 —
-# THL_LOG_* macros, thl::core::Thread, owned rt log queues; bump to the v0.1.0 tag once cut.)
-#
-# Plain (non-cache) variables on purpose: tanh-lib's cmake_minimum_required
-# puts CMP0077 in NEW mode, so these shadow its option() defaults while anira
-# is the project populating tanh-lib, and never leak into the cache. A parent
-# that fetches tanh-lib itself (with more components) before adding anira keeps
-# its own configuration — FORCE'd cache entries would have clobbered it.
+# Only the Apache-2.0 core component (tanh::Core) is fetched — never the AGPL
+# ones. Installs re-resolve it via find_dependency(tanh COMPONENTS Core).
+# Plain (non-cache) variables: they shadow tanh-lib's option() defaults under
+# CMP0077 NEW without clobbering a parent that fetches tanh-lib itself.
 set(TANH_BUILD_CORE ON)
 set(TANH_BUILD_STATE OFF)
 set(TANH_BUILD_DSP OFF)
@@ -219,19 +162,14 @@ set(TANH_WITH_TESTS OFF)
 set(TANH_WITH_EXAMPLES OFF)
 set(TANH_WITH_DOCS OFF)
 set(TANH_WITH_JOURNALD OFF)
-# tanh-lib's own [[clang::nonblocking]] annotations (thl::Logger::rt, the buffers)
-# are checked in the same RTSan build as anira's ANIRA_REALTIME entry points.
 set(TANH_WITH_RTSAN ${ANIRA_WITH_RTSAN})
 set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    # tanh-lib main after PRs #17 (THL_LOG_*, thl::core::Thread, owned rt log
-    # queues), #19 (RingBuffer push_fill/discard/peek_past_block) and #20 (RCU
-    # thread-local registry, Windows DLL TLS); bump to the next tag once cut.
-    # tanh-lib v0.1.0: symbol policy on every component, shared tanh-tooling modules
-    # (pins tanh-tooling v0.1.5 — the same tag anira pins; see modules-version.cmake).
+    # anira and the fetched tanh-lib must pin the same tanh-tooling tag
+    # (modules-version.cmake warns otherwise).
     GIT_TAG v0.1.0
 )
 FetchContent_MakeAvailable(tanh-lib)
@@ -362,62 +300,10 @@ endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
 
-# ------------------------------------------------------------------------------
-# Backends link PRIVATE, through their anira::<engine> targets. No public header
-# includes an engine header (BackendBase.h), and a consumer's own use of an engine
-# is its own explicit link of anira::<engine>. For a static anira the engine
-# archives still reach the consumer's link line as $<LINK_ONLY:anira::<engine>> —
-# link dependencies (archive, --exclude-libs, system libraries) without compile
-# usage requirements — so the installed package defines the same targets before
-# importing anira (cmake/install.cmake). How each engine is linked — on demand,
-# hidden, never whole-archive — is documented in cmake/aniraBackendHelpers.cmake.
-# ------------------------------------------------------------------------------
-if(ANIRA_WITH_EXECUTORCH)
-    # anira::executorch wraps ONE merged libexecutorch.a per platform (runtime +
-    # extensions + kernels + XNNPACK delegate, registrations pre-linked into one
-    # archive member; Windows whole-archives the separate registrations lib), so
-    # it links on demand like the other static engines — see
-    # cmake/backends/executorch.cmake. ExecuTorch is static-only, so anira is
-    # static here (cmake/validate-options.cmake) and hands the runtime on to its
-    # consumer as $<LINK_ONLY:anira::executorch>: the single place it is linked,
-    # which matters — the pre-linked registrations abort at static-init when
-    # they register twice in one process.
-    #
-    # The ExecuTorch headers vendor a copy of c10 that used to be kept out of every
-    # TU but ExecuTorchProcessor.cpp, so that it could not shadow LibTorch's real
-    # c10 (which broke the LibTorch backend at link time on MSVC). LibTorch is
-    # shared-only and ExecuTorch static-only, so the two can no longer share an
-    # image and the processor is a regular anira source.
-    target_link_libraries(${PROJECT_NAME} PRIVATE anira::executorch)
-endif()
-
-if(ANIRA_WITH_LIBTORCH)
-    # anira::libtorch wraps torch, torch_library and what find_package(Torch) lists
-    # by absolute path (libc10, libkineto, ...). PRIVATE: LibTorch is shared-only,
-    # so anira is shared here and none of it reaches a consumer or the installed
-    # export. (The CMake < 3.26 subproject special case that once split
-    # torch/torch_library PUBLIC from the rest is the same thing now.)
-    target_link_libraries(${PROJECT_NAME} PRIVATE anira::libtorch)
-    # TORCH_CXX_FLAGS is LibTorch's libstdc++ ABI switch (-D_GLIBCXX_USE_CXX11_ABI=...;
-    # empty in the current prebuilds). Compiling anira against LibTorch means
-    # compiling anira with it, and it then decides the std::string ABI of anira's
-    # own public API — so it is a PUBLIC requirement of anira, in the build tree and
-    # in the installed export, not only of anira::libtorch.
-    if(TORCH_CXX_FLAGS)
-        separate_arguments(_anira_torch_cxx_flags NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
-        target_compile_options(${PROJECT_NAME} PUBLIC ${_anira_torch_cxx_flags})
-        unset(_anira_torch_cxx_flags)
-    endif()
-endif()
-
-foreach(_anira_engine onnxruntime tflite litert)
-    string(TOUPPER "${_anira_engine}" _anira_ENGINE)
-    if(ANIRA_WITH_${_anira_ENGINE})
-        target_link_libraries(${PROJECT_NAME} PRIVATE anira::${_anira_engine})
-    endif()
-endforeach()
-unset(_anira_engine)
-unset(_anira_ENGINE)
+# Backends link PRIVATE through their anira::<engine> targets (details per
+# engine in cmake/backends/<engine>.cmake; how each is linked in
+# cmake/aniraBackendHelpers.cmake).
+anira_link_backends(${PROJECT_NAME})
 
 if(ANIRA_WITH_BENCHMARK OR ANIRA_WITH_TESTS)
     include(cmake/test-deps.cmake)

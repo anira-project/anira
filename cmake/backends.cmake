@@ -725,3 +725,26 @@ endmacro()
     message(STATUS "anira: ${id} ready (${_ab_linkage}) at ${_ab_rootdir}")
 endmacro()
 
+
+# ------------------------------------------------------------------------------
+# anira_link_backends(<target>) — link every enabled engine PRIVATE. No public
+# header includes an engine header; a consumer's own engine use is its own
+# explicit link of anira::<engine> (a static anira still hands the archives on
+# as $<LINK_ONLY:...> — the installed package defines the same targets first,
+# cmake/install.cmake).
+# ------------------------------------------------------------------------------
+function(anira_link_backends target)
+    foreach(_engine onnxruntime tflite litert executorch libtorch)
+        string(TOUPPER "${_engine}" _ENGINE)
+        if(ANIRA_WITH_${_ENGINE})
+            target_link_libraries(${target} PRIVATE anira::${_engine})
+        endif()
+    endforeach()
+    if(ANIRA_WITH_LIBTORCH AND TORCH_CXX_FLAGS)
+        # LibTorch's libstdc++ ABI switch decides the std::string ABI of anira's
+        # own public API — a PUBLIC requirement of anira, not only of
+        # anira::libtorch.
+        separate_arguments(_torch_cxx_flags NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
+        target_compile_options(${target} PUBLIC ${_torch_cxx_flags})
+    endif()
+endfunction()
