@@ -20,9 +20,9 @@ jobs:
   # the fetched tanh-lib must pin the same tag.
   clang-config:
     if: github.event_name != 'pull_request'
-    uses: tanh-lab/tanh-tooling/.github/workflows/config-check.yml@v0.1.5
+    uses: tanh-lab/tanh-tooling/.github/workflows/config-check.yml@v0.2.3
     with:
-      ref: v0.1.5
+      ref: v0.2.3
       family: "clang cmake"
 
   # The queue's required status for this workflow.

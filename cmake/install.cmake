@@ -103,9 +103,9 @@ endfunction()
 
 # ------------------------------------------------------------------------------
 # _anira_install_cmake_package(<id> <src> <dest>) — install an engine's own CMake
-# package directory (LibTorch's share/cmake, ExecuTorch's lib/cmake) to <dest>
+# package directory (LibTorch's share/cmake) to <dest>
 # under the prefix. Those packages locate their libraries relative to their own
-# file as <prefix>/lib/... (Caffe2Targets/ExecuTorchTargets: ${_IMPORT_PREFIX}/lib/,
+# file as <prefix>/lib/... (Caffe2Targets: ${_IMPORT_PREFIX}/lib/,
 # TorchConfig: ${TORCH_INSTALL_PREFIX}/lib), which is only right when everything
 # is in "lib". Two layouts differ, and anira installs patched copies of the
 # package files for them instead of bending its own layout to the packages:
@@ -217,14 +217,12 @@ if(ANIRA_WITH_EXECUTORCH)
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/executorch.xcframework/${ANIRA_EXECUTORCH_IOS_SLICE}/Headers/"
             DESTINATION "${_anira_backend_incdir}/executorch" COMPONENT deps-backends)
     else()
-        # On desktop the lib/ tree carries ExecuTorch's CMake package (lib/cmake/
-        # ExecuTorch, plus the KleidiAI one it depends on), which the installed
-        # aniraBackendTargets.cmake re-resolves via find_package(executorch) —
-        # analogous to LibTorch above, and installed through the same libdir patch.
+        # One merged libexecutorch.a (plus executorch_registrations.lib on
+        # Windows) in lib/, headers in include/ — installed like any other
+        # static engine.
         install(DIRECTORY "${ANIRA_EXECUTORCH_ROOTDIR}/include/"
             DESTINATION "${_anira_backend_incdir}/executorch" COMPONENT deps-backends)
-        _anira_install_engine_libs("${ANIRA_EXECUTORCH_ROOTDIR}" EXCLUDE_CMAKE)
-        _anira_install_cmake_package(executorch "${ANIRA_EXECUTORCH_ROOTDIR}/lib/cmake" "${CMAKE_INSTALL_LIBDIR}/cmake")
+        _anira_install_engine_libs("${ANIRA_EXECUTORCH_ROOTDIR}")
     endif()
 endif()
 
@@ -308,24 +306,28 @@ unset(_anira_imported_after)
 endif()
 
 if(ANIRA_WITH_EXECUTORCH)
-    if(TANH_OPERATING_SYSTEM STREQUAL "Android" OR TANH_OPERATING_SYSTEM STREQUAL "iOS")
-        string(APPEND _anira_installed_targets
-            "anira_define_backend_target(executorch STATIC\n"
-            "    LOCATION \"\${_anira_libdir}/${ANIRA_EXECUTORCH_STATIC_LIB_SUBPATH}\"\n"
-            "    INCLUDE_DIRS \"\${_anira_incdir}/executorch\")\n")
-    else()
-        string(APPEND _anira_installed_targets [=[
-# ExecuTorch: its own CMake package, installed into lib/cmake/ExecuTorch. Imported,
-# sanitized and wrapped exactly as in anira's build tree (aniraBackendHelpers.cmake).
-anira_find_executorch_package("${_anira_libdir}/cmake/ExecuTorch"
-    _anira_executorch_targets _anira_executorch_archives _anira_executorch_defs)
-anira_define_executorch_target("${_anira_incdir}/executorch"
-    "${_anira_executorch_archives}" "${_anira_executorch_defs}")
-unset(_anira_executorch_targets)
-unset(_anira_executorch_archives)
-unset(_anira_executorch_defs)
-]=])
+    # The merged archive wraps like any other static engine; the vendored-c10
+    # include dir, the runtime's compile definitions and (on Windows) the
+    # whole-archived registration lib mirror the build tree
+    # (cmake/backends/executorch.cmake).
+    set(_et_extra_inc "")
+    if(EXISTS "${ANIRA_EXECUTORCH_ROOTDIR}/include/executorch/runtime/core/portable_type/c10")
+        set(_et_extra_inc " \"\${_anira_incdir}/executorch/executorch/runtime/core/portable_type/c10\"")
     endif()
+    set(_et_link "")
+    if(ANIRA_EXECUTORCH_REGISTRATIONS_SUBPATH)
+        set(_et_link
+            "\n    LINK_LIBRARIES \"\${_anira_libdir}/${ANIRA_EXECUTORCH_REGISTRATIONS_SUBPATH}\""
+            "\n    LINK_OPTIONS \"/WHOLEARCHIVE:\${_anira_libdir}/${ANIRA_EXECUTORCH_REGISTRATIONS_SUBPATH}\"")
+        string(REPLACE ";" "" _et_link "${_et_link}")
+    endif()
+    string(APPEND _anira_installed_targets
+        "anira_define_backend_target(executorch STATIC\n"
+        "    LOCATION \"\${_anira_libdir}/${ANIRA_EXECUTORCH_STATIC_LIB_SUBPATH}\"\n"
+        "    INCLUDE_DIRS \"\${_anira_incdir}/executorch\"${_et_extra_inc}\n"
+        "    DEFINITIONS C10_USING_CUSTOM_GENERATED_MACROS ET_LOG_ENABLED=0 ET_USE_THREADPOOL${_et_link})\n")
+    unset(_et_extra_inc)
+    unset(_et_link)
 endif()
 
 set(ANIRA_INSTALLED_BACKEND_TARGETS "${_anira_installed_targets}")
