@@ -58,9 +58,9 @@ jobs:
           submodules: true
           fetch-depth: 0
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.6
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.7
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.6
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.7
         with:
           BUILD_TYPE: Release
           TARGETS: anira
@@ -74,35 +74,28 @@ jobs:
           PREFIX="$PWD/prefix"
           if command -v cygpath > /dev/null; then PREFIX="$(cygpath -m "$PREFIX")"; fi
           cmake --install build --config Release --prefix "$PREFIX"
+          echo "ANIRA_PREFIX=$PREFIX" >> "$GITHUB_ENV"
           echo "::group::install tree"
           find prefix -type f | sort
           echo "::endgroup::"
-      - name: build and run the consumer against the prefix
+      # test/install builds two consumers — anira alone, and one that calls ONNX
+      # Runtime itself through anira::onnxruntime — and asserts at configure
+      # time that the engine header is unreachable without that target.
+      - name: build and run the consumers against the prefix
+        uses: tanh-lab/ci-actions/install-consume-check@v0.3.7
+        with:
+          PREFIX: ${{ env.ANIRA_PREFIX }}
+          CONSUMER_DIR: test/install
+          BINARIES: "consumer consumer_engine"
+          GENERATOR: ${{ runner.os != 'Windows' && 'Ninja' || '' }}
+      # The plugin-shaped engine consumer must export no engine symbol (the
+      # InstallConsumer CTest runs the same check).
+      - name: scan the module's export table
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          PREFIX="$PWD/prefix"
-          if command -v cygpath > /dev/null; then PREFIX="$(cygpath -m "$PREFIX")"; fi
-          # test/install builds two consumers — anira alone, and one that calls ONNX
-          # Runtime itself through anira::onnxruntime — and asserts at configure
-          # time that the engine header is unreachable without that target.
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            cmake -S test/install -B build-consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"
-            cmake --build build-consumer --config Release --parallel
-            # Every DLL (anira, the engines, tanh_core) installs to bin/; only bin/ goes
-            # on PATH so that the run also proves the layout.
-            PATH="$PWD/prefix/bin:$PATH" ./build-consumer/Release/consumer.exe
-            PATH="$PWD/prefix/bin:$PATH" ./build-consumer/Release/consumer_engine.exe
-          else
-            cmake -S test/install -B build-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"
-            cmake --build build-consumer --parallel
-            ./build-consumer/consumer
-            ./build-consumer/consumer_engine
-            # The plugin-shaped engine consumer must export no engine symbol (the
-            # InstallConsumer CTest, test/install/run-install-test.cmake, runs the
-            # same check).
-            if nm -D --defined-only build-consumer/consumer_engine_module.so | grep -E "_ZN3Ort|_ZN11onnxruntime|[ _]Ort[A-Z]|OrtGetApiBase"; then
-              echo "consumer_engine_module exports engine symbols"; exit 1
-            fi
+          if nm -D --defined-only build-consumer/consumer_engine_module.so | grep -E "_ZN3Ort|_ZN11onnxruntime|[ _]Ort[A-Z]|OrtGetApiBase"; then
+            echo "consumer_engine_module exports engine symbols"; exit 1
           fi
 
   # One macOS runner does shared and static sequentially (raw cmake over the ci

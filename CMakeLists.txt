@@ -85,7 +85,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 # Detect Emscripten — must be after project() so CMAKE_CXX_COMPILER is set.
 # EMSDK_VERSION is needed by backends.cmake (WASM target selection) below.
 if(ANIRA_BUILD_WASM)
-    include(cmake/detect-emscripten.cmake)
+    tanh_detect_emscripten()
+    if(WASM)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -matomics -msimd128 -mbulk-memory -sNO_DISABLE_EXCEPTION_CATCHING")
+    endif()
 endif()
 
 # Validate the option combination (mutual exclusivity, libtorch auto-disable, WASM
