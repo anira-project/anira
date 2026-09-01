@@ -89,8 +89,8 @@ InferenceManagerTestParams non_streamable_mix_param() {
 // // Test fixture for paramterized inference tests
 class InferenceManagerTest : public ::testing::TestWithParam<InferenceManagerTestParams> {};
 
-// The empty/partial custom-latency contracts branch only on the output-tensor
-// count and the streamable/non-streamable mix — never on the per-config
+// The custom-latency contracts (wholesale replace, empty, partial) branch only
+// on the output-tensor count and the streamable/non-streamable mix — never on the per-config
 // constants the full sweep varies: the override runs after the latency
 // calculation, which Simple/WithCustomLatency keep asserting on every param.
 // Three params cover every branch combination; running these two tests over
@@ -122,7 +122,7 @@ TEST_P(InferenceManagerTest, Simple) {
     }
 }
 
-TEST_P(InferenceManagerTest, WithCustomLatency) {
+TEST_P(InferenceManagerCustomLatencySubset, WithCustomLatency) {
     auto test_params = GetParam();
 
     PrePostProcessor pp_processor(test_params.m_inference_config);

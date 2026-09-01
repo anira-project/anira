@@ -195,11 +195,10 @@ INSTANTIATE_TEST_SUITE_P(StatefulModel,
                          StatefulOrderingTest,
                          ::testing::Values(
                              // session_exclusive=true, host_buffer > hop_size to force multiple
-                             // inferences
+                             // inferences. 512 was dropped (same dispatch path at the
+                             // weakest race pressure) and the non-exclusive reference row
+                             // with it: it asserted only executions > 0, its comparison
+                             // being a printout (audit, docs/ci-overhaul.md step 9a).
                              StatefulTestParams{true, 1024.f, 48000.f, 480},
-                             StatefulTestParams{true, 512.f, 48000.f, 480},
                              StatefulTestParams{true, 2048.f, 48000.f, 480},
-                             StatefulTestParams{true, 1024.f, 48000.f, 512},
-                             // session_exclusive=false (reference — not asserted, just for
-                             // comparison)
-                             StatefulTestParams{false, 1024.f, 48000.f, 480}));
+                             StatefulTestParams{true, 1024.f, 48000.f, 512}));
