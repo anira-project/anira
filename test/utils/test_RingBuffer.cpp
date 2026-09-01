@@ -23,18 +23,10 @@ protected:
 };
 
 // Test basic initialization
-TEST_F(RingBufferTest, Initialization) {
-    EXPECT_EQ(m_ring_buffer.get_num_channels(), 2);
-    EXPECT_EQ(m_ring_buffer.get_num_samples(), 5);
-
-    // All channels should start empty
-    for (size_t channel = 0; channel < m_ring_buffer.get_num_channels(); ++channel) {
-        EXPECT_EQ(m_ring_buffer.get_available_samples(channel), 0);
-        // Past samples are actually-written history, none yet after init
-        EXPECT_EQ(m_ring_buffer.get_available_past_samples(channel), 0);
-    }
-}
-
+// RingBufferTest.Initialization was removed: anira::RingBuffer is an alias over
+// thl::core::RingBuffer, whose own suite asserts the same post-init state
+// (RingBuffer.InitialiseWithPositions: dimensions + available samples;
+// ClearWithPositions: zero past samples) — audit, docs/ci-overhaul.md step 9a.
 // Test single channel push and pop operations
 TEST_F(RingBufferTest, SingleChannelPushPop) {
     const size_t channel = 0;

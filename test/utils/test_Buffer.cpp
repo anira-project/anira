@@ -99,39 +99,29 @@ TEST(Buffer, BufferSwap) {
 // Mismatched dimensions violate swap_data()'s contract: the containers never
 // log, so the call asserts in debug builds and is a silent no-op in release.
 #ifdef NDEBUG
-TEST(Buffer, InvalidSizeSwap) {
-    anira::Buffer<int> buffer1(1, 5);
-    anira::Buffer<int> buffer2(1, 6);
-    int* buffer1_ptr = buffer1.data();
-    int* buffer2_ptr = buffer2.data();
+// Both mismatch shapes hit the same "different dimensions" guard; one test
+// keeps both input shapes (audit, docs/ci-overhaul.md step 9a).
+TEST(Buffer, InvalidSwap) {
+    anira::Buffer<int> size_mismatch1(1, 5), size_mismatch2(1, 6);
+    int* size_ptr1 = size_mismatch1.data();
+    int* size_ptr2 = size_mismatch2.data();
+    size_mismatch1.swap_data(size_mismatch2);
+    ASSERT_EQ(size_ptr1, size_mismatch1.data()) << "size mismatch swapped";
+    ASSERT_EQ(size_ptr2, size_mismatch2.data()) << "size mismatch swapped";
 
-    buffer1.swap_data(buffer2);
-
-    ASSERT_EQ(buffer1_ptr, buffer1.data());
-    ASSERT_EQ(buffer2_ptr, buffer2.data());
-}
-
-TEST(Buffer, InvalidChannelsSwap) {
-    anira::Buffer<int> buffer1(2, 5);
-    anira::Buffer<int> buffer2(1, 5);
-    int* buffer1_ptr = buffer1.data();
-    int* buffer2_ptr = buffer2.data();
-
-    buffer1.swap_data(buffer2);
-
-    ASSERT_EQ(buffer1_ptr, buffer1.data());
-    ASSERT_EQ(buffer2_ptr, buffer2.data());
+    anira::Buffer<int> channel_mismatch1(2, 5), channel_mismatch2(1, 5);
+    int* channel_ptr1 = channel_mismatch1.data();
+    int* channel_ptr2 = channel_mismatch2.data();
+    channel_mismatch1.swap_data(channel_mismatch2);
+    ASSERT_EQ(channel_ptr1, channel_mismatch1.data()) << "channel mismatch swapped";
+    ASSERT_EQ(channel_ptr2, channel_mismatch2.data()) << "channel mismatch swapped";
 }
 #elif GTEST_HAS_DEATH_TEST
-TEST(BufferDeathTest, InvalidSizeSwap) {
-    anira::Buffer<int> buffer1(1, 5);
-    anira::Buffer<int> buffer2(1, 6);
-    EXPECT_DEATH(buffer1.swap_data(buffer2), "different dimensions");
-}
+TEST(BufferDeathTest, InvalidSwap) {
+    anira::Buffer<int> size_mismatch1(1, 5), size_mismatch2(1, 6);
+    EXPECT_DEATH(size_mismatch1.swap_data(size_mismatch2), "different dimensions");
 
-TEST(BufferDeathTest, InvalidChannelsSwap) {
-    anira::Buffer<int> buffer1(2, 5);
-    anira::Buffer<int> buffer2(1, 5);
-    EXPECT_DEATH(buffer1.swap_data(buffer2), "different dimensions");
+    anira::Buffer<int> channel_mismatch1(2, 5), channel_mismatch2(1, 5);
+    EXPECT_DEATH(channel_mismatch1.swap_data(channel_mismatch2), "different dimensions");
 }
 #endif
