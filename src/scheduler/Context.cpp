@@ -192,7 +192,7 @@ std::shared_ptr<Context> Context::get_instance(const ContextConfig& context_conf
     Core& c = core();
     const ContextConfig config = sanitize_config(context_config);
     {
-        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        const std::scoped_lock<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
         apply_log_level_locked(c, config);
         c.m_staged_config = config;
     }
@@ -494,7 +494,7 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
     // Whole function locked: applies or reconciles the configuration, hands out shared
     // backend processors from the pools, builds the thread pool for a first session and
     // registers the session — one decision, one critical section.
-    const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+    const std::scoped_lock<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
     const ContextConfig config = sanitize_config(context_config);
     // Apply the log level before anything (including this function) logs.
     apply_log_level_locked(c, config);
@@ -640,7 +640,7 @@ std::shared_ptr<SessionElement> Context::create_session(PrePostProcessor& pp_pro
     Core& c = core();
     ContextConfig config;
     {
-        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        const std::scoped_lock<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
         if (c.m_staged_config.has_value()) {
             config = *c.m_staged_config;
             c.m_staged_config.reset();
@@ -668,7 +668,7 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
     // erasing from the same vector (two handlers destructed in parallel).
     bool was_last_session = false;
     {
-        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        const std::scoped_lock<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
         unregister_session_locked(c, session);
         was_last_session = c.m_sessions.empty();
         if (was_last_session) { log_drain_to_stop = take_log_drain_locked(c); }
@@ -692,7 +692,7 @@ void Context::shutdown() {
     Core& c = *static_cast<Core*>(existing);
     std::unique_ptr<thl::Logger::rt::DrainThread> log_drain_to_stop;
     {
-        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        const std::scoped_lock<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
         if (!c.m_sessions.empty()) {
             ANIRA_LOG_ERROR(log_group::k_context,
                             "Context::shutdown() called with %zu registered session(s): the "
@@ -766,7 +766,7 @@ void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
         // Only the pool start touches shared state; the drain and the
         // session's own prepare above are session-local and stay unlocked.
         Core& c = core();
-        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        const std::scoped_lock<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
         start_thread_pool_locked(c);
     }
 
@@ -966,7 +966,7 @@ std::vector<std::shared_ptr<SessionElement>> Context::get_sessions() {
     void* existing = s_core.load(std::memory_order_acquire);
     if (existing == nullptr) { return {}; }
     Core& c = *static_cast<Core*>(existing);
-    const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+    const std::scoped_lock<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
     return c.m_sessions;
 }
 
@@ -1124,7 +1124,7 @@ int Context::get_num_sessions() {
     void* existing = s_core.load(std::memory_order_acquire);
     if (existing == nullptr) { return 0; }
     Core& c = *static_cast<Core*>(existing);
-    const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+    const std::scoped_lock<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
     return static_cast<int>(c.m_sessions.size());
 }
 
@@ -1234,7 +1234,7 @@ std::unique_ptr<InferenceThread> Context::make_inference_thread() {
     Core& c = core();
     WaitStrategy wait_strategy = WaitStrategy::SpinBackoff;
     {
-        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        const std::scoped_lock<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
         wait_strategy = c.m_context_config.m_wait_strategy;
     }
     return std::make_unique<InferenceThread>(c.m_next_inference, wait_strategy);
@@ -1252,7 +1252,7 @@ bool Context::has_inference_threads() {
     bool pool_exists = false;
     if (void* existing = s_core.load(std::memory_order_acquire)) {
         Core& c = *static_cast<Core*>(existing);
-        const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
+        const std::scoped_lock<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
         pool_exists = !c.m_thread_pool.empty();
     }
     return pool_exists || InferenceThread::get_num_active_threads() > 0;
