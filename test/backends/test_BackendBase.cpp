@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "backend_test_support.h"
 #include "gtest/gtest.h"
 
 namespace {
@@ -31,18 +32,8 @@ anira::InferenceConfig make_config(const std::vector<anira::TensorShape>& tensor
     return {model_data, tensor_shapes, 5.0F};
 }
 
-anira::BufferF make_buffer(size_t size, float fill_value) {
-    anira::BufferF buffer(1, size);
-    for (size_t i = 0; i < size; ++i) { buffer.set_sample(0, i, fill_value); }
-    return buffer;
-}
-
-bool all_samples_equal(const anira::BufferF& buffer, float expected) {
-    for (size_t i = 0; i < buffer.get_num_samples(); ++i) {
-        if (buffer.get_sample(0, i) != expected) { return false; }
-    }
-    return true;
-}
+using anira_test::all_samples_equal;
+using anira_test::filled_buffer;
 
 }  // namespace
 
@@ -55,13 +46,13 @@ TEST(BackendBase, ProcessWithMoreInputsThanOutputs) {
     anira::BackendBase backend(config);
 
     std::vector<anira::BufferF> input;
-    input.push_back(make_buffer(static_cast<size_t>(k_audio_size), 0.25F));
-    input.push_back(make_buffer(static_cast<size_t>(k_state_size), 0.5F));
-    input.push_back(make_buffer(static_cast<size_t>(k_prior_size), 0.75F));
+    input.push_back(filled_buffer(static_cast<size_t>(k_audio_size), 0.25F));
+    input.push_back(filled_buffer(static_cast<size_t>(k_state_size), 0.5F));
+    input.push_back(filled_buffer(static_cast<size_t>(k_prior_size), 0.75F));
 
     std::vector<anira::BufferF> output;
-    output.push_back(make_buffer(static_cast<size_t>(k_audio_size), -1.0F));
-    output.push_back(make_buffer(static_cast<size_t>(k_state_size), -1.0F));
+    output.push_back(filled_buffer(static_cast<size_t>(k_audio_size), -1.0F));
+    output.push_back(filled_buffer(static_cast<size_t>(k_state_size), -1.0F));
 
     backend.process(input, output, nullptr);
 
@@ -77,11 +68,11 @@ TEST(BackendBase, ProcessWithMoreOutputsThanInputsClearsExtras) {
     anira::BackendBase backend(config);
 
     std::vector<anira::BufferF> input;
-    input.push_back(make_buffer(static_cast<size_t>(k_audio_size), 0.25F));
+    input.push_back(filled_buffer(static_cast<size_t>(k_audio_size), 0.25F));
 
     std::vector<anira::BufferF> output;
-    output.push_back(make_buffer(static_cast<size_t>(k_audio_size), -1.0F));
-    output.push_back(make_buffer(static_cast<size_t>(k_state_size), -1.0F));
+    output.push_back(filled_buffer(static_cast<size_t>(k_audio_size), -1.0F));
+    output.push_back(filled_buffer(static_cast<size_t>(k_state_size), -1.0F));
 
     backend.process(input, output, nullptr);
 

@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 // Avoid min/max macro conflicts on Windows for LibTorch compatibility
@@ -122,6 +123,10 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config)
         } catch (const c10::Error& e) {
             ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "error loading the model");
             ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "%s", e.what());
+            // Same contract as the other backends: a model that will not load fails
+            // session creation with a std::runtime_error. Carrying on would call
+            // eval() on an empty module and let a c10 exception escape instead.
+            throw std::runtime_error("[anira][LibTorch] could not load the model from memory");
         }
     } else {
         try {
@@ -130,6 +135,9 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config)
         } catch (const c10::Error& e) {
             ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "error loading the model");
             ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "%s", e.what());
+            throw std::runtime_error(
+                "[anira][LibTorch] could not load the model from " +
+                m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
         }
     }
     m_module.eval();
