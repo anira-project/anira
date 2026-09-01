@@ -133,3 +133,8 @@ if(TANH_BINARY_FORMAT STREQUAL "Wasm")
         message(FATAL_ERROR "Only the ONNX Runtime backend is supported for WebAssembly. Set -DANIRA_WITH_EXECUTORCH=OFF and enable ANIRA_WITH_ONNXRUNTIME.")
     endif()
 endif()
+
+# TSan cannot combine with ASan or LSan (one runtime owns the shadow memory).
+if(ANIRA_WITH_TSAN AND (ANIRA_WITH_ASAN OR ANIRA_WITH_LSAN))
+    message(FATAL_ERROR "ANIRA_WITH_TSAN cannot be combined with ANIRA_WITH_ASAN/ANIRA_WITH_LSAN.")
+endif()

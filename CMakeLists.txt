@@ -21,6 +21,10 @@ option(ANIRA_WITH_TESTS     "Add build tests" OFF)
 option(ANIRA_WITH_DOCS      "Build documentation" OFF)
 option(ANIRA_WITH_LOGGING   "Enable logging printouts" ON)
 option(ANIRA_WITH_RTSAN     "Enable RealtimeSanitizer (rtsan) checks (requires clang 20)" OFF)
+option(ANIRA_WITH_ASAN      "Enable AddressSanitizer" OFF)
+option(ANIRA_WITH_UBSAN     "Enable UndefinedBehaviorSanitizer" OFF)
+option(ANIRA_WITH_TSAN      "Enable ThreadSanitizer" OFF)
+option(ANIRA_WITH_LSAN      "Enable LeakSanitizer (standalone)" OFF)
 option(ANIRA_BUILD_WASM     "Build WebAssembly module (requires Emscripten toolchain)" OFF)
 
 # ==============================================================================
@@ -166,6 +170,12 @@ set(TANH_WITH_EXAMPLES OFF)
 set(TANH_WITH_DOCS OFF)
 set(TANH_WITH_JOURNALD OFF)
 set(TANH_WITH_RTSAN ${ANIRA_WITH_RTSAN})
+# tanh-lib is instrumented in the same build (its options mirror anira's;
+# UBSan is USAN in tanh-lib's spelling).
+set(TANH_WITH_ASAN ${ANIRA_WITH_ASAN})
+set(TANH_WITH_USAN ${ANIRA_WITH_UBSAN})
+set(TANH_WITH_TSAN ${ANIRA_WITH_TSAN})
+set(TANH_WITH_LSAN ${ANIRA_WITH_LSAN})
 set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 
 FetchContent_Declare(
@@ -296,9 +306,23 @@ target_compile_definitions(${PROJECT_NAME}
     ${ANIRA_COMPILE_DEFINITIONS}
 )
 
-if(ANIRA_WITH_RTSAN)
+if(ANIRA_WITH_RTSAN OR ANIRA_WITH_ASAN OR ANIRA_WITH_UBSAN OR ANIRA_WITH_TSAN OR ANIRA_WITH_LSAN)
     include(cmake/tanh/sanitizers.cmake)
+endif()
+if(ANIRA_WITH_RTSAN)
     tanh_add_sanitizer(${PROJECT_NAME} rtsan DEFINE ANIRA_WITH_RTSAN)
+endif()
+if(ANIRA_WITH_ASAN)
+    tanh_add_sanitizer(${PROJECT_NAME} asan DEFINE ANIRA_WITH_ASAN)
+endif()
+if(ANIRA_WITH_UBSAN)
+    tanh_add_sanitizer(${PROJECT_NAME} ubsan DEFINE ANIRA_WITH_UBSAN)
+endif()
+if(ANIRA_WITH_TSAN)
+    tanh_add_sanitizer(${PROJECT_NAME} tsan DEFINE ANIRA_WITH_TSAN)
+endif()
+if(ANIRA_WITH_LSAN)
+    tanh_add_sanitizer(${PROJECT_NAME} lsan DEFINE ANIRA_WITH_LSAN)
 endif()
 
 target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
