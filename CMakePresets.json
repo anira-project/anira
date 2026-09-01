@@ -259,10 +259,9 @@
             "name": "ci-tests-coverage",
             "inherits": "ci-tests-shared",
             "description":
-                "Instrumented coverage build (clang source-based coverage; accurate under optimization). RelWithDebInfo rather than Release: it is -O2 -DNDEBUG just the same, but tanh-lib compiles its logging down to Error only under CONFIG:Release (THL_LOG_COMPILED_MAX_LEVEL=1), which turns every ANIRA_LOG_WARNING/INFO/DEBUG body into dead code the coverage run can never reach. llvm-profdata/llvm-cov consume the output.",
+                "Instrumented coverage build (clang source-based coverage; accurate under optimization, so Release stays). llvm-profdata/llvm-cov consume the output.",
             "binaryDir": "${sourceDir}/build/ci/coverage",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
                 "CMAKE_C_FLAGS": "-fprofile-instr-generate -fcoverage-mapping",
                 "CMAKE_CXX_FLAGS": "-fprofile-instr-generate -fcoverage-mapping"
             }
