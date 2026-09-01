@@ -663,10 +663,15 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
     // shared registry, the processor pools, and possibly tear down the pool.
     Core& c = core();
     std::unique_ptr<thl::Logger::rt::DrainThread> log_drain_to_stop;
+    // Whether this was the last session has to be read under the lock and carried out:
+    // re-reading m_sessions below would race with a concurrent release_session()
+    // erasing from the same vector (two handlers destructed in parallel).
+    bool was_last_session = false;
     {
         const std::lock_guard<std::mutex> lifecycle_lock(c.m_lifecycle_mutex);
         unregister_session_locked(c, session);
-        if (c.m_sessions.empty()) { log_drain_to_stop = take_log_drain_locked(c); }
+        was_last_session = c.m_sessions.empty();
+        if (was_last_session) { log_drain_to_stop = take_log_drain_locked(c); }
     }
     // Outside the lifecycle lock: stopping joins the drain thread and flushes the queue
     // through the log sinks on this thread, and a host's log callback may call back
@@ -674,7 +679,7 @@ void Context::release_session(const std::shared_ptr<SessionElement>& session) {
     // mode the same final flush makes sure the last session's records are not stuck.
     if (log_drain_to_stop) {
         log_drain_to_stop.reset();
-    } else if (c.m_sessions.empty()) {
+    } else if (was_last_session) {
         drain_log();
     }
 }

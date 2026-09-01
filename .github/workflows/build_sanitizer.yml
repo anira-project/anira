@@ -1,8 +1,30 @@
 name: build_sanitizer
 
+# Sanitizer build + test — the logic lives in tanh-lab/ci-actions' reusable
+# build-sanitizer workflow; this file keeps only anira's facts (triggers, the
+# matrix file, the models cache). The matrix lives in
+# .github/sanitizer_matrix.json (see the reusable workflow's header for the row
+# schema).
+#
+# The legs, and why they are scoped the way they are:
+#   RTSan       gates the ANIRA_REALTIME ([[clang::nonblocking]]) hot path —
+#               process/push_data/pop_data/reset — at runtime, with no
+#               suppressions: logging from real-time paths goes through
+#               thl::Logger::rt (lock-free, no syscalls), so any allocation,
+#               lock, sleep, semaphore or stream syscall in a real-time context
+#               fails the job. Runs the full backend set, so it restores the
+#               model fixtures; tanh-lib is built with TANH_WITH_RTSAN so its
+#               own nonblocking annotations are checked in the same build.
+#   ASan-UBSan  engine-free scope: the prebuilt backend runtimes are
+#   TSan        uninstrumented, so a sanitized build that linked them would
+#               report on frames it cannot see into. That also keeps both legs
+#               small — no engine downloads, no model fixtures — so they finish
+#               inside the RTSan leg they run beside and cost the queue nothing.
+#
+# PR runs are stubs: only the result job reports (the queue entry requires it);
+# the real jobs run in the merge queue.
+
 on:
-  # PR runs are stubs: only the result job reports (queue entry requires it);
-  # the real jobs run in the merge queue.
   pull_request:
     branches:
       - main
@@ -10,68 +32,36 @@ on:
   workflow_call:
   workflow_dispatch:
 
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build_and_test_rtsan:
+  sanitize:
     if: github.event_name != 'pull_request'
-    # Gates the ANIRA_REALTIME ([[clang::nonblocking]]) hot path — process/
-    # push_data/pop_data/reset — at runtime, with no suppressions: logging from
-    # real-time paths goes through thl::Logger::rt (lock-free, no syscalls), so
-    # any allocation, lock, sleep, semaphore or stream syscall in a real-time
-    # context fails the job. tanh-lib is built with TANH_WITH_RTSAN so its own
-    # nonblocking annotations are checked in the same build.
-    name: Check real-time safety with RTSan
-    strategy:
-      matrix:
-        name: [Linux-x86_64]
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    env:
-      GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
-    steps:
-      - name: get repo and submodules
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 0
-          fetch-tags: true
-      - name: restore the model fixtures
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            extras/models/hybrid-nn/GuitarLSTM
-            extras/models/cnn/steerable-nafx
-            extras/models/stateful-rnn/stateful-lstm
-            extras/models/model-pool/example-models
-            extras/models/third-party/ircam-acids/RAVE
-          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
-          enableCrossOsArchive: true
-      # RTSan (-fsanitize=realtime) requires clang >= 20.
-      - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.7
-        with:
-          CLANG_VERSION: "20"
-      - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.7
-        with:
-          PRESET: desktop-tests-rtsan
-      - name: test
-        uses: tanh-lab/ci-actions/cmake-test@v0.3.7
-        with:
-          PRESET: desktop-tests-rtsan
+    uses: tanh-lab/ci-actions/.github/workflows/build-sanitizer.yml@v0.3.8
+    with:
+      matrix_file: .github/sanitizer_matrix.json
+      models_cache_prefix: anira-models-v1
+      models_hash_glob: extras/fetch-models.cmake
+      models_cache_paths: |
+        extras/models/hybrid-nn/GuitarLSTM
+        extras/models/cnn/steerable-nafx
+        extras/models/stateful-rnn/stateful-lstm
+        extras/models/model-pool/example-models
+        extras/models/third-party/ircam-acids/RAVE
 
-  # The queue's required status for this workflow.
+  # The queue's required status for this workflow. It lives here, not only
+  # inside the reusable workflow, because called jobs report under a prefixed
+  # name ("sanitize / TSan") — this job keeps the exact context.
   result:
     name: sanitizer result
-    needs: [build_and_test_rtsan]
+    needs: sanitize
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: aggregate
         run: |
           [ "${{ github.event_name }}" = "pull_request" ] && { echo "stub: the real jobs run in the merge queue"; exit 0; }
-          [ "${{ needs.build_and_test_rtsan.result }}" = "success" ] || exit 1
+          echo "workflow result: ${{ needs.sanitize.result }}"
+          [ "${{ needs.sanitize.result }}" = "success" ] || exit 1

@@ -4,6 +4,7 @@
 [![codecov](https://codecov.io/gh/anira-project/anira/branch/main/graph/badge.svg)](https://codecov.io/gh/anira-project/anira)
 ![build_benchmark](https://github.com/anira-project/anira/actions/workflows/build_benchmark.yml/badge.svg)
 ![build_examples](https://github.com/anira-project/anira/actions/workflows/build_examples.yml/badge.svg)
+![build_sanitizer](https://github.com/anira-project/anira/actions/workflows/build_sanitizer.yml/badge.svg)
 ![build_docs](https://github.com/anira-project/anira/actions/workflows/build_docs_and_deploy.yml/badge.svg)
 ![on_tag](https://github.com/anira-project/anira/actions/workflows/on_tag.yml/badge.svg)
 

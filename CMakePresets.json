@@ -322,7 +322,9 @@
             "binaryDir": "${sourceDir}/build/ci/asan",
             "cacheVariables": {
                 "BUILD_SHARED_LIBS": "ON",
-                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_C_FLAGS_RELWITHDEBINFO": "-O2 -g -fno-omit-frame-pointer",
+                "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -fno-omit-frame-pointer",
                 "ANIRA_WITH_LIBTORCH": "OFF",
                 "ANIRA_WITH_ONNXRUNTIME": "OFF",
                 "ANIRA_WITH_LITERT": "OFF",
@@ -339,29 +341,15 @@
             "binaryDir": "${sourceDir}/build/ci/tsan",
             "cacheVariables": {
                 "BUILD_SHARED_LIBS": "ON",
-                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_C_FLAGS_RELWITHDEBINFO": "-O2 -g -fno-omit-frame-pointer",
+                "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -fno-omit-frame-pointer",
                 "ANIRA_WITH_LIBTORCH": "OFF",
                 "ANIRA_WITH_ONNXRUNTIME": "OFF",
                 "ANIRA_WITH_LITERT": "OFF",
                 "ANIRA_WITH_EXECUTORCH": "OFF",
                 "ANIRA_WITH_TFLITE": "OFF",
                 "ANIRA_WITH_TSAN": "ON"
-            }
-        },
-        {
-            "name": "desktop-tests-lsan",
-            "inherits": "ci-clang-base",
-            "description": "Standalone LSan over the engine-free suite (noengines scope; Linux).",
-            "binaryDir": "${sourceDir}/build/ci/lsan",
-            "cacheVariables": {
-                "BUILD_SHARED_LIBS": "ON",
-                "CMAKE_BUILD_TYPE": "Debug",
-                "ANIRA_WITH_LIBTORCH": "OFF",
-                "ANIRA_WITH_ONNXRUNTIME": "OFF",
-                "ANIRA_WITH_LITERT": "OFF",
-                "ANIRA_WITH_EXECUTORCH": "OFF",
-                "ANIRA_WITH_TFLITE": "OFF",
-                "ANIRA_WITH_LSAN": "ON"
             }
         },
         {
@@ -563,10 +551,6 @@
             "configurePreset": "desktop-tests-tsan"
         },
         {
-            "name": "desktop-tests-lsan",
-            "configurePreset": "desktop-tests-lsan"
-        },
-        {
             "name": "android-emulator-tests",
             "configurePreset": "android-emulator-tests"
         },
@@ -758,17 +742,6 @@
         {
             "name": "desktop-tests-tsan",
             "configurePreset": "desktop-tests-tsan",
-            "output": {
-                "outputOnFailure": true
-            },
-            "execution": {
-                "jobs": 4,
-                "timeout": 900
-            }
-        },
-        {
-            "name": "desktop-tests-lsan",
-            "configurePreset": "desktop-tests-lsan",
             "output": {
                 "outputOnFailure": true
             },

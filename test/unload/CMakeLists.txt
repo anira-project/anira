@@ -40,12 +40,11 @@ target_link_libraries(anira_unload_test PRIVATE gtest gtest_main ${CMAKE_DL_LIBS
 # The harness deliberately does not link anira (it drives the module via
 # dlopen), so it inherits no sanitizer flags — but the module it loads is
 # instrumented, and a sanitizer runtime arriving via dlopen aborts ("loaded
-# too late"). Instrument the host with the same sanitizers.
-foreach(_ul_kind rtsan asan ubsan tsan lsan)
+# too late"). Instrument the host with the same sanitizers. RTSan is absent
+# from this list on purpose: the parent excludes this whole directory under
+# ANIRA_WITH_RTSAN, so a branch for it here would be unreachable.
+foreach(_ul_kind asan ubsan tsan lsan)
     string(TOUPPER "${_ul_kind}" _ul_KIND)
-    if(_ul_kind STREQUAL "ubsan")
-        set(_ul_KIND "UBSAN")
-    endif()
     if(ANIRA_WITH_${_ul_KIND})
         tanh_add_sanitizer(anira_unload_test ${_ul_kind})
     endif()
