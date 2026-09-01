@@ -65,6 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Codecov is configured as a metric and nothing else: no project or patch commit status (so it can never fail a pull request or block the merge queue), no bot comment, no inline diff annotations. This matches `coverage.yml`'s stance that "a coverage dip is information, never a merge blocker". `default.profraw`, a 216 KB clang coverage artifact a test binary drops when run from the repo root, is removed from the repository and `*.profraw`/`*.profdata` are gitignored.
+
 - Data race in `Context::release_session()`: whether the released session was the last one was re-read from `m_sessions` *after* the lifecycle lock was dropped, while a concurrent `release_session()` erased from that same vector under the lock — so two `InferenceHandler`s destructed in parallel raced on the registry, and the "last session" verdict driving the final log drain could be read from a vector mid-erase. The emptiness is now captured inside the locked block and carried out, which keeps the drain call outside the lock (a host's log callback may re-enter the context). Found by the new TSan CI leg.
 
 - The backend-archive, release-metadata and RAVE-model downloads retry once after a transient failure (SSL connect errors against GitHub occasionally failed a CI configure).
