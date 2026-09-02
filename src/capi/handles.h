@@ -63,12 +63,19 @@ private:
 
 /// One models[] entry: a built-in engine or a custom engine id, a path or bytes, the
 /// canonical -> engine tensor names, and its extensions (host "model").
+/// What one entry's file calls a tensor and how it holds its axes (section 5): the
+/// JSON file's models[].tensors record, keyed by the spec's canonical name.
+struct TensorBinding {
+    std::string m_name;              ///< the export's name; empty = bind positionally
+    std::vector<uint32_t> m_layout;  ///< engine axis k = spec axis m_layout[k]; empty = identity
+};
+
 struct ModelEntry {
     anira_engine m_engine = ANIRA_ENGINE_NONE;
     std::string m_engine_id;  ///< non-empty for a custom engine
     std::string m_path;       ///< kept for to_json even after set_model_bytes
     std::shared_ptr<BytesCarrier> m_bytes;
-    std::map<std::string, std::string> m_tensor_names;
+    std::map<std::string, TensorBinding> m_tensors;
     ExtBag m_ext;
 
     bool is_custom() const noexcept { return !m_engine_id.empty(); }
@@ -152,8 +159,7 @@ struct anira_model_config {
     std::string m_default_engine_id;
     anira_model_state m_state = ANIRA_MODEL_STATELESS;
     uint32_t m_max_instances = 1;
-    uint32_t m_anchor_index = ANIRA_ANCHOR_FIRST_STREAMED;
-    bool m_anchor_is_input = true;
+    std::string m_anchor;  ///< canonical name of the clock tensor; empty = the first streamed
     anira::capi::ExtBag m_ext;
     std::unique_ptr<anira_contract> m_legacy_contract;  ///< after a version 2 JSON upgrade
     bool m_upgraded = false;

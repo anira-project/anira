@@ -46,7 +46,7 @@ int anira_header_c_probe(void) {
     checks += err.message[0] == '\0' ? 1 : 0;
     checks += ANIRA_MAX_RANK == 8 ? 1 : 0;
     checks += ANIRA_DYNAMIC == ANIRA_UNBOUNDED ? 1 : 0;
-    checks += (int)ANIRA_ANCHOR_FIRST_STREAMED == -1 ? 1 : 0;
+    checks += (int)ANIRA_AXIS_INSERT == -1 ? 1 : 0;
 
     {
         anira_ext_entry entry = ANIRA_EXT_ENTRY_INIT;

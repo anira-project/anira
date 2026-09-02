@@ -113,7 +113,7 @@ TEST(AbiJsonUpgrade, SimpleGainUpgrades) {
     EXPECT_EQ(cfg.m_outputs[1].m_role, ANIRA_ROLE_STATIC);
     EXPECT_EQ(cfg.m_state, ANIRA_MODEL_STATELESS);
     EXPECT_EQ(cfg.m_max_instances, 1u);
-    EXPECT_EQ(cfg.m_anchor_index, ANIRA_ANCHOR_FIRST_STREAMED);
+    EXPECT_TRUE(cfg.m_anchor.empty()) << "the default: the first streamed tensor";
 
     anira_contract* legacy = nullptr;
     ASSERT_EQ(anira_model_config_take_legacy_contract(m.m_config, &legacy), ANIRA_OK);
@@ -208,8 +208,9 @@ TEST(AbiJsonUpgrade, HybridShapedDocumentUsesThePerChannelWindow) {
     EXPECT_EQ(in.m_window_min, 38400) << "elements / channels";
     EXPECT_EQ(in.m_context, 38400 - 256);
     const anira_tensor_spec& out = m.m_config->m_outputs[0];
-    // With one channel no other axis carries the channel count: the trailing axis is Time.
-    expect_axes(out, {ANIRA_AXIS_ANY, ANIRA_AXIS_TIME}, {256, 1});
+    // The axis carrying the per-channel element count (256) is Time; the other unit axis
+    // carries the channel count 1.
+    expect_axes(out, {ANIRA_AXIS_TIME, ANIRA_AXIS_CHANNEL}, {256, 1});
     EXPECT_EQ(out.m_window_min, 256);
     EXPECT_EQ(out.m_context, 0);
 }
@@ -240,13 +241,92 @@ TEST(AbiJsonUpgrade, TensorShapeSpellings) {
     const Upgraded c(universal);
     EXPECT_EQ(c.m_status, ANIRA_SUCCESS_UPGRADED) << c.m_err.message;
 
+    // A per-backend entry that permutes unit axes becomes a layout on that backend's rows.
     const char* differing =
-        R"({"inference_config": {"model_data": [{"model_path": "m", "inference_backend": "ONNX"}],
+        R"({"inference_config": {"model_data": [{"model_path": "m", "inference_backend": "ONNX"},
+                                                {"model_path": "m.tflite", "inference_backend": "TFLITE"}],
         "tensor_shape": [{"input_shape": [1, 1, 512], "output_shape": [1, 1, 512]},
                          {"input_shape": [1, 512, 1], "output_shape": [1, 1, 512], "inference_backend": "TFLITE"}], "max_inference_time": 1.0}})";
     const Upgraded d(differing);
-    EXPECT_EQ(d.m_status, ANIRA_ERROR_JSON);
-    EXPECT_NE(std::strstr(d.m_err.message, "tensor_shape[1]"), nullptr) << d.m_err.message;
+    ASSERT_EQ(d.m_status, ANIRA_SUCCESS_UPGRADED) << d.m_err.message;
+    EXPECT_TRUE(d.m_config->m_models[0].m_tensors.empty()) << "the ONNX row is canonical";
+    ASSERT_EQ(d.m_config->m_models[1].m_tensors.count("input_0"), 1u);
+    EXPECT_EQ(d.m_config->m_models[1].m_tensors.at("input_0").m_layout,
+              (std::vector<uint32_t>{0, 2, 1}));
+    EXPECT_EQ(d.m_config->m_models[1].m_tensors.count("output_0"), 0u) << "equal dims: no record";
+    EXPECT_NE(model_text(d.m_config)
+                  .find("\"input_0\": {\n          \"layout\": [\n            0,\n            2,\n "
+                        "           1\n          ]\n        }"),
+              std::string::npos)
+        << model_text(d.m_config);
+
+    // A different rank by unit axes is a layout too (the squeezed batch axis, the rank-3 scalar).
+    const char* rank =
+        R"({"inference_config": {"model_data": [{"model_path": "m", "inference_backend": "ONNX"},
+                                                {"model_path": "m.tflite", "inference_backend": "TFLITE"}],
+        "tensor_shape": [{"input_shape": [[1, 1, 512], [1]], "output_shape": [[1, 1, 512]]},
+                         {"input_shape": [[1, 512], [1, 1, 1]], "output_shape": [[1, 1, 512]], "inference_backend": "TFLITE"}],
+        "processing_spec": {"preprocess_input_size": [512, 0]}, "max_inference_time": 1.0}})";
+    const Upgraded r(rank);
+    ASSERT_EQ(r.m_status, ANIRA_SUCCESS_UPGRADED) << r.m_err.message;
+    EXPECT_EQ(r.m_config->m_models[1].m_tensors.at("input_0").m_layout,
+              (std::vector<uint32_t>{0, 2}));
+    EXPECT_EQ(r.m_config->m_models[1].m_tensors.at("input_1").m_layout,
+              (std::vector<uint32_t>{0, ANIRA_AXIS_INSERT, ANIRA_AXIS_INSERT}));
+
+    // Moving an axis of another extent is not a layout the upgrade can write.
+    const char* transposed =
+        R"({"inference_config": {"model_data": [{"model_path": "m", "inference_backend": "ONNX"}],
+        "tensor_shape": [{"input_shape": [1, 2, 512], "output_shape": [1, 1, 512]},
+                         {"input_shape": [1, 512, 2], "output_shape": [1, 1, 512], "inference_backend": "TFLITE"}], "max_inference_time": 1.0}})";
+    const Upgraded t(transposed);
+    EXPECT_EQ(t.m_status, ANIRA_ERROR_JSON);
+    EXPECT_NE(std::strstr(t.m_err.message, "tensor_shape[1].input_shape[0]"), nullptr)
+        << t.m_err.message;
+
+    // The canonical entry is the universal one wherever it sits: HybridNNConfig.h lists the
+    // TFLite and LiteRT rows first.
+    const char* hybrid_order =
+        R"({"inference_config": {"model_data": [{"model_path": "m.tflite", "inference_backend": "TFLITE"},
+                                                {"model_path": "m.tflite", "inference_backend": "LITERT"},
+                                                {"model_path": "m.pt", "inference_backend": "LIBTORCH"}],
+        "tensor_shape": [{"input_shape": [256, 150, 1], "output_shape": [256, 1], "inference_backend": "TFLITE"},
+                         {"input_shape": [256, 150, 1], "output_shape": [256, 1], "inference_backend": "LITERT"},
+                         {"input_shape": [256, 1, 150], "output_shape": [256, 1]}],
+        "processing_spec": {"preprocess_input_size": [256], "postprocess_output_size": [256]}, "max_inference_time": 1.0}})";
+    const Upgraded h(hybrid_order);
+    ASSERT_EQ(h.m_status, ANIRA_SUCCESS_UPGRADED) << h.m_err.message;
+    expect_axes(h.m_config->m_inputs[0],
+                {ANIRA_AXIS_ANY, ANIRA_AXIS_CHANNEL, ANIRA_AXIS_TIME},
+                {256, 1, 150});
+    EXPECT_EQ(h.m_config->m_models[0].m_tensors.at("input_0").m_layout,
+              (std::vector<uint32_t>{0, 2, 1}));
+    EXPECT_EQ(h.m_config->m_models[1].m_tensors.at("input_0").m_layout,
+              (std::vector<uint32_t>{0, 2, 1}));
+    EXPECT_TRUE(h.m_config->m_models[2].m_tensors.empty());
+}
+
+TEST(AbiJsonUpgrade, TimeFirstShapesKeepTheirTimeAxis) {
+    // StatefulRNNConfig.h: {2048, 1, 1} for LibTorch, {1, 2048, 1} for TFLite. The axis carrying
+    // the per-channel element count is Time, wherever it sits; the TFLite row gets a layout.
+    const char* rnn =
+        R"({"inference_config": {"model_data": [{"model_path": "m.pt", "inference_backend": "LIBTORCH"},
+                                                {"model_path": "m.tflite", "inference_backend": "TFLITE"}],
+        "tensor_shape": [{"input_shape": [2048, 1, 1], "output_shape": [2048, 1, 1], "inference_backend": "LIBTORCH"},
+                         {"input_shape": [1, 2048, 1], "output_shape": [1, 2048, 1], "inference_backend": "TFLITE"}],
+        "max_inference_time": 42.66, "warm_up": 2, "session_exclusive_processor": true}})";
+    const Upgraded m(rnn);
+    ASSERT_EQ(m.m_status, ANIRA_SUCCESS_UPGRADED) << m.m_err.message;
+    expect_axes(m.m_config->m_inputs[0],
+                {ANIRA_AXIS_TIME, ANIRA_AXIS_ANY, ANIRA_AXIS_CHANNEL},
+                {2048, 1, 1});
+    EXPECT_EQ(m.m_config->m_inputs[0].m_window_min, 2048);
+    EXPECT_EQ(m.m_config->m_inputs[0].m_context, 0);
+    EXPECT_EQ(m.m_config->m_models[1].m_tensors.at("input_0").m_layout,
+              (std::vector<uint32_t>{1, 0, 2}));
+    EXPECT_EQ(m.m_config->m_models[1].m_tensors.at("output_0").m_layout,
+              (std::vector<uint32_t>{1, 0, 2}));
+    EXPECT_EQ(m.m_config->m_state, ANIRA_MODEL_STATEFUL);
 }
 
 TEST(AbiJsonUpgrade, RejectionsNameTheKeyPath) {

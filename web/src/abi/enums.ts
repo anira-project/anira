@@ -338,7 +338,7 @@ export const ANIRA_UNBOUNDED = -1n
 export const ANIRA_FOURCC = (a: number, b: number, c: number, d: number): number => (a | (b << 8) | (c << 16) | (d << 24)) >>> 0
 export const ANIRA_THREADS_AUTO = 4294967295
 export const ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK = 1
-export const ANIRA_ANCHOR_FIRST_STREAMED = 4294967295
+export const ANIRA_AXIS_INSERT = 4294967295
 export const ANIRA_TICKET_INVALID = 0
 export const ANIRA_LOG_RECORD_REALTIME = 1
 export const ANIRA_LOG_RECORD_CONTRACT_VIOLATION = 2

@@ -12,8 +12,10 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "capi/handles.h"
+#include "capi/layout.h"
 
 namespace {
 
@@ -344,8 +346,12 @@ TEST(AbiModelConfig, SpecsAreCopiedAndTheRestIsScalar) {
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_model_config_set_max_instances(m.m_config, 0), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_model_config_set_max_instances(m.m_config, 4), ANIRA_OK);
-    EXPECT_EQ(anira_model_config_set_anchor(m.m_config, 1, 0), ANIRA_OK);
-    EXPECT_FALSE(m.m_config->m_anchor_is_input);
+    EXPECT_EQ(anira_model_config_set_anchor(m.m_config, "mask_out"), ANIRA_OK);
+    EXPECT_EQ(m.m_config->m_anchor, "mask_out");
+    EXPECT_EQ(anira_model_config_set_anchor(m.m_config, nullptr), ANIRA_OK)
+        << "NULL restores the default";
+    EXPECT_TRUE(m.m_config->m_anchor.empty());
+    EXPECT_EQ(anira_model_config_set_anchor(nullptr, "x"), ANIRA_ERROR_INVALID_ARGUMENT);
     uint32_t index = 0;
     ASSERT_EQ(anira_model_config_add_model_path(m.m_config,
                                                 ANIRA_ENGINE_ONNXRUNTIME,
@@ -358,7 +364,156 @@ TEST(AbiModelConfig, SpecsAreCopiedAndTheRestIsScalar) {
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_model_config_set_tensor_name(m.m_config, 1, "a", "b"),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(m.m_config->m_models[0].m_tensor_names.at("audio_in"), "input_0");
+    EXPECT_EQ(m.m_config->m_models[0].m_tensors.at("audio_in").m_name, "input_0");
+}
+
+TEST(AbiModelConfig, TensorLayoutRecord) {
+    Model m;
+    uint32_t index = 0;
+    ASSERT_EQ(anira_model_config_add_model_path(m.m_config,
+                                                ANIRA_ENGINE_TFLITE,
+                                                "m.tflite",
+                                                &index,
+                                                &m.m_err),
+              ANIRA_OK);
+    const std::array<uint32_t, 3> nhwc{0, 2, 1};
+    EXPECT_EQ(anira_model_config_set_tensor_layout(m.m_config, 0, "audio_in", nhwc.data(), 3),
+              ANIRA_OK);
+    EXPECT_EQ(m.m_config->m_models[0].m_tensors.at("audio_in").m_layout,
+              (std::vector<uint32_t>{0, 2, 1}));
+    EXPECT_TRUE(m.m_config->m_models[0].m_tensors.at("audio_in").m_name.empty())
+        << "a layout without a name: positional binding, permuted axes";
+    // The name and the layout share one record.
+    EXPECT_EQ(anira_model_config_set_tensor_name(m.m_config, 0, "audio_in", "args_0"), ANIRA_OK);
+    EXPECT_EQ(m.m_config->m_models[0].m_tensors.size(), 1u);
+    EXPECT_EQ(m.m_config->m_models[0].m_tensors.at("audio_in").m_layout.size(), 3u);
+    // Rejections: index, name, NULL axes, rank, a spec axis out of range, a duplicate axis.
+    EXPECT_EQ(anira_model_config_set_tensor_layout(m.m_config, 1, "audio_in", nhwc.data(), 3),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_model_config_set_tensor_layout(m.m_config, 0, "", nhwc.data(), 3),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_model_config_set_tensor_layout(m.m_config, 0, "audio_in", nullptr, 3),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_model_config_set_tensor_layout(m.m_config,
+                                                   0,
+                                                   "audio_in",
+                                                   nhwc.data(),
+                                                   ANIRA_MAX_RANK + 1),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    const std::array<uint32_t, 2> out_of_range{0, ANIRA_MAX_RANK};
+    EXPECT_EQ(
+        anira_model_config_set_tensor_layout(m.m_config, 0, "audio_in", out_of_range.data(), 2),
+        ANIRA_ERROR_INVALID_ARGUMENT);
+    const std::array<uint32_t, 3> twice{0, 1, 1};
+    EXPECT_EQ(anira_model_config_set_tensor_layout(m.m_config, 0, "audio_in", twice.data(), 3),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    const std::array<uint32_t, 2> with_insert{0, ANIRA_AXIS_INSERT};
+    EXPECT_EQ(anira_model_config_set_tensor_layout(m.m_config, 0, "gain", with_insert.data(), 2),
+              ANIRA_OK)
+        << "insert: a unit axis the spec lacks";
+    // Clearing: ndim 0 with NULL axes; a record without a name disappears.
+    EXPECT_EQ(anira_model_config_set_tensor_layout(m.m_config, 0, "gain", nhwc.data(), 0),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_model_config_set_tensor_layout(m.m_config, 0, "gain", nullptr, 0), ANIRA_OK);
+    EXPECT_EQ(m.m_config->m_models[0].m_tensors.count("gain"), 0u);
+    EXPECT_EQ(anira_model_config_set_tensor_layout(m.m_config, 0, "audio_in", nullptr, 0),
+              ANIRA_OK);
+    EXPECT_EQ(m.m_config->m_models[0].m_tensors.at("audio_in").m_name, "args_0")
+        << "clearing the layout keeps the name";
+}
+
+TEST(AbiModelConfig, CanonicalNamesAreUniqueAcrossSides) {
+    const Model m;
+    const Spec in("audio");
+    const Spec out("audio");
+    const Spec other("other");
+    EXPECT_EQ(anira_model_config_add_input(m.m_config, in.m_spec), ANIRA_OK);
+    EXPECT_EQ(anira_model_config_add_input(m.m_config, in.m_spec), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "the same name twice on one side";
+    EXPECT_EQ(anira_model_config_add_output(m.m_config, out.m_spec), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "the same name on the other side";
+    EXPECT_EQ(anira_model_config_add_output(m.m_config, other.m_spec), ANIRA_OK);
+    EXPECT_EQ(m.m_config->m_inputs.size(), 1u);
+    EXPECT_EQ(m.m_config->m_outputs.size(), 1u);
+}
+
+// ---- layout helpers (src/capi/layout.h): what the loader, the upgrade and the translator share
+
+namespace {
+
+anira_tensor_spec spec_with(const std::vector<int64_t>& extents) {
+    anira_tensor_spec spec;
+    spec.m_name = "t";
+    spec.m_ndim = static_cast<uint32_t>(extents.size());
+    for (size_t i = 0; i < extents.size(); ++i) {
+        spec.m_axes[i] =
+            anira::capi::Axis{.m_tag = ANIRA_AXIS_ANY, .m_extent = extents[i], .m_written = true};
+    }
+    return spec;
+}
+
+}  // namespace
+
+TEST(AbiLayout, ClassifiesViewsAndTransposes) {
+    using anira::capi::classify_layout;
+    using anira::capi::LayoutKind;
+    const anira_tensor_spec cnn = spec_with({1, 1, 15380});
+    EXPECT_EQ(classify_layout(cnn, {}, nullptr), LayoutKind::Identity);
+    EXPECT_EQ(classify_layout(cnn, {0, 1, 2}, nullptr), LayoutKind::Identity);
+    EXPECT_EQ(classify_layout(cnn, {0, 2, 1}, nullptr), LayoutKind::View) << "channels-last CNN";
+    EXPECT_EQ(classify_layout(spec_with({2048, 1, 1}), {1, 0, 2}, nullptr), LayoutKind::View)
+        << "time-first RNN";
+    EXPECT_EQ(classify_layout(spec_with({256, 1, 150}), {0, 2, 1}, nullptr), LayoutKind::View)
+        << "HybridNN: batch and time keep their order";
+    EXPECT_EQ(classify_layout(spec_with({1, 2, 512}), {0, 2, 1}, nullptr), LayoutKind::Transpose)
+        << "stereo channels-last moves an axis of extent 2";
+    EXPECT_EQ(classify_layout(spec_with({1, 2, ANIRA_DYNAMIC}), {0, 2, 1}, nullptr),
+              LayoutKind::Transpose)
+        << "a dynamic extent is material";
+    EXPECT_EQ(classify_layout(spec_with({1}), {0, ANIRA_AXIS_INSERT, ANIRA_AXIS_INSERT}, nullptr),
+              LayoutKind::View)
+        << "the rank-3 TFLite scalar over a rank-1 spec";
+    EXPECT_EQ(classify_layout(spec_with({1, 1, 512}), {0, 2}, nullptr), LayoutKind::View)
+        << "a unit axis left out";
+    std::string why;
+    EXPECT_EQ(classify_layout(spec_with({1, 2, 512}), {0, 2}, &why), LayoutKind::Invalid)
+        << "a material axis left out";
+    EXPECT_NE(why.find("left out"), std::string::npos) << why;
+    EXPECT_EQ(classify_layout(cnn, {0, 1, 3}, &why), LayoutKind::Invalid) << "beyond the rank";
+    EXPECT_EQ(classify_layout(cnn, {0, 1, 1}, &why), LayoutKind::Invalid) << "twice";
+}
+
+TEST(AbiLayout, EngineDimsFollowTheLayout) {
+    using anira::capi::engine_dims;
+    EXPECT_EQ(engine_dims(spec_with({1, 1, 15380}), {0, 2, 1}),
+              (std::vector<int64_t>{1, 15380, 1}));
+    EXPECT_EQ(engine_dims(spec_with({1, 1, 15380}), {}), (std::vector<int64_t>{1, 1, 15380}));
+    EXPECT_EQ(engine_dims(spec_with({1}), {0, ANIRA_AXIS_INSERT, ANIRA_AXIS_INSERT}),
+              (std::vector<int64_t>{1, 1, 1}));
+    EXPECT_EQ(engine_dims(spec_with({1, 1, 512}), {0, 2}), (std::vector<int64_t>{1, 512}));
+}
+
+TEST(AbiLayout, StableFillReproducesTheTreesPerBackendShapes) {
+    using anira::capi::stable_fill_layout;
+    using Axes = std::vector<uint32_t>;
+    EXPECT_EQ(stable_fill_layout({1, 1, 15380}, {1, 15380, 1}).value_or(Axes{}), (Axes{0, 2, 1}))
+        << "CNN";
+    EXPECT_EQ(stable_fill_layout({256, 1, 150}, {256, 150, 1}).value_or(Axes{}), (Axes{0, 2, 1}))
+        << "HybridNN";
+    EXPECT_EQ(stable_fill_layout({2048, 1, 1}, {1, 2048, 1}).value_or(Axes{}), (Axes{1, 0, 2}))
+        << "StatefulRNN";
+    EXPECT_EQ(stable_fill_layout({1, 1, 512}, {1, 512}).value_or(Axes{}), (Axes{0, 2}))
+        << "a squeezed batch axis";
+    EXPECT_EQ(stable_fill_layout({1}, {1, 1, 1}).value_or(Axes{}),
+              (Axes{0, ANIRA_AXIS_INSERT, ANIRA_AXIS_INSERT}))
+        << "SimpleGain's rank-3 TFLite gain";
+    EXPECT_EQ(stable_fill_layout({1, 1, 512}, {1, 1, 512}).value_or(Axes{}), (Axes{0, 1, 2}))
+        << "equal dims: the identity";
+    EXPECT_FALSE(stable_fill_layout({1, 2, 512}, {1, 512, 2}).has_value())
+        << "a material axis moved: not a view";
+    EXPECT_FALSE(stable_fill_layout({1, 1, 512}, {1, 1, 256}).has_value()) << "another extent";
+    EXPECT_FALSE(stable_fill_layout({1, 2, 512}, {1, 512}).has_value())
+        << "a material axis missing";
 }
 
 // ---- machine config --------------------------------------------------------------------------
