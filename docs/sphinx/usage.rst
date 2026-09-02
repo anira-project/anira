@@ -4,28 +4,29 @@ Usage Guide
 Overview
 --------
 
-anira describes a deployment with four configuration handles and runs it with a real-time
-handler. The handles are the C API of ``anira/abi/config.h`` (C11, callable from every
-language); the three JSON files of section 1.5 are their file form.
+anira describes a deployment with four configuration objects and runs it with a real-time
+handler. The objects are the C++ builders of ``anira/anira.hpp`` over the C API of
+``anira/abi/config.h`` (C11, callable from every language; section 1.6); the three JSON files
+of section 1.5 are their file form.
 
 .. list-table::
    :header-rows: 1
    :widths: 30 70
 
-   * - Handle
+   * - Object
      - Description
-   * - ``anira_model_config``
+   * - ``anira::ModelConfig``
      - The model: one entry per engine (a file or bytes), its input and output tensors, its
        state, the instance ceiling and the anchor tensor the host geometry refers to. Travels
        with the model; its file form is the model file.
-   * - ``anira_tensor_spec``
+   * - ``anira::TensorSpec``
      - One tensor of the model: data type, role, tagged axes, the window and context a
        streamed tensor is consumed with, the output latency.
-   * - ``anira_contract``
+   * - ``anira::ContractHandle`` (``anira::Hard`` / ``anira::Async``)
      - How the model runs: **Hard** for a real-time stream (block range and rate, budget,
        warmup, miss policy) or **Async** for jobs (deadline and policy). Names the run; its
        file form is the contract file.
-   * - ``anira_machine_config``
+   * - ``anira::MachineConfig``
      - The process: the inference thread pool, logging, the devices anira may use. Lives on
        the box; its file form is the machine file.
    * - :cpp:class:`anira::InferenceHandler`, :cpp:class:`anira::PrePostProcessor`
@@ -36,28 +37,32 @@ language); the three JSON files of section 1.5 are their file form.
 1. Configuration
 ----------------------------------------
 
-Every configuration call returns an ``anira_status``: negative values are failures,
-``ANIRA_OK`` and the positive values (``ANIRA_SUCCESS_UPGRADED``, ``ANIRA_INCOMPLETE``) are
-successes, so test with ``ANIRA_FAILED(status)`` rather than comparing with ``ANIRA_OK``.
-Calls that can fail for more than one reason take a caller-owned ``anira_error`` (initialise
-it with ``ANIRA_ERROR_INIT``) and write the status and a message into it; pass ``NULL`` if you
-do not want the message. Construction is cheap and does not validate across handles: every
-semantic check (does the window fit the axis, does the default engine name an entry) happens
-once, at prepare, the same way for JSON and for code.
+The configuration is written with the builders of ``<anira/anira.hpp>``: ``anira::TensorSpec``,
+``anira::ModelConfig``, ``anira::ContractHandle`` (minted from an ``anira::Hard`` or
+``anira::Async`` aggregate) and ``anira::MachineConfig``. Every method is one C call into
+``anira/abi/config.h`` (section 1.6); a call that fails throws ``anira::Error``, a
+``std::runtime_error`` that carries the ``anira_status`` in ``.status`` and anira's message in
+``what()``. The handles are move-only RAII objects: the destructor releases the C handle, and
+what you pass into another handle is copied, so a spec may go out of scope right after it was
+added to a model config. The header is C++20 and header-only: it is compiled into your binary,
+so it is not part of the binary promise (the C ABI is), it needs no anira define, and it can be
+included beside ``<anira/anira.h>``. Construction is cheap and does not validate across
+handles: every semantic check (does the window fit the axis, does the default engine name an
+entry) happens once, at prepare, the same way for JSON and for code.
 
-.. code-block:: c
+.. code-block:: cpp
 
-    #include <anira/abi/config.h>
+    #include <anira/anira.hpp>
 
-    anira_error err = ANIRA_ERROR_INIT;
-    anira_model_config* cfg = NULL;
-    if (ANIRA_FAILED(anira_model_config_create(&cfg, &err))) {
-        fprintf(stderr, "%s: %s\n", anira_status_string(err.status), err.message);
+    try {
+        anira::ModelConfig cfg;
+        cfg.add_model_path(ANIRA_ENGINE_ONNXRUNTIME, "model.onnx");
+    } catch (const anira::Error& e) {
+        std::fprintf(stderr, "%s: %s\n", anira_status_string(e.status), e.what());
     }
 
-The handles are opaque and single-owner: every ``*_create`` has a ``*_destroy`` (NULL-safe),
-and what you pass into another handle is copied, so a spec can be destroyed right after it was
-added to a model config.
+Every handle hands its C handle out through ``native()``, for a C entry the builders do not
+wrap.
 
 1.1. Tensor specs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -81,44 +86,43 @@ The roles are:
 - ``ANIRA_ROLE_BUFFER``: the whole submitted buffer is one tensor, no Time axis (frames,
   images).
 
-The axes are set by index in the model's memory order, each with a tag and an extent; NCHW
-against NHWC is just a different order of tags. Tags are ``ANIRA_AXIS_BATCH``,
-``ANIRA_AXIS_CHANNEL``, ``ANIRA_AXIS_TIME``, ``ANIRA_AXIS_HEIGHT``, ``ANIRA_AXIS_WIDTH``,
-``ANIRA_AXIS_FEATURE`` and ``ANIRA_AXIS_ANY`` (no semantics). The extent of the Time axis of a
-streamed spec may be ``ANIRA_DYNAMIC`` when the model accepts any length; a streamed spec has
-exactly one Time axis and at most one Channel axis.
+The axes are set with ``axis(i, tag, extent)`` by index in the model's memory order, each with
+a tag and an extent; NCHW against NHWC is just a different order of tags. Tags are
+``ANIRA_AXIS_BATCH``, ``ANIRA_AXIS_CHANNEL``, ``ANIRA_AXIS_TIME``, ``ANIRA_AXIS_HEIGHT``,
+``ANIRA_AXIS_WIDTH``, ``ANIRA_AXIS_FEATURE`` and ``ANIRA_AXIS_ANY`` (no semantics). The extent
+of the Time axis of a streamed spec may be ``ANIRA_DYNAMIC`` when the model accepts any
+length; a streamed spec has exactly one Time axis and at most one Channel axis.
 
-A streamed spec also carries its **window**: how many elements along the Time axis one
-inference consumes (``window_min`` and ``window_max``, equal for a fixed window,
-``window_max = ANIRA_UNBOUNDED`` for an open one) and how many of them are **context**, the
-elements kept from the previous window. The advance per inference, the hop, is the window
-minus the context. A receptive-field model whose export takes 15380 samples and yields 2048
-fresh ones is a window of 15380 with a context of 13332.
+A streamed spec also carries its **window**, ``window(window_min, window_max, context)``: how
+many elements along the Time axis one inference consumes (``window_min`` and ``window_max``,
+equal for a fixed window, ``window_max = ANIRA_UNBOUNDED`` for an open one) and how many of
+them are **context**, the elements kept from the previous window. The advance per inference,
+the hop, is the window minus the context. A receptive-field model whose export takes 15380
+samples and yields 2048 fresh ones is a window of 15380 with a context of 13332.
 
-.. code-block:: c
+.. code-block:: cpp
 
-    anira_tensor_spec* in = NULL;
-    anira_tensor_spec_create("audio_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED, &in, &err);
-    anira_tensor_spec_set_axis(in, 0, ANIRA_AXIS_BATCH, 1);
-    anira_tensor_spec_set_axis(in, 1, ANIRA_AXIS_CHANNEL, 1);
-    anira_tensor_spec_set_axis(in, 2, ANIRA_AXIS_TIME, 15380);
-    anira_tensor_spec_set_window(in, 15380, 15380, 13332);   /* hop 2048 */
+    anira::TensorSpec in("audio_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    in.axis(0, ANIRA_AXIS_BATCH, 1)
+        .axis(1, ANIRA_AXIS_CHANNEL, 1)
+        .axis(2, ANIRA_AXIS_TIME, 15380)
+        .window(15380, 15380, 13332);   // hop 2048
 
-    anira_tensor_spec* out = NULL;
-    anira_tensor_spec_create("audio_out", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED, &out, &err);
-    anira_tensor_spec_set_axis(out, 0, ANIRA_AXIS_BATCH, 1);
-    anira_tensor_spec_set_axis(out, 1, ANIRA_AXIS_CHANNEL, 1);
-    anira_tensor_spec_set_axis(out, 2, ANIRA_AXIS_TIME, 2048);
-    anira_tensor_spec_set_window(out, 2048, 2048, 0);
+    anira::TensorSpec out("audio_out", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    out.axis(0, ANIRA_AXIS_BATCH, 1)
+        .axis(1, ANIRA_AXIS_CHANNEL, 1)
+        .axis(2, ANIRA_AXIS_TIME, 2048)
+        .window(2048, 2048, 0);
 
-    anira_tensor_spec* gain = NULL;   /* a conditioning scalar: no time semantics */
-    anira_tensor_spec_create("gain", ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC, &gain, &err);
-    anira_tensor_spec_set_axis(gain, 0, ANIRA_AXIS_ANY, 1);
+    anira::TensorSpec gain("gain", ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC);   // no time semantics
+    gain.axis(0, ANIRA_AXIS_ANY, 1);
 
-Two more setters cover the rarer cases: ``anira_tensor_spec_set_latency`` declares an output's
-internal delay along the Time axis so that the reported latency accounts for it, and
-``anira_tensor_spec_set_time_ratio(spec, num, den)`` declares a tensor whose Time axis advances
-at a rate other than the anchor's (``(0, 0)``, the default, derives it).
+The setters return the spec, so they chain; a spec is move-only, and a chain that starts on a
+temporary is passed straight into the model config (section 1.2) rather than bound to a name.
+Two more setters cover the rarer cases: ``latency(elements)`` declares an output's internal
+delay along the Time axis so that the reported latency accounts for it, and
+``time_ratio(num, den)`` declares a tensor whose Time axis advances at a rate other than the
+anchor's (``(0, 0)``, the default, derives it).
 
 1.2. Model configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -127,131 +131,127 @@ The model config lists the model's files, one entry per engine, and its tensors.
 only for the engines you ship; whether an engine is part of the build is decided at prepare,
 not here, so one config serves every build.
 
-.. code-block:: c
+.. code-block:: cpp
 
-    anira_model_config* cfg = NULL;
-    anira_model_config_create(&cfg, &err);
+    anira::ModelConfig cfg;
 
-    uint32_t i = 0;
-    anira_model_config_add_model_path(cfg, ANIRA_ENGINE_LIBTORCH, "model.pt", &i, &err);
-    /* the TorchScript export takes (batch, channel, time), the spec's order: nothing to add */
+    cfg.add_model_path(ANIRA_ENGINE_LIBTORCH, "model.pt");
+    // the TorchScript export takes (batch, channel, time), the spec's order: nothing to add
 
-    anira_model_config_add_model_path(cfg, ANIRA_ENGINE_ONNXRUNTIME, "model.onnx", &i, &err);
-    /* your "audio_in" is what model.onnx calls "input.1": bind it by that name */
-    anira_model_config_set_tensor_name(cfg, i, "audio_in", "input.1");
+    uint32_t i = cfg.add_model_path(ANIRA_ENGINE_ONNXRUNTIME, "model.onnx");
+    // your "audio_in" is what model.onnx calls "input.1": bind it by that name
+    cfg.tensor_name(i, "audio_in", "input.1");
 
-    anira_model_config_add_model_path(cfg, ANIRA_ENGINE_TFLITE, "model.tflite", &i, &err);
-    /* the TensorFlow export holds audio_in as (batch, time, channel): spec axes 0, 2, 1 */
-    static const uint32_t channels_last[3] = {0u, 2u, 1u};
-    anira_model_config_set_tensor_layout(cfg, i, "audio_in", channels_last, 3u);
+    i = cfg.add_model_path(ANIRA_ENGINE_TFLITE, "model.tflite");
+    // the TensorFlow export holds audio_in as (batch, time, channel): spec axes 0, 2, 1
+    cfg.tensor_layout(i, "audio_in", std::array{0u, 2u, 1u});
 
-    anira_model_config_add_input(cfg, in);      /* copied */
-    anira_model_config_add_input(cfg, gain);
-    anira_model_config_add_output(cfg, out);
-    anira_tensor_spec_destroy(in);
-    anira_tensor_spec_destroy(gain);
-    anira_tensor_spec_destroy(out);
-
-    anira_model_config_set_default_engine(cfg, ANIRA_ENGINE_ONNXRUNTIME);
+    cfg.input(in).input(gain).output(out);   // copied: the specs may go out of scope now
+    cfg.default_engine(ANIRA_ENGINE_ONNXRUNTIME);
 
 - **Tensor records: what the export calls a tensor, and how it holds its axes.** Every
   engine's file may name and lay out a tensor differently; the spec is written once, and each
   model entry carries one optional record per tensor, keyed by *your* canonical name, with two
   optional fields:
 
-  - ``anira_model_config_set_tensor_name(cfg, i, canonical, engine_name)``: the **export's
-    name** for the tensor. Where to read it off: ONNX Runtime uses the graph's input and output
-    names; TFLite and LiteRT the signature key (``args_0``, ``output_0``), or the tensor name
-    for a file without signatures; LibTorch the method's argument name (inputs only);
-    ExecuTorch the tensor name when the export carries one. With a name the entry binds that
-    tensor by name; a name the engine cannot find fails prepare with what the file has.
-  - ``anira_model_config_set_tensor_layout(cfg, i, canonical, axes, ndim)``: the order in which
-    the export holds the tensor's axes, as spec axis indices: ``{0, 2, 1}`` says the file's
-    axis 0 is spec axis 0, its axis 1 is spec axis 2, its axis 2 is spec axis 1, which is how a
-    TensorFlow export (batch, time, channel) is described against a spec written (batch,
-    channel, time). ``ANIRA_AXIS_INSERT`` stands for an axis of extent 1 the file has and the
-    spec does not; a spec axis left out must have extent 1. A layout that moves only axes of
-    extent 1 costs nothing (the same bytes, other dims); one that moves an axis of another
-    extent is a transpose, refused at prepare in this pre-release.
+  - ``tensor_name(i, canonical, engine_name)``: the **export's name** for the tensor. Where to
+    read it off: ONNX Runtime uses the graph's input and output names; TFLite and LiteRT the
+    signature key (``args_0``, ``output_0``), or the tensor name for a file without
+    signatures; LibTorch the method's argument name (inputs only); ExecuTorch the tensor name
+    when the export carries one. With a name the entry binds that tensor by name; a name the
+    engine cannot find fails prepare with what the file has.
+  - ``tensor_layout(i, canonical, axes)``: the order in which the export holds the tensor's
+    axes, as spec axis indices (a ``std::span<const uint32_t>``; a ``std::array`` converts):
+    ``{0, 2, 1}`` says the file's axis 0 is spec axis 0, its axis 1 is spec axis 2, its axis 2
+    is spec axis 1, which is how a TensorFlow export (batch, time, channel) is described
+    against a spec written (batch, channel, time). ``ANIRA_AXIS_INSERT`` stands for an axis
+    of extent 1 the file has and the spec does not; a spec axis left out must have extent 1.
+    A layout that moves only axes of extent 1 costs nothing (the same bytes, other dims); one
+    that moves an axis of another extent is a transpose, refused at prepare in this
+    pre-release.
 
   Without a record, an entry binds the tensor **positionally** (the spec's input ``i`` to the
   file's input ``i``, in ONNX Runtime's session order or the primary subgraph's order on TFLite
   and LiteRT) and in the spec's axis order. That is what every 2.x configuration did; a name
   makes the binding independent of the file's tensor order and turns a mismatch into an error
   at prepare instead of a silent swap.
-- **Bytes instead of a file.** ``anira_model_config_add_model_bytes(cfg, engine, bytes, size,
-  ownership, release, ctx, &i, &err)`` loads from memory, e.g. a resource compiled into a
-  plugin. ``ANIRA_BYTES_COPY`` copies the bytes into the config; ``ANIRA_BYTES_BORROW`` keeps
-  your pointer, which must stay valid until the config is destroyed, when ``release(bytes,
-  ctx)`` is called if given. ``anira_model_config_set_model_bytes`` replaces the source of an
-  entry loaded from a file, e.g. to patch a path a JSON file named.
+- **Bytes instead of a file.** ``add_model_bytes(engine, bytes, ownership, release, ctx)``
+  loads from a ``std::span<const std::byte>``, e.g. a resource compiled into a plugin.
+  ``ANIRA_BYTES_COPY`` (the default) copies the bytes into the config; ``ANIRA_BYTES_BORROW``
+  keeps your pointer, which must stay valid until the config is destroyed, when
+  ``release(bytes, ctx)`` is called if given. ``set_model_bytes(i, bytes, ...)`` replaces the
+  source of an entry loaded from a file, e.g. to patch a path a JSON file named.
 - **Entry points.** A LibTorch or ExecuTorch file can carry several named methods (RAVE's
   ``encode`` and ``decode``). Name the one to run with the ``entry`` extension on the model
   entry:
 
-  .. code-block:: c
+  .. code-block:: cpp
 
-      anira_ext_entry entry = ANIRA_EXT_ENTRY_INIT;
-      entry.name = "decode";
-      anira_model_config_set_model_ext(cfg, i, &entry.header, &err);
+      cfg.model_ext(i, anira::ext::Entry{"decode"});
 
 - **Custom engines.** A backend registered by name (a reverse-URI id such as
-  ``"de.tu-berlin.coreml"``) gets its entries through
-  ``anira_model_config_add_model_path_custom`` / ``_add_model_bytes_custom`` and
-  ``anira_model_config_set_default_engine_custom``.
-- **State.** ``anira_model_config_set_state(cfg, ANIRA_MODEL_STATEFUL)`` declares a model that
-  carries state across inferences (RNNs, LSTMs, RAVE): its inferences then run strictly in
-  submission order and never concurrently.
-- **Instances.** ``anira_model_config_set_max_instances`` is the ceiling within which the
-  planner allocates parallel instances of a stateless model (default 1).
-- **Anchor.** ``anira_model_config_set_anchor(cfg, canonical)`` names the streamed tensor that
-  is the model's clock: the Hard contract's block range and rate are counted in its Time-axis
-  elements, and every other streamed tensor's time ratio is stated against it. The default
-  (``NULL``) is the first streamed input, or the first streamed output of a model without one.
-  Name one only when the host's stream is another tensor: a decoder that turns latent frames
-  into audio anchors on its audio output, because the plugin's block size is audio.
+  ``"de.tu-berlin.coreml"``) gets its entries through the string overloads:
+  ``add_model_path("de.tu-berlin.coreml", path)``, ``add_model_bytes(id, bytes)`` and
+  ``default_engine("de.tu-berlin.coreml")``.
+- **State.** ``state(ANIRA_MODEL_STATEFUL)`` declares a model that carries state across
+  inferences (RNNs, LSTMs, RAVE): its inferences then run strictly in submission order and
+  never concurrently.
+- **Instances.** ``max_instances(n)`` is the ceiling within which the planner allocates
+  parallel instances of a stateless model (default 1).
+- **Anchor.** ``anchor(canonical)`` names the streamed tensor that is the model's clock: the
+  Hard contract's block range and rate are counted in its Time-axis elements, and every other
+  streamed tensor's time ratio is stated against it. The default (an empty name) is the first
+  streamed input, or the first streamed output of a model without one. Name one only when the
+  host's stream is another tensor: a decoder that turns latent frames into audio anchors on
+  its audio output, because the plugin's block size is audio.
 
-Extensions (``anira_model_config_set_ext`` / ``set_ext_json``, and the same pair on every other
-handle) attach a typed record by kind and version; ``anira_registered_ext_kinds`` lists what a
-build understands, and a kind nobody consumes fails prepare by name, so a typo never turns
-into a default.
+Extensions (``ext(value)`` / ``ext_json(kind, text)``, the same pair on every handle) attach
+a typed record by kind and version; ``anira_registered_ext_kinds`` lists what a build
+understands, and a kind nobody consumes fails prepare by name, so a typo never turns into a
+default.
 
 1.3. Contracts
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 A contract names the run. A **Hard** contract is the real-time stream: the host geometry (the
 block range in samples of the anchor tensor and the rate in Hz), the per-inference budget, the
-warmup policy, what to deliver when an inference misses its deadline, and the wait ratio.
+warmup policy, what to deliver when an inference misses its deadline, and the wait ratio. It
+is written as an ``anira::Hard`` aggregate, whose defaults are the library's, and minted into
+an ``anira::ContractHandle``.
 
-.. code-block:: c
+.. code-block:: cpp
 
-    anira_contract* contract = NULL;
-    anira_contract_create_hard(1, 512, 48000.0, &contract, &err);   /* blocks of 1..512 samples */
-    anira_contract_hard_set_budget(contract, ANIRA_BUDGET_EXPLICIT, 42.66);   /* ms per inference */
-    anira_contract_hard_set_warmup(contract, ANIRA_WARMUP_FIXED, 2);
-    anira_contract_hard_set_on_miss(contract, ANIRA_MISS_BYPASS);
+    anira::Hard hard{
+        .block_min = 1, .block_max = 512, .rate = 48000.0,   // blocks of 1..512 samples
+        .budget = ANIRA_BUDGET_EXPLICIT,
+        .budget_value = std::chrono::microseconds(42660),    // per inference
+        .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2,
+        .on_miss = ANIRA_MISS_BYPASS,
+    };
+    anira::ContractHandle contract(hard);
 
 - **Geometry.** ``block_min == block_max`` is a fixed-block host; ``block_min = 1`` allows every
   smaller block up to the maximum, which may raise the latency anira has to reserve. A
   contract loaded from a file usually carries no geometry; a plugin patches it from the host
-  with ``anira_contract_hard_set_geometry`` (``anira_contract_create_hard(0, 0, 0.0, ...)`` is
-  valid for the same reason).
-- **Budget.** ``ANIRA_BUDGET_EXPLICIT`` with the measured worst-case inference time in
-  milliseconds, per inference at the pinned window, or ``ANIRA_BUDGET_MEASURED`` (the default)
-  to derive it during warmup. An inference that exceeds the budget produces a dropout.
-- **Warmup.** ``ANIRA_WARMUP_FIXED`` with a number of iterations, ``ANIRA_WARMUP_UNTIL_STABLE``
+  with ``contract.hard_geometry(block_min, block_max, rate)`` (an ``anira::Hard{}`` with the
+  geometry left at zero is valid for the same reason).
+- **Budget.** ``ANIRA_BUDGET_EXPLICIT`` with ``budget_value``, a ``std::chrono`` duration
+  holding the measured worst-case inference time per inference at the pinned window, or
+  ``ANIRA_BUDGET_MEASURED`` (the default) to derive it during warmup. An inference that
+  exceeds the budget produces a dropout.
+- **Warmup.** ``ANIRA_WARMUP_FIXED`` with ``warmup_iterations``, ``ANIRA_WARMUP_UNTIL_STABLE``
   (the default) or ``ANIRA_WARMUP_NONE``, which is legal only with an explicit budget.
 - **Miss policy.** ``ANIRA_MISS_BYPASS`` (the default) passes the input through,
   ``ANIRA_MISS_HOLD_LAST`` repeats the last output, ``ANIRA_MISS_ZEROS`` delivers silence.
-- **Wait ratio.** ``anira_contract_hard_set_wait_ratio`` is the fraction of the block period the
-  real-time thread may spend waiting for a result in the ``_wait`` entry points; ``0`` (the
-  default) never waits.
+- **Wait ratio.** ``wait_ratio`` is the fraction of the block period the real-time thread may
+  spend waiting for a result in the ``_wait`` entry points; ``0`` (the default) never waits.
 
-An **Async** contract (``anira_contract_create_async``, ``anira_contract_async_set_deadline``,
-``anira_contract_async_set_policy``) describes jobs without a real-time deadline, the offline
-posture; ``anira_contract_get_kind`` tells the two apart, and a Hard setter on an Async
-contract returns ``ANIRA_ERROR_WRONG_CONTRACT``. ``anira_contract_set_edge_cost`` is the
-plan-validation policy for pipelines and does not affect scheduling.
+An **Async** contract (the ``anira::Async`` aggregate: an optional ``deadline``, ``on_late``,
+``priority``, ``lanes``, ``max_in_flight``, ``delivery``) describes jobs without a real-time
+deadline, the offline posture; ``anira::Contract`` is the ``std::variant`` of the two, and the
+handle is minted from either. ``contract.kind()`` tells the two apart, and a Hard setter on an
+Async contract throws ``anira::Error`` with ``ANIRA_ERROR_WRONG_CONTRACT``. ``edge_cost``, on
+both aggregates, is the plan-validation policy for pipelines and does not affect scheduling.
 
 1.4. Machine configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -259,46 +259,44 @@ plan-validation policy for pipelines and does not affect scheduling.
 The machine config describes the process: every anira instance in it shares one inference
 thread pool, sized and configured by the first machine created.
 
-.. code-block:: c
+.. code-block:: cpp
 
-    anira_machine_config* machine = NULL;
-    anira_machine_config_create(&machine, &err);
-    anira_machine_config_set_threads(machine, 4, ANIRA_WAIT_SPIN_BACKOFF);
-    anira_machine_config_set_log_level(machine, ANIRA_LOG_WARNING);
-    anira_machine_config_set_log_drain(machine, ANIRA_LOG_DRAIN_THREAD, 10);   /* every 10 ms */
+    anira::MachineConfig machine;
+    machine.threads(4, ANIRA_WAIT_SPIN_BACKOFF)
+        .log_level(ANIRA_LOG_WARNING)
+        .log_drain(ANIRA_LOG_DRAIN_THREAD, 10);   // every 10 ms
 
-- **Threads.** ``ANIRA_THREADS_AUTO`` (the default) sizes the pool from the hardware
-  concurrency; ``0`` means the host brings its own threads. ``ANIRA_WAIT_SPIN_BACKOFF`` keeps
-  idle threads responsive at the cost of some idle CPU, ``ANIRA_WAIT_BLOCKING`` parks them on
-  a semaphore.
-- **Logging.** The level (``ANIRA_LOG_DEBUG`` to ``ANIRA_LOG_ERROR``), who drains the real-time
-  log queue and how often (``ANIRA_LOG_DRAIN_THREAD``, or ``ANIRA_LOG_DRAIN_MANUAL`` through
-  ``anira_drain_log``), the queue capacity (clamped to 64..65536), the flags
-  (``ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK``) and a sink callback
-  (``anira_machine_config_set_log_sink``); ``anira_machine_config_set_log`` takes all of it in
-  one ``anira_log_desc``.
-- **Devices.** ``anira_machine_config_set_cuda`` / ``_gl`` / ``_vulkan`` / ``_metal`` /
-  ``_d3d12`` / ``_webgpu`` declare the device blocks anira may use, each an
-  ``ANIRA_*_DESC_INIT`` descriptor naming either a device anira creates and owns or a handle
-  the host lends; NULL clears the block.
-- **WebAssembly.** The context cannot run threads on the web: use ``num_threads = 0`` (the
-  workers are created from JavaScript via ``AniraWeb.spinUpInferenceWorker()``) and drain the
-  log manually; ``anira_machine_config_set_webgpu`` returns ``ANIRA_ERROR_NOT_SUPPORTED``
-  there, the browser's WebGPU being a JavaScript backend.
+- **Threads.** ``threads(n, wait)``: ``ANIRA_THREADS_AUTO`` (the default) sizes the pool from
+  the hardware concurrency; ``0`` means the host brings its own threads.
+  ``ANIRA_WAIT_SPIN_BACKOFF`` keeps idle threads responsive at the cost of some idle CPU,
+  ``ANIRA_WAIT_BLOCKING`` parks them on a semaphore.
+- **Logging.** ``log_level`` (``ANIRA_LOG_DEBUG`` to ``ANIRA_LOG_ERROR``), ``log_drain``: who
+  drains the real-time log queue and how often (``ANIRA_LOG_DRAIN_THREAD``, or
+  ``ANIRA_LOG_DRAIN_MANUAL`` through ``anira_drain_log``), ``log_queue_capacity`` (clamped to
+  64..65536), ``log_flags`` (``ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK``) and a sink callback,
+  ``log_sink(callback, user_data)``; ``log(desc)`` takes all of it in one ``anira_log_desc``.
+- **Devices.** ``cuda`` / ``gl`` / ``vulkan`` / ``metal`` / ``d3d12`` / ``webgpu`` declare the
+  device blocks anira may use, each an ``ANIRA_*_DESC_INIT`` descriptor naming either a device
+  anira creates and owns or a handle the host lends.
+- **WebAssembly.** The context cannot run threads on the web: use ``threads(0)`` (the workers
+  are created from JavaScript via ``AniraWeb.spinUpInferenceWorker()``) and drain the log
+  manually; ``webgpu`` throws ``ANIRA_ERROR_NOT_SUPPORTED`` there, the browser's WebGPU being a
+  JavaScript backend.
 
 1.5. JSON files
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-anira describes a deployment in three JSON files with three lifetimes, loaded
-through the C ABI (``anira/abi/config.h``): the **model file** travels with the model
-(``anira_model_config_from_json`` / ``anira_model_config_from_json_file``), the **machine
-file** lives on the box (``anira_machine_config_from_json``), and the **contract file** names
-the run (``anira_contract_from_json``). Loaders are dumb, strings to enums and numbers; every
-semantic check happens once at prepare, the same way for JSON and for code, so a document
-that loads may still be refused there. Every loader failure is ``ANIRA_ERROR_JSON`` with the
-key path and the offending value in ``anira_error::message`` (``models[0].engine: "foo" is
-not one of ...``); a key the loader does not own is stored as an extension and fails prepare by
-name (section 1b of the architecture document), so a typo never turns into a default.
+anira describes a deployment in three JSON files with three lifetimes, each read by a static
+loader of its handle: the **model file** travels with the model
+(``anira::ModelConfig::from_file(path)``, or ``from_json(text, base_dir)``), the **machine
+file** lives on the box (``anira::MachineConfig::from_file`` / ``from_json``), and the
+**contract file** names the run (``anira::ContractHandle::from_file`` / ``from_json``). Loaders
+are dumb, strings to enums and numbers; every semantic check happens once at prepare, the same
+way for JSON and for code, so a document that loads may still be refused there. Every loader
+failure throws ``anira::Error`` with ``ANIRA_ERROR_JSON`` and the key path and the offending
+value in ``what()`` (``models[0].engine: "foo" is not one of ...``); a key the loader does not
+own is stored as an extension and fails prepare by name (section 1b of the architecture
+document), so a typo never turns into a default.
 
 .. code-block:: json
 
@@ -325,14 +323,14 @@ name (section 1b of the architecture document), so a typo never turns into a def
 
 - ``models[]``: one entry per engine, tagged by ``engine`` alone (``onnxruntime``,
   ``libtorch``, ``tflite``, ``litert``, ``executorch``, or the reverse-URI name of a custom
-  engine); relative ``path`` values resolve against the file's directory (``from_json_file``)
-  or the ``base_dir`` argument; ``tensors`` holds the per-tensor records of section 1.2, keyed
-  by *your* canonical name: a string is the export's name for the tensor, an object has
-  ``name`` and ``layout`` (spec axis indices, ``"insert"`` for a unit axis the spec lacks:
-  ``{ "audio_in": { "name": "args_0", "layout": [0, 2, 1] } }`` for a channels-last
-  TensorFlow export of a mono model); ``entry`` is the extension that names the entry point
-  (section 1.2).
-- ``inputs[]`` / ``outputs[]``: the tensor specs of section 2 — ``dtype``, ``role``
+  engine); relative ``path`` values resolve against the file's directory (``from_file``) or
+  the ``base_dir`` argument (``from_json``); ``tensors`` holds the per-tensor records of
+  section 1.2, keyed by *your* canonical name: a string is the export's name for the tensor,
+  an object has ``name`` and ``layout`` (spec axis indices, ``"insert"`` for a unit axis the
+  spec lacks: ``{ "audio_in": { "name": "args_0", "layout": [0, 2, 1] } }`` for a
+  channels-last TensorFlow export of a mono model); ``entry`` is the extension that names the
+  entry point (section 1.2).
+- ``inputs[]`` / ``outputs[]``: the tensor specs of section 1.1 — ``dtype``, ``role``
   (``streamed``, ``buffer``, ``static``), tagged ``axes`` (an extent or ``"dynamic"``),
   ``window`` (``min`` and ``max`` or ``"unbounded"``), ``context``, ``latency`` (outputs) and
   ``time_ratio``.
@@ -347,30 +345,79 @@ code-only and patched with the device setters afterwards. The contract file has 
 root, ``{"hard": {...}}`` or ``{"async": {...}}``, with ``budget`` as ``"measured"`` or
 ``{"ms": 1.8}``, ``warmup`` as ``"until_stable"``, ``"none"`` or ``{"fixed": 200}``, the
 geometry keys ``block_min`` / ``block_max`` / ``rate`` (optional; a plugin patches them from
-the host with ``anira_contract_hard_set_geometry``), and an optional top-level ``edge_cost``.
+the host with ``hard_geometry``), and an optional top-level ``edge_cost``.
 
-.. code-block:: c
+.. code-block:: cpp
 
-    anira_error err = ANIRA_ERROR_INIT;
-    anira_model_config* cfg = NULL;
-    anira_status st = anira_model_config_from_json_file("model.json", &cfg, &err);
-    if (ANIRA_FAILED(st)) { fprintf(stderr, "%s\n", err.message); return 1; }
+    try {
+        anira::ModelConfig cfg = anira::ModelConfig::from_file("model.json");
+        anira::MachineConfig machine = anira::MachineConfig::from_file("machine.json");
+        anira::ContractHandle contract = anira::ContractHandle::from_file("contract.json");
+    } catch (const anira::Error& e) {
+        std::fprintf(stderr, "%s\n", e.what());
+        return 1;
+    }
 
-``anira_model_config_to_json`` and ``anira_machine_config_to_json`` write a handle back in
-version 3 spelling with a fixed key order (``(buf, cap, out_len)``,
-``ANIRA_ERROR_BUFFER_TOO_SMALL`` with the required length in ``out_len``); reading a 2.x file
-and writing it out is the migration tool (:ref:`migration-json`).
+``ModelConfig::to_json()`` and ``MachineConfig::to_json()`` return the handle in version 3
+spelling with a fixed key order as a ``std::string``; reading a 2.x file and writing it out is
+the migration tool (:ref:`migration-json`).
 
 .. note::
     Coming from anira 2.x? All three loaders read the 2.x document (``inference_config`` /
-    ``context_config`` roots) as well and upgrade it in memory, returning
-    ``ANIRA_SUCCESS_UPGRADED``; :ref:`migration-json` lists what becomes what.
+    ``context_config`` roots) as well and upgrade it in memory: ``upgraded()`` says so and
+    ``ModelConfig::take_legacy_contract()`` hands out the Hard contract it held back;
+    :ref:`migration-json` lists what becomes what.
+
+1.6. The C entries
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The same configuration is reachable from C11 through ``anira/abi/config.h``, which is the
+binary promise the builders are written over: one function per method, named
+``anira_<handle>_<method>`` (``ModelConfig::tensor_layout`` is
+``anira_model_config_set_tensor_layout``, ``TensorSpec::axis`` is
+``anira_tensor_spec_set_axis``, ``MachineConfig::threads`` is
+``anira_machine_config_set_threads``). Every entry returns an ``anira_status``: negative
+values are failures, ``ANIRA_OK`` and the positive values (``ANIRA_SUCCESS_UPGRADED``) are
+successes, so test with ``ANIRA_FAILED(status)`` rather than comparing with ``ANIRA_OK``.
+Entries that can fail for more than one reason take a caller-owned ``anira_error`` (initialise
+it with ``ANIRA_ERROR_INIT``) and write the status and a message into it; pass ``NULL`` if you
+do not want the message. The handles are opaque and single-owner: every ``*_create`` has a
+``*_destroy`` (NULL-safe), and what you pass into another handle is copied.
+
+.. code-block:: c
+
+    #include <anira/abi/config.h>
+
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_model_config* cfg = NULL;
+    anira_tensor_spec* in = NULL;
+    uint32_t i = 0;
+    if (ANIRA_FAILED(anira_model_config_create(&cfg, &err)) ||
+        ANIRA_FAILED(anira_model_config_add_model_path(
+            cfg, ANIRA_ENGINE_ONNXRUNTIME, "model.onnx", &i, &err)) ||
+        ANIRA_FAILED(anira_tensor_spec_create(
+            "audio_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED, &in, &err))) {
+        fprintf(stderr, "%s: %s\n", anira_status_string(err.status), err.message);
+        return 1;
+    }
+    anira_tensor_spec_set_axis(in, 0, ANIRA_AXIS_TIME, ANIRA_DYNAMIC);
+    anira_model_config_add_input(cfg, in);   /* copied */
+    anira_tensor_spec_destroy(in);
+    /* ... anira_model_config_destroy(cfg) when done */
+
+The JSON files of section 1.5 are the same three loaders: ``anira_model_config_from_json`` /
+``anira_model_config_from_json_file``, ``anira_machine_config_from_json`` and
+``anira_contract_from_json``, with ``anira_model_config_to_json`` /
+``anira_machine_config_to_json`` as the writers (``(buf, cap, out_len)``,
+``ANIRA_ERROR_BUFFER_TOO_SMALL`` with the required length in ``out_len``); a 2.x document
+returns ``ANIRA_SUCCESS_UPGRADED`` and ``anira_model_config_take_legacy_contract`` hands out
+its Hard contract.
 
 .. note::
     In this pre-release the runtime, sections 2 to 5, still takes the 2.x configuration
     classes :cpp:struct:`anira::InferenceConfig`, :cpp:struct:`anira::ContextConfig` and
-    :cpp:struct:`anira::HostConfig`; the handles above are not yet connected to it.
-    :doc:`migration` maps one onto the other.
+    :cpp:struct:`anira::HostConfig`; the bridge from the handles above to the runtime arrives
+    with the next pre-release change. :doc:`migration` maps one onto the other.
 
 2. Pre and Post Processing
 --------------------------

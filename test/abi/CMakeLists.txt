@@ -10,7 +10,11 @@
 #   anira_header_c11      gate 4: every M1 header, alone and together, as C11 under the
 #                         strict flags with no anira define at all
 #   anira_header_cxx17    gate 4: the same as C++17
+#   anira_header_cxx20    gate 4: anira.hpp alone as C++20 under the strict flags, the
+#                         wrapper's API exercised at compile time (nothing runs)
 #   anira_header_coexist  the v2 C++ umbrella and the C headers in one TU, both orders
+#   anira_header_cxx20_with_v2
+#                         the v2 C++ umbrella and anira.hpp in one TU, both orders
 #
 # On desktop the compile gates are EXCLUDE_FROM_ALL objects driven by a CTest (a
 # regression shows up as a failed test with the compiler's error); on Android/iOS they
@@ -37,6 +41,11 @@ else()
     set(_abi_werror -Werror)
 endif()
 
+# add_compile_definitions() in test/CMakeLists.txt (the model paths) reaches every target
+# of this directory at generate time, whatever the target's own COMPILE_DEFINITIONS says;
+# the gates promise a consumer's compile line, so the directory's definitions go here.
+set_property(DIRECTORY PROPERTY COMPILE_DEFINITIONS "")
+
 # Only rewrite a generated wrapper when its text changes, so a reconfigure does not
 # rebuild the gates (CMake 3.15: no file(CONFIGURE)).
 function(anira_abi_write_if_changed path content)
@@ -50,7 +59,9 @@ function(anira_abi_write_if_changed path content)
 endfunction()
 
 # A consumer-shaped target: anira's include directories only, no anira define at all,
-# the strict warning set, and the standard the gate names (never the directory's C++20).
+# the strict warning set, and the standard the gate names (never the directory's C++20):
+# C11 for C; C++17 for CXX, or the standard given as the third argument (anira.hpp is
+# C++20).
 function(anira_abi_consumer_target target lang)
     set_property(TARGET ${target} PROPERTY COMPILE_DEFINITIONS "")
     target_include_directories(${target} PRIVATE ${_abi_include_dirs})
@@ -59,9 +70,31 @@ function(anira_abi_consumer_target target lang)
         set_target_properties(${target} PROPERTIES
             C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
     else()
+        set(_cxx_standard 17)
+        if(ARGC GREATER 2)
+            set(_cxx_standard "${ARGV2}")
+        endif()
         set_target_properties(${target} PROPERTIES
-            CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+            CXX_STANDARD ${_cxx_standard} CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
     endif()
+endfunction()
+
+# A target holding the v2 C++ umbrella: the include and define set anira_header_isolation
+# (test/CMakeLists.txt) uses for it, C++20 (the umbrella's floor), and only the default
+# warnings, as errors, since the v2 headers are not held to -Wall -Wextra.
+function(anira_abi_umbrella_target target)
+    set_target_properties(${target} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(${target} PRIVATE
+        ${_abi_include_dirs}
+        $<TARGET_PROPERTY:concurrentqueue,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:tanh::Core,INTERFACE_INCLUDE_DIRECTORIES>)
+    set_property(TARGET ${target} PROPERTY COMPILE_DEFINITIONS "")
+    target_compile_definitions(${target} PRIVATE
+        ${ANIRA_COMPILE_DEFINITIONS}
+        $<TARGET_PROPERTY:tanh::Core,INTERFACE_COMPILE_DEFINITIONS>
+        $<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:ANIRA_STATIC>)
+    target_compile_options(${target} PRIVATE ${_abi_werror})
 endfunction()
 
 # A build-driving CTest: mutually exclusive with the others under ctest -j.
@@ -95,29 +128,32 @@ endif()
 anira_abi_consumer_target(anira_header_c11 C)
 anira_abi_consumer_target(anira_header_cxx17 CXX)
 
-# ---- the two umbrellas in one TU ----------------------------------------------------------
+# ---- gate 4: anira.hpp alone as C++20 ------------------------------------------------------
+# The header-only wrapper the way a consumer compiles it: anira's include directories, no
+# anira define, the strict flags, C++20 (the wrapper's floor; the C headers stay at C++17
+# above). header_cxx20.cpp exercises the API at compile time; nothing runs.
+if(_abi_on_device)
+    add_library(anira_header_cxx20 OBJECT header_cxx20.cpp)
+else()
+    add_library(anira_header_cxx20 OBJECT EXCLUDE_FROM_ALL header_cxx20.cpp)
+    anira_abi_build_test(anira_header_cxx20)
+endif()
+anira_abi_consumer_target(anira_header_cxx20 CXX 20)
+
+# ---- the umbrellas in one TU -------------------------------------------------------------
 # header_coexist.inc includes <anira/anira.h> and the C headers in the order its two
-# drivers select. Only the default warnings, as errors: a macro redefined between the two
-# umbrellas (C4005 / -Wmacro-redefined / GCC's "redefined") is what this gate is for, and
-# the v2 headers are not held to -Wall -Wextra. The include and define set is the one
-# anira_header_isolation (test/CMakeLists.txt) uses for the v2 umbrella.
+# drivers select; header_cxx20_with_v2.inc does the same for <anira/anira.h> and
+# <anira/anira.hpp>. A macro redefined between the umbrellas (C4005 / -Wmacro-redefined /
+# GCC's "redefined") or a name both declare in namespace anira is what these gates are for.
 if(NOT _abi_on_device)
     add_library(anira_header_coexist OBJECT EXCLUDE_FROM_ALL
         header_coexist_v2_first.cpp header_coexist_abi_first.cpp)
-    set_target_properties(anira_header_coexist PROPERTIES
-        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-    target_include_directories(anira_header_coexist PRIVATE
-        ${_abi_include_dirs}
-        $<TARGET_PROPERTY:concurrentqueue,INTERFACE_INCLUDE_DIRECTORIES>
-        $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
-        $<TARGET_PROPERTY:tanh::Core,INTERFACE_INCLUDE_DIRECTORIES>)
-    set_property(TARGET anira_header_coexist PROPERTY COMPILE_DEFINITIONS "")
-    target_compile_definitions(anira_header_coexist PRIVATE
-        ${ANIRA_COMPILE_DEFINITIONS}
-        $<TARGET_PROPERTY:tanh::Core,INTERFACE_COMPILE_DEFINITIONS>
-        $<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:ANIRA_STATIC>)
-    target_compile_options(anira_header_coexist PRIVATE ${_abi_werror})
+    anira_abi_umbrella_target(anira_header_coexist)
     anira_abi_build_test(anira_header_coexist)
+    add_library(anira_header_cxx20_with_v2 OBJECT EXCLUDE_FROM_ALL
+        header_cxx20_with_v2.cpp header_cxx20_with_v2_reverse.cpp)
+    anira_abi_umbrella_target(anira_header_cxx20_with_v2)
+    anira_abi_build_test(anira_header_cxx20_with_v2)
 endif()
 
 # ---- gate 3: the Tier-1 layout table -----------------------------------------------------
