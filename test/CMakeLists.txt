@@ -81,6 +81,7 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_InferenceThread.cpp
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp
+	scheduler/test_SessionElementSmallerBuffers.cpp
 	scheduler/test_StatefulOrdering.cpp
 )
 
