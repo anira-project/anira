@@ -8,7 +8,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <functional>
 
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
@@ -57,15 +56,15 @@ class ExecuTorchProcessor;
  * Key responsibilities:
  * - Managing input/output ring buffers for continuous audio streaming
  * - Coordinating with backend processors (LibTorch, ONNX, TensorFlow Lite)
- * - Handling latency calculation and compensation
+ * - Latency compensation (the latency itself is computed by LatencyCalculator)
  * - Managing thread-safe data structures for multi-threaded processing
- * - Buffer size calculation and optimization for different host configurations
  * - Session lifecycle management and resource cleanup
  *
  * The session uses ring buffers for efficient audio streaming and maintains
  * multiple thread-safe structures to enable concurrent processing without
- * blocking the audio thread. Latency is automatically calculated based on
- * the model characteristics and host audio configuration.
+ * blocking the audio thread. Latency, the number of those structures and the ring
+ * sizes are computed in closed form by LatencyCalculator from the model
+ * characteristics and the host audio configuration.
  *
  * @note Each session has a unique ID and maintains its own processing state
  *       while participating in the global inference scheduling system.
@@ -141,52 +140,6 @@ public:
      */
     template <typename T>
     void set_processor(std::shared_ptr<T>& processor);
-
-    /**
-     * @brief Calculates the number of thread-safe structures needed (public for testing)
-     *
-     * Determines the optimal number of concurrent processing structures based on
-     * the host configuration and model requirements. This ensures sufficient
-     * parallelism without excessive memory usage.
-     *
-     * @param spec Host configuration to calculate requirements for
-     * @return Number of thread-safe structures needed
-     */
-    size_t calculate_num_structs(const HostConfig& spec) const;
-
-    /**
-     * @brief Calculates latency values for all tensors (public for testing)
-     *
-     * Computes the processing latency for each tensor based on the model
-     * characteristics and host audio configuration. Includes buffer delays,
-     * processing time, and synchronization overhead.
-     *
-     * @param host_config Host configuration to calculate latency for
-     * @return Vector of latency values in samples for each tensor
-     */
-    std::vector<float> calculate_latency(const HostConfig& host_config);
-
-    /**
-     * @brief Calculates send buffer sizes for all tensors (public for testing)
-     *
-     * Determines the optimal buffer sizes for input ring buffers based on
-     * the model input requirements and host configuration.
-     *
-     * @param host_config Host configuration to calculate buffer sizes for
-     * @return Vector of buffer sizes for each input tensor
-     */
-    std::vector<size_t> calculate_send_buffer_sizes(const HostConfig& host_config) const;
-
-    /**
-     * @brief Calculates receive buffer sizes for all tensors (public for testing)
-     *
-     * Determines the optimal buffer sizes for output ring buffers based on
-     * the model output requirements and host configuration.
-     *
-     * @param host_config Host configuration to calculate buffer sizes for
-     * @return Vector of buffer sizes for each output tensor
-     */
-    std::vector<size_t> calculate_receive_buffer_sizes(const HostConfig& host_config) const;
 
     /**
      * @brief Whether every streamable receive ring can take one more inference result
@@ -443,130 +396,11 @@ public:
 
 private:
     /**
-     * @brief Synchronizes latency values to integer samples
-     *
-     * Converts floating-point latency calculations to integer sample counts
-     * while maintaining accuracy and consistency across all tensors. Input and
-     * output are index-aligned with the output tensor list (see
-     * collect_output_latencies()); non-streamable outputs stay at 0.
-     *
-     * @param latencies Vector of floating-point latency values, one per output tensor
-     * @return Vector of synchronized integer latency values in samples, one per output tensor
-     */
-    std::vector<unsigned int> sync_latencies(const std::vector<float>& latencies) const;
-
-    /**
-     * @brief Builds an index-aligned latency vector over the output tensors
-     *
-     * The one place that decides the shape of a latency vector: one entry per
-     * output tensor, in output tensor order, 0 for a non-streamable output (it has
-     * no stream and hence no stream latency) and the callback's value otherwise.
-     * Both the baseline and the smaller-buffer pass of prepare() go through here,
-     * so sync_latencies() and the per-output loops can index by output tensor
-     * unconditionally.
-     *
-     * @param streamable_output_latency Callback computing the latency of streamable output i
-     * @return Latency values, one per output tensor
-     */
-    std::vector<float> collect_output_latencies(
-        const std::function<float(size_t)>& streamable_output_latency) const;
-
-    /**
      * @brief Whether any input tensor is streamable
      *
      * @return True if at least one input has a non-zero preprocess_input_size
      */
     bool has_streamable_input() const;
-
-    /**
-     * @brief Calculates maximum number of possible inferences per buffer
-     *
-     * Determines the theoretical maximum number of inference operations that
-     * could be required for the given host configuration, over the driving
-     * side: the streamable inputs when there are any (one inference per full
-     * input hop), otherwise the streamable outputs of a generator (one inference
-     * per hop of demanded output).
-     *
-     * @param host_config Host configuration to calculate for
-     * @return Maximum number of inferences per processing cycle
-     */
-    float max_num_inferences(const HostConfig& host_config) const;
-
-    /**
-     * @brief Maximum number of inferences one host buffer can trigger on one stream
-     *
-     * @param host_buffer_size Host buffer size in samples of this stream
-     * @param stream_size Samples of this stream consumed or produced per inference
-     * @return Maximum number of inferences per host buffer
-     */
-    int max_num_inferences_for_stream(float host_buffer_size, int stream_size) const;
-
-    /**
-     * @brief Calculates buffer size adaptation factor
-     *
-     * Computes the adaptation factor needed to match host buffer sizes
-     * with model output requirements.
-     *
-     * @param host_buffer_size Host audio buffer size
-     * @param postprocess_output_size Model postprocessed output size
-     * @return Buffer adaptation factor
-     */
-    int calculate_buffer_adaptation(float host_buffer_size, int postprocess_output_size) const;
-
-    /**
-     * @brief Calculates latency introduced by inference processing
-     *
-     * Computes the additional latency caused by inference processing delays,
-     * queue waiting times, and buffer management overhead.
-     *
-     * @param max_possible_inferences Maximum possible inferences per cycle
-     * @param host_buffer_size Host audio buffer size
-     * @param host_sample_rate Host audio sample rate
-     * @param wait_time Expected wait time for inference completion
-     * @param postprocess_output_size Size of the model's postprocessed output in samples
-     * @return Additional inference-caused latency in samples
-     */
-    int calculate_inference_caused_latency(float max_possible_inferences,
-                                           float host_buffer_size,
-                                           float host_sample_rate,
-                                           float wait_time,
-                                           size_t postprocess_output_size) const;
-
-    /**
-     * @brief Calculates expected wait time for inference completion
-     *
-     * Estimates the time required for inference processing based on buffer
-     * characteristics and system performance.
-     *
-     * @param host_buffer_size Host audio buffer size
-     * @param host_sample_rate Host audio sample rate
-     * @return Expected wait time in seconds
-     */
-    float calculate_wait_time(float host_buffer_size, float host_sample_rate) const;
-
-    /**
-     * @brief Calculates greatest common divisor of two integers
-     *
-     * Mathematical utility function for buffer size calculations and
-     * synchronization requirements.
-     *
-     * @param a First integer
-     * @param b Second integer
-     * @return Greatest common divisor of a and b
-     */
-    int greatest_common_divisor(int a, int b) const;
-
-    /**
-     * @brief Calculates least common multiple of two integers
-     *
-     * Mathematical utility function for buffer size calculations and
-     * alignment requirements.
-     *
-     * @param a First integer
-     * @param b Second integer
-     * @return Least common multiple of a and b
-     */
-    int least_common_multiple(int a, int b) const;
 
     HostConfig m_host_config;  ///< Stored host configuration for this session
 

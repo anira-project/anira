@@ -190,9 +190,9 @@ INSTANTIATE_TEST_SUITE_P(
                             0.5f,
                             2),
             {0},
-            2,
+            1,       // collected inside the blocking wait: one slot in flight
             {2048},  // Expected send buffer sizes
-            {4096}   // Expected receive buffer sizes
+            {2048}   // Expected receive buffer sizes
         },
         SessionElementTestParams{
             HostConfig(2048, 48000, true),
@@ -206,7 +206,7 @@ INSTANTIATE_TEST_SUITE_P(
                             2),
             {3966},
             2,
-            {4096},  // Expected send buffer sizes
+            {4095},  // Expected send buffer sizes: one block plus hop - 1
             {8062}   // Expected receive buffer sizes
         },
         SessionElementTestParams{
@@ -220,9 +220,9 @@ INSTANTIATE_TEST_SUITE_P(
                             0.5f,
                             2),
             {3006},
-            2,
-            {4096},  // Expected send buffer sizes
-            {7102}   // Expected receive buffer sizes
+            1,
+            {4095},  // Expected send buffer sizes
+            {5054}   // Expected receive buffer sizes
         },
         SessionElementTestParams{
             HostConfig(2048, 48000, true),
@@ -236,7 +236,7 @@ INSTANTIATE_TEST_SUITE_P(
                             2),
             {4095},
             2,
-            {4096},  // Expected send buffer sizes
+            {4095},  // Expected send buffer sizes
             {8191}   // Expected receive buffer sizes
         },
         SessionElementTestParams{
@@ -251,7 +251,7 @@ INSTANTIATE_TEST_SUITE_P(
                             2),
             {4095},
             2,
-            {2},
+            {1},
             {8191}},
         SessionElementTestParams{
             HostConfig(1, 48000.0 / 2048),
@@ -279,7 +279,7 @@ INSTANTIATE_TEST_SUITE_P(
                             2),
             {6143},
             3,
-            {2},
+            {1},
             {12287}},
         SessionElementTestParams{
             HostConfig(256, 48000.0),
@@ -309,9 +309,9 @@ INSTANTIATE_TEST_SUITE_P(
                             0.f,
                             2),
             {3972},
-            2,
-            {2},    // Expected send buffer sizes
-            {8068}  // Expected receive buffer sizes
+            1,
+            {1},    // Expected send buffer sizes
+            {6020}  // Expected receive buffer sizes
         },
         SessionElementTestParams{
             HostConfig(1., 48000. / 2048.),
@@ -343,7 +343,7 @@ INSTANTIATE_TEST_SUITE_P(
                             2),
             {4096, 256},
             2,
-            {2, 512},    // Expected send buffer sizes
+            {1, 511},    // Expected send buffer sizes
             {8192, 512}  // Expected receive buffer sizes
         },
         SessionElementTestParams{
@@ -359,9 +359,9 @@ INSTANTIATE_TEST_SUITE_P(
                             0.f,
                             2),
             {8192, 512},
-            9,
+            5,
             {3, 848},      // Expected send buffer sizes
-            {26624, 1664}  // Expected receive buffer sizes
+            {18432, 1152}  // Expected receive buffer sizes
         },
         // Non-power-of-two buffer size tests
         SessionElementTestParams{
@@ -375,9 +375,9 @@ INSTANTIATE_TEST_SUITE_P(
                             0.f,
                             2),
             {2759},
-            2,
-            {2244},  // Expected send buffer sizes
-            {6855}   // Expected receive buffer sizes
+            1,
+            {2147},  // Expected send buffer sizes
+            {4807}   // Expected receive buffer sizes
         },
         SessionElementTestParams{
             HostConfig(300, 44100),
@@ -406,9 +406,9 @@ INSTANTIATE_TEST_SUITE_P(
                             0.f,
                             2),
             {3583},
-            6,
-            {6},    // Expected send buffer sizes
-            {9727}  // Expected receive buffer sizes
+            5,
+            {3},    // Expected send buffer sizes
+            {8703}  // Expected receive buffer sizes
         },
         SessionElementTestParams{
             HostConfig(2.5, 48000. / 1024., true),
@@ -422,9 +422,9 @@ INSTANTIATE_TEST_SUITE_P(
                             0.5f,
                             2),
             {1406},
-            6,
-            {6},    // Expected send buffer sizes
-            {7550}  // Expected receive buffer sizes
+            3,
+            {3},    // Expected send buffer sizes
+            {4478}  // Expected receive buffer sizes
         },
         SessionElementTestParams{
             HostConfig(2048, 48000, true),
@@ -439,10 +439,12 @@ INSTANTIATE_TEST_SUITE_P(
                             2),
             {4095},
             2,
-            {12048},  // Expected send buffer sizes
+            {12047},  // Expected send buffer sizes
             {8191}    // Expected receive buffer sizes
         },
-        // Edge cases with very small buffer sizes
+        // Edge cases with very small buffer sizes. 30 ms of inference per 11.6 ms hop on
+        // two processors exceeds the pool's capacity (LatencyCalculator::is_feasible);
+        // the values size one host block on an idle pool.
         SessionElementTestParams{
             HostConfig(1, 44100, true),
             InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
@@ -454,9 +456,9 @@ INSTANTIATE_TEST_SUITE_P(
                             0.f,
                             2),
             {1834},
-            4,
-            {513},  // Expected send buffer sizes
-            {3882}  // Expected receive buffer sizes
+            3,
+            {512},  // Expected send buffer sizes
+            {3370}  // Expected receive buffer sizes
         },
         // Test with large buffer sizes
         SessionElementTestParams{
@@ -470,9 +472,9 @@ INSTANTIATE_TEST_SUITE_P(
                             0.f,
                             2),
             {4096},
-            12,
+            8,
             {4096},  // Expected send buffer sizes
-            {16384}  // Expected receive buffer sizes
+            {12288}  // Expected receive buffer sizes
         },
         // Test with very short inference times
         SessionElementTestParams{
@@ -487,10 +489,11 @@ INSTANTIATE_TEST_SUITE_P(
                             2),
             {767},
             4,
-            {1024},  // Expected send buffer sizes
-            {1791}   // Expected receive buffer sizes
+            {767},  // Expected send buffer sizes
+            {1791}  // Expected receive buffer sizes
         },
-        // Test with very long inference times
+        // Test with very long inference times: 100 ms per 5.3 ms hop on two processors is
+        // far beyond the pool's capacity; sized for one host block on an idle pool.
         SessionElementTestParams{
             HostConfig(512, 48000),
             InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
@@ -502,9 +505,9 @@ INSTANTIATE_TEST_SUITE_P(
                             0.f,
                             2),
             {5120},
-            40,
+            22,
             {512},   // Expected send buffer sizes
-            {15360}  // Expected receive buffer sizes
+            {10752}  // Expected receive buffer sizes
         }),
     build_test_name);
 

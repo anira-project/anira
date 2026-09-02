@@ -79,6 +79,7 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_FallbackPaths.cpp
 	scheduler/test_InferenceManager.cpp
 	scheduler/test_InferenceThread.cpp
+	scheduler/test_LatencyCalculator.cpp
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp
 	scheduler/test_StatefulOrdering.cpp
