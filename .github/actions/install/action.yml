@@ -45,9 +45,15 @@ runs:
       id: get_project_version
       shell: bash
       run: |
-        version=$(grep 'CMAKE_PROJECT_VERSION:STATIC' ${{ inputs.BUILD_DIR }}/CMakeCache.txt | cut -d'=' -f2)
+        # CMAKE_PROJECT_VERSION is the digits-only version that names the install tree
+        # (a pre-release tag v3.0.0-alpha.1 configures project() with 3.0.0); the
+        # artifact carries the tag itself so pre-releases stay distinguishable.
+        install_version=$(grep 'CMAKE_PROJECT_VERSION:STATIC' ${{ inputs.BUILD_DIR }}/CMakeCache.txt | cut -d'=' -f2)
+        version=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+        [ -z "$version" ] && version="$install_version"
+        echo "INSTALL_VERSION=${install_version}" >> $GITHUB_OUTPUT
         echo "PROJECT_VERSION=${version}" >> $GITHUB_OUTPUT
-        echo "current project version: ${version}"
+        echo "install tree version: ${install_version}; artifact version: ${version}"
 
     # Declaring the product name and the packaging directory
     - name: declare artefact variables
@@ -62,7 +68,7 @@ runs:
       shell: bash
       run: |
         mkdir -p artefacts;
-        mv "${{ inputs.BUILD_DIR }}/${{ inputs.PROJECT_NAME }}-${{ steps.get_project_version.outputs.PROJECT_VERSION }}" ${{ steps.declare_artefact_variables.outputs.PACKAGE_DIR }};
+        mv "${{ inputs.BUILD_DIR }}/${{ inputs.PROJECT_NAME }}-${{ steps.get_project_version.outputs.INSTALL_VERSION }}" ${{ steps.declare_artefact_variables.outputs.PACKAGE_DIR }};
 
     # We need to import the apple developer certificate so that we can codesign our binaries
     - name: import certificates (macOS)

@@ -12,6 +12,7 @@ on:
   pull_request:
     branches:
       - main
+      - v3
 
 concurrency:
   group: lint-${{ github.event_name }}-${{ github.ref }}
@@ -35,9 +36,9 @@ jobs:
 
   tooling-config:
     if: github.event_name != 'pull_request'
-    uses: tanh-lab/tanh-tooling/.github/workflows/config-check.yml@v0.2.6
+    uses: tanh-lab/tanh-tooling/.github/workflows/config-check.yml@v0.2.7
     with:
-      ref: v0.2.4
+      ref: v0.2.7
       family: "clang cmake"
 
   clang_format_result:

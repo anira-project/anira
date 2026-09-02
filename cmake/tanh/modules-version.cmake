@@ -11,7 +11,7 @@
 # uses a global property, because directory scopes do not see each other's variables.
 # Bumped by the release commit together with the default REF in install.sh.
 # ==============================================================================
-set(TANH_CMAKE_MODULES_VERSION "0.1.5")
+set(TANH_CMAKE_MODULES_VERSION "0.2.7")
 
 get_property(_tanh_loaded_version GLOBAL PROPERTY TANH_CMAKE_MODULES_VERSION)
 if(_tanh_loaded_version)

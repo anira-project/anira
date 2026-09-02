@@ -34,11 +34,18 @@ echo "Building device + simulator slices…"
 build_slice device iphoneos arm64
 build_slice sim iphonesimulator arm64
 
+# The public headers plus the configure-time <anira/abi/build_info.h>
+# (cmake/build-info.cmake), which is identical for both slices.
+HEADERS="$WORK/headers"
+mkdir -p "$HEADERS/anira/abi"
+cp -R "$ROOT/include/." "$HEADERS/"
+cp "$WORK/device/generated/include/anira/abi/build_info.h" "$HEADERS/anira/abi/"
+
 mkdir -p "$OUT_DIR"
 rm -rf "$OUT_DIR/anira.xcframework"
 xcodebuild -create-xcframework \
-    -library "$WORK/device/libanira.a" -headers "$ROOT/include" \
-    -library "$WORK/sim/libanira.a" -headers "$ROOT/include" \
+    -library "$WORK/device/libanira.a" -headers "$HEADERS" \
+    -library "$WORK/sim/libanira.a" -headers "$HEADERS" \
     -output "$OUT_DIR/anira.xcframework"
 
 IDENTITY="${ANIRA_CODESIGN_IDENTITY:--}"  # "-" = ad-hoc

@@ -151,17 +151,17 @@ public:
             return false;
         }
 #endif
-        return resolve(m_api.m_create, "anira_test_create") &&
-               resolve(m_api.m_prepare, "anira_test_prepare") &&
-               resolve(m_api.m_process, "anira_test_process") &&
-               resolve(m_api.m_destroy, "anira_test_destroy") &&
-               resolve(m_api.m_create_throwing, "anira_test_create_throwing") &&
-               resolve(m_api.m_num_inference_threads, "anira_test_num_inference_threads") &&
-               resolve(m_api.m_has_inference_threads, "anira_test_has_inference_threads") &&
-               resolve(m_api.m_num_sessions, "anira_test_num_sessions") &&
-               resolve(m_api.m_has_core, "anira_test_has_core") &&
-               resolve(m_api.m_shutdown, "anira_test_shutdown") &&
-               resolve(m_api.m_leak_thread, "anira_test_leak_thread");
+        return resolve(m_api.m_create, "unloadtest_create") &&
+               resolve(m_api.m_prepare, "unloadtest_prepare") &&
+               resolve(m_api.m_process, "unloadtest_process") &&
+               resolve(m_api.m_destroy, "unloadtest_destroy") &&
+               resolve(m_api.m_create_throwing, "unloadtest_create_throwing") &&
+               resolve(m_api.m_num_inference_threads, "unloadtest_num_inference_threads") &&
+               resolve(m_api.m_has_inference_threads, "unloadtest_has_inference_threads") &&
+               resolve(m_api.m_num_sessions, "unloadtest_num_sessions") &&
+               resolve(m_api.m_has_core, "unloadtest_has_core") &&
+               resolve(m_api.m_shutdown, "unloadtest_shutdown") &&
+               resolve(m_api.m_leak_thread, "unloadtest_leak_thread");
     }
 
     void unload() {

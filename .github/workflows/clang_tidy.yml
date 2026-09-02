@@ -6,12 +6,14 @@ on:
   pull_request:
     branches:
       - main
+      - v3
     # Diff-based early warning: only when C++/build/config sources change does
     # the job even spawn; the merge queue always runs the full sweep and is the
     # enforcement point (this workflow's result is deliberately NOT a required
     # check — a path-skipped required check would block queue entry forever).
     paths:
       - "**.cpp"
+      - "**.c"
       - "**.h"
       - "**.hpp"
       - "**.cmake"

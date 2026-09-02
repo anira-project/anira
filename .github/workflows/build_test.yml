@@ -25,6 +25,7 @@ on:
   pull_request:
     branches:
       - main
+      - v3
 
 # The event is in the group so a dispatched full run and a push run on the same
 # ref never cancel each other. The name stays hardcoded (not github.workflow):

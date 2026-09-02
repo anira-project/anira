@@ -92,9 +92,9 @@ Anything a consumer needs — public headers, the exported target, tanh-lib's co
 Code Style
 ~~~~~~~~~~
 
-Formatting and linting are enforced by ``.clang-format``, ``.clang-tidy`` and ``.clangd`` in the repository root; the CMake modules under ``cmake/tanh/`` (platform detection, the symbol-export policy and its CTest check, git versioning, sanitizers, googletest/benchmark, Apple defaults, CPack, install RPATHs) are the build-side counterpart. None of these files are **maintained in anira**: they are shared across the tanh-lab projects and installed verbatim from a pinned release of `tanh-tooling <https://github.com/tanh-lab/tanh-tooling>`_ (the canonical copies live in its ``clang/`` and ``cmake/`` directories). Do not edit them by hand and do not add files to ``cmake/tanh/`` — the ``clang_check`` CI job re-downloads the pinned release and fails if the committed files differ. The tanh-lib anira fetches carries its own copy of the modules, so anira and the pinned tanh-lib must move to the same tanh-tooling tag together.
+Formatting and linting are enforced by ``.clang-format``, ``.clang-tidy`` and ``.clangd`` in the repository root; the CMake modules under ``cmake/tanh/`` (platform detection, the symbol-export policy and its CTest check, git versioning, sanitizers, googletest/benchmark, Apple defaults, CPack, install RPATHs) are the build-side counterpart. None of these files are **maintained in anira**: they are shared across the tanh-lab projects and installed verbatim from a pinned release of `tanh-tooling <https://github.com/tanh-lab/tanh-tooling>`_ (the canonical copies live in its ``clang/`` and ``cmake/`` directories). Do not edit them by hand and do not add files to ``cmake/tanh/`` — the ``tooling-config`` job in ``lint.yml`` (a merge-queue job) re-downloads the pinned release and fails if the committed files differ. The tanh-lib anira fetches carries its own copy of the modules, so anira and the pinned tanh-lib must move to the same tanh-tooling tag together.
 
-To update to a newer tanh-tooling release, run its installer with the new tag, commit the rewritten files, and bump the ``ref`` (and the workflow version) in ``.github/workflows/clang_check.yml`` to the same tag in the same commit:
+To update to a newer tanh-tooling release, run its installer with the new tag, commit the rewritten files, and bump the ``ref`` (and the workflow version) in ``.github/workflows/lint.yml`` to the same tag in the same commit:
 
 .. code-block:: bash
 
@@ -150,6 +150,19 @@ consumes — read them there rather than in prose that could go stale:
 - **What the queue requires**: the ten ``<name> result`` contexts in the
   repository ruleset, produced by the ``result`` job at the bottom of each
   workflow.
+
+Branches
+~~~~~~~~
+
+``main`` carries the 2.x line. ``v3`` is the integration branch of the 3.x line (the
+versioned C ABI of ``docs/anira-v3-architecture.md``): every v3 change is a
+``feat/v3-<topic>`` branch with a pull request against ``v3``, gated by the same
+workflows and the same ten required contexts as ``main`` (the ``pull_request`` filters
+name both branches), and ``main`` is merged into ``v3`` regularly. On ``v3`` the project
+version comes from the ``v3*`` tags only (``tanh_git_version(... MATCH "v3*")`` in the
+top-level ``CMakeLists.txt``), so a checkout without a reachable v3 tag configures as
+``0.0.0`` with ABI ``0.0``; ``cmake/build-info.cmake`` documents how the tag becomes
+``ANIRA_ABI_MAJOR``/``ANIRA_ABI_MINOR`` in the generated ``anira/abi/build_info.h``.
 
 Reproducing CI locally
 ~~~~~~~~~~~~~~~~~~~~~~
