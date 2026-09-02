@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - tanh-tooling v0.2.8 (library-neutral export-selector comment) and tanh-lib v0.2.0 (self-contained `TANH_API` header, `tanh/core/ExportMacros.h` a deprecated forwarding shim) pinned together; anira's own export header no longer depends on tanh-lib.
 - The export allowlist admits the C entry points of the 3.x line (`tanh_set_export_allowlist(anira NAMESPACE anira SYMBOL "anira_*")`, `anira_exports` `ALLOW_REGEX "^_?anira_[a-z0-9_]+$"`); the plugin-shaped unload module's entry points are renamed `anira_test_*` -> `unloadtest_*` so the static-leg leak scan cannot mistake them for library exports.
 - WebAssembly: `_anira_drain_log` is defined by the library (`src/capi/log.cpp`) and exported by name from `cmake/build-wasm.cmake`; the wrapper's copy is gone. `web/src/helpers.ts` keeps calling it.
+- Docs: the guides describe the 3.x configuration API only. `docs/sphinx/usage.rst` section 1 is rewritten on the handles of `anira/abi/config.h` (tensor specs, model configuration, contracts, machine configuration, JSON files); everything about the 2.x classes and the JSON auto-upgrade moved to the new `docs/sphinx/migration.rst` (the 2.x to 3.x mapping tables, the 2.x document, `take_legacy_contract`, the write-back tool, the 2.x `JsonConfigLoader`), which the guides point to from short notes. The runtime sections still take the 2.x classes in this pre-release and say so.
 
 ## [v2.3.0] - 2026-09-02
 

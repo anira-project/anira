@@ -4,190 +4,248 @@ Usage Guide
 Overview
 --------
 
-Anira provides the following structures and classes to help you integrate real-time audio processing with your machine learning models:
+anira describes a deployment with four configuration handles and runs it with a real-time
+handler. The handles are the C API of ``anira/abi/config.h`` (C11, callable from every
+language); the three JSON files of section 1.5 are their file form.
 
-+---------------------------------------+--------------------------------------------------------------------------+
-| Class                                 | Description                                                              |
-+=======================================+==========================================================================+
-| :cpp:class:`anira::InferenceHandler`  | Manages audio processing/inference for the real-time thread,             |
-|                                       | offloading inference to the thread pool and updating the real-time       |
-|                                       | thread buffers with processed audio. This class provides the main        |
-|                                       | interface for interacting with the library.                              |
-+---------------------------------------+--------------------------------------------------------------------------+
-| :cpp:struct:`anira::InferenceConfig`  | A configuration structure for defining model specifics such as           |
-|                                       | input/output shape, model details such as maximum inference time,        |
-|                                       | and more. Each InferenceHandler instance must be constructed with        |
-|                                       | this configuration.                                                      |
-+---------------------------------------+--------------------------------------------------------------------------+
-| :cpp:class:`anira::PrePostProcessor`  | Enables pre- and post-processing steps before and after inference.       |
-|                                       | Either use the default PrePostProcessor or inherit from this class       |
-|                                       | for custom processing.                                                   |
-+---------------------------------------+--------------------------------------------------------------------------+
-| :cpp:class:`anira::HostConfig`        | A structure for defining the host configuration: buffer size             |
-|                                       | and sample rate.                                                         |
-+---------------------------------------+--------------------------------------------------------------------------+
-| :cpp:struct:`anira::ContextConfig`    | **Optional:** The configuration structure that defines the context       |
-|                                       | across all anira instances. Here you can define the behaviour of the     |
-|                                       | thread pool, such as the number of threads and how idle threads wait     |
-|                                       | for new work (see :cpp:enum:`anira::WaitStrategy`), as well as the       |
-|                                       | log level of anira and its backends (see :cpp:enum:`anira::LogLevel`).   |
-+---------------------------------------+--------------------------------------------------------------------------+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
 
-1. Inference Configuration
---------------------------
+   * - Handle
+     - Description
+   * - ``anira_model_config``
+     - The model: one entry per engine (a file or bytes), its input and output tensors, its
+       state, the instance ceiling and the anchor tensor the host geometry refers to. Travels
+       with the model; its file form is the model file.
+   * - ``anira_tensor_spec``
+     - One tensor of the model: data type, role, tagged axes, the window and context a
+       streamed tensor is consumed with, the output latency.
+   * - ``anira_contract``
+     - How the model runs: **Hard** for a real-time stream (block range and rate, budget,
+       warmup, miss policy) or **Async** for jobs (deadline and policy). Names the run; its
+       file form is the contract file.
+   * - ``anira_machine_config``
+     - The process: the inference thread pool, logging, the devices anira may use. Lives on
+       the box; its file form is the machine file.
+   * - :cpp:class:`anira::InferenceHandler`, :cpp:class:`anira::PrePostProcessor`
+     - The runtime: offloads inference to the thread pool and returns the processed audio to
+       the real-time thread, with optional custom pre- and post-processing. In this
+       pre-release the runtime still takes the 2.x configuration classes (sections 2 to 5).
 
-Start by specifying your model configuration using :cpp:struct:`anira::InferenceConfig`. This includes the model path, input/output shapes, and other critical settings that match the requirements of your model.
+1. Configuration
+----------------------------------------
 
-1.1. ModelData
-~~~~~~~~~~~~~~
+Every configuration call returns an ``anira_status``: negative values are failures,
+``ANIRA_OK`` and the positive values (``ANIRA_SUCCESS_UPGRADED``, ``ANIRA_INCOMPLETE``) are
+successes, so test with ``ANIRA_FAILED(status)`` rather than comparing with ``ANIRA_OK``.
+Calls that can fail for more than one reason take a caller-owned ``anira_error`` (initialise
+it with ``ANIRA_ERROR_INIT``) and write the status and a message into it; pass ``NULL`` if you
+do not want the message. Construction is cheap and does not validate across handles: every
+semantic check (does the window fit the axis, does the default engine name an entry) happens
+once, at prepare, the same way for JSON and for code.
 
-First define the model information and the corresponding inference backend in a :cpp:struct:`anira::ModelData`. There are two ways to define the model information:
+.. code-block:: c
 
-Pass the model path as a string:
+    #include <anira/abi/config.h>
 
-.. code-block:: cpp
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_model_config* cfg = NULL;
+    if (ANIRA_FAILED(anira_model_config_create(&cfg, &err))) {
+        fprintf(stderr, "%s: %s\n", anira_status_string(err.status), err.message);
+    }
 
-    {std::string model_path, anira::InferenceBackend backend}
+The handles are opaque and single-owner: every ``*_create`` has a ``*_destroy`` (NULL-safe),
+and what you pass into another handle is copied, so a spec can be destroyed right after it was
+added to a model config.
 
-Pass the model data as binary information:
+1.1. Tensor specs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: cpp
+A tensor spec describes one input or output of the model: its name (the canonical name you
+use everywhere; the engine's own name is mapped per model entry), its data type
+(``ANIRA_DTYPE_F32``; the ``ANIRA_DTYPE_*`` constants of ``anira/abi/enums.h``) and its role:
 
-    {void* model_data, size_t model_size, anira::InferenceBackend backend}
+- ``ANIRA_ROLE_STREAMED``: has a Time axis that is consumed window by window, the audio case.
+- ``ANIRA_ROLE_STATIC``: no time semantics, one value per run, such as a gain or a
+  conditioning vector.
+- ``ANIRA_ROLE_BUFFER``: the whole submitted buffer is one tensor, no Time axis (frames,
+  images).
 
-.. note::
-    Defining the model data as binary information is only possible for the ``anira::InferenceBackend::ONNX`` and ``anira::InferenceBackend::TFLITE`` until now.
+The axes are set by index in the model's memory order, each with a tag and an extent; NCHW
+against NHWC is just a different order of tags. Tags are ``ANIRA_AXIS_BATCH``,
+``ANIRA_AXIS_CHANNEL``, ``ANIRA_AXIS_TIME``, ``ANIRA_AXIS_HEIGHT``, ``ANIRA_AXIS_WIDTH``,
+``ANIRA_AXIS_FEATURE`` and ``ANIRA_AXIS_ANY`` (no semantics). The extent of the Time axis of a
+streamed spec may be ``ANIRA_DYNAMIC`` when the model accepts any length; a streamed spec has
+exactly one Time axis and at most one Channel axis.
 
-The :cpp:struct:`anira::InferenceConfig` requires a vector of :cpp:struct:`anira::ModelData`.
+A streamed spec also carries its **window**: how many elements along the Time axis one
+inference consumes (``window_min`` and ``window_max``, equal for a fixed window,
+``window_max = ANIRA_UNBOUNDED`` for an open one) and how many of them are **context**, the
+elements kept from the previous window. The advance per inference, the hop, is the window
+minus the context. A receptive-field model whose export takes 15380 samples and yields 2048
+fresh ones is a window of 15380 with a context of 13332.
 
-.. code-block:: cpp
+.. code-block:: c
 
-    std::vector<anira::ModelData> model_data = {
-        {"path/to/your/model.pt", anira::InferenceBackend::LIBTORCH},
-        {"path/to/your/model.onnx", anira::InferenceBackend::ONNX},
-        {"path/to/your/model.tflite", anira::InferenceBackend::TFLITE}
-    };
+    anira_tensor_spec* in = NULL;
+    anira_tensor_spec_create("audio_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED, &in, &err);
+    anira_tensor_spec_set_axis(in, 0, ANIRA_AXIS_BATCH, 1);
+    anira_tensor_spec_set_axis(in, 1, ANIRA_AXIS_CHANNEL, 1);
+    anira_tensor_spec_set_axis(in, 2, ANIRA_AXIS_TIME, 15380);
+    anira_tensor_spec_set_window(in, 15380, 15380, 13332);   /* hop 2048 */
 
-.. note::
-    It is not necessary to submit a model for each backend anira was built with, only the one you want to use.
+    anira_tensor_spec* out = NULL;
+    anira_tensor_spec_create("audio_out", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED, &out, &err);
+    anira_tensor_spec_set_axis(out, 0, ANIRA_AXIS_BATCH, 1);
+    anira_tensor_spec_set_axis(out, 1, ANIRA_AXIS_CHANNEL, 1);
+    anira_tensor_spec_set_axis(out, 2, ANIRA_AXIS_TIME, 2048);
+    anira_tensor_spec_set_window(out, 2048, 2048, 0);
 
-1.2. TensorShape
-~~~~~~~~~~~~~~~~
+    anira_tensor_spec* gain = NULL;   /* a conditioning scalar: no time semantics */
+    anira_tensor_spec_create("gain", ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC, &gain, &err);
+    anira_tensor_spec_set_axis(gain, 0, ANIRA_AXIS_ANY, 1);
 
-In the next step, define the input and output shapes of the model in an :cpp:struct:`anira::TensorShape`. The input and output_shapes are defined as :cpp:type:`anira::TensorShapeList`, where each inner vector represents the shape of a tensor.
+Two more setters cover the rarer cases: ``anira_tensor_spec_set_latency`` declares an output's
+internal delay along the Time axis so that the reported latency accounts for it, and
+``anira_tensor_spec_set_time_ratio(spec, num, den)`` declares a tensor whose Time axis advances
+at a rate other than the anchor's (``(0, 0)``, the default, derives it).
 
-.. code-block:: cpp
+1.2. Model configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    {anira::TensorShapeList input_shape, anira::TensorShapeList output_shape, (optional) anira::InferenceBackend}
+The model config lists the model's files, one entry per engine, and its tensors. Add an entry
+only for the engines you ship; whether an engine is part of the build is decided at prepare,
+not here, so one config serves every build.
 
-The input and output shapes are defined as a vector of integers, where each integer represents the size of a dimension in the tensor. The optional :cpp:enum:`anira::InferenceBackend` parameter allows you to specify which backend this shape corresponds to. If you do not specify the backend, the shape is used for all backends that do not have a specific shape defined.
+.. code-block:: c
 
-The :cpp:struct:`anira::InferenceConfig` requires a vector of :cpp:struct:`anira::TensorShape`.
+    anira_model_config* cfg = NULL;
+    anira_model_config_create(&cfg, &err);
 
-.. code-block:: cpp
+    uint32_t i = 0;
+    anira_model_config_add_model_path(cfg, ANIRA_ENGINE_ONNXRUNTIME, "model.onnx", &i, &err);
+    anira_model_config_set_tensor_name(cfg, i, "audio_in", "input_0");   /* canonical -> engine */
+    anira_model_config_add_model_path(cfg, ANIRA_ENGINE_LIBTORCH, "model.pt", &i, &err);
 
-    std::vector<anira::TensorShape> tensor_shape = {
-        {{{1, 4, 15380}, {1, 1}}, {{1, 1, 2048}, {1, 1}}, anira::InferenceBackend::LIBTORCH},
-        {{{1, 4, 15380}, {1, 1}}, {{1, 1, 2048}, {1, 1}}, anira::InferenceBackend::ONNX},
-        {{{1, 15380, 4}, {1, 1}}, {{1, 2048, 1}, {1, 1}}, anira::InferenceBackend::TFLITE}
-    };
+    anira_model_config_add_input(cfg, in);      /* copied */
+    anira_model_config_add_input(cfg, gain);
+    anira_model_config_add_output(cfg, out);
+    anira_tensor_spec_destroy(in);
+    anira_tensor_spec_destroy(gain);
+    anira_tensor_spec_destroy(out);
 
-.. note::
-    If the input and output shapes of the model are the same for all backends, you can also define only one :cpp:struct:`anira::TensorShape` without a specific :cpp:enum:`anira::InferenceBackend`:
+    anira_model_config_set_default_engine(cfg, ANIRA_ENGINE_ONNXRUNTIME);
 
-1.3. (Optional) ProcessingSpec
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+- **Bytes instead of a file.** ``anira_model_config_add_model_bytes(cfg, engine, bytes, size,
+  ownership, release, ctx, &i, &err)`` loads from memory, e.g. a resource compiled into a
+  plugin. ``ANIRA_BYTES_COPY`` copies the bytes into the config; ``ANIRA_BYTES_BORROW`` keeps
+  your pointer, which must stay valid until the config is destroyed, when ``release(bytes,
+  ctx)`` is called if given. ``anira_model_config_set_model_bytes`` replaces the source of an
+  entry loaded from a file, e.g. to patch a path a JSON file named.
+- **Entry points.** A LibTorch or ExecuTorch file can carry several named methods (RAVE's
+  ``encode`` and ``decode``). Name the one to run with the ``entry`` extension on the model
+  entry:
 
-In some cases, you may want to define a processing specification that describes how the model should be processed. This is optional and can be used to specify additional parameters for the inference process. Here you can define the number of input and output channels and also whether tensors shall be streamable or non-streamable.
+  .. code-block:: c
 
-The following parameters can be defined in the :cpp:struct:`anira::ProcessingSpec`:
+      anira_ext_entry entry = ANIRA_EXT_ENTRY_INIT;
+      entry.name = "decode";
+      anira_model_config_set_model_ext(cfg, i, &entry.header, &err);
 
-+-------------------------------+------------------------------------------------------------------------------------------------+
-| Parameter                     | Description                                                                                    |
-+===============================+================================================================================================+
-| preprocess_input_channels     | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{input_tensor_shape.size(), 1}``  |
-|                               | Defines the number of input channels for the model. Only streamable tensors can have input     |
-|                               | channels != 1.                                                                                 |
-+-------------------------------+------------------------------------------------------------------------------------------------+
-| postprocess_output_channels   | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{output_tensor_shape.size(), 1}`` |
-|                               | Defines the number of output channels for the model. Only streamable tensors can have output   |
-|                               | channels != 1.                                                                                 |
-+-------------------------------+------------------------------------------------------------------------------------------------+
-| preprocess_input_size         | Type: ``std::vector<size_t>``, default: ``input_tensor_sizes``. Specifies the minimum number   |
-|                               | of samples required per tensor before triggering preprocessing and inference. For streamable   |
-|                               | tensors, this determines how many samples must accumulate before processing begins. Set to     |
-|                               | ``0`` for non-streamable tensors to start processing immediately without waiting for samples.  |
-|                               | If the tensor holds more samples than this (a receptive-field model, e.g. shape                |
-|                               | ``[1, 1, 15380]`` with size ``2048``), the default PrePostProcessor slides a window: the head  |
-|                               | is filled with history, only this many fresh samples are consumed per inference.               |
-+-------------------------------+------------------------------------------------------------------------------------------------+
-| postprocess_output_size       | Type: ``std::vector<size_t>``, default: ``output_tensor_sizes``. Defines the number of samples |
-|                               | that will be returned after the postprocessing step. Set to ``0`` for non-streamable tensors.  |
-+-------------------------------+------------------------------------------------------------------------------------------------+
-| internal_model_latency        | Type: ``std::vector<size_t>``, default: ``std::vector<size_t>{input_tensor_shape.size(), 0}``. |
-|                               | Submit if your model has an internal latency. This allows for the latency calculation to take  |
-|                               | it into account.                                                                               |
-+-------------------------------+------------------------------------------------------------------------------------------------+
+- **Custom engines.** A backend registered by name (a reverse-URI id such as
+  ``"de.tu-berlin.coreml"``) gets its entries through
+  ``anira_model_config_add_model_path_custom`` / ``_add_model_bytes_custom`` and
+  ``anira_model_config_set_default_engine_custom``.
+- **State.** ``anira_model_config_set_state(cfg, ANIRA_MODEL_STATEFUL)`` declares a model that
+  carries state across inferences (RNNs, LSTMs, RAVE): its inferences then run strictly in
+  submission order and never concurrently.
+- **Instances.** ``anira_model_config_set_max_instances`` is the ceiling within which the
+  planner allocates parallel instances of a stateless model (default 1).
+- **Anchor.** ``anira_model_config_set_anchor(cfg, index, is_input)`` names the streamed tensor
+  whose samples the host geometry of the Hard contract counts in; the default,
+  ``ANIRA_ANCHOR_FIRST_STREAMED``, is the first streamed input, or the first streamed output
+  of a generator model.
 
-You only need to define the parameters that are relevant for your model. If you do not define an :cpp:struct:`anira::ProcessingSpec`, the default values will be used. Here is an example of how to define the :cpp:struct:`anira::ProcessingSpec` with all parameters:
+Extensions (``anira_model_config_set_ext`` / ``set_ext_json``, and the same pair on every other
+handle) attach a typed record by kind and version; ``anira_registered_ext_kinds`` lists what a
+build understands, and a kind nobody consumes fails prepare by name, so a typo never turns
+into a default.
 
-.. code-block:: cpp
+1.3. Contracts
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    std::vector<anira::ProcessingSpec> processing_spec = {
-        {4, 1}, // Input tensor 0 has 4 input channels, and tensor 1 has 1 input channel
-        {1, 1}, // Output tensor 0 has 1 output channel, and tensor 1 has 1 output channel
-        {2048, 0}, // Preprocess input size is 2048 for tensor 0 and 0 for tensor 1
-        {2048, 0}, // Postprocess output size is 2048 for tensor 0 and 0 for tensor 1
-        {0, 0}  // Internal model latency is 0 for both tensors, meaning no internal latency
-    };
+A contract names the run. A **Hard** contract is the real-time stream: the host geometry (the
+block range in samples of the anchor tensor and the rate in Hz), the per-inference budget, the
+warmup policy, what to deliver when an inference misses its deadline, and the wait ratio.
 
-1.4. InferenceConfig
-~~~~~~~~~~~~~~~~~~~~
+.. code-block:: c
 
-Finally, define the necessary :cpp:struct:`anira::InferenceConfig` with the vector of :cpp:struct:`anira::ModelData`, vector of :cpp:struct:`anira::TensorShape`, the optional :cpp:struct:`anira::ProcessingSpec`, and the maximum inference time. The maximum inference time is the measured worst case inference time. If the inference time during execution exceeds this value, it is likely that the audio signal will contain dropouts. There are also some other optional parameters that can be set in the :cpp:struct:`anira::InferenceConfig` to further customize the inference process.
+    anira_contract* contract = NULL;
+    anira_contract_create_hard(1, 512, 48000.0, &contract, &err);   /* blocks of 1..512 samples */
+    anira_contract_hard_set_budget(contract, ANIRA_BUDGET_EXPLICIT, 42.66);   /* ms per inference */
+    anira_contract_hard_set_warmup(contract, ANIRA_WARMUP_FIXED, 2);
+    anira_contract_hard_set_on_miss(contract, ANIRA_MISS_BYPASS);
 
-.. code-block:: cpp
+- **Geometry.** ``block_min == block_max`` is a fixed-block host; ``block_min = 1`` allows every
+  smaller block up to the maximum, which may raise the latency anira has to reserve. A
+  contract loaded from a file usually carries no geometry; a plugin patches it from the host
+  with ``anira_contract_hard_set_geometry`` (``anira_contract_create_hard(0, 0, 0.0, ...)`` is
+  valid for the same reason).
+- **Budget.** ``ANIRA_BUDGET_EXPLICIT`` with the measured worst-case inference time in
+  milliseconds, per inference at the pinned window, or ``ANIRA_BUDGET_MEASURED`` (the default)
+  to derive it during warmup. An inference that exceeds the budget produces a dropout.
+- **Warmup.** ``ANIRA_WARMUP_FIXED`` with a number of iterations, ``ANIRA_WARMUP_UNTIL_STABLE``
+  (the default) or ``ANIRA_WARMUP_NONE``, which is legal only with an explicit budget.
+- **Miss policy.** ``ANIRA_MISS_BYPASS`` (the default) passes the input through,
+  ``ANIRA_MISS_HOLD_LAST`` repeats the last output, ``ANIRA_MISS_ZEROS`` delivers silence.
+- **Wait ratio.** ``anira_contract_hard_set_wait_ratio`` is the fraction of the block period the
+  real-time thread may spend waiting for a result in the ``_wait`` entry points; ``0`` (the
+  default) never waits.
 
-    anira::InferenceConfig inference_config (
-        model_data, // std::vector<anira::ModelData>
-        tensor_shape, // std::vector<anira::TensorShape>
-        processing_spec, // anira::ProcessingSpec (optional)
-        42.66f // Maximum inference time in ms
-    );
+An **Async** contract (``anira_contract_create_async``, ``anira_contract_async_set_deadline``,
+``anira_contract_async_set_policy``) describes jobs without a real-time deadline, the offline
+posture; ``anira_contract_get_kind`` tells the two apart, and a Hard setter on an Async
+contract returns ``ANIRA_ERROR_WRONG_CONTRACT``. ``anira_contract_set_edge_cost`` is the
+plan-validation policy for pipelines and does not affect scheduling.
 
-These are the other optional parameters that can be set in the :cpp:struct:`anira::InferenceConfig`:
+1.4. Machine configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-+-----------------------------+--------------------------------------------------------+
-| Parameter                   | Description                                            |
-+=============================+========================================================+
-| warm_up                     | Type: ``unsigned int``, default: ``0``. Defines the    |
-|                             | number of warm-up iterations before starting the       |
-|                             | inference process.                                     |
-+-----------------------------+--------------------------------------------------------+
-| session_exclusive_processor | Type: ``bool``, default: ``false``. If set to          |
-|                             | ``true``, the session will use an exclusive processor  |
-|                             | for inference and therefore cannot be processed in     |
-|                             | parallel. Tasks of the session then execute strictly   |
-|                             | in submission order and never concurrently, which is   |
-|                             | necessary for stateful models that carry internal      |
-|                             | state between inferences (e.g. RNNs/LSTMs).            |
-+-----------------------------+--------------------------------------------------------+
-| blocking_ratio              | Type: ``float``, default: ``0.0f``. Defines the        |
-|                             | proportion of available processing time (0.0-0.99)     |
-|                             | that the library will use to acquire new data from     |
-|                             | inference threads on the real-time thread. Use with    |
-|                             | caution as this affects real-time performance.         |
-+-----------------------------+--------------------------------------------------------+
-| num_parallel_processors     | Type: ``unsigned int``, default:                       |
-|                             | ``std::thread::hardware_concurrency() / 2``. Defines   |
-|                             | the number of parallel processors that can be used     |
-|                             | for the inference.                                     |
-+-----------------------------+--------------------------------------------------------+
+The machine config describes the process: every anira instance in it shares one inference
+thread pool, sized and configured by the first machine created.
 
-1.5. Loading the configuration from JSON (version 3 files)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code-block:: c
 
-The 3.x line describes a deployment in three JSON files with three lifetimes, loaded
+    anira_machine_config* machine = NULL;
+    anira_machine_config_create(&machine, &err);
+    anira_machine_config_set_threads(machine, 4, ANIRA_WAIT_SPIN_BACKOFF);
+    anira_machine_config_set_log_level(machine, ANIRA_LOG_WARNING);
+    anira_machine_config_set_log_drain(machine, ANIRA_LOG_DRAIN_THREAD, 10);   /* every 10 ms */
+
+- **Threads.** ``ANIRA_THREADS_AUTO`` (the default) sizes the pool from the hardware
+  concurrency; ``0`` means the host brings its own threads. ``ANIRA_WAIT_SPIN_BACKOFF`` keeps
+  idle threads responsive at the cost of some idle CPU, ``ANIRA_WAIT_BLOCKING`` parks them on
+  a semaphore.
+- **Logging.** The level (``ANIRA_LOG_DEBUG`` to ``ANIRA_LOG_ERROR``), who drains the real-time
+  log queue and how often (``ANIRA_LOG_DRAIN_THREAD``, or ``ANIRA_LOG_DRAIN_MANUAL`` through
+  ``anira_drain_log``), the queue capacity (clamped to 64..65536), the flags
+  (``ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK``) and a sink callback
+  (``anira_machine_config_set_log_sink``); ``anira_machine_config_set_log`` takes all of it in
+  one ``anira_log_desc``.
+- **Devices.** ``anira_machine_config_set_cuda`` / ``_gl`` / ``_vulkan`` / ``_metal`` /
+  ``_d3d12`` / ``_webgpu`` declare the device blocks anira may use, each an
+  ``ANIRA_*_DESC_INIT`` descriptor naming either a device anira creates and owns or a handle
+  the host lends; NULL clears the block.
+- **WebAssembly.** The context cannot run threads on the web: use ``num_threads = 0`` (the
+  workers are created from JavaScript via ``AniraWeb.spinUpInferenceWorker()``) and drain the
+  log manually; ``anira_machine_config_set_webgpu`` returns ``ANIRA_ERROR_NOT_SUPPORTED``
+  there, the browser's WebGPU being a JavaScript backend.
+
+1.5. JSON files
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+anira describes a deployment in three JSON files with three lifetimes, loaded
 through the C ABI (``anira/abi/config.h``): the **model file** travels with the model
 (``anira_model_config_from_json`` / ``anira_model_config_from_json_file``), the **machine
 file** lives on the box (``anira_machine_config_from_json``), and the **contract file** names
@@ -226,7 +284,7 @@ name (section 1b of the architecture document), so a typo never turns into a def
   ``libtorch``, ``tflite``, ``litert``, ``executorch``, or the reverse-URI name of a custom
   engine); relative ``path`` values resolve against the file's directory (``from_json_file``)
   or the ``base_dir`` argument; ``tensor_names`` maps canonical names to the engine's;
-  ``entry`` is the extension that names the entry point (v2's ``model_function``).
+  ``entry`` is the extension that names the entry point (section 1.2).
 - ``inputs[]`` / ``outputs[]``: the tensor specs of section 2 — ``dtype``, ``role``
   (``streamed``, ``buffer``, ``static``), tagged ``axes`` (an extent or ``"dynamic"``),
   ``window`` (``min`` and ``max`` or ``"unbounded"``), ``context``, ``latency`` (outputs) and
@@ -250,95 +308,22 @@ the host with ``anira_contract_hard_set_geometry``), and an optional top-level `
     anira_model_config* cfg = NULL;
     anira_status st = anira_model_config_from_json_file("model.json", &cfg, &err);
     if (ANIRA_FAILED(st)) { fprintf(stderr, "%s\n", err.message); return 1; }
-    /* ANIRA_SUCCESS_UPGRADED is a success: the file was a version 2 document */
-    anira_contract* legacy = NULL;
-    anira_model_config_take_legacy_contract(cfg, &legacy);   /* non-NULL after an upgrade */
 
 ``anira_model_config_to_json`` and ``anira_machine_config_to_json`` write a handle back in
 version 3 spelling with a fixed key order (``(buf, cap, out_len)``,
-``ANIRA_ERROR_BUFFER_TOO_SMALL`` with the required length in ``out_len``); reading a version 2
-file and writing it out is the migration tool.
-
-**Version 2 documents.** All three loaders accept the version 2 document of the next section
-(recognised by its ``inference_config`` / ``context_config`` roots) and return
-``ANIRA_SUCCESS_UPGRADED``: ``model_data`` rows become ``models`` (``model_function`` becomes
-the ``entry`` extension), the universal ``tensor_shape`` entry and the ``processing_spec``
-become tensor specs (the trailing axis is ``time``, the axis carrying the channel count is
-``channel``, the window is the per-channel element count and the context that window minus
-the processing size; a size of ``0`` is a ``static`` tensor), and ``max_inference_time``,
-``warm_up`` and ``blocking_ratio`` are held back as a Hard contract that
-``anira_model_config_take_legacy_contract`` hands out (``anira_contract_from_json`` on the
-same document yields it directly). One warning is logged per process. Unlike the version 2
-loader below, nothing is silently dropped: a malformed entry is ``ANIRA_ERROR_JSON``.
-
-1.6. The version 2 JSON document (auto-upgraded)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Instead of constructing the :cpp:struct:`anira::InferenceConfig` (and the optional :cpp:struct:`anira::ContextConfig`) in C++, you can describe them in a JSON file and load them at runtime with :cpp:class:`anira::JsonConfigLoader`. This keeps model paths, tensor shapes and processing parameters out of the compiled binary, so you can swap models without recompiling.
-
-The JSON mirrors the two configuration structs — a ``context_config`` object and an ``inference_config`` object:
-
-.. code-block:: json
-
-    {
-      "context_config": {
-        "num_threads": 1,
-        "wait_strategy": "spin_backoff",
-        "log": { "level": "warning", "drain": "thread", "queue_capacity": 512, "drain_interval_ms": 10 }
-      },
-      "inference_config": {
-        "model_data": [
-          { "model_path": ".../simple_gain_network_mono.pt",     "inference_backend": "LIBTORCH" },
-          { "model_path": ".../simple_gain_network_mono.onnx",   "inference_backend": "ONNX" },
-          { "model_path": ".../simple_gain_network_mono.tflite", "inference_backend": "TFLITE" }
-        ],
-        "tensor_shape": [
-          {
-            "input_shape":  [[1, 1, 512], [1]],
-            "output_shape": [[1, 1, 512], [1]]
-          }
-        ],
-        "processing_spec": {
-          "preprocess_input_channels":   [1, 1],
-          "postprocess_output_channels": [1, 1],
-          "preprocess_input_size":       [512, 0],
-          "postprocess_output_size":     [512, 0]
-        },
-        "max_inference_time": 5.0,
-        "warm_up": 1
-      }
-    }
-
-The keys map directly onto the fields described above:
-
-- ``context_config`` → :cpp:struct:`anira::ContextConfig`: ``num_threads`` (unsigned integer), ``wait_strategy`` (``"spin_backoff"`` or ``"blocking"``, see :cpp:enum:`anira::WaitStrategy`) and ``log`` → :cpp:struct:`anira::LogConfig` with ``level`` (``"debug"``, ``"info"``, ``"warning"`` or ``"error"``, see :cpp:enum:`anira::LogLevel`), ``drain`` (``"thread"`` or ``"manual"``, see :cpp:enum:`anira::LogDrain`), ``queue_capacity`` and ``drain_interval_ms`` (unsigned integers); every key is optional, and the pre-2.3 top-level ``log_level`` key is still accepted. The whole block is optional. On WebAssembly builds ``"blocking"`` is not supported and is coerced to ``"spin_backoff"`` with a warning; likewise a ``num_threads`` other than ``0`` is coerced to ``0`` and ``drain`` to ``"manual"`` with a warning — the context cannot run threads on the web, they are always created from JavaScript via ``AniraWeb.spinUpInferenceWorker()``.
-- ``inference_config.model_data`` → the vector of :cpp:struct:`anira::ModelData`; each entry needs a ``model_path`` and an ``inference_backend`` (one of ``LIBTORCH``, ``ONNX``, ``TFLITE``, ``LITERT``, ``EXECUTORCH``), and optionally a ``model_function`` naming the entry point to run for LibTorch and ExecuTorch (both formats can carry several named methods in one file, e.g. RAVE's ``encode``/``decode``; ExecuTorch defaults to ``forward``).
-- ``inference_config.tensor_shape`` → the vector of :cpp:struct:`anira::TensorShape`. For a single-tensor model the shapes may be given as a flat array (``[1, 1, 2048]``); for multi-tensor models use a list of per-tensor shapes (``[[1, 1, 512], [1]]``).
-- ``inference_config.processing_spec`` → the optional :cpp:struct:`anira::ProcessingSpec` (``preprocess_input_channels``, ``postprocess_output_channels``, ``preprocess_input_size``, ``postprocess_output_size`` and the optional ``internal_model_latency``).
-- ``max_inference_time``, ``warm_up``, ``session_exclusive_processor``, ``blocking_ratio`` and ``num_parallel_processors`` → the InferenceConfig parameters from the table above.
-
-Then load the file and move the configurations out of the loader:
-
-.. code-block:: cpp
-
-    #include <anira/anira.h>
-
-    anira::JsonConfigLoader json_config_loader("path/to/Config.json");
-
-    anira::ContextConfig context_config = std::move(*json_config_loader.get_context_config());
-    anira::InferenceConfig inference_config = std::move(*json_config_loader.get_inference_config());
-
-    anira::PrePostProcessor pp_processor(inference_config);
-    anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
+``ANIRA_ERROR_BUFFER_TOO_SMALL`` with the required length in ``out_len``); reading a 2.x file
+and writing it out is the migration tool (:ref:`migration-json`).
 
 .. note::
-    :cpp:func:`anira::JsonConfigLoader::get_context_config` and :cpp:func:`anira::JsonConfigLoader::get_inference_config` each return a ``std::unique_ptr``; move the value out (as above) before using it. The loader also accepts a ``std::istream``, so the configuration can be loaded from an embedded resource instead of a file on disk.
-
-.. tip::
-    See the JUCE plugin example (``MODEL_TO_USE == 8``), which loads the RAVE model entirely from ``RaveFunkDrumConfig.json`` via :cpp:class:`anira::JsonConfigLoader`.
+    Coming from anira 2.x? All three loaders read the 2.x document (``inference_config`` /
+    ``context_config`` roots) as well and upgrade it in memory, returning
+    ``ANIRA_SUCCESS_UPGRADED``; :ref:`migration-json` lists what becomes what.
 
 .. note::
-    This is the behaviour of the version 2 C++ loader :cpp:class:`anira::JsonConfigLoader`, kept through the alpha releases of the 3.x line; the version 3 loaders above accept the same document and fail instead of skipping. A malformed value is reported through the log and skipped — never fatal. An unparseable ``model_data`` or ``tensor_shape`` entry is dropped, an out-of-range or wrongly typed scalar falls back to its default, and only a configuration that still has model data, a tensor shape and ``max_inference_time`` yields an :cpp:struct:`anira::InferenceConfig`; anything less returns ``nullptr``, which the caller must check before dereferencing. :cpp:func:`anira::JsonConfigLoader::get_context_config` returns ``nullptr`` only when the document itself does not parse.
+    In this pre-release the runtime, sections 2 to 5, still takes the 2.x configuration
+    classes :cpp:struct:`anira::InferenceConfig`, :cpp:struct:`anira::ContextConfig` and
+    :cpp:struct:`anira::HostConfig`; the handles above are not yet connected to it.
+    :doc:`migration` maps one onto the other.
 
 2. Pre and Post Processing
 --------------------------

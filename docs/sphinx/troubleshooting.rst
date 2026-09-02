@@ -108,7 +108,7 @@ Model Loading Failures
 **Solutions**:
     1. Verify the model file exists at the specified path
     2. Check that the model format is compatible with the selected backend
-    3. Ensure tensor shapes in your :cpp:struct:`anira::InferenceConfig` match the model's expected shapes
+    3. Ensure the axes of your tensor specs match the model's expected shapes
     4. Try a different backend if available
 
 Wait Strategy Mismatch
@@ -118,7 +118,7 @@ Wait Strategy Mismatch
 
 All anira instances in a process share one inference thread pool, and the pool's threads wait for work according to the :cpp:enum:`anira::WaitStrategy` of the *first* :cpp:struct:`anira::ContextConfig` the context was created with. A later instance that requests a different strategy has no effect — the warning tells you the originally configured strategy stays active. This is harmless (both strategies produce identical results), but the requested idle-CPU/latency characteristic is not the one in effect.
 
-**Solution**: Use the same ``wait_strategy`` in every :cpp:struct:`anira::ContextConfig` (and in the ``context_config`` block of every version 2 JSON configuration file, or the ``wait_strategy`` key of every version 3 machine file) that the process loads.
+**Solution**: Use the same ``wait_strategy`` in every :cpp:struct:`anira::ContextConfig` (and the ``wait_strategy`` key of every machine file) that the process loads.
 
 Thread Priority Issues
 ^^^^^^^^^^^^^^^^^^^^^^

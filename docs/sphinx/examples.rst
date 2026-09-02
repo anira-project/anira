@@ -34,7 +34,7 @@ Key files:
     cmake --build build --target anira-juce-plugin-example_VST3
 
 .. note::
-    In the JUCE plugin example, there are several different models available. You can select the model by changing the ``MODEL_TO_USE`` variable in the ``CMakeLists.txt`` file. ``MODEL_TO_USE == 8`` loads the RAVE model from a JSON configuration via :cpp:class:`anira::JsonConfigLoader` — see the "Loading the Configuration from JSON" section of the :doc:`usage` guide.
+    In the JUCE plugin example, there are several different models available. You can select the model by changing the ``MODEL_TO_USE`` variable in the ``CMakeLists.txt`` file. ``MODEL_TO_USE == 8`` loads the RAVE model from a 2.x JSON configuration via :cpp:class:`anira::JsonConfigLoader` (see :ref:`migration-json`).
 
 CLAP Plugin Example
 ~~~~~~~~~~~~~~~~~~~

@@ -26,6 +26,11 @@ Installation
 Basic Usage Example
 -------------------
 
+.. note::
+    The example below is the README's and still uses the 2.x configuration classes, which
+    this pre-release ships alongside the 3.x configuration API (section 1 of the :doc:`usage`
+    guide). :doc:`migration` maps one onto the other.
+
 .. include:: ../../README.md
    :parser: myst_parser.sphinx_
    :start-after: ## Usage

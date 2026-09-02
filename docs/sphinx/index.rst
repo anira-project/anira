@@ -20,6 +20,7 @@ Anira Documentation
     custom_preprocessing
     custom_backends
     examples
+    migration
     api/index
     web-api/index
     architecture
@@ -35,5 +36,7 @@ Next Steps
 New to Anira? Start with :doc:`getting_started` for installation and basic usage.
 
 Ready to dive deeper? Check out the :doc:`usage` and explore :doc:`custom_preprocessing` or :doc:`custom_backends` for advanced use cases.
+
+Coming from anira 2.x? :doc:`migration` maps the 2.x classes and JSON files onto the 3.x API.
 
 Having issues? See :doc:`troubleshooting` or visit the GitHub repository for support.
