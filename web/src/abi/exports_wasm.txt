@@ -3,7 +3,6 @@ _free
 _anira_abi_version
 _anira_check_abi
 _anira_drain_log
-_anira_get_proc_address
 _anira_log
 _anira_log_rt
 _anira_status_string

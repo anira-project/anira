@@ -88,17 +88,6 @@ ANIRA_API uint32_t ANIRA_CALL anira_version(void) ANIRA_NONBLOCKING;
  */
 ANIRA_API const char* ANIRA_CALL anira_version_string(void) ANIRA_NONBLOCKING;
 
-/**
- * @brief Feature detection for dlopen hosts: the address of a promised entry point of this
- * build, or NULL when the name is unknown, NULL, or the entry is not in this build.
- * @param name The entry point's name, e.g. "anira_abi_version".
- * @return The function's address cast to void*, or NULL.
- * @par Thread contract
- * [thread-safe]
- * @since ABI 0.1
- */
-ANIRA_API void* ANIRA_CALL anira_get_proc_address(const char* name);
-
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 #ifdef __cplusplus
