@@ -263,16 +263,6 @@ headers:
         since: "0.1"
         doc: "The library's full version string (git describe without the leading v), e.g. \"3.0.0-alpha.1-12-gabc123\"; what ANIRA_VERSION_STRING was for the build that produced the library."
         return_doc: "A NUL-terminated string in static storage."
-      - kind: function
-        name: anira_get_proc_address
-        returns: void*
-        params:
-          - {type: const char*, name: name, doc: "The entry point's name, e.g. \"anira_abi_version\"."}
-        thread: thread-safe
-        status: promised
-        since: "0.1"
-        doc: "Feature detection for dlopen hosts: the address of a promised entry point of this build, or NULL when the name is unknown, NULL, or the entry is not in this build."
-        return_doc: "The function's address cast to void*, or NULL."
 
   # ----------------------------------------------------------------------------
   - file: enums.h

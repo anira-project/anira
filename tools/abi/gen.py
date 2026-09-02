@@ -10,8 +10,6 @@ validates it against the header conventions of docs/anira-v3-architecture.md
   abi/symbols-<major>.txt                 the promised entry points, sorted
   abi/symbols-draft.txt                   the draft entry points, sorted
   web/src/abi/exports_wasm.txt            the Emscripten export list (_-prefixed)
-  src/capi/generated/abi_headers.inc      one #include per registry header
-  src/capi/generated/proc_table.inc       ANIRA_PROC(name) per promised entry point
   src/capi/generated/status_strings.inc   ANIRA_STATUS_TEXT(name, "text") per status
   test/abi/generated/test_layout.c        gate 3: _Static_asserts and the layout printer
   docs/sphinx/api/enum/<enum>.rst         one Breathe page per enum
@@ -715,19 +713,6 @@ def emit_layout_table(reg: dict) -> str:
     return "\n".join(out) + "\n"
 
 
-def emit_abi_headers(reg: dict) -> str:
-    out = [f"/* {GENERATED_BANNER} */", "/* Every registry header, in dependency order: what the proc table needs declared. */"]
-    out.extend(f"#include <anira/abi/{h['file']}>" for h in reg["headers"])
-    return "\n".join(out) + "\n"
-
-
-def emit_proc_table(reg: dict) -> str:
-    promised, _ = symbol_lists(reg)
-    out = [f"/* {GENERATED_BANNER} */", "/* ANIRA_PROC(name): one row per promised entry point; a missing definition fails the link. */"]
-    out.extend(f"ANIRA_PROC({name})" for name in promised)
-    return "\n".join(out) + "\n"
-
-
 def emit_status_strings(reg: dict) -> str:
     status = next(e for _, e in entities(reg, "enum") if e["name"] == "anira_status")
     out = [f"/* {GENERATED_BANNER} */", "/* ANIRA_STATUS_TEXT(name, text): the static text anira_status_string() returns. */"]
@@ -760,8 +745,6 @@ def generate(reg: dict) -> dict[str, str]:
     files[f"abi/symbols-{major}.txt"] = "".join(f"{n}\n" for n in promised)
     files["abi/symbols-draft.txt"] = "".join(f"{n}\n" for n in draft)
     files["web/src/abi/exports_wasm.txt"] = "".join(f"_{n}\n" for n in ["malloc", "free"] + promised + draft)
-    files["src/capi/generated/abi_headers.inc"] = emit_abi_headers(reg)
-    files["src/capi/generated/proc_table.inc"] = emit_proc_table(reg)
     files["src/capi/generated/status_strings.inc"] = emit_status_strings(reg)
     files["test/abi/generated/test_layout.c"] = emit_layout_test(reg)
     files[f"abi/layout-{major}.txt"] = emit_layout_table(reg)

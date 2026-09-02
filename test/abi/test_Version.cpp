@@ -3,17 +3,7 @@
 #include <anira/abi/version.h>
 #include <gtest/gtest.h>
 
-#include <array>
 #include <cstdint>
-
-// The proc table the library was built from: every promised name must resolve.
-namespace {
-constexpr std::array k_promised_names{
-#define ANIRA_PROC(name) #name,
-#include "capi/generated/proc_table.inc"
-#undef ANIRA_PROC
-};
-}  // namespace
 
 TEST(AbiVersion, LibraryReportsTheHeaderPair) {
     EXPECT_EQ(anira_abi_version(), ANIRA_ABI_VERSION);
@@ -57,21 +47,4 @@ TEST(AbiVersion, VersionStringIsTheBuildString) {
     ASSERT_NE(anira_version_string(), nullptr);
     EXPECT_STREQ(anira_version_string(), ANIRA_VERSION_STRING);
     EXPECT_EQ(anira_version_string(), anira_version_string()) << "static storage";
-}
-
-TEST(AbiVersion, EveryPromisedNameResolvesThroughGetProcAddress) {
-    for (const char* name : k_promised_names) {
-        EXPECT_NE(anira_get_proc_address(name), nullptr) << name;
-    }
-    EXPECT_EQ(anira_get_proc_address("anira_abi_version"),
-              reinterpret_cast<void*>(&anira_abi_version));
-    EXPECT_EQ(anira_get_proc_address("anira_status_string"),
-              reinterpret_cast<void*>(&anira_status_string));
-}
-
-TEST(AbiVersion, UnknownOrNullNamesYieldNull) {
-    EXPECT_EQ(anira_get_proc_address(nullptr), nullptr);
-    EXPECT_EQ(anira_get_proc_address(""), nullptr);
-    EXPECT_EQ(anira_get_proc_address("anira_no_such_entry"), nullptr);
-    EXPECT_EQ(anira_get_proc_address("anira_abi_version "), nullptr) << "exact match only";
 }
