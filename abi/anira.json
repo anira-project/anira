@@ -1974,6 +1974,2227 @@
           "doc": "Control-path logging through anira's private logger; formats and allocates like any other control-path call and reaches every sink synchronously."
         }
       ]
+    },
+    {
+      "file": "config.h",
+      "guard": "ANIRA_ABI_CONFIG_H",
+      "brief": "The configuration handles: tensor specs, model, machine, contract and job options, their scalar setters, the device descriptors and the extension slots.",
+      "doc": "Every entry is [main-thread] and may allocate; a rejected value is ANIRA_FAILED(status), with anira_error::message filled where the entry takes one, and the handle is left as it was. The handle layouts never enter the ABI. Extensions (section 1b) arrive through a set_ext / set_ext_json pair on every handle, one slot per kind, a second set of the same kind replacing the first: a known kind at a registered version is deep-copied during the call, a known kind at an unregistered version is ANIRA_ERROR_EXTENSION_VERSION, an unknown kind is stored and fails prepare by name (ANIRA_ERROR_EXTENSION_UNKNOWN). Strings in are UTF-8, NUL-terminated and copied; strings out are owned by the handle and valid until it is destroyed or mutated.",
+      "includes": [
+        "<stddef.h>",
+        "<stdint.h>",
+        "export.h",
+        "status.h",
+        "enums.h",
+        "log.h"
+      ],
+      "entities": [
+        {
+          "kind": "struct",
+          "name": "anira_ext_header",
+          "tier": 2,
+          "doc": "The first member of every extension payload: the payload's size, the revision of the kind's layout and the kind, a stable string id that doubles as the JSON key (anira's bare kinds such as \"entry\"; third-party kinds carry a reverse-URI prefix).",
+          "fields": [
+            {
+              "name": "struct_size",
+              "type": "uint32_t",
+              "doc": "sizeof the payload struct of the caller's header."
+            },
+            {
+              "name": "version",
+              "type": "uint32_t",
+              "doc": "Revision of this kind's layout; 1 for every kind anira ships at 3.0."
+            },
+            {
+              "name": "kind",
+              "type": "const char*",
+              "doc": "The kind, NUL-terminated; e.g. \"entry\"."
+            }
+          ]
+        },
+        {
+          "kind": "struct",
+          "name": "anira_ext_entry",
+          "tier": 2,
+          "doc": "Extension \"entry\", version 1, on a model entry: the entry point a program is run through (v2's model_function; absent means \"forward\"). Consumed by the LibTorch and ExecuTorch adapters.",
+          "fields": [
+            {
+              "name": "header",
+              "type": "anira_ext_header",
+              "doc": "{sizeof(anira_ext_entry), 1, \"entry\"}."
+            },
+            {
+              "name": "name",
+              "type": "const char*",
+              "doc": "The entry point's name; copied by the set call."
+            }
+          ],
+          "init": {
+            "name": "ANIRA_EXT_ENTRY_INIT",
+            "value": "{sizeof(anira_ext_entry), 1, \"entry\"}, NULL",
+            "doc": "An anira_ext_entry with its header filled and no name yet."
+          }
+        },
+        {
+          "kind": "function",
+          "name": "anira_registered_ext_kinds",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "uint32_t*",
+              "name": "count",
+              "doc": "In: the capacity of out; out: the number of registered kinds."
+            },
+            {
+              "type": "const char**",
+              "name": "out",
+              "doc": "Receives the kind names (static storage), or NULL to ask for the count only."
+            }
+          ],
+          "thread": "thread-safe",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Scalar enumeration of the extension kinds this build understands, without a machine: NULL out returns the count, a short buffer is filled as far as it goes and returns ANIRA_INCOMPLETE.",
+          "return_doc": "ANIRA_OK, ANIRA_INCOMPLETE, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL count."
+        },
+        {
+          "kind": "struct",
+          "name": "anira_cuda_desc",
+          "tier": 2,
+          "doc": "The CUDA device block of a machine config. Nothing to hand over: the primary context is process-wide, so a pointer, stream or event on it is anira's as much as the user's.",
+          "fields": [
+            {
+              "name": "struct_size",
+              "type": "uint32_t",
+              "doc": "sizeof(anira_cuda_desc) of the caller's header."
+            },
+            {
+              "name": "ownership",
+              "type": "uint32_t",
+              "doc": "anira_ownership."
+            },
+            {
+              "name": "device",
+              "type": "int32_t",
+              "doc": "CUDA device ordinal."
+            },
+            {
+              "name": "reserved",
+              "type": "uint32_t",
+              "doc": "Zero."
+            },
+            {
+              "name": "pinned_pool_limit",
+              "type": "uint64_t",
+              "doc": "Cap on cudaHostAlloc staging in bytes; 0 = planner-sized."
+            }
+          ],
+          "init": {
+            "name": "ANIRA_CUDA_DESC_INIT",
+            "value": "sizeof(anira_cuda_desc), ANIRA_OWNERSHIP_OWNED, 0, 0u, 0u",
+            "doc": "OWNED, device 0, planner-sized staging."
+          }
+        },
+        {
+          "kind": "struct",
+          "name": "anira_gl_desc",
+          "tier": 2,
+          "doc": "The OpenGL block of a machine config; GL is always borrowed. CALLER_THREAD: anira touches GL only inside allocate_*, submit and bind_output, on the calling thread where the user's context is current. SHARED_CONTEXT (additive): a second context of the same share group that anira's worker makes current.",
+          "fields": [
+            {
+              "name": "struct_size",
+              "type": "uint32_t",
+              "doc": "sizeof(anira_gl_desc) of the caller's header."
+            },
+            {
+              "name": "threads",
+              "type": "uint32_t",
+              "doc": "anira_gl_threads."
+            },
+            {
+              "name": "display",
+              "type": "void*",
+              "doc": "EGLDisplay (or the GLX equivalent)."
+            },
+            {
+              "name": "context",
+              "type": "void*",
+              "doc": "EGLContext (or the GLX equivalent)."
+            },
+            {
+              "name": "gbm",
+              "type": "void*",
+              "doc": "gbm_device*: lets allocate_* back GL storage with a dma-buf; NULL otherwise."
+            }
+          ],
+          "init": {
+            "name": "ANIRA_GL_DESC_INIT",
+            "value": "sizeof(anira_gl_desc), ANIRA_GL_CALLER_THREAD, NULL, NULL, NULL",
+            "doc": "CALLER_THREAD, no handles."
+          }
+        },
+        {
+          "kind": "struct",
+          "name": "anira_vulkan_desc",
+          "tier": 2,
+          "doc": "The Vulkan block of a machine config; thread-agnostic, anira serializes its own submissions on the queue.",
+          "fields": [
+            {
+              "name": "struct_size",
+              "type": "uint32_t",
+              "doc": "sizeof(anira_vulkan_desc) of the caller's header."
+            },
+            {
+              "name": "ownership",
+              "type": "uint32_t",
+              "doc": "anira_ownership."
+            },
+            {
+              "name": "queue_family",
+              "type": "uint32_t",
+              "doc": "Queue family index."
+            },
+            {
+              "name": "queue_index",
+              "type": "uint32_t",
+              "doc": "Queue index within the family."
+            },
+            {
+              "name": "instance",
+              "type": "void*",
+              "doc": "VkInstance."
+            },
+            {
+              "name": "physical",
+              "type": "void*",
+              "doc": "VkPhysicalDevice."
+            },
+            {
+              "name": "device",
+              "type": "void*",
+              "doc": "VkDevice."
+            }
+          ],
+          "init": {
+            "name": "ANIRA_VULKAN_DESC_INIT",
+            "value": "sizeof(anira_vulkan_desc), ANIRA_OWNERSHIP_OWNED, 0u, 0u, NULL, NULL, NULL",
+            "doc": "OWNED, queue family 0, index 0, no handles."
+          }
+        },
+        {
+          "kind": "struct",
+          "name": "anira_metal_desc",
+          "tier": 2,
+          "doc": "The Metal block of a machine config.",
+          "fields": [
+            {
+              "name": "struct_size",
+              "type": "uint32_t",
+              "doc": "sizeof(anira_metal_desc) of the caller's header."
+            },
+            {
+              "name": "reserved",
+              "type": "uint32_t",
+              "doc": "Zero."
+            },
+            {
+              "name": "device",
+              "type": "void*",
+              "doc": "id<MTLDevice>; NULL = the default device."
+            }
+          ],
+          "init": {
+            "name": "ANIRA_METAL_DESC_INIT",
+            "value": "sizeof(anira_metal_desc), 0u, NULL",
+            "doc": "The default device."
+          }
+        },
+        {
+          "kind": "struct",
+          "name": "anira_d3d12_desc",
+          "tier": 2,
+          "doc": "The Direct3D 12 block of a machine config.",
+          "fields": [
+            {
+              "name": "struct_size",
+              "type": "uint32_t",
+              "doc": "sizeof(anira_d3d12_desc) of the caller's header."
+            },
+            {
+              "name": "ownership",
+              "type": "uint32_t",
+              "doc": "anira_ownership."
+            },
+            {
+              "name": "device",
+              "type": "void*",
+              "doc": "ID3D12Device*."
+            }
+          ],
+          "init": {
+            "name": "ANIRA_D3D12_DESC_INIT",
+            "value": "sizeof(anira_d3d12_desc), ANIRA_OWNERSHIP_OWNED, NULL",
+            "doc": "OWNED, no device handle."
+          }
+        },
+        {
+          "kind": "struct",
+          "name": "anira_webgpu_desc",
+          "tier": 2,
+          "doc": "The WebGPU block of a machine config (native Dawn); someone must pump ProcessEvents / WaitAny, which exec selects.",
+          "fields": [
+            {
+              "name": "struct_size",
+              "type": "uint32_t",
+              "doc": "sizeof(anira_webgpu_desc) of the caller's header."
+            },
+            {
+              "name": "ownership",
+              "type": "uint32_t",
+              "doc": "anira_ownership."
+            },
+            {
+              "name": "exec",
+              "type": "uint32_t",
+              "doc": "anira_exec_policy."
+            },
+            {
+              "name": "reserved",
+              "type": "uint32_t",
+              "doc": "Zero."
+            },
+            {
+              "name": "instance",
+              "type": "void*",
+              "doc": "WGPUInstance."
+            },
+            {
+              "name": "device",
+              "type": "void*",
+              "doc": "WGPUDevice."
+            },
+            {
+              "name": "queue",
+              "type": "void*",
+              "doc": "WGPUQueue."
+            }
+          ],
+          "init": {
+            "name": "ANIRA_WEBGPU_DESC_INIT",
+            "value": "sizeof(anira_webgpu_desc), ANIRA_OWNERSHIP_OWNED, ANIRA_EXEC_WORKER, 0u, NULL, NULL, NULL",
+            "doc": "OWNED, WORKER, no handles."
+          }
+        },
+        {
+          "kind": "function",
+          "name": "anira_tensor_spec_create",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const char*",
+              "name": "name",
+              "doc": "Canonical tensor name, UTF-8, copied; the model config maps it to engine names."
+            },
+            {
+              "type": "anira_dtype",
+              "name": "dtype",
+              "doc": "The model's true dtype (section 1)."
+            },
+            {
+              "type": "anira_role",
+              "name": "role",
+              "doc": "STREAMED, BUFFER or STATIC."
+            },
+            {
+              "type": "anira_tensor_spec**",
+              "name": "out",
+              "doc": "Receives the handle on success."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Creates a tensor spec: no axes yet, window 0/0/0, time ratio (0, 0) = derive, latency 0.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL or empty name, an unknown role, or a NULL out."
+        },
+        {
+          "kind": "function",
+          "name": "anira_tensor_spec_set_axis",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_tensor_spec*",
+              "name": "spec",
+              "doc": "The spec."
+            },
+            {
+              "type": "uint32_t",
+              "name": "i",
+              "doc": "Axis index in model memory order; i < ANIRA_MAX_RANK; ndim becomes max(i + 1)."
+            },
+            {
+              "type": "anira_axis_tag",
+              "name": "tag",
+              "doc": "The axis' meaning."
+            },
+            {
+              "type": "int64_t",
+              "name": "extent",
+              "doc": "Extent > 0, or ANIRA_DYNAMIC on the Time axis of a Streamed or Buffer spec."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Sets one axis; axis index order is model memory order (NCHW vs NHWC is just axis order).",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for i >= ANIRA_MAX_RANK, an unknown tag, or an extent that is neither positive nor ANIRA_DYNAMIC."
+        },
+        {
+          "kind": "function",
+          "name": "anira_tensor_spec_set_window",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_tensor_spec*",
+              "name": "spec",
+              "doc": "The spec."
+            },
+            {
+              "type": "int64_t",
+              "name": "window_min",
+              "doc": "The model's smallest legal Time extent, in elements."
+            },
+            {
+              "type": "int64_t",
+              "name": "window_max",
+              "doc": "The largest, or ANIRA_UNBOUNDED."
+            },
+            {
+              "type": "int64_t",
+              "name": "context",
+              "doc": "Left context retained across inferences; consumed per inference = window_used - context."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The window of a Streamed spec, in elements along the Time axis; the fixed case is window_min == window_max. Defaults 0, 0, 0. Cross-field legality (context < window_min, window_max >= window_min) is checked at prepare.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value other than ANIRA_UNBOUNDED as window_max."
+        },
+        {
+          "kind": "function",
+          "name": "anira_tensor_spec_set_time_ratio",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_tensor_spec*",
+              "name": "spec",
+              "doc": "The spec."
+            },
+            {
+              "type": "int64_t",
+              "name": "num",
+              "doc": "This tensor advances num elements ..."
+            },
+            {
+              "type": "int64_t",
+              "name": "den",
+              "doc": "... per den anchor elements; (0, 0) = derive (default)."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The tensor's Time advance relative to the anchor tensor.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value or den == 0 with num != 0."
+        },
+        {
+          "kind": "function",
+          "name": "anira_tensor_spec_set_latency",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_tensor_spec*",
+              "name": "spec",
+              "doc": "The spec."
+            },
+            {
+              "type": "int64_t",
+              "name": "latency",
+              "doc": "Model-internal delay along Time, in elements; default 0."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Outputs only: the model's internal delay along the Time axis, which the reported latency adds.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative latency."
+        },
+        {
+          "kind": "function",
+          "name": "anira_tensor_spec_set_ext",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_tensor_spec*",
+              "name": "spec",
+              "doc": "The spec."
+            },
+            {
+              "type": "const anira_ext_header*",
+              "name": "ext",
+              "doc": "The payload; deep-copied through the registry row."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Sets an extension on the spec (section 1b); one slot per kind, a second set replaces the first.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL or short header; ANIRA_ERROR_EXTENSION_VERSION for a known kind at an unregistered version."
+        },
+        {
+          "kind": "function",
+          "name": "anira_tensor_spec_set_ext_json",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_tensor_spec*",
+              "name": "spec",
+              "doc": "The spec."
+            },
+            {
+              "type": "const char*",
+              "name": "kind",
+              "doc": "The extension kind."
+            },
+            {
+              "type": "const char*",
+              "name": "utf8",
+              "doc": "The extension object as JSON text, optionally with a \"version\" member (default 1)."
+            },
+            {
+              "type": "size_t",
+              "name": "len",
+              "doc": "Length of utf8 in bytes."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The JSON twin of set_ext: a known kind is parsed through its registry row, an unknown kind keeps the text.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL kind or text; ANIRA_ERROR_JSON for malformed text; ANIRA_ERROR_EXTENSION_VERSION for a known kind at an unregistered version."
+        },
+        {
+          "kind": "function",
+          "name": "anira_tensor_spec_destroy",
+          "returns": "void",
+          "params": [
+            {
+              "type": "anira_tensor_spec*",
+              "name": "spec",
+              "doc": "The spec, or NULL."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Destroys a spec; NULL-safe. A spec added to a model config was copied and may be destroyed right after."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_create_hard",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "uint32_t",
+              "name": "block_min",
+              "doc": "Smallest block the host callback delivers, in Time-axis elements of the anchor tensor."
+            },
+            {
+              "type": "uint32_t",
+              "name": "block_max",
+              "doc": "Largest; block_min == block_max is the fixed-block host."
+            },
+            {
+              "type": "double",
+              "name": "rate",
+              "doc": "Anchor elements per second (48000 for audio)."
+            },
+            {
+              "type": "anira_contract**",
+              "name": "out",
+              "doc": "Receives the handle on success."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Creates a Hard (real-time) contract with the stream geometry; the fixed-block host earns the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on miss, wait_ratio 0, PERMISSIVE edge cost. A geometry of 0, 0, 0 is legal here and completed by hard_set_geometry or refused at prepare.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for block_min > block_max, a negative rate, or a NULL out."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_create_async",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract**",
+              "name": "out",
+              "doc": "Receives the handle on success."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Creates an Async contract: no deadline (the offline posture), FINISH on late, AUTO priority, auto lanes and depth, POLLED delivery, PERMISSIVE edge cost.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_hard_set_geometry",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "A Hard contract."
+            },
+            {
+              "type": "uint32_t",
+              "name": "block_min",
+              "doc": "See anira_contract_create_hard."
+            },
+            {
+              "type": "uint32_t",
+              "name": "block_max",
+              "doc": "See anira_contract_create_hard."
+            },
+            {
+              "type": "double",
+              "name": "rate",
+              "doc": "See anira_contract_create_hard."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Patches the stream geometry, e.g. of a contract loaded from a file (section 8).",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for block_min > block_max or a negative rate."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_hard_set_budget",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "A Hard contract."
+            },
+            {
+              "type": "anira_budget_kind",
+              "name": "kind",
+              "doc": "MEASURED (default) derives the budget during warmup; EXPLICIT reads explicit_ms."
+            },
+            {
+              "type": "double",
+              "name": "explicit_ms",
+              "doc": "Per-inference budget in milliseconds, read for EXPLICIT only."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The per-inference budget of a Hard contract (v2's max_inference_time when EXPLICIT).",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for an unknown kind or, with EXPLICIT, explicit_ms <= 0."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_hard_set_warmup",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "A Hard contract."
+            },
+            {
+              "type": "anira_warmup_mode",
+              "name": "mode",
+              "doc": "UNTIL_STABLE (default), FIXED, or NONE (legal only with an EXPLICIT budget, checked at prepare)."
+            },
+            {
+              "type": "uint32_t",
+              "name": "iterations",
+              "doc": "Iterations for FIXED only."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The warmup policy of a Hard contract (v2's warm_up when FIXED).",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for an unknown mode."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_hard_set_on_miss",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "A Hard contract."
+            },
+            {
+              "type": "anira_miss_policy",
+              "name": "policy",
+              "doc": "BYPASS (default; requires shape-compatible I/O along the anchored Time axis), HOLD_LAST or ZEROS."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "What the handler delivers when an inference misses its deadline.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for an unknown policy."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_hard_set_wait_ratio",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "A Hard contract."
+            },
+            {
+              "type": "double",
+              "name": "ratio",
+              "doc": "0 (default) = never wait; v2's blocking_ratio one-to-one."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The wait ratio consumed by the _wait twins only: how long, as a fraction of the block duration, a wait entry may block for a result.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a negative ratio."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_async_set_deadline",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "An Async contract."
+            },
+            {
+              "type": "double",
+              "name": "deadline_ms",
+              "doc": "< 0 (default) = none, the offline posture; the clock starts at submit."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The per-job deadline of an Async contract; an absolute per-job override is the deadline_ms argument of anira_handler_submit.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on a Hard contract."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_async_set_policy",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "An Async contract."
+            },
+            {
+              "type": "anira_late_policy",
+              "name": "on_late",
+              "doc": "FINISH (default) or DROP (cancels at chunk boundaries, enables admission control)."
+            },
+            {
+              "type": "anira_priority",
+              "name": "priority",
+              "doc": "AUTO (default): INTERACTIVE iff a deadline is set, else BATCH."
+            },
+            {
+              "type": "uint32_t",
+              "name": "lanes",
+              "doc": "Parallel plan instances; 0 = auto (1 if STATEFUL, else min(max_instances, pool-derived))."
+            },
+            {
+              "type": "uint32_t",
+              "name": "max_in_flight",
+              "doc": "Per-lane pipelining; 0 = auto (shallow iff deadline, else deep)."
+            },
+            {
+              "type": "anira_delivery",
+              "name": "delivery",
+              "doc": "POLLED (default) or IMMEDIATE."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The scheduling policy of an Async contract.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on a Hard contract; ANIRA_ERROR_INVALID_ARGUMENT for an unknown enum value."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_set_edge_cost",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "Either contract kind."
+            },
+            {
+              "type": "anira_edge_cost",
+              "name": "cost",
+              "doc": "PERMISSIVE (default) or STRICT."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Plan validation policy for the edges a pipeline uses (section 7); not scheduling.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown value."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_set_ext",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "Either contract kind."
+            },
+            {
+              "type": "const anira_ext_header*",
+              "name": "ext",
+              "doc": "The payload; deep-copied through the registry row."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Sets an extension on the contract (section 1b); v3.0.0 registers none for this host.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL or short header; ANIRA_ERROR_EXTENSION_VERSION for a known kind at an unregistered version."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_set_ext_json",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "Either contract kind."
+            },
+            {
+              "type": "const char*",
+              "name": "kind",
+              "doc": "The extension kind."
+            },
+            {
+              "type": "const char*",
+              "name": "utf8",
+              "doc": "The extension object as JSON text."
+            },
+            {
+              "type": "size_t",
+              "name": "len",
+              "doc": "Length of utf8 in bytes."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The JSON twin of anira_contract_set_ext.",
+          "return_doc": "As anira_tensor_spec_set_ext_json."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_get_kind",
+          "returns": "anira_contract_kind",
+          "params": [
+            {
+              "type": "const anira_contract*",
+              "name": "contract",
+              "doc": "The contract."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Whether the contract is Hard or Async.",
+          "return_doc": "ANIRA_CONTRACT_HARD or ANIRA_CONTRACT_ASYNC."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_destroy",
+          "returns": "void",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "The contract, or NULL."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Destroys a contract; NULL-safe."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_create",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config**",
+              "name": "out",
+              "doc": "Receives the handle on success."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Creates a machine config with the defaults: ANIRA_THREADS_AUTO threads, SPIN_BACKOFF, log level WARNING, the drain thread every 10 ms, a 512-record queue, no sink, no device blocks.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_threads",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "num_threads",
+              "doc": "Pool size; ANIRA_THREADS_AUTO = the library default, 0 = bring your own threads."
+            },
+            {
+              "type": "anira_wait_strategy",
+              "name": "wait",
+              "doc": "SPIN_BACKOFF (default) or BLOCKING."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The inference thread pool the first machine sizes.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown wait strategy."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_log_level",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "anira_log_level",
+              "name": "level",
+              "doc": "Default WARNING; the most verbose request across machines wins."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The runtime log level.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown level."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_log_drain",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "anira_log_drain",
+              "name": "drain",
+              "doc": "THREAD (default) or MANUAL (anira_drain_log)."
+            },
+            {
+              "type": "uint32_t",
+              "name": "interval_ms",
+              "doc": "Drain-thread period in milliseconds; 0 keeps the default of 10."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Who drains the real-time log queue and how often.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown drain."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_log_queue_capacity",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "capacity",
+              "doc": "Records; clamped to [64, 65536]; fixed for the life of the core."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The real-time log queue's capacity.",
+          "return_doc": "ANIRA_OK."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_log_flags",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "flags",
+              "doc": "ANIRA_LOG_FLAG_* bits."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Log flags, e.g. ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown bit."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_log_sink",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "anira_log_fn",
+              "name": "callback",
+              "doc": "The sink, or NULL for none."
+            },
+            {
+              "type": "void*",
+              "name": "user_data",
+              "doc": "Passed to callback."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The machine's log sink; ignored on Wasm, where anira_em_set_log_hook is the sink.",
+          "return_doc": "ANIRA_OK."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_log",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const anira_log_desc*",
+              "name": "desc",
+              "doc": "The log block; read within min(struct_size, sizeof(anira_log_desc))."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The C one-shot convenience equal to the five scalar log setters.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL or short descriptor; ANIRA_ERROR_ABI_VERSION when desc->abi_version fails anira_check_abi."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_cuda",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const anira_cuda_desc*",
+              "name": "desc",
+              "doc": "The block, or NULL = domain unavailable, edges pruned."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Declares the CUDA device block; presence is the user's declaration, no implicit probing.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_gl",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const anira_gl_desc*",
+              "name": "desc",
+              "doc": "The block, or NULL."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Declares the OpenGL device block.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_vulkan",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const anira_vulkan_desc*",
+              "name": "desc",
+              "doc": "The block, or NULL."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Declares the Vulkan device block.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_metal",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const anira_metal_desc*",
+              "name": "desc",
+              "doc": "The block, or NULL."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Declares the Metal device block.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_d3d12",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const anira_d3d12_desc*",
+              "name": "desc",
+              "doc": "The block, or NULL."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Declares the Direct3D 12 device block.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_webgpu",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const anira_webgpu_desc*",
+              "name": "desc",
+              "doc": "The block, or NULL."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Declares the WebGPU device block (native Dawn); ANIRA_ERROR_NOT_SUPPORTED under Emscripten in 3.0.",
+          "return_doc": "ANIRA_OK, ANIRA_ERROR_NOT_SUPPORTED, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_ext",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const anira_ext_header*",
+              "name": "ext",
+              "doc": "The payload; deep-copied through the registry row."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Sets an extension on the machine config (section 1b).",
+          "return_doc": "As anira_tensor_spec_set_ext."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_set_ext_json",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const char*",
+              "name": "kind",
+              "doc": "The extension kind."
+            },
+            {
+              "type": "const char*",
+              "name": "utf8",
+              "doc": "The extension object as JSON text."
+            },
+            {
+              "type": "size_t",
+              "name": "len",
+              "doc": "Length of utf8 in bytes."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The JSON twin of anira_machine_config_set_ext.",
+          "return_doc": "As anira_tensor_spec_set_ext_json."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_destroy",
+          "returns": "void",
+          "params": [
+            {
+              "type": "anira_machine_config*",
+              "name": "config",
+              "doc": "The config, or NULL."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Destroys a machine config; NULL-safe."
+        },
+        {
+          "kind": "callback",
+          "name": "anira_bytes_release_fn",
+          "returns": "void",
+          "params": [
+            {
+              "type": "const void*",
+              "name": "bytes",
+              "doc": "The bytes handed to add_model_bytes / set_model_bytes."
+            },
+            {
+              "type": "void*",
+              "name": "ctx",
+              "doc": "The ctx handed with them."
+            }
+          ],
+          "thread": "main-thread",
+          "doc": "Release callback of borrowed model bytes: fires exactly once, when the last carrier of the bytes dies, on the thread that destroys it."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_create",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config**",
+              "name": "out",
+              "doc": "Receives the handle on success."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Creates an empty model config: no models, no tensors, default engine NONE (= models[0]), STATELESS, max_instances 1, anchor = the first Streamed input.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_add_model_path",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "anira_engine",
+              "name": "engine",
+              "doc": "A built-in engine (not NONE)."
+            },
+            {
+              "type": "const char*",
+              "name": "utf8_path",
+              "doc": "Model file path, UTF-8, copied."
+            },
+            {
+              "type": "uint32_t*",
+              "name": "out_index",
+              "doc": "Receives the model index, or NULL."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Appends a model entry that loads from a file. Whether the engine is in this build is decided at prepare, so a config can name every engine a deployment might have.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine, or a NULL or empty path."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_add_model_bytes",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "anira_engine",
+              "name": "engine",
+              "doc": "A built-in engine (not NONE)."
+            },
+            {
+              "type": "const void*",
+              "name": "bytes",
+              "doc": "The model bytes."
+            },
+            {
+              "type": "size_t",
+              "name": "size",
+              "doc": "Their size; > 0."
+            },
+            {
+              "type": "anira_bytes_ownership",
+              "name": "ownership",
+              "doc": "COPY, or BORROW (the plugin default for embedded blobs)."
+            },
+            {
+              "type": "anira_bytes_release_fn",
+              "name": "release",
+              "doc": "Optional release callback for BORROW; fires once when the last carrier dies."
+            },
+            {
+              "type": "void*",
+              "name": "ctx",
+              "doc": "Passed to release."
+            },
+            {
+              "type": "uint32_t*",
+              "name": "out_index",
+              "doc": "Receives the model index, or NULL."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Appends a model entry that loads from memory.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine or ownership, NULL bytes or a zero size."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_add_model_path_custom",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const char*",
+              "name": "engine_id",
+              "doc": "A registered custom engine's name, reverse-URI (must contain a '.')."
+            },
+            {
+              "type": "const char*",
+              "name": "utf8_path",
+              "doc": "Model file path, UTF-8, copied."
+            },
+            {
+              "type": "uint32_t*",
+              "name": "out_index",
+              "doc": "Receives the model index, or NULL."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Appends a model entry for a custom engine registered by name (anira_pipeline_register_engine, M2).",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.', or a NULL or empty path."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_add_model_bytes_custom",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const char*",
+              "name": "engine_id",
+              "doc": "A registered custom engine's name, reverse-URI."
+            },
+            {
+              "type": "const void*",
+              "name": "bytes",
+              "doc": "The model bytes."
+            },
+            {
+              "type": "size_t",
+              "name": "size",
+              "doc": "Their size; > 0."
+            },
+            {
+              "type": "anira_bytes_ownership",
+              "name": "ownership",
+              "doc": "COPY or BORROW."
+            },
+            {
+              "type": "anira_bytes_release_fn",
+              "name": "release",
+              "doc": "Optional release callback for BORROW."
+            },
+            {
+              "type": "void*",
+              "name": "ctx",
+              "doc": "Passed to release."
+            },
+            {
+              "type": "uint32_t*",
+              "name": "out_index",
+              "doc": "Receives the model index, or NULL."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The bytes twin of anira_model_config_add_model_path_custom.",
+          "return_doc": "As anira_model_config_add_model_bytes, plus ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.'."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_set_model_bytes",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "model_index",
+              "doc": "An existing entry."
+            },
+            {
+              "type": "const void*",
+              "name": "bytes",
+              "doc": "The model bytes."
+            },
+            {
+              "type": "size_t",
+              "name": "size",
+              "doc": "Their size; > 0."
+            },
+            {
+              "type": "anira_bytes_ownership",
+              "name": "ownership",
+              "doc": "COPY or BORROW."
+            },
+            {
+              "type": "anira_bytes_release_fn",
+              "name": "release",
+              "doc": "Optional release callback for BORROW."
+            },
+            {
+              "type": "void*",
+              "name": "ctx",
+              "doc": "Passed to release."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Replaces an entry's source with bytes, e.g. to patch a path entry a JSON file produced; the path is kept for anira_model_config_to_json, model_path() then returns NULL.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an index out of range, NULL bytes, a zero size or an unknown ownership."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_model_count",
+          "returns": "uint32_t",
+          "params": [
+            {
+              "type": "const anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The number of model entries.",
+          "return_doc": "The count; 0 for NULL."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_model_engine",
+          "returns": "anira_engine",
+          "params": [
+            {
+              "type": "const anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "model_index",
+              "doc": "An entry."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The entry's engine.",
+          "return_doc": "The engine; ANIRA_ENGINE_NONE for a custom entry or an index out of range."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_model_engine_id",
+          "returns": "const char*",
+          "params": [
+            {
+              "type": "const anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "model_index",
+              "doc": "An entry."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The entry's custom engine name.",
+          "return_doc": "Object-owned; NULL for a built-in engine or an index out of range."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_model_path",
+          "returns": "const char*",
+          "params": [
+            {
+              "type": "const anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "model_index",
+              "doc": "An entry."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The entry's model path.",
+          "return_doc": "Object-owned; NULL for a bytes entry or an index out of range."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_model_bytes",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "model_index",
+              "doc": "An entry."
+            },
+            {
+              "type": "const void**",
+              "name": "bytes",
+              "doc": "Receives the bytes (object-owned)."
+            },
+            {
+              "type": "size_t*",
+              "name": "size",
+              "doc": "Receives their size."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The entry's model bytes.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_STATE for a path entry; ANIRA_ERROR_INVALID_ARGUMENT for an index out of range or NULL out-parameters."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_set_tensor_name",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "model_index",
+              "doc": "An entry."
+            },
+            {
+              "type": "const char*",
+              "name": "canonical",
+              "doc": "The spec's canonical name."
+            },
+            {
+              "type": "const char*",
+              "name": "engine_name",
+              "doc": "The name the engine's model uses for it; copied."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Maps a canonical tensor name to the engine's name for this entry (section 5).",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an index out of range or a NULL or empty name."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_set_model_ext",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "model_index",
+              "doc": "An entry."
+            },
+            {
+              "type": "const anira_ext_header*",
+              "name": "ext",
+              "doc": "The payload; deep-copied through the registry row."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Sets an extension on one model entry (host \"model\"), e.g. anira_ext_entry.",
+          "return_doc": "As anira_tensor_spec_set_ext, plus ANIRA_ERROR_INVALID_ARGUMENT for an index out of range."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_set_model_ext_json",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "model_index",
+              "doc": "An entry."
+            },
+            {
+              "type": "const char*",
+              "name": "kind",
+              "doc": "The extension kind."
+            },
+            {
+              "type": "const char*",
+              "name": "utf8",
+              "doc": "The extension object as JSON text."
+            },
+            {
+              "type": "size_t",
+              "name": "len",
+              "doc": "Length of utf8 in bytes."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The JSON twin of anira_model_config_set_model_ext.",
+          "return_doc": "As anira_tensor_spec_set_ext_json, plus ANIRA_ERROR_INVALID_ARGUMENT for an index out of range."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_add_input",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const anira_tensor_spec*",
+              "name": "spec",
+              "doc": "The spec; copied."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Appends an input tensor spec (copied; the caller keeps ownership of spec).",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_add_output",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const anira_tensor_spec*",
+              "name": "spec",
+              "doc": "The spec; copied."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Appends an output tensor spec (copied).",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_set_default_engine",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "anira_engine",
+              "name": "engine",
+              "doc": "A built-in engine, or ANIRA_ENGINE_NONE = models[0] (default)."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The engine the handler starts on; whether it names an entry is checked at prepare.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown engine."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_set_default_engine_custom",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const char*",
+              "name": "engine_id",
+              "doc": "A registered custom engine's name, reverse-URI."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The custom twin of anira_model_config_set_default_engine.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.'."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_set_state",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "anira_model_state",
+              "name": "state",
+              "doc": "STATELESS (default) or STATEFUL (session-exclusive, lanes forced to 1)."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Whether the model carries state across inferences (v2's session_exclusive_processor).",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown state."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_set_max_instances",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "max_instances",
+              "doc": "Memory ceiling of loaded model instances; >= 1; default 1."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The ceiling within which the planner allocates lanes and pool instances (v2's num_parallel_processors).",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for 0."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_set_anchor",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "uint32_t",
+              "name": "index_or_first_streamed",
+              "doc": "A tensor index, or ANIRA_ANCHOR_FIRST_STREAMED (default)."
+            },
+            {
+              "type": "anira_bool",
+              "name": "is_input",
+              "doc": "Whether the index counts inputs (true) or outputs."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The anchor tensor the host geometry refers to (v2's HostConfig reference stream); resolved at prepare.",
+          "return_doc": "ANIRA_OK."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_set_ext",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const anira_ext_header*",
+              "name": "ext",
+              "doc": "The payload; deep-copied through the registry row."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Sets an extension on the whole config (host \"model_config\").",
+          "return_doc": "As anira_tensor_spec_set_ext."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_set_ext_json",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const char*",
+              "name": "kind",
+              "doc": "The extension kind."
+            },
+            {
+              "type": "const char*",
+              "name": "utf8",
+              "doc": "The extension object as JSON text."
+            },
+            {
+              "type": "size_t",
+              "name": "len",
+              "doc": "Length of utf8 in bytes."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The JSON twin of anira_model_config_set_ext.",
+          "return_doc": "As anira_tensor_spec_set_ext_json."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_destroy",
+          "returns": "void",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config, or NULL."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Destroys a model config; NULL-safe. Borrowed model bytes are released (their callback fires) when the last carrier dies."
+        },
+        {
+          "kind": "function",
+          "name": "anira_job_options_create",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_job_options**",
+              "name": "out",
+              "doc": "Receives the handle on success."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Creates job options with the defaults: no head trim, tail flush on, REJECT below the window minimum. Build once, reuse across submits; never mutate concurrently with a submit that reads it.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out."
+        },
+        {
+          "kind": "function",
+          "name": "anira_job_options_set_head_trim",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_job_options*",
+              "name": "options",
+              "doc": "The options."
+            },
+            {
+              "type": "uint32_t",
+              "name": "count",
+              "doc": "Number of trims, one per output."
+            },
+            {
+              "type": "const int64_t*",
+              "name": "trims",
+              "doc": "Elements to drop at the head of each output; -1 = that output's latency (input-aligned). Copied."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Per-output head trim of an Async job's outputs.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL trims with count > 0, or a value below -1."
+        },
+        {
+          "kind": "function",
+          "name": "anira_job_options_set_tail_flush",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_job_options*",
+              "name": "options",
+              "doc": "The options."
+            },
+            {
+              "type": "anira_bool",
+              "name": "tail_flush",
+              "doc": "Default true."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "ViewChunker reassembly semantics: whether the tail of a job is flushed through the model.",
+          "return_doc": "ANIRA_OK."
+        },
+        {
+          "kind": "function",
+          "name": "anira_job_options_set_below_min",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_job_options*",
+              "name": "options",
+              "doc": "The options."
+            },
+            {
+              "type": "anira_pad_policy",
+              "name": "policy",
+              "doc": "REJECT (default) or ZEROS."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "What happens to a submitted buffer shorter than the window minimum.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown policy."
+        },
+        {
+          "kind": "function",
+          "name": "anira_job_options_set_ext",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_job_options*",
+              "name": "options",
+              "doc": "The options."
+            },
+            {
+              "type": "const anira_ext_header*",
+              "name": "ext",
+              "doc": "The payload; BORROWED until every submit that reads the options has returned."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Sets a per-job extension (host \"job\"): borrowed, not copied, because submit is ANIRA_NONBLOCKING and copies what it needs into the job record; the consumed-or-fail check runs at submit and fails the ticket, not the handler.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL or short header."
+        },
+        {
+          "kind": "function",
+          "name": "anira_job_options_set_ext_json",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_job_options*",
+              "name": "options",
+              "doc": "The options."
+            },
+            {
+              "type": "const char*",
+              "name": "kind",
+              "doc": "The extension kind."
+            },
+            {
+              "type": "const char*",
+              "name": "utf8",
+              "doc": "The extension object as JSON text."
+            },
+            {
+              "type": "size_t",
+              "name": "len",
+              "doc": "Length of utf8 in bytes."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The JSON twin every config handle carries; the parsed payload is owned by the options.",
+          "return_doc": "ANIRA_OK, ANIRA_ERROR_INVALID_ARGUMENT for a NULL kind or text, ANIRA_ERROR_JSON for malformed text, ANIRA_ERROR_EXTENSION_VERSION for a known kind at an unregistered version."
+        },
+        {
+          "kind": "function",
+          "name": "anira_job_options_destroy",
+          "returns": "void",
+          "params": [
+            {
+              "type": "anira_job_options*",
+              "name": "options",
+              "doc": "The options, or NULL."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Destroys job options; NULL-safe."
+        }
+      ]
     }
   ]
 }

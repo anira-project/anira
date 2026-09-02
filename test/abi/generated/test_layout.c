@@ -12,6 +12,7 @@
 #include <anira/abi/version.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
+#include <anira/abi/config.h>
 
 _Static_assert(sizeof(anira_status) == 4, "anira_status is a 32-bit enum");
 _Static_assert(ANIRA_STATUS_FORCE32 == 0x7fffffff, "anira_status terminator");
@@ -124,6 +125,23 @@ _Static_assert(sizeof(((const anira_log_record*)0)->message_bits) == 8, "anira_l
 _Static_assert(offsetof(anira_log_desc, struct_size) == 0, "anira_log_desc.struct_size first");
 _Static_assert(offsetof(anira_log_desc, abi_version) == 4, "anira_log_desc.abi_version second");
 _Static_assert(offsetof(anira_log_desc, user_data) == 8, "anira_log_desc.user_data third");
+
+_Static_assert(offsetof(anira_ext_header, struct_size) == 0, "anira_ext_header.struct_size first");
+
+_Static_assert(offsetof(anira_ext_entry, header) == 0, "anira_ext_entry.header (an anira_ext_header) first");
+_Static_assert(offsetof(anira_ext_entry, header.struct_size) == 0, "anira_ext_entry: struct_size first through the header");
+
+_Static_assert(offsetof(anira_cuda_desc, struct_size) == 0, "anira_cuda_desc.struct_size first");
+
+_Static_assert(offsetof(anira_gl_desc, struct_size) == 0, "anira_gl_desc.struct_size first");
+
+_Static_assert(offsetof(anira_vulkan_desc, struct_size) == 0, "anira_vulkan_desc.struct_size first");
+
+_Static_assert(offsetof(anira_metal_desc, struct_size) == 0, "anira_metal_desc.struct_size first");
+
+_Static_assert(offsetof(anira_d3d12_desc, struct_size) == 0, "anira_d3d12_desc.struct_size first");
+
+_Static_assert(offsetof(anira_webgpu_desc, struct_size) == 0, "anira_webgpu_desc.struct_size first");
 
 int main(void) {
     printf("struct anira_error size %u align %u\n", (unsigned)sizeof(anira_error), (unsigned)_Alignof(anira_error));
