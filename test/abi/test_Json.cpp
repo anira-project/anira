@@ -198,7 +198,9 @@ TEST(AbiJsonModel, FromFileUsesTheFilesDirectoryAsBaseDir) {
     anira_error err = ANIRA_ERROR_INIT;
     ASSERT_EQ(anira_model_config_from_json_file(file.string().c_str(), &config, &err), ANIRA_OK)
         << err.message;
-    EXPECT_EQ(config->m_models[0].m_path, (dir / "sub" / "m.onnx").lexically_normal().string());
+    // Resolved paths are joined in generic form: forward slashes on every platform.
+    EXPECT_EQ(config->m_models[0].m_path,
+              (dir / "sub" / "m.onnx").lexically_normal().generic_string());
     anira_model_config_destroy(config);
     config = nullptr;
     EXPECT_EQ(
