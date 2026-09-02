@@ -191,10 +191,10 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
     # anira and the fetched tanh-lib must pin the same tanh-tooling tag
     # (modules-version.cmake warns otherwise).
-    # v0.1.0 + the upstream container coverage of tanh-lab/tanh-lib#31 (which the
-    # trimmed test/utils container tests rely on) + tanh-tooling v0.2.7
-    # (tanh-lab/tanh-lib#34, the pre-release aware tanh_git_version this branch needs).
-    GIT_TAG 17cd716420c12d8de50460a96c3ae06e2a496325
+    # v0.2.0: the upstream container coverage of tanh-lab/tanh-lib#31 (which the trimmed
+    # test/utils container tests rely on), the self-contained TANH_API header (#35) and
+    # tanh-tooling v0.2.8 (#36), the same tooling tag this tree pins.
+    GIT_TAG 488ad6ab80aeaed2e7b9ebda70a92910b63d35f4
 )
 FetchContent_MakeAvailable(tanh-lib)
 
@@ -307,7 +307,9 @@ anira_generate_build_info(${PROJECT_NAME})
 # src/capi/capi_internal.h; the generated proc table makes a promised name without a
 # definition a link error.
 target_sources(${PROJECT_NAME} PRIVATE
+    src/capi/config.cpp
     src/capi/error.cpp
+    src/capi/ext_registry.cpp
     src/capi/log.cpp
     src/capi/version.cpp
 )

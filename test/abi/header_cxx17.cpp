@@ -2,6 +2,7 @@
 // strict flags with no anira define at all; the C headers never need C++20 (anira.hpp may).
 // Every header is included on purpose, so the include-cleaner check is off for the file.
 // NOLINTBEGIN(misc-include-cleaner)
+#include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/log.h>
@@ -30,6 +31,17 @@ static_assert(ANIRA_DTYPE_F32 == 0x00012002u, "DLPack float32");
     checks += desc.abi_version == ANIRA_ABI_VERSION ? 1 : 0;
     checks += std::strlen(record.message) == 7 ? 1 : 0;
     checks += ANIRA_ABI_VERSION_MINOR(ANIRA_ABI_VERSION) == ANIRA_ABI_MINOR ? 1 : 0;
+    const anira_ext_entry entry = ANIRA_EXT_ENTRY_INIT;
+    const anira_cuda_desc cuda = ANIRA_CUDA_DESC_INIT;
+    const anira_gl_desc gl = ANIRA_GL_DESC_INIT;
+    const anira_vulkan_desc vulkan = ANIRA_VULKAN_DESC_INIT;
+    const anira_metal_desc metal = ANIRA_METAL_DESC_INIT;
+    const anira_d3d12_desc d3d12 = ANIRA_D3D12_DESC_INIT;
+    const anira_webgpu_desc webgpu = ANIRA_WEBGPU_DESC_INIT;
+    checks += entry.header.version == 1u && entry.name == nullptr ? 1 : 0;
+    checks += cuda.ownership == ANIRA_OWNERSHIP_OWNED && gl.gbm == nullptr ? 1 : 0;
+    checks += vulkan.queue_family == 0u && metal.device == nullptr ? 1 : 0;
+    checks += d3d12.device == nullptr && webgpu.exec == ANIRA_EXEC_WORKER ? 1 : 0;
     return checks;
 }
 

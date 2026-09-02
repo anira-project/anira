@@ -680,7 +680,12 @@ def emit_layout_test(reg: dict) -> str:
                 else:
                     out.append(f'_Static_assert(sizeof(((const {name}*)0)->{f["name"]}) == {row["size"]}, "{name}.{f["name"]} size");')
         else:
-            out.append(f'_Static_assert(offsetof({name}, struct_size) == 0, "{name}.struct_size first");')
+            first = ent["fields"][0]
+            if first["name"] == "struct_size":
+                out.append(f'_Static_assert(offsetof({name}, struct_size) == 0, "{name}.struct_size first");')
+            else:
+                out.append(f'_Static_assert(offsetof({name}, {first["name"]}) == 0, "{name}.{first["name"]} (an anira_ext_header) first");')
+                out.append(f'_Static_assert(offsetof({name}, {first["name"]}.struct_size) == 0, "{name}: struct_size first through the header");')
             if ent.get("callback_descriptor"):
                 out.append(f'_Static_assert(offsetof({name}, abi_version) == 4, "{name}.abi_version second");')
                 out.append(f'_Static_assert(offsetof({name}, user_data) == 8, "{name}.user_data third");')

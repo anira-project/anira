@@ -16,7 +16,9 @@
 #       - <P>_BUILDING (PRIVATE) while compiling the target; <P>_STATIC (PUBLIC) when the
 #         target is a static library (OBJECT libraries follow BUILD_SHARED_LIBS). The
 #         library's export header selects on these: <P>_STATIC → empty macro,
-#         <P>_BUILDING → THL_DECL_EXPORT, else THL_DECL_IMPORT (tanh/core/ExportMacros.h).
+#         <P>_BUILDING → the platform's export decoration (dllexport /
+#         visibility("default")), else the import decoration; each library's own
+#         export header spells the selector.
 #         Omit EXPORT_PREFIX for a plugin/module or executable that has no export macro.
 #       - -fno-gnu-unique for GNU C++ on ELF: GCC binds exported vague-linkage data as
 #         STB_GNU_UNIQUE, which glibc answers by never unloading the object (NODELETE)

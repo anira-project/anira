@@ -4,6 +4,7 @@
  * with no anira define at all, exercising each _INIT initializer and the macros a C host
  * uses. The per-file wrappers test/abi/CMakeLists.txt generates cover self-containment.
  */
+#include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/log.h>
@@ -46,5 +47,30 @@ int anira_header_c_probe(void) {
     checks += ANIRA_MAX_RANK == 8 ? 1 : 0;
     checks += ANIRA_DYNAMIC == ANIRA_UNBOUNDED ? 1 : 0;
     checks += (int)ANIRA_ANCHOR_FIRST_STREAMED == -1 ? 1 : 0;
+
+    {
+        anira_ext_entry entry = ANIRA_EXT_ENTRY_INIT;
+        anira_cuda_desc cuda = ANIRA_CUDA_DESC_INIT;
+        anira_gl_desc gl = ANIRA_GL_DESC_INIT;
+        anira_vulkan_desc vulkan = ANIRA_VULKAN_DESC_INIT;
+        anira_metal_desc metal = ANIRA_METAL_DESC_INIT;
+        anira_d3d12_desc d3d12 = ANIRA_D3D12_DESC_INIT;
+        anira_webgpu_desc webgpu = ANIRA_WEBGPU_DESC_INIT;
+        entry.name = "forward";
+        checks += entry.header.struct_size == sizeof(anira_ext_entry) ? 1 : 0;
+        checks += entry.header.version == 1u ? 1 : 0;
+        checks +=
+            cuda.struct_size == sizeof(anira_cuda_desc) && cuda.ownership == ANIRA_OWNERSHIP_OWNED
+                ? 1
+                : 0;
+        checks +=
+            gl.struct_size == sizeof(anira_gl_desc) && gl.threads == ANIRA_GL_CALLER_THREAD ? 1 : 0;
+        checks += vulkan.struct_size == sizeof(anira_vulkan_desc) && vulkan.device == NULL ? 1 : 0;
+        checks += metal.struct_size == sizeof(anira_metal_desc) ? 1 : 0;
+        checks += d3d12.struct_size == sizeof(anira_d3d12_desc) ? 1 : 0;
+        checks +=
+            webgpu.struct_size == sizeof(anira_webgpu_desc) && webgpu.exec == ANIRA_EXEC_WORKER ? 1
+                                                                                                : 0;
+    }
     return checks;
 }
