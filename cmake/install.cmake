@@ -40,6 +40,12 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/anira
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT dev
 )
+# The configure-time header (cmake/build-info.cmake) lives in the build tree; it lands
+# in the same layout as the committed abi headers.
+install(FILES "${ANIRA_GENERATED_INCLUDE_DIR}/anira/abi/build_info.h"
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/anira/abi
+    COMPONENT dev
+)
 
 # install the target and create export-set
 # GNUInstallDirs layout: shared libraries into the libdir; on Windows the DLL is a

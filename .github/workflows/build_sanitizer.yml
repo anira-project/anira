@@ -28,6 +28,7 @@ on:
   pull_request:
     branches:
       - main
+      - v3
   merge_group:
   workflow_call:
   workflow_dispatch:

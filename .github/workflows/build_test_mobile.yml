@@ -20,6 +20,7 @@ on:
   pull_request:
     branches:
       - main
+      - v3
 
 env:
   SCCACHE_GHA_ENABLED: "true"

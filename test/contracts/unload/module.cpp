@@ -56,28 +56,28 @@ struct ThrowingProcessor : public BackendBase {
 
 extern "C" {
 
-void* anira_test_create(void) {
+void* unloadtest_create(void) {
     try {
         return new Instance();
     } catch (const std::exception&) { return nullptr; }
 }
 
-void anira_test_prepare(void* instance) {
+void unloadtest_prepare(void* instance) {
     static_cast<Instance*>(instance)->m_handler.prepare(HostConfig(k_block_size, k_sample_rate));
 }
 
-void anira_test_process(void* instance, int num_blocks) {
+void unloadtest_process(void* instance, int num_blocks) {
     auto* i = static_cast<Instance*>(instance);
     for (int block = 0; block < num_blocks; ++block) {
         i->m_handler.process(i->m_buffer.get_array_of_write_pointers(), k_block_size);
     }
 }
 
-void anira_test_destroy(void* instance) {
+void unloadtest_destroy(void* instance) {
     delete static_cast<Instance*>(instance);
 }
 
-int anira_test_create_throwing(void) {
+int unloadtest_create_throwing(void) {
     InferenceConfig inference_config = make_inference_config();
     PrePostProcessor pp_processor(inference_config);
     ThrowingProcessor throwing_processor(inference_config);
@@ -90,27 +90,27 @@ int anira_test_create_throwing(void) {
     return 0;
 }
 
-unsigned int anira_test_num_inference_threads(void) {
+unsigned int unloadtest_num_inference_threads(void) {
     return Context::get_num_inference_threads();
 }
 
-int anira_test_has_inference_threads(void) {
+int unloadtest_has_inference_threads(void) {
     return Context::has_inference_threads() ? 1 : 0;
 }
 
-int anira_test_num_sessions(void) {
+int unloadtest_num_sessions(void) {
     return Context::get_num_sessions();
 }
 
-int anira_test_has_core(void) {
+int unloadtest_has_core(void) {
     return Context::has_core() ? 1 : 0;
 }
 
-void anira_test_shutdown(void) {
+void unloadtest_shutdown(void) {
     Context::shutdown();
 }
 
-void anira_test_leak_thread(void) {
+void unloadtest_leak_thread(void) {
     // SpinBackoff (the configuration's default): the thread wakes every <= 100 us, so
     // it runs into the unmapped code within a millisecond of the unload.
     InferenceThread* leaked = Context::make_inference_thread().release();

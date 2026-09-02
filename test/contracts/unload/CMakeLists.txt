@@ -27,7 +27,7 @@ set_target_properties(anira_unload_module PROPERTIES
 # macOS a static anira with ExecuTorch force-loads archives ld64 cannot hide otherwise.
 # The anira_exports check below asserts the result.
 tanh_apply_symbol_policy(anira_unload_module)
-tanh_set_export_allowlist(anira_unload_module SYMBOL anira_test_*)
+tanh_set_export_allowlist(anira_unload_module SYMBOL unloadtest_*)
 
 add_executable(anira_unload_test test_LibraryUnload.cpp)
 set_target_properties(anira_unload_test PROPERTIES
@@ -109,9 +109,13 @@ gtest_discover_tests(anira_unload_test
 # symbol and, with a static anira, nothing of namespace anira either. See the
 # symbol-policy notes in the top-level CMakeLists.txt. On PE, which cannot interpose,
 # the dllexports LibTorch's headers and the LiteRT/TFLite archives force are tolerated.
+# ALLOW_REGEX admits the C entry points of the 3.x line (anira_*, extern "C") on the
+# shared library; on a static-leg module every such export is reported as a leak,
+# which is why the module's own entry points are unloadtest_*, not anira_test_*.
 tanh_add_export_check(NAME anira_exports
     LIBRARY anira MODULE anira_unload_module
     NAMESPACES anira
+    ALLOW_REGEX "^_?anira_[a-z0-9_]+$"
     FORBID_NAMESPACES Ort onnxruntime torch c10 caffe2 executorch tflite litert flatbuffers Eigen absl thl
     FORBID_PREFIXES Ort OrtApi xnn_ pthreadpool_ cpuinfo_ kai_ TfLite LiteRt
     TOLERATE_REGEX_PE "@(torch|c10|caffe2)@@" "^(TfLite|LiteRt)")

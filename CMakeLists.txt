@@ -48,7 +48,10 @@ option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for backend integrit
 # ==============================================================================
 
 include(cmake/tanh/git-version.cmake)
-tanh_git_version(${CMAKE_CURRENT_SOURCE_DIR})
+# The 3.x line names itself after its own tags only: this branch also reaches the 2.x
+# tags, and `git describe` would otherwise pick whichever is fewer commits away.
+# Without a reachable v3 tag the build is 0.0.0+g<hash> (ABI 0.0, cmake/build-info.cmake).
+tanh_git_version(${CMAKE_CURRENT_SOURCE_DIR} MATCH "v3*")
 set(PROJECT_VERSION_SHORT "${TANH_VERSION_SHORT}")
 set(PROJECT_VERSION_FULL "${TANH_VERSION_FULL}")
 
@@ -59,6 +62,11 @@ set(PROJECT_VERSION_FULL "${TANH_VERSION_FULL}")
 set (PROJECT_NAME anira)
 
 project (${PROJECT_NAME} VERSION ${PROJECT_VERSION_SHORT})
+
+# ANIRA_ABI_MAJOR / ANIRA_ABI_MINOR from the tag (rules in cmake/build-info.cmake); the
+# generated <anira/abi/build_info.h> is attached to the library target below.
+include(cmake/build-info.cmake)
+anira_compute_abi_version()
 
 # Platform axes (cmake/tanh/platform.cmake): TANH_OPERATING_SYSTEM, TANH_BINARY_FORMAT
 # (ELF | Mach-O | PE | Wasm), TANH_IOS_PLATFORM. Every OS/format decision below keys on
@@ -183,9 +191,10 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
     # anira and the fetched tanh-lib must pin the same tanh-tooling tag
     # (modules-version.cmake warns otherwise).
-    # v0.1.0 + the upstream container coverage of tanh-lab/tanh-lib#31, which the
-    # trimmed test/utils container tests rely on.
-    GIT_TAG 751b2b19a27d06a4d817e710008ce076452910bc
+    # v0.1.0 + the upstream container coverage of tanh-lab/tanh-lib#31 (which the
+    # trimmed test/utils container tests rely on) + tanh-tooling v0.2.7
+    # (tanh-lab/tanh-lib#34, the pre-release aware tanh_git_version this branch needs).
+    GIT_TAG 17cd716420c12d8de50460a96c3ae06e2a496325
 )
 FetchContent_MakeAvailable(tanh-lib)
 
@@ -243,7 +252,9 @@ FetchContent_MakeAvailable(nlohmann_json)
 add_library(${PROJECT_NAME})
 set_target_properties(${PROJECT_NAME} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
 tanh_apply_symbol_policy(${PROJECT_NAME} EXPORT_PREFIX ANIRA)
-tanh_set_export_allowlist(${PROJECT_NAME} NAMESPACE anira)
+# The exported surface: the C++ namespace and, from the 3.x line on, the C entry
+# points anira_* (extern "C", so the namespace pattern cannot cover them).
+tanh_set_export_allowlist(${PROJECT_NAME} NAMESPACE anira SYMBOL "anira_*")
 # tanh-lib's components are compiled hidden with an empty TANH_API when static, so the
 # objects of libtanh_core.a are already hidden inside a plugin that embeds a static
 # anira. Localizing the archive on the consumer's link on top of that is
@@ -287,6 +298,9 @@ target_include_directories(${PROJECT_NAME}
     PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
+# <anira/abi/build_info.h>: the version triple and the ABI pair, generated into the
+# build tree (never under include/, which the install rule copies verbatim).
+anira_generate_build_info(${PROJECT_NAME})
 
 # Shared between the anira target and the isolated ExecuTorch object target below —
 # the two must agree on every USE_* define (they shape the anira class layouts).
