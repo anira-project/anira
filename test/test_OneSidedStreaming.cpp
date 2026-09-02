@@ -240,7 +240,7 @@ void drive_generator_with_process(InferenceHandler& handler,
 struct LogRecordCollector {
     LogRecordCollector() {
         thl::Logger::set_callback([this](const thl::Logger::LogRecord& record) {
-            const std::lock_guard<std::mutex> lock(m_mutex);
+            const std::scoped_lock lock(m_mutex);
             m_messages += record.m_message;
             m_messages += '\n';
         });
@@ -253,7 +253,7 @@ struct LogRecordCollector {
 
     /// The messages collected so far, and starts over.
     std::string take() {
-        const std::lock_guard<std::mutex> lock(m_mutex);
+        const std::scoped_lock lock(m_mutex);
         std::string out;
         out.swap(m_messages);
         return out;
@@ -917,6 +917,9 @@ TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
         size_t received = 0;
         for (int attempt = 0; attempt < 5 && received != n; ++attempt) {
             model.pull(n, param);  // every call is a pull, a starved one included
+            // process() reports the popped count through the array it is handed and writes
+            // 0 for a starved pop, so a retry has to ask for the full block again.
+            num_output_samples[0] = n;
             auto const start = std::chrono::steady_clock::now();
             received = handler.process(input_tensors.data(),
                                        num_input_samples.data(),
@@ -941,6 +944,69 @@ TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
         global_index += n;
         model.m_popped += n;
     }
+    RecordProperty("starved_pops", starved);
+}
+
+// The retry path of the test above, made deterministic: an inference longer than the
+// deadline starves the first pop, and the retry must pull the block again with its full
+// demand. Regression for the intermittent CI failure "the pop gave up after 2 us": the
+// retry reused the count array that process() had just zeroed, asked for 0 samples,
+// collected the finished inferences in microseconds and reported 0 -- the starvation
+// itself was a loaded runner, tolerated by design, and the retry turned it into a failure.
+TEST(OneSidedStreamingStandalone, GeneratorStarvedBlockingPopIsRetriedWithFullDemand) {
+    InferenceConfig config = generator_config(/*session_exclusive=*/false,
+                                              /*blocking_ratio=*/1.f);
+    PrePostProcessor pp_processor(config);
+    ParamFillGeneratorBackend backend(config);
+    backend.m_sleep_us = 100000;  // longer than the 85 ms deadline: every first pop starves
+    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    handler.prepare(HostConfig(4096, 48000, false));
+
+    GeneratorModel model;
+    model.m_latency = handler.get_latency(0);
+
+    size_t const n = 4096;
+    long long const deadline_us = static_cast<long long>(n) * 1000000LL / 48000LL;  // 85 ms
+    int starved = 0;
+    size_t global_index = 0;
+    for (size_t block = 0; block < 4; ++block) {
+        float const param = 1.f + static_cast<float>(block);
+        std::vector<float> params{param, 0.f, 0.f, 0.f};
+        std::vector<float> out(n, -1.f);
+        std::array<const float*, 1> param_channels{params.data()};
+        std::array<float*, 1> out_channels{out.data()};
+        std::array<const float* const*, 1> input_tensors{param_channels.data()};
+        std::array<float* const*, 1> output_tensors{out_channels.data()};
+        std::array<size_t, 1> num_input_samples{4};
+        std::array<size_t, 1> num_output_samples{n};
+
+        size_t received = 0;
+        for (int attempt = 0; attempt < 5 && received != n; ++attempt) {
+            model.pull(n, param);
+            num_output_samples[0] = n;  // see GeneratorBlockingDeadlineUsesReference
+            auto const start = std::chrono::steady_clock::now();
+            received = handler.process(input_tensors.data(),
+                                       num_input_samples.data(),
+                                       output_tensors.data(),
+                                       num_output_samples.data())[0];
+            long long const elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                             std::chrono::steady_clock::now() - start)
+                                             .count();
+            if (received == n) { break; }
+            ASSERT_EQ(received, 0u) << "block " << block << ": a pop is all-or-nothing";
+            ASSERT_GE(elapsed_us, deadline_us / 2)
+                << "block " << block << ": a starved pop must have waited for the deadline";
+            ++starved;
+        }
+        ASSERT_EQ(received, n) << "block " << block << ": starved on five attempts in a row";
+        for (size_t s = 0; s < n; ++s) {
+            ASSERT_EQ(out[s], model.expected_sample(global_index + s))
+                << "block " << block << ", sample " << s;
+        }
+        global_index += n;
+        model.m_popped += n;
+    }
+    EXPECT_GT(starved, 0) << "a 100 ms inference must starve at least the first pop";
     RecordProperty("starved_pops", starved);
 }
 #endif  // ANIRA_WITH_RTSAN
