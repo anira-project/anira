@@ -172,6 +172,8 @@ struct anira_machine_config {
     std::optional<anira_cuda_desc> m_cuda;
     std::optional<anira_gl_desc> m_gl;
     std::optional<anira_vulkan_desc> m_vulkan;
+    int32_t m_vulkan_device = 0;  ///< the JSON file's "vulkan": {"device"} index; the descriptor
+                                  ///< has no slot for it
     std::optional<anira_metal_desc> m_metal;
     std::optional<anira_d3d12_desc> m_d3d12;
     std::optional<anira_webgpu_desc> m_webgpu;

@@ -311,6 +311,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/config.cpp
     src/capi/error.cpp
     src/capi/ext_registry.cpp
+    src/capi/json.cpp
     src/capi/log.cpp
     src/capi/version.cpp
 )

@@ -184,8 +184,95 @@ These are the other optional parameters that can be set in the :cpp:struct:`anir
 |                             | for the inference.                                     |
 +-----------------------------+--------------------------------------------------------+
 
-1.5. (Optional) Loading the Configuration from JSON
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1.5. Loading the configuration from JSON (version 3 files)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The 3.x line describes a deployment in three JSON files with three lifetimes, loaded
+through the C ABI (``anira/abi/config.h``): the **model file** travels with the model
+(``anira_model_config_from_json`` / ``anira_model_config_from_json_file``), the **machine
+file** lives on the box (``anira_machine_config_from_json``), and the **contract file** names
+the run (``anira_contract_from_json``). Loaders are dumb, strings to enums and numbers; every
+semantic check happens once at prepare, the same way for JSON and for code, so a document
+that loads may still be refused there. Every loader failure is ``ANIRA_ERROR_JSON`` with the
+key path and the offending value in ``anira_error::message`` (``models[0].engine: "foo" is
+not one of ...``); a key the loader does not own is stored as an extension and fails prepare by
+name (section 1b of the architecture document), so a typo never turns into a default.
+
+.. code-block:: json
+
+    {
+      "models": [
+        { "engine": "onnxruntime", "path": "model.onnx",
+          "tensor_names": { "audio_in": "input_0", "mask_out": "output_0" } },
+        { "engine": "libtorch", "path": "model.pt", "entry": { "name": "forward_streaming" } }
+      ],
+      "default_engine": "onnxruntime",
+      "state": "stateless",
+      "max_instances": 4,
+      "anchor": { "output": "mask_out" },
+      "inputs": [
+        { "name": "audio_in", "dtype": "float32", "role": "streamed",
+          "axes": [ ["batch", 1], ["channel", 2], ["time", "dynamic"] ],
+          "window": { "min": 2048, "max": 8192 }, "context": 1024 }
+      ],
+      "outputs": [
+        { "name": "mask_out", "role": "streamed",
+          "axes": [ ["batch", 1], ["channel", 2], ["time", "dynamic"] ],
+          "window": { "min": 2048, "max": 8192 }, "context": 1024, "latency": 512 }
+      ]
+    }
+
+- ``models[]``: one entry per engine, tagged by ``engine`` alone (``onnxruntime``,
+  ``libtorch``, ``tflite``, ``litert``, ``executorch``, or the reverse-URI name of a custom
+  engine); relative ``path`` values resolve against the file's directory (``from_json_file``)
+  or the ``base_dir`` argument; ``tensor_names`` maps canonical names to the engine's;
+  ``entry`` is the extension that names the entry point (v2's ``model_function``).
+- ``inputs[]`` / ``outputs[]``: the tensor specs of section 2 — ``dtype``, ``role``
+  (``streamed``, ``buffer``, ``static``), tagged ``axes`` (an extent or ``"dynamic"``),
+  ``window`` (``min`` and ``max`` or ``"unbounded"``), ``context``, ``latency`` (outputs) and
+  ``time_ratio``.
+- ``anchor`` names the tensor the host geometry refers to; absent means the first streamed
+  tensor.
+
+The machine file carries ``num_threads`` (absent = the library default, ``0`` = bring your own
+threads), ``wait_strategy``, the ``log`` block (``level``, ``drain``, ``queue_capacity``,
+``drain_interval_ms``) and the device blocks ``cuda``, ``vulkan``, ``metal``, ``gl``,
+``d3d12`` and ``webgpu``, which imply that anira owns the device; borrowed handles are
+code-only and patched with the device setters afterwards. The contract file has exactly one
+root, ``{"hard": {...}}`` or ``{"async": {...}}``, with ``budget`` as ``"measured"`` or
+``{"ms": 1.8}``, ``warmup`` as ``"until_stable"``, ``"none"`` or ``{"fixed": 200}``, the
+geometry keys ``block_min`` / ``block_max`` / ``rate`` (optional; a plugin patches them from
+the host with ``anira_contract_hard_set_geometry``), and an optional top-level ``edge_cost``.
+
+.. code-block:: c
+
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_model_config* cfg = NULL;
+    anira_status st = anira_model_config_from_json_file("model.json", &cfg, &err);
+    if (ANIRA_FAILED(st)) { fprintf(stderr, "%s\n", err.message); return 1; }
+    /* ANIRA_SUCCESS_UPGRADED is a success: the file was a version 2 document */
+    anira_contract* legacy = NULL;
+    anira_model_config_take_legacy_contract(cfg, &legacy);   /* non-NULL after an upgrade */
+
+``anira_model_config_to_json`` and ``anira_machine_config_to_json`` write a handle back in
+version 3 spelling with a fixed key order (``(buf, cap, out_len)``,
+``ANIRA_ERROR_BUFFER_TOO_SMALL`` with the required length in ``out_len``); reading a version 2
+file and writing it out is the migration tool.
+
+**Version 2 documents.** All three loaders accept the version 2 document of the next section
+(recognised by its ``inference_config`` / ``context_config`` roots) and return
+``ANIRA_SUCCESS_UPGRADED``: ``model_data`` rows become ``models`` (``model_function`` becomes
+the ``entry`` extension), the universal ``tensor_shape`` entry and the ``processing_spec``
+become tensor specs (the trailing axis is ``time``, the axis carrying the channel count is
+``channel``, the window is the per-channel element count and the context that window minus
+the processing size; a size of ``0`` is a ``static`` tensor), and ``max_inference_time``,
+``warm_up`` and ``blocking_ratio`` are held back as a Hard contract that
+``anira_model_config_take_legacy_contract`` hands out (``anira_contract_from_json`` on the
+same document yields it directly). One warning is logged per process. Unlike the version 2
+loader below, nothing is silently dropped: a malformed entry is ``ANIRA_ERROR_JSON``.
+
+1.6. The version 2 JSON document (auto-upgraded)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Instead of constructing the :cpp:struct:`anira::InferenceConfig` (and the optional :cpp:struct:`anira::ContextConfig`) in C++, you can describe them in a JSON file and load them at runtime with :cpp:class:`anira::JsonConfigLoader`. This keeps model paths, tensor shapes and processing parameters out of the compiled binary, so you can swap models without recompiling.
 
@@ -251,7 +338,7 @@ Then load the file and move the configurations out of the loader:
     See the JUCE plugin example (``MODEL_TO_USE == 8``), which loads the RAVE model entirely from ``RaveFunkDrumConfig.json`` via :cpp:class:`anira::JsonConfigLoader`.
 
 .. note::
-    A malformed value is reported through the log and skipped — never fatal. An unparseable ``model_data`` or ``tensor_shape`` entry is dropped, an out-of-range or wrongly typed scalar falls back to its default, and only a configuration that still has model data, a tensor shape and ``max_inference_time`` yields an :cpp:struct:`anira::InferenceConfig`; anything less returns ``nullptr``, which the caller must check before dereferencing. :cpp:func:`anira::JsonConfigLoader::get_context_config` returns ``nullptr`` only when the document itself does not parse.
+    This is the behaviour of the version 2 C++ loader :cpp:class:`anira::JsonConfigLoader`, kept through the alpha releases of the 3.x line; the version 3 loaders above accept the same document and fail instead of skipping. A malformed value is reported through the log and skipped — never fatal. An unparseable ``model_data`` or ``tensor_shape`` entry is dropped, an out-of-range or wrongly typed scalar falls back to its default, and only a configuration that still has model data, a tensor shape and ``max_inference_time`` yields an :cpp:struct:`anira::InferenceConfig`; anything less returns ``nullptr``, which the caller must check before dereferencing. :cpp:func:`anira::JsonConfigLoader::get_context_config` returns ``nullptr`` only when the document itself does not parse.
 
 2. Pre and Post Processing
 --------------------------

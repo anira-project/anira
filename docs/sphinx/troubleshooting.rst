@@ -118,7 +118,7 @@ Wait Strategy Mismatch
 
 All anira instances in a process share one inference thread pool, and the pool's threads wait for work according to the :cpp:enum:`anira::WaitStrategy` of the *first* :cpp:struct:`anira::ContextConfig` the context was created with. A later instance that requests a different strategy has no effect — the warning tells you the originally configured strategy stays active. This is harmless (both strategies produce identical results), but the requested idle-CPU/latency characteristic is not the one in effect.
 
-**Solution**: Use the same ``wait_strategy`` in every :cpp:struct:`anira::ContextConfig` (and in the ``context_config`` block of every JSON configuration file) that the process loads.
+**Solution**: Use the same ``wait_strategy`` in every :cpp:struct:`anira::ContextConfig` (and in the ``context_config`` block of every version 2 JSON configuration file, or the ``wait_strategy`` key of every version 3 machine file) that the process loads.
 
 Thread Priority Issues
 ^^^^^^^^^^^^^^^^^^^^^^
