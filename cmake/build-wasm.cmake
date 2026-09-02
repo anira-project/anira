@@ -54,7 +54,7 @@ set(ANIRA_WASM_LINK_FLAGS "\
   -s ASSERTIONS=1 \
   -s NO_DISABLE_EXCEPTION_CATCHING \
   -s STACK_SIZE=33554432 \
-  -s EXPORTED_FUNCTIONS='[\"_free\",\"_malloc\"]' \
+  -s EXPORTED_FUNCTIONS='[\"_free\",\"_malloc\",\"_anira_drain_log\"]' \
   -s EXPORT_KEEPALIVE=1 \
   -s EXPORTED_RUNTIME_METHODS='[\"UTF8ToString\",\"HEAPU32\",\"HEAPF32\",\"stackSave\",\"stackRestore\"]' \
   ")

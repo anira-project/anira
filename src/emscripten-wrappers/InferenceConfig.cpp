@@ -29,14 +29,8 @@ const char* anira_get_version() {
     return ANIRA_VERSION;
 }
 
-// Forwards the records anira's real-time paths (process/push/pop, the inference
-// workers) queued through thl::Logger::rt to the log sinks. There is no drain thread
-// on the web, so the host pumps this from its message loop; returns the number of
-// records delivered. Not real-time safe.
-EMSCRIPTEN_KEEPALIVE
-size_t anira_drain_log() {
-    return anira::Context::drain_log();
-}
+// anira_drain_log() is a C ABI entry of the library itself (include/anira/abi/log.h,
+// src/capi/log.cpp); cmake/build-wasm.cmake exports it by name.
 
 // Debug helper
 EMSCRIPTEN_KEEPALIVE

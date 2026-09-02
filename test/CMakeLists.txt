@@ -101,6 +101,18 @@ anira_add_test_binary(test_handler
 	test_PrePostProcessor.cpp
 )
 
+# The C ABI (include/anira/abi/, src/capi/): version negotiation, status text, the
+# exception firewall and the log entries. test/abi/ also holds the ABI gates.
+anira_add_test_binary(test_abi
+	abi/test_Version.cpp
+	abi/test_Error.cpp
+	abi/test_Firewall.cpp
+	abi/test_Log.cpp
+)
+# capi_internal.h (the firewall probe) and the generated tables under src/capi/.
+target_include_directories(test_abi PRIVATE "${anira_SOURCE_DIR}/src")
+add_subdirectory(abi)
+
 # Header-isolation check: anira's public headers must compile with anira's own include
 # directory (plus those of its public dependencies — the queue, JSON and tanh-lib
 # headers the public headers include) and no engine include directory at all. The

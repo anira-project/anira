@@ -26,6 +26,13 @@ jobs:
           submodules: true
           fetch-depth: 0
 
+      # The committed C ABI files (headers, enums.ts, symbol lists, layout test) must
+      # match abi/anira.yml; this workflow has no path filter, so every PR gets it.
+      - name: check the generated C ABI files against abi/anira.yml
+        run: |
+          python3 -m pip install --user pyyaml
+          python3 tools/abi/gen.py --repo . --check
+
       # emcc emits the .d.ts during the build (--emit-tsd), so the pin must
       # precede it.
       - name: pin global typescript for emscripten --emit-tsd

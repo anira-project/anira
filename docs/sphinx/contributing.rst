@@ -164,6 +164,26 @@ top-level ``CMakeLists.txt``), so a checkout without a reachable v3 tag configur
 ``0.0.0`` with ABI ``0.0``; ``cmake/build-info.cmake`` documents how the tag becomes
 ``ANIRA_ABI_MAJOR``/``ANIRA_ABI_MINOR`` in the generated ``anira/abi/build_info.h``.
 
+The C ABI registry
+~~~~~~~~~~~~~~~~~~
+
+The C headers under ``include/anira/abi/`` are generated, never edited by hand. The
+single source of truth is ``abi/anira.yml``; ``python3 tools/abi/gen.py --repo . --write``
+(or the ``anira_abi_regen`` build target; needs ``pip install pyyaml``) validates the
+registry against the header conventions of ``docs/anira-v3-architecture.md`` and
+rewrites the headers, ``web/src/abi/enums.ts``, the symbol and wasm export lists, the
+tables under ``src/capi/generated/`` and ``test/abi/generated/``, ``abi/layout-<major>.txt``
+and the enum pages under ``docs/sphinx/api/enum/``. Commit the registry together with
+every regenerated file: the ``anira_abi_generate`` test and the ``build_web`` workflow run
+``gen.py --check`` and fail on any drift. ``gen.py --diff-against <git-ref>`` says whether
+the registry changes since a tag are appended (a minor or pre-release) or breaking (a
+major). The generated files carry a ``.clang-format`` with ``DisableFormat`` and a
+``NOLINTBEGIN(readability-identifier-naming)`` block, so the pinned root configs stay
+untouched. The C-side tests and gates live in ``test/abi/`` (the ``test_abi`` binary,
+``anira_abi_layout``, ``anira_header_c11`` / ``anira_header_cxx17`` /
+``anira_header_coexist``); a Tier-1 layout may change only in a commit that changes
+``ANIRA_ABI_MAJOR``, and ``anira_abi_layout_regen`` rewrites the committed table then.
+
 Reproducing CI locally
 ~~~~~~~~~~~~~~~~~~~~~~
 

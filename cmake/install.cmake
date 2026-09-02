@@ -39,6 +39,9 @@ unset(_anira_apple_rpaths)
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/anira
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     COMPONENT dev
+    # The nested tooling markers of the generated abi/ headers are not headers.
+    PATTERN ".clang-format" EXCLUDE
+    PATTERN ".clang-tidy" EXCLUDE
 )
 # The configure-time header (cmake/build-info.cmake) lives in the build tree; it lands
 # in the same layout as the committed abi headers.
