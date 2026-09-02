@@ -89,6 +89,8 @@ Install tree
 
 Anything a consumer needs — public headers, the exported target, tanh-lib's core component, backend runtimes — must be part of that tree.
 
+The ``ci-install-*`` presets build ONNX Runtime only. For an install tree with the default backend set, use the developer presets ``desktop-install-release`` / ``desktop-install-debug`` (``build/desktop/Install/<Config>``); without ``--prefix``, ``cmake --install`` places the tree in ``<build dir>/anira-<version>``.
+
 Code Style
 ~~~~~~~~~~
 
