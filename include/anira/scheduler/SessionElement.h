@@ -361,7 +361,11 @@ public:
                                   ///< triggered by arriving input samples. False for a generator
                                   ///< (no streamable input), whose inference is triggered by
                                   ///< output demand (see m_pending_pull_samples).
-    size_t m_num_structs = 0;  ///< Number of allocated thread-safe structures (for testing access)
+    size_t m_num_structs = 0;     ///< Number of allocated thread-safe structures: twice the
+                               ///< steady-state bound of LatencyCalculator::get_num_structs(), so
+                               ///< that the inferences a wait-free reset() strands until their
+                               ///< workers finish never starve the fresh schedule (for testing
+                               ///< access)
     std::vector<size_t> m_send_buffer_size;  ///< Calculated send buffer sizes (for testing access)
     std::vector<size_t> m_receive_buffer_size;  ///< Calculated receive buffer sizes (for testing
                                                 ///< access)

@@ -253,7 +253,6 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
     // re-resolved there.
     m_reference = host_config.resolve_reference(m_inference_config);
     m_input_driven = has_streamable_input();
-    float const reference_size = host_config.get_reference_size(m_inference_config);
     m_host_config = host_config;
 
     // Latency and inference-slot count in closed form (see LatencyCalculator): the
@@ -261,7 +260,11 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
     // host allows smaller buffers, the worst case over every smaller block size.
     LatencyCalculator const latency_calculator(m_inference_config, host_config);
     m_latency = latency_calculator.get_synced_output_latencies();
-    m_num_structs = latency_calculator.get_num_structs();
+    // Twice the steady-state bound: a wait-free reset() leaves every in-flight
+    // inference in its struct until the worker publishes completion (see
+    // Context::reclaim_stale_structs), while the fresh schedule already claims structs
+    // of its own. One pool drains, one pool serves, so a single reset never drops a hop.
+    m_num_structs = 2 * latency_calculator.get_num_structs();
 
     // Add the internal model latency to the latency
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {

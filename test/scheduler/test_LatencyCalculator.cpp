@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -158,32 +160,32 @@ OracleResult simulate(const OracleCase& c) {
 }
 
 InferenceConfig make_config(const OracleCase& c) {
-    std::vector<size_t> input_sizes{static_cast<size_t>(c.m_reference)};
-    std::vector<size_t> input_channels{1};
-    std::vector<size_t> output_channels(c.m_output_sizes.size(), 1);
+    std::vector<size_t> const input_sizes{static_cast<size_t>(c.m_reference)};
+    std::vector<size_t> const input_channels{1};
+    std::vector<size_t> const output_channels(c.m_output_sizes.size(), 1);
     std::vector<TensorShape> shapes;
     std::vector<std::vector<int64_t>> outputs;
+    outputs.reserve(c.m_output_sizes.size());
     for (size_t const size : c.m_output_sizes) {
         outputs.push_back({1, static_cast<int64_t>(std::max<size_t>(size, 1))});
     }
     shapes.emplace_back(std::vector<std::vector<int64_t>>{{1, c.m_reference}}, outputs);
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        shapes,
-        ProcessingSpec(input_channels, output_channels, input_sizes, c.m_output_sizes),
-        static_cast<float>(c.m_inference_samples) / 8.f,  // ms at 8000 Hz
-        0,
-        false,
-        static_cast<float>(c.m_beta_quarters) / 4.f,
-        c.m_n);
+    return {std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+            shapes,
+            ProcessingSpec(input_channels, output_channels, input_sizes, c.m_output_sizes),
+            static_cast<float>(c.m_inference_samples) / 8.f,  // ms at 8000 Hz
+            0,
+            false,
+            static_cast<float>(c.m_beta_quarters) / 4.f,
+            c.m_n};
 }
 
 HostConfig make_host(const OracleCase& c, bool smaller = false) {
     // p R / q reference samples per host block: exact in float for the cases below.
-    return HostConfig(
+    return {
         static_cast<float>(static_cast<double>(c.m_p * c.m_reference) / static_cast<double>(c.m_q)),
         8000.f,
-        smaller);
+        smaller};
 }
 
 std::vector<OracleCase> oracle_cases() {
@@ -230,7 +232,7 @@ std::vector<OracleCase> oracle_cases() {
 TEST(LatencyCalculatorClosedForm, EqualsTheEventSimulationForFixedBlocks) {
     size_t checked = 0;
     for (OracleCase const& c : oracle_cases()) {
-        InferenceConfig config = make_config(c);
+        InferenceConfig const config = make_config(c);
         LatencyCalculator const calculator(config, make_host(c));
         // kappa = inference_samples / R hop periods; the queue is unbounded from n on.
         if (!calculator.is_feasible()) {
@@ -261,11 +263,11 @@ TEST(LatencyCalculatorClosedForm, InfeasibleConfigIsFlagged) {
                        .m_beta_quarters = 0,
                        .m_n = 2,
                        .m_output_sizes = {64}};
-    InferenceConfig config = make_config(c);
+    InferenceConfig const config = make_config(c);
     EXPECT_FALSE(LatencyCalculator(config, make_host(c)).is_feasible());
     OracleCase fine = c;
     fine.m_inference_samples = 127;
-    InferenceConfig fine_config = make_config(fine);
+    InferenceConfig const fine_config = make_config(fine);
     EXPECT_TRUE(LatencyCalculator(fine_config, make_host(fine)).is_feasible());
 }
 
@@ -277,7 +279,7 @@ TEST(LatencyCalculatorClosedForm, SmallerBuffersEqualTheMaximumOverEveryBlockSiz
         // The brute force sweeps whole-sample blocks of the finest stream, so the largest
         // host block must itself be one of them.
         if ((c.m_p * 64) % c.m_q != 0) { continue; }
-        InferenceConfig config = make_config(c);
+        InferenceConfig const config = make_config(c);
         LatencyCalculator const smaller(config, make_host(c, true));
         if (!smaller.is_feasible()) { continue; }
 
@@ -325,7 +327,7 @@ TEST(LatencyCalculatorClosedForm, LargeSmallerBufferSweepIsImmediate) {
     // greatest relative block size down to 1 and stalled above 2^24. This block is 2^25
     // samples of a 1-sample control input; the closed form evaluates a handful of
     // breakpoints instead.
-    InferenceConfig config(
+    InferenceConfig const config(
         std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
         std::vector<TensorShape>{TensorShape({{1, 1}}, {{1, 1}})},
         ProcessingSpec({1}, {1}, {1}, {1}),
@@ -344,7 +346,7 @@ TEST(LatencyCalculatorClosedForm, LargeSmallerBufferSweepIsImmediate) {
 
 TEST(LatencyCalculatorClosedForm, LatencyIsUniformInHopsAcrossOutputs) {
     // Two outputs of different hop: the float latency is P_i * Lambda for both.
-    InferenceConfig config(
+    InferenceConfig const config(
         std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
         std::vector<TensorShape>{TensorShape({{1, 256}}, {{1, 2048}, {1, 3}})},
         ProcessingSpec({1}, {1, 1}, {256}, {2048, 3}),
@@ -364,7 +366,7 @@ TEST(LatencyCalculatorClosedForm, LatencyIsUniformInHopsAcrossOutputs) {
 }
 
 TEST(LatencyCalculatorClosedForm, RejectsAnEmptyHostConfig) {
-    InferenceConfig config(
+    InferenceConfig const config(
         std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
         std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
         40.f,

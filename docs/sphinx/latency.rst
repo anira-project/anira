@@ -98,6 +98,8 @@ The same recursion bounds the number of inferences that are submitted but not ye
 
 With a blocking ratio that covers the inference time this is 1: the result is collected in the callback that submitted it.
 
+The session allocates twice this many structures. :cpp:func:`anira::InferenceHandler::reset` is wait-free: it does not wait for in-flight inferences but marks them stale, and each keeps its structure until its worker publishes completion. Meanwhile the fresh schedule needs :math:`S` structures of its own, so one pool drains while the other serves and a reset never drops a hop.
+
 Adaptive buffer handling
 ------------------------
 

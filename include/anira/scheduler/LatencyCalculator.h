@@ -68,7 +68,9 @@ namespace anira {
  * @f[
  *   S = \max_{m \ge 0} \left[ \lceil (d_m + 1)\rho \rceil - m n \right],
  * @f]
- * which is the number of ThreadSafeStructs the session allocates (get_num_structs()).
+ * the steady-state slot count (get_num_structs()); the session allocates twice as many
+ * ThreadSafeStructs so that a wait-free reset, which strands the in-flight inferences
+ * in their slots until the workers finish, never starves the fresh schedule.
  *
  * @par allow_smaller_buffers
  * The host may then use any block of @f$j@f$ samples of the finest stream,
@@ -146,7 +148,12 @@ public:
     std::vector<unsigned int> get_synced_output_latencies() const;
 
     /**
-     * @brief The number of ThreadSafeStructs the session needs
+     * @brief The steady-state number of inference slots, @f$S@f$
+     *
+     * The maximum number of inferences submitted but not yet collected at any callback.
+     * SessionElement allocates twice this many ThreadSafeStructs: a wait-free reset
+     * leaves the in-flight inferences in their slots until the workers finish, while
+     * the fresh schedule needs @f$S@f$ slots of its own.
      *
      * @return Maximum number of inferences in flight at any callback, @f$S@f$
      */
