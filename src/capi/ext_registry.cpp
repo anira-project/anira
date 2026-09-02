@@ -89,10 +89,14 @@ const std::vector<ExtRow>& ext_rows() {
 const std::vector<ExtConsumer>& ext_consumers() {
     static const std::vector<ExtConsumer> k_consumers = {
 #ifdef USE_LIBTORCH
-        {"LibTorchAdapter", ANIRA_ENGINE_LIBTORCH, {"model:entry"}},
+        {.m_name = "LibTorchAdapter",
+         .m_engine = ANIRA_ENGINE_LIBTORCH,
+         .m_consumed = {"model:entry"}},
 #endif
 #ifdef USE_EXECUTORCH
-        {"ExecuTorchAdapter", ANIRA_ENGINE_EXECUTORCH, {"model:entry"}},
+        {.m_name = "ExecuTorchAdapter",
+         .m_engine = ANIRA_ENGINE_EXECUTORCH,
+         .m_consumed = {"model:entry"}},
 #endif
     };
     return k_consumers;
