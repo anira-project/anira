@@ -58,8 +58,11 @@ described in section 1 of the :doc:`usage` guide.
    * - ``TensorShape`` (one shape list per backend)
      - One ``anira_tensor_spec`` per tensor with tagged axes
        (``anira_tensor_spec_set_axis``), added with ``anira_model_config_add_input`` /
-       ``add_output``; the spec is shared by every model entry and its axis order is the
-       model's memory order.
+       ``add_output``, shared by every model entry. A backend whose export holds the axes in
+       another order (the channels-last TensorFlow rows of the CNN, HybridNN and StatefulRNN
+       configs) gets a per-entry layout: ``anira_model_config_set_tensor_layout(cfg, i,
+       canonical, axes, ndim)`` with the spec axis at each of the file's positions, e.g.
+       ``{0, 2, 1}`` for ``{1, 15380, 1}`` against a spec ``{1, 1, 15380}``.
    * - ``ProcessingSpec::preprocess_input_channels`` / ``postprocess_output_channels``
      - The extent of the tensor's ``ANIRA_AXIS_CHANNEL`` axis.
    * - ``ProcessingSpec::preprocess_input_size`` / ``postprocess_output_size`` (the hop)
@@ -91,8 +94,8 @@ described in section 1 of the :doc:`usage` guide.
        ``anira_contract_hard_set_geometry``; ``allow_smaller_buffers`` is
        ``block_min = 1`` against ``block_min == block_max``.
    * - ``HostConfig{tensor_index, tensor_is_input}`` (the reference stream)
-     - ``anira_model_config_set_anchor(cfg, index, is_input)``;
-       ``ANIRA_ANCHOR_FIRST_STREAMED`` is the 2.x default.
+     - ``anira_model_config_set_anchor(cfg, canonical)`` with the tensor's canonical name;
+       ``NULL`` is the 2.x default (the first streamable tensor).
    * - ``InferenceHandler::set_inference_backend`` (the starting backend)
      - ``anira_model_config_set_default_engine``; switching at run time stays a handler call.
 
@@ -159,9 +162,12 @@ entry is ``ANIRA_ERROR_JSON`` with the key path in ``anira_error::message``.
    * - ``model_data[].model_function``
      - ``models[].entry.name``.
    * - ``tensor_shape`` (the universal entry, the flat single-tensor shorthand, ``"UNIVERSAL"``)
-     - ``inputs[].axes`` / ``outputs[].axes``: the trailing axis is ``time``, the axis carrying
-       the channel count is ``channel``, every other axis is ``any``. A per-backend entry that
-       differs from the universal one is ``ANIRA_ERROR_JSON``.
+     - ``inputs[].axes`` / ``outputs[].axes`` from the universal entry (or the first one): the
+       axis carrying the per-channel element count is ``time`` (the trailing axis when none
+       does), the axis carrying the channel count is ``channel``, every other axis is ``any``.
+       A per-backend entry that holds the same axes in another order becomes a ``layout`` in
+       the ``tensors`` record of that backend's model entries; one that changes an extent other
+       than 1 is ``ANIRA_ERROR_JSON``.
    * - ``processing_spec.preprocess_input_channels``, ``postprocess_output_channels``
      - The extent of the ``channel`` axis.
    * - ``processing_spec.preprocess_input_size``, ``postprocess_output_size``

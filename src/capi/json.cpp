@@ -31,6 +31,7 @@
 #include "capi_internal.h"
 #include "ext_registry.h"
 #include "handles.h"
+#include "layout.h"
 
 using anira::capi::StatusError;
 using anira::capi::translate_exception;
@@ -385,9 +386,109 @@ void set_engine_from_json(const Json& node,
     engine_id = word;
 }
 
+// models[].tensors.<canonical>.layout: spec axis indices and "insert" (ANIRA_AXIS_INSERT).
+std::vector<uint32_t> parse_layout(const Json& node, const std::string& path) {
+    require_array(node, path);
+    std::vector<uint32_t> axes;
+    axes.reserve(node.size());
+    for (size_t k = 0; k < node.size(); ++k) {
+        const std::string item_path = index(path, k);
+        if (node[k].is_string()) {
+            if (node[k].get<std::string>() != "insert") {
+                fail_json(item_path, R"(a spec axis index or "insert", got )" + node[k].dump());
+            }
+            axes.push_back(ANIRA_AXIS_INSERT);
+        } else {
+            axes.push_back(require_u32(node[k], item_path));
+        }
+    }
+    std::string why;
+    if (!anira::capi::valid_layout_shape(axes, &why)) { fail_json(path, why); }
+    return axes;
+}
+
+Json layout_to_json(const std::vector<uint32_t>& axes) {
+    Json array = Json::array();
+    for (const uint32_t axis : axes) {
+        if (axis == ANIRA_AXIS_INSERT) {
+            array.push_back("insert");
+        } else {
+            array.push_back(axis);
+        }
+    }
+    return array;
+}
+
+// models[].tensors.<canonical>: the export's name as a string, or {"name", "layout"}.
+void load_tensor_record(const Json& node,
+                        const std::string& path,
+                        anira::capi::TensorBinding& binding) {
+    if (node.is_string()) {
+        binding.m_name = node.get<std::string>();
+        if (binding.m_name.empty()) { fail_json(path, "must not be empty"); }
+        return;
+    }
+    require_object(node, path);
+    for (const auto& [key, value] : node.items()) {
+        const std::string key_path = child(path, key.c_str());
+        if (key == "name") {
+            binding.m_name = require_string(value, key_path);
+            if (binding.m_name.empty()) { fail_json(key_path, "must not be empty"); }
+        } else if (key == "layout") {
+            binding.m_layout = parse_layout(value, key_path);
+        } else {
+            fail_json(key_path, R"(unknown key; a tensor record has "name" and "layout")");
+        }
+    }
+    if (binding.m_name.empty() && binding.m_layout.empty()) {
+        fail_json(path, "an empty tensor record");
+    }
+}
+
+Json tensor_record_to_json(const anira::capi::TensorBinding& binding) {
+    if (binding.m_layout.empty()) { return binding.m_name; }
+    Json object = Json::object();
+    if (!binding.m_name.empty()) { object["name"] = binding.m_name; }
+    object["layout"] = layout_to_json(binding.m_layout);
+    return object;
+}
+
+void write_tensor_records(Json& object, const anira::capi::ModelEntry& entry) {
+    if (entry.m_tensors.empty()) { return; }
+    Json records = Json::object();
+    for (const auto& [canonical, binding] : entry.m_tensors) {
+        records[canonical] = tensor_record_to_json(binding);
+    }
+    object["tensors"] = records;
+}
+
+// Canonical names are unique across both sides; the anchor and the tensor records refer to a
+// tensor by bare name.
+void check_spec_names(const anira_model_config& cfg) {
+    std::vector<std::string> seen;
+    const auto check = [&seen](const std::vector<anira_tensor_spec>& specs, const char* side) {
+        for (size_t i = 0; i < specs.size(); ++i) {
+            for (const std::string& name : seen) {
+                if (name == specs[i].m_name) {
+                    fail_json(child(index(side, i), "name"),
+                              "\"" + name + "\" is already the name of another tensor");
+                }
+            }
+            seen.push_back(specs[i].m_name);
+        }
+    };
+    check(cfg.m_inputs, "inputs");
+    check(cfg.m_outputs, "outputs");
+    if (!cfg.m_anchor.empty()) {
+        bool found = false;
+        for (const std::string& name : seen) { found = found || name == cfg.m_anchor; }
+        if (!found) {
+            fail_json("anchor", "\"" + cfg.m_anchor + "\" names no input or output tensor");
+        }
+    }
+}
+
 void load_model_v3(const Json& root, const char* base_dir, anira_model_config& cfg) {
-    std::string anchor_side;
-    std::string anchor_name;
     for (const auto& [key, value] : root.items()) {
         const std::string path = key;
         if (key == "models") {
@@ -405,12 +506,18 @@ void load_model_v3(const Json& root, const char* base_dir, anira_model_config& c
                     } else if (ekey == "path") {
                         entry.m_path = resolve_path(require_string(evalue, ekey_path), base_dir);
                         if (entry.m_path.empty()) { fail_json(ekey_path, "must not be empty"); }
-                    } else if (ekey == "tensor_names") {
+                    } else if (ekey == "tensors") {
                         require_object(evalue, ekey_path);
-                        for (const auto& [canonical, engine_name] : evalue.items()) {
-                            entry.m_tensor_names[canonical] =
-                                require_string(engine_name, child(ekey_path, canonical.c_str()));
+                        for (const auto& [canonical, record] : evalue.items()) {
+                            if (canonical.empty()) { fail_json(ekey_path, "an empty tensor name"); }
+                            load_tensor_record(record,
+                                               child(ekey_path, canonical.c_str()),
+                                               entry.m_tensors[canonical]);
                         }
+                    } else if (ekey == "tensor_names") {
+                        fail_json(ekey_path,
+                                  R"(renamed: "tensors": { <canonical>: <export name> | )"
+                                  R"({ "name": ..., "layout": [...] } })");
                     } else {
                         set_ext_from_json(entry.m_ext, ekey, evalue, entry_path);
                     }
@@ -427,16 +534,8 @@ void load_model_v3(const Json& root, const char* base_dir, anira_model_config& c
             cfg.m_max_instances = require_u32(value, path);
             if (cfg.m_max_instances == 0) { fail_json(path, "must be at least 1"); }
         } else if (key == "anchor") {
-            require_object(value, path);
-            if (value.size() != 1) {
-                fail_json(path, R"(anchor is {"input": name} or {"output": name})");
-            }
-            const auto& item = value.items().begin();
-            anchor_side = item.key();
-            if (anchor_side != "input" && anchor_side != "output") {
-                fail_json(path, R"(anchor is {"input": name} or {"output": name})");
-            }
-            anchor_name = require_string(item.value(), child(path, anchor_side.c_str()));
+            cfg.m_anchor = require_string(value, path);
+            if (cfg.m_anchor.empty()) { fail_json(path, "must not be empty"); }
         } else if (key == "inputs" || key == "outputs") {
             require_array(value, path);
             std::vector<anira_tensor_spec>& specs = key == "inputs" ? cfg.m_inputs : cfg.m_outputs;
@@ -449,22 +548,7 @@ void load_model_v3(const Json& root, const char* base_dir, anira_model_config& c
             set_ext_from_json(cfg.m_ext, key, value, "");
         }
     }
-    if (!anchor_side.empty()) {
-        const std::vector<anira_tensor_spec>& specs =
-            anchor_side == "input" ? cfg.m_inputs : cfg.m_outputs;
-        bool found = false;
-        for (size_t i = 0; i < specs.size(); ++i) {
-            if (specs[i].m_name == anchor_name) {
-                cfg.m_anchor_index = static_cast<uint32_t>(i);
-                cfg.m_anchor_is_input = anchor_side == "input";
-                found = true;
-            }
-        }
-        if (!found) {
-            fail_json("anchor." + anchor_side,
-                      R"(")" + anchor_name + R"(" names no )" + anchor_side + " tensor");
-        }
-    }
+    check_spec_names(cfg);
 }
 
 // ---- v3 machine file (8.2) ----------------------------------------------------------------
@@ -823,10 +907,20 @@ void upgrade_spec(const std::vector<int64_t>& dims,
     if (hop > per_channel) {
         fail_json(path, "the processing size exceeds the tensor's per-channel element count");
     }
-    spec.m_axes[dims.size() - 1].m_tag = ANIRA_AXIS_TIME;
+    // Time: the last axis whose extent is the per-channel element count (the window), which is
+    // how a time-first export ({2048, 1, 1}) is told apart from a channels-first one; else the
+    // trailing axis. Channel: the last other axis carrying the channel count.
+    size_t time_axis = dims.size() - 1;
+    for (size_t i = dims.size(); i-- > 0;) {
+        if (dims[i] == per_channel) {
+            time_axis = i;
+            break;
+        }
+    }
+    spec.m_axes[time_axis].m_tag = ANIRA_AXIS_TIME;
     bool channel_found = false;
-    for (size_t i = dims.size() - 1; i-- > 0;) {
-        if (dims[i] == channels) {
+    for (size_t i = dims.size(); i-- > 0;) {
+        if (i != time_axis && dims[i] == channels) {
             spec.m_axes[i].m_tag = ANIRA_AXIS_CHANNEL;
             channel_found = true;
             break;
@@ -852,6 +946,17 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
     anira::capi::HardContract hard;
     bool has_contract_key = false;
 
+    // tensor_shape[] entries, decided after the loop: the universal entry (else the first) is
+    // the canonical spec list, every other entry a per-engine layout over it (section 8.4).
+    struct V2ShapeEntry {
+        std::string m_path;
+        bool m_universal = false;
+        anira_engine m_engine = ANIRA_ENGINE_NONE;
+        std::string m_engine_id;
+        ShapeList m_inputs;
+        ShapeList m_outputs;
+    };
+    std::vector<V2ShapeEntry> shape_entries;
     ShapeList inputs;
     ShapeList outputs;
     std::vector<int64_t> in_channels;
@@ -903,38 +1008,31 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
         } else if (key == "tensor_shape") {
             require_array(value, path);
             if (value.empty()) { fail_json(path, "must not be empty"); }
-            bool universal_seen = false;
+            shape_entries.reserve(value.size());
             for (size_t i = 0; i < value.size(); ++i) {
-                const std::string entry_path = index(path, i);
-                require_object(value[i], entry_path);
+                V2ShapeEntry shape_entry;
+                shape_entry.m_path = index(path, i);
+                require_object(value[i], shape_entry.m_path);
                 const auto in = value[i].find("input_shape");
                 const auto out = value[i].find("output_shape");
                 if (in == value[i].end() || out == value[i].end()) {
-                    fail_json(entry_path, "input_shape and output_shape are required");
+                    fail_json(shape_entry.m_path, "input_shape and output_shape are required");
                 }
-                const ShapeList entry_inputs =
-                    parse_v2_shape(*in, child(entry_path, "input_shape"));
-                const ShapeList entry_outputs =
-                    parse_v2_shape(*out, child(entry_path, "output_shape"));
+                shape_entry.m_inputs =
+                    parse_v2_shape(*in, child(shape_entry.m_path, "input_shape"));
+                shape_entry.m_outputs =
+                    parse_v2_shape(*out, child(shape_entry.m_path, "output_shape"));
                 const auto backend = value[i].find("inference_backend");
-                const bool universal =
-                    backend == value[i].end() ||
-                    require_string(*backend, child(entry_path, "inference_backend")) == "UNIVERSAL";
-                if (universal) {
-                    if (universal_seen) {
-                        fail_json(entry_path, "a second universal tensor_shape entry");
-                    }
-                    universal_seen = true;
-                    inputs = entry_inputs;
-                    outputs = entry_outputs;
-                } else if (inputs.empty() && outputs.empty()) {
-                    inputs = entry_inputs;
-                    outputs = entry_outputs;
-                } else if (entry_inputs != inputs || entry_outputs != outputs) {
-                    fail_json(entry_path,
-                              "differs from the universal tensor_shape entry; version 3 has one "
-                              "canonical spec per tensor");
+                const std::string backend_path = child(shape_entry.m_path, "inference_backend");
+                if (backend == value[i].end() ||
+                    require_string(*backend, backend_path) == "UNIVERSAL") {
+                    shape_entry.m_universal = true;
+                } else if (require_string(*backend, backend_path) == "CUSTOM") {
+                    shape_entry.m_engine_id = k_v2_custom_engine;
+                } else {
+                    shape_entry.m_engine = vocabulary(*backend, backend_path, k_engines_v2);
                 }
+                shape_entries.push_back(std::move(shape_entry));
             }
         } else if (key == "processing_spec") {
             require_object(value, path);
@@ -978,7 +1076,62 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
             set_ext_from_json(cfg.m_ext, key, value, base);
         }
     }
-    if (inputs.empty() || outputs.empty()) { fail_json(child(base, "tensor_shape"), "required"); }
+    if (shape_entries.empty()) { fail_json(child(base, "tensor_shape"), "required"); }
+    size_t canonical = 0;
+    bool universal_seen = false;
+    for (size_t i = 0; i < shape_entries.size(); ++i) {
+        if (!shape_entries[i].m_universal) { continue; }
+        if (universal_seen) {
+            fail_json(shape_entries[i].m_path, "a second universal tensor_shape entry");
+        }
+        universal_seen = true;
+        canonical = i;
+    }
+    inputs = shape_entries[canonical].m_inputs;
+    outputs = shape_entries[canonical].m_outputs;
+    // A per-engine entry that differs from the canonical one is a layout on that engine's
+    // rows: the same bytes, another axis order (section 5); anything else cannot be upgraded.
+    struct PendingLayout {
+        anira_engine m_engine;
+        std::string m_engine_id;
+        std::string m_tensor;
+        std::vector<uint32_t> m_axes;
+    };
+    std::vector<PendingLayout> pending_layouts;
+    for (size_t i = 0; i < shape_entries.size(); ++i) {
+        if (i == canonical) { continue; }
+        const V2ShapeEntry& shape_entry = shape_entries[i];
+        if (shape_entry.m_universal) { continue; }  // unreachable: the second one failed above
+        const auto derive = [&](const ShapeList& entry_shapes,
+                                const ShapeList& canonical_shapes,
+                                const char* side_key,
+                                const char* prefix) {
+            if (entry_shapes.size() != canonical_shapes.size()) {
+                fail_json(child(shape_entry.m_path, side_key),
+                          "lists " + std::to_string(entry_shapes.size()) + " tensors where " +
+                              shape_entries[canonical].m_path + " lists " +
+                              std::to_string(canonical_shapes.size()));
+            }
+            for (size_t t = 0; t < entry_shapes.size(); ++t) {
+                if (entry_shapes[t] == canonical_shapes[t]) { continue; }
+                const std::optional<std::vector<uint32_t>> axes =
+                    anira::capi::stable_fill_layout(canonical_shapes[t], entry_shapes[t]);
+                if (!axes.has_value()) {
+                    fail_json(index(child(shape_entry.m_path, side_key), t),
+                              "is not an axis layout of " + shape_entries[canonical].m_path +
+                                  "'s shape: the extents other than 1 differ (version 3 permutes "
+                                  "axes per engine and cannot reshape; write the version 3 "
+                                  "document by hand)");
+                }
+                pending_layouts.push_back(PendingLayout{.m_engine = shape_entry.m_engine,
+                                                        .m_engine_id = shape_entry.m_engine_id,
+                                                        .m_tensor = prefix + std::to_string(t),
+                                                        .m_axes = *axes});
+            }
+        };
+        derive(shape_entry.m_inputs, inputs, "input_shape", "input_");
+        derive(shape_entry.m_outputs, outputs, "output_shape", "output_");
+    }
     if (!in_channels.empty() && in_channels.size() != inputs.size()) {
         fail_json(child(base, "processing_spec.preprocess_input_channels"),
                   "one entry per input tensor");
@@ -1022,6 +1175,14 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
                      index(child(base, "tensor_shape.output_shape"), i),
                      spec);
         cfg.m_outputs.push_back(std::move(spec));
+    }
+    for (const PendingLayout& layout : pending_layouts) {
+        for (anira::capi::ModelEntry& row : cfg.m_models) {
+            const bool same_engine = layout.m_engine_id.empty()
+                                         ? (row.m_engine == layout.m_engine && !row.is_custom())
+                                         : row.m_engine_id == layout.m_engine_id;
+            if (same_engine) { row.m_tensors[layout.m_tensor].m_layout = layout.m_axes; }
+        }
     }
     static_cast<void>(sizes_given);
     static_cast<void>(has_contract_key);
@@ -1101,13 +1262,7 @@ Json model_to_json(const anira_model_config& cfg) {
         object["engine"] =
             entry.is_custom() ? entry.m_engine_id.c_str() : word_of(entry.m_engine, k_engines);
         if (!entry.m_path.empty()) { object["path"] = entry.m_path; }
-        if (!entry.m_tensor_names.empty()) {
-            Json names = Json::object();
-            for (const auto& [canonical, engine_name] : entry.m_tensor_names) {
-                names[canonical] = engine_name;
-            }
-            object["tensor_names"] = names;
-        }
+        write_tensor_records(object, entry);
         write_exts(object, entry.m_ext);
         models.push_back(object);
     }
@@ -1119,15 +1274,7 @@ Json model_to_json(const anira_model_config& cfg) {
     }
     root["state"] = word_of(cfg.m_state, k_states);
     root["max_instances"] = cfg.m_max_instances;
-    if (cfg.m_anchor_index != ANIRA_ANCHOR_FIRST_STREAMED) {
-        const std::vector<anira_tensor_spec>& specs =
-            cfg.m_anchor_is_input ? cfg.m_inputs : cfg.m_outputs;
-        if (cfg.m_anchor_index < specs.size()) {
-            Json anchor = Json::object();
-            anchor[cfg.m_anchor_is_input ? "input" : "output"] = specs[cfg.m_anchor_index].m_name;
-            root["anchor"] = anchor;
-        }
-    }
+    if (!cfg.m_anchor.empty()) { root["anchor"] = cfg.m_anchor; }
     Json inputs = Json::array();
     for (const anira_tensor_spec& spec : cfg.m_inputs) {
         inputs.push_back(spec_to_json(spec, false));

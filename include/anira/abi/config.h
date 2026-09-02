@@ -169,7 +169,10 @@ typedef struct anira_webgpu_desc {
 /**
  * @brief Creates a tensor spec: no axes yet, window 0/0/0, time ratio (0, 0) = derive, latency
  * 0.
- * @param name Canonical tensor name, UTF-8, copied; the model config maps it to engine names.
+ * @param name The canonical name: your name for this tensor, UTF-8, copied. Every other part of
+ *        the configuration refers to the tensor by it (the per-entry name and layout
+ *        records, the anchor, error messages); it is never handed to an engine. Unique
+ *        across the inputs and outputs of one model config.
  * @param dtype The model's true dtype (section 1).
  * @param role STREAMED, BUFFER or STATIC.
  * @param out Receives the handle on success.
@@ -942,11 +945,24 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_model_bytes(const anira_mod
                                                                  size_t* size);
 
 /**
- * @brief Maps a canonical tensor name to the engine's name for this entry (section 5).
+ * @brief Records what this entry's file calls the tensor you named canonical, and switches that
+ * tensor of this entry from positional binding (input slot i to the file's input i, the
+ * slot order being the add_input/add_output order; ONNX Runtime's session order, the
+ * primary subgraph's order on TFLite and LiteRT) to binding by that name. An entry
+ * without a record for a tensor binds it positionally. A name the engine cannot resolve,
+ * or an engine that binds only positionally on that side, fails prepare with
+ * ANIRA_ERROR_CONFIG naming what the file has. Together with
+ * anira_model_config_set_tensor_layout this is the per-entry tensor record, the JSON
+ * file's models[].tensors.
  * @param config The config.
  * @param model_index An entry.
- * @param canonical The spec's canonical name.
- * @param engine_name The name the engine's model uses for it; copied.
+ * @param canonical Your canonical name of the tensor (the spec's name); the spec may be added
+ *        later, the name is resolved at prepare.
+ * @param engine_name The export's name for that tensor, copied: ONNX Runtime the graph's input
+ *        or output name; TFLite and LiteRT the signature key ("args_0",
+ *        "output_0"), or the tensor name for a file without signatures; LibTorch
+ *        the method's argument name (inputs only); ExecuTorch the tensor name when
+ *        the export carries one.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an index out of range or a NULL or
  *         empty name.
  * @par Thread contract
@@ -957,6 +973,36 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_tensor_name(anira_model
                                                                      uint32_t model_index,
                                                                      const char* canonical,
                                                                      const char* engine_name);
+
+/**
+ * @brief The axis order in which this entry's file holds the tensor you named canonical, when
+ * it differs from the spec's (a TensorFlow export holding batch, time, channel where the
+ * spec says batch, channel, time is {0, 2, 1}). A spec axis left out must have extent 1.
+ * A layout that moves only axes of extent 1 is a view: the same bytes with other dims,
+ * at no cost. One that moves an axis of another extent is a transpose, refused at
+ * prepare in this pre-release with ANIRA_ERROR_NOT_SUPPORTED. Agreement with the spec's
+ * rank and extents is checked at prepare, and against the file where the engine reports
+ * its dims.
+ * @param config The config.
+ * @param model_index An entry.
+ * @param canonical Your canonical name of the tensor (the spec's name); resolved at prepare.
+ * @param axes ndim entries, copied: axes[k] is the spec axis (an index into
+ *        anira_tensor_spec_set_axis's order, each at most once) that this entry's file
+ *        holds at position k, or ANIRA_AXIS_INSERT for an axis of extent 1 the file has
+ *        and the spec does not. NULL with ndim 0 clears.
+ * @param ndim 1..ANIRA_MAX_RANK, or 0 to clear.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an index out of range, a NULL or empty
+ *         canonical, ndim > ANIRA_MAX_RANK, NULL axes with ndim > 0, a spec axis index >=
+ *         ANIRA_MAX_RANK that is not ANIRA_AXIS_INSERT, or a spec axis listed twice.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.1
+ */
+ANIRA_API anira_status ANIRA_CALL anira_model_config_set_tensor_layout(anira_model_config* config,
+                                                                       uint32_t model_index,
+                                                                       const char* canonical,
+                                                                       const uint32_t* axes,
+                                                                       uint32_t ndim);
 
 /**
  * @brief Sets an extension on one model entry (host "model"), e.g. anira_ext_entry.
@@ -997,10 +1043,13 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_model_ext_json(anira_mo
                                                                         anira_error* err);
 
 /**
- * @brief Appends an input tensor spec (copied; the caller keeps ownership of spec).
+ * @brief Appends an input tensor spec (copied; the caller keeps ownership of spec). The order
+ * of the add_input calls is the slot order an entry without a name record binds
+ * positionally.
  * @param config The config.
  * @param spec The spec; copied.
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec or a spec whose canonical
+ *         name an input or output of this config already has.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
@@ -1009,10 +1058,12 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_input(anira_model_confi
                                                                const anira_tensor_spec* spec);
 
 /**
- * @brief Appends an output tensor spec (copied).
+ * @brief Appends an output tensor spec (copied). The order of the add_output calls is the slot
+ * order an entry without a name record binds positionally.
  * @param config The config.
  * @param spec The spec; copied.
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec or a spec whose canonical
+ *         name an input or output of this config already has.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
@@ -1070,19 +1121,22 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_max_instances(anira_mod
                                                                        uint32_t max_instances);
 
 /**
- * @brief The anchor tensor the host geometry refers to (v2's HostConfig reference stream);
- * resolved at prepare.
+ * @brief The anchor: the streamed tensor whose Time axis is the model's clock. A Hard
+ * contract's block range and rate are counted in its elements, and every other streamed
+ * tensor's time ratio is stated against it (v2's HostConfig reference stream). Default:
+ * the first streamed input, or, for a model without one (a generator), the first
+ * streamed output. Resolved at prepare, where a name that is not a streamed tensor of
+ * this config fails with ANIRA_ERROR_CONFIG.
  * @param config The config.
- * @param index_or_first_streamed A tensor index, or ANIRA_ANCHOR_FIRST_STREAMED (default).
- * @param is_input Whether the index counts inputs (true) or outputs.
- * @return ANIRA_OK.
+ * @param canonical Your canonical name of a streamed tensor, copied; NULL or empty restores the
+ *        default.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_set_anchor(anira_model_config* config,
-                                                                uint32_t index_or_first_streamed,
-                                                                anira_bool is_input);
+                                                                const char* canonical);
 
 /**
  * @brief Sets an extension on the whole config (host "model_config").

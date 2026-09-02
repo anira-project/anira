@@ -10,16 +10,16 @@ namespace anira_test {
 inline constexpr const char* k_model_v3 = R"({
   "models": [
     { "engine": "onnxruntime", "path": "model.onnx",
-      "tensor_names": { "audio_in": "input_0", "mask_out": "output_0" } },
+      "tensors": { "audio_in": "input_0", "mask_out": "output_0" } },
     { "engine": "libtorch", "path": "model.pt",
-      "tensor_names": { "audio_in": "x", "mask_out": "y" },
+      "tensors": { "audio_in": { "name": "x" }, "gain": { "layout": [0, "insert"] } },
       "entry": { "name": "forward_streaming" } },
     { "engine": "de.tu-berlin.coreml", "path": "/abs/model.mlpackage" }
   ],
   "default_engine": "onnxruntime",
   "state": "stateless",
   "max_instances": 4,
-  "anchor": { "output": "mask_out" },
+  "anchor": "mask_out",
   "inputs": [
     { "name": "audio_in", "dtype": "float32", "role": "streamed",
       "axes": [ ["batch", 1], ["channel", 2], ["time", "dynamic"] ],

@@ -526,9 +526,11 @@ typedef enum anira_bytes_ownership {
 } anira_bytes_ownership;
 
 /**
- * @brief Anchor sentinel: the first Streamed tensor (the v2 HostConfig::k_first_streamable).
+ * @brief In the axes of anira_model_config_set_tensor_layout: an axis of extent 1 that the
+ * entry's file has and the spec does not (a TensorFlow export's rank-3 scalar against a
+ * rank-1 spec).
  */
-#define ANIRA_ANCHOR_FIRST_STREAMED 0xffffffffu
+#define ANIRA_AXIS_INSERT 0xffffffffu
 
 /**
  * @brief The state of an Async job.

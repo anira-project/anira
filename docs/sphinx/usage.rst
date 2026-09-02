@@ -62,9 +62,18 @@ added to a model config.
 1.1. Tensor specs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A tensor spec describes one input or output of the model: its name (the canonical name you
-use everywhere; the engine's own name is mapped per model entry), its data type
-(``ANIRA_DTYPE_F32``; the ``ANIRA_DTYPE_*`` constants of ``anira/abi/enums.h``) and its role:
+A tensor spec describes one input or output of the model: its **canonical name**, its data
+type (``ANIRA_DTYPE_F32``; the ``ANIRA_DTYPE_*`` constants of ``anira/abi/enums.h``) and its
+role.
+
+The canonical name is **your** name for the tensor. You choose it when you create the spec, and
+every other part of the configuration refers to the tensor by it: the per-entry tensor records
+of section 1.2, the anchor, error messages. It is never handed to an engine and need not match
+anything in any exported file; what an exported file calls the tensor is a separate,
+per-engine fact (section 1.2). Canonical names are unique across the inputs and outputs of one
+model config.
+
+The roles are:
 
 - ``ANIRA_ROLE_STREAMED``: has a Time axis that is consumed window by window, the audio case.
 - ``ANIRA_ROLE_STATIC``: no time semantics, one value per run, such as a gain or a
@@ -124,9 +133,17 @@ not here, so one config serves every build.
     anira_model_config_create(&cfg, &err);
 
     uint32_t i = 0;
-    anira_model_config_add_model_path(cfg, ANIRA_ENGINE_ONNXRUNTIME, "model.onnx", &i, &err);
-    anira_model_config_set_tensor_name(cfg, i, "audio_in", "input_0");   /* canonical -> engine */
     anira_model_config_add_model_path(cfg, ANIRA_ENGINE_LIBTORCH, "model.pt", &i, &err);
+    /* the TorchScript export takes (batch, channel, time), the spec's order: nothing to add */
+
+    anira_model_config_add_model_path(cfg, ANIRA_ENGINE_ONNXRUNTIME, "model.onnx", &i, &err);
+    /* your "audio_in" is what model.onnx calls "input.1": bind it by that name */
+    anira_model_config_set_tensor_name(cfg, i, "audio_in", "input.1");
+
+    anira_model_config_add_model_path(cfg, ANIRA_ENGINE_TFLITE, "model.tflite", &i, &err);
+    /* the TensorFlow export holds audio_in as (batch, time, channel): spec axes 0, 2, 1 */
+    static const uint32_t channels_last[3] = {0u, 2u, 1u};
+    anira_model_config_set_tensor_layout(cfg, i, "audio_in", channels_last, 3u);
 
     anira_model_config_add_input(cfg, in);      /* copied */
     anira_model_config_add_input(cfg, gain);
@@ -137,6 +154,31 @@ not here, so one config serves every build.
 
     anira_model_config_set_default_engine(cfg, ANIRA_ENGINE_ONNXRUNTIME);
 
+- **Tensor records: what the export calls a tensor, and how it holds its axes.** Every
+  engine's file may name and lay out a tensor differently; the spec is written once, and each
+  model entry carries one optional record per tensor, keyed by *your* canonical name, with two
+  optional fields:
+
+  - ``anira_model_config_set_tensor_name(cfg, i, canonical, engine_name)``: the **export's
+    name** for the tensor. Where to read it off: ONNX Runtime uses the graph's input and output
+    names; TFLite and LiteRT the signature key (``args_0``, ``output_0``), or the tensor name
+    for a file without signatures; LibTorch the method's argument name (inputs only);
+    ExecuTorch the tensor name when the export carries one. With a name the entry binds that
+    tensor by name; a name the engine cannot find fails prepare with what the file has.
+  - ``anira_model_config_set_tensor_layout(cfg, i, canonical, axes, ndim)``: the order in which
+    the export holds the tensor's axes, as spec axis indices: ``{0, 2, 1}`` says the file's
+    axis 0 is spec axis 0, its axis 1 is spec axis 2, its axis 2 is spec axis 1, which is how a
+    TensorFlow export (batch, time, channel) is described against a spec written (batch,
+    channel, time). ``ANIRA_AXIS_INSERT`` stands for an axis of extent 1 the file has and the
+    spec does not; a spec axis left out must have extent 1. A layout that moves only axes of
+    extent 1 costs nothing (the same bytes, other dims); one that moves an axis of another
+    extent is a transpose, refused at prepare in this pre-release.
+
+  Without a record, an entry binds the tensor **positionally** (the spec's input ``i`` to the
+  file's input ``i``, in ONNX Runtime's session order or the primary subgraph's order on TFLite
+  and LiteRT) and in the spec's axis order. That is what every 2.x configuration did; a name
+  makes the binding independent of the file's tensor order and turns a mismatch into an error
+  at prepare instead of a silent swap.
 - **Bytes instead of a file.** ``anira_model_config_add_model_bytes(cfg, engine, bytes, size,
   ownership, release, ctx, &i, &err)`` loads from memory, e.g. a resource compiled into a
   plugin. ``ANIRA_BYTES_COPY`` copies the bytes into the config; ``ANIRA_BYTES_BORROW`` keeps
@@ -162,10 +204,12 @@ not here, so one config serves every build.
   submission order and never concurrently.
 - **Instances.** ``anira_model_config_set_max_instances`` is the ceiling within which the
   planner allocates parallel instances of a stateless model (default 1).
-- **Anchor.** ``anira_model_config_set_anchor(cfg, index, is_input)`` names the streamed tensor
-  whose samples the host geometry of the Hard contract counts in; the default,
-  ``ANIRA_ANCHOR_FIRST_STREAMED``, is the first streamed input, or the first streamed output
-  of a generator model.
+- **Anchor.** ``anira_model_config_set_anchor(cfg, canonical)`` names the streamed tensor that
+  is the model's clock: the Hard contract's block range and rate are counted in its Time-axis
+  elements, and every other streamed tensor's time ratio is stated against it. The default
+  (``NULL``) is the first streamed input, or the first streamed output of a model without one.
+  Name one only when the host's stream is another tensor: a decoder that turns latent frames
+  into audio anchors on its audio output, because the plugin's block size is audio.
 
 Extensions (``anira_model_config_set_ext`` / ``set_ext_json``, and the same pair on every other
 handle) attach a typed record by kind and version; ``anira_registered_ext_kinds`` lists what a
@@ -261,13 +305,12 @@ name (section 1b of the architecture document), so a typo never turns into a def
     {
       "models": [
         { "engine": "onnxruntime", "path": "model.onnx",
-          "tensor_names": { "audio_in": "input_0", "mask_out": "output_0" } },
+          "tensors": { "audio_in": "input.1", "mask_out": "output" } },
         { "engine": "libtorch", "path": "model.pt", "entry": { "name": "forward_streaming" } }
       ],
       "default_engine": "onnxruntime",
       "state": "stateless",
       "max_instances": 4,
-      "anchor": { "output": "mask_out" },
       "inputs": [
         { "name": "audio_in", "dtype": "float32", "role": "streamed",
           "axes": [ ["batch", 1], ["channel", 2], ["time", "dynamic"] ],
@@ -283,14 +326,18 @@ name (section 1b of the architecture document), so a typo never turns into a def
 - ``models[]``: one entry per engine, tagged by ``engine`` alone (``onnxruntime``,
   ``libtorch``, ``tflite``, ``litert``, ``executorch``, or the reverse-URI name of a custom
   engine); relative ``path`` values resolve against the file's directory (``from_json_file``)
-  or the ``base_dir`` argument; ``tensor_names`` maps canonical names to the engine's;
-  ``entry`` is the extension that names the entry point (section 1.2).
+  or the ``base_dir`` argument; ``tensors`` holds the per-tensor records of section 1.2, keyed
+  by *your* canonical name: a string is the export's name for the tensor, an object has
+  ``name`` and ``layout`` (spec axis indices, ``"insert"`` for a unit axis the spec lacks:
+  ``{ "audio_in": { "name": "args_0", "layout": [0, 2, 1] } }`` for a channels-last
+  TensorFlow export of a mono model); ``entry`` is the extension that names the entry point
+  (section 1.2).
 - ``inputs[]`` / ``outputs[]``: the tensor specs of section 2 — ``dtype``, ``role``
   (``streamed``, ``buffer``, ``static``), tagged ``axes`` (an extent or ``"dynamic"``),
   ``window`` (``min`` and ``max`` or ``"unbounded"``), ``context``, ``latency`` (outputs) and
   ``time_ratio``.
-- ``anchor`` names the tensor the host geometry refers to; absent means the first streamed
-  tensor.
+- ``anchor`` is the canonical name of the streamed tensor that is the model's clock (section
+  1.2); absent means the first streamed input, or the first streamed output of a generator.
 
 The machine file carries ``num_threads`` (absent = the library default, ``0`` = bring your own
 threads), ``wait_strategy``, the ``log`` block (``level``, ``drain``, ``queue_capacity``,

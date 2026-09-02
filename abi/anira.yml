@@ -649,9 +649,9 @@ headers:
           - {name: ANIRA_BYTES_BORROW, value: 1, doc: "Borrowed until the last carrier dies (the plugin default for embedded blobs); the release callback fires once."}
           - {name: ANIRA_BYTES_OWNERSHIP_FORCE32, value: "0x7fffffff"}
       - kind: define
-        name: ANIRA_ANCHOR_FIRST_STREAMED
+        name: ANIRA_AXIS_INSERT
         value: "0xffffffffu"
-        doc: "Anchor sentinel: the first Streamed tensor (the v2 HostConfig::k_first_streamable)."
+        doc: "In the axes of anira_model_config_set_tensor_layout: an axis of extent 1 that the entry's file has and the spec does not (a TensorFlow export's rank-3 scalar against a rank-1 spec)."
       - kind: enum
         name: anira_ticket_status
         terminator: ANIRA_TICKET_STATUS_FORCE32
@@ -948,7 +948,7 @@ headers:
         name: anira_tensor_spec_create
         returns: anira_status
         params:
-          - {type: const char*, name: name, doc: "Canonical tensor name, UTF-8, copied; the model config maps it to engine names."}
+          - {type: const char*, name: name, doc: "The canonical name: your name for this tensor, UTF-8, copied. Every other part of the configuration refers to the tensor by it (the per-entry name and layout records, the anchor, error messages); it is never handed to an engine. Unique across the inputs and outputs of one model config."}
           - {type: anira_dtype, name: dtype, doc: "The model's true dtype (section 1)."}
           - {type: anira_role, name: role, doc: "STREAMED, BUFFER or STATIC."}
           - {type: anira_tensor_spec**, name: out, doc: "Receives the handle on success."}
@@ -1565,13 +1565,27 @@ headers:
         params:
           - {type: anira_model_config*, name: config, doc: "The config."}
           - {type: uint32_t, name: model_index, doc: "An entry."}
-          - {type: const char*, name: canonical, doc: "The spec's canonical name."}
-          - {type: const char*, name: engine_name, doc: "The name the engine's model uses for it; copied."}
+          - {type: const char*, name: canonical, doc: "Your canonical name of the tensor (the spec's name); the spec may be added later, the name is resolved at prepare."}
+          - {type: const char*, name: engine_name, doc: "The export's name for that tensor, copied: ONNX Runtime the graph's input or output name; TFLite and LiteRT the signature key (\"args_0\", \"output_0\"), or the tensor name for a file without signatures; LibTorch the method's argument name (inputs only); ExecuTorch the tensor name when the export carries one."}
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "Maps a canonical tensor name to the engine's name for this entry (section 5)."
+        doc: "Records what this entry's file calls the tensor you named canonical, and switches that tensor of this entry from positional binding (input slot i to the file's input i, the slot order being the add_input/add_output order; ONNX Runtime's session order, the primary subgraph's order on TFLite and LiteRT) to binding by that name. An entry without a record for a tensor binds it positionally. A name the engine cannot resolve, or an engine that binds only positionally on that side, fails prepare with ANIRA_ERROR_CONFIG naming what the file has. Together with anira_model_config_set_tensor_layout this is the per-entry tensor record, the JSON file's models[].tensors."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an index out of range or a NULL or empty name."
+      - kind: function
+        name: anira_model_config_set_tensor_layout
+        returns: anira_status
+        params:
+          - {type: anira_model_config*, name: config, doc: "The config."}
+          - {type: uint32_t, name: model_index, doc: "An entry."}
+          - {type: const char*, name: canonical, doc: "Your canonical name of the tensor (the spec's name); resolved at prepare."}
+          - {type: const uint32_t*, name: axes, doc: "ndim entries, copied: axes[k] is the spec axis (an index into anira_tensor_spec_set_axis's order, each at most once) that this entry's file holds at position k, or ANIRA_AXIS_INSERT for an axis of extent 1 the file has and the spec does not. NULL with ndim 0 clears."}
+          - {type: uint32_t, name: ndim, doc: "1..ANIRA_MAX_RANK, or 0 to clear."}
+        thread: main-thread
+        status: promised
+        since: "0.1"
+        doc: "The axis order in which this entry's file holds the tensor you named canonical, when it differs from the spec's (a TensorFlow export holding batch, time, channel where the spec says batch, channel, time is {0, 2, 1}). A spec axis left out must have extent 1. A layout that moves only axes of extent 1 is a view: the same bytes with other dims, at no cost. One that moves an axis of another extent is a transpose, refused at prepare in this pre-release with ANIRA_ERROR_NOT_SUPPORTED. Agreement with the spec's rank and extents is checked at prepare, and against the file where the engine reports its dims."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an index out of range, a NULL or empty canonical, ndim > ANIRA_MAX_RANK, NULL axes with ndim > 0, a spec axis index >= ANIRA_MAX_RANK that is not ANIRA_AXIS_INSERT, or a spec axis listed twice."
       - kind: function
         name: anira_model_config_set_model_ext
         returns: anira_status
@@ -1609,8 +1623,8 @@ headers:
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "Appends an input tensor spec (copied; the caller keeps ownership of spec)."
-        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec."
+        doc: "Appends an input tensor spec (copied; the caller keeps ownership of spec). The order of the add_input calls is the slot order an entry without a name record binds positionally."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec or a spec whose canonical name an input or output of this config already has."
       - kind: function
         name: anira_model_config_add_output
         returns: anira_status
@@ -1620,8 +1634,8 @@ headers:
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "Appends an output tensor spec (copied)."
-        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec."
+        doc: "Appends an output tensor spec (copied). The order of the add_output calls is the slot order an entry without a name record binds positionally."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec or a spec whose canonical name an input or output of this config already has."
       - kind: function
         name: anira_model_config_set_default_engine
         returns: anira_status
@@ -1671,13 +1685,12 @@ headers:
         returns: anira_status
         params:
           - {type: anira_model_config*, name: config, doc: "The config."}
-          - {type: uint32_t, name: index_or_first_streamed, doc: "A tensor index, or ANIRA_ANCHOR_FIRST_STREAMED (default)."}
-          - {type: anira_bool, name: is_input, doc: "Whether the index counts inputs (true) or outputs."}
+          - {type: const char*, name: canonical, doc: "Your canonical name of a streamed tensor, copied; NULL or empty restores the default."}
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "The anchor tensor the host geometry refers to (v2's HostConfig reference stream); resolved at prepare."
-        return_doc: "ANIRA_OK."
+        doc: "The anchor: the streamed tensor whose Time axis is the model's clock. A Hard contract's block range and rate are counted in its elements, and every other streamed tensor's time ratio is stated against it (v2's HostConfig reference stream). Default: the first streamed input, or, for a model without one (a generator), the first streamed output. Resolved at prepare, where a name that is not a streamed tensor of this config fails with ANIRA_ERROR_CONFIG."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config."
       - kind: function
         name: anira_model_config_set_ext
         returns: anira_status

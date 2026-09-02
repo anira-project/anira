@@ -71,7 +71,14 @@ TEST(AbiJsonModel, LoadsTheDocumentExample) {
     EXPECT_EQ(cfg.m_models[0].m_engine, ANIRA_ENGINE_ONNXRUNTIME);
     EXPECT_EQ(cfg.m_models[0].m_path, "/base/model.onnx")
         << "relative paths resolve against base_dir";
-    EXPECT_EQ(cfg.m_models[0].m_tensor_names.at("audio_in"), "input_0");
+    EXPECT_EQ(cfg.m_models[0].m_tensors.at("audio_in").m_name, "input_0")
+        << "the string form of a tensor record";
+    EXPECT_EQ(cfg.m_models[1].m_tensors.at("audio_in").m_name, "x") << "the object form";
+    EXPECT_EQ(cfg.m_models[1].m_tensors.at("gain").m_layout,
+              (std::vector<uint32_t>{0, ANIRA_AXIS_INSERT}))
+        << "a layout with an inserted unit axis";
+    EXPECT_TRUE(cfg.m_models[1].m_tensors.at("gain").m_name.empty());
+    EXPECT_TRUE(cfg.m_models[2].m_tensors.empty()) << "no record: positional, the spec's order";
     EXPECT_EQ(cfg.m_models[1].m_engine, ANIRA_ENGINE_LIBTORCH);
     const auto* entry = cfg.m_models[1].m_ext.payload<anira::capi::EntryPayload>("entry");
     ASSERT_NE(entry, nullptr);
@@ -82,8 +89,7 @@ TEST(AbiJsonModel, LoadsTheDocumentExample) {
     EXPECT_EQ(cfg.m_default_engine, ANIRA_ENGINE_ONNXRUNTIME);
     EXPECT_EQ(cfg.m_state, ANIRA_MODEL_STATELESS);
     EXPECT_EQ(cfg.m_max_instances, 4u);
-    EXPECT_EQ(cfg.m_anchor_index, 0u);
-    EXPECT_FALSE(cfg.m_anchor_is_input);
+    EXPECT_EQ(cfg.m_anchor, "mask_out");
     ASSERT_EQ(cfg.m_inputs.size(), 2u);
     const anira_tensor_spec& in = cfg.m_inputs[0];
     EXPECT_EQ(in.m_name, "audio_in");
@@ -118,7 +124,14 @@ TEST(AbiJsonModel, RoundTripIsByteStable) {
     ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
     EXPECT_EQ(model_text(second.m_config), once);
     EXPECT_NE(once.find("\"entry\": {"), std::string::npos) << "extensions are written back";
-    EXPECT_NE(once.find("\"anchor\": {"), std::string::npos);
+    EXPECT_NE(once.find("\"anchor\": \"mask_out\""), std::string::npos);
+    EXPECT_NE(once.find("\"audio_in\": \"input_0\""), std::string::npos)
+        << "a name-only record is written as a string";
+    EXPECT_NE(once.find("\"gain\": {\n          \"layout\": [\n            0,\n            "
+                        "\"insert\"\n          ]\n        }"),
+              std::string::npos)
+        << "a layout record is written as an object:\n"
+        << once;
     EXPECT_NE(once.find("\"max\": \"unbounded\""), std::string::npos);
 }
 
@@ -156,7 +169,36 @@ TEST(AbiJsonModel, RejectionsNameTheKeyPath) {
               ANIRA_ERROR_JSON);
     EXPECT_EQ(load_fails(R"({"inputs": [{"role": "streamed"}]})", "inputs[0].name"),
               ANIRA_ERROR_JSON);
-    EXPECT_EQ(load_fails(R"({"anchor": {"output": "nope"}})", "anchor.output"), ANIRA_ERROR_JSON);
+    EXPECT_EQ(load_fails(R"({"anchor": "nope"})", "anchor"), ANIRA_ERROR_JSON);
+    EXPECT_EQ(load_fails(R"({"anchor": {"output": "x"}})", "anchor"), ANIRA_ERROR_JSON)
+        << "the anchor is a bare canonical name";
+    EXPECT_EQ(
+        load_fails(R"({"inputs": [{"name": "a"}], "outputs": [{"name": "a"}]})", "outputs[0].name"),
+        ANIRA_ERROR_JSON)
+        << "canonical names are unique across both sides";
+    EXPECT_EQ(load_fails(R"({"models": [{"engine": "tflite", "path": "m",
+                             "tensor_names": {"a": "b"}}]})",
+                         "models[0].tensor_names"),
+              ANIRA_ERROR_JSON)
+        << "the pre-release key is refused by name, never read as an extension";
+    EXPECT_EQ(load_fails(R"({"models": [{"engine": "tflite", "path": "m",
+                             "tensors": {"a": {"layout": [0, 0]}}}]})",
+                         "models[0].tensors.a.layout"),
+              ANIRA_ERROR_JSON);
+    EXPECT_EQ(load_fails(R"({"models": [{"engine": "tflite", "path": "m",
+                             "tensors": {"a": {"layout": [0, "flip"]}}}]})",
+                         "models[0].tensors.a.layout[1]"),
+              ANIRA_ERROR_JSON);
+    EXPECT_EQ(load_fails(R"({"models": [{"engine": "tflite", "path": "m",
+                             "tensors": {"a": {"nam": "x"}}}]})",
+                         "models[0].tensors.a.nam"),
+              ANIRA_ERROR_JSON);
+    EXPECT_EQ(load_fails(R"({"models": [{"engine": "tflite", "path": "m", "tensors": {"a": {}}}]})",
+                         "models[0].tensors.a"),
+              ANIRA_ERROR_JSON);
+    EXPECT_EQ(load_fails(R"({"models": [{"engine": "tflite", "path": "m", "tensors": {"a": ""}}]})",
+                         "models[0].tensors.a"),
+              ANIRA_ERROR_JSON);
     EXPECT_EQ(load_fails(R"({"max_instances": 0})", "max_instances"), ANIRA_ERROR_JSON);
     EXPECT_EQ(load_fails(R"({"state": 1})", "state"), ANIRA_ERROR_JSON);
     EXPECT_EQ(load_fails("{not json", "malformed"), ANIRA_ERROR_JSON);

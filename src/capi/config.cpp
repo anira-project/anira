@@ -19,6 +19,7 @@
 #include "capi_internal.h"
 #include "ext_registry.h"
 #include "handles.h"
+#include "layout.h"
 
 using anira::capi::translate_exception;
 
@@ -79,6 +80,18 @@ bool custom_engine_id(const char* engine_id) {
 }
 bool non_empty(const char* text) {
     return text != nullptr && text[0] != '\0';
+}
+
+// Canonical names are unique across both sides: the per-entry tensor records and the anchor
+// refer to a tensor by bare name.
+bool name_taken(const anira_model_config& config, const std::string& name) {
+    for (const anira_tensor_spec& spec : config.m_inputs) {
+        if (spec.m_name == name) { return true; }
+    }
+    for (const anira_tensor_spec& spec : config.m_outputs) {
+        if (spec.m_name == name) { return true; }
+    }
+    return false;
 }
 
 // A Tier-2 descriptor handed once to a setter: NULL clears the block, a short one is
@@ -768,7 +781,33 @@ anira_status ANIRA_CALL anira_model_config_set_tensor_name(anira_model_config* c
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     if (!non_empty(canonical) || !non_empty(engine_name)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    config->m_models[model_index].m_tensor_names[canonical] = engine_name;
+    config->m_models[model_index].m_tensors[canonical].m_name = engine_name;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr); }
+
+anira_status ANIRA_CALL anira_model_config_set_tensor_layout(anira_model_config* config,
+                                                             uint32_t model_index,
+                                                             const char* canonical,
+                                                             const uint32_t* axes,
+                                                             uint32_t ndim) try {
+    if (config == nullptr || model_index >= config->m_models.size()) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    if (!non_empty(canonical)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    anira::capi::ModelEntry& entry = config->m_models[model_index];
+    if (ndim == 0) {
+        if (axes != nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+        const auto record = entry.m_tensors.find(canonical);
+        if (record != entry.m_tensors.end()) {
+            record->second.m_layout.clear();
+            if (record->second.m_name.empty()) { entry.m_tensors.erase(record); }
+        }
+        return ANIRA_OK;
+    }
+    if (axes == nullptr || ndim > ANIRA_MAX_RANK) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const std::vector<uint32_t> layout(axes, axes + ndim);
+    if (!anira::capi::valid_layout_shape(layout, nullptr)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    entry.m_tensors[canonical].m_layout = layout;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr); }
 
@@ -811,6 +850,7 @@ anira_status ANIRA_CALL anira_model_config_set_model_ext_json(anira_model_config
 anira_status ANIRA_CALL anira_model_config_add_input(anira_model_config* config,
                                                      const anira_tensor_spec* spec) try {
     if (config == nullptr || spec == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (name_taken(*config, spec->m_name)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     config->m_inputs.push_back(*spec);
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr); }
@@ -818,6 +858,7 @@ anira_status ANIRA_CALL anira_model_config_add_input(anira_model_config* config,
 anira_status ANIRA_CALL anira_model_config_add_output(anira_model_config* config,
                                                       const anira_tensor_spec* spec) try {
     if (config == nullptr || spec == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (name_taken(*config, spec->m_name)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     config->m_outputs.push_back(*spec);
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr); }
@@ -856,11 +897,9 @@ anira_status ANIRA_CALL anira_model_config_set_max_instances(anira_model_config*
 } catch (...) { return translate_exception(nullptr); }
 
 anira_status ANIRA_CALL anira_model_config_set_anchor(anira_model_config* config,
-                                                      uint32_t index_or_first_streamed,
-                                                      anira_bool is_input) try {
+                                                      const char* canonical) try {
     if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    config->m_anchor_index = index_or_first_streamed;
-    config->m_anchor_is_input = is_input != 0;
+    config->m_anchor = non_empty(canonical) ? canonical : "";
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr); }
 
