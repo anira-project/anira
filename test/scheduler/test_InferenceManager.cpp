@@ -69,7 +69,9 @@ InferenceManagerTestParams multi_tensor_param() {
             false,
             0.f,
             2),
-        .m_expected_latency = {12800, 4800}};
+        // 50 ms per 23 ms hop on two processors exceeds the pool's capacity
+        // (LatencyCalculator::is_feasible): sized for one host block on an idle pool.
+        .m_expected_latency = {7680, 2880}};
 }
 
 InferenceManagerTestParams non_streamable_mix_param() {
@@ -323,7 +325,7 @@ INSTANTIATE_TEST_SUITE_P(
                             false,
                             0.5f,
                             2),
-            {1}},
+            {2}},
         InferenceManagerTestParams{
             HostConfig(2048, 48000, true),
             InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
@@ -335,7 +337,7 @@ INSTANTIATE_TEST_SUITE_P(
                             false,
                             0.5f,
                             2),
-            {5}},
+            {6}},
         InferenceManagerTestParams{
             HostConfig(2048, 48000, true),
             InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
@@ -347,7 +349,8 @@ INSTANTIATE_TEST_SUITE_P(
                             false,
                             0.5f,
                             1),
-            {20}},
+            {14}},  // 1.47 hop periods of work per hop on one processor: infeasible,
+                    // sized for one host block on an idle pool
         InferenceManagerTestParams{
             HostConfig(2048, 48000, true),
             InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
@@ -359,7 +362,7 @@ INSTANTIATE_TEST_SUITE_P(
                             false,
                             0.f,
                             2),
-            {12}},
+            {13}},
         InferenceManagerTestParams{
             HostConfig(1, 48000.0 / 2048, true),
             InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
@@ -381,7 +384,7 @@ INSTANTIATE_TEST_SUITE_P(
                             false,
                             0.f,
                             2),
-            {1}},
+            {2}},
         InferenceManagerTestParams{
             HostConfig(2048, 48000.0, false),
             InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
@@ -551,7 +554,7 @@ INSTANTIATE_TEST_SUITE_P(
                             false,
                             0.f,
                             2),
-            {12800, 4800}},
+            {7680, 2880}},  // infeasible, see multi_tensor_param()
         non_streamable_mix_param()),
     build_test_name);
 

@@ -280,6 +280,7 @@ target_sources(${PROJECT_NAME}
         src/scheduler/InferenceThread.cpp
         src/scheduler/Context.cpp
         src/scheduler/SessionElement.cpp
+        src/scheduler/LatencyCalculator.cpp
 
         # Utils
         src/utils/JsonConfigLoader.cpp

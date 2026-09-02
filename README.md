@@ -128,10 +128,20 @@ very file anira links, so the process never holds a second copy of the engine.
 ```bash
 git clone https://github.com/anira-project/anira.git
 cd anira
-cmake . -B build -DCMAKE_BUILD_TYPE=Release
+cmake . -B build -DCMAKE_BUILD_TYPE=Release -DANIRA_WITH_INSTALL=ON
 cmake --build build --config Release --target anira
 cmake --install build --prefix /path/to/install/directory
 ```
+
+Or with the bundled presets (`desktop-install-release` / `desktop-install-debug`):
+
+```bash
+cmake --preset desktop-install-release
+cmake --build --preset desktop-install-release
+cmake --install build/desktop/Install/Release --prefix /path/to/install/directory
+```
+
+Without `--prefix`, the tree is installed to `<build dir>/anira-<version>`.
 
 The install tree also carries the Apache-2.0 core component of [tanh-lib](https://github.com/tanh-lab/tanh-lib) that backs anira's buffers, together with its own CMake package; `find_package(anira)` resolves it automatically via `find_dependency(tanh COMPONENTS Core)`, so consumers only add the anira prefix to `CMAKE_PREFIX_PATH`.
 

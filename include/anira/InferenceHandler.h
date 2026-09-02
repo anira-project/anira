@@ -218,8 +218,11 @@ public:
      * @param input_data Input data organized as data[tensor_index][channel][sample]
      * @param num_input_samples Array of input sample counts for each tensor
      * @param output_data Output data buffers organized as data[tensor_index][channel][sample]
-     * @param num_output_samples Array of maximum output sample counts for each tensor
-     * @return Array of actual output sample counts for each tensor
+     * @param num_output_samples Array of requested output sample counts for each tensor. The
+     * array is written back: on return it holds the count actually delivered per tensor, the
+     * requested count or 0 for a streamable output whose block was not available in full,
+     * so a caller that retries a starved pop must set the requested counts again
+     * @return num_output_samples, holding the actual output sample counts for each tensor
      *
      * @note This method is real-time safe and does not allocate memory. If the blocking_ratio
      * in the inference configuration is > 0 (not default), this method introduces a controlled
@@ -312,8 +315,10 @@ public:
      * This method is non-blocking and returns immediately with available samples for each tensor.
      *
      * @param output_data Output buffers organized as data[tensor_index][channel][sample]
-     * @param num_output_samples Array of maximum output sample counts for each tensor
-     * @return Array of actual output sample counts for each tensor
+     * @param num_output_samples Array of requested output sample counts for each tensor,
+     * written back with the counts actually delivered (0 for a streamable output whose block
+     * was not available in full); set the requested counts again before retrying
+     * @return num_output_samples, holding the actual output sample counts for each tensor
      *
      * @note This method is real-time safe and does not allocate memory.
      */
@@ -327,9 +332,11 @@ public:
      * reached.
      *
      * @param output_data Output buffers organized as data[tensor_index][channel][sample]
-     * @param num_output_samples Array of maximum output sample counts for each tensor
+     * @param num_output_samples Array of requested output sample counts for each tensor,
+     * written back with the counts actually delivered (0 for a streamable output whose block
+     * was not available in full); set the requested counts again before retrying
      * @param wait_until Time point until which to wait for available data
-     * @return Array of actual output sample counts for each tensor
+     * @return num_output_samples, holding the actual output sample counts for each tensor
      *
      * @note This method is not 100% real-time safe due to potential blocking to wait for data.
      */
