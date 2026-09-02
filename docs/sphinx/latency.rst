@@ -50,7 +50,7 @@ The latency vector returned by :cpp:func:`anira::InferenceHandler::get_latency_v
 Adaptive Buffer Handling
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For hosts that support variable buffer sizes (``allow_smaller_buffers``), the system performs additional calculations to handle worst-case scenarios across different buffer sizes, ensuring stable latency regardless of the actual buffer size used.
+For hosts that support variable buffer sizes (``allow_smaller_buffers``), the system performs additional calculations to handle worst-case scenarios across different buffer sizes, ensuring stable latency regardless of the actual buffer size used. The reported latency and the number of inference slots are the maximum over every buffer size up to the stated one. That maximum is not found by trying each size: the inference-caused latency of a buffer size is a sawtooth (it jumps whenever the inference time crosses a whole number of buffers), so only its peaks, the points where a blocking wait stops covering the remainder, and the sizes where the number of inferences per buffer changes are evaluated. The result is identical to an exhaustive walk, at a cost that grows with the square root of the inference time in samples rather than with the buffer size.
 
 These calculations count buffer sizes in samples of the *reference stream* selected by the :cpp:struct:`anira::HostConfig` — a streamable input for effects and analysers, the streamable output for a generator model with no streamable input (see the usage guide, section 4.1).
 

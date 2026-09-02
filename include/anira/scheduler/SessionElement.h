@@ -155,6 +155,19 @@ public:
     size_t calculate_num_structs(const HostConfig& spec) const;
 
     /**
+     * @brief Calculates the number of structs for a known inference count per buffer
+     *
+     * Same as calculate_num_structs(const HostConfig&) with max_num_inferences() of that
+     * configuration already computed by the caller.
+     *
+     * @param spec Host configuration to calculate for
+     * @param max_possible_inferences_per_buffer Result of max_num_inferences(spec)
+     * @return Number of thread-safe structs needed
+     */
+    size_t calculate_num_structs(const HostConfig& spec,
+                                 float max_possible_inferences_per_buffer) const;
+
+    /**
      * @brief Calculates latency values for all tensors (public for testing)
      *
      * Computes the processing latency for each tensor based on the model
@@ -495,6 +508,10 @@ private:
     /**
      * @brief Maximum number of inferences one host buffer can trigger on one stream
      *
+     * Whole-sample buffers take the closed form floor(buffer / hop), plus one when the
+     * remainder is neither zero nor a divisor of the hop; fractional buffers walk the
+     * alignment cycle.
+     *
      * @param host_buffer_size Host buffer size in samples of this stream
      * @param stream_size Samples of this stream consumed or produced per inference
      * @return Maximum number of inferences per host buffer
@@ -505,7 +522,8 @@ private:
      * @brief Calculates buffer size adaptation factor
      *
      * Computes the adaptation factor needed to match host buffer sizes
-     * with model output requirements.
+     * with model output requirements. Whole-sample buffers take the closed
+     * form hop - gcd(buffer, hop); fractional buffers walk the alignment cycle.
      *
      * @param host_buffer_size Host audio buffer size
      * @param postprocess_output_size Model postprocessed output size
@@ -554,19 +572,55 @@ private:
      * @param b Second integer
      * @return Greatest common divisor of a and b
      */
-    int greatest_common_divisor(int a, int b) const;
+    int64_t greatest_common_divisor(int64_t a, int64_t b) const;
 
     /**
      * @brief Calculates least common multiple of two integers
      *
      * Mathematical utility function for buffer size calculations and
-     * alignment requirements.
+     * alignment requirements. Computed as a / gcd(a, b) * b in 64 bits, so a
+     * frame-sized host block times a stream hop cannot overflow the way the
+     * former 32-bit product did once it exceeded 2^31.
      *
      * @param a First integer
      * @param b Second integer
      * @return Least common multiple of a and b
      */
-    int least_common_multiple(int a, int b) const;
+    int64_t least_common_multiple(int64_t a, int64_t b) const;
+
+    /**
+     * @brief Visits the smaller host buffers that can hold the worst-case latency
+     *
+     * With HostConfig::m_allow_smaller_buffers the host may deliver any buffer up to
+     * its stated size, so m_latency and m_num_structs must cover the worst of them.
+     * The worst case is not at an obvious end of the range: the latency one buffer
+     * size causes is a sawtooth in that size (it jumps whenever the inference time
+     * crosses a whole number of buffers), blocking adds further steps, and the
+     * inference count per buffer dips wherever the remainder divides the hop. All of
+     * these breakpoints have closed forms, so instead of walking every smaller buffer
+     * size, prepare()'s per-size calculation is evaluated only at the candidates
+     * where a maximum can sit. The result equals the exhaustive walk; the cost scales
+     * with the square root of the inference time in samples instead of with the
+     * buffer size.
+     *
+     * @param host_config Host configuration whose buffer size is the upper end
+     * @param min_config The same configuration at the smallest buffer (one sample of
+     *        the greatest stream)
+     * @param reference_size Size of the reference stream the host buffer is stated in
+     * @param greatest_buffer_size Largest relative buffer size over all streams
+     * @param greatest_buffer_size_index Tensor index of that stream
+     * @param greatest_buffer_size_is_input Whether that stream is an input
+     * @param evaluate_buffer The per-size calculation: folds one adjusted configuration into
+     *        m_latency and m_num_structs and returns its raw (unsynced) latencies
+     */
+    void for_each_smaller_buffer(
+        const HostConfig& host_config,
+        const HostConfig& min_config,
+        float reference_size,
+        float greatest_buffer_size,
+        size_t greatest_buffer_size_index,
+        bool greatest_buffer_size_is_input,
+        const std::function<std::vector<float>(const HostConfig&)>& evaluate_buffer);
 
     HostConfig m_host_config;  ///< Stored host configuration for this session
 

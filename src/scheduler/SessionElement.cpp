@@ -30,6 +30,8 @@
 #include <functional>
 #include <memory>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -266,7 +268,6 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
     // If the host config allows smaller buffers, we need to adjust the latency and number of
     // structs
     if (host_config.m_allow_smaller_buffers) {
-        HostConfig adjusted_config = host_config;
         HostConfig min_config = host_config;
 
         // Find the greatest relative buffersize and count down from there
@@ -277,20 +278,20 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
 
         for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
             if (m_inference_config.get_preprocess_input_size()[i] > 0) {
-                if (adjusted_config.get_relative_buffer_size(m_inference_config, i, true) >
+                if (host_config.get_relative_buffer_size(m_inference_config, i, true) >
                     greatest_buffer_size) {
                     greatest_buffer_size =
-                        adjusted_config.get_relative_buffer_size(m_inference_config, i, true);
+                        host_config.get_relative_buffer_size(m_inference_config, i, true);
                     greatest_buffer_size_index = i;
                 }
             }
         }
         for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
             if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-                if (adjusted_config.get_relative_buffer_size(m_inference_config, i, false) >
+                if (host_config.get_relative_buffer_size(m_inference_config, i, false) >
                     greatest_buffer_size) {
                     greatest_buffer_size =
-                        adjusted_config.get_relative_buffer_size(m_inference_config, i, false);
+                        host_config.get_relative_buffer_size(m_inference_config, i, false);
                     greatest_buffer_size_index = i;
                     greatest_buffer_size_is_input = false;
                 }
@@ -312,22 +313,16 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
         // Host buffer sizes are stated in samples of the reference stream (input or output).
         min_config.m_buffer_size = buffer_size_ratio * reference_size;
 
-        while (--greatest_buffer_size > 0) {
-            float buffer_size_ratio;
-            if (greatest_buffer_size_is_input) {
-                buffer_size_ratio =
-                    greatest_buffer_size /
-                    static_cast<float>(
-                        m_inference_config.get_preprocess_input_size()[greatest_buffer_size_index]);
-            } else {
-                buffer_size_ratio =
-                    greatest_buffer_size /
-                    static_cast<float>(
-                        m_inference_config
-                            .get_postprocess_output_size()[greatest_buffer_size_index]);
-            }
-            adjusted_config.m_buffer_size = buffer_size_ratio * reference_size;
-
+        // Raise the latency and struct count to the worst of the smaller buffers. Which
+        // buffer sizes can hold that worst case is decided by for_each_smaller_buffer();
+        // the per-size calculation is unchanged.
+        for_each_smaller_buffer(host_config,
+                                min_config,
+                                reference_size,
+                                greatest_buffer_size,
+                                greatest_buffer_size_index,
+                                greatest_buffer_size_is_input,
+                                [&](const HostConfig& adjusted_config) -> std::vector<float> {
             // Index-aligned with the output tensors (0 for non-streamable outputs), like the
             // baseline pass, so the loops below can index by output tensor unconditionally.
             std::vector<float> const adjusted_latency = collect_output_latencies([&](size_t i)
@@ -396,7 +391,8 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
             size_t const adjusted_num_structs = calculate_num_structs(adjusted_config);
 
             if (adjusted_num_structs > m_num_structs) { m_num_structs = adjusted_num_structs; }
-        }
+            return adjusted_latency;
+        });
     }
 
     // Add the internal model latency to the latency
@@ -532,6 +528,11 @@ void SessionElement::set_processor(std::shared_ptr<T>& processor) {
 }
 
 size_t SessionElement::calculate_num_structs(const HostConfig& host_config) const {
+    return calculate_num_structs(host_config, max_num_inferences(host_config));
+}
+
+size_t SessionElement::calculate_num_structs(const HostConfig& host_config,
+                                             float max_possible_inferences_per_buffer) const {
     // Now calculate the number of structs necessary to keep the inference queues filled
     float const max_inference_time_in_samples =
         m_inference_config.m_max_inference_time * host_config.m_sample_rate / 1000;
@@ -539,7 +540,7 @@ size_t SessionElement::calculate_num_structs(const HostConfig& host_config) cons
     // an input hop for an effect or analyser, an output hop for a generator.
     int const new_samples_needed_for_inference =
         static_cast<int>(host_config.get_reference_size(m_inference_config));
-    int const max_possible_inferences = (int)max_num_inferences(host_config);
+    int const max_possible_inferences = (int)max_possible_inferences_per_buffer;
     int const structs_per_max_inference_time =
         std::ceil((float)max_inference_time_in_samples / (float)new_samples_needed_for_inference);
     // We need to multiply the number of structs per max inference time with the maximum possible
@@ -570,6 +571,299 @@ std::vector<float> SessionElement::calculate_latency(const HostConfig& host_conf
         // Add it all together
         return static_cast<float>(buffer_adaptation + inference_caused_latency);
     });
+}
+
+namespace {
+// Candidate buffer sizes for the smaller-buffer sweep. The latency one buffer size B
+// causes is a sawtooth in B: B * ceil(x / B) for the inference time x in samples, which
+// jumps whenever x / B crosses a whole number and grows linearly in between. A maximum
+// over B <= b_top can therefore only sit just below a breakpoint x / (q - 1 + offset),
+// q = 1, 2, ...: offset 1 gives the sawtooth peaks, offset = blocking ratio the points
+// where the blocking wait stops covering the remainder of the inference time. Consecutive
+// q mostly share one candidate, so the walk jumps straight to the next distinct one and
+// visits O(sqrt(x)) values.
+void collect_breakpoint_candidates(double x,
+                                   double offset,
+                                   int64_t b_top,
+                                   std::vector<int64_t>& out) {
+    if (!(x > 0.0) || !(offset > 0.0) || b_top < 1) { return; }
+    int64_t current = b_top;
+    while (true) {
+        // The smallest q whose candidate lies below the current one ...
+        double q = std::ceil(x / static_cast<double>(current) + 1.0 - offset);
+        if (q < 1.0) { q = 1.0; }
+        // ... and that candidate: the largest integer below x / (q - 1 + offset).
+        auto next = static_cast<int64_t>(std::ceil(x / (q - 1.0 + offset))) - 1;
+        if (next >= current) { next = current - 1; }  // progress regardless of rounding
+        if (next < 1) { break; }
+        out.push_back(next);
+        current = next;
+    }
+}
+}  // namespace
+
+void SessionElement::for_each_smaller_buffer(
+    const HostConfig& host_config,
+    const HostConfig& min_config,
+    float reference_size,
+    float greatest_buffer_size,
+    size_t greatest_buffer_size_index,
+    bool greatest_buffer_size_is_input,
+    const std::function<std::vector<float>(const HostConfig&)>& evaluate_buffer) {
+    std::vector<size_t> const& input_sizes = m_inference_config.get_preprocess_input_size();
+    std::vector<size_t> const& output_sizes = m_inference_config.get_postprocess_output_size();
+
+    auto const greatest_stream_size = static_cast<float>(
+        greatest_buffer_size_is_input ? input_sizes[greatest_buffer_size_index]
+                                      : output_sizes[greatest_buffer_size_index]);
+
+    // Candidate k is the k-th smaller buffer: greatest - k samples of the greatest stream,
+    // for k = 1 .. k_max (the last one still positive).
+    auto const k_max =
+        static_cast<int64_t>(std::ceil(static_cast<double>(greatest_buffer_size))) - 1;
+    if (k_max < 1) { return; }
+
+    auto candidate_config = [&](int64_t k) {
+        HostConfig adjusted_config = host_config;
+        auto const candidate_buffer_size = static_cast<float>(
+            static_cast<double>(greatest_buffer_size) - static_cast<double>(k));
+        float const buffer_size_ratio = candidate_buffer_size / greatest_stream_size;
+        adjusted_config.m_buffer_size = buffer_size_ratio * reference_size;
+        return adjusted_config;
+    };
+
+    float const host_inferences = max_num_inferences(host_config);
+
+    // Everything a candidate's latency depends on is fixed by three things: the number of
+    // inferences one buffer triggers, the whole part of the buffer size, and (with
+    // blocking) the exact buffer size, which only ever lowers the latency within one whole
+    // part. So for every inference count the range can produce, only the buffer sizes at
+    // the analytic breakpoints for that count -- taken at the smallest buffer of their
+    // whole part that actually triggers the count -- and the largest buffers triggering
+    // the count can hold the maximum.
+    //
+    // The count is only roughly monotone in the buffer size. For a whole-sample buffer b
+    // against a hop h the counting walk yields floor(b / h) + 1 when the remainder r is
+    // neither zero nor a divisor of h, and floor(b / h) otherwise: it dips by one at
+    // every divisor. When the driving stream is the greatest stream that closed form
+    // navigates for whole-sample buffers, and the dip positions (hop multiples plus each
+    // divisor) still locate the largest buffers of a count for fractional ones (a
+    // fraction lets smaller divisors escape the dip, so the largest count may then sit
+    // below the largest buffer). Otherwise the walk itself is consulted, memoized, over
+    // the two-hop window a count can occupy. Every candidate is evaluated exactly, so
+    // navigation only decides where to look.
+    auto const greatest_hop = static_cast<int64_t>(greatest_stream_size);
+    size_t driving_streams = 0;
+    if (has_streamable_input()) {
+        for (size_t const size : input_sizes) { driving_streams += size > 0 ? 1 : 0; }
+    } else {
+        for (size_t const size : output_sizes) { driving_streams += size > 0 ? 1 : 0; }
+    }
+    bool const driving_is_greatest =
+        driving_streams == 1 && greatest_buffer_size_is_input == has_streamable_input();
+    bool const whole_sample_buffers = std::floor(greatest_buffer_size) == greatest_buffer_size;
+    bool const analytic = driving_is_greatest && whole_sample_buffers;
+    auto const greatest_whole = static_cast<int64_t>(std::floor(greatest_buffer_size));
+
+    std::unordered_map<int64_t, int64_t> inference_cache;
+    auto inferences_at = [&](int64_t k) -> int64_t {
+        if (analytic) {
+            int64_t const b = greatest_whole - k;
+            int64_t const r = b % greatest_hop;
+            int64_t const n = b / greatest_hop + ((r != 0 && greatest_hop % r != 0) ? 1 : 0);
+            return std::max<int64_t>(n, 1);
+        }
+        auto const found = inference_cache.find(k);
+        if (found != inference_cache.end()) { return found->second; }
+        auto const n = static_cast<int64_t>(max_num_inferences(candidate_config(k)));
+        inference_cache.emplace(k, n);
+        return n;
+    };
+    // Every driving stream's buffer measured in its own hops is the candidate buffer
+    // measured in greatest-stream hops, so a count m can only occur where that quotient
+    // is m - 1 or m: the k window below.
+    double const greatest = greatest_buffer_size;
+    auto window_top_k = [&](int64_t m) {  // smallest k (largest buffer) of the window
+        double const g = static_cast<double>(m + 1) * greatest_stream_size;
+        return std::clamp<int64_t>(static_cast<int64_t>(std::floor(greatest - g)) + 1, 1, k_max);
+    };
+    auto window_bottom_k = [&](int64_t m) {  // largest k (smallest buffer) of the window
+        double const g = static_cast<double>(m - 1) * greatest_stream_size;
+        return std::clamp<int64_t>(static_cast<int64_t>(std::floor(greatest - g)), 1, k_max);
+    };
+
+    // Candidates are evaluated as they are found, once each; the raw (unsynced) maxima
+    // let later inference counts be skipped when they cannot raise the result.
+    std::unordered_set<int64_t> evaluated;
+    std::vector<float> raw_maximum(m_inference_config.get_tensor_output_shape().size(), 0.f);
+    auto evaluate = [&](int64_t k) {
+        if (k < 1 || k > k_max || !evaluated.insert(k).second) { return; }
+        std::vector<float> const raw = evaluate_buffer(candidate_config(k));
+        for (size_t i = 0; i < raw.size(); ++i) {
+            raw_maximum[i] = std::max(raw_maximum[i], raw[i]);
+        }
+    };
+    auto evaluate_around = [&](int64_t k) {  // with neighbours, absorbing float rounding
+        for (int64_t d = -1; d <= 1; ++d) { evaluate(k + d); }
+    };
+    evaluate_around(1);
+    evaluate_around(k_max);
+
+    int64_t const top_inferences = inferences_at(1);
+    int64_t const bottom_inferences = inferences_at(k_max);
+    int64_t const lowest = std::max<int64_t>(std::min(top_inferences, bottom_inferences) - 1, 1);
+    int64_t const highest = std::max(top_inferences, bottom_inferences) + 1;
+
+    // Divisors of the hop (with 0): the offsets above a hop multiple where the count dips
+    // back, i.e. the largest buffers that still trigger the lower count.
+    std::vector<int64_t> dip_offsets;
+    if (driving_is_greatest) {
+        dip_offsets.push_back(0);
+        for (int64_t d = 1; d * d <= greatest_hop; ++d) {
+            if (greatest_hop % d == 0) {
+                dip_offsets.push_back(d);
+                if (d != greatest_hop / d && greatest_hop / d != greatest_hop) {
+                    dip_offsets.push_back(greatest_hop / d);
+                }
+            }
+        }
+    }
+
+    auto const parallel = static_cast<double>(m_inference_config.m_num_parallel_processors);
+    double const blocking_ratio = m_inference_config.m_blocking_ratio;
+    HostConfig const top_config = candidate_config(1);
+    auto const host_inference_count = static_cast<int64_t>(host_inferences);
+
+    // Per output: what does not depend on the inference count.
+    struct OutputTerms {
+        double m_ratio;              // samples of this output per sample of the greatest stream
+        double m_inference_samples;  // one batch of inference time, in samples of this output
+        int64_t m_b_top;             // whole part of the largest candidate buffer
+        double m_host_buffer;        // the host's own buffer, in samples of this output
+        double m_min_latency;        // the constant smallest-buffer term
+        int m_buffer_adaptation;
+    };
+    std::vector<OutputTerms> terms(m_inference_config.get_tensor_output_shape().size());
+    for (size_t i = 0; i < terms.size(); ++i) {
+        if (output_sizes[i] == 0) { continue; }  // no stream, no stream latency
+        float const sample_rate =
+            host_config.get_relative_sample_rate(m_inference_config, i, false);
+        float const min_buffer_size =
+            min_config.get_relative_buffer_size(m_inference_config, i, false);
+        terms[i].m_ratio =
+            static_cast<double>(output_sizes[i]) / static_cast<double>(greatest_stream_size);
+        terms[i].m_inference_samples =
+            static_cast<double>(m_inference_config.m_max_inference_time) * sample_rate / 1000.0;
+        terms[i].m_b_top = static_cast<int64_t>(
+            std::floor(top_config.get_relative_buffer_size(m_inference_config, i, false)));
+        terms[i].m_host_buffer = host_config.get_relative_buffer_size(m_inference_config, i, false);
+        terms[i].m_min_latency = calculate_inference_caused_latency(
+            1,
+            min_buffer_size,
+            sample_rate,
+            calculate_wait_time(min_buffer_size, sample_rate),
+            output_sizes[i]);
+        terms[i].m_buffer_adaptation = std::max(static_cast<int>(output_sizes[i]) - 1, 0);
+    }
+    auto batches_for = [&](int64_t inferences) {
+        return std::ceil(static_cast<double>(inferences) / parallel);
+    };
+
+    std::vector<int64_t> breakpoints;
+    for (int64_t m = highest; m >= lowest; --m) {
+        // Can this count still raise anything? The inference-caused latency of a buffer B
+        // is at most one batch-quantum past the inference time, x + B, and the struct
+        // count grows with the inference count; skip m when neither bound beats what has
+        // been found (relative slack for the float arithmetic of the exact evaluation).
+        // Without the closed form a candidate located for m may turn out to trigger
+        // m + 1, so the bounds cover that count too.
+        int64_t const bound_count = analytic ? m : m + 1;
+        bool can_raise =
+            calculate_num_structs(host_config, static_cast<float>(bound_count)) > m_num_structs;
+        for (size_t i = 0; i < terms.size() && !can_raise; ++i) {
+            if (output_sizes[i] == 0) { continue; }
+            double const x_adjusted = batches_for(bound_count) * terms[i].m_inference_samples;
+            double const x_host = batches_for(std::max(bound_count, host_inference_count)) *
+                                  terms[i].m_inference_samples;
+            double const bound = std::max({x_adjusted + static_cast<double>(terms[i].m_b_top),
+                                           x_host + terms[i].m_host_buffer,
+                                           terms[i].m_min_latency}) +
+                                 terms[i].m_buffer_adaptation;
+            can_raise = bound * (1.0 + 1e-5) + 2.0 > raw_maximum[i];
+        }
+        if (!can_raise) { continue; }
+
+        // The largest buffers triggering exactly m inferences.
+        if (driving_is_greatest) {
+            for (int64_t const offset : dip_offsets) {
+                int64_t const b = m * greatest_hop + offset;
+                if (b >= 1 && b <= greatest_whole) { evaluate_around(greatest_whole - b); }
+            }
+        } else {
+            // Every buffer in the window that triggers m while the next larger one does
+            // not: the local tops of the count.
+            int64_t const top = window_top_k(m);
+            int64_t const bottom = window_bottom_k(m);
+            for (int64_t k = top; k <= bottom; ++k) {
+                if (inferences_at(k) == m && (k == 1 || inferences_at(k - 1) != m)) {
+                    evaluate_around(k);
+                }
+            }
+        }
+
+        double const batches = batches_for(m);
+        for (size_t i = 0; i < terms.size(); ++i) {
+            if (output_sizes[i] == 0 || terms[i].m_b_top < 1) { continue; }
+            int64_t const b_top = terms[i].m_b_top;
+            double const x = batches * terms[i].m_inference_samples;
+
+            breakpoints.clear();
+            breakpoints.push_back(b_top);
+            collect_breakpoint_candidates(x, 1.0, b_top, breakpoints);
+            if (blocking_ratio > 0.0) {
+                collect_breakpoint_candidates(x, blocking_ratio, b_top, breakpoints);
+                // The buffers just below each point where one more batch fits into the
+                // blocking wait.
+                for (int64_t j = 1; j <= static_cast<int64_t>(batches); ++j) {
+                    auto const c =
+                        static_cast<int64_t>(std::ceil(static_cast<double>(j) *
+                                                       terms[i].m_inference_samples /
+                                                       blocking_ratio)) -
+                        1;
+                    if (c > b_top) { break; }
+                    if (c >= 1) { breakpoints.push_back(c); }
+                }
+            }
+            int64_t const window_top = window_top_k(m);
+            int64_t const window_bottom = window_bottom_k(m);
+            auto band_of = [&](int64_t k) {
+                return static_cast<int64_t>(
+                    std::floor(terms[i].m_ratio * (greatest - static_cast<double>(k))));
+            };
+            for (int64_t const b : breakpoints) {
+                // The smallest buffer whose whole part is b: the largest k with
+                // ratio * (greatest - k) >= b ...
+                auto const k_band = std::clamp<int64_t>(
+                    static_cast<int64_t>(
+                        std::floor(greatest - static_cast<double>(b) / terms[i].m_ratio)),
+                    1,
+                    k_max);
+                evaluate_around(k_band);
+                // ... and from there the first larger buffer of the same whole part that
+                // triggers m inferences, in case the band starts in a dip. Only the part
+                // of the band inside the count's window can hold one.
+                if (k_band < window_top) { continue; }
+                for (int64_t k = std::min(k_band, window_bottom);
+                     k >= window_top && band_of(k) == b;
+                     --k) {
+                    if (inferences_at(k) == m) {
+                        evaluate_around(k);
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }
 
 std::vector<float> SessionElement::collect_output_latencies(
@@ -621,11 +915,21 @@ std::vector<unsigned int> SessionElement::sync_latencies(
 
 int SessionElement::calculate_buffer_adaptation(float host_buffer_size,
                                                 int postprocess_output_size) const {
+    if (std::fmod(host_buffer_size, 1.f) == 0.f) {
+        // Whole-sample buffers: the walk below visits every non-zero multiple of
+        // gcd(buffer, hop) as a remainder, so its maximum is hop - gcd (0 when the hop
+        // divides the buffer). Closed form instead of up to hop / gcd steps.
+        auto const buffer = static_cast<int64_t>(host_buffer_size);
+        int64_t const hop = postprocess_output_size;
+        if (buffer <= 0 || hop <= 0 || buffer % hop == 0) { return 0; }
+        return static_cast<int>(hop - greatest_common_divisor(buffer, hop));
+    }
     int res = 0;
     // NOLINTNEXTLINE(clang-analyzer-security.FloatLoopCounter) intentional fractional buffer step
     for (float i = host_buffer_size;
          i < static_cast<float>(
-                 least_common_multiple(std::floor(host_buffer_size), postprocess_output_size));
+                 least_common_multiple(static_cast<int64_t>(std::floor(host_buffer_size)),
+                                       postprocess_output_size));
          i += host_buffer_size) {
         float const remainder = std::fmod(i, (float)postprocess_output_size);
         res = std::max<int>(res, std::ceil(remainder));
@@ -721,13 +1025,28 @@ float SessionElement::max_num_inferences(const HostConfig& host_config) const {
 }
 
 int SessionElement::max_num_inferences_for_stream(float host_buffer_size, int stream_size) const {
+    if (std::fmod(host_buffer_size, 1.f) == 0.f) {
+        // Whole-sample buffers: the walk below reaches every multiple of gcd(buffer, hop)
+        // as a leftover except hop - remainder, so one more inference than buffer / hop
+        // fits exactly when the remainder is neither zero nor a divisor of the hop.
+        // Closed form instead of up to hop / gcd steps.
+        auto const buffer = static_cast<int64_t>(host_buffer_size);
+        int64_t const hop = stream_size;
+        if (buffer <= 0 || hop <= 0) { return 1; }
+        int64_t const remainder = buffer % hop;
+        int64_t const inferences =
+            buffer / hop + ((remainder != 0 && hop % remainder != 0) ? 1 : 0);
+        return static_cast<int>(std::max<int64_t>(inferences, 1));
+    }
     float samples_in_buffer = host_buffer_size;
     int res = (int)(samples_in_buffer / (float)stream_size);
     res = std::max<int>(res, 1);
     int num_inferences = 0;
     // NOLINTNEXTLINE(clang-analyzer-security.FloatLoopCounter): fractional buffer step
     for (float i = samples_in_buffer;
-         i < static_cast<float>(least_common_multiple(std::floor(host_buffer_size), stream_size));
+         i < static_cast<float>(least_common_multiple(
+                 static_cast<int64_t>(std::floor(host_buffer_size)),
+                 stream_size));
          i += host_buffer_size) {
         num_inferences = (int)(samples_in_buffer / (float)stream_size);
         res = std::max<int>(res, num_inferences);
@@ -761,17 +1080,20 @@ bool SessionElement::receive_rings_have_room() {
     return true;
 }
 
-int SessionElement::greatest_common_divisor(int a, int b) const {
+int64_t SessionElement::greatest_common_divisor(int64_t a, int64_t b) const {
     while (b != 0) {
-        int const t = b;
+        int64_t const t = b;
         b = a % b;
         a = t;
     }
     return a;
 }
 
-int SessionElement::least_common_multiple(int a, int b) const {
-    return a * b / greatest_common_divisor(a, b);
+int64_t SessionElement::least_common_multiple(int64_t a, int64_t b) const {
+    if (a == 0 || b == 0) { return 0; }
+    // Divide before multiplying: the intermediate never exceeds the result, so a
+    // frame-sized host block times a stream hop cannot overflow the way a * b did.
+    return a / greatest_common_divisor(a, b) * b;
 }
 
 std::vector<size_t> SessionElement::calculate_send_buffer_sizes(
