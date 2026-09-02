@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include "../log_record_collector.h"
+#include "../support/log_record_collector.h"
 #include "gtest/gtest.h"
 
 using namespace anira;

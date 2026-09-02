@@ -21,14 +21,15 @@ add_compile_definitions(
 		RAVE_MODEL_DIR="${RAVE_MODEL_DIR}"
 )
 
-# One test binary per component, over the existing source grouping; the root-file
-# integration suite stays together as test_handler. The test_* naming is load-bearing:
-# it is what the shared ci-actions mobile runners auto-discover, and per-component
-# binaries are where the v3 milestones' suites slot in.
+
+# One test binary per component, mirroring the source tree: test/<dir> covers
+# src/<dir> and include/anira/<dir>, and the root files cover the root units. The
+# test_* naming is load-bearing: it is what the shared ci-actions mobile runners
+# auto-discover.
 function(anira_add_test_binary TARGET)
-    # CoreReclaim.cpp releases the context core after the binary's last test, so the
-    # immortal-by-design core is not reported as a leak under LeakSanitizer.
-    add_executable(${TARGET} ${ARGN} "${CMAKE_CURRENT_SOURCE_DIR}/CoreReclaim.cpp")
+    # support/CoreReclaim.cpp releases the context core after the binary's last test,
+    # so the immortal-by-design core is not reported as a leak under LeakSanitizer.
+    add_executable(${TARGET} ${ARGN} "${CMAKE_CURRENT_SOURCE_DIR}/support/CoreReclaim.cpp")
     target_link_libraries(${TARGET} anira::anira)
 
     if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
@@ -39,10 +40,9 @@ function(anira_add_test_binary TARGET)
         # one CTest entry per binary that runs it in a single on-device launch.
         add_test(NAME ${TARGET} COMMAND ${TARGET})
     else()
-        # gtest_discover_tests will register a CTest test for each gtest and run them all in parallel with the rest of the Test.
-        # Every discovered test carries its binary name as a CTest label, so a
-        # run can select by component (PR CI excludes the heavy model-inference
-        # binaries with -LE "test_handler|test_backends"; the merge queue runs all).
+        # One CTest entry per gtest, so ctest runs them all in parallel. Every test
+        # carries its binary name as a label for component selection
+        # (ctest -L test_scheduler). Every leg runs the full suite.
         gtest_discover_tests(${TARGET} DISCOVERY_TIMEOUT 90 PROPERTIES LABELS ${TARGET})
     endif()
 
@@ -62,16 +62,13 @@ endfunction()
 anira_add_test_binary(test_utils
 	utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
-	utils/test_PrePostProcessorWindow.cpp
 	utils/test_Semaphore.cpp
 	utils/test_JsonConfigLoader.cpp
 	utils/test_JsonConfigLoaderErrors.cpp
-	utils/test_ContextConfig.cpp
 	utils/test_HelperFunctions.cpp
-	utils/test_InferenceConfig.cpp
-	utils/test_HighPriorityThread.cpp
 	utils/test_Logger.cpp
-	test_WavReader.cpp
+	utils/test_WavReader.cpp
+	system/test_HighPriorityThread.cpp
 )
 
 anira_add_test_binary(test_scheduler
@@ -81,9 +78,10 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_CreateSessionFailure.cpp
 	scheduler/test_FallbackPaths.cpp
 	scheduler/test_InferenceManager.cpp
+	scheduler/test_InferenceThread.cpp
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp
-	scheduler/test_UserManagedThread.cpp
+	scheduler/test_StatefulOrdering.cpp
 )
 
 anira_add_test_binary(test_backends
@@ -94,11 +92,13 @@ anira_add_test_binary(test_backends
 )
 
 anira_add_test_binary(test_handler
-	test_BackendLinkage.cpp
+	contracts/test_BackendLinkage.cpp
+	test_ContextConfig.cpp
+	test_InferenceConfig.cpp
 	test_InferenceHandler.cpp
 	test_InferenceHandlerApi.cpp
 	test_OneSidedStreaming.cpp
-	test_StatefulOrdering.cpp
+	test_PrePostProcessor.cpp
 )
 
 # Header-isolation check: anira's public headers must compile with anira's own include
@@ -110,7 +110,7 @@ anira_add_test_binary(test_handler
 # is excluded from the default build and compiled by a CTest, so that a regression
 # shows up as a failed test with the compiler's error instead of a broken build.
 if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$")
-    add_library(anira_header_isolation OBJECT EXCLUDE_FROM_ALL header_isolation.cpp)
+    add_library(anira_header_isolation OBJECT EXCLUDE_FROM_ALL contracts/header_isolation.cpp)
     set_target_properties(anira_header_isolation PROPERTIES
         CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON)
@@ -143,7 +143,7 @@ endif()
 # covered on the uninstrumented build_test legs.
 if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$"
    AND NOT ANIRA_WITH_RTSAN AND NOT ANIRA_WITH_ASAN AND NOT ANIRA_WITH_TSAN AND NOT ANIRA_WITH_LSAN)
-    add_subdirectory(unload)
+    add_subdirectory(contracts/unload)
 endif()
 
 # Installed-package smoke test: install anira to a throwaway prefix and build +
@@ -156,11 +156,11 @@ if(ANIRA_WITH_INSTALL)
     add_test(NAME InstallConsumer
         COMMAND ${CMAKE_COMMAND}
             -DANIRA_BUILD_DIR=${CMAKE_BINARY_DIR}
-            -DCONSUMER_SRC=${CMAKE_CURRENT_SOURCE_DIR}/install
+            -DCONSUMER_SRC=${CMAKE_CURRENT_SOURCE_DIR}/contracts/install
             -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/install-test
             -DGENERATOR=${CMAKE_GENERATOR}
             -DBUILD_TYPE=$<CONFIG>
-            -P ${CMAKE_CURRENT_SOURCE_DIR}/install/run-install-test.cmake)
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/contracts/install/run-install-test.cmake)
     # RESOURCE_LOCK: installs from the build tree — see anira_header_isolation.
     set_tests_properties(InstallConsumer PROPERTIES TIMEOUT 600 RESOURCE_LOCK anira_build_tree)
 endif()

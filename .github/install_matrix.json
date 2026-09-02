@@ -1,0 +1,6 @@
+[
+ {"name": "Linux-x86_64-shared", "os": "ubuntu-latest", "pr": false, "preset": "ci-install-shared"},
+ {"name": "Linux-x86_64-static", "os": "ubuntu-latest", "pr": false, "preset": "ci-install-static"},
+ {"name": "Windows-x86_64-shared", "os": "windows-latest", "pr": false, "preset": "ci-install-shared"},
+ {"name": "Windows-x86_64-static", "os": "windows-latest", "pr": false, "preset": "ci-install-static"}
+]

@@ -1,4 +1,4 @@
-name: warm_caches
+name: warm caches (feeds PR and queue builds)
 
 # The push-to-main cache warmer — the logic lives in
 # tanh-lab/ci-actions' reusable warm-caches workflow (build-only legs plus the
@@ -17,8 +17,8 @@ concurrency:
 
 jobs:
   warm:
-    name: warm
-    uses: tanh-lab/ci-actions/.github/workflows/warm-caches.yml@v0.3.7
+    name: seed sccache + model fixtures
+    uses: tanh-lab/ci-actions/.github/workflows/warm-caches.yml@v0.3.10
     with:
       # One build-only leg per platform family (the PR-tier presets), so PR and
       # queue runs restore warm compile caches from main's scope.

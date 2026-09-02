@@ -39,7 +39,7 @@ concurrency:
 jobs:
   sanitize:
     if: github.event_name != 'pull_request'
-    uses: tanh-lab/ci-actions/.github/workflows/build-sanitizer.yml@v0.3.8
+    uses: tanh-lab/ci-actions/.github/workflows/build-sanitizer.yml@v0.3.10
     with:
       matrix_file: .github/sanitizer_matrix.json
       models_cache_prefix: anira-models-v1

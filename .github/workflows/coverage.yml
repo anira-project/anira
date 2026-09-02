@@ -1,4 +1,4 @@
-name: coverage
+name: coverage (Codecov metric, not a gate)
 
 # Full-suite coverage — the pipeline is tanh-lab/ci-actions' reusable coverage
 # workflow; this file keeps anira's facts.
@@ -50,7 +50,7 @@ jobs:
             args: "-DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"
           - name: shared-tflite
             args: "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"
-    uses: tanh-lab/ci-actions/.github/workflows/coverage.yml@v0.3.7
+    uses: tanh-lab/ci-actions/.github/workflows/coverage.yml@v0.3.10
     permissions:
       contents: read
       id-token: write # Codecov's tokenless OIDC upload

@@ -202,10 +202,10 @@ even from late-running static destructors) and is reclaimed at unload.
        does not unload images that use thread-local storage, which the statically linked
        backend archives (ONNX Runtime, LiteRT, ExecuTorch) do. Such a plugin — or a
        ``libanira.dylib`` with a static backend inside — stays mapped until the host
-       quits and cannot crash this way; anira's ``test/unload`` skips its unmapped
+       quits and cannot crash this way; anira's ``test/contracts/unload`` skips its unmapped
        assertions in that configuration.
 
-The scenario is covered by anira's host-shaped ``test/unload`` test, which loads a
+The scenario is covered by anira's host-shaped ``test/contracts/unload`` test, which loads a
 plugin-shaped module from an executable that does not link anira, unloads it and
 checks that it was really unmapped.
 

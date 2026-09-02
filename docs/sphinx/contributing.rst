@@ -79,11 +79,12 @@ General
 Install tree
 ~~~~~~~~~~~~
 
-``test/install`` is a minimal external project that consumes an installed anira package through ``find_package(anira)``. The ``build_install`` workflow installs anira into a fresh prefix in the merge queue (and on tags) and builds and runs it against that prefix; run the same flow locally with::
+``test/contracts/install`` is a minimal external project that consumes an installed anira package through ``find_package(anira)``. The ``build_install`` workflow installs anira into a fresh prefix in the merge queue (and on tags) and builds and runs it against that prefix; run the same flow locally with::
 
-    cmake -S . -B build -DANIRA_WITH_INSTALL=ON -DCMAKE_INSTALL_PREFIX=$PWD/prefix
-    cmake --build build --target anira && cmake --install build
-    cmake -S test/install -B build-consumer -DCMAKE_PREFIX_PATH=$PWD/prefix
+    cmake --preset ci-install-shared
+    cmake --build build/ci/install-shared --target anira
+    cmake --install build/ci/install-shared --prefix $PWD/prefix
+    cmake -S test/contracts/install -B build-consumer -DCMAKE_PREFIX_PATH=$PWD/prefix
     cmake --build build-consumer && ./build-consumer/consumer
 
 Anything a consumer needs — public headers, the exported target, tanh-lib's core component, backend runtimes — must be part of that tree.
@@ -114,6 +115,54 @@ Testing
 - Write unit tests for new functionality
 - Ensure all tests pass before submitting
 - If fixing a bug, add a test that reproduces the bug
+
+Test layout
+~~~~~~~~~~~
+
+``test/`` mirrors ``include/anira/``: a test file lives in the directory of the unit
+it covers, and the directory decides which ``test_*`` binary compiles it (see
+``test/CMakeLists.txt``).
+
+- ``test/<dir>/test_<Unit>.cpp`` covers ``include/anira/<dir>/<Unit>.h`` — so
+  ``scheduler/``, ``backends/``, ``system/`` and ``utils/`` each map one to one.
+- Root-level units (``InferenceHandler``, ``InferenceConfig``, ``ContextConfig``,
+  ``PrePostProcessor``) are covered by root-level ``test_*.cpp`` files, alongside the
+  cross-unit integration suites (``test_OneSidedStreaming``).
+- ``test/contracts/`` holds checks of the build, link and packaging contracts rather
+  than of any one unit: header isolation, backend linkage, the library-unload harness,
+  the installed-package consumer.
+- ``test/support/`` is shared test infrastructure, not tests.
+
+CI tiers
+~~~~~~~~
+
+Which tests run when is defined in exactly four places, each the file CI itself
+consumes — read them there rather than in prose that could go stale:
+
+- **Which legs run on a pull request vs the merge queue**: the ``"pr"`` flags in
+  ``.github/*_matrix.json`` (one file per workflow; a row without ``"pr": true``
+  runs only in the queue). A one-line guard in ``build_test``'s ``result`` job
+  pins the static and tflite legs to the PR tier — the rows that carry
+  ExecuTorch and desktop-TFLite coverage.
+- **Which workflows are PR stubs**: the ``if: github.event_name != 'pull_request'``
+  guards — those workflows report their required status on a PR without running;
+  the merge queue is their real gate.
+- **What the queue requires**: the ten ``<name> result`` contexts in the
+  repository ruleset, produced by the ``result`` job at the bottom of each
+  workflow.
+
+Reproducing CI locally
+~~~~~~~~~~~~~~~~~~~~~~
+
+Every leg runs the full test suite — a plain ``ctest`` in any test-enabled build
+reproduces what CI runs; the tiers differ only in which legs (configurations)
+build. Select a component with ``ctest -L test_scheduler`` (the label is the
+binary name).
+
+Do not re-test what tanh-lib already covers upstream: ``anira::Buffer``,
+``RingBuffer``, ``MemoryBlock`` and the threading primitives are thin aliases over
+``thl::core``, which has its own suite. anira keeps only tests of its own contract on
+top of them; coverage that belongs to the underlying container goes to tanh-lib.
 
 Sanitizers
 ~~~~~~~~~~

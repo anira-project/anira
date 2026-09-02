@@ -1,0 +1,8 @@
+[
+ {"name": "Linux-x86_64-shared", "os": "ubuntu-latest", "preset": "ci-tests-shared", "pr": false},
+ {"name": "Linux-x86_64-static", "os": "ubuntu-latest", "preset": "ci-tests-static", "pr": false},
+ {"name": "macOS-arm64-shared", "os": "macOS-latest", "preset": "ci-tests-shared", "pr": false},
+ {"name": "macOS-arm64-static", "os": "macOS-latest", "preset": "ci-tests-static", "pr": false},
+ {"name": "Windows-x86_64-shared", "os": "windows-latest", "preset": "windows-msvc-tests-shared", "vcvars": "x64", "pr": false},
+ {"name": "Windows-x86_64-static", "os": "windows-latest", "preset": "windows-msvc-tests-static", "vcvars": "x64", "pr": false}
+]

@@ -2,12 +2,10 @@ name: build_test
 
 # Desktop build + test — the logic lives in tanh-lab/ci-actions' reusable
 # build-test workflow; this file keeps only anira's facts (triggers, the matrix
-# file, the fast-test labels, the models cache). Pull requests run the
-# "pr": true subset with the fast tests; the merge queue (and on_tag's call)
-# runs every leg with the full suite; pushes to main run nothing here — the
-# queue already validated the identical tree (docs/ci-overhaul.md §3.6).
-# The matrix lives in .github/build_test_matrix.json (see the reusable
-# workflow's header for the row schema).
+# file, the models cache). Every leg runs the full test suite: pull requests
+# build the "pr": true subset of .github/build_test_matrix.json, the merge
+# queue (and on_tag's call) builds every leg, and pushes to main run nothing
+# here — the queue already validated the identical tree.
 
 on:
   merge_group:
@@ -38,12 +36,11 @@ concurrency:
 jobs:
   build_test:
     name: build_test
-    uses: tanh-lab/ci-actions/.github/workflows/build-test.yml@v0.3.7
+    uses: tanh-lab/ci-actions/.github/workflows/build-test.yml@v0.3.10
     with:
       tier: ${{ inputs.tier || '' }}
-      # PRs run the fast tests only; the heavy model-inference binaries
-      # (test_handler, test_backends - labeled by binary) run in the queue.
-      fast_exclude_labels: "test_handler|test_backends"
+      # PRs run the full test suite; the tiers differ only in WHICH LEGS run
+      # (the pr flags in .github/build_test_matrix.json), not in which tests.
       models_cache_prefix: anira-models-v1
       models_hash_glob: extras/fetch-models.cmake
       models_cache_paths: |
@@ -62,6 +59,22 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      # The PR tier's backend coverage lives or dies with these two rows staying
+      # "pr": true — the static leg is the only PR leg that builds ExecuTorch, the
+      # tflite leg the only desktop TFLite one. What each leg actually builds is
+      # already asserted by its own assert_grep and its tests; this only pins the
+      # promotion so it cannot be dropped unnoticed.
+      - name: pr tier keeps its backend legs
+        run: |
+          jq -e '[.[] | select(.pr == true) | .name]
+                 | contains(["Linux-x86_64-static","Linux-x86_64-tflite-shared"])'             .github/build_test_matrix.json
+      # uses: refs cannot reference a variable (GitHub resolves them before any
+      # context exists), so single-point definition is impossible — this asserts
+      # the next-best property: exactly one ci-actions version across the repo.
+      - name: one ci-actions version repo-wide
+        run: |
+          test "$(grep -rho 'tanh-lab/ci-actions[^@]*@v[0-9.]*' .github/workflows/ | grep -o 'v[0-9.]*$' | sort -u | wc -l)" -eq 1
       - name: aggregate
         run: |
           echo "workflow result: ${{ needs.build_test.result }}"
