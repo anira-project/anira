@@ -43,7 +43,21 @@ function(anira_add_test_binary TARGET)
         # One CTest entry per gtest, so ctest runs them all in parallel. Every test
         # carries its binary name as a label for component selection
         # (ctest -L test_scheduler). Every leg runs the full suite.
-        gtest_discover_tests(${TARGET} DISCOVERY_TIMEOUT 90 PROPERTIES LABELS ${TARGET})
+        #
+        # PRE_TEST: ctest enumerates the binaries one after another when it starts,
+        # instead of one post-build step per target that Ninja runs in parallel. CMake
+        # 4.4.0's post-build discovery writes every target's --gtest_list_tests JSON to
+        # the same file (the per-target hash is taken from an empty name; CMake issue
+        # 27972, fixed in 4.4.1), so with the four binaries linking within the same
+        # second a neighbour's fopen truncated a list between its writer's exit and
+        # CMake's read, and the build failed with "Syntax error: value, object or array
+        # expected" (Homebrew CMake 4.4.0 on the macOS runners; test_utils,
+        # test_backends and test_scheduler each hit it). Serial discovery has no such
+        # window on any CMake version.
+        gtest_discover_tests(${TARGET}
+            DISCOVERY_MODE PRE_TEST
+            DISCOVERY_TIMEOUT 90
+            PROPERTIES LABELS ${TARGET})
     endif()
 
     # Only copy runtime DLLs when there are any (a fully static build has none).
