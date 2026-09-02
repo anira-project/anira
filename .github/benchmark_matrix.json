@@ -1,0 +1,5 @@
+[
+ {"name": "Linux-x86_64", "os": "ubuntu-latest", "preset": "ci-tests-shared", "pr": false},
+ {"name": "macOS-arm64", "os": "macOS-latest", "preset": "ci-tests-shared", "pr": false},
+ {"name": "Windows-x86_64", "os": "windows-latest", "preset": "windows-msvc-tests-shared", "vcvars": "x64", "pr": false}
+]

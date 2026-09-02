@@ -26,11 +26,12 @@ jobs:
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}
     steps:
+      - uses: actions/checkout@v4
       - name: select the tier
         id: tier
         shell: bash
         run: |
-          LEGS='[{"name":"Linux-x86_64","os":"ubuntu-latest","preset":"ci-tests-shared"},{"name":"macOS-arm64","os":"macOS-latest","preset":"ci-tests-shared"},{"name":"Windows-x86_64","os":"windows-latest","preset":"windows-msvc-tests-shared","vcvars":"x64"}]'
+          LEGS=$(cat .github/benchmark_matrix.json)
           echo "matrix=$(echo "$LEGS" | jq -c .)" >> "$GITHUB_OUTPUT"
 
   build_benchmark:
@@ -62,7 +63,7 @@ jobs:
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.7
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.10
       - name: add juce deps
         shell: bash
         run: |
@@ -79,14 +80,14 @@ jobs:
         with:
           arch: ${{ matrix.vcvars }}
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.7
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.10
         with:
           PRESET: ${{ matrix.preset }}
           TARGETS: cnn-size-benchmark advanced-benchmark simple-benchmark
           # Benchmark + tests + examples: the combination the benchmark fixture needs.
           CMAKE_BUILD_ARGS: "-DANIRA_WITH_BENCHMARK=ON -DANIRA_WITH_EXAMPLES=ON"
       - name: test
-        uses: tanh-lab/ci-actions/cmake-test@v0.3.7
+        uses: tanh-lab/ci-actions/cmake-test@v0.3.10
         with:
           PRESET: ${{ matrix.preset }}
           # Only the Benchmark.* suites (the unit tests run in build_test), and

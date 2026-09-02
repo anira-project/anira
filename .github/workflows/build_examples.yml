@@ -28,11 +28,12 @@ jobs:
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}
     steps:
+      - uses: actions/checkout@v4
       - name: select the tier
         id: tier
         shell: bash
         run: |
-          LEGS='[{"name":"Linux-x86_64-shared","os":"ubuntu-latest","preset":"ci-tests-shared"},{"name":"Linux-x86_64-static","os":"ubuntu-latest","preset":"ci-tests-static"},{"name":"macOS-arm64-shared","os":"macOS-latest","preset":"ci-tests-shared"},{"name":"macOS-arm64-static","os":"macOS-latest","preset":"ci-tests-static"},{"name":"Windows-x86_64-shared","os":"windows-latest","preset":"windows-msvc-tests-shared","vcvars":"x64"},{"name":"Windows-x86_64-static","os":"windows-latest","preset":"windows-msvc-tests-static","vcvars":"x64"}]'
+          LEGS=$(cat .github/examples_matrix.json)
           echo "matrix=$(echo "$LEGS" | jq -c .)" >> "$GITHUB_OUTPUT"
 
   build_examples:
@@ -64,7 +65,7 @@ jobs:
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.7
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.10
       - name: add juce deps
         shell: bash
         run: |
@@ -81,7 +82,7 @@ jobs:
         with:
           arch: ${{ matrix.vcvars }}
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.7
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.10
         with:
           PRESET: ${{ matrix.preset }}
           # The exact example set depends on the active backends (libtorch is

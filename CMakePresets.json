@@ -80,8 +80,7 @@
         {
             "name": "desktop-benchmark-tests-debug",
             "displayName": "Desktop Benchmark + Tests Debug",
-            "description":
-                "Debug build with tests and the example benchmarks enabled, so benchmarks can be run via ctest (ANIRA_WITH_EXAMPLES is required to build the benchmark executables)",
+            "description": "Debug build with tests and the example benchmarks enabled, so benchmarks can be run via ctest (ANIRA_WITH_EXAMPLES is required to build the benchmark executables)",
             "inherits": "desktop-base",
             "binaryDir": "${sourceDir}/build/desktop/BenchmarkTests/Debug",
             "cacheVariables": {
@@ -94,8 +93,7 @@
         {
             "name": "desktop-benchmark-tests-release",
             "displayName": "Desktop Benchmark + Tests Release",
-            "description":
-                "Release build with tests and the example benchmarks enabled, so benchmarks can be run via ctest (ANIRA_WITH_EXAMPLES is required to build the benchmark executables)",
+            "description": "Release build with tests and the example benchmarks enabled, so benchmarks can be run via ctest (ANIRA_WITH_EXAMPLES is required to build the benchmark executables)",
             "inherits": "desktop-base",
             "binaryDir": "${sourceDir}/build/desktop/BenchmarkTests/Release",
             "cacheVariables": {
@@ -130,8 +128,7 @@
         {
             "name": "clang-tidy",
             "displayName": "Clang-Tidy",
-            "description":
-                "Library + tests + benchmark build with all backends, used for clang-tidy analysis (exports compile_commands.json)",
+            "description": "Library + tests + benchmark build with all backends, used for clang-tidy analysis (exports compile_commands.json)",
             "inherits": "desktop-base",
             "binaryDir": "${sourceDir}/build/clang-tidy",
             "cacheVariables": {
@@ -152,8 +149,7 @@
             "description": "Build AniraWeb WASM module (debug)",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/wasm/Debug",
-            "toolchainFile":
-                "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+            "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
             "cacheVariables": {
                 "ANIRA_BUILD_WASM": "ON",
                 "BUILD_SHARED_LIBS": "OFF",
@@ -171,8 +167,7 @@
             "description": "Build AniraWeb WASM module (release)",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/wasm/Release",
-            "toolchainFile":
-                "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+            "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
             "cacheVariables": {
                 "ANIRA_BUILD_WASM": "ON",
                 "BUILD_SHARED_LIBS": "OFF",
@@ -187,8 +182,7 @@
         {
             "name": "docs",
             "displayName": "Documentation",
-            "description":
-                "Build C++ (Doxygen+Breathe) and Anira Web (TypeDoc+sphinx-js) docs via Sphinx",
+            "description": "Build C++ (Doxygen+Breathe) and Anira Web (TypeDoc+sphinx-js) docs via Sphinx",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/docs",
             "cacheVariables": {
@@ -206,8 +200,7 @@
             "name": "ci-base",
             "hidden": true,
             "generator": "Ninja",
-            "description":
-                "Base for the CI presets: Release + tests. Backend sets and per-leg flags ride on top via the workflow's configure args (ci-actions cmake-build appends CMAKE_BUILD_ARGS in preset mode), so one preset serves several legs. /Z7 keeps MSVC debug info out of central PDBs so a debug-info leg can never zero the sccache hit rate.",
+            "description": "Base for the CI presets: Release + tests. Backend sets and per-leg flags ride on top via the workflow's configure args (ci-actions cmake-build appends CMAKE_BUILD_ARGS in preset mode), so one preset serves several legs. /Z7 keeps MSVC debug info out of central PDBs so a debug-info leg can never zero the sccache hit rate.",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "ANIRA_WITH_TESTS": "ON",
@@ -227,8 +220,7 @@
         {
             "name": "ci-tests-shared",
             "inherits": "ci-clang-base",
-            "description":
-                "Shared-library test build, clang (Linux x64/arm64, macOS arm64, macOS x64 on the Intel runner).",
+            "description": "Shared-library test build, clang (Linux x64/arm64, macOS arm64, macOS x64 on the Intel runner).",
             "binaryDir": "${sourceDir}/build/ci/tests-shared",
             "cacheVariables": {
                 "BUILD_SHARED_LIBS": "ON"
@@ -246,8 +238,7 @@
         {
             "name": "ci-tests-gcc",
             "inherits": "ci-base",
-            "description":
-                "The one explicit gcc job (Linux): the preset family pins clang, this keeps gcc coverage.",
+            "description": "The one explicit gcc job (Linux): the preset family pins clang, this keeps gcc coverage.",
             "binaryDir": "${sourceDir}/build/ci/tests-gcc",
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "gcc",
@@ -258,8 +249,7 @@
         {
             "name": "ci-tests-coverage",
             "inherits": "ci-tests-shared",
-            "description":
-                "Instrumented coverage build (clang source-based coverage; accurate under optimization, so Release stays). llvm-profdata/llvm-cov consume the output.",
+            "description": "Instrumented coverage build (clang source-based coverage; accurate under optimization, so Release stays). llvm-profdata/llvm-cov consume the output.",
             "binaryDir": "${sourceDir}/build/ci/coverage",
             "cacheVariables": {
                 "CMAKE_C_FLAGS": "-fprofile-instr-generate -fcoverage-mapping",
@@ -269,8 +259,7 @@
         {
             "name": "windows-msvc-tests-shared",
             "inherits": "ci-base",
-            "description":
-                "MSVC cl.exe under Ninja (run inside a vcvars environment; Ninja is what lets sccache cache cl).",
+            "description": "MSVC cl.exe under Ninja (run inside a vcvars environment; Ninja is what lets sccache cache cl).",
             "binaryDir": "${sourceDir}/build/ci/windows-msvc-shared",
             "cacheVariables": {
                 "BUILD_SHARED_LIBS": "ON"
@@ -288,8 +277,7 @@
         {
             "name": "windows-clang-tests-shared",
             "inherits": "ci-base",
-            "description":
-                "Secondary Windows coverage: clang-cl (keeps MSVC=TRUE, so DLL staging and the symbol policy apply); needs a vcvars environment too.",
+            "description": "Secondary Windows coverage: clang-cl (keeps MSVC=TRUE, so DLL staging and the symbol policy apply); needs a vcvars environment too.",
             "binaryDir": "${sourceDir}/build/ci/windows-clang-shared",
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang-cl",
@@ -318,10 +306,39 @@
             }
         },
         {
+            "name": "ci-install-base",
+            "hidden": true,
+            "inherits": "ci-base",
+            "description": "Install-tree legs: anira + ONNX Runtime only, no tests \u2014 the test/contracts/install consumers run against the installed prefix; the other engines' install paths are covered by on_tag.",
+            "cacheVariables": {
+                "ANIRA_WITH_INSTALL": "ON",
+                "ANIRA_WITH_TESTS": "OFF",
+                "ANIRA_WITH_LIBTORCH": "OFF",
+                "ANIRA_WITH_ONNXRUNTIME": "ON",
+                "ANIRA_WITH_LITERT": "OFF",
+                "ANIRA_WITH_EXECUTORCH": "OFF"
+            }
+        },
+        {
+            "name": "ci-install-shared",
+            "inherits": "ci-install-base",
+            "binaryDir": "${sourceDir}/build/ci/install-shared",
+            "cacheVariables": {
+                "BUILD_SHARED_LIBS": "ON"
+            }
+        },
+        {
+            "name": "ci-install-static",
+            "inherits": "ci-install-base",
+            "binaryDir": "${sourceDir}/build/ci/install-static",
+            "cacheVariables": {
+                "BUILD_SHARED_LIBS": "OFF"
+            }
+        },
+        {
             "name": "desktop-tests-rtsan",
             "inherits": "ci-clang-base",
-            "description":
-                "RTSan gate for the ANIRA_REALTIME hot path (clang >= 20; tanh-lib built with TANH_WITH_RTSAN).",
+            "description": "RTSan gate for the ANIRA_REALTIME hot path (clang >= 20; tanh-lib built with TANH_WITH_RTSAN).",
             "binaryDir": "${sourceDir}/build/ci/rtsan",
             "cacheVariables": {
                 "BUILD_SHARED_LIBS": "ON",
@@ -331,8 +348,7 @@
         {
             "name": "desktop-tests-asan",
             "inherits": "ci-clang-base",
-            "description":
-                "ASan+UBSan over the engine-free suite (the prebuilt backends are uninstrumented - noengines scope by decision Q6).",
+            "description": "ASan+UBSan over the engine-free suite (the prebuilt backends are uninstrumented - noengines scope by decision Q6).",
             "binaryDir": "${sourceDir}/build/ci/asan",
             "cacheVariables": {
                 "BUILD_SHARED_LIBS": "ON",
@@ -369,8 +385,7 @@
         {
             "name": "android-emulator-tests",
             "inherits": "ci-base",
-            "description":
-                "Android x86_64 for the emulator run; model paths baked to the on-device staging dir. Linkage/backends per leg via configure args.",
+            "description": "Android x86_64 for the emulator run; model paths baked to the on-device staging dir. Linkage/backends per leg via configure args.",
             "binaryDir": "${sourceDir}/build/ci/android-emulator",
             "cacheVariables": {
                 "ANDROID_ABI": "x86_64",
@@ -384,8 +399,7 @@
         {
             "name": "android-arm64-build",
             "inherits": "ci-base",
-            "description":
-                "Android arm64-v8a build coverage (no accelerated arm emulator on x86 CI hosts).",
+            "description": "Android arm64-v8a build coverage (no accelerated arm emulator on x86 CI hosts).",
             "binaryDir": "${sourceDir}/build/ci/android-arm64",
             "cacheVariables": {
                 "ANDROID_ABI": "arm64-v8a",
@@ -398,8 +412,7 @@
         {
             "name": "ios-simulator-tests",
             "inherits": "ci-base",
-            "description":
-                "iOS simulator (arm64) test build; the test_* binaries bundle as .app for the shared mobile runner.",
+            "description": "iOS simulator (arm64) test build; the test_* binaries bundle as .app for the shared mobile runner.",
             "binaryDir": "${sourceDir}/build/ci/ios-simulator",
             "cacheVariables": {
                 "CMAKE_SYSTEM_NAME": "iOS",
@@ -413,8 +426,7 @@
         {
             "name": "ios-device-build",
             "inherits": "ci-base",
-            "description":
-                "iOS device (iphoneos) library build coverage \u2014 wiring check, nothing runs.",
+            "description": "iOS device (iphoneos) library build coverage \u2014 wiring check, nothing runs.",
             "binaryDir": "${sourceDir}/build/ci/ios-device",
             "cacheVariables": {
                 "CMAKE_SYSTEM_NAME": "iOS",
@@ -555,6 +567,20 @@
         {
             "name": "macos-universal-tests-static",
             "configurePreset": "macos-universal-tests-static"
+        },
+        {
+            "name": "ci-install-shared",
+            "configurePreset": "ci-install-shared",
+            "targets": [
+                "anira"
+            ]
+        },
+        {
+            "name": "ci-install-static",
+            "configurePreset": "ci-install-static",
+            "targets": [
+                "anira"
+            ]
         },
         {
             "name": "desktop-tests-rtsan",

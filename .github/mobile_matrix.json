@@ -1,0 +1,6 @@
+[
+ {"name": "onnx-litert-shared", "shared": "ON", "pr": true, "backends": "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF"},
+ {"name": "onnx-litert-static", "shared": "OFF", "backends": "-DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF", "pr": false},
+ {"name": "tflite-shared", "shared": "ON", "backends": "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON -DANIRA_WITH_EXECUTORCH=OFF", "pr": false},
+ {"name": "no-backend-shared", "shared": "ON", "backends": "-DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF", "pr": false}
+]

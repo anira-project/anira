@@ -183,7 +183,9 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
     # anira and the fetched tanh-lib must pin the same tanh-tooling tag
     # (modules-version.cmake warns otherwise).
-    GIT_TAG v0.1.0
+    # v0.1.0 + the upstream container coverage of tanh-lab/tanh-lib#31, which the
+    # trimmed test/utils container tests rely on.
+    GIT_TAG 751b2b19a27d06a4d817e710008ce076452910bc
 )
 FetchContent_MakeAvailable(tanh-lib)
 
