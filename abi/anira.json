@@ -4212,7 +4212,7 @@
             {
               "type": "const char*",
               "name": "base_dir",
-              "doc": "Directory relative model paths resolve against, or NULL to keep them as written."
+              "doc": "Directory relative model paths resolve against (the joined path uses forward slashes on every platform; a rooted path stays as written), or NULL to keep every path as written."
             },
             {
               "type": "anira_model_config**",

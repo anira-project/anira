@@ -261,8 +261,12 @@ void write_exts(Json& object, const anira::capi::ExtBag& bag) {
 std::string resolve_path(const std::string& path, const char* base_dir) {
     if (base_dir == nullptr || base_dir[0] == '\0' || path.empty()) { return path; }
     const std::filesystem::path p(path);
-    if (p.is_absolute()) { return path; }
-    return (std::filesystem::path(base_dir) / p).lexically_normal().string();
+    // A rooted path stays as written. On Windows "/abs/x" has no drive letter and is not
+    // absolute there, yet it is not relative to base_dir either.
+    if (p.is_absolute() || p.has_root_directory() || p.has_root_name()) { return path; }
+    // Forward slashes on every platform: they are what the JSON file carries, what to_json
+    // writes back, and what the file APIs of every supported platform accept.
+    return (std::filesystem::path(base_dir) / p).lexically_normal().generic_string();
 }
 
 // ---- v3 model file (8.1) ------------------------------------------------------------------

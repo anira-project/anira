@@ -1232,8 +1232,9 @@ ANIRA_API void ANIRA_CALL anira_job_options_destroy(anira_job_options* options);
  * @param utf8 The document text (a v3 model file, or a v2 document with an inference_config
  *        root).
  * @param len Length of utf8 in bytes.
- * @param base_dir Directory relative model paths resolve against, or NULL to keep them as
- *        written.
+ * @param base_dir Directory relative model paths resolve against (the joined path uses forward
+ *        slashes on every platform; a rooted path stays as written), or NULL to keep
+ *        every path as written.
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK or ANIRA_SUCCESS_UPGRADED; ANIRA_ERROR_JSON with the key path and the
