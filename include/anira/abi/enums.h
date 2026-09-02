@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-// NOLINTBEGIN(readability-identifier-naming)
+// NOLINTBEGIN(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 /**
  * @brief Boolean at the boundary: 0 is false, any other value true.
@@ -599,7 +599,7 @@ typedef enum anira_stage_phase {
     ANIRA_STAGE_PHASE_FORCE32 = 0x7fffffff
 } anira_stage_phase;
 
-// NOLINTEND(readability-identifier-naming)
+// NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 #ifdef __cplusplus
 }

@@ -22,7 +22,7 @@
 extern "C" {
 #endif
 
-// NOLINTBEGIN(readability-identifier-naming)
+// NOLINTBEGIN(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 /**
  * @brief Return status of every fallible entry point: 0 is success, positive values are
@@ -155,7 +155,7 @@ typedef struct anira_error {
  */
 ANIRA_API const char* ANIRA_CALL anira_status_string(anira_status status);
 
-// NOLINTEND(readability-identifier-naming)
+// NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 #ifdef __cplusplus
 }

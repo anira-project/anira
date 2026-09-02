@@ -98,6 +98,10 @@ PTR_SLOT = (8, 8)  # ANIRA_PTR: a union of the pointer with a uint64_t
 
 WIDTH = 100
 DOC_WIDTH = 96
+NOLINT_CHECKS = "readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses"
+# Target-width integers never sit in a record: a Tier-1 layout must be identical on
+# wasm32, LP64 and LLP64, and a Tier-2 record is read by struct_size, never by target.
+TARGET_WIDTH_TYPES = {"size_t", "ptrdiff_t", "intptr_t", "uintptr_t", "long", "unsigned long", "long long", "unsigned long long", "int", "unsigned", "unsigned int", "short", "unsigned short"}
 
 
 class RegistryError(Exception):
@@ -273,6 +277,8 @@ def validate(reg: dict) -> None:
             for f in fields:
                 if f.get("type") in enum_names:
                     err(f"{where}: field {f['name']} is enum-typed; struct fields carry uint32_t")
+                if "ptr" not in f and f.get("type", "").replace("const ", "").strip() in TARGET_WIDTH_TYPES:
+                    err(f"{where}: field {f['name']} has a target-width type ({f['type']}); records carry fixed-width integers only")
                 if not re.match(r"^[a-z][a-z0-9_]*$", f["name"]):
                     err(f"{where}: field {f['name']} must be lower_case")
             tier = ent.get("tier")
@@ -547,7 +553,9 @@ def emit_header(reg: dict, header: dict) -> str:
     out.append('extern "C" {')
     out.append("#endif")
     out.append("")
-    out.append("// NOLINTBEGIN(readability-identifier-naming)")
+    # C names and C spellings in a header the C++ tidy config also sees: typedef (not
+    # using), type names inside ANIRA_INIT / ANIRA_PTR that no parentheses can wrap.
+    out.append(f"// NOLINTBEGIN({NOLINT_CHECKS})")
     out.append("")
     for ent in header.get("entities", []):
         kind = ent["kind"]
@@ -573,7 +581,7 @@ def emit_header(reg: dict, header: dict) -> str:
             out.append(function_doc(ent))
             out.append(function_decl(ent))
         out.append("")
-    out.append("// NOLINTEND(readability-identifier-naming)")
+    out.append(f"// NOLINTEND({NOLINT_CHECKS})")
     out.append("")
     out.append("#ifdef __cplusplus")
     out.append("}")

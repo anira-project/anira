@@ -1,8 +1,16 @@
+#include <anira/ContextConfig.h>
+#include <anira/InferenceConfig.h>
+#include <anira/InferenceHandler.h>
+#include <anira/PrePostProcessor.h>
+#include <anira/abi/enums.h>
 #include <anira/abi/log.h>
-#include <anira/anira.h>
+#include <anira/abi/version.h>
+#include <anira/scheduler/Context.h>
+#include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <thread>
 #include <vector>
 
@@ -79,7 +87,7 @@ TEST(AbiLog, NullArgumentsAreIgnored) {
 
 TEST(AbiLog, RtRecordReachesTheSinkWhenTheHostDrains) {
     RecordCollector collector;
-    Instance instance{make_context_config(LogDrain::Manual)};
+    const Instance instance{make_context_config(LogDrain::Manual)};
     // Error level: the only one tanh-lib compiles in for Release builds.
     anira_log_rt(ANIRA_LOG_ERROR, "anira.test", "abi rt record", 1, 2);
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -91,7 +99,7 @@ TEST(AbiLog, RtRecordReachesTheSinkWhenTheHostDrains) {
 
 TEST(AbiLog, SyncRecordReachesTheSinkImmediately) {
     RecordCollector collector;
-    Instance instance{make_context_config(LogDrain::Manual)};
+    const Instance instance{make_context_config(LogDrain::Manual)};
     anira_log(ANIRA_LOG_ERROR, "anira.test", "abi sync record");
     EXPECT_TRUE(collector.has("abi sync record", "native"));
 }

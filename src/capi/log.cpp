@@ -1,6 +1,10 @@
+#include <anira/ContextConfig.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/log.h>
 #include <anira/scheduler/Context.h>
 #include <anira/utils/Logger.h>
+#include <tanh/core/Logger.h>
 
 #include <atomic>
 #include <cstddef>
@@ -17,17 +21,16 @@ anira::LogLevel to_anira_level(anira_log_level level) noexcept {
         case ANIRA_LOG_DEBUG: return anira::LogLevel::Debug;
         case ANIRA_LOG_INFO: return anira::LogLevel::Info;
         case ANIRA_LOG_WARNING: return anira::LogLevel::Warning;
-        case ANIRA_LOG_ERROR: return anira::LogLevel::Error;
-        default: return anira::LogLevel::Error;
+        default: return anira::LogLevel::Error;  // ANIRA_LOG_ERROR and every stray value
     }
 }
 
 }  // namespace
 
 size_t ANIRA_CALL anira_drain_log(void) {
-    try {
-        return anira::Context::drain_log();
-    } catch (...) { return 0; }
+    ANIRA_CAPI_BEGIN
+    return anira::Context::drain_log();
+    ANIRA_CAPI_END_VALUE(nullptr, 0)
 }
 
 void ANIRA_CALL anira_log_rt(anira_log_level level,
@@ -58,11 +61,10 @@ void ANIRA_CALL anira_log_rt(anira_log_level level,
 void ANIRA_CALL anira_log(anira_log_level level, const char* group, const char* message) {
 #ifdef ENABLE_LOGGING
     if (group == nullptr || message == nullptr) { return; }
-    try {
-        thl::Logger::logf(anira::to_thl_log_level(to_anira_level(level)), group, "%s", message);
-    } catch (...) {
-        // A sink that throws must not unwind through a C frame.
-    }
+    // A sink that throws must not unwind through a C frame: the firewall swallows it.
+    ANIRA_CAPI_BEGIN
+    thl::Logger::logf(anira::to_thl_log_level(to_anira_level(level)), group, "%s", message);
+    ANIRA_CAPI_END_VOID(nullptr)
 #else
     static_cast<void>(level);
     static_cast<void>(group);

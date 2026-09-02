@@ -33,6 +33,7 @@ private:
 
 /// Writes status and a printf-formatted message into err (nullable), truncated to the
 /// record's capacity and always NUL-terminated.
+// NOLINTNEXTLINE(modernize-avoid-variadic-functions) printf-style by design
 void fail(anira_error* err, anira_status status, const char* fmt, ...) noexcept;
 void vfail(anira_error* err, anira_status status, const char* fmt, std::va_list args) noexcept;
 

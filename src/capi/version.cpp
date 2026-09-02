@@ -1,9 +1,13 @@
+#include <anira/abi/build_info.h>
+#include <anira/abi/export.h>
+#include <anira/abi/status.h>
 #include <anira/abi/version.h>
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 
-#include "capi_internal.h"
 // Every ABI header: the proc table below names every promised entry point.
 #include "generated/abi_headers.inc"
 
@@ -21,13 +25,14 @@ struct ProcEntry {
 const ProcEntry* proc_table(std::size_t& count) {
     // reinterpret_cast of a function pointer to void* is conditionally supported and is
     // what every dlsym-style host does on the platforms anira ships on.
-    static const ProcEntry k_table[] = {
-#define ANIRA_PROC(name) {#name, reinterpret_cast<void*>(&name)},
+    // NOLINTNEXTLINE(bugprone-macro-parentheses) #name cannot be parenthesized
+#define ANIRA_PROC(name) ProcEntry{#name, reinterpret_cast<void*>(&(name))},
+    static const std::array k_table{
 #include "generated/proc_table.inc"
-#undef ANIRA_PROC
     };
-    count = sizeof(k_table) / sizeof(k_table[0]);
-    return k_table;
+#undef ANIRA_PROC
+    count = k_table.size();
+    return k_table.data();
 }
 
 }  // namespace
@@ -37,11 +42,12 @@ uint32_t ANIRA_CALL anira_abi_version(void) {
 }
 
 anira_status ANIRA_CALL anira_check_abi(uint32_t header_abi_version) {
-    if (ANIRA_ABI_VERSION_MAJOR(header_abi_version) != ANIRA_ABI_MAJOR) {
+    constexpr uint32_t k_library_major = ANIRA_ABI_MAJOR;
+    if (ANIRA_ABI_VERSION_MAJOR(header_abi_version) != k_library_major) {
         return ANIRA_ERROR_ABI_VERSION;
     }
     // While the major is 0 nothing is promised: the pair must match exactly.
-    if (ANIRA_ABI_MAJOR == 0) {
+    if (k_library_major == 0) {
         return header_abi_version == ANIRA_ABI_VERSION ? ANIRA_OK : ANIRA_ERROR_ABI_VERSION;
     }
     return ANIRA_ABI_VERSION_MINOR(header_abi_version) <= ANIRA_ABI_MINOR ? ANIRA_OK

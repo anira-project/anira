@@ -1,12 +1,13 @@
 #include <anira/abi/status.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstring>
 #include <set>
 #include <string>
 
 namespace {
-const anira_status k_every_status[] = {
+constexpr std::array k_every_status{
 #define ANIRA_STATUS_TEXT(name, text) name,
 #include "capi/generated/status_strings.inc"
 #undef ANIRA_STATUS_TEXT
@@ -33,11 +34,15 @@ TEST(AbiStatus, EveryStatusHasDistinctStaticText) {
         EXPECT_TRUE(texts.insert(text).second) << "duplicate text: " << text;
         EXPECT_EQ(anira_status_string(status), text) << "static storage";
     }
-    EXPECT_EQ(texts.size(), sizeof(k_every_status) / sizeof(k_every_status[0]));
+    EXPECT_EQ(texts.size(), k_every_status.size());
 }
 
 TEST(AbiStatus, UnknownValuesYieldUnknownStatus) {
+    // Out-of-range values on purpose: a newer library may return a status this header
+    // does not know, and the text lookup must not assume the enum is closed.
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
     EXPECT_STREQ(anira_status_string(static_cast<anira_status>(12345)), "unknown status");
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
     EXPECT_STREQ(anira_status_string(static_cast<anira_status>(-12345)), "unknown status");
     EXPECT_STREQ(anira_status_string(ANIRA_STATUS_FORCE32), "unknown status");
 }

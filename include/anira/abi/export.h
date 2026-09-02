@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-// NOLINTBEGIN(readability-identifier-naming)
+// NOLINTBEGIN(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 #if defined(__EMSCRIPTEN__)
 #define ANIRA_API __attribute__((visibility("default"))) /* plus the generated -sEXPORTED_FUNCTIONS */
@@ -80,7 +80,7 @@ extern "C" {
 #define ANIRA_DEPRECATED(msg)
 #endif
 
-// NOLINTEND(readability-identifier-naming)
+// NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 #ifdef __cplusplus
 }

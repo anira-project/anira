@@ -1,11 +1,14 @@
+#include <anira/abi/build_info.h>
+#include <anira/abi/status.h>
 #include <anira/abi/version.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 
 // The proc table the library was built from: every promised name must resolve.
 namespace {
-const char* const k_promised_names[] = {
+constexpr std::array k_promised_names{
 #define ANIRA_PROC(name) #name,
 #include "capi/generated/proc_table.inc"
 #undef ANIRA_PROC
@@ -32,10 +35,12 @@ TEST(AbiVersion, CheckAbiRefusesANewerMinorAndAnotherMajor) {
 }
 
 TEST(AbiVersion, CheckAbiOfAnOlderMinorDependsOnTheMajor) {
-    if (ANIRA_ABI_MINOR == 0) { GTEST_SKIP() << "no older minor exists at minor 0"; }
-    const uint32_t older = ANIRA_MAKE_ABI_VERSION(ANIRA_ABI_MAJOR, ANIRA_ABI_MINOR - 1);
+    constexpr uint32_t k_major = ANIRA_ABI_MAJOR;
+    constexpr uint32_t k_minor = ANIRA_ABI_MINOR;
+    if (k_minor == 0) { GTEST_SKIP() << "no older minor exists at minor 0"; }
+    const uint32_t older = ANIRA_MAKE_ABI_VERSION(k_major, k_minor - 1);
     // Exact match while the major is 0 (nothing promised); compatible from v3.0.0 on.
-    if (ANIRA_ABI_MAJOR == 0) {
+    if (k_major == 0) {
         EXPECT_EQ(anira_check_abi(older), ANIRA_ERROR_ABI_VERSION);
     } else {
         EXPECT_EQ(anira_check_abi(older), ANIRA_OK);

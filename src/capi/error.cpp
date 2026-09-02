@@ -1,7 +1,9 @@
+#include <anira/abi/export.h>
 #include <anira/abi/status.h>
 
 #include <cstdarg>
 #include <cstdio>
+#include <exception>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -23,6 +25,7 @@ void vfail(anira_error* err, anira_status status, const char* fmt, std::va_list 
     if (written < 0) { err->message[0] = '\0'; }
 }
 
+// NOLINTNEXTLINE(modernize-avoid-variadic-functions) printf-style by design
 void fail(anira_error* err, anira_status status, const char* fmt, ...) noexcept {
     std::va_list args;
     va_start(args, fmt);

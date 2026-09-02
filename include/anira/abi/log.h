@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-// NOLINTBEGIN(readability-identifier-naming)
+// NOLINTBEGIN(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 /**
  * @brief anira_log_record flag: the record came through the real-time queue.
@@ -133,7 +133,7 @@ ANIRA_API void ANIRA_CALL anira_log_rt(anira_log_level level,
  */
 ANIRA_API void ANIRA_CALL anira_log(anira_log_level level, const char* group, const char* message);
 
-// NOLINTEND(readability-identifier-naming)
+// NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 #ifdef __cplusplus
 }

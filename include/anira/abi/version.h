@@ -24,7 +24,7 @@
 extern "C" {
 #endif
 
-// NOLINTBEGIN(readability-identifier-naming)
+// NOLINTBEGIN(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 /**
  * @brief Packs an ABI pair into one uint32_t: major in the high 16 bits, minor in the low 16.
@@ -99,7 +99,7 @@ ANIRA_API const char* ANIRA_CALL anira_version_string(void) ANIRA_NONBLOCKING;
  */
 ANIRA_API void* ANIRA_CALL anira_get_proc_address(const char* name);
 
-// NOLINTEND(readability-identifier-naming)
+// NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 #ifdef __cplusplus
 }

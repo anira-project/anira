@@ -96,16 +96,14 @@ anira_abi_consumer_target(anira_header_c11 C)
 anira_abi_consumer_target(anira_header_cxx17 CXX)
 
 # ---- the two umbrellas in one TU ----------------------------------------------------------
-# header_coexist.cpp includes <anira/anira.h> then the C headers; the generated wrapper
-# reverses the order. Only the default warnings, as errors: a macro redefined between the
-# two umbrellas (C4005 / -Wmacro-redefined / GCC's "redefined") is what this gate is for,
-# and the v2 headers are not held to -Wall -Wextra. The include and define set is the one
+# header_coexist.inc includes <anira/anira.h> and the C headers in the order its two
+# drivers select. Only the default warnings, as errors: a macro redefined between the two
+# umbrellas (C4005 / -Wmacro-redefined / GCC's "redefined") is what this gate is for, and
+# the v2 headers are not held to -Wall -Wextra. The include and define set is the one
 # anira_header_isolation (test/CMakeLists.txt) uses for the v2 umbrella.
 if(NOT _abi_on_device)
-    anira_abi_write_if_changed("${_gate4_dir}/coexist_abi_first.cpp"
-        "#define ANIRA_COEXIST_ABI_FIRST 1\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/header_coexist.cpp\"\n")
     add_library(anira_header_coexist OBJECT EXCLUDE_FROM_ALL
-        header_coexist.cpp "${_gate4_dir}/coexist_abi_first.cpp")
+        header_coexist_v2_first.cpp header_coexist_abi_first.cpp)
     set_target_properties(anira_header_coexist PROPERTIES
         CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_include_directories(anira_header_coexist PRIVATE
