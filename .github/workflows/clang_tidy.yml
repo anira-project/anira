@@ -90,7 +90,7 @@ jobs:
       - uses: tanh-lab/ci-actions/clang-tidy-check@v0.3.10
         with:
           PRESET: clang-tidy
-          SOURCES: "src/backends/ src/benchmark/ src/scheduler/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/backends/ test/scheduler/ test/utils/ test/system/ test/support/ test/contracts/unload/ test/contracts/header_isolation.cpp test/contracts/test_BackendLinkage.cpp test/*.cpp"
+          SOURCES: "src/backends/ src/benchmark/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/backends/ test/scheduler/ test/utils/ test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp test/contracts/test_BackendLinkage.cpp test/*.cpp"
           # Empty on queue runs -> the action sweeps SOURCES.
           FILES: ${{ steps.diff.outputs.files }}
 

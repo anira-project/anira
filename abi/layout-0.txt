@@ -1,0 +1,14 @@
+struct anira_error size 520 align 4
+field anira_error.status offset 0 size 4
+field anira_error.reserved offset 4 size 4
+field anira_error.message offset 8 size 512
+struct anira_log_record size 56 align 8
+field anira_log_record.level offset 0 size 4
+field anira_log_record.flags offset 4 size 4
+field anira_log_record.dropped_before offset 8 size 4
+field anira_log_record.reserved offset 12 size 4
+field anira_log_record.sequence offset 16 size 8
+field anira_log_record.timestamp_ms offset 24 size 8
+field anira_log_record.monotonic_ns offset 32 size 8
+field anira_log_record.group offset 40 size 8
+field anira_log_record.message offset 48 size 8

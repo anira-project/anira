@@ -3,7 +3,7 @@ name: build_test_mobile
 # Mobile build + test. The desktop matrix lives in build_test.yml; mobile is
 # split out because it cross-compiles and runs the suite on a simulator/emulator.
 # Each per-component gtest binary (test_utils, test_scheduler, test_backends,
-# test_handler) is launched once per target instead of one launch per case.
+# test_handler, test_abi) is launched once per target instead of one launch per case.
 #
 # Backend coverage (LibTorch has no mobile build, so it is never enabled here):
 # ONE iOS job runs the sets sequentially — ONNX+LiteRT (device build + simulator
@@ -103,7 +103,7 @@ jobs:
           # resolve as-is; failures are collected so one run reports every suite.
           rc=0
           for build in build-ios-sim build-ios-sim-tflite; do
-            for t in test_utils test_scheduler test_backends test_handler; do
+            for t in test_utils test_scheduler test_backends test_handler test_abi; do
               xcrun simctl spawn "$UDID" "$PWD/$build/test/$t.app/$t" --gtest_brief=1 || rc=1
             done
           done
@@ -204,7 +204,7 @@ jobs:
         uses: tanh-lab/ci-actions/cmake-test-android@v0.3.10
         with:
           PRESET: android-emulator-tests
-          TEST_BINARIES: "test_utils test_scheduler test_backends test_handler"
+          TEST_BINARIES: "test_utils test_scheduler test_backends test_handler test_abi"
           API_LEVEL: "34"
           ARCH: x86_64
           TARGET: google_apis

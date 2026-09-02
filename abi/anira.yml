@@ -1,0 +1,824 @@
+# anira ABI registry -- the single source of truth for the versioned C ABI.
+#
+# tools/abi/gen.py validates this file against the header conventions of
+# docs/anira-v3-architecture.md (section 6a) and generates include/anira/abi/*.h, the
+# TypeScript mirror, the symbol and wasm export lists, the proc table, the layout
+# test and the enum reference pages. Never edit the generated files.
+#
+# Shape: `headers` is an ordered list; each header lists its `entities` in the order
+# they appear in the file. Entity kinds: verbatim, typedef, define, enum, handles,
+# struct, callback, function. Every enum value is an explicit integer (hex strings
+# keep their spelling), every function carries a thread tag from the vocabulary and
+# a `status` (promised | draft) plus the ABI pair it appeared in (`since`).
+#
+# Content transcribed from the architecture document's C blocks; where the document
+# left a value implicit (the Tier-1 struct ids 4..6) the choice is stated in the doc
+# field of the entity.
+
+abi_file_major: 0
+
+headers:
+  # ----------------------------------------------------------------------------
+  - file: export.h
+    guard: ANIRA_ABI_EXPORT_H
+    brief: "Export, calling-convention and attribute macros of the C ABI."
+    doc: >-
+      Self-contained (stdint.h only). ANIRA_API is the export allowlist: hidden
+      visibility everywhere, dllexport/dllimport on Windows, empty inside a static
+      embedding. ANIRA_CALL pins __cdecl on 32-bit Windows. ANIRA_NONBLOCKING marks the
+      real-time entries and callback slots for clang's function-effects analysis and
+      RealtimeSanitizer. ANIRA_INIT spells a compound literal in C and a braced temporary
+      in C++; ANIRA_PTR is the 8-byte pointer slot of every Tier-1 record.
+    includes: ["<stdint.h>"]
+    entities:
+      - kind: verbatim
+        text: |
+          #if defined(__EMSCRIPTEN__)
+          #define ANIRA_API __attribute__((visibility("default"))) /* plus the generated -sEXPORTED_FUNCTIONS */
+          #elif defined(ANIRA_STATIC)
+          #define ANIRA_API /* hidden inside the embedding plugin; PUBLIC on static targets */
+          #elif defined(_WIN32)
+          #if defined(ANIRA_BUILDING)
+          #define ANIRA_API __declspec(dllexport) /* dllexport is the allowlist on PE */
+          #else
+          #define ANIRA_API __declspec(dllimport)
+          #endif
+          #elif defined(__GNUC__) || defined(__clang__)
+          #define ANIRA_API __attribute__((visibility("default"))) /* plus the version script (SYMBOL anira_*) */
+          #else
+          #define ANIRA_API
+          #endif
+
+          #if defined(_WIN32) && !defined(_WIN64)
+          #define ANIRA_CALL __cdecl /* fixed forever, as CLAP_ABI */
+          #else
+          #define ANIRA_CALL
+          #endif
+
+          #if defined(__clang__) && defined(__has_attribute)
+          #if __has_attribute(nonblocking)
+          #define ANIRA_NONBLOCKING __attribute__((nonblocking))
+          #endif
+          #endif
+          #ifndef ANIRA_NONBLOCKING
+          #define ANIRA_NONBLOCKING
+          #endif
+
+          #if defined(__cplusplus)
+          #define ANIRA_NOEXCEPT noexcept
+          #define ANIRA_INIT(type, ...) (type{__VA_ARGS__})
+          #else
+          #define ANIRA_NOEXCEPT
+          #define ANIRA_INIT(type, ...) ((type){__VA_ARGS__})
+          #endif
+
+          /* An 8-byte pointer slot on ILP32 and LP64 alike: zero the struct before use, the high
+             half of the slot is otherwise undefined on 32-bit targets. */
+          #define ANIRA_PTR(T, name) \
+              union {                \
+                  T* name;           \
+                  uint64_t name##_bits; \
+              }
+
+          #if defined(_MSC_VER) && !defined(__clang__)
+          #define ANIRA_DEPRECATED(msg) __declspec(deprecated(msg))
+          #elif defined(__GNUC__) || defined(__clang__)
+          #define ANIRA_DEPRECATED(msg) __attribute__((deprecated(msg)))
+          #else
+          #define ANIRA_DEPRECATED(msg)
+          #endif
+
+  # ----------------------------------------------------------------------------
+  - file: status.h
+    guard: ANIRA_ABI_STATUS_H
+    brief: "Status codes, the anira_error record and the opaque handle types."
+    doc: >-
+      Every fallible function returns anira_status; positive values are informational
+      successes and the set a function may return is not frozen, so the stable failure
+      test is ANIRA_FAILED(s), never s != ANIRA_OK. Functions that can produce a message
+      take a nullable anira_error* as their last parameter and fill it on failure, with
+      every out-parameter left untouched.
+    includes: ["<stdint.h>", "export.h"]
+    entities:
+      - kind: enum
+        name: anira_status
+        terminator: ANIRA_STATUS_FORCE32
+        doc: "Return status of every fallible entry point: 0 is success, positive values are informational successes, negative values are failures."
+        values:
+          - {name: ANIRA_OK, value: 0, text: "success", doc: "Success."}
+          - {name: ANIRA_SUCCESS_UPGRADED, value: 1, text: "success (version 2 document auto-upgraded)", doc: "Success; a version 2 JSON document was auto-upgraded (section 8.4)."}
+          - {name: ANIRA_INCOMPLETE, value: 2, text: "success (enumeration buffer too short)", doc: "Success; the enumeration buffer was too short and holds what fit."}
+          - {name: ANIRA_TIMEOUT, value: 3, text: "timed out", doc: "A wait ran out of time."}
+          - {name: ANIRA_PENDING, value: 4, text: "pending", doc: "Not yet complete."}
+          - {name: ANIRA_ERROR_UNKNOWN, value: -1, text: "unknown error", doc: "Unclassified failure."}
+          - {name: ANIRA_ERROR_INVALID_ARGUMENT, value: -2, text: "invalid argument", doc: "A single argument is out of range or NULL where a value is required."}
+          - {name: ANIRA_ERROR_INVALID_STATE, value: -3, text: "invalid state", doc: "The object is not in a state that allows the call."}
+          - {name: ANIRA_ERROR_OUT_OF_MEMORY, value: -4, text: "out of memory", doc: "An allocation failed."}
+          - {name: ANIRA_ERROR_NOT_SUPPORTED, value: -5, text: "not supported in this build", doc: "Backend, domain or extension kind not in this build."}
+          - {name: ANIRA_ERROR_NO_SUCH_FILE, value: -6, text: "no such file", doc: "A path does not resolve to a readable file."}
+          - {name: ANIRA_ERROR_MODEL_LOAD, value: -7, text: "model load failed", doc: "The engine refused the model."}
+          - {name: ANIRA_ERROR_ENGINE, value: -8, text: "engine error", doc: "The engine failed at run time."}
+          - {name: ANIRA_ERROR_CONFIG, value: -9, text: "configuration error", doc: "Prepare-time legality (section 2), and the real-time refusals recorded in anira_handler_rt_error: a submitted tensor's dtype or axis-tag sequence, a ring or tensor accessor's dtype, a non-F32 Static slot met by the float scalars."}
+          - {name: ANIRA_ERROR_EXTENSION_UNCONSUMED, value: -10, text: "extension not consumed by any stage or adapter", doc: "An extension was set that nothing in the pipeline consumes (section 1b)."}
+          - {name: ANIRA_ERROR_EXTENSION_UNKNOWN, value: -11, text: "unknown extension kind", doc: "The extension kind is not registered in this build."}
+          - {name: ANIRA_ERROR_EDGE_UNREACHABLE, value: -12, text: "no edge between the domain and the backend", doc: "No edge connects the tensor's domain with the selected backend (section 7)."}
+          - {name: ANIRA_ERROR_BUDGET, value: -13, text: "the hard contract's budget cannot be met", doc: "Hard-contract validation failed."}
+          - {name: ANIRA_ERROR_CAPACITY, value: -14, text: "no free slot or ring full", doc: "Real-time: no free ticket slot, or a ring is full."}
+          - {name: ANIRA_ERROR_TICKET_STALE, value: -15, text: "stale ticket", doc: "The ticket names a recycled slot."}
+          - {name: ANIRA_ERROR_WRONG_CONTRACT, value: -16, text: "wrong contract kind for this entry", doc: "A Hard entry under an Async contract or vice versa."}
+          - {name: ANIRA_ERROR_NOT_PREPARED, value: -17, text: "handler not prepared", doc: "The handler has not been prepared."}
+          - {name: ANIRA_ERROR_JSON, value: -18, text: "malformed or unknown JSON", doc: "A JSON document is malformed or names an unknown value; the message carries the key path."}
+          - {name: ANIRA_ERROR_ABI_VERSION, value: -19, text: "ABI version mismatch", doc: "anira_check_abi: the header and the library disagree."}
+          - {name: ANIRA_ERROR_BUFFER_TOO_SMALL, value: -20, text: "buffer too small", doc: "A (buf, cap, out_len) text buffer is too small; out_len holds the required size."}
+          - {name: ANIRA_ERROR_DEVICE, value: -21, text: "device error", doc: "A device descriptor was refused or a device call failed."}
+          - {name: ANIRA_ERROR_EXTENSION_VERSION, value: -22, text: "extension version not registered", doc: "The extension kind is known but not at that version."}
+          - {name: ANIRA_ERROR_INTERNAL, value: -100, text: "internal error", doc: "An exception the firewall could not classify; a bug in anira."}
+          - {name: ANIRA_STATUS_FORCE32, value: "0x7fffffff"}
+      - kind: define
+        name: ANIRA_FAILED
+        params: [s]
+        value: "((int32_t)(s) < 0)"
+        ts: "(s: number): boolean => (s | 0) < 0"
+        doc: "The only stable failure test: true for every negative status. A minor may add positive (informational) statuses, so never compare against ANIRA_OK."
+      - kind: define
+        name: ANIRA_SUCCEEDED
+        params: [s]
+        value: "((int32_t)(s) >= 0)"
+        ts: "(s: number): boolean => (s | 0) >= 0"
+        doc: "The complement of ANIRA_FAILED."
+      - kind: define
+        name: ANIRA_ERROR_MESSAGE_CAPACITY
+        value: "512"
+        doc: "Capacity of anira_error::message including the terminating NUL."
+      - kind: handles
+        doc: "The opaque handle types. Config handles are value-like (copied at anira_handler_create, destroyable right after); the runtime handles are refcounted internally. Every anira_<x>_destroy is NULL-safe."
+        names:
+          - anira_tensor_spec
+          - anira_model_config
+          - anira_machine_config
+          - anira_contract
+          - anira_job_options
+          - anira_pipeline
+          - anira_machine
+          - anira_capabilities
+          - anira_inference_thread
+          - anira_handler
+          - anira_plan_report
+      - kind: struct
+        name: anira_error
+        tier: 1
+        size: 520
+        align: 4
+        doc: "Caller-owned error record, filled by the callee on failure: the status and a NUL-terminated message. Tier 1: 520 bytes, frozen; identical on every target, so anira::Result<T> value-initialises it and TypeScript allocates it with anira_sizeof(ANIRA_STRUCT_ERROR)."
+        fields:
+          - {name: status, type: int32_t, doc: "The anira_status of the failure; ANIRA_OK after ANIRA_ERROR_INIT."}
+          - {name: reserved, type: uint32_t, doc: "Padding; zero."}
+          - {name: message, type: char, array: ANIRA_ERROR_MESSAGE_CAPACITY, doc: "UTF-8, NUL-terminated; empty when no message was produced."}
+        init:
+          name: ANIRA_ERROR_INIT
+          value: "ANIRA_OK, 0u, {0}"
+          doc: "An anira_error with ANIRA_OK and an empty message."
+      - kind: function
+        name: anira_status_string
+        returns: const char*
+        params:
+          - {type: anira_status, name: status, doc: "Any status, known or not."}
+        thread: thread-safe
+        status: promised
+        since: "0.1"
+        doc: "Static text for a status code, for diagnostics; never NULL. An unknown value yields \"unknown status\"."
+        return_doc: "A NUL-terminated string in static storage."
+
+  # ----------------------------------------------------------------------------
+  - file: version.h
+    guard: ANIRA_ABI_VERSION_H
+    brief: "ABI version packing and negotiation, and the library's release identity."
+    doc: >-
+      ANIRA_ABI_MAJOR / ANIRA_ABI_MINOR come from the generated build_info.h, derived from
+      the git tag by cmake/build-info.cmake: 0.N through the pre-releases, X.Y from
+      v3.0.0 on. anira_check_abi is the one negotiation call: exact match while the major
+      is 0, same major and a library minor at least the header's afterwards.
+    includes: ["<stdint.h>", "export.h", "status.h", "<anira/abi/build_info.h>"]
+    entities:
+      - kind: define
+        name: ANIRA_MAKE_ABI_VERSION
+        params: [major, minor]
+        value: "(((uint32_t)(major) << 16) | (uint32_t)(minor))"
+        ts: "(major: number, minor: number): number => ((major << 16) | minor) >>> 0"
+        doc: "Packs an ABI pair into one uint32_t: major in the high 16 bits, minor in the low 16."
+      - kind: define
+        name: ANIRA_ABI_VERSION
+        value: "ANIRA_MAKE_ABI_VERSION(ANIRA_ABI_MAJOR, ANIRA_ABI_MINOR)"
+        doc: "The packed ABI version this header was compiled against; what descriptors carry in abi_version and what anira_check_abi takes."
+      - kind: define
+        name: ANIRA_ABI_VERSION_MAJOR
+        params: [v]
+        value: "((uint32_t)(v) >> 16)"
+        ts: "(v: number): number => (v >>> 16) & 0xffff"
+        doc: "The major of a packed ABI version."
+      - kind: define
+        name: ANIRA_ABI_VERSION_MINOR
+        params: [v]
+        value: "((uint32_t)(v) & 0xffffu)"
+        ts: "(v: number): number => v & 0xffff"
+        doc: "The minor of a packed ABI version."
+      - kind: function
+        name: anira_abi_version
+        returns: uint32_t
+        params: []
+        thread: thread-safe
+        nonblocking: true
+        status: promised
+        since: "0.1"
+        doc: "The ANIRA_ABI_VERSION the library was built with."
+        return_doc: "The packed pair; unpack with ANIRA_ABI_VERSION_MAJOR / ANIRA_ABI_VERSION_MINOR."
+      - kind: function
+        name: anira_check_abi
+        returns: anira_status
+        params:
+          - {type: uint32_t, name: header_abi_version, doc: "The caller's ANIRA_ABI_VERSION."}
+        thread: thread-safe
+        nonblocking: true
+        status: promised
+        since: "0.1"
+        doc: "Negotiates the header the caller compiled against with the library it loaded: ANIRA_OK iff the majors are equal and the library's minor is at least the header's; while the major is 0 (before v3.0.0) the pair must match exactly."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_ABI_VERSION."
+      - kind: function
+        name: anira_version
+        returns: uint32_t
+        params: []
+        thread: thread-safe
+        nonblocking: true
+        status: promised
+        since: "0.1"
+        doc: "The library's release version, packed as ANIRA_MAKE_VERSION(major, minor, patch)."
+        return_doc: "The packed semver triple of the library."
+      - kind: function
+        name: anira_version_string
+        returns: const char*
+        params: []
+        thread: thread-safe
+        nonblocking: true
+        status: promised
+        since: "0.1"
+        doc: "The library's full version string (git describe without the leading v), e.g. \"3.0.0-alpha.1-12-gabc123\"; what ANIRA_VERSION_STRING was for the build that produced the library."
+        return_doc: "A NUL-terminated string in static storage."
+      - kind: function
+        name: anira_get_proc_address
+        returns: void*
+        params:
+          - {type: const char*, name: name, doc: "The entry point's name, e.g. \"anira_abi_version\"."}
+        thread: thread-safe
+        status: promised
+        since: "0.1"
+        doc: "Feature detection for dlopen hosts: the address of a promised entry point of this build, or NULL when the name is unknown, NULL, or the entry is not in this build."
+        return_doc: "The function's address cast to void*, or NULL."
+
+  # ----------------------------------------------------------------------------
+  - file: enums.h
+    guard: ANIRA_ABI_ENUMS_H
+    brief: "Every enum and pinned sentinel of the C ABI."
+    doc: >-
+      Every value is pinned independently of build options; every enum is a C enum with
+      explicit values and a _FORCE32 = 0x7fffffff terminator, appears as the enum type in
+      parameters and as uint32_t in struct fields, and is exactly four bytes. Engine and
+      execution provider are two independent axes. Reserved ranges are stated per enum.
+    includes: ["<stdint.h>"]
+    entities:
+      - kind: typedef
+        name: anira_bool
+        type: uint32_t
+        doc: "Boolean at the boundary: 0 is false, any other value true."
+      - kind: typedef
+        name: anira_dtype
+        type: uint32_t
+        doc: "Packed element type: code | bits << 8 | lanes << 16, whose little-endian bytes are exactly DLPack's DLDataType {uint8 code; uint8 bits; uint16 lanes}."
+      - kind: typedef
+        name: anira_ticket
+        type: uint32_t
+        doc: "A job ticket: slot in the low 16 bits, generation in the high 16; a value type, never a heap object."
+      - kind: enum
+        name: anira_dtype_code
+        terminator: ANIRA_DTYPE_CODE_FORCE32
+        doc: "The DLPack type codes carried in the low byte of an anira_dtype."
+        values:
+          - {name: ANIRA_DTYPE_INT, value: 0, doc: "Signed integer."}
+          - {name: ANIRA_DTYPE_UINT, value: 1, doc: "Unsigned integer."}
+          - {name: ANIRA_DTYPE_FLOAT, value: 2, doc: "IEEE floating point."}
+          - {name: ANIRA_DTYPE_OPAQUE, value: 3, doc: "Opaque handle."}
+          - {name: ANIRA_DTYPE_BFLOAT, value: 4, doc: "bfloat."}
+          - {name: ANIRA_DTYPE_COMPLEX, value: 5, doc: "Complex."}
+          - {name: ANIRA_DTYPE_BOOL, value: 6, doc: "Boolean."}
+          - {name: ANIRA_DTYPE_CODE_FORCE32, value: "0x7fffffff"}
+      - kind: define
+        name: ANIRA_MAKE_DTYPE
+        params: [code, bits, lanes]
+        value: "((uint32_t)(code) | ((uint32_t)(bits) << 8) | ((uint32_t)(lanes) << 16))"
+        ts: "(code: number, bits: number, lanes: number): number => (code | (bits << 8) | (lanes << 16)) >>> 0"
+        doc: "Packs an anira_dtype from a DLPack code, a bit width and a lane count."
+      - kind: define
+        name: ANIRA_DTYPE_CODE
+        params: [d]
+        value: "((d) & 0xffu)"
+        ts: "(d: number): number => d & 0xff"
+        doc: "The anira_dtype_code of a packed dtype."
+      - kind: define
+        name: ANIRA_DTYPE_BITS
+        params: [d]
+        value: "(((d) >> 8) & 0xffu)"
+        ts: "(d: number): number => (d >>> 8) & 0xff"
+        doc: "The bit width of a packed dtype."
+      - kind: define
+        name: ANIRA_DTYPE_LANES
+        params: [d]
+        value: "((d) >> 16)"
+        ts: "(d: number): number => d >>> 16"
+        doc: "The lane count of a packed dtype."
+      - {kind: define, name: ANIRA_DTYPE_F32, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)", ts: "0x00012002", doc: "32-bit float, one lane: the type of every v2 stream and the only one the Hard entries carry."}
+      - {kind: define, name: ANIRA_DTYPE_F16, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 16, 1)", ts: "0x00011002", doc: "16-bit float."}
+      - {kind: define, name: ANIRA_DTYPE_BF16, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_BFLOAT, 16, 1)", ts: "0x00011004", doc: "bfloat16."}
+      - {kind: define, name: ANIRA_DTYPE_I8, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_INT, 8, 1)", ts: "0x00010800", doc: "Signed 8-bit integer."}
+      - {kind: define, name: ANIRA_DTYPE_U8, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_UINT, 8, 1)", ts: "0x00010801", doc: "Unsigned 8-bit integer."}
+      - {kind: define, name: ANIRA_DTYPE_I16, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_INT, 16, 1)", ts: "0x00011000", doc: "Signed 16-bit integer."}
+      - {kind: define, name: ANIRA_DTYPE_I32, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_INT, 32, 1)", ts: "0x00012000", doc: "Signed 32-bit integer."}
+      - {kind: define, name: ANIRA_DTYPE_I64, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_INT, 64, 1)", ts: "0x00014000", doc: "Signed 64-bit integer."}
+      - {kind: define, name: ANIRA_DTYPE_BOOL8, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_BOOL, 8, 1)", ts: "0x00010806", doc: "8-bit boolean."}
+      - kind: define
+        name: ANIRA_MAX_RANK
+        value: "8"
+        doc: "Maximum tensor rank: the axis arrays of anira_tensor and anira_tensor_spec hold this many entries."
+      - kind: define
+        name: ANIRA_DYNAMIC
+        value: "((int64_t)-1)"
+        ts: "-1n"
+        doc: "A spec extent that is decided at run time; legal on the Time axis of a Streamed or Buffer spec only."
+      - kind: define
+        name: ANIRA_UNBOUNDED
+        value: "((int64_t)-1)"
+        ts: "-1n"
+        doc: "window_max without an upper limit."
+      - kind: enum
+        name: anira_domain
+        terminator: ANIRA_DOMAIN_FORCE32
+        doc: "Where a tensor's bytes live. Values 13..63 are reserved for later domains; every arm named here is pinned now even where no engine reads it before M4."
+        values:
+          - {name: ANIRA_DOMAIN_HOST, value: 0, doc: "Pageable host memory."}
+          - {name: ANIRA_DOMAIN_HOST_PINNED, value: 1, doc: "Page-locked host memory."}
+          - {name: ANIRA_DOMAIN_CUDA, value: 2, doc: "CUDA device memory."}
+          - {name: ANIRA_DOMAIN_GL_BUFFER, value: 3, doc: "An OpenGL buffer object."}
+          - {name: ANIRA_DOMAIN_VULKAN_BUFFER, value: 4, doc: "A VkBuffer with its VkDeviceMemory."}
+          - {name: ANIRA_DOMAIN_OPAQUE_FD, value: 5, doc: "Exported opaque memory (fd, or the NT handle on Windows)."}
+          - {name: ANIRA_DOMAIN_METAL_BUFFER, value: 6, doc: "An id<MTLBuffer>."}
+          - {name: ANIRA_DOMAIN_WGPU_BUFFER, value: 7, doc: "A WGPUBuffer of the machine's Dawn device."}
+          - {name: ANIRA_DOMAIN_DMABUF, value: 8, doc: "Exported buffer memory as a dma-buf."}
+          - {name: ANIRA_DOMAIN_IOSURFACE, value: 9, doc: "An IOSurfaceRef, plane 0, byte-image encoded."}
+          - {name: ANIRA_DOMAIN_AHARDWAREBUFFER, value: 10, doc: "An AHardwareBuffer* (BLOB)."}
+          - {name: ANIRA_DOMAIN_D3D12, value: 11, doc: "An ID3D12Resource*."}
+          - {name: ANIRA_DOMAIN_FRAME, value: 12, doc: "Reserved: the Frame side of a FrameToTensor edge (section 1a); nothing consumes it at v3.0.0."}
+          - {name: ANIRA_DOMAIN_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_sync_kind
+        terminator: ANIRA_SYNC_KIND_FORCE32
+        doc: "The kind of fence an anira_sync_token carries; NONE means the data is already visible."
+        values:
+          - {name: ANIRA_SYNC_NONE, value: 0, doc: "No fence: the data is visible."}
+          - {name: ANIRA_SYNC_QUEUE_ORDERED, value: 1, doc: "Complete when the producing queue reaches it; a same-queue consumer waits for nothing."}
+          - {name: ANIRA_SYNC_CUDA_EVENT, value: 2, doc: "A cudaEvent_t."}
+          - {name: ANIRA_SYNC_VK_TIMELINE, value: 3, doc: "A Vulkan timeline semaphore plus value."}
+          - {name: ANIRA_SYNC_GL_SYNC, value: 4, doc: "A GLsync."}
+          - {name: ANIRA_SYNC_SYNC_FILE_FD, value: 5, doc: "A sync_file fd (dma-buf / AHardwareBuffer world); owned by the token."}
+          - {name: ANIRA_SYNC_OPAQUE_FD_SEMAPHORE, value: 6, doc: "A Vulkan semaphore exported OPAQUE_FD, the only fence CUDA imports; owned by the token."}
+          - {name: ANIRA_SYNC_MTL_SHARED_EVENT, value: 7, doc: "An id<MTLSharedEvent> plus value."}
+          - {name: ANIRA_SYNC_D3D12_FENCE, value: 8, doc: "An ID3D12Fence* plus value."}
+          - {name: ANIRA_SYNC_KIND_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_tensor_flags
+        terminator: ANIRA_TENSOR_FLAGS_FORCE32
+        doc: "Bit flags of anira_tensor::flags."
+        values:
+          - {name: ANIRA_TENSOR_READ_ONLY, value: 1, doc: "The producer will not write; anira must not either."}
+          - {name: ANIRA_TENSOR_DISCARD_CONTENTS, value: 2, doc: "The previous contents need not be preserved."}
+          - {name: ANIRA_TENSOR_HOST_COHERENT, value: 4, doc: "Host writes are visible without an explicit flush."}
+          - {name: ANIRA_TENSOR_FLAGS_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_struct_id
+        terminator: ANIRA_STRUCT_ID_FORCE32
+        doc: "Identifies a record for anira_sizeof (M2): the six Tier-1 PODs and the enumerated Tier-2 records. Ids 0x0001xxxx are reserved for extension payloads, 0x0004xxxx for Emscripten-only structs. The document pins 1..3 and 7..11; 4..6 follow its Tier-1 table order."
+        values:
+          - {name: ANIRA_STRUCT_TENSOR, value: 1, doc: "anira_tensor (216 bytes)."}
+          - {name: ANIRA_STRUCT_SYNC_TOKEN, value: 2, doc: "anira_sync_token (24 bytes)."}
+          - {name: ANIRA_STRUCT_MEMORY_HANDLE, value: 3, doc: "anira_memory_handle (24 bytes)."}
+          - {name: ANIRA_STRUCT_STAGE_CTX, value: 4, doc: "anira_stage_ctx (64 bytes)."}
+          - {name: ANIRA_STRUCT_LOG_RECORD, value: 5, doc: "anira_log_record (56 bytes)."}
+          - {name: ANIRA_STRUCT_ERROR, value: 6, doc: "anira_error (520 bytes)."}
+          - {name: ANIRA_STRUCT_EDGE_INFO, value: 7, doc: "anira_edge_info (Tier 2)."}
+          - {name: ANIRA_STRUCT_PLAN_SLOT, value: 8, doc: "anira_plan_slot (Tier 2)."}
+          - {name: ANIRA_STRUCT_PLAN_EXT, value: 9, doc: "anira_plan_ext (Tier 2)."}
+          - {name: ANIRA_STRUCT_PLAN_INFO, value: 10, doc: "anira_plan_info (Tier 2)."}
+          - {name: ANIRA_STRUCT_BACKEND_ID, value: 11, doc: "anira_backend_id (Tier 2)."}
+          - {name: ANIRA_STRUCT_ID_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_container
+        terminator: ANIRA_CONTAINER_FORCE32
+        doc: "The container of a Frame (section 1a; values reserved at v3.0.0, consumed by abi/draft/frame.h)."
+        values:
+          - {name: ANIRA_CONTAINER_DMABUF, value: 0, doc: "dma-buf planes."}
+          - {name: ANIRA_CONTAINER_AHARDWAREBUFFER, value: 1, doc: "AHardwareBuffer."}
+          - {name: ANIRA_CONTAINER_IOSURFACE, value: 2, doc: "IOSurface / CVPixelBuffer."}
+          - {name: ANIRA_CONTAINER_DXGI, value: 3, doc: "DXGI shared resource."}
+          - {name: ANIRA_CONTAINER_VK_IMAGE, value: 4, doc: "VkImage."}
+          - {name: ANIRA_CONTAINER_GL_TEXTURE, value: 5, doc: "GL texture."}
+          - {name: ANIRA_CONTAINER_WGPU_TEXTURE, value: 6, doc: "WGPUTexture."}
+          - {name: ANIRA_CONTAINER_MTL_TEXTURE, value: 7, doc: "id<MTLTexture>."}
+          - {name: ANIRA_CONTAINER_HOST, value: 8, doc: "Host planes."}
+          - {name: ANIRA_CONTAINER_FORCE32, value: "0x7fffffff"}
+      - kind: define
+        name: ANIRA_FOURCC
+        params: [a, b, c, d]
+        value: "((uint32_t)(a) | ((uint32_t)(b) << 8) | ((uint32_t)(c) << 16) | ((uint32_t)(d) << 24))"
+        ts: "(a: number, b: number, c: number, d: number): number => (a | (b << 8) | (c << 16) | (d << 24)) >>> 0"
+        doc: "A DRM-style fourcc code from four characters."
+      - kind: enum
+        name: anira_pixel_format
+        terminator: ANIRA_PIXEL_FORMAT_FORCE32
+        doc: "Pixel formats of a Frame; every value is the literal DRM fourcc constant of the format the name abbreviates."
+        values:
+          - {name: ANIRA_PIXEL_NV12, value: "0x3231564e", doc: "ANIRA_FOURCC('N','V','1','2')."}
+          - {name: ANIRA_PIXEL_YUYV, value: "0x56595559", doc: "ANIRA_FOURCC('Y','U','Y','V')."}
+          - {name: ANIRA_PIXEL_UYVY, value: "0x59565955", doc: "ANIRA_FOURCC('U','Y','V','Y')."}
+          - {name: ANIRA_PIXEL_R8, value: "0x20203852", doc: "ANIRA_FOURCC('R','8',' ',' ')."}
+          - {name: ANIRA_PIXEL_RGBA8, value: "0x34324152", doc: "ANIRA_FOURCC('R','A','2','4')."}
+          - {name: ANIRA_PIXEL_BGRA8, value: "0x34324142", doc: "ANIRA_FOURCC('B','A','2','4')."}
+          - {name: ANIRA_PIXEL_XRGB8, value: "0x34325258", doc: "ANIRA_FOURCC('X','R','2','4')."}
+          - {name: ANIRA_PIXEL_FORMAT_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_color_matrix
+        terminator: ANIRA_COLOR_MATRIX_FORCE32
+        doc: "YCbCr matrix of a Frame."
+        values:
+          - {name: ANIRA_COLOR_BT601, value: 0, doc: "BT.601."}
+          - {name: ANIRA_COLOR_BT709, value: 1, doc: "BT.709."}
+          - {name: ANIRA_COLOR_BT2020, value: 2, doc: "BT.2020."}
+          - {name: ANIRA_COLOR_MATRIX_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_color_range
+        terminator: ANIRA_COLOR_RANGE_FORCE32
+        doc: "Sample range of a Frame."
+        values:
+          - {name: ANIRA_RANGE_LIMITED, value: 0, doc: "Limited (video) range."}
+          - {name: ANIRA_RANGE_FULL, value: 1, doc: "Full range."}
+          - {name: ANIRA_COLOR_RANGE_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_axis_tag
+        terminator: ANIRA_AXIS_TAG_FORCE32
+        doc: "The meaning of one axis of a tensor spec. Axis index order is model memory order (NCHW vs NHWC is just axis order); chunkers find the Time axis by tag."
+        values:
+          - {name: ANIRA_AXIS_BATCH, value: 0, doc: "Batch."}
+          - {name: ANIRA_AXIS_CHANNEL, value: 1, doc: "Channel."}
+          - {name: ANIRA_AXIS_TIME, value: 2, doc: "Time: the axis a Streamed spec is consumed along."}
+          - {name: ANIRA_AXIS_HEIGHT, value: 3, doc: "Image height."}
+          - {name: ANIRA_AXIS_WIDTH, value: 4, doc: "Image width."}
+          - {name: ANIRA_AXIS_FEATURE, value: 5, doc: "Feature."}
+          - {name: ANIRA_AXIS_ANY, value: 6, doc: "No semantics."}
+          - {name: ANIRA_AXIS_TAG_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_role
+        terminator: ANIRA_ROLE_FORCE32
+        doc: "How a tensor spec is fed and drained."
+        values:
+          - {name: ANIRA_ROLE_STREAMED, value: 0, doc: "Has a Time axis consumed window-wise (inputs and outputs)."}
+          - {name: ANIRA_ROLE_BUFFER, value: 1, doc: "The whole submitted buffer is one model tensor, no Time axis (frames, images)."}
+          - {name: ANIRA_ROLE_STATIC, value: 2, doc: "No time semantics: conditioning in, scalar or embedding out; one value per job."}
+          - {name: ANIRA_ROLE_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_contract_kind
+        terminator: ANIRA_CONTRACT_KIND_FORCE32
+        doc: "The scheduling regime of a contract."
+        values:
+          - {name: ANIRA_CONTRACT_HARD, value: 1, doc: "Real-time: the host callback drives fixed or ranged blocks; the v2 regime."}
+          - {name: ANIRA_CONTRACT_ASYNC, value: 2, doc: "Asynchronous: jobs with tickets, an optional deadline."}
+          - {name: ANIRA_CONTRACT_KIND_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_budget_kind
+        terminator: ANIRA_BUDGET_KIND_FORCE32
+        doc: "How a Hard contract's per-inference budget is set."
+        values:
+          - {name: ANIRA_BUDGET_MEASURED, value: 0, doc: "Derived during warmup (default)."}
+          - {name: ANIRA_BUDGET_EXPLICIT, value: 1, doc: "The explicit_ms of anira_contract_hard_set_budget; the v2 max_inference_time."}
+          - {name: ANIRA_BUDGET_KIND_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_warmup_mode
+        terminator: ANIRA_WARMUP_MODE_FORCE32
+        doc: "Warmup policy of a Hard contract."
+        values:
+          - {name: ANIRA_WARMUP_NONE, value: 0, doc: "No warmup; legal only with an explicit budget."}
+          - {name: ANIRA_WARMUP_FIXED, value: 1, doc: "A fixed number of iterations; the v2 warm_up."}
+          - {name: ANIRA_WARMUP_UNTIL_STABLE, value: 2, doc: "Until the measured time stabilises (default)."}
+          - {name: ANIRA_WARMUP_MODE_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_miss_policy
+        terminator: ANIRA_MISS_POLICY_FORCE32
+        doc: "What a Hard contract delivers when an inference misses its deadline."
+        values:
+          - {name: ANIRA_MISS_BYPASS, value: 0, doc: "Pass the input through (default); requires shape-compatible I/O along the anchored Time axis."}
+          - {name: ANIRA_MISS_HOLD_LAST, value: 1, doc: "Repeat the last output."}
+          - {name: ANIRA_MISS_ZEROS, value: 2, doc: "Deliver zeros."}
+          - {name: ANIRA_MISS_POLICY_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_late_policy
+        terminator: ANIRA_LATE_POLICY_FORCE32
+        doc: "What an Async contract does with a job past its deadline."
+        values:
+          - {name: ANIRA_LATE_FINISH, value: 0, doc: "Finish it anyway (default)."}
+          - {name: ANIRA_LATE_DROP, value: 1, doc: "Cancel at chunk boundaries; enables admission control at dispatch."}
+          - {name: ANIRA_LATE_POLICY_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_priority
+        terminator: ANIRA_PRIORITY_FORCE32
+        doc: "Scheduling priority of Async jobs."
+        values:
+          - {name: ANIRA_PRIORITY_AUTO, value: 0, doc: "INTERACTIVE iff a deadline is set, else BATCH (default)."}
+          - {name: ANIRA_PRIORITY_INTERACTIVE, value: 1, doc: "Interactive."}
+          - {name: ANIRA_PRIORITY_BATCH, value: 2, doc: "Batch."}
+          - {name: ANIRA_PRIORITY_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_delivery
+        terminator: ANIRA_DELIVERY_FORCE32
+        doc: "Where an Async completion callback runs."
+        values:
+          - {name: ANIRA_DELIVERY_POLLED, value: 0, doc: "In the caller of anira_handler_poll / ticket_wait (default)."}
+          - {name: ANIRA_DELIVERY_IMMEDIATE, value: 1, doc: "On the inference thread."}
+          - {name: ANIRA_DELIVERY_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_edge_cost
+        terminator: ANIRA_EDGE_COST_FORCE32
+        doc: "Plan validation policy for the edges a pipeline uses (section 7); not scheduling."
+        values:
+          - {name: ANIRA_EDGE_COST_PERMISSIVE, value: 0, doc: "Any available edge (default)."}
+          - {name: ANIRA_EDGE_COST_STRICT, value: 1, doc: "Zero-copy edges only."}
+          - {name: ANIRA_EDGE_COST_FORCE32, value: "0x7fffffff"}
+      - kind: define
+        name: ANIRA_WAIT_FOREVER
+        value: "(-1.0)"
+        doc: "timeout_ms sentinel of the _wait twins: wait without limit (the v2 set_non_realtime behaviour)."
+      - kind: define
+        name: ANIRA_WAIT_CONTRACT
+        value: "(-2.0)"
+        doc: "timeout_ms sentinel of the _wait twins: wait_ratio times the block duration (the v2 blocking_ratio)."
+      - kind: enum
+        name: anira_ownership
+        terminator: ANIRA_OWNERSHIP_FORCE32
+        doc: "Who owns the device a descriptor names."
+        values:
+          - {name: ANIRA_OWNERSHIP_BORROWED, value: 0, doc: "The user's handles; anira never destroys them."}
+          - {name: ANIRA_OWNERSHIP_OWNED, value: 1, doc: "anira creates and destroys the device."}
+          - {name: ANIRA_OWNERSHIP_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_exec_policy
+        terminator: ANIRA_EXEC_POLICY_FORCE32
+        doc: "Who pumps a WebGPU device (ProcessEvents / WaitAny)."
+        values:
+          - {name: ANIRA_EXEC_WORKER, value: 0, doc: "anira's worker (default)."}
+          - {name: ANIRA_EXEC_USER_DRIVEN, value: 1, doc: "The user pumps."}
+          - {name: ANIRA_EXEC_POLICY_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_gl_threads
+        terminator: ANIRA_GL_THREADS_FORCE32
+        doc: "How anira reaches a GL context."
+        values:
+          - {name: ANIRA_GL_CALLER_THREAD, value: 0, doc: "Only inside allocate_*, submit and bind_output, on the calling thread where the user's context is current (default)."}
+          - {name: ANIRA_GL_SHARED_CONTEXT, value: 1, doc: "A second context of the same share group that anira's worker makes current (additive)."}
+          - {name: ANIRA_GL_THREADS_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_wait_strategy
+        terminator: ANIRA_WAIT_STRATEGY_FORCE32
+        doc: "How idle inference threads wait; the v2 WaitStrategy."
+        values:
+          - {name: ANIRA_WAIT_SPIN_BACKOFF, value: 0, doc: "Spin with backoff (default)."}
+          - {name: ANIRA_WAIT_BLOCKING, value: 1, doc: "Block on a semaphore."}
+          - {name: ANIRA_WAIT_STRATEGY_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_log_level
+        terminator: ANIRA_LOG_LEVEL_FORCE32
+        doc: "Log severity; the four v2 levels, numerically as the engines count them."
+        values:
+          - {name: ANIRA_LOG_DEBUG, value: 0, doc: "Debug."}
+          - {name: ANIRA_LOG_INFO, value: 1, doc: "Info."}
+          - {name: ANIRA_LOG_WARNING, value: 2, doc: "Warning (the default level)."}
+          - {name: ANIRA_LOG_ERROR, value: 3, doc: "Error."}
+          - {name: ANIRA_LOG_LEVEL_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_log_drain
+        terminator: ANIRA_LOG_DRAIN_FORCE32
+        doc: "Who drains the real-time log queue."
+        values:
+          - {name: ANIRA_LOG_DRAIN_THREAD, value: 0, doc: "anira's low-priority drain thread, every drain_interval_ms (default)."}
+          - {name: ANIRA_LOG_DRAIN_MANUAL, value: 1, doc: "The host, through anira_drain_log; forced on Wasm."}
+          - {name: ANIRA_LOG_DRAIN_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_edge_class
+        terminator: ANIRA_EDGE_CLASS_FORCE32
+        doc: "Cost class of an edge between a domain and a backend (section 7)."
+        values:
+          - {name: ANIRA_EDGE_ZERO_COPY, value: 0, doc: "No copy."}
+          - {name: ANIRA_EDGE_DEVICE_COPY, value: 1, doc: "A device-side copy."}
+          - {name: ANIRA_EDGE_HOST_COPY, value: 2, doc: "A copy through host memory."}
+          - {name: ANIRA_EDGE_UNAVAILABLE, value: 3, doc: "No edge."}
+          - {name: ANIRA_EDGE_CLASS_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_probe_rung
+        terminator: ANIRA_RUNG_FORCE32
+        doc: "The rung a machine probe reached for an edge (section 4)."
+        values:
+          - {name: ANIRA_RUNG_STATIC, value: 0, doc: "Compiled-in knowledge only."}
+          - {name: ANIRA_RUNG_IDENTITY, value: 1, doc: "The device identified itself."}
+          - {name: ANIRA_RUNG_FUNCTIONAL, value: 2, doc: "A round trip succeeded."}
+          - {name: ANIRA_RUNG_FORCE32, value: "0x7fffffff"}
+      - kind: define
+        name: ANIRA_THREADS_AUTO
+        value: "0xffffffffu"
+        doc: "num_threads sentinel: the library's default pool size; 0 means bring your own threads."
+      - kind: define
+        name: ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK
+        value: "1u"
+        doc: "Log flag: switch the platform sink (stderr, logcat, os_log) off while this machine lives."
+      - kind: enum
+        name: anira_model_state
+        terminator: ANIRA_MODEL_STATE_FORCE32
+        doc: "Whether a model carries state across inferences."
+        values:
+          - {name: ANIRA_MODEL_STATELESS, value: 0, doc: "Stateless (default)."}
+          - {name: ANIRA_MODEL_STATEFUL, value: 1, doc: "Stateful: session-exclusive, lanes forced to 1; the v2 session_exclusive_processor."}
+          - {name: ANIRA_MODEL_STATE_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_bytes_ownership
+        terminator: ANIRA_BYTES_OWNERSHIP_FORCE32
+        doc: "Whether model bytes handed to a config are copied or borrowed."
+        values:
+          - {name: ANIRA_BYTES_COPY, value: 0, doc: "Copied into the config."}
+          - {name: ANIRA_BYTES_BORROW, value: 1, doc: "Borrowed until the last carrier dies (the plugin default for embedded blobs); the release callback fires once."}
+          - {name: ANIRA_BYTES_OWNERSHIP_FORCE32, value: "0x7fffffff"}
+      - kind: define
+        name: ANIRA_ANCHOR_FIRST_STREAMED
+        value: "0xffffffffu"
+        doc: "Anchor sentinel: the first Streamed tensor (the v2 HostConfig::k_first_streamable)."
+      - kind: enum
+        name: anira_ticket_status
+        terminator: ANIRA_TICKET_STATUS_FORCE32
+        doc: "The state of an Async job."
+        values:
+          - {name: ANIRA_TICKET_PENDING, value: 0, doc: "Not yet terminal."}
+          - {name: ANIRA_TICKET_MET, value: 1, doc: "Completed within the deadline."}
+          - {name: ANIRA_TICKET_LATE, value: 2, doc: "Completed past the deadline."}
+          - {name: ANIRA_TICKET_DROPPED, value: 3, doc: "Cancelled by the late policy."}
+          - {name: ANIRA_TICKET_FAILED, value: 4, doc: "Failed; anira_handler_ticket_error has the reason."}
+          - {name: ANIRA_TICKET_STATUS_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_pad_policy
+        terminator: ANIRA_PAD_POLICY_FORCE32
+        doc: "What happens to a submitted buffer shorter than the window minimum."
+        values:
+          - {name: ANIRA_PAD_REJECT, value: 0, doc: "Refuse the job (default)."}
+          - {name: ANIRA_PAD_ZEROS, value: 1, doc: "Pad with zeros."}
+          - {name: ANIRA_PAD_POLICY_FORCE32, value: "0x7fffffff"}
+      - kind: define
+        name: ANIRA_TICKET_INVALID
+        value: "0u"
+        doc: "The ticket value that names no job; every failed submit writes it."
+      - kind: enum
+        name: anira_engine
+        terminator: ANIRA_ENGINE_FORCE32
+        doc: "Inference engine, one of the two independent backend axes. Values 6..0x0fff are reserved for later anira engines; a registered custom engine is assigned a value from 0x1000 up at prepare, scoped to its pipeline."
+        values:
+          - {name: ANIRA_ENGINE_NONE, value: 0, doc: "No engine; as a default engine it means models[0]."}
+          - {name: ANIRA_ENGINE_ONNXRUNTIME, value: 1, doc: "ONNX Runtime (v2 ONNX, JSON \"onnxruntime\")."}
+          - {name: ANIRA_ENGINE_LIBTORCH, value: 2, doc: "LibTorch (JSON \"libtorch\")."}
+          - {name: ANIRA_ENGINE_TFLITE, value: 3, doc: "TensorFlow Lite, legacy C API (JSON \"tflite\")."}
+          - {name: ANIRA_ENGINE_LITERT, value: 4, doc: "LiteRT (JSON \"litert\")."}
+          - {name: ANIRA_ENGINE_EXECUTORCH, value: 5, doc: "ExecuTorch (JSON \"executorch\")."}
+          - {name: ANIRA_ENGINE_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_provider
+        terminator: ANIRA_PROVIDER_FORCE32
+        doc: "Execution provider, the other backend axis; a provider name means the same thing across engines."
+        values:
+          - {name: ANIRA_PROVIDER_DEFAULT, value: 0, doc: "The engine's own CPU path (JSON: no suffix)."}
+          - {name: ANIRA_PROVIDER_CUDA, value: 1, doc: "CUDA (JSON \":cuda\")."}
+          - {name: ANIRA_PROVIDER_WEBGPU, value: 2, doc: "WebGPU (JSON \":webgpu\")."}
+          - {name: ANIRA_PROVIDER_DIRECTML, value: 3, doc: "DirectML (JSON \":directml\")."}
+          - {name: ANIRA_PROVIDER_COREML, value: 4, doc: "Core ML (JSON \":coreml\")."}
+          - {name: ANIRA_PROVIDER_XNNPACK, value: 5, doc: "XNNPACK (JSON \":xnnpack\")."}
+          - {name: ANIRA_PROVIDER_VULKAN, value: 6, doc: "Vulkan (JSON \":vulkan\")."}
+          - {name: ANIRA_PROVIDER_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_stage_phase
+        terminator: ANIRA_STAGE_PHASE_FORCE32
+        doc: "The phase a stage callback runs in (abi/stage.h, M2); pinned now."
+        values:
+          - {name: ANIRA_PHASE_PRE_PROCESS, value: 0, doc: "Before the model inputs are formed."}
+          - {name: ANIRA_PHASE_POST_PROCESS, value: 1, doc: "After the model outputs arrive."}
+          - {name: ANIRA_PHASE_BEFORE_INFERENCE, value: 2, doc: "On the inference thread, before the engine call."}
+          - {name: ANIRA_PHASE_AFTER_INFERENCE, value: 3, doc: "On the inference thread, after the engine call."}
+          - {name: ANIRA_PHASE_PREPARE, value: 4, doc: "At anira_handler_prepare."}
+          - {name: ANIRA_PHASE_RELEASE, value: 5, doc: "When the last carrier dies."}
+          - {name: ANIRA_STAGE_PHASE_FORCE32, value: "0x7fffffff"}
+
+  # ----------------------------------------------------------------------------
+  - file: log.h
+    guard: ANIRA_ABI_LOG_H
+    brief: "The log sink descriptor, the frozen log record and the logging entry points."
+    doc: >-
+      Logging crosses the ABI as anira_log_desc in and anira_log_record out. Real-time
+      paths write fixed-size records into a lock-free queue that a drain thread or the
+      host (anira_drain_log) delivers to the sinks; control paths log synchronously. The
+      sink runs on whichever thread logs, never on the driver thread, possibly with
+      anira's lifecycle lock held, and therefore must not call anira.
+    includes: ["<stddef.h>", "<stdint.h>", "export.h", "enums.h", "version.h"]
+    entities:
+      - kind: define
+        name: ANIRA_LOG_RECORD_REALTIME
+        value: "1u"
+        doc: "anira_log_record flag: the record came through the real-time queue."
+      - kind: define
+        name: ANIRA_LOG_RECORD_CONTRACT_VIOLATION
+        value: "2u"
+        doc: "anira_log_record flag: the record reports a contract violation raised by the C layer or the wrapper."
+      - kind: struct
+        name: anira_log_record
+        tier: 1
+        size: 56
+        align: 8
+        doc: "One delivered log record, valid for the duration of the callback. Tier 1: 56 bytes, frozen; a projection of the private logger's record."
+        fields:
+          - {name: level, type: uint32_t, doc: "anira_log_level."}
+          - {name: flags, type: uint32_t, doc: "ANIRA_LOG_RECORD_* bits."}
+          - {name: dropped_before, type: uint32_t, doc: "Records the queue dropped before this one."}
+          - {name: reserved, type: uint32_t, doc: "Zero."}
+          - {name: sequence, type: uint64_t, doc: "Monotonic sequence number."}
+          - {name: timestamp_ms, type: int64_t, doc: "Wall-clock UTC epoch, milliseconds."}
+          - {name: monotonic_ns, type: uint64_t, doc: "Steady-clock epoch, nanoseconds."}
+          - {name: group, ptr: const char, doc: "\"anira.<component>\", NUL-terminated."}
+          - {name: message, ptr: const char, doc: "The message, NUL-terminated."}
+      - kind: callback
+        name: anira_log_fn
+        returns: void
+        params:
+          - {type: const anira_log_record*, name: record, doc: "The record; valid until the callback returns."}
+          - {type: void*, name: user_data, doc: "The descriptor's user_data."}
+        thread: thread-safe, !audio-thread
+        doc: "A log sink. Runs on whichever thread logs (the caller of a [main-thread] entry, the drain thread for real-time records, the caller of a destroy for the final flush), never on the driver thread; may run with anira's lifecycle lock held and must not call anira."
+      - kind: struct
+        name: anira_log_desc
+        tier: 2
+        callback_descriptor: true
+        doc: "The log block of a machine config, handed once to anira_machine_config_set_log; the C one-shot equivalent of the five scalar setters."
+        fields:
+          - {name: struct_size, type: uint32_t, doc: "sizeof(anira_log_desc) of the caller's header."}
+          - {name: abi_version, type: uint32_t, doc: "ANIRA_ABI_VERSION the caller compiled against."}
+          - {name: user_data, type: void*, doc: "Passed to callback."}
+          - {name: callback, type: anira_log_fn, doc: "The sink; NULL keeps the platform sink only."}
+          - {name: level, type: uint32_t, doc: "anira_log_level; the most verbose request across machines wins."}
+          - {name: drain, type: uint32_t, doc: "anira_log_drain."}
+          - {name: queue_capacity, type: uint32_t, doc: "Real-time queue records, clamped to [64, 65536]; fixed for the life of the core."}
+          - {name: drain_interval_ms, type: uint32_t, doc: "Drain-thread period in milliseconds."}
+          - {name: flags, type: uint32_t, doc: "ANIRA_LOG_FLAG_* bits."}
+          - {name: reserved, type: uint32_t, doc: "Zero."}
+        init:
+          name: ANIRA_LOG_DESC_INIT
+          value: "sizeof(anira_log_desc), ANIRA_ABI_VERSION, NULL, NULL, ANIRA_LOG_WARNING, ANIRA_LOG_DRAIN_THREAD, 512, 10, 0, 0"
+          doc: "The defaults: no sink, WARNING, the drain thread every 10 ms, 512 records."
+      - kind: function
+        name: anira_drain_log
+        returns: size_t
+        params: []
+        thread: thread-safe, !audio-thread
+        status: promised
+        since: "0.1"
+        doc: "Delivers the queued real-time records of this copy's core to the sinks; the host's pump under ANIRA_LOG_DRAIN_MANUAL (and on Wasm, where no drain thread exists). Returns 0 while no core exists."
+        return_doc: "The number of records delivered."
+      - kind: function
+        name: anira_log_rt
+        returns: void
+        params:
+          - {type: anira_log_level, name: level, doc: "Severity."}
+          - {type: const char*, name: group, doc: "\"anira.<component>\" or the host's own group; static storage."}
+          - {type: const char*, name: static_message, doc: "A static string, never a format string."}
+          - {type: int32_t, name: arg0, doc: "First argument, appended as \"[arg0 arg1]\"."}
+          - {type: int32_t, name: arg1, doc: "Second argument."}
+        thread: thread-safe
+        callback_safe: true
+        nonblocking: true
+        status: promised
+        since: "0.1"
+        doc: "Real-time logging for callers on an ANIRA_NONBLOCKING path: writes \"<message> [arg0 arg1]\" into the real-time queue without formatting or allocating; a full queue drops and counts. A no-op while no core exists."
+      - kind: function
+        name: anira_log
+        returns: void
+        params:
+          - {type: anira_log_level, name: level, doc: "Severity."}
+          - {type: const char*, name: group, doc: "\"anira.<component>\" or the host's own group."}
+          - {type: const char*, name: message, doc: "The message; copied."}
+        thread: thread-safe, !audio-thread
+        status: promised
+        since: "0.1"
+        doc: "Control-path logging through anira's private logger; formats and allocates like any other control-path call and reaches every sink synchronously."

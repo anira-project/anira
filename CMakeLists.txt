@@ -302,6 +302,16 @@ target_include_directories(${PROJECT_NAME}
 # build tree (never under include/, which the install rule copies verbatim).
 anira_generate_build_info(${PROJECT_NAME})
 
+# The C ABI (include/anira/abi/, generated from abi/anira.yml by tools/abi/gen.py) and
+# its implementation: every entry body sits behind the exception firewall of
+# src/capi/capi_internal.h; the generated proc table makes a promised name without a
+# definition a link error.
+target_sources(${PROJECT_NAME} PRIVATE
+    src/capi/error.cpp
+    src/capi/log.cpp
+    src/capi/version.cpp
+)
+
 # Shared between the anira target and the isolated ExecuTorch object target below —
 # the two must agree on every USE_* define (they shape the anira class layouts).
 set(ANIRA_COMPILE_DEFINITIONS

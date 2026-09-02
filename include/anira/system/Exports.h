@@ -7,9 +7,10 @@
  *
  * anira is compiled with hidden symbol visibility; ANIRA_API is the allowlist that
  * marks what a shared libanira exports (dllexport/dllimport on Windows,
- * visibility("default") elsewhere — the platform switch is tanh-lib's
- * tanh/core/ExportMacros.h), so that nothing else — above all the backend runtimes
- * linked into it — ever appears in its export table.
+ * visibility("default") elsewhere), so that nothing else — above all the backend
+ * runtimes linked into it — ever appears in its export table. The platform switch
+ * lives in the self-contained C ABI header anira/abi/export.h, which this header
+ * includes: the v2 C++ headers and the C headers spell one and the same macro.
  *
  * Two macros steer it, both set by anira's CMake build (tanh_apply_symbol_policy):
  *
@@ -27,18 +28,11 @@
  * hand-written build systems.
  */
 
-#include <tanh/core/ExportMacros.h>
-
+// The legacy spelling must be mapped before abi/export.h decides.
 #if defined(ANIRA_STATIC_DEFINE) && !defined(ANIRA_STATIC)
 #define ANIRA_STATIC
 #endif
 
-#if defined(ANIRA_STATIC)
-#define ANIRA_API
-#elif defined(ANIRA_BUILDING)
-#define ANIRA_API THL_DECL_EXPORT
-#else
-#define ANIRA_API THL_DECL_IMPORT
-#endif
+#include <anira/abi/export.h>
 
 #endif  // ANIRA_EXPORTS_H
