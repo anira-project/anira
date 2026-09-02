@@ -126,6 +126,28 @@
             }
         },
         {
+            "name": "desktop-install-debug",
+            "displayName": "Desktop Install Debug",
+            "description": "Debug build with ANIRA_WITH_INSTALL enabled (all default backends). Install with `cmake --install build/desktop/Install/Debug [--prefix <dir>]`; without --prefix the tree lands in build/desktop/Install/Debug/anira-<version>",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/Install/Debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ANIRA_WITH_INSTALL": "ON"
+            }
+        },
+        {
+            "name": "desktop-install-release",
+            "displayName": "Desktop Install Release",
+            "description": "Release build with ANIRA_WITH_INSTALL enabled (all default backends). Install with `cmake --install build/desktop/Install/Release [--prefix <dir>]`; without --prefix the tree lands in build/desktop/Install/Release/anira-<version>",
+            "inherits": "desktop-base",
+            "binaryDir": "${sourceDir}/build/desktop/Install/Release",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "ANIRA_WITH_INSTALL": "ON"
+            }
+        },
+        {
             "name": "clang-tidy",
             "displayName": "Clang-Tidy",
             "description": "Library + tests + benchmark build with all backends, used for clang-tidy analysis (exports compile_commands.json)",
@@ -505,6 +527,16 @@
         {
             "name": "desktop-examples-release",
             "configurePreset": "desktop-examples-release",
+            "configuration": "Release"
+        },
+        {
+            "name": "desktop-install-debug",
+            "configurePreset": "desktop-install-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "desktop-install-release",
+            "configurePreset": "desktop-install-release",
             "configuration": "Release"
         },
         {

@@ -22,6 +22,7 @@
 #include <anira/utils/Logger.h>
 #include <anira/utils/RingBuffer.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -79,7 +80,11 @@ public:
     void process(std::vector<BufferF>& input,
                  std::vector<BufferF>& output,
                  [[maybe_unused]] std::shared_ptr<SessionElement> session) override {
-        if (m_sleep_us > 0) { std::this_thread::sleep_for(std::chrono::microseconds(m_sleep_us)); }
+        // The very first inference may stall for longer than the others (a cold start,
+        // a page fault, a preempted worker): m_first_sleep_us applies to it alone.
+        int const sleep_us =
+            m_started.fetch_add(1) == 0 && m_first_sleep_us > 0 ? m_first_sleep_us : m_sleep_us;
+        if (sleep_us > 0) { std::this_thread::sleep_for(std::chrono::microseconds(sleep_us)); }
         float const value = input[0].get_sample(0, 0);  // parameter 0
         for (size_t ch = 0; ch < output[0].get_num_channels(); ++ch) {
             float* write_ptr = output[0].get_write_pointer(ch);
@@ -89,7 +94,9 @@ public:
     }
 
     std::atomic<int> m_calls{0};
+    std::atomic<int> m_started{0};
     int m_sleep_us = 0;
+    int m_first_sleep_us = 0;
 };
 
 // Analyser: a 2048-sample audio stream in plus one control parameter in, one
@@ -240,7 +247,7 @@ void drive_generator_with_process(InferenceHandler& handler,
 struct LogRecordCollector {
     LogRecordCollector() {
         thl::Logger::set_callback([this](const thl::Logger::LogRecord& record) {
-            const std::lock_guard<std::mutex> lock(m_mutex);
+            const std::scoped_lock lock(m_mutex);
             m_messages += record.m_message;
             m_messages += '\n';
         });
@@ -253,7 +260,7 @@ struct LogRecordCollector {
 
     /// The messages collected so far, and starts over.
     std::string take() {
-        const std::lock_guard<std::mutex> lock(m_mutex);
+        const std::scoped_lock lock(m_mutex);
         std::string out;
         out.swap(m_messages);
         return out;
@@ -876,34 +883,54 @@ TEST(OneSidedStreamingStandalone, PrepareCustomLatencyIndexOutOfRangeThrows) {
 }
 
 #ifndef ANIRA_WITH_RTSAN
-TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
-    // With blocking_ratio > 0 the deadline is derived from the reference stream's
-    // block size. Before the fix it read num_input_samples[m_tensor_index] -- the
-    // params tensor's value count for a generator -- giving a deadline of
-    // 4/48000 s (83 us) instead of one host block (4096/48000 s = 85 ms here).
-    //
-    // The backend sleeps 1 ms per inference: longer than the buggy deadline, far
-    // shorter than the correct one, so every pop is expected to succeed. A CI runner
-    // (iOS simulator, loaded macOS VM) can still stall a worker for longer than any
-    // fixed margin, so a starved pop is tolerated as long as process() demonstrably
-    // waited for the correct deadline -- the buggy one gives up within microseconds --
-    // and the block is retried; the sample-exact check still covers every sample.
+namespace {
+// Drives a blocking generator (blocking_ratio 1, a `host_block`-sample host block, so a
+// deadline of host_block / 48000 s derived from the reference output) for `blocks` blocks
+// with a backend that sleeps `sleep_us` per inference, `first_sleep_us` for its very
+// first one, and checks every delivered sample.
+//
+// A starved pop (0 samples) is tolerated as long as process() demonstrably waited for
+// the correct deadline -- the former bug read the params tensor's value count and gave
+// up within microseconds -- and the block is then pulled again with its full demand:
+// process() reports the delivered count through the array it is handed and writes 0
+// for a starved pop, so the retry has to set its demand again.
+//
+// After a starvation the handler's output lags the demand by the starved samples until
+// its catch-up logic (InferenceManager::process_output) finds more than one block in the
+// receive ring and discards them. When that happens depends on the runner's timing, so
+// a delivered sample is checked against the range of parameters the lag allows: the
+// parameter of its demand position and, as the lower bound, the parameter of the
+// position that lags by every starved sample so far. Without starvation the range is
+// one value and the check is sample-exact. The parameters grow with the block index, so
+// the range is well-ordered.
+void drive_blocking_generator(int first_sleep_us,
+                              int sleep_us,
+                              size_t host_block,
+                              size_t blocks,
+                              int& starved) {
     InferenceConfig config = generator_config(/*session_exclusive=*/false,
                                               /*blocking_ratio=*/1.f);
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    backend.m_sleep_us = 1000;
+    backend.m_first_sleep_us = first_sleep_us;
+    backend.m_sleep_us = sleep_us;
     InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
-    handler.prepare(HostConfig(4096, 48000, false));
+    handler.prepare(HostConfig(static_cast<float>(host_block), 48000, false));
+    size_t const latency = handler.get_latency(0);
 
-    GeneratorModel model;
-    model.m_latency = handler.get_latency(0);
+    size_t const n = host_block;
+    long long const deadline_us = static_cast<long long>(n) * 1000000LL / 48000LL;
+    std::vector<float> submitted;  // parameter captured by each hop, in submission order
+    size_t demand = 0;             // samples requested so far, starved requests included
+    size_t starved_samples = 0;    // upper bound of the output's lag behind the demand
+    auto const param_at = [&](size_t position) -> float {
+        if (position < latency) { return 0.f; }
+        size_t const hop = (position - latency) / k_hop;
+        return hop < submitted.size() ? submitted[hop] : submitted.back();
+    };
 
-    size_t const n = 4096;
-    long long const deadline_us = static_cast<long long>(n) * 1000000LL / 48000LL;  // 85 ms
-    int starved = 0;
-    size_t global_index = 0;
-    for (size_t block = 0; block < 20; ++block) {
+    starved = 0;
+    for (size_t block = 0; block < blocks; ++block) {
         float const param = 1.f + static_cast<float>(block);
         std::vector<float> params{param, 0.f, 0.f, 0.f};
         std::vector<float> out(n, -1.f);
@@ -916,7 +943,10 @@ TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
 
         size_t received = 0;
         for (int attempt = 0; attempt < 5 && received != n; ++attempt) {
-            model.pull(n, param);  // every call is a pull, a starved one included
+            // Every call is a pull, a starved one included: one hop per k_hop demanded
+            // samples, capturing the parameter current at that pull.
+            while ((submitted.size() + 1) * k_hop <= demand + n) { submitted.push_back(param); }
+            num_output_samples[0] = n;  // written back by process(), see above
             auto const start = std::chrono::steady_clock::now();
             received = handler.process(input_tensors.data(),
                                        num_input_samples.data(),
@@ -932,15 +962,58 @@ TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
                 << " us -- a deadline derived from the params count, not from the "
                    "reference stream";
             ++starved;
+            starved_samples += n;
+            demand += n;
         }
         ASSERT_EQ(received, n) << "block " << block << ": starved on five attempts in a row";
         for (size_t s = 0; s < n; ++s) {
-            ASSERT_EQ(out[s], model.expected_sample(global_index + s))
-                << "block " << block << ", sample " << s;
+            size_t const position = demand + s;
+            float const high = param_at(position);
+            float const low = param_at(position - std::min(starved_samples, position));
+            ASSERT_GE(out[s], low) << "block " << block << ", sample " << s;
+            ASSERT_LE(out[s], high) << "block " << block << ", sample " << s;
         }
-        global_index += n;
-        model.m_popped += n;
+        demand += n;
     }
+}
+}  // namespace
+
+TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
+    // With blocking_ratio > 0 the deadline is derived from the reference stream's
+    // block size. Before the fix it read num_input_samples[m_tensor_index] -- the
+    // params tensor's value count for a generator -- giving a deadline of
+    // 4/48000 s (83 us) instead of one host block (4096/48000 s = 85 ms here).
+    //
+    // The backend sleeps 1 ms per inference: longer than the buggy deadline, far
+    // shorter than the correct one, so every pop is expected to succeed. A CI runner
+    // (iOS simulator, loaded macOS VM) can still stall a worker for longer than any
+    // fixed margin; drive_blocking_generator tolerates that.
+    int starved = 0;
+    drive_blocking_generator(/*first_sleep_us=*/0,
+                             /*sleep_us=*/1000,
+                             /*host_block=*/4096,
+                             /*blocks=*/20,
+                             starved);
+    RecordProperty("starved_pops", starved);
+}
+
+// The starvation path of the test above, made deterministic: the model's first inference
+// stalls for 500 ms against a 341 ms deadline (a 16384-sample block), so the first pop
+// starves whatever the runner does, and the retry -- whose own deadline ends at 682 ms --
+// must pull the block again with its full demand. Every other inference takes 1 ms, a
+// feasible load, so nothing but that one stall is exercised. Regression for the
+// intermittent CI failure "the pop gave up after 2 us": the retry reused the count array
+// that process() had just zeroed, asked for 0 samples, collected the finished inferences
+// in microseconds and reported 0 -- the starvation itself was a loaded runner, tolerated
+// by design, and the retry turned it into a failure.
+TEST(OneSidedStreamingStandalone, GeneratorStarvedBlockingPopIsRetriedWithFullDemand) {
+    int starved = 0;
+    drive_blocking_generator(/*first_sleep_us=*/500000,
+                             /*sleep_us=*/1000,
+                             /*host_block=*/16384,
+                             /*blocks=*/3,
+                             starved);
+    EXPECT_GT(starved, 0) << "a 500 ms stall must starve the first pop of a 341 ms deadline";
     RecordProperty("starved_pops", starved);
 }
 #endif  // ANIRA_WITH_RTSAN

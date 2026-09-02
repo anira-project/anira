@@ -12,6 +12,7 @@
 #include "scheduler/Context.h"
 #include "scheduler/InferenceManager.h"
 #include "scheduler/InferenceThread.h"
+#include "scheduler/LatencyCalculator.h"
 #include "scheduler/SessionElement.h"
 #include "system/HighPriorityThread.h"
 #include "utils/Buffer.h"
