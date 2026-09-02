@@ -80,7 +80,11 @@ public:
     void process(std::vector<BufferF>& input,
                  std::vector<BufferF>& output,
                  [[maybe_unused]] std::shared_ptr<SessionElement> session) override {
-        if (m_sleep_us > 0) { std::this_thread::sleep_for(std::chrono::microseconds(m_sleep_us)); }
+        // The very first inference may stall for longer than the others (a cold start,
+        // a page fault, a preempted worker): m_first_sleep_us applies to it alone.
+        int const sleep_us =
+            m_started.fetch_add(1) == 0 && m_first_sleep_us > 0 ? m_first_sleep_us : m_sleep_us;
+        if (sleep_us > 0) { std::this_thread::sleep_for(std::chrono::microseconds(sleep_us)); }
         float const value = input[0].get_sample(0, 0);  // parameter 0
         for (size_t ch = 0; ch < output[0].get_num_channels(); ++ch) {
             float* write_ptr = output[0].get_write_pointer(ch);
@@ -90,7 +94,9 @@ public:
     }
 
     std::atomic<int> m_calls{0};
+    std::atomic<int> m_started{0};
     int m_sleep_us = 0;
+    int m_first_sleep_us = 0;
 };
 
 // Analyser: a 2048-sample audio stream in plus one control parameter in, one
@@ -878,9 +884,10 @@ TEST(OneSidedStreamingStandalone, PrepareCustomLatencyIndexOutOfRangeThrows) {
 
 #ifndef ANIRA_WITH_RTSAN
 namespace {
-// Drives a blocking generator (blocking_ratio 1, 4096-sample host block, so an 85 ms
-// deadline derived from the reference output) for `blocks` blocks with a backend that
-// sleeps `sleep_us` per inference, and checks every delivered sample.
+// Drives a blocking generator (blocking_ratio 1, a `host_block`-sample host block, so a
+// deadline of host_block / 48000 s derived from the reference output) for `blocks` blocks
+// with a backend that sleeps `sleep_us` per inference, `first_sleep_us` for its very
+// first one, and checks every delivered sample.
 //
 // A starved pop (0 samples) is tolerated as long as process() demonstrably waited for
 // the correct deadline -- the former bug read the params tensor's value count and gave
@@ -896,18 +903,23 @@ namespace {
 // position that lags by every starved sample so far. Without starvation the range is
 // one value and the check is sample-exact. The parameters grow with the block index, so
 // the range is well-ordered.
-void drive_blocking_generator(int sleep_us, size_t blocks, int& starved) {
+void drive_blocking_generator(int first_sleep_us,
+                              int sleep_us,
+                              size_t host_block,
+                              size_t blocks,
+                              int& starved) {
     InferenceConfig config = generator_config(/*session_exclusive=*/false,
                                               /*blocking_ratio=*/1.f);
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
+    backend.m_first_sleep_us = first_sleep_us;
     backend.m_sleep_us = sleep_us;
     InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
-    handler.prepare(HostConfig(4096, 48000, false));
+    handler.prepare(HostConfig(static_cast<float>(host_block), 48000, false));
     size_t const latency = handler.get_latency(0);
 
-    size_t const n = 4096;
-    long long const deadline_us = static_cast<long long>(n) * 1000000LL / 48000LL;  // 85 ms
+    size_t const n = host_block;
+    long long const deadline_us = static_cast<long long>(n) * 1000000LL / 48000LL;
     std::vector<float> submitted;  // parameter captured by each hop, in submission order
     size_t demand = 0;             // samples requested so far, starved requests included
     size_t starved_samples = 0;    // upper bound of the output's lag behind the demand
@@ -977,20 +989,31 @@ TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
     // (iOS simulator, loaded macOS VM) can still stall a worker for longer than any
     // fixed margin; drive_blocking_generator tolerates that.
     int starved = 0;
-    drive_blocking_generator(/*sleep_us=*/1000, /*blocks=*/20, starved);
+    drive_blocking_generator(/*first_sleep_us=*/0,
+                             /*sleep_us=*/1000,
+                             /*host_block=*/4096,
+                             /*blocks=*/20,
+                             starved);
     RecordProperty("starved_pops", starved);
 }
 
-// The starvation path of the test above, made deterministic: an inference longer than
-// the deadline starves the first pop, and the retry must pull the block again with its
-// full demand. Regression for the intermittent CI failure "the pop gave up after 2 us":
-// the retry reused the count array that process() had just zeroed, asked for 0 samples,
-// collected the finished inferences in microseconds and reported 0 -- the starvation
-// itself was a loaded runner, tolerated by design, and the retry turned it into a failure.
+// The starvation path of the test above, made deterministic: the model's first inference
+// stalls for 500 ms against a 341 ms deadline (a 16384-sample block), so the first pop
+// starves whatever the runner does, and the retry -- whose own deadline ends at 682 ms --
+// must pull the block again with its full demand. Every other inference takes 1 ms, a
+// feasible load, so nothing but that one stall is exercised. Regression for the
+// intermittent CI failure "the pop gave up after 2 us": the retry reused the count array
+// that process() had just zeroed, asked for 0 samples, collected the finished inferences
+// in microseconds and reported 0 -- the starvation itself was a loaded runner, tolerated
+// by design, and the retry turned it into a failure.
 TEST(OneSidedStreamingStandalone, GeneratorStarvedBlockingPopIsRetriedWithFullDemand) {
     int starved = 0;
-    drive_blocking_generator(/*sleep_us=*/100000, /*blocks=*/4, starved);
-    EXPECT_GT(starved, 0) << "a 100 ms inference must starve at least the first pop";
+    drive_blocking_generator(/*first_sleep_us=*/500000,
+                             /*sleep_us=*/1000,
+                             /*host_block=*/16384,
+                             /*blocks=*/3,
+                             starved);
+    EXPECT_GT(starved, 0) << "a 500 ms stall must starve the first pop of a 341 ms deadline";
     RecordProperty("starved_pops", starved);
 }
 #endif  // ANIRA_WITH_RTSAN
