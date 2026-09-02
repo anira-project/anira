@@ -5,6 +5,7 @@ anira_contract_async_set_policy
 anira_contract_create_async
 anira_contract_create_hard
 anira_contract_destroy
+anira_contract_from_json
 anira_contract_get_kind
 anira_contract_hard_set_budget
 anira_contract_hard_set_geometry
@@ -26,6 +27,7 @@ anira_log
 anira_log_rt
 anira_machine_config_create
 anira_machine_config_destroy
+anira_machine_config_from_json
 anira_machine_config_set_cuda
 anira_machine_config_set_d3d12
 anira_machine_config_set_ext
@@ -41,6 +43,7 @@ anira_machine_config_set_metal
 anira_machine_config_set_threads
 anira_machine_config_set_vulkan
 anira_machine_config_set_webgpu
+anira_machine_config_to_json
 anira_model_config_add_input
 anira_model_config_add_model_bytes
 anira_model_config_add_model_bytes_custom
@@ -49,6 +52,8 @@ anira_model_config_add_model_path_custom
 anira_model_config_add_output
 anira_model_config_create
 anira_model_config_destroy
+anira_model_config_from_json
+anira_model_config_from_json_file
 anira_model_config_model_bytes
 anira_model_config_model_count
 anira_model_config_model_engine
@@ -65,6 +70,8 @@ anira_model_config_set_model_ext
 anira_model_config_set_model_ext_json
 anira_model_config_set_state
 anira_model_config_set_tensor_name
+anira_model_config_take_legacy_contract
+anira_model_config_to_json
 anira_registered_ext_kinds
 anira_status_string
 anira_tensor_spec_create

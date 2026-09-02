@@ -1222,6 +1222,142 @@ ANIRA_API anira_status ANIRA_CALL anira_job_options_set_ext_json(anira_job_optio
  */
 ANIRA_API void ANIRA_CALL anira_job_options_destroy(anira_job_options* options);
 
+/**
+ * @brief Loads a model config from JSON text (section 8.1). A version 2 document is upgraded
+ * (section 8.4): the result carries the models, tensors and scalars, holds back
+ * max_inference_time / warm_up / blocking_ratio as a legacy Hard contract for
+ * anira_model_config_take_legacy_contract, logs one warning per process, and returns
+ * ANIRA_SUCCESS_UPGRADED. Unknown keys are stored as extensions and fail prepare by
+ * name.
+ * @param utf8 The document text (a v3 model file, or a v2 document with an inference_config
+ *        root).
+ * @param len Length of utf8 in bytes.
+ * @param base_dir Directory relative model paths resolve against (the joined path uses forward
+ *        slashes on every platform; a rooted path stays as written), or NULL to keep
+ *        every path as written.
+ * @param out Receives the handle on success.
+ * @param err Nullable.
+ * @return ANIRA_OK or ANIRA_SUCCESS_UPGRADED; ANIRA_ERROR_JSON with the key path and the
+ *         offending value in err for malformed text, a wrong type, or a string outside a key's
+ *         vocabulary; ANIRA_ERROR_EXTENSION_VERSION for a known extension at an unregistered
+ *         version.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.1
+ */
+ANIRA_API anira_status ANIRA_CALL anira_model_config_from_json(const char* utf8,
+                                                               size_t len,
+                                                               const char* base_dir,
+                                                               anira_model_config** out,
+                                                               anira_error* err);
+
+/**
+ * @brief Reads a file and loads it as anira_model_config_from_json with base_dir = the file's
+ * directory.
+ * @param utf8_path Path of the file; its directory is the base_dir of the model paths.
+ * @param out Receives the handle on success.
+ * @param err Nullable.
+ * @return As anira_model_config_from_json, plus ANIRA_ERROR_NO_SUCH_FILE.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.1
+ */
+ANIRA_API anira_status ANIRA_CALL anira_model_config_from_json_file(const char* utf8_path,
+                                                                    anira_model_config** out,
+                                                                    anira_error* err);
+
+/**
+ * @brief Writes the config in v3 spelling (section 8.1), fixed key order; reading a v2 file and
+ * writing it out is the migration tool. Bytes entries keep the path they were loaded
+ * with.
+ * @param config The config.
+ * @param buf Receives the text, NUL-terminated; may be NULL with cap 0 to size.
+ * @param cap Capacity of buf in bytes.
+ * @param out_len Receives the text length without the NUL; always written.
+ * @return ANIRA_OK, or ANIRA_ERROR_BUFFER_TOO_SMALL (out_len holds the required length) or
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out_len.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.1
+ */
+ANIRA_API anira_status ANIRA_CALL anira_model_config_to_json(const anira_model_config* config,
+                                                             char* buf,
+                                                             size_t cap,
+                                                             size_t* out_len);
+
+/**
+ * @brief Hands out the Hard contract a version 2 upgrade held back (budget, warmup and wait
+ * ratio; no geometry). Non-NULL only once after an upgrade: a second call, or a v3
+ * document, yields NULL.
+ * @param config The config.
+ * @param out Receives the contract (caller destroys it), or NULL when there is none.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.1
+ */
+ANIRA_API anira_status ANIRA_CALL anira_model_config_take_legacy_contract(anira_model_config* config,
+                                                                          anira_contract** out);
+
+/**
+ * @brief Loads a machine config from JSON text (section 8.2). Device blocks in JSON imply
+ * ANIRA_OWNERSHIP_OWNED; borrowed handles are code-only and patched afterwards with the
+ * device setters. A version 2 document is upgraded (context_config; the bare log_level
+ * key becomes log.level) and returns ANIRA_SUCCESS_UPGRADED.
+ * @param utf8 The document text (a v3 machine file, or a v2 document with a context_config
+ *        root).
+ * @param len Length of utf8 in bytes.
+ * @param out Receives the handle on success.
+ * @param err Nullable.
+ * @return ANIRA_OK or ANIRA_SUCCESS_UPGRADED; ANIRA_ERROR_JSON with the key path for malformed
+ *         text, a wrong type or an unknown vocabulary value.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.1
+ */
+ANIRA_API anira_status ANIRA_CALL anira_machine_config_from_json(const char* utf8,
+                                                                 size_t len,
+                                                                 anira_machine_config** out,
+                                                                 anira_error* err);
+
+/**
+ * @brief Writes the config in v3 spelling (section 8.2), fixed key order; the sink is code-only
+ * and not written, device blocks are written without their borrowed handles.
+ * @param config The config.
+ * @param buf Receives the text, NUL-terminated; may be NULL with cap 0 to size.
+ * @param cap Capacity of buf in bytes.
+ * @param out_len Receives the text length without the NUL; always written.
+ * @return ANIRA_OK, or ANIRA_ERROR_BUFFER_TOO_SMALL (out_len holds the required length) or
+ *         ANIRA_ERROR_INVALID_ARGUMENT.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.1
+ */
+ANIRA_API anira_status ANIRA_CALL anira_machine_config_to_json(const anira_machine_config* config,
+                                                               char* buf,
+                                                               size_t cap,
+                                                               size_t* out_len);
+
+/**
+ * @brief Loads a contract from JSON text (section 8.3): budget is "measured" or {"ms": x},
+ * warmup is "until_stable", "none" or {"fixed": n}; a file with both roots or neither is
+ * ANIRA_ERROR_JSON. A version 2 document yields its legacy Hard contract directly
+ * (ANIRA_SUCCESS_UPGRADED).
+ * @param utf8 The document text: {"hard": {...}} or {"async": {...}} with an optional top-level
+ *        edge_cost, or a v2 document.
+ * @param len Length of utf8 in bytes.
+ * @param out Receives the handle on success.
+ * @param err Nullable.
+ * @return ANIRA_OK or ANIRA_SUCCESS_UPGRADED, or ANIRA_ERROR_JSON with the key path.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.1
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_from_json(const char* utf8,
+                                                           size_t len,
+                                                           anira_contract** out,
+                                                           anira_error* err);
+
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 #ifdef __cplusplus

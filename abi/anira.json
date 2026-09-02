@@ -4193,6 +4193,220 @@
           "status": "promised",
           "since": "0.1",
           "doc": "Destroys job options; NULL-safe."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_from_json",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const char*",
+              "name": "utf8",
+              "doc": "The document text (a v3 model file, or a v2 document with an inference_config root)."
+            },
+            {
+              "type": "size_t",
+              "name": "len",
+              "doc": "Length of utf8 in bytes."
+            },
+            {
+              "type": "const char*",
+              "name": "base_dir",
+              "doc": "Directory relative model paths resolve against (the joined path uses forward slashes on every platform; a rooted path stays as written), or NULL to keep every path as written."
+            },
+            {
+              "type": "anira_model_config**",
+              "name": "out",
+              "doc": "Receives the handle on success."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Loads a model config from JSON text (section 8.1). A version 2 document is upgraded (section 8.4): the result carries the models, tensors and scalars, holds back max_inference_time / warm_up / blocking_ratio as a legacy Hard contract for anira_model_config_take_legacy_contract, logs one warning per process, and returns ANIRA_SUCCESS_UPGRADED. Unknown keys are stored as extensions and fail prepare by name.",
+          "return_doc": "ANIRA_OK or ANIRA_SUCCESS_UPGRADED; ANIRA_ERROR_JSON with the key path and the offending value in err for malformed text, a wrong type, or a string outside a key's vocabulary; ANIRA_ERROR_EXTENSION_VERSION for a known extension at an unregistered version."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_from_json_file",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const char*",
+              "name": "utf8_path",
+              "doc": "Path of the file; its directory is the base_dir of the model paths."
+            },
+            {
+              "type": "anira_model_config**",
+              "name": "out",
+              "doc": "Receives the handle on success."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Reads a file and loads it as anira_model_config_from_json with base_dir = the file's directory.",
+          "return_doc": "As anira_model_config_from_json, plus ANIRA_ERROR_NO_SUCH_FILE."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_to_json",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "char*",
+              "name": "buf",
+              "doc": "Receives the text, NUL-terminated; may be NULL with cap 0 to size."
+            },
+            {
+              "type": "size_t",
+              "name": "cap",
+              "doc": "Capacity of buf in bytes."
+            },
+            {
+              "type": "size_t*",
+              "name": "out_len",
+              "doc": "Receives the text length without the NUL; always written."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Writes the config in v3 spelling (section 8.1), fixed key order; reading a v2 file and writing it out is the migration tool. Bytes entries keep the path they were loaded with.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_BUFFER_TOO_SMALL (out_len holds the required length) or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out_len."
+        },
+        {
+          "kind": "function",
+          "name": "anira_model_config_take_legacy_contract",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_model_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "anira_contract**",
+              "name": "out",
+              "doc": "Receives the contract (caller destroys it), or NULL when there is none."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Hands out the Hard contract a version 2 upgrade held back (budget, warmup and wait ratio; no geometry). Non-NULL only once after an upgrade: a second call, or a v3 document, yields NULL.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_from_json",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const char*",
+              "name": "utf8",
+              "doc": "The document text (a v3 machine file, or a v2 document with a context_config root)."
+            },
+            {
+              "type": "size_t",
+              "name": "len",
+              "doc": "Length of utf8 in bytes."
+            },
+            {
+              "type": "anira_machine_config**",
+              "name": "out",
+              "doc": "Receives the handle on success."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Loads a machine config from JSON text (section 8.2). Device blocks in JSON imply ANIRA_OWNERSHIP_OWNED; borrowed handles are code-only and patched afterwards with the device setters. A version 2 document is upgraded (context_config; the bare log_level key becomes log.level) and returns ANIRA_SUCCESS_UPGRADED.",
+          "return_doc": "ANIRA_OK or ANIRA_SUCCESS_UPGRADED; ANIRA_ERROR_JSON with the key path for malformed text, a wrong type or an unknown vocabulary value."
+        },
+        {
+          "kind": "function",
+          "name": "anira_machine_config_to_json",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const anira_machine_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "char*",
+              "name": "buf",
+              "doc": "Receives the text, NUL-terminated; may be NULL with cap 0 to size."
+            },
+            {
+              "type": "size_t",
+              "name": "cap",
+              "doc": "Capacity of buf in bytes."
+            },
+            {
+              "type": "size_t*",
+              "name": "out_len",
+              "doc": "Receives the text length without the NUL; always written."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Writes the config in v3 spelling (section 8.2), fixed key order; the sink is code-only and not written, device blocks are written without their borrowed handles.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_BUFFER_TOO_SMALL (out_len holds the required length) or ANIRA_ERROR_INVALID_ARGUMENT."
+        },
+        {
+          "kind": "function",
+          "name": "anira_contract_from_json",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const char*",
+              "name": "utf8",
+              "doc": "The document text: {\"hard\": {...}} or {\"async\": {...}} with an optional top-level edge_cost, or a v2 document."
+            },
+            {
+              "type": "size_t",
+              "name": "len",
+              "doc": "Length of utf8 in bytes."
+            },
+            {
+              "type": "anira_contract**",
+              "name": "out",
+              "doc": "Receives the handle on success."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "Loads a contract from JSON text (section 8.3): budget is \"measured\" or {\"ms\": x}, warmup is \"until_stable\", \"none\" or {\"fixed\": n}; a file with both roots or neither is ANIRA_ERROR_JSON. A version 2 document yields its legacy Hard contract directly (ANIRA_SUCCESS_UPGRADED).",
+          "return_doc": "ANIRA_OK or ANIRA_SUCCESS_UPGRADED, or ANIRA_ERROR_JSON with the key path."
         }
       ]
     }
