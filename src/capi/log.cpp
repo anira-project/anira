@@ -27,10 +27,9 @@ anira::LogLevel to_anira_level(anira_log_level level) noexcept {
 
 }  // namespace
 
-size_t ANIRA_CALL anira_drain_log(void) {
-    ANIRA_CAPI_BEGIN
-    return anira::Context::drain_log();
-    ANIRA_CAPI_END_VALUE(nullptr, 0)
+size_t ANIRA_CALL anira_drain_log(void) try { return anira::Context::drain_log(); } catch (...) {
+    anira::capi::translate_exception(nullptr);
+    return 0;
 }
 
 void ANIRA_CALL anira_log_rt(anira_log_level level,
@@ -58,16 +57,16 @@ void ANIRA_CALL anira_log_rt(anira_log_level level,
 #endif
 }
 
-void ANIRA_CALL anira_log(anira_log_level level, const char* group, const char* message) {
+void ANIRA_CALL anira_log(anira_log_level level, const char* group, const char* message) try {
 #ifdef ENABLE_LOGGING
     if (group == nullptr || message == nullptr) { return; }
-    // A sink that throws must not unwind through a C frame: the firewall swallows it.
-    ANIRA_CAPI_BEGIN
     thl::Logger::logf(anira::to_thl_log_level(to_anira_level(level)), group, "%s", message);
-    ANIRA_CAPI_END_VOID(nullptr)
 #else
     static_cast<void>(level);
     static_cast<void>(group);
     static_cast<void>(message);
 #endif
+} catch (...) {
+    // A sink that throws must not unwind through a C frame.
+    anira::capi::translate_exception(nullptr);
 }

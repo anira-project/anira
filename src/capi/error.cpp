@@ -58,8 +58,7 @@ anira_status firewall_probe(int kind,
                             anira_status status,
                             const char* message,
                             anira_error* err,
-                            int* out_value) {
-    ANIRA_CAPI_BEGIN
+                            int* out_value) try {
     const std::string text = message != nullptr ? message : "";
     switch (kind) {
         case 1: throw std::bad_alloc();
@@ -71,8 +70,7 @@ anira_status firewall_probe(int kind,
     }
     if (out_value != nullptr) { *out_value = 42; }
     return ANIRA_OK;
-    ANIRA_CAPI_END(err)
-}
+} catch (...) { return translate_exception(err); }
 
 }  // namespace anira::capi
 

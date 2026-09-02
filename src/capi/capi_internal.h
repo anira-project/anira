@@ -5,6 +5,22 @@
  * The exception firewall and the error helpers shared by every src/capi translation
  * unit. Private: never installed, never included by a public header. The test binary
  * test_abi includes it through the src/ include directory.
+ *
+ * Exceptions never cross the C boundary: every control-path entry is a function-try-block
+ * whose handler is translate_exception, so a C++ exception becomes a status and a message
+ * in the caller's anira_error:
+ *
+ *     anira_status ANIRA_CALL anira_x_create(anira_x** out, anira_error* err) try {
+ *         ...
+ *         *out = handle.release();   // out-parameters only on the success path
+ *         return ANIRA_OK;
+ *     } catch (...) {
+ *         return anira::capi::translate_exception(err);
+ *     }
+ *
+ * Entries returning a count or nothing write `translate_exception(err); return 0;` in
+ * the handler. Real-time entries have no handler: they are noexcept and nothing inside
+ * them throws by contract.
  */
 
 #include <anira/abi/status.h>
@@ -54,25 +70,7 @@ ANIRA_API anira_status firewall_probe(int kind,
 
 }  // namespace anira::capi
 
-// The firewall: every control-path C entry body sits between these two. Out-parameters
-// are written only on the success path, so a caller never sees a half-written result.
-#define ANIRA_CAPI_BEGIN try {
-#define ANIRA_CAPI_END(err)                             \
-    }                                                   \
-    catch (...) {                                       \
-        return ::anira::capi::translate_exception(err); \
-    }
-#define ANIRA_CAPI_END_VALUE(err, value)                            \
-    }                                                               \
-    catch (...) {                                                   \
-        static_cast<void>(::anira::capi::translate_exception(err)); \
-        return (value);                                             \
-    }
-#define ANIRA_CAPI_END_VOID(err)                                    \
-    }                                                               \
-    catch (...) {                                                   \
-        static_cast<void>(::anira::capi::translate_exception(err)); \
-    }
+// An argument check that fails the entry with a status and a message.
 #define ANIRA_CAPI_REQUIRE(cond, err, status_value, ...)             \
     do {                                                             \
         if (!(cond)) {                                               \
