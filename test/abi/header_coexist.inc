@@ -14,12 +14,14 @@
 #include <anira/anira.h>
 #define ANIRA_COEXIST_PROBE anira_header_coexist_abi_first
 #else
+#include <anira/anira.h>
+// The 2.x umbrella first; this comment keeps clang-format from regrouping the C headers
+// above it, which is the point of this branch.
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/abi/version.h>
-#include <anira/anira.h>
 #define ANIRA_COEXIST_PROBE anira_header_coexist_v2_first
 #endif
 

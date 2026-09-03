@@ -2,7 +2,8 @@ Migrating from anira 2.x
 ========================
 
 anira 3 replaces the 2.x configuration classes with a versioned C ABI: the handles of
-``anira/abi/config.h`` and three JSON files. The guides of this documentation describe the 3.x
+``anira/abi/config.h``, the C++ builders of ``anira/anira.hpp`` over them, and three JSON
+files. The guides of this documentation describe the 3.x
 API only. This page collects what a 2.x user needs on top of them: what each 2.x entity became,
 what the loaders do with a 2.x JSON file, and how long the 2.x classes stay.
 
@@ -31,11 +32,12 @@ Where the 2.x API stands in this pre-release
 Configuration in code
 ---------------------
 
-One 2.x ``InferenceConfig`` becomes one ``anira_model_config`` plus one Hard
-``anira_contract``; one ``ContextConfig`` becomes one ``anira_machine_config``; the
-``HostConfig`` handed to ``prepare`` becomes the geometry of the Hard contract and the anchor of
-the model config. Every 3.x call is a C function returning ``anira_status``; the builders are
-described in section 1 of the :doc:`usage` guide.
+One 2.x ``anira::InferenceConfig`` becomes one ``anira::ModelConfig`` plus one Hard
+``anira::ContractHandle``; one ``anira::ContextConfig`` becomes one ``anira::MachineConfig``; the
+``anira::HostConfig`` handed to ``prepare`` becomes the geometry of the Hard contract and the anchor of
+the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` (``cfg``,
+``spec``, ``contract`` and ``machine`` are the handles) with the C entry of
+``anira/abi/config.h`` beside it; section 1 of the :doc:`usage` guide describes both.
 
 .. list-table::
    :header-rows: 1
@@ -43,61 +45,74 @@ described in section 1 of the :doc:`usage` guide.
 
    * - anira 2.x
      - anira 3.x
-   * - ``ModelData{path, backend}``
-     - ``anira_model_config_add_model_path(cfg, engine, path, &index, &err)``; the engines are
-       ``ANIRA_ENGINE_ONNXRUNTIME`` (2.x ``ONNX``), ``ANIRA_ENGINE_LIBTORCH``,
-       ``ANIRA_ENGINE_TFLITE``, ``ANIRA_ENGINE_LITERT``, ``ANIRA_ENGINE_EXECUTORCH``. A
-       custom backend is a named engine: ``anira_model_config_add_model_path_custom``.
-   * - ``ModelData{bytes, size, backend}`` (binary)
-     - ``anira_model_config_add_model_bytes(cfg, engine, bytes, size, ownership, release, ctx,
-       &index, &err)``; ``ANIRA_BYTES_COPY`` copies, ``ANIRA_BYTES_BORROW`` keeps your pointer
-       and calls ``release`` when the config is destroyed. Any engine may load from bytes.
-   * - ``ModelData::model_function``
-     - The ``entry`` extension on the model entry: an ``anira_ext_entry`` set with
-       ``anira_model_config_set_model_ext``.
-   * - ``TensorShape`` (one shape list per backend)
-     - One ``anira_tensor_spec`` per tensor with tagged axes
-       (``anira_tensor_spec_set_axis``), added with ``anira_model_config_add_input`` /
-       ``add_output``, shared by every model entry. A backend whose export holds the axes in
+   * - ``anira::ModelData{path, backend}``
+     - ``cfg.add_model_path(ANIRA_ENGINE_ONNXRUNTIME, path)``
+       (``anira_model_config_add_model_path``); the engines are ``ANIRA_ENGINE_ONNXRUNTIME``
+       (2.x ``ONNX``), ``ANIRA_ENGINE_LIBTORCH``, ``ANIRA_ENGINE_TFLITE``,
+       ``ANIRA_ENGINE_LITERT``, ``ANIRA_ENGINE_EXECUTORCH``. A custom backend is a named
+       engine: ``cfg.add_model_path("de.tu-berlin.coreml", path)``
+       (``anira_model_config_add_model_path_custom``).
+   * - ``anira::ModelData{bytes, size, backend}`` (binary)
+     - ``cfg.add_model_bytes(engine, bytes, ownership, release, ctx)`` with a
+       ``std::span<const std::byte>`` (``anira_model_config_add_model_bytes``);
+       ``ANIRA_BYTES_COPY`` copies, ``ANIRA_BYTES_BORROW`` keeps your pointer and calls
+       ``release`` when the config is destroyed. Any engine may load from bytes.
+   * - ``anira::ModelData::model_function``
+     - The ``entry`` extension on the model entry: ``cfg.model_ext(i,
+       anira::ext::Entry{"decode"})`` (an ``anira_ext_entry`` set with
+       ``anira_model_config_set_model_ext``).
+   * - ``anira::TensorShape`` (one shape list per backend)
+     - One ``anira::TensorSpec(name, dtype, role)`` per tensor with tagged axes,
+       ``spec.axis(i, tag, extent)`` (``anira_tensor_spec_set_axis``), added with
+       ``cfg.input(spec)`` / ``cfg.output(spec)`` (``anira_model_config_add_input`` /
+       ``add_output``), shared by every model entry. A backend whose export holds the axes in
        another order (the channels-last TensorFlow rows of the CNN, HybridNN and StatefulRNN
-       configs) gets a per-entry layout: ``anira_model_config_set_tensor_layout(cfg, i,
-       canonical, axes, ndim)`` with the spec axis at each of the file's positions, e.g.
-       ``{0, 2, 1}`` for ``{1, 15380, 1}`` against a spec ``{1, 1, 15380}``.
-   * - ``ProcessingSpec::preprocess_input_channels`` / ``postprocess_output_channels``
+       configs) gets a per-entry layout: ``cfg.tensor_layout(i, canonical, std::array{0u,
+       2u, 1u})`` (``anira_model_config_set_tensor_layout``) with the spec axis at each of
+       the file's positions, e.g. ``{0, 2, 1}`` for ``{1, 15380, 1}`` against a spec
+       ``{1, 1, 15380}``.
+   * - ``anira::ProcessingSpec::preprocess_input_channels`` / ``postprocess_output_channels``
      - The extent of the tensor's ``ANIRA_AXIS_CHANNEL`` axis.
-   * - ``ProcessingSpec::preprocess_input_size`` / ``postprocess_output_size`` (the hop)
-     - ``anira_tensor_spec_set_window(spec, window_min, window_max, context)``: the window is
-       the per-channel element count of the tensor, the context is the window minus the 2.x
-       size (the samples kept from the previous window). A size of ``0`` (non-streamable)
-       is ``ANIRA_ROLE_STATIC``.
-   * - ``ProcessingSpec::internal_model_latency``
-     - ``anira_tensor_spec_set_latency`` on the output spec.
-   * - ``InferenceConfig::max_inference_time``
-     - ``anira_contract_hard_set_budget(contract, ANIRA_BUDGET_EXPLICIT, ms)``.
-   * - ``InferenceConfig::warm_up``
-     - ``anira_contract_hard_set_warmup(contract, ANIRA_WARMUP_FIXED, n)``; ``0`` is
-       ``ANIRA_WARMUP_NONE``.
-   * - ``InferenceConfig::blocking_ratio``
-     - ``anira_contract_hard_set_wait_ratio``.
-   * - ``InferenceConfig::session_exclusive_processor``
-     - ``anira_model_config_set_state(cfg, ANIRA_MODEL_STATEFUL)``.
-   * - ``InferenceConfig::num_parallel_processors``
-     - ``anira_model_config_set_max_instances``.
-   * - ``ContextConfig::num_threads`` / ``wait_strategy``
-     - ``anira_machine_config_set_threads(machine, num_threads, wait)``;
+   * - ``anira::ProcessingSpec::preprocess_input_size`` / ``postprocess_output_size`` (the hop)
+     - ``spec.window(window_min, window_max, context)`` (``anira_tensor_spec_set_window``):
+       the window is the per-channel element count of the tensor, the context is the window
+       minus the 2.x size (the samples kept from the previous window). A size of ``0``
+       (non-streamable) is ``ANIRA_ROLE_STATIC``.
+   * - ``anira::ProcessingSpec::internal_model_latency``
+     - ``spec.latency(elements)`` on the output spec (``anira_tensor_spec_set_latency``).
+   * - ``anira::InferenceConfig::max_inference_time``
+     - ``anira::Hard{.budget = ANIRA_BUDGET_EXPLICIT, .budget_value =
+       std::chrono::microseconds(...)}`` (``anira_contract_hard_set_budget(contract,
+       ANIRA_BUDGET_EXPLICIT, ms)``).
+   * - ``anira::InferenceConfig::warm_up``
+     - ``anira::Hard{.warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = n}``
+       (``anira_contract_hard_set_warmup``); ``0`` is ``ANIRA_WARMUP_NONE``.
+   * - ``anira::InferenceConfig::blocking_ratio``
+     - ``anira::Hard{.wait_ratio = ...}`` (``anira_contract_hard_set_wait_ratio``).
+   * - ``anira::InferenceConfig::session_exclusive_processor``
+     - ``cfg.state(ANIRA_MODEL_STATEFUL)`` (``anira_model_config_set_state``).
+   * - ``anira::InferenceConfig::num_parallel_processors``
+     - ``cfg.max_instances(n)`` (``anira_model_config_set_max_instances``).
+   * - ``anira::ContextConfig::num_threads`` / ``wait_strategy``
+     - ``machine.threads(num_threads, wait)`` (``anira_machine_config_set_threads``);
        ``ANIRA_THREADS_AUTO`` is the 2.x default, ``0`` means the host brings its own threads.
-   * - ``LogConfig`` (``level``, ``drain``, ``queue_capacity``, ``drain_interval_ms``)
-     - ``anira_machine_config_set_log_level`` / ``set_log_drain`` / ``set_log_queue_capacity``,
-       or all at once with ``anira_machine_config_set_log``.
-   * - ``HostConfig{buffer_size, sample_rate}``
-     - ``anira_contract_create_hard(block_min, block_max, rate, &contract, &err)`` or
-       ``anira_contract_hard_set_geometry``; ``allow_smaller_buffers`` is
-       ``block_min = 1`` against ``block_min == block_max``.
-   * - ``HostConfig{tensor_index, tensor_is_input}`` (the reference stream)
-     - ``anira_model_config_set_anchor(cfg, canonical)`` with the tensor's canonical name;
-       ``NULL`` is the 2.x default (the first streamable tensor).
-   * - ``InferenceHandler::set_inference_backend`` (the starting backend)
-     - ``anira_model_config_set_default_engine``; switching at run time stays a handler call.
+   * - ``anira::LogConfig`` (``level``, ``drain``, ``queue_capacity``, ``drain_interval_ms``)
+     - ``machine.log_level`` / ``log_drain`` / ``log_queue_capacity``
+       (``anira_machine_config_set_log_level`` / ``set_log_drain`` /
+       ``set_log_queue_capacity``), or all at once with ``machine.log(desc)``
+       (``anira_machine_config_set_log``).
+   * - ``anira::HostConfig{buffer_size, sample_rate}``
+     - ``anira::Hard{.block_min, .block_max, .rate}`` (``anira_contract_create_hard``) or
+       ``contract.hard_geometry(block_min, block_max, rate)``
+       (``anira_contract_hard_set_geometry``); ``allow_smaller_buffers`` is ``block_min = 1``
+       against ``block_min == block_max``.
+   * - ``anira::HostConfig{tensor_index, tensor_is_input}`` (the reference stream)
+     - ``cfg.anchor(canonical)`` with the tensor's canonical name
+       (``anira_model_config_set_anchor``); an empty name (``NULL`` in C) is the 2.x default
+       (the first streamable tensor).
+   * - ``anira::InferenceHandler::set_inference_backend`` (the starting backend)
+     - ``cfg.default_engine(engine)`` (``anira_model_config_set_default_engine``); switching
+       at run time stays a handler call.
 
 .. _migration-json:
 
@@ -187,7 +202,7 @@ entry is ``ANIRA_ERROR_JSON`` with the key path in ``anira_error::message``.
      - Stored as an extension of its host and refused by name at prepare.
 
 Tensors are named ``input_<i>`` / ``output_<i>`` and typed ``float32``; ``anchor`` is left at
-its default (the first streamed tensor), which is what the 2.x ``HostConfig`` default did.
+its default (the first streamed tensor), which is what the 2.x ``anira::HostConfig`` default did.
 
 .. code-block:: c
 
