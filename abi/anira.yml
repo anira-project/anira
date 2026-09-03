@@ -632,6 +632,10 @@ headers:
         name: ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK
         value: "1u"
         doc: "Log flag: switch the platform sink (stderr, logcat, os_log) off while this machine lives."
+      - kind: define
+        name: ANIRA_LOG_FLAG_TRACE_FAILURES
+        value: "2u"
+        doc: "Log flag: every failed status of every C entry also emits one Error record whose text is the anira_error message prefixed by the entry and the status (the boundary trace, for an application that swallowed the status and a developer who only has the device log). Off by default on every platform. The machine config stores the flag; the machine of the 3.x runtime applies it, in this pre-release the process-wide switch is anira::capi::set_trace_failures."
       - kind: enum
         name: anira_model_state
         terminator: ANIRA_MODEL_STATE_FORCE32
@@ -784,7 +788,7 @@ headers:
         thread: thread-safe, !audio-thread
         status: promised
         since: "0.1"
-        doc: "Delivers the queued real-time records of this copy's core to the sinks; the host's pump under ANIRA_LOG_DRAIN_MANUAL (and on Wasm, where no drain thread exists). Returns 0 while no core exists."
+        doc: "Delivers the queued real-time records of this copy's core to the sinks; the host's pump under ANIRA_LOG_DRAIN_MANUAL (and on Wasm, where no drain thread exists). Returns 0 while no core exists. Real-time records are also delivered on the thread of a failing main-thread entry: before a negative status is returned the firewall drains the queue there, so the records that preceded the failure are in front of the host before it acts."
         return_doc: "The number of records delivered."
       - kind: function
         name: anira_log_rt

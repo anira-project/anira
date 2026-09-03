@@ -94,13 +94,16 @@ typedef struct anira_log_desc {
 /**
  * @brief Delivers the queued real-time records of this copy's core to the sinks; the host's
  * pump under ANIRA_LOG_DRAIN_MANUAL (and on Wasm, where no drain thread exists). Returns
- * 0 while no core exists.
+ * 0 while no core exists. Real-time records are also delivered on the thread of a
+ * failing main-thread entry: before a negative status is returned the firewall drains
+ * the queue there, so the records that preceded the failure are in front of the host
+ * before it acts.
  * @return The number of records delivered.
  * @par Thread contract
  * [thread-safe, !audio-thread]
  * @since ABI 0.1
  */
-ANIRA_API size_t ANIRA_CALL anira_drain_log(void);
+ANIRA_API size_t ANIRA_CALL anira_drain_log(void) ANIRA_NOEXCEPT;
 
 /**
  * @brief Real-time logging for callers on an ANIRA_NONBLOCKING path: writes "<message> [arg0
@@ -119,7 +122,7 @@ ANIRA_API void ANIRA_CALL anira_log_rt(anira_log_level level,
                                        const char* group,
                                        const char* static_message,
                                        int32_t arg0,
-                                       int32_t arg1) ANIRA_NONBLOCKING;
+                                       int32_t arg1) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
  * @brief Control-path logging through anira's private logger; formats and allocates like any
@@ -131,7 +134,9 @@ ANIRA_API void ANIRA_CALL anira_log_rt(anira_log_level level,
  * [thread-safe, !audio-thread]
  * @since ABI 0.1
  */
-ANIRA_API void ANIRA_CALL anira_log(anira_log_level level, const char* group, const char* message);
+ANIRA_API void ANIRA_CALL anira_log(anira_log_level level,
+                                    const char* group,
+                                    const char* message) ANIRA_NOEXCEPT;
 
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 

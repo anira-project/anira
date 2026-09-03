@@ -1,11 +1,14 @@
 #ifdef USE_TFLITE
 
 #include <anira/InferenceConfig.h>
+#include <anira/abi/status.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/backends/TFLiteProcessor.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
+#include <anira/utils/Logger.h>
+#include <anira/utils/MemoryBlock.h>
 #include <tensorflow/lite/core/c/c_api.h>
 
 #include <atomic>
@@ -16,11 +19,30 @@
 #include <string>
 #include <vector>
 
+#include "../utils/ModelFile.h"
+#include "../utils/StatusError.h"
+
 #ifdef _WIN32
 #include <comdef.h>
 #endif
 
 namespace anira {
+
+namespace {
+
+// The TensorFlow Lite C API reports failure as a TfLiteStatus; on the control path it
+// becomes ANIRA_ERROR_ENGINE with the failing call named.
+void tflite_check(TfLiteStatus status, const char* what) {
+    if (status != kTfLiteOk) {
+        throw StatusError(ANIRA_ERROR_ENGINE,
+                          model_file::message(
+                              "tflite",
+                              what,
+                              "returned TfLiteStatus " + std::to_string(static_cast<int>(status))));
+    }
+}
+
+}  // namespace
 
 // Defined here, not in the header: it owns TensorFlow Lite objects, and the engine
 // headers stay out of anira's public headers (see the note on BackendBase).
@@ -84,15 +106,37 @@ TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config)
             m_inference_config.get_model_data(anira::InferenceBackend::TFLITE);
         assert(model_data && "Model data not found for binary model!");
         m_model = TfLiteModelCreate(model_data->m_data, model_data->m_size);
+        if (m_model == nullptr) {
+            throw StatusError(ANIRA_ERROR_MODEL_LOAD,
+                              model_file::message("tflite",
+                                                  model_file::k_memory,
+                                                  "TfLiteModelCreate returned NULL (not a "
+                                                  "TensorFlow Lite flatbuffer)"));
+        }
     } else {
-        std::string const modelpath =
-            m_inference_config.get_model_path(anira::InferenceBackend::TFLITE);
+        std::string const modelpath = model_file::require_readable(
+            m_inference_config.get_model_path(anira::InferenceBackend::TFLITE),
+            "tflite");
         m_model = TfLiteModelCreateFromFile(modelpath.c_str());
+        if (m_model == nullptr) {
+            throw StatusError(ANIRA_ERROR_MODEL_LOAD,
+                              model_file::message("tflite",
+                                                  modelpath,
+                                                  "TfLiteModelCreateFromFile returned NULL (not "
+                                                  "a TensorFlow Lite flatbuffer)"));
+        }
     }
 
     m_options = TfLiteInterpreterOptionsCreate();
     TfLiteInterpreterOptionsSetNumThreads(m_options, 1);
     m_interpreter = TfLiteInterpreterCreate(m_model, m_options);
+    if (m_interpreter == nullptr) {
+        throw StatusError(ANIRA_ERROR_ENGINE,
+                          model_file::message("tflite",
+                                              "TfLiteInterpreterCreate",
+                                              "returned NULL (the model's operators are not "
+                                              "supported by this runtime)"));
+    }
 
     // This is necessary when we have dynamic input shapes, it should be done before allocating
     // tensors obviously
@@ -102,13 +146,15 @@ TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config)
             m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[i];
         input_shape.reserve(input_shape64.size());
         for (long j : input_shape64) { input_shape.push_back((int)j); }
-        TfLiteInterpreterResizeInputTensor(m_interpreter,
-                                           static_cast<int32_t>(i),
-                                           input_shape.data(),
-                                           static_cast<int32_t>(input_shape.size()));
+        tflite_check(TfLiteInterpreterResizeInputTensor(m_interpreter,
+                                                        static_cast<int32_t>(i),
+                                                        input_shape.data(),
+                                                        static_cast<int32_t>(input_shape.size())),
+                     "TfLiteInterpreterResizeInputTensor");
     }
 
-    TfLiteInterpreterAllocateTensors(m_interpreter);
+    tflite_check(TfLiteInterpreterAllocateTensors(m_interpreter),
+                 "TfLiteInterpreterAllocateTensors");
 
     m_inputs.resize(m_inference_config.get_tensor_input_shape().size());
     m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
@@ -123,7 +169,8 @@ TFLiteProcessor::Instance::Instance(InferenceConfig& inference_config)
     }
 
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
-        TfLiteInterpreterInvoke(m_interpreter);
+        // A warm-up that fails fails construction: the model cannot run.
+        tflite_check(TfLiteInterpreterInvoke(m_interpreter), "TfLiteInterpreterInvoke (warm-up)");
     }
 }
 
@@ -151,8 +198,14 @@ void TFLiteProcessor::Instance::process(std::vector<BufferF>& input,
                                    m_inference_config.get_tensor_input_size()[i] * sizeof(float));
     }
 
-    // Run inference
-    TfLiteInterpreterInvoke(m_interpreter);
+    // Run inference. No caller waits for this task: a failing engine is logged once and
+    // delivers zeros, never the previous job's output.
+    if (TfLiteInterpreterInvoke(m_interpreter) != kTfLiteOk) {
+        ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite,
+                           "TfLiteInterpreterInvoke failed; delivering zeros");
+        for (auto& buffer : output) { buffer.clear(); }
+        return;
+    }
 
     // We need to copy the data because we cannot access the data pointer ref of the tensor directly
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {

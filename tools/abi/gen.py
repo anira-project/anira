@@ -417,12 +417,19 @@ def param_text(p: dict) -> str:
 def function_decl(fn: dict) -> str:
     params = fn.get("params", [])
     head = f"ANIRA_API {fn['returns']} ANIRA_CALL {fn['name']}("
-    tail = ")" + (" ANIRA_NONBLOCKING" if fn.get("nonblocking") else "") + ";"
+    # Every entry is ANIRA_NOEXCEPT (noexcept in C++, nothing in C): an exception that
+    # escapes the firewall terminates deterministically instead of MSVC's undefined
+    # behaviour for extern "C". ANIRA_NONBLOCKING follows it, as clang wants the effect
+    # attribute after the exception specification.
+    tail = ") ANIRA_NOEXCEPT" + (" ANIRA_NONBLOCKING" if fn.get("nonblocking") else "") + ";"
     joined = ", ".join(param_text(p) for p in params) or "void"
     line = head + joined + tail
     if len(line) <= WIDTH:
         return line
     pad = " " * len(head)
+    if len(params) < 2:
+        # One parameter that does not fit beside the tail: the tail wraps, not the parameter.
+        return head + joined + ")\n" + pad + tail[1:].lstrip()
     rows = [head + param_text(params[0]) + ","]
     for p in params[1:-1]:
         rows.append(pad + param_text(p) + ",")

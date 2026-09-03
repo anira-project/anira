@@ -237,6 +237,7 @@ anira_status ExtBag::set(const anira_ext_header* header, anira_error* err) {
     if (kind_known && row == nullptr) {
         fail(err,
              ANIRA_ERROR_EXTENSION_VERSION,
+             nullptr,
              "extension '%s': version %u is not registered in this build",
              header->kind,
              static_cast<unsigned>(header->version));
@@ -270,7 +271,7 @@ anira_status ExtBag::set_json(const char* kind, std::string_view utf8, anira_err
                        kind);
     const nlohmann::json object = nlohmann::json::parse(utf8, nullptr, false);
     if (object.is_discarded() || !object.is_object()) {
-        fail(err, ANIRA_ERROR_JSON, "extension '%s': not a JSON object", kind);
+        fail(err, ANIRA_ERROR_JSON, nullptr, "extension '%s': not a JSON object", kind);
         return ANIRA_ERROR_JSON;
     }
     uint32_t version = 1;
@@ -278,6 +279,7 @@ anira_status ExtBag::set_json(const char* kind, std::string_view utf8, anira_err
         if (!it->is_number_unsigned()) {
             fail(err,
                  ANIRA_ERROR_JSON,
+                 nullptr,
                  "extension '%s': \"version\" must be a positive integer",
                  kind);
             return ANIRA_ERROR_JSON;
@@ -289,13 +291,18 @@ anira_status ExtBag::set_json(const char* kind, std::string_view utf8, anira_err
     if (kind_known && row == nullptr) {
         fail(err,
              ANIRA_ERROR_EXTENSION_VERSION,
+             nullptr,
              "extension '%s': version %u is not registered in this build",
              kind,
              static_cast<unsigned>(version));
         return ANIRA_ERROR_EXTENSION_VERSION;
     }
     if (row != nullptr && row->m_from_json == nullptr) {
-        fail(err, ANIRA_ERROR_JSON, "extension '%s': a code-only kind has no JSON form", kind);
+        fail(err,
+             ANIRA_ERROR_JSON,
+             nullptr,
+             "extension '%s': a code-only kind has no JSON form",
+             kind);
         return ANIRA_ERROR_JSON;
     }
     void* payload = nullptr;
@@ -305,7 +312,7 @@ anira_status ExtBag::set_json(const char* kind, std::string_view utf8, anira_err
         std::string error;
         payload = row->m_from_json(body.dump(), error);
         if (payload == nullptr) {
-            fail(err, ANIRA_ERROR_JSON, "extension '%s': %s", kind, error.c_str());
+            fail(err, ANIRA_ERROR_JSON, nullptr, "extension '%s': %s", kind, error.c_str());
             return ANIRA_ERROR_JSON;
         }
     }
@@ -362,6 +369,7 @@ anira_status check_bag(const ExtBag& bag,
         if (!slot.known()) {
             fail(err,
                  ANIRA_ERROR_EXTENSION_UNKNOWN,
+                 nullptr,
                  "extension '%s' on %s %s is not known to this build",
                  slot.kind().c_str(),
                  host_name(host),
@@ -371,6 +379,7 @@ anira_status check_bag(const ExtBag& bag,
         if (consumer_of(host, slot.kind(), entry_engine, candidates, num_candidates) == nullptr) {
             fail(err,
                  ANIRA_ERROR_EXTENSION_UNCONSUMED,
+                 nullptr,
                  "extension '%s' on %s %s is not consumed by any stage in this build",
                  slot.kind().c_str(),
                  host_name(host),

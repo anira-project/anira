@@ -1,6 +1,7 @@
 #ifdef USE_EXECUTORCH
 
 #include <anira/InferenceConfig.h>
+#include <anira/abi/status.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/backends/ExecuTorchProcessor.h>
 #include <anira/scheduler/SessionElement.h>
@@ -21,6 +22,9 @@
 #include <utility>
 #include <vector>
 
+#include "../utils/ModelFile.h"
+#include "../utils/StatusError.h"
+
 // IWYU pragma: begin_keep — the ExecuTorch headers are compiled as SYSTEM includes,
 // where misc-include-cleaner cannot attribute the used symbols to their providers.
 #include "executorch/extension/data_loader/buffer_data_loader.h"
@@ -40,11 +44,18 @@ namespace {
 // Every fallible ExecuTorch call returns a runtime::Error (or a Result carrying one).
 // A failure here means a setup or runtime problem, so we throw with the failing call +
 // error code — this keeps a broken state from silently producing zeros.
-inline void executorch_check(executorch::runtime::Error error, const char* what) {
+// Control path: a failing call becomes ANIRA_ERROR_ENGINE (or the status the caller passes)
+// with the call and the error named (executorch::runtime::to_string, e.g. "InvalidProgram").
+inline void executorch_check(executorch::runtime::Error error,
+                             const char* what,
+                             anira_status failure = ANIRA_ERROR_ENGINE,
+                             const std::string& where = "") {
     if (error != executorch::runtime::Error::Ok) {
-        throw std::runtime_error(std::string("[anira][ExecuTorch] ") + what +
-                                 " failed with error code " +
-                                 std::to_string(static_cast<uint32_t>(error)));
+        const std::string text = std::string(what) +
+                                 " failed with Error::" + executorch::runtime::to_string(error) +
+                                 " (" + std::to_string(static_cast<uint32_t>(error)) + ")";
+        throw StatusError(failure,
+                          model_file::message("executorch", where.empty() ? what : where, text));
     }
 }
 
@@ -87,6 +98,7 @@ struct ExecuTorchProcessor::Instance {
                                                               ///< its selected method
 
     std::string m_method;  ///< Method executed per inference: the config's model_function
+    std::string m_where;   ///< The model path or "memory", for the failure messages
                            ///< (a .pte can carry several named entry points, e.g.
                            ///< encode/decode), or "forward" when none is set
 
@@ -139,13 +151,15 @@ ExecuTorchProcessor::Instance::Instance(InferenceConfig& inference_config)
         assert(model_data && "Model data not found for binary model!");
         // BufferDataLoader keeps a pointer into the caller's buffer; the ModelData
         // blob lives in the InferenceConfig, which outlives this instance.
+        m_where = model_file::k_memory;
         m_module = std::make_unique<executorch::extension::Module>(
             std::make_unique<executorch::extension::BufferDataLoader>(model_data->m_data,
                                                                       model_data->m_size));
     } else {
-        std::string const modelpath =
-            m_inference_config.get_model_path(anira::InferenceBackend::EXECUTORCH);
-        m_module = std::make_unique<executorch::extension::Module>(modelpath);
+        m_where = model_file::require_readable(
+            m_inference_config.get_model_path(anira::InferenceBackend::EXECUTORCH),
+            "executorch");
+        m_module = std::make_unique<executorch::extension::Module>(m_where);
     }
 
     // Load the program and the selected method up front: this parses the .pte,
@@ -154,7 +168,9 @@ ExecuTorchProcessor::Instance::Instance(InferenceConfig& inference_config)
     m_method = m_inference_config.get_model_function(anira::InferenceBackend::EXECUTORCH);
     if (m_method.empty()) { m_method = "forward"; }
     executorch_check(m_module->load_method(m_method),
-                     ("Module::load_method(\"" + m_method + "\")").c_str());
+                     ("Module::load_method(\"" + m_method + "\")").c_str(),
+                     ANIRA_ERROR_MODEL_LOAD,
+                     m_where);
 
     // Build the input tensors once, wrapping instance-owned host memory: the .pte
     // interface is positional float32 tensors of the configured shapes.
@@ -217,7 +233,9 @@ void ExecuTorchProcessor::Instance::process(std::vector<BufferF>& input,
                         m_inference_config.get_tensor_output_size()[i] * sizeof(float));
         }
     } catch (const std::exception& e) {
+        // No caller waits for this task: log once, deliver zeros, never stale output.
         ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch, "%s", e.what());
+        for (auto& buffer : output) { buffer.clear(); }
     }
 }
 

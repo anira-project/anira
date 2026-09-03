@@ -45,5 +45,12 @@ static_assert(ANIRA_DTYPE_F32 == 0x00012002u, "DLPack float32");
     return checks;
 }
 
+// Every C entry is noexcept in C++ (ANIRA_NOEXCEPT): a control-path entry, a void entry and
+// a nonblocking one.
+static_assert(noexcept(anira_model_config_create(nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_destroy(nullptr)));
+static_assert(noexcept(anira_abi_version()));
+static_assert(noexcept(anira_log_rt(ANIRA_LOG_ERROR, "g", "m", 0, 0)));
+
 }  // namespace
 // NOLINTEND(misc-include-cleaner)

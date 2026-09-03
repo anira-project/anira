@@ -198,6 +198,23 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(tanh-lib)
 
+# One compiled log ceiling in every build type. tanh-lib compiles Warning, Info and Debug
+# out of Release builds (THL_LOG_COMPILED_MAX_LEVEL=1, PUBLIC on tanh_core, 4 otherwise).
+# anira's private copy keeps every level compiled in, so that the runtime level of the
+# machine config is the only filter and a warning the call survives exists in a shipped
+# build (docs/anira-v3-error-and-log-strategy.md, rule 4).
+foreach(_prop COMPILE_DEFINITIONS INTERFACE_COMPILE_DEFINITIONS)
+    get_target_property(_defs tanh_core ${_prop})
+    if(_defs)
+        list(FILTER _defs EXCLUDE REGEX "THL_LOG_COMPILED_MAX_LEVEL")
+    else()
+        set(_defs "")
+    endif()
+    set_target_properties(tanh_core PROPERTIES ${_prop} "${_defs};THL_LOG_COMPILED_MAX_LEVEL=4")
+endforeach()
+unset(_defs)
+unset(_prop)
+
 # Fetch the release tarball instead of cloning the repo — the full git
 # history plus test suite is ~150MB while the release archive is a few MB, the
 # URL_HASH verifies integrity, and the tarball is content-addressable so CMake

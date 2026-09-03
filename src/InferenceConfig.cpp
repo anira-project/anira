@@ -33,10 +33,8 @@ InferenceConfig::InferenceConfig(std::vector<ModelData> model_data,
     , m_blocking_ratio(blocking_ratio)
     , m_num_parallel_processors(num_parallel_processors) {
     if (m_max_inference_time <= 0.f) {
-        ANIRA_LOG_ERROR(log_group::k_config,
-                        "Invalid max_inference_time: %f. It must be greater than 0.",
-                        static_cast<double>(m_max_inference_time));
-        throw std::invalid_argument("max_inference_time must be greater than 0.");
+        throw std::invalid_argument("max_inference_time must be greater than 0, got " +
+                                    std::to_string(m_max_inference_time));
     }
 
     update_processing_spec();
@@ -270,27 +268,21 @@ void InferenceConfig::update_processing_spec() {
         std::vector<size_t> input_size(m_tensor_shape[i].m_tensor_input_shape.size(), 1);
         std::vector<size_t> output_size(m_tensor_shape[i].m_tensor_output_shape.size(), 1);
         if (shape.m_tensor_input_shape.size() < 1) {
-            ANIRA_LOG_ERROR(log_group::k_config,
-                            "No input shape provided for backend: %d. At least one input shape "
-                            "must be provided.",
-                            static_cast<int>(shape.m_backend));
-            throw std::invalid_argument("No input shape provided.");
+            throw std::invalid_argument("no input shape provided for backend " +
+                                        std::to_string(static_cast<int>(shape.m_backend)) +
+                                        "; at least one input shape is required");
         }
         if (shape.m_tensor_output_shape.size() < 1) {
-            ANIRA_LOG_ERROR(log_group::k_config,
-                            "No output shape provided for backend: %d. At least one output shape "
-                            "must be provided.",
-                            static_cast<int>(shape.m_backend));
-            throw std::invalid_argument("No output shape provided.");
+            throw std::invalid_argument("no output shape provided for backend " +
+                                        std::to_string(static_cast<int>(shape.m_backend)) +
+                                        "; at least one output shape is required");
         }
         for (int j = 0; j < shape.m_tensor_input_shape.size(); ++j) {
             for (auto& dim : shape.m_tensor_input_shape[j]) {
                 if (dim < 1) {
-                    ANIRA_LOG_ERROR(log_group::k_config,
-                                    "Invalid dimension in input shape: %lld. Input dimensions "
-                                    "must be positive.",
-                                    static_cast<long long>(dim));
-                    throw std::invalid_argument("Invalid dimension in input shape.");
+                    throw std::invalid_argument("invalid dimension " + std::to_string(dim) +
+                                                " in input shape " + std::to_string(j) +
+                                                "; dimensions must be positive");
                 }
                 input_size[j] *= (size_t)dim;
             }
@@ -298,11 +290,9 @@ void InferenceConfig::update_processing_spec() {
         for (int j = 0; j < shape.m_tensor_output_shape.size(); ++j) {
             for (auto& dim : shape.m_tensor_output_shape[j]) {
                 if (dim < 1) {
-                    ANIRA_LOG_ERROR(log_group::k_config,
-                                    "Invalid dimension in output shape: %lld. Output dimensions "
-                                    "must be positive.",
-                                    static_cast<long long>(dim));
-                    throw std::invalid_argument("Invalid dimension in output shape.");
+                    throw std::invalid_argument("invalid dimension " + std::to_string(dim) +
+                                                " in output shape " + std::to_string(j) +
+                                                "; dimensions must be positive");
                 }
                 output_size[j] *= (size_t)dim;
             }
@@ -362,75 +352,76 @@ void InferenceConfig::update_processing_spec() {
             }
         } else {
             if (m_processing_spec.m_tensor_input_size != input_size) {
-                ANIRA_LOG_ERROR(log_group::k_config,
-                                "Input size mismatch for backend: %d. All backends must have the "
-                                "same input size.",
-                                static_cast<int>(shape.m_backend));
-                throw std::invalid_argument("Input size mismatch.");
+                throw std::invalid_argument("input size mismatch for backend " +
+                                            std::to_string(static_cast<int>(shape.m_backend)) +
+                                            "; all backends must have the same input size");
             }
             if (m_processing_spec.m_tensor_output_size != output_size) {
-                ANIRA_LOG_ERROR(log_group::k_config,
-                                "Output size mismatch for backend: %d. All backends must have the "
-                                "same output size.",
-                                static_cast<int>(shape.m_backend));
-                throw std::invalid_argument("Output size mismatch.");
+                throw std::invalid_argument("output size mismatch for backend " +
+                                            std::to_string(static_cast<int>(shape.m_backend)) +
+                                            "; all backends must have the same output size");
             }
         }
     }
     if (m_processing_spec.m_preprocess_input_channels.size() !=
         m_processing_spec.m_tensor_input_size.size()) {
-        ANIRA_LOG_ERROR(log_group::k_config,
-                        "Preprocess input channels size mismatch. Must match the number of input "
-                        "tensors.");
-        throw std::invalid_argument("Preprocess input channels size mismatch.");
+        throw std::invalid_argument(
+            "preprocess_input_channels has " +
+            std::to_string(m_processing_spec.m_preprocess_input_channels.size()) +
+            " entries; the model has " +
+            std::to_string(m_processing_spec.m_tensor_input_size.size()) + " input tensors");
     }
     if (m_processing_spec.m_postprocess_output_channels.size() !=
         m_processing_spec.m_tensor_output_size.size()) {
-        ANIRA_LOG_ERROR(log_group::k_config,
-                        "Postprocess output channels size mismatch. Must match the number of "
-                        "output tensors.");
-        throw std::invalid_argument("Postprocess output channels size mismatch.");
+        throw std::invalid_argument(
+            "postprocess_output_channels has " +
+            std::to_string(m_processing_spec.m_postprocess_output_channels.size()) +
+            " entries; the model has " +
+            std::to_string(m_processing_spec.m_tensor_output_size.size()) + " output tensors");
     }
     if (m_processing_spec.m_preprocess_input_size.size() !=
         m_processing_spec.m_tensor_input_size.size()) {
-        ANIRA_LOG_ERROR(log_group::k_config,
-                        "Preprocess input size mismatch. Must match the number of input tensors.");
-        throw std::invalid_argument("Preprocess input size mismatch.");
+        throw std::invalid_argument(
+            "preprocess_input_size has " +
+            std::to_string(m_processing_spec.m_preprocess_input_size.size()) +
+            " entries; the model has " +
+            std::to_string(m_processing_spec.m_tensor_input_size.size()) + " input tensors");
     }
     if (m_processing_spec.m_postprocess_output_size.size() !=
         m_processing_spec.m_tensor_output_size.size()) {
-        ANIRA_LOG_ERROR(log_group::k_config,
-                        "Postprocess output size mismatch. Must match the number of output "
-                        "tensors.");
-        throw std::invalid_argument("Postprocess output size mismatch.");
+        throw std::invalid_argument(
+            "postprocess_output_size has " +
+            std::to_string(m_processing_spec.m_postprocess_output_size.size()) +
+            " entries; the model has " +
+            std::to_string(m_processing_spec.m_tensor_output_size.size()) + " output tensors");
     }
     if (m_processing_spec.m_internal_model_latency.size() !=
         m_processing_spec.m_tensor_output_size.size()) {
-        ANIRA_LOG_ERROR(log_group::k_config,
-                        "Internal latency size mismatch. Must match the number of output tensors.");
-        throw std::invalid_argument("Internal latency size mismatch.");
+        throw std::invalid_argument(
+            "internal_model_latency has " +
+            std::to_string(m_processing_spec.m_internal_model_latency.size()) +
+            " entries; the model has " +
+            std::to_string(m_processing_spec.m_tensor_output_size.size()) + " output tensors");
     }
     for (size_t i = 0; i < m_processing_spec.m_tensor_input_size.size(); ++i) {
         if (m_processing_spec.m_preprocess_input_size[i] == 0) {
             if (m_processing_spec.m_preprocess_input_channels[i] != 1) {
-                ANIRA_LOG_ERROR(log_group::k_config,
-                                "For non-streamable tensors (preprocess_input_size[%zu] == 0), "
-                                "the number of channels must be 1.",
-                                i);
                 throw std::invalid_argument(
-                    "Invalid number of channels for non-streamable tensor.");
+                    "input tensor " + std::to_string(i) +
+                    " is non-streamable (preprocess_input_size 0) but has " +
+                    std::to_string(m_processing_spec.m_preprocess_input_channels[i]) +
+                    " channels; a non-streamable tensor has exactly 1");
             }
         }
     }
     for (size_t i = 0; i < m_processing_spec.m_tensor_output_size.size(); ++i) {
         if (m_processing_spec.m_postprocess_output_size[i] == 0) {
             if (m_processing_spec.m_postprocess_output_channels[i] != 1) {
-                ANIRA_LOG_ERROR(log_group::k_config,
-                                "For non-streamable tensors (postprocess_output_size[%zu] == 0), "
-                                "the number of channels must be 1.",
-                                i);
                 throw std::invalid_argument(
-                    "Invalid number of channels for non-streamable tensor.");
+                    "output tensor " + std::to_string(i) +
+                    " is non-streamable (postprocess_output_size 0) but has " +
+                    std::to_string(m_processing_spec.m_postprocess_output_channels[i]) +
+                    " channels; a non-streamable tensor has exactly 1");
             }
         }
     }

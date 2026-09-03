@@ -153,7 +153,7 @@ typedef struct anira_error {
  * [thread-safe]
  * @since ABI 0.1
  */
-ANIRA_API const char* ANIRA_CALL anira_status_string(anira_status status);
+ANIRA_API const char* ANIRA_CALL anira_status_string(anira_status status) ANIRA_NOEXCEPT;
 
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 

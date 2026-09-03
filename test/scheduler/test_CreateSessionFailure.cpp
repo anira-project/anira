@@ -171,3 +171,94 @@ TEST(CreateSessionFailureTest, UnloadableOnnxModelLeaksNothing) {
     expect_next_handler_lifecycle_intact();
 }
 #endif
+
+// ============================================================================
+// The error strategy: a model file that is not there is ANIRA_ERROR_NO_SUCH_FILE with the
+// path and the engine name, on every backend, before any engine sees the path; a file the
+// engine refuses is ANIRA_ERROR_MODEL_LOAD with the engine's own text.
+// ============================================================================
+
+#include <anira/abi/status.h>
+
+#include "../../src/utils/StatusError.h"
+
+namespace {
+
+template <class Body>
+anira::StatusError status_error_of(Body&& body) {
+    try {
+        body();
+    } catch (const anira::StatusError& e) { return e; }
+    ADD_FAILURE() << "expected an anira::StatusError";
+    return {ANIRA_OK, ""};
+}
+
+void expect_missing_file_is_no_such_file(InferenceBackend backend, const char* engine) {
+    const std::filesystem::path model_path =
+        std::filesystem::temp_directory_path() / "anira_create_session_failure_missing_model";
+    std::filesystem::remove(model_path);
+    InferenceConfig inference_config(
+        std::vector<ModelData>{ModelData(model_path.string(), backend)},
+        std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+        42.66f);
+    PrePostProcessor pp_processor(inference_config);
+    const anira::StatusError error = status_error_of(
+        [&] { const InferenceHandler handler(pp_processor, inference_config, ContextConfig(2)); });
+    EXPECT_EQ(error.status(), ANIRA_ERROR_NO_SUCH_FILE) << error.what();
+    const std::string what = error.what();
+    EXPECT_NE(what.find(engine), std::string::npos) << what;
+    EXPECT_NE(what.find(model_path.filename().string()), std::string::npos) << what;
+    EXPECT_NE(what.find("no such file"), std::string::npos) << what;
+    expect_clean_slate();
+}
+
+}  // namespace
+
+TEST(CreateSessionFailureTest, MissingModelFileIsNoSuchFileOnEveryBackend) {
+    ASSERT_EQ(Context::get_num_sessions(), 0);
+#ifdef USE_ONNXRUNTIME
+    expect_missing_file_is_no_such_file(InferenceBackend::ONNX, "onnxruntime");
+#endif
+#ifdef USE_LIBTORCH
+    expect_missing_file_is_no_such_file(InferenceBackend::LIBTORCH, "libtorch");
+#endif
+#ifdef USE_TFLITE
+    expect_missing_file_is_no_such_file(InferenceBackend::TFLITE, "tflite");
+#endif
+#ifdef USE_LITERT
+    expect_missing_file_is_no_such_file(InferenceBackend::LITERT, "litert");
+#endif
+#ifdef USE_EXECUTORCH
+    expect_missing_file_is_no_such_file(InferenceBackend::EXECUTORCH, "executorch");
+#endif
+    expect_next_handler_lifecycle_intact();
+}
+
+#ifdef USE_ONNXRUNTIME
+TEST(CreateSessionFailureTest, UnloadableModelIsModelLoadWithTheEngineText) {
+    ASSERT_EQ(Context::get_num_sessions(), 0);
+    const std::filesystem::path model_path =
+        std::filesystem::temp_directory_path() / "anira_create_session_failure_not_a_model.onnx";
+    {
+        std::ofstream file(model_path, std::ios::binary);
+        file << "definitely not a model";
+    }
+    {
+        InferenceConfig inference_config(
+            std::vector<ModelData>{ModelData(model_path.string(), InferenceBackend::ONNX)},
+            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+            42.66f);
+        PrePostProcessor pp_processor(inference_config);
+        const anira::StatusError error = status_error_of([&] {
+            const InferenceHandler handler(pp_processor, inference_config, ContextConfig(2));
+        });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_MODEL_LOAD) << error.what();
+        const std::string what = error.what();
+        EXPECT_EQ(what.rfind("onnxruntime: ", 0), 0) << "the engine name leads: " << what;
+        EXPECT_NE(what.find(model_path.filename().string()), std::string::npos) << what;
+    }
+    std::filesystem::remove(model_path);
+    expect_clean_slate();
+    expect_next_handler_lifecycle_intact();
+}
+#endif
