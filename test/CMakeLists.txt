@@ -60,8 +60,6 @@ function(anira_add_test_binary TARGET)
     endif ()
 endfunction()
 
-# test_WavReader.cpp sits with the utils suite: it exercises the header-only
-# thl::core::read_wav, not the handler.
 anira_add_test_binary(test_utils
 	utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
@@ -70,7 +68,6 @@ anira_add_test_binary(test_utils
 	utils/test_JsonConfigLoaderErrors.cpp
 	utils/test_HelperFunctions.cpp
 	utils/test_Logger.cpp
-	utils/test_WavReader.cpp
 	system/test_HighPriorityThread.cpp
 )
 

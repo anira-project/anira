@@ -46,6 +46,10 @@ The first pre-release of the 3.x line: the configuration layer of the versioned 
 - A failing inference now delivers zeros for that task on every engine, never the previous job's output (ONNX Runtime copied stale outputs after a caught exception; LiteRT and ExecuTorch left the buffer untouched; TFLite ignored the status).
 - LibTorch: a `c10::Error` thrown by `forward` on the inference thread escaped the instance and left it marked busy forever (the pool loop then spun on the remaining instances). The inference now catches per task and the busy flag is released on every exit path.
 
+### Removed
+
+- `test/utils/test_WavReader.cpp`: the test of tanh-lib's `thl::core::read_wav` against the GuitarLSTM wav fixture; tanh-lib carries its own (`test/core/test_WavReader.cpp`), and anira's round-trip tests read the same files through it anyway.
+
 ## [v2.3.0] - 2026-09-02
 
 anira v2.3.0 is the last release of the 2.x line. Development continues on the v3 branch (the versioned C ABI, `docs/anira-v3-architecture.md`); 2.x receives fixes only.
