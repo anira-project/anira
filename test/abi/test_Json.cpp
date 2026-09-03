@@ -367,6 +367,28 @@ TEST(AbiJsonContract, HardAndAsyncFiles) {
     anira_contract_destroy(hard);
 }
 
+TEST(AbiJsonContract, RingDtypesAreReadByTensorName) {
+    static constexpr const char* k_text = R"({ "hard": {
+        "block_min": 512, "block_max": 512, "rate": 48000, "budget": {"ms": 5},
+        "ring_dtypes": {"audio_in": "int16", "audio_out": "float32"}
+    } })";
+    anira_contract* hard = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_contract_from_json(k_text, std::strlen(k_text), &hard, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(hard->hard()->m_ring_dtypes.size(), 2u);
+    EXPECT_EQ(hard->hard()->m_ring_dtypes.at("audio_in"), ANIRA_DTYPE_I16);
+    EXPECT_EQ(hard->hard()->m_ring_dtypes.at("audio_out"), ANIRA_DTYPE_F32);
+    anira_contract_destroy(hard);
+
+    static constexpr const char* k_bad = R"({ "hard": { "ring_dtypes": {"audio_in": "f32"} } })";
+    hard = nullptr;
+    EXPECT_EQ(anira_contract_from_json(k_bad, std::strlen(k_bad), &hard, &err), ANIRA_ERROR_JSON);
+    EXPECT_NE(std::string(err.message).find("hard.ring_dtypes.audio_in"), std::string::npos)
+        << err.message;
+    EXPECT_EQ(hard, nullptr);
+}
+
 TEST(AbiJsonContract, Rejections) {
     const std::vector<std::pair<const char*, const char*>> cases = {
         {R"({"hard": {}, "async": {}})", "exactly one root"},

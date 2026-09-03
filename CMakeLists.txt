@@ -319,6 +319,8 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/json.cpp
     src/capi/layout.cpp
     src/capi/log.cpp
+    src/capi/translate.cpp
+    src/capi/v3_to_v2.cpp
     src/capi/version.cpp
 )
 

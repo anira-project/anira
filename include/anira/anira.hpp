@@ -499,6 +499,16 @@ public:
                       "anira_contract_hard_set_geometry");
         return *this;
     }
+    /// The ring dtype of one tensor under this Hard contract, by canonical name: the element
+    /// type of the host's samples, which the ring holds as is (the pre- and post-processor
+    /// convert to the spec's dtype); F32 for every tensor never set. Data only in this
+    /// pre-release: the bridge to the 2.x runtime accepts F32 alone.
+    ContractHandle& hard_ring_dtype(std::string_view canonical, DType dtype) {
+        const std::string name(canonical);
+        detail::check(anira_contract_hard_set_ring_dtype(m_contract, name.c_str(), dtype),
+                      "anira_contract_hard_set_ring_dtype");
+        return *this;
+    }
     /// The per-inference budget: MEASURED, or EXPLICIT with the value.
     template <class Rep, class Period>
     ContractHandle& hard_budget(anira_budget_kind kind_value,

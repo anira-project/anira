@@ -1,4 +1,5 @@
 #include <anira/ContextConfig.h>
+#include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
@@ -112,7 +113,8 @@ TEST(AbiJsonUpgrade, SimpleGainUpgrades) {
     EXPECT_EQ(cfg.m_outputs[0].m_latency, 0);
     EXPECT_EQ(cfg.m_outputs[1].m_role, ANIRA_ROLE_STATIC);
     EXPECT_EQ(cfg.m_state, ANIRA_MODEL_STATELESS);
-    EXPECT_EQ(cfg.m_max_instances, 1u);
+    EXPECT_EQ(cfg.m_max_instances, anira::InferenceConfig::Defaults::m_num_parallel_processors)
+        << "absent in the file: the 2.x constructor's default";
     EXPECT_TRUE(cfg.m_anchor.empty()) << "the default: the first streamed tensor";
 
     anira_contract* legacy = nullptr;

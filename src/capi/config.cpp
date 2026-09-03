@@ -342,6 +342,18 @@ anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contract* contr
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
+anira_status ANIRA_CALL anira_contract_hard_set_ring_dtype(anira_contract* contract,
+                                                             const char* canonical,
+                                                             anira_dtype dtype) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || !non_empty(canonical) || dtype == 0) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    hard->m_ring_dtypes[canonical] = dtype;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
 anira_status ANIRA_CALL anira_contract_async_set_deadline(anira_contract* contract,
                                                           double deadline_ms) ANIRA_NOEXCEPT try {
     if (contract == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }

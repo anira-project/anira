@@ -96,6 +96,10 @@ struct HardContract {
     uint32_t m_warmup_iterations = 0;
     anira_miss_policy m_on_miss = ANIRA_MISS_BYPASS;
     double m_wait_ratio = 0.0;
+    /// Per-tensor ring dtype by canonical name (the host's element type, held as is by the
+    /// ring; pre/post convert to the spec's dtype); absent = ANIRA_DTYPE_F32. Data only at
+    /// M1: the bridge to the 2.x runtime refuses anything but F32.
+    std::map<std::string, anira_dtype> m_ring_dtypes;
 };
 
 /// The Async half of a contract.
