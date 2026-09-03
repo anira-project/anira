@@ -154,7 +154,11 @@ frame.
 
 - C ABI: every entry `noexcept` plus the function-try-block; an escape is a deterministic
   `std::terminate` on every compiler instead of MSVC `/EHsc`'s undefined behaviour for
-  `extern "C"`. Exception types never leave `libanira` (hidden visibility stays safe).
+  `extern "C"`. Through the C entries no exception type leaves `libanira`. Through the 2.x
+  C++ entries of this pre-release (an `InferenceHandler` constructor) `anira::StatusError` does
+  cross, so the type is exported (`ANIRA_API`): under hidden visibility a class without it keeps
+  its typeinfo local to the library, and a `catch` in another module (a plugin, a test binary on
+  macOS) falls through to `std::exception`. Once the 2.x entries retire, the export can go.
 - Real-time entries are `noexcept` and `ANIRA_NONBLOCKING`; throwing allocates and (before
   glibc 2.35) takes a global unwinder lock; clang's function-effect analysis diagnoses a throw
   in a consumer's nonblocking TU at compile time; anira's internal RT bodies are covered by

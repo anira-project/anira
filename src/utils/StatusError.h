@@ -6,19 +6,25 @@
  * with the right status (MODEL_LOAD, ENGINE, NOT_SUPPORTED, NO_SUCH_FILE, CONFIG) instead of
  * a bare runtime_error the firewall can only classify as ANIRA_ERROR_INTERNAL.
  *
- * Private: never included from a public header, never exported.
+ * Private header (never included from a public header), but the TYPE is exported: the 2.x
+ * C++ entries (an InferenceHandler constructor) let it cross the library boundary, and a
+ * catch in another module can only match an exception whose typeinfo is visible. Under
+ * hidden visibility (every shared anira build) a class without ANIRA_API keeps its RTTI
+ * local to libanira, and a `catch (const anira::StatusError&)` in a test or a plugin falls
+ * through to std::exception.
  */
 #ifndef ANIRA_UTILS_STATUSERROR_H
 #define ANIRA_UTILS_STATUSERROR_H
 
 #include <anira/abi/status.h>
+#include <anira/system/Exports.h>
 
 #include <stdexcept>
 #include <string>
 
 namespace anira {
 
-class StatusError : public std::runtime_error {
+class ANIRA_API StatusError : public std::runtime_error {
 public:
     StatusError(anira_status status, const std::string& message)
         : std::runtime_error(message), m_status(status) {}

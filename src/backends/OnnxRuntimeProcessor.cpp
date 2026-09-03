@@ -167,17 +167,17 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config)
         }
     } else {
         // Load model from file path
-#ifdef _WIN32
-        std::string modelpath_str =
-            m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
-        std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
-#else
         std::string const modelpath = anira::model_file::require_readable(
             m_inference_config.get_model_path(anira::InferenceBackend::ONNX),
             "onnxruntime");
+#ifdef _WIN32
+        // ORT's Windows API takes a wide path; the message keeps the UTF-8 one.
+        const std::wstring ort_path(modelpath.begin(), modelpath.end());
+#else
+        const std::string& ort_path = modelpath;
 #endif
         try {
-            m_session = std::make_unique<Ort::Session>(m_env, modelpath.c_str(), m_session_options);
+            m_session = std::make_unique<Ort::Session>(m_env, ort_path.c_str(), m_session_options);
         } catch (const Ort::Exception& e) {
             throw StatusError(ANIRA_ERROR_MODEL_LOAD,
                               model_file::message("onnxruntime", modelpath, e.what()));

@@ -238,7 +238,7 @@ TEST(CreateSessionFailureTest, MissingModelFileIsNoSuchFileOnEveryBackend) {
 TEST(CreateSessionFailureTest, UnloadableModelIsModelLoadWithTheEngineText) {
     ASSERT_EQ(Context::get_num_sessions(), 0);
     const std::filesystem::path model_path =
-        std::filesystem::temp_directory_path() / "anira_create_session_failure_not_a_model.onnx";
+        std::filesystem::temp_directory_path() / "anira_create_session_failure_engine_text.onnx";
     {
         std::ofstream file(model_path, std::ios::binary);
         file << "definitely not a model";
