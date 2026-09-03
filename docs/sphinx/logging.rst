@@ -215,9 +215,10 @@ the ``log.tag.<tag>`` system property raises the minimum priority for one tag
 platform sink is stdout/stderr, Error and Warning on stderr, Info and Debug on stdout.
 
 **Release builds.** tanh-lib, whose logger anira uses, compiles Warning, Info and Debug out of
-its own ``Release`` builds (``THL_LOG_COMPILED_MAX_LEVEL=1``). anira's private copy pins that
-ceiling to 4 in every build type, so the runtime level of the machine config is the only
-filter and a warning the call survives exists in a shipped build.
+its own ``Release`` builds (``THL_LOG_COMPILED_MAX_LEVEL=1``). anira sets tanh-lib's
+``TANH_LOG_COMPILED_MAX_LEVEL`` option to 4 for its private copy in every build type, so the
+runtime level of the machine config is the only filter and a warning the call survives exists
+in a shipped build.
 
 Delivery
 --------

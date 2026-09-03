@@ -176,7 +176,7 @@ frame.
 1. tanh-lib: identity (tag/subsystem/category) configurable per copy; `flags` on
    `RtRecord`/`LogRecord` and a flags-taking `logf`; drop count beside the first record after
    a gap; a cache option for the compiled ceiling. Re-pin.
-2. anira: pin `THL_LOG_COMPILED_MAX_LEVEL=4` on the private copy (configure-time check).
+2. anira: set tanh-lib's `TANH_LOG_COMPILED_MAX_LEVEL` to 4 as a plain variable before the fetch (the option lands with the tanh-lib PR of item 1).
 3. `StatusError` to `src/utils`, derived from `std::runtime_error`; backends throw
    `MODEL_LOAD`/`ENGINE`/`NOT_SUPPORTED` with `"<engine>: <path>: <text>"`; model-file
    pre-check -> `NO_SUCH_FILE`; TFLite null checks and status checks; ORT warm-up failure fails

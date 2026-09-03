@@ -185,35 +185,23 @@ set(TANH_WITH_USAN ${ANIRA_WITH_UBSAN})
 set(TANH_WITH_TSAN ${ANIRA_WITH_TSAN})
 set(TANH_WITH_LSAN ${ANIRA_WITH_LSAN})
 set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
+# Every log level is compiled into anira's private logger in every build type, so that the
+# runtime level of the machine config is the only filter and a warning the call survives
+# exists in a shipped build (docs/anira-v3-error-and-log-strategy.md, rule 4). tanh-lib's
+# own default would compile everything below Error out of Release builds.
+set(TANH_LOG_COMPILED_MAX_LEVEL 4)
 
 FetchContent_Declare(
     tanh-lib
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
     # anira and the fetched tanh-lib must pin the same tanh-tooling tag
     # (modules-version.cmake warns otherwise).
-    # v0.2.0: the upstream container coverage of tanh-lab/tanh-lib#31 (which the trimmed
-    # test/utils container tests rely on), the self-contained TANH_API header (#35) and
-    # tanh-tooling v0.2.8 (#36), the same tooling tag this tree pins.
-    GIT_TAG 488ad6ab80aeaed2e7b9ebda70a92910b63d35f4
+    # v0.2.0 plus the logger carriers (tanh-lab/tanh-lib#37: platform identity, per-record
+    # flags, the drop count on the record) and the TANH_LOG_COMPILED_MAX_LEVEL option;
+    # re-pin to the next tag once it is cut.
+    GIT_TAG 0eae8ac8bc046995566c12b91afac80ca2dfbcdf
 )
 FetchContent_MakeAvailable(tanh-lib)
-
-# One compiled log ceiling in every build type. tanh-lib compiles Warning, Info and Debug
-# out of Release builds (THL_LOG_COMPILED_MAX_LEVEL=1, PUBLIC on tanh_core, 4 otherwise).
-# anira's private copy keeps every level compiled in, so that the runtime level of the
-# machine config is the only filter and a warning the call survives exists in a shipped
-# build (docs/anira-v3-error-and-log-strategy.md, rule 4).
-foreach(_prop COMPILE_DEFINITIONS INTERFACE_COMPILE_DEFINITIONS)
-    get_target_property(_defs tanh_core ${_prop})
-    if(_defs)
-        list(FILTER _defs EXCLUDE REGEX "THL_LOG_COMPILED_MAX_LEVEL")
-    else()
-        set(_defs "")
-    endif()
-    set_target_properties(tanh_core PROPERTIES ${_prop} "${_defs};THL_LOG_COMPILED_MAX_LEVEL=4")
-endforeach()
-unset(_defs)
-unset(_prop)
 
 # Fetch the release tarball instead of cloning the repo — the full git
 # history plus test suite is ~150MB while the release archive is a few MB, the
