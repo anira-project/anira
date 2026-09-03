@@ -130,7 +130,10 @@ ANIRA_API unsigned int v2_default_instances() noexcept;
 
 // ---- The C++ face over the anira.hpp handles (C++20) ----------------------------------------
 
-#if defined(__cplusplus) && __cplusplus >= 202002L
+// MSVC reports __cplusplus as 199711L unless /Zc:__cplusplus is given; _MSVC_LANG carries
+// the real value there.
+#if (defined(__cplusplus) && __cplusplus >= 202002L) || \
+    (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L)
 
 #include <anira/anira.hpp>
 #include <span>
