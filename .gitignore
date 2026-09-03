@@ -8,6 +8,9 @@ modules/onnxruntime*
 modules/tensorflow*
 modules/LiteRt*
 modules/executorch*
+# Everything under modules/ is fetched (backends, tanh-lib); a checkout may also point the
+# directory elsewhere with a symlink, which must never be committed.
+/modules
 cmake-build*
 .vscode
 logs/
