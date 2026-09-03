@@ -4,6 +4,7 @@
  * of it over nlohmann::json, which never reaches a header. Loaders are dumb: strings to
  * enums, numbers, construct; semantic validation is prepare's.
  */
+#include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
@@ -751,6 +752,13 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
         } else if (key == "wait_ratio") {
             hard.m_wait_ratio = require_number(value, key_path);
             if (hard.m_wait_ratio < 0.0) { fail_json(key_path, "must not be negative"); }
+        } else if (key == "ring_dtypes") {
+            require_object(value, key_path);
+            for (const auto& [tensor, word] : value.items()) {
+                if (tensor.empty()) { fail_json(key_path, "a tensor name must not be empty"); }
+                hard.m_ring_dtypes[tensor] =
+                    vocabulary(word, child(key_path, tensor.c_str()), k_dtypes);
+            }
         } else {
             fail_json(key_path, "unknown hard contract key");
         }
@@ -965,6 +973,8 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
     std::vector<int64_t> out_sizes;
     std::vector<int64_t> latencies;
     bool sizes_given = false;
+    bool warm_up_given = false;
+    bool instances_given = false;
 
     for (const auto& [key, value] : inference->items()) {
         const std::string path = child(base, key.c_str());
@@ -1062,6 +1072,7 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
         } else if (key == "warm_up") {
             hard.m_warmup = ANIRA_WARMUP_FIXED;
             hard.m_warmup_iterations = require_u32(value, path);
+            warm_up_given = true;
             has_contract_key = true;
         } else if (key == "blocking_ratio") {
             hard.m_wait_ratio = require_number(value, path);
@@ -1070,6 +1081,7 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
         } else if (key == "num_parallel_processors") {
             cfg.m_max_instances = require_u32(value, path);
             if (cfg.m_max_instances == 0) { fail_json(path, "must be at least 1"); }
+            instances_given = true;
         } else if (key == "session_exclusive_processor") {
             cfg.m_state = require_bool(value, path) ? ANIRA_MODEL_STATEFUL : ANIRA_MODEL_STATELESS;
         } else {
@@ -1186,6 +1198,16 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
     }
     static_cast<void>(sizes_given);
     static_cast<void>(has_contract_key);
+    // The keys a 2.x file may leave out took the InferenceConfig constructor's defaults: a
+    // fixed warm-up count (0) and half the hardware threads as parallel processors. The
+    // upgrade writes them, so the bridge to the 2.x runtime yields the same configuration.
+    if (!warm_up_given) {
+        hard.m_warmup = ANIRA_WARMUP_FIXED;
+        hard.m_warmup_iterations = anira::InferenceConfig::Defaults::k_warm_up;
+    }
+    if (!instances_given) {
+        cfg.m_max_instances = anira::InferenceConfig::Defaults::m_num_parallel_processors;
+    }
     legacy->m_kind = hard;
     legacy->m_legacy = true;
     cfg.m_legacy_contract = std::move(legacy);

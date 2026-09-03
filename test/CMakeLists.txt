@@ -128,6 +128,8 @@ anira_add_test_binary(test_abi
 	abi/test_Json.cpp
 	abi/test_JsonUpgrade.cpp
 	abi/test_anira_hpp.cpp
+	abi/test_Translate.cpp
+	abi/test_Bridge.cpp
 )
 # capi_internal.h (the firewall probe) and the generated tables under src/capi/.
 target_include_directories(test_abi PRIVATE "${anira_SOURCE_DIR}/src")

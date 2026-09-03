@@ -245,6 +245,13 @@ an ``anira::ContractHandle``.
   ``ANIRA_MISS_HOLD_LAST`` repeats the last output, ``ANIRA_MISS_ZEROS`` delivers silence.
 - **Wait ratio.** ``wait_ratio`` is the fraction of the block period the real-time thread may
   spend waiting for a result in the ``_wait`` entry points; ``0`` (the default) never waits.
+- **Ring dtype.** ``contract.hard_ring_dtype("audio_in", ANIRA_DTYPE_I16)``
+  (``anira_contract_hard_set_ring_dtype``) names the element type of the host's samples for
+  one tensor, by the tensor's canonical name: the ring holds exactly that type, the Hard
+  entries copy without conversion, and the pre- and post-processor convert between the ring
+  dtype and the spec's dtype (the model's) on the inference thread. Per tensor, so an input
+  and an output may differ; every tensor never set uses ``ANIRA_DTYPE_F32``. In this
+  pre-release the value is stored only: the bridge to the 2.x runtime accepts float32 alone.
 
 An **Async** contract (the ``anira::Async`` aggregate: an optional ``deadline``, ``on_late``,
 ``priority``, ``lanes``, ``max_in_flight``, ``delivery``) describes jobs without a real-time
@@ -345,7 +352,8 @@ code-only and patched with the device setters afterwards. The contract file has 
 root, ``{"hard": {...}}`` or ``{"async": {...}}``, with ``budget`` as ``"measured"`` or
 ``{"ms": 1.8}``, ``warmup`` as ``"until_stable"``, ``"none"`` or ``{"fixed": 200}``, the
 geometry keys ``block_min`` / ``block_max`` / ``rate`` (optional; a plugin patches them from
-the host with ``hard_geometry``), and an optional top-level ``edge_cost``.
+the host with ``hard_geometry``), ``ring_dtypes`` as ``{"audio_in": "int16"}`` (optional,
+by canonical name), and an optional top-level ``edge_cost``.
 
 .. code-block:: cpp
 
@@ -416,8 +424,22 @@ its Hard contract.
 .. note::
     In this pre-release the runtime, sections 2 to 5, still takes the 2.x configuration
     classes :cpp:struct:`anira::InferenceConfig`, :cpp:struct:`anira::ContextConfig` and
-    :cpp:struct:`anira::HostConfig`; the bridge from the handles above to the runtime arrives
-    with the next pre-release change. :doc:`migration` maps one onto the other.
+    :cpp:struct:`anira::HostConfig`. The transitional bridge ``<anira/compat/v3_to_v2.h>``
+    builds them from the handles above, so the configuration is written once, in the 3.x API:
+
+    .. code-block:: cpp
+
+        #include <anira/compat/v3_to_v2.h>
+
+        anira::InferenceConfig inference_config = anira::v3compat::to_inference_config(cfg, hard);
+        anira::ContextConfig context_config = anira::v3compat::to_context_config(machine);
+        // at prepare, once the host geometry is on the contract (section 1.3):
+        anira::HostConfig host_config = anira::v3compat::to_host_config(hard, cfg);
+
+    Each call throws ``anira::Error`` for a configuration the 2.x runtime cannot run (an
+    Async contract, a ``MEASURED`` budget or ``UNTIL_STABLE`` warmup, a dtype other than
+    float32) or that breaks a rule of section 1.1, naming the tensor. :ref:`migration-bridge`
+    lists what becomes what, the lifetime rules and the candidate filter.
 
 2. Pre and Post Processing
 --------------------------

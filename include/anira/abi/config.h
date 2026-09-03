@@ -417,6 +417,31 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contr
                                                                      double ratio) ANIRA_NOEXCEPT;
 
 /**
+ * @brief The ring dtype of one tensor under a Hard contract: the element type the host hands
+ * to, and takes from, the Hard entries for that tensor, which is exactly the type its
+ * ring holds. The Hard entries copy between the host and the ring without conversion;
+ * the pre- and post-processor convert between the ring dtype and the spec's dtype (the
+ * model's) on the inference thread. Set per tensor by canonical name, so an input and an
+ * output may differ. A name that matches no spec is checked at prepare, not here. Data
+ * only in this pre-release: the bridge to the 2.x runtime refuses any ring dtype other
+ * than ANIRA_DTYPE_F32 with ANIRA_ERROR_NOT_SUPPORTED, the typed Hard entries arrive
+ * with the 3.x runtime.
+ * @param contract A Hard contract.
+ * @param canonical The tensor's canonical name (the one its spec was created with).
+ * @param dtype The element type of the host's samples for that tensor; ANIRA_DTYPE_F32 for
+ *        every tensor that was never set.
+ * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of
+ *         0.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.1
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_ring_dtype(anira_contract* contract,
+                                                                     const char* canonical,
+                                                                     anira_dtype dtype) ANIRA_NOEXCEPT;
+
+/**
  * @brief The per-job deadline of an Async contract; an absolute per-job override is the
  * deadline_ms argument of anira_handler_submit.
  * @param contract An Async contract.

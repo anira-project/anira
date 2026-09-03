@@ -687,6 +687,20 @@ TEST(AbiCxx, ContractSettersPatchALoadedContract) {
     EXPECT_EQ(wrong.m_status, ANIRA_ERROR_WRONG_CONTRACT);
 }
 
+TEST(AbiCxx, HardRingDtypeLandsInTheHandle) {
+    ContractHandle contract{anira::Hard{}};
+    contract.hard_ring_dtype("audio_in", ANIRA_DTYPE_I16);
+    EXPECT_EQ(contract.native()->hard()->m_ring_dtypes.at("audio_in"), ANIRA_DTYPE_I16);
+    const Thrown empty = thrown_by([&] { contract.hard_ring_dtype("", ANIRA_DTYPE_F32); });
+    ASSERT_TRUE(empty.m_thrown);
+    EXPECT_EQ(empty.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    ContractHandle async_contract{anira::Async{}};
+    const Thrown wrong =
+        thrown_by([&] { async_contract.hard_ring_dtype("audio_in", ANIRA_DTYPE_F32); });
+    ASSERT_TRUE(wrong.m_thrown);
+    EXPECT_EQ(wrong.m_status, ANIRA_ERROR_WRONG_CONTRACT);
+}
+
 TEST(AbiCxx, TensorLayoutEmptySpanClears) {
     ModelConfig model;
     const uint32_t tflite = model.add_model_path(ANIRA_ENGINE_TFLITE, "m.tflite");

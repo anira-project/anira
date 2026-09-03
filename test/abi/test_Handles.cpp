@@ -611,6 +611,21 @@ TEST(AbiContract, HardAndAsyncGateTheirSetters) {
     EXPECT_EQ(anira_contract_hard_set_on_miss(hard, ANIRA_MISS_ZEROS), ANIRA_OK);
     EXPECT_EQ(anira_contract_hard_set_wait_ratio(hard, -0.5), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_contract_hard_set_wait_ratio(hard, 0.5), ANIRA_OK);
+    EXPECT_EQ(anira_contract_hard_set_ring_dtype(hard, "audio_in", ANIRA_DTYPE_I16), ANIRA_OK);
+    EXPECT_EQ(hard->hard()->m_ring_dtypes.at("audio_in"), ANIRA_DTYPE_I16);
+    EXPECT_EQ(anira_contract_hard_set_ring_dtype(hard, "audio_in", ANIRA_DTYPE_F32), ANIRA_OK)
+        << "a second set replaces";
+    EXPECT_EQ(hard->hard()->m_ring_dtypes.at("audio_in"), ANIRA_DTYPE_F32);
+    EXPECT_EQ(anira_contract_hard_set_ring_dtype(hard, "", ANIRA_DTYPE_F32),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_set_ring_dtype(hard, nullptr, ANIRA_DTYPE_F32),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_set_ring_dtype(hard, "audio_in", 0),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_set_ring_dtype(nullptr, "audio_in", ANIRA_DTYPE_F32),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_set_ring_dtype(async_contract, "audio_in", ANIRA_DTYPE_F32),
+              ANIRA_ERROR_WRONG_CONTRACT);
     EXPECT_EQ(anira_contract_async_set_deadline(hard, 10.0), ANIRA_ERROR_WRONG_CONTRACT);
     EXPECT_EQ(anira_contract_async_set_policy(hard,
                                               ANIRA_LATE_DROP,

@@ -20,8 +20,9 @@ Where the 2.x API stands in this pre-release
   exported through the alpha releases of the 3.x line.
 - **The runtime** (:cpp:class:`anira::InferenceHandler`, :cpp:class:`anira::PrePostProcessor`,
   ``prepare`` and ``process``) is unchanged in this pre-release and still takes the 2.x
-  configuration classes; sections 2 to 5 of the :doc:`usage` guide describe it. The 3.x handler
-  over the C ABI follows in a later pre-release.
+  configuration classes, which the transitional bridge ``<anira/compat/v3_to_v2.h>`` builds
+  from the 3.x handles (:ref:`migration-bridge`); sections 2 to 5 of the :doc:`usage` guide
+  describe it. The 3.x handler over the C ABI follows in a later pre-release.
 - **Schedule.** The 2.x configuration classes become deprecated constructor shims
   (``anira/compat/v2.hpp``, ``namespace anira::v2``) once the 3.x handler lands, and are removed
   one minor release after 3.0.0. The 2.x JSON document is read by the 3.x loaders for as long as
@@ -114,6 +115,109 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
      - ``cfg.default_engine(engine)`` (``anira_model_config_set_default_engine``); switching
        at run time stays a handler call.
 
+.. _migration-bridge:
+
+The bridge to the 2.x runtime
+-----------------------------
+
+``<anira/compat/v3_to_v2.h>`` (``namespace anira::v3compat``) turns a 3.x configuration into
+the 2.x classes the runtime of this pre-release takes, so a host writes its configuration once
+and the runtime sections of the :doc:`usage` guide apply unchanged. It is transitional: the
+pre-release that ships the 3.x handler removes it.
+
+.. code-block:: cpp
+
+    #include <anira/anira.hpp>
+    #include <anira/compat/v3_to_v2.h>
+
+    anira::ModelConfig cfg = ...;                 // section 1.2 of the usage guide
+    anira::Hard hard{.budget = ANIRA_BUDGET_EXPLICIT,
+                     .budget_value = std::chrono::microseconds(42660),
+                     .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2};
+    anira::MachineConfig machine;                 // section 1.4
+
+    anira::InferenceConfig inference_config = anira::v3compat::to_inference_config(cfg, hard);
+    anira::ContextConfig context_config = anira::v3compat::to_context_config(machine);
+    anira::InferenceHandler handler(pp_processor, inference_config, context_config);
+
+    // prepare, once the host geometry is known
+    hard.block_min = hard.block_max = samples_per_block;
+    hard.rate = sample_rate;
+    handler.prepare(anira::v3compat::to_host_config(hard, cfg));
+
+The overloads over the ``anira.hpp`` handles (``ModelConfig``, ``ContractHandle`` or a
+``Hard`` aggregate, ``MachineConfig``) return the 2.x object and throw ``anira::Error`` with
+the reason; the same four functions exist over the C handles with a status and an
+``anira_error`` (``to_inference_config(const anira_model_config*, const anira_contract*,
+const anira_engine* candidates, uint32_t num_candidates, anira::InferenceConfig&,
+anira_error*)`` and so on). ``to_host_config(cfg, buffer_size, sample_rate, allow_smaller)``
+takes the host's own geometry, which may be fractional (a plugin that prepares a 2048-sample
+decoder with ``samplesPerBlock / 2048.f``).
+
+**What becomes what.**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - anira 3.x
+     - anira 2.x
+   * - A model entry (``models[]``)
+     - One ``anira::ModelData`` per entry: a path is copied, bytes are borrowed, the ``entry``
+       extension is the model function. ``anira.v2.custom`` is the 2.x ``CUSTOM`` backend.
+   * - The tensor specs
+     - One universal ``anira::TensorShape`` from the specs' extents (a dynamic Time extent
+       resolved to the window), plus one backend-qualified ``TensorShape`` per entry whose
+       ``tensors`` record holds a layout (``engine_dims`` of the spec). A name in the record is
+       accepted and ignored: the 2.x adapters bind positionally.
+   * - ``ANIRA_AXIS_CHANNEL`` extent; window minus context; output ``latency``
+     - ``preprocess_input_channels`` / ``postprocess_output_channels``;
+       ``preprocess_input_size`` / ``postprocess_output_size`` (``0`` for a Static or Buffer
+       tensor); ``internal_model_latency``.
+   * - ``Hard.budget_value`` (explicit); ``warmup`` ``FIXED n`` / ``NONE``; ``wait_ratio``
+     - ``max_inference_time``; ``warm_up = n`` / ``0``; ``blocking_ratio``.
+   * - ``state(ANIRA_MODEL_STATEFUL)``; ``max_instances``
+     - ``session_exclusive_processor``; ``num_parallel_processors``
+       (``anira::v3compat::v2_default_instances()`` is the 2.x default).
+   * - ``Hard.block_max`` / ``rate``; ``block_min < block_max``; ``anchor``
+     - ``HostConfig{buffer_size, sample_rate}``; ``allow_smaller_buffers``;
+       ``tensor_index`` / ``tensor_is_input`` (the 2.x default when no anchor is set).
+   * - ``MachineConfig`` threads (``ANIRA_THREADS_AUTO`` = the 2.x default), wait strategy,
+       log level, drain, interval and queue capacity
+     - ``ContextConfig`` and its ``LogConfig``. The log sink, the log flags and the device
+       descriptors have no 2.x counterpart and are not carried.
+
+**What the 2.x runtime cannot do** is refused with ``ANIRA_ERROR_NOT_SUPPORTED`` and a message
+saying what to change: an Async contract; a ``MEASURED`` budget or ``UNTIL_STABLE`` warmup
+(the defaults of ``anira::Hard{}``: set an explicit budget and a fixed warmup, as every bundled
+fixture does); a miss policy other than ``BYPASS``; a dtype other than float32, on a spec or as
+a ring dtype; a layout that moves an axis of extent above 1 (a transpose; a view over unit
+axes is fine); a dynamic Time extent on a Buffer tensor; an engine this build does not carry
+(see the candidates below); a custom engine other than ``anira.v2.custom``. Every other rule
+of section 1.1 that a configuration breaks is ``ANIRA_ERROR_CONFIG`` with the tensor's or the
+entry's name in the message.
+
+**Candidates.** The candidate list narrows which entries reach the ``InferenceConfig``. With
+none (the default), every entry is one, and an entry naming an engine this build does not
+carry is refused; ``anira::v3compat::enabled_engines()`` is the list that lets one model
+config serve every build, and ``ANIRA_ENGINE_NONE`` in the list keeps the custom-engine
+entries. The consumed-or-fail walk over the extensions runs over the entries that survive, so
+an ``entry`` extension on a LibTorch entry does not fail a build without LibTorch when LibTorch
+is not a candidate.
+
+**Lifetime.** A path entry is copied into the ``InferenceConfig``; a bytes entry is borrowed
+(a 2.x binary ``ModelData`` never copies), so the ``ModelConfig`` must outlive the
+``InferenceConfig`` and every handler built on it. Destroy in this order: the handler, the
+``InferenceConfig``, the ``ModelConfig``. The C++ overloads take the model config by lvalue
+reference only; passing a temporary does not compile.
+
+**Windows.** A flexible window (``window_min < window_max``) is pinned when
+``to_inference_config`` runs: one host block per inference (``block_max`` scaled by the
+tensor's time ratio, plus the context), clamped to the window range; without a geometry on the
+contract, the smallest window. When a spec's window is flexible, set the geometry before the
+call, or build the ``InferenceConfig`` at prepare. With fixed windows, which every bundled
+fixture uses, the order does not matter.
+
 .. _migration-json:
 
 JSON files
@@ -191,13 +295,16 @@ entry is ``ANIRA_ERROR_JSON`` with the key path in ``anira_error::message``.
    * - ``processing_spec.internal_model_latency``
      - ``outputs[].latency``.
    * - ``num_parallel_processors``
-     - ``max_instances``.
+     - ``max_instances``; absent, the 2.x default (half the hardware threads, at least 1),
+       which is what the 2.x constructor used.
    * - ``session_exclusive_processor``
      - ``"state": "stateful"``.
    * - ``max_inference_time``, ``warm_up``, ``blocking_ratio``
      - Held back as a Hard contract (``budget {"ms"}``, ``warmup {"fixed"}``, ``wait_ratio``)
        that ``anira_model_config_take_legacy_contract`` hands out once;
-       ``anira_contract_from_json`` on the same document yields it directly.
+       ``anira_contract_from_json`` on the same document yields it directly. A ``warm_up``
+       the file leaves out is ``warmup {"fixed": 0}``, the 2.x default, so the contract
+       bridges as the file ran.
    * - any other key
      - Stored as an extension of its host and refused by name at prepare.
 

@@ -2712,6 +2712,33 @@
         },
         {
           "kind": "function",
+          "name": "anira_contract_hard_set_ring_dtype",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_contract*",
+              "name": "contract",
+              "doc": "A Hard contract."
+            },
+            {
+              "type": "const char*",
+              "name": "canonical",
+              "doc": "The tensor's canonical name (the one its spec was created with)."
+            },
+            {
+              "type": "anira_dtype",
+              "name": "dtype",
+              "doc": "The element type of the host's samples for that tensor; ANIRA_DTYPE_F32 for every tensor that was never set."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.1",
+          "doc": "The ring dtype of one tensor under a Hard contract: the element type the host hands to, and takes from, the Hard entries for that tensor, which is exactly the type its ring holds. The Hard entries copy between the host and the ring without conversion; the pre- and post-processor convert between the ring dtype and the spec's dtype (the model's) on the inference thread. Set per tensor by canonical name, so an input and an output may differ. A name that matches no spec is checked at prepare, not here. Data only in this pre-release: the bridge to the 2.x runtime refuses any ring dtype other than ANIRA_DTYPE_F32 with ANIRA_ERROR_NOT_SUPPORTED, the typed Hard entries arrive with the 3.x runtime.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of 0."
+        },
+        {
+          "kind": "function",
           "name": "anira_contract_async_set_deadline",
           "returns": "anira_status",
           "params": [

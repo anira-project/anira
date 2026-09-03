@@ -10,15 +10,20 @@
 #include <anira/anira.hpp>
 // The umbrella second; the comment keeps clang-format from sorting anira.h above.
 #include <anira/anira.h>
+// The bridge last: it includes both.
+#include <anira/compat/v3_to_v2.h>
 #define ANIRA_CXX20_WITH_V2_PROBE anira_header_cxx20_with_v2_reverse
 #else
 #include <anira/anira.h>
 
 #include <anira/anira.hpp>
+#include <anira/compat/v3_to_v2.h>
 #define ANIRA_CXX20_WITH_V2_PROBE anira_header_cxx20_with_v2
 #endif
 
 #include <cstddef>
+#include <type_traits>
+#include <utility>
 
 namespace {
 
@@ -26,6 +31,18 @@ namespace {
     // A 2.x class and a 3.x aggregate side by side, both in namespace anira.
     return sizeof(anira::InferenceConfig) + sizeof(anira::Hard);
 }
+
+// The bridge takes the model config by lvalue only (a bytes entry is borrowed).
+template <class Model, class = void>
+struct BridgeTakes : std::false_type {};
+template <class Model>
+struct BridgeTakes<Model,
+                   std::void_t<decltype(anira::v3compat::to_inference_config(
+                       std::declval<Model>(), std::declval<const anira::Hard&>()))>>
+    : std::true_type {};
+static_assert(BridgeTakes<anira::ModelConfig&>::value);
+static_assert(BridgeTakes<const anira::ModelConfig&>::value);
+static_assert(!BridgeTakes<anira::ModelConfig>::value, "an rvalue model config is refused");
 
 }  // namespace
 // NOLINTEND(misc-include-cleaner)
