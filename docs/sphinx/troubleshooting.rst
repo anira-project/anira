@@ -157,15 +157,14 @@ Where the records are on each platform:
 - **Linux, Windows**: ``stderr`` for Error and Warning, ``stdout`` for Info and Debug, flushed
   per record. Set the runtime level with the machine config or, for the 2.x runtime,
   ``ContextConfig::m_log.m_level``.
-- **Android**: ``adb logcat -s thl:V`` (the tag is still ``thl`` in this pre-release, ``anira``
-  from the next tanh-lib release); anira's component is inside the message as
+- **Android**: ``adb logcat -s anira:V``; anira's component is inside the message as
   ``[native][anira.backend.onnxruntime] ...``. The engines keep their own tags:
-  ``adb logcat -s thl:V onnxruntime:V tflite:V ExecuTorch:V``.
-- **macOS, iOS**: Console.app or ``log stream --predicate 'subsystem == "thl"' --level debug``
-  (subsystem and category become anira's own with the next tanh-lib release). Info records
-  are memory-only and Debug records are not recorded unless streamed; Error and Warning are
-  persisted, so ``log show --last 1h --predicate 'subsystem == "thl"'`` finds them after the
-  fact. On macOS, with a debugger attached, the records go to ``stderr`` instead.
+  ``adb logcat -s anira:V onnxruntime:V tflite:V ExecuTorch:V``.
+- **macOS, iOS**: Console.app or ``log stream --predicate 'subsystem == "anira"' --level
+  debug``. Info records are memory-only and Debug records are not recorded unless streamed;
+  Error and Warning are persisted, so ``log show --last 1h --predicate 'subsystem == "anira"'``
+  finds them after the fact. On macOS, with a debugger attached, the records go to ``stderr``
+  instead.
 - **WebAssembly**: the browser console; the host must pump ``anira_drain_log`` for real-time
   records (no drain thread there).
 

@@ -113,11 +113,18 @@ struct TraceOff {
     TraceOff& operator=(const TraceOff&) = delete;
 };
 
+/// A collector that starts empty: a freshly set callback receives the logger's early-buffered
+/// records of earlier tests (and, on a leg that runs every suite in one process, of other
+/// suites), which are not under test here.
+struct FreshCollector : RecordCollector {
+    FreshCollector() { m_records.clear(); }
+};
+
 }  // namespace
 
 TEST(AbiFirewallLogging, AClassifiedStatusLogsNothing) {
     const TraceOff off;
-    RecordCollector collector;
+    FreshCollector collector;
     anira_error err = ANIRA_ERROR_INIT;
     EXPECT_EQ(firewall_probe(1, ANIRA_OK, nullptr, &err, nullptr), ANIRA_ERROR_OUT_OF_MEMORY);
     EXPECT_EQ(firewall_probe(2, ANIRA_ERROR_JSON, "models[0]: bad", &err, nullptr),
@@ -128,7 +135,7 @@ TEST(AbiFirewallLogging, AClassifiedStatusLogsNothing) {
 
 TEST(AbiFirewallLogging, InternalLogsExactlyOnceWithTheEntryName) {
     const TraceOff off;
-    RecordCollector collector;
+    FreshCollector collector;
     anira_error err = ANIRA_ERROR_INIT;
     EXPECT_EQ(firewall_probe(4, ANIRA_OK, "unexpected", &err, nullptr), ANIRA_ERROR_INTERNAL);
     EXPECT_STREQ(err.message, "unexpected");
@@ -140,7 +147,7 @@ TEST(AbiFirewallLogging, InternalLogsExactlyOnceWithTheEntryName) {
 
 TEST(AbiFirewallLogging, AVoidEntryReportsASwallowedFailureOnce) {
     const TraceOff off;
-    RecordCollector collector;
+    FreshCollector collector;
     firewall_probe_void(0, nullptr, false);
     EXPECT_EQ(native_record_count(collector), 0) << "success logs nothing";
     firewall_probe_void(3, "destroy went wrong", false);
@@ -150,14 +157,14 @@ TEST(AbiFirewallLogging, AVoidEntryReportsASwallowedFailureOnce) {
 
 TEST(AbiFirewallLogging, TheQuietHandlerNeverLogs) {
     const TraceOff off;
-    RecordCollector collector;
+    FreshCollector collector;
     firewall_probe_void(4, "sink threw", true);
     EXPECT_EQ(native_record_count(collector), 0) << "a throwing sink must not recurse";
 }
 
 TEST(AbiFirewallLogging, TheTraceFlagEmitsTheErrorMessageOnce) {
     const TraceOff off;
-    RecordCollector collector;
+    FreshCollector collector;
     anira_error err = ANIRA_ERROR_INIT;
     set_trace_failures(true);
     EXPECT_EQ(firewall_probe(2, ANIRA_ERROR_JSON, "models[0].engine: unknown", &err, nullptr),
@@ -192,7 +199,7 @@ TEST(AbiFirewallLogging, AFailingEntryDrainsTheRealTimeQueueFirst) {
     anira::InferenceHandler handler(pp_processor, inference_config, context_config);
     handler.prepare(anira::HostConfig(512, 48000));
 
-    RecordCollector collector;
+    FreshCollector collector;
     anira_log_rt(ANIRA_LOG_ERROR, "anira.test", "queued before the failure", 7, 8);
     EXPECT_FALSE(collector.has("queued before the failure")) << "still in the queue";
     anira_error err = ANIRA_ERROR_INIT;

@@ -85,6 +85,13 @@ void expect_diagnostic(RecordCollector& collector,
 
 // The queue is sized once per context and clamped to what the ring supports.
 TEST_F(ContextConfigMismatchTest, QueueCapacityOutsideTheSupportedRangeIsClamped) {
+    // The clamp is reported when the core's queue is created, i.e. by the first session of
+    // a core; on a leg that runs every suite in one process an earlier test may have left
+    // the core alive, so start from none.
+    Context::shutdown();
+    if (!Context::release_core_if_idle() && Context::has_core()) {
+        GTEST_SKIP() << "the core is held by another test's objects";
+    }
     RecordCollector collector;
     ContextConfig config = verbose_config();
     config.m_log.m_queue_capacity = 8;  // below the 64-record minimum

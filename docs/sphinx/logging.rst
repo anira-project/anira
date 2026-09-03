@@ -211,7 +211,7 @@ platform keeps:
 
 logcat's buffers are ring buffers in memory; all four priorities reach them by default, and
 the ``log.tag.<tag>`` system property raises the minimum priority for one tag
-(``adb shell setprop log.tag.thl ERROR``). On Linux, Windows and in the terminal on macOS the
+(``adb shell setprop log.tag.anira ERROR``). On Linux, Windows and in the terminal on macOS the
 platform sink is stdout/stderr, Error and Warning on stderr, Info and Debug on stdout.
 
 **Release builds.** tanh-lib, whose logger anira uses, compiles Warning, Info and Debug out of
@@ -326,20 +326,19 @@ One slot may be torn when the crash lands in the middle of a ``snprintf``; that 
 of a lock-free ring and the reason the handler writes the slot's recorded length rather than
 scanning for a terminator.
 
-**Where to look.** Today the platform identity is tanh-lib's: the Android tag and the Apple
-subsystem are ``thl``, the Apple category is ``logger``, and every line reads
+**Where to look.** anira's private logger files every record under anira's own identity: the
+Android tag and the Apple subsystem and category are ``anira``, and every line reads
 ``[<source>][<group>] <message>`` with ``source`` = ``native`` or ``rt`` and ``group`` =
 ``anira.<component>`` (``anira.context``, ``anira.scheduler``, ``anira.config``,
-``anira.system``, ``anira.backend.<engine>``, ``anira.web``). The next tanh-lib release lets
-anira's copy emit under its own identity (tag ``anira``, a reverse-DNS subsystem with the group
-as category); the filters below change with it.
+``anira.system``, ``anira.backend.<engine>``, ``anira.web``, ``anira.capi``). A host that also
+uses tanh-lib has a second logger under ``thl``, which anira never touches.
 
-- Android: ``adb logcat -s thl:W`` for anira's warnings and errors, ``adb logcat -s thl`` for
-  everything at the runtime level; add the engines' own tags for a combined view,
-  ``adb logcat -s thl onnxruntime tflite ExecuTorch``. ``adb shell setprop log.tag.thl DEBUG``
+- Android: ``adb logcat -s anira:W`` for anira's warnings and errors, ``adb logcat -s anira``
+  for everything at the runtime level; add the engines' own tags for a combined view,
+  ``adb logcat -s anira onnxruntime tflite ExecuTorch``. ``adb shell setprop log.tag.anira DEBUG``
   lowers the tag's minimum for the session.
-- macOS and iOS: ``log stream --predicate 'subsystem == "thl"' --level info`` while the app
-  runs (``--level debug`` for Debug records), ``log show --predicate 'subsystem == "thl"'
+- macOS and iOS: ``log stream --predicate 'subsystem == "anira"' --level info`` while the app
+  runs (``--level debug`` for Debug records), ``log show --predicate 'subsystem == "anira"'
   --last 1h`` afterwards, or Console.app with the subsystem in the search field and *Include
   Info Messages* / *Include Debug Messages* in the Action menu. Under a debugger on macOS the
   lines are on stdout/stderr (the Xcode console) instead, not in ``log``.

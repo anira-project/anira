@@ -259,6 +259,17 @@ void Context::apply_log_level_locked(Core& c, const ContextConfig& context_confi
 void Context::start_log_drain_locked(Core& c, const ContextConfig& context_config) {
     const LogConfig& log_config = context_config.m_log;
     if (!c.m_log_queue) {
+        // Once per core, before its first record: anira's private logger files records
+        // under anira's own name, so a device filter finds them (adb logcat -s anira,
+        // log stream --predicate 'subsystem == "anira"'). Every other field keeps what
+        // the host configured. See docs/sphinx/logging.rst, "Where the records go".
+        {
+            thl::Logger::LoggerConfig logger_config = thl::Logger::get_config();
+            logger_config.m_platform_tag = "anira";
+            logger_config.m_platform_subsystem = "anira";
+            logger_config.m_platform_category = "anira";
+            thl::Logger::set_config(logger_config);
+        }
         // Once per core: the queue is what the real-time sites hold a pointer to, so it
         // is never replaced while the core lives (a later first session that asks for
         // another capacity is told below).
