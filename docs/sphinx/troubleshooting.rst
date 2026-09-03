@@ -144,6 +144,47 @@ Unexpected Results or Crashes
     3. Try using a different backend to rule out backend-specific issues
     4. Check that your model works correctly outside of anira use the minimal inference example provided in the :doc:`examples` section.
 
+Reading anira's log
+^^^^^^^^^^^^^^^^^^^
+
+**Issue**: A call failed, or the audio went silent, and you want to see what anira has to say.
+
+anira hands a failure back to the caller (``anira_error`` in C, ``anira::Error`` in C++) and
+does not log it; the log carries what nobody could receive (failures on anira's own threads,
+in ``destroy`` entries, in sinks) and the real-time refusals. :doc:`logging` explains the split.
+Where the records are on each platform:
+
+- **Linux, Windows**: ``stderr`` for Error and Warning, ``stdout`` for Info and Debug, flushed
+  per record. Set the runtime level with the machine config or, for the 2.x runtime,
+  ``ContextConfig::m_log.m_level``.
+- **Android**: ``adb logcat -s anira:V``; anira's component is inside the message as
+  ``[native][anira.backend.onnxruntime] ...``. The engines keep their own tags:
+  ``adb logcat -s anira:V onnxruntime:V tflite:V ExecuTorch:V``.
+- **macOS, iOS**: Console.app or ``log stream --predicate 'subsystem == "anira"' --level
+  debug``. Info records are memory-only and Debug records are not recorded unless streamed;
+  Error and Warning are persisted, so ``log show --last 1h --predicate 'subsystem == "anira"'``
+  finds them after the fact. On macOS, with a debugger attached, the records go to ``stderr``
+  instead.
+- **WebAssembly**: the browser console; the host must pump ``anira_drain_log`` for real-time
+  records (no drain thread there).
+
+**Issue**: The application swallowed the error and the log is empty.
+
+**Solution**: Two switches, neither on by default. ``ANIRA_LOG_FLAG_TRACE_FAILURES`` on the
+machine config makes every failed status also an Error record with the entry name, the status
+and the message (the 3.x runtime applies it; in this pre-release
+``anira::capi::set_trace_failures(true)`` is the process-wide switch). Or install your own
+sink (``anira_log_fn`` on the machine config, ``thl::Logger::set_callback`` for the 2.x
+runtime), which receives every record, and keep the last N in a ring you write out from your
+crash handler.
+
+**Issue**: A real-time record is missing from the log after a crash.
+
+Real-time records wait in a queue until the drain thread's next pass (10 ms by default, on a
+low-priority thread) or until a failing control-path call drains them; a crash inside that
+window loses them, and anira installs no crash handler. Lower ``drain_interval_ms`` in a debug
+build, or pump ``anira_drain_log`` from your own crash handler if your sink is async-signal-safe.
+
 Host application ships its own backend runtime
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

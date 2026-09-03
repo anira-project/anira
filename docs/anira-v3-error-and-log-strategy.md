@@ -154,7 +154,11 @@ frame.
 
 - C ABI: every entry `noexcept` plus the function-try-block; an escape is a deterministic
   `std::terminate` on every compiler instead of MSVC `/EHsc`'s undefined behaviour for
-  `extern "C"`. Exception types never leave `libanira` (hidden visibility stays safe).
+  `extern "C"`. Through the C entries no exception type leaves `libanira`. Through the 2.x
+  C++ entries of this pre-release (an `InferenceHandler` constructor) `anira::StatusError` does
+  cross, so the type is exported (`ANIRA_API`): under hidden visibility a class without it keeps
+  its typeinfo local to the library, and a `catch` in another module (a plugin, a test binary on
+  macOS) falls through to `std::exception`. Once the 2.x entries retire, the export can go.
 - Real-time entries are `noexcept` and `ANIRA_NONBLOCKING`; throwing allocates and (before
   glibc 2.35) takes a global unwinder lock; clang's function-effect analysis diagnoses a throw
   in a consumer's nonblocking TU at compile time; anira's internal RT bodies are covered by
@@ -172,7 +176,7 @@ frame.
 1. tanh-lib: identity (tag/subsystem/category) configurable per copy; `flags` on
    `RtRecord`/`LogRecord` and a flags-taking `logf`; drop count beside the first record after
    a gap; a cache option for the compiled ceiling. Re-pin.
-2. anira: pin `THL_LOG_COMPILED_MAX_LEVEL=4` on the private copy (configure-time check).
+2. anira: set tanh-lib's `TANH_LOG_COMPILED_MAX_LEVEL` to 4 as a plain variable before the fetch (the option lands with the tanh-lib PR of item 1).
 3. `StatusError` to `src/utils`, derived from `std::runtime_error`; backends throw
    `MODEL_LOAD`/`ENGINE`/`NOT_SUPPORTED` with `"<engine>: <path>: <text>"`; model-file
    pre-check -> `NO_SUCH_FILE`; TFLite null checks and status checks; ORT warm-up failure fails

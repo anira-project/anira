@@ -27,8 +27,11 @@ anira::LogLevel to_anira_level(anira_log_level level) noexcept {
 
 }  // namespace
 
-size_t ANIRA_CALL anira_drain_log(void) try { return anira::Context::drain_log(); } catch (...) {
-    anira::capi::translate_exception(nullptr);
+size_t ANIRA_CALL anira_drain_log(void) ANIRA_NOEXCEPT try {
+    return anira::Context::drain_log();
+} catch (...) {
+    // A sink that throws while draining must not recurse into the logger.
+    anira::capi::report_void_failure_quiet(__func__);
     return 0;
 }
 
@@ -36,7 +39,7 @@ void ANIRA_CALL anira_log_rt(anira_log_level level,
                              const char* group,
                              const char* static_message,
                              int32_t arg0,
-                             int32_t arg1) ANIRA_NONBLOCKING {
+                             int32_t arg1) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
 #ifdef ENABLE_LOGGING
     if (group == nullptr || static_message == nullptr) { return; }
     // The queue lives as long as the core; one relaxed load, no lock, no allocation.
@@ -57,7 +60,9 @@ void ANIRA_CALL anira_log_rt(anira_log_level level,
 #endif
 }
 
-void ANIRA_CALL anira_log(anira_log_level level, const char* group, const char* message) try {
+void ANIRA_CALL anira_log(anira_log_level level,
+                          const char* group,
+                          const char* message) ANIRA_NOEXCEPT try {
 #ifdef ENABLE_LOGGING
     if (group == nullptr || message == nullptr) { return; }
     thl::Logger::logf(anira::to_thl_log_level(to_anira_level(level)), group, "%s", message);
@@ -67,6 +72,6 @@ void ANIRA_CALL anira_log(anira_log_level level, const char* group, const char* 
     static_cast<void>(message);
 #endif
 } catch (...) {
-    // A sink that throws must not unwind through a C frame.
-    anira::capi::translate_exception(nullptr);
+    // A sink that throws must not unwind through a C frame, nor recurse into the logger.
+    anira::capi::report_void_failure_quiet(__func__);
 }

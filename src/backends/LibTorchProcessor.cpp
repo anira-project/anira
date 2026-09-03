@@ -1,4 +1,5 @@
 #include <anira/InferenceConfig.h>
+#include <anira/abi/status.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/backends/LibTorchProcessor.h>
 #include <anira/scheduler/SessionElement.h>
@@ -12,8 +13,10 @@
 #include <cstddef>
 #include <memory>
 #include <sstream>
-#include <stdexcept>
 #include <vector>
+
+#include "../utils/ModelFile.h"
+#include "../utils/StatusError.h"
 
 // Avoid min/max macro conflicts on Windows for LibTorch compatibility
 #ifdef _WIN32
@@ -50,6 +53,22 @@
 #endif
 
 namespace anira {
+
+namespace {
+
+/// Clears an instance's busy flag on every exit path of process().
+class ProcessingGuard {
+public:
+    explicit ProcessingGuard(std::atomic<bool>& flag) noexcept : m_flag(flag) {}
+    ~ProcessingGuard() { m_flag.store(false); }
+    ProcessingGuard(const ProcessingGuard&) = delete;
+    ProcessingGuard& operator=(const ProcessingGuard&) = delete;
+
+private:
+    std::atomic<bool>& m_flag;
+};
+
+}  // namespace
 
 // Defined here, not in the header: it owns LibTorch objects, and the engine headers
 // stay out of anira's public headers (see the note on BackendBase).
@@ -101,8 +120,10 @@ void LibtorchProcessor::process(std::vector<BufferF>& input,
     while (true) {
         for (auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
+                // The flag is released on every path, including a throw from the engine,
+                // so a failing inference can never leave the instance busy forever.
+                const ProcessingGuard guard(instance->m_processing);
                 instance->process(input, output, session);
-                instance->m_processing.exchange(false);
                 return;
             }
         }
@@ -121,23 +142,22 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config)
                 std::string(static_cast<const char*>(model_data->m_data), model_data->m_size));
             m_module = torch::jit::load(stream);
         } catch (const c10::Error& e) {
-            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "error loading the model");
-            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "%s", e.what());
-            // Same contract as the other backends: a model that will not load fails
-            // session creation with a std::runtime_error. Carrying on would call
-            // eval() on an empty module and let a c10 exception escape instead.
-            throw std::runtime_error("[anira][LibTorch] could not load the model from memory");
+            // A model that will not load fails session creation with the engine's own text
+            // in the status message; carrying on would call eval() on an empty module.
+            throw StatusError(
+                ANIRA_ERROR_MODEL_LOAD,
+                model_file::message("libtorch", model_file::k_memory, e.what_without_backtrace()));
         }
     } else {
+        const std::string modelpath = model_file::require_readable(
+            m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH),
+            "libtorch");
         try {
-            m_module = torch::jit::load(
-                m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
+            m_module = torch::jit::load(modelpath);
         } catch (const c10::Error& e) {
-            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "error loading the model");
-            ANIRA_LOG_ERROR(log_group::k_backend_libtorch, "%s", e.what());
-            throw std::runtime_error(
-                "[anira][LibTorch] could not load the model from " +
-                m_inference_config.get_model_path(anira::InferenceBackend::LIBTORCH));
+            throw StatusError(
+                ANIRA_ERROR_MODEL_LOAD,
+                model_file::message("libtorch", modelpath, e.what_without_backtrace()));
         }
     }
     m_module.eval();
@@ -157,13 +177,20 @@ LibtorchProcessor::Instance::Instance(InferenceConfig& inference_config)
     // No gradient calculation for inference
     torch::NoGradGuard const no_grad;
     for (size_t i = 0; i < m_inference_config.m_warm_up; i++) {
-        if (!m_inference_config.get_model_function(InferenceBackend::LIBTORCH).empty()) {
-            auto method = m_module.get_method(
-                m_inference_config.get_model_function(InferenceBackend::LIBTORCH));
-            m_outputs = method(m_inputs);
-        } else {
-            // Run inference
-            m_outputs = m_module.forward(m_inputs);
+        try {
+            if (!m_inference_config.get_model_function(InferenceBackend::LIBTORCH).empty()) {
+                auto method = m_module.get_method(
+                    m_inference_config.get_model_function(InferenceBackend::LIBTORCH));
+                m_outputs = method(m_inputs);
+            } else {
+                // Run inference
+                m_outputs = m_module.forward(m_inputs);
+            }
+        } catch (const c10::Error& e) {
+            // A warm-up that fails fails construction: the model cannot run.
+            throw StatusError(
+                ANIRA_ERROR_ENGINE,
+                model_file::message("libtorch", "warm-up", e.what_without_backtrace()));
         }
     }
 }
@@ -190,13 +217,20 @@ void LibtorchProcessor::Instance::process(std::vector<BufferF>& input,
             m_tensor_options);
     }
 
-    // Run inference
-    if (!m_inference_config.get_model_function(InferenceBackend::LIBTORCH).empty()) {
-        auto method =
-            m_module.get_method(m_inference_config.get_model_function(InferenceBackend::LIBTORCH));
-        m_outputs = method(m_inputs);
-    } else {
-        m_outputs = m_module.forward(m_inputs);
+    // Run inference. No caller waits for this task: a failing engine is logged once and
+    // delivers zeros, never the previous job's output.
+    try {
+        if (!m_inference_config.get_model_function(InferenceBackend::LIBTORCH).empty()) {
+            auto method = m_module.get_method(
+                m_inference_config.get_model_function(InferenceBackend::LIBTORCH));
+            m_outputs = method(m_inputs);
+        } else {
+            m_outputs = m_module.forward(m_inputs);
+        }
+    } catch (const c10::Error& e) {
+        ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what_without_backtrace());
+        for (auto& buffer : output) { buffer.clear(); }
+        return;
     }
 
     // We need to copy the data because we cannot access the data pointer ref of the tensor directly

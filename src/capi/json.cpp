@@ -1345,7 +1345,7 @@ anira_status ANIRA_CALL anira_model_config_from_json(const char* utf8,
                                                      size_t len,
                                                      const char* base_dir,
                                                      anira_model_config** out,
-                                                     anira_error* err) try {
+                                                     anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(out != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "model config: NULL out");
     ANIRA_CAPI_REQUIRE(utf8 != nullptr,
                        err,
@@ -1363,11 +1363,11 @@ anira_status ANIRA_CALL anira_model_config_from_json(const char* utf8,
     }
     *out = cfg.release();
     return status;
-} catch (...) { return translate_exception(err); }
+} catch (...) { return translate_exception(err, __func__); }
 
 anira_status ANIRA_CALL anira_model_config_from_json_file(const char* utf8_path,
                                                           anira_model_config** out,
-                                                          anira_error* err) try {
+                                                          anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(out != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "model config: NULL out");
     ANIRA_CAPI_REQUIRE(utf8_path != nullptr && utf8_path[0] != '\0',
                        err,
@@ -1375,7 +1375,7 @@ anira_status ANIRA_CALL anira_model_config_from_json_file(const char* utf8_path,
                        "model config: NULL or empty path");
     const std::ifstream file(std::filesystem::path(utf8_path), std::ios::binary);
     if (!file) {
-        anira::capi::fail(err, ANIRA_ERROR_NO_SUCH_FILE, "cannot open '%s'", utf8_path);
+        anira::capi::fail(err, ANIRA_ERROR_NO_SUCH_FILE, __func__, "cannot open '%s'", utf8_path);
         return ANIRA_ERROR_NO_SUCH_FILE;
     }
     std::stringstream buffer;
@@ -1387,27 +1387,28 @@ anira_status ANIRA_CALL anira_model_config_from_json_file(const char* utf8_path,
                                         base_dir.empty() ? nullptr : base_dir.c_str(),
                                         out,
                                         err);
-} catch (...) { return translate_exception(err); }
+} catch (...) { return translate_exception(err, __func__); }
 
 anira_status ANIRA_CALL anira_model_config_to_json(const anira_model_config* config,
                                                    char* buf,
                                                    size_t cap,
-                                                   size_t* out_len) try {
+                                                   size_t* out_len) ANIRA_NOEXCEPT try {
     if (config == nullptr || out_len == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     return write_text(model_to_json(*config).dump(2), buf, cap, out_len);
-} catch (...) { return translate_exception(nullptr); }
+} catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_model_config_take_legacy_contract(anira_model_config* config,
-                                                                anira_contract** out) try {
+                                                                anira_contract** out) ANIRA_NOEXCEPT
+    try {
     if (config == nullptr || out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     *out = config->m_legacy_contract.release();
     return ANIRA_OK;
-} catch (...) { return translate_exception(nullptr); }
+} catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_machine_config_from_json(const char* utf8,
                                                        size_t len,
                                                        anira_machine_config** out,
-                                                       anira_error* err) try {
+                                                       anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(out != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
@@ -1428,20 +1429,20 @@ anira_status ANIRA_CALL anira_machine_config_from_json(const char* utf8,
     }
     *out = mc.release();
     return status;
-} catch (...) { return translate_exception(err); }
+} catch (...) { return translate_exception(err, __func__); }
 
 anira_status ANIRA_CALL anira_machine_config_to_json(const anira_machine_config* config,
                                                      char* buf,
                                                      size_t cap,
-                                                     size_t* out_len) try {
+                                                     size_t* out_len) ANIRA_NOEXCEPT try {
     if (config == nullptr || out_len == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     return write_text(machine_to_json(*config).dump(2), buf, cap, out_len);
-} catch (...) { return translate_exception(nullptr); }
+} catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_contract_from_json(const char* utf8,
                                                  size_t len,
                                                  anira_contract** out,
-                                                 anira_error* err) try {
+                                                 anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(out != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "contract: NULL out");
     ANIRA_CAPI_REQUIRE(utf8 != nullptr,
                        err,
@@ -1459,4 +1460,4 @@ anira_status ANIRA_CALL anira_contract_from_json(const char* utf8,
     load_contract_v3(root, *contract);
     *out = contract.release();
     return ANIRA_OK;
-} catch (...) { return translate_exception(err); }
+} catch (...) { return translate_exception(err, __func__); }

@@ -17,6 +17,7 @@ Anira Documentation
     about
     getting_started
     usage
+    logging
     custom_preprocessing
     custom_backends
     examples

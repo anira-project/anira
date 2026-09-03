@@ -469,3 +469,37 @@ TEST(InferenceConfigValidation, BackendSpecificShapeIsNotCloned) {
         k_max_inference_time);
     EXPECT_EQ(config.m_tensor_shape.size(), 1U);
 }
+
+// ============================================================================
+// The error strategy: a rejection carries its detail in what() and logs nothing
+// ============================================================================
+
+#include "support/log_record_collector.h"
+
+TEST(InferenceConfigValidation, RejectionsCarryTheDetailAndLogNothing) {
+    const std::vector<anira::ModelData> model_data = custom_model_data();
+    const std::vector<anira::TensorShape> tensor_shape = universal_shape();
+    anira_test::RecordCollector collector;
+    // A freshly set callback receives the logger's early-buffered records of earlier tests;
+    // only what the two constructions below emit is under test.
+    collector.m_records.clear();
+
+    try {
+        const anira::InferenceConfig config(model_data, tensor_shape, -1.0F);
+        FAIL() << "a non-positive max_inference_time must throw";
+    } catch (const std::invalid_argument& e) {
+        EXPECT_NE(std::string(e.what()).find("max_inference_time"), std::string::npos) << e.what();
+        EXPECT_NE(std::string(e.what()).find("-1"), std::string::npos)
+            << "the offending value travels in the message: " << e.what();
+    }
+    try {
+        const anira::InferenceConfig config(model_data,
+                                            {anira::TensorShape({{1, 1, 0}}, {{1, 1, 512}})},
+                                            k_max_inference_time);
+        FAIL() << "a zero dimension must throw";
+    } catch (const std::invalid_argument& e) {
+        EXPECT_NE(std::string(e.what()).find("dimension 0"), std::string::npos) << e.what();
+    }
+    EXPECT_TRUE(collector.m_records.empty())
+        << "a failure that is returned (thrown) to the caller is not logged";
+}

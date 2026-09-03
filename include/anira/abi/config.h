@@ -68,7 +68,8 @@ typedef struct anira_ext_entry {
  * [thread-safe]
  * @since ABI 0.1
  */
-ANIRA_API anira_status ANIRA_CALL anira_registered_ext_kinds(uint32_t* count, const char** out);
+ANIRA_API anira_status ANIRA_CALL anira_registered_ext_kinds(uint32_t* count,
+                                                             const char** out) ANIRA_NOEXCEPT;
 
 /**
  * @brief The CUDA device block of a machine config. Nothing to hand over: the primary context
@@ -187,7 +188,7 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_create(const char* name,
                                                            anira_dtype dtype,
                                                            anira_role role,
                                                            anira_tensor_spec** out,
-                                                           anira_error* err);
+                                                           anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Sets one axis; axis index order is model memory order (NCHW vs NHWC is just axis
@@ -205,7 +206,7 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_create(const char* name,
 ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_axis(anira_tensor_spec* spec,
                                                              uint32_t i,
                                                              anira_axis_tag tag,
-                                                             int64_t extent);
+                                                             int64_t extent) ANIRA_NOEXCEPT;
 
 /**
  * @brief The window of a Streamed spec, in elements along the Time axis; the fixed case is
@@ -225,7 +226,7 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_axis(anira_tensor_spec* 
 ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_window(anira_tensor_spec* spec,
                                                                int64_t window_min,
                                                                int64_t window_max,
-                                                               int64_t context);
+                                                               int64_t context) ANIRA_NOEXCEPT;
 
 /**
  * @brief The tensor's Time advance relative to the anchor tensor.
@@ -240,7 +241,7 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_window(anira_tensor_spec
  */
 ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_time_ratio(anira_tensor_spec* spec,
                                                                    int64_t num,
-                                                                   int64_t den);
+                                                                   int64_t den) ANIRA_NOEXCEPT;
 
 /**
  * @brief Outputs only: the model's internal delay along the Time axis, which the reported
@@ -253,7 +254,7 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_time_ratio(anira_tensor_
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spec* spec,
-                                                                int64_t latency);
+                                                                int64_t latency) ANIRA_NOEXCEPT;
 
 /**
  * @brief Sets an extension on the spec (section 1b); one slot per kind, a second set replaces
@@ -269,7 +270,7 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spe
  */
 ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_ext(anira_tensor_spec* spec,
                                                             const anira_ext_header* ext,
-                                                            anira_error* err);
+                                                            anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief The JSON twin of set_ext: a known kind is parsed through its registry row, an unknown
@@ -291,7 +292,7 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_ext_json(anira_tensor_sp
                                                                  const char* kind,
                                                                  const char* utf8,
                                                                  size_t len,
-                                                                 anira_error* err);
+                                                                 anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Destroys a spec; NULL-safe. A spec added to a model config was copied and may be
@@ -301,7 +302,7 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_ext_json(anira_tensor_sp
  * [main-thread]
  * @since ABI 0.1
  */
-ANIRA_API void ANIRA_CALL anira_tensor_spec_destroy(anira_tensor_spec* spec);
+ANIRA_API void ANIRA_CALL anira_tensor_spec_destroy(anira_tensor_spec* spec) ANIRA_NOEXCEPT;
 
 /**
  * @brief Creates a Hard (real-time) contract with the stream geometry; the fixed-block host
@@ -324,7 +325,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_create_hard(uint32_t block_min,
                                                              uint32_t block_max,
                                                              double rate,
                                                              anira_contract** out,
-                                                             anira_error* err);
+                                                             anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Creates an Async contract: no deadline (the offline posture), FINISH on late, AUTO
@@ -337,7 +338,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_create_hard(uint32_t block_min,
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_create_async(anira_contract** out,
-                                                              anira_error* err);
+                                                              anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Patches the stream geometry, e.g. of a contract loaded from a file (section 8).
@@ -354,7 +355,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_create_async(anira_contract** o
 ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_geometry(anira_contract* contract,
                                                                    uint32_t block_min,
                                                                    uint32_t block_max,
-                                                                   double rate);
+                                                                   double rate) ANIRA_NOEXCEPT;
 
 /**
  * @brief The per-inference budget of a Hard contract (v2's max_inference_time when EXPLICIT).
@@ -369,7 +370,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_geometry(anira_contrac
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_budget(anira_contract* contract,
                                                                  anira_budget_kind kind,
-                                                                 double explicit_ms);
+                                                                 double explicit_ms) ANIRA_NOEXCEPT;
 
 /**
  * @brief The warmup policy of a Hard contract (v2's warm_up when FIXED).
@@ -385,7 +386,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_budget(anira_contract*
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_warmup(anira_contract* contract,
                                                                  anira_warmup_mode mode,
-                                                                 uint32_t iterations);
+                                                                 uint32_t iterations) ANIRA_NOEXCEPT;
 
 /**
  * @brief What the handler delivers when an inference misses its deadline.
@@ -399,7 +400,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_warmup(anira_contract*
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract* contract,
-                                                                  anira_miss_policy policy);
+                                                                  anira_miss_policy policy) ANIRA_NOEXCEPT;
 
 /**
  * @brief The wait ratio consumed by the _wait twins only: how long, as a fraction of the block
@@ -413,7 +414,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contract* contract,
-                                                                     double ratio);
+                                                                     double ratio) ANIRA_NOEXCEPT;
 
 /**
  * @brief The per-job deadline of an Async contract; an absolute per-job override is the
@@ -426,7 +427,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contr
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_async_set_deadline(anira_contract* contract,
-                                                                    double deadline_ms);
+                                                                    double deadline_ms) ANIRA_NOEXCEPT;
 
 /**
  * @brief The scheduling policy of an Async contract.
@@ -449,7 +450,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_async_set_policy(anira_contract
                                                                   anira_priority priority,
                                                                   uint32_t lanes,
                                                                   uint32_t max_in_flight,
-                                                                  anira_delivery delivery);
+                                                                  anira_delivery delivery) ANIRA_NOEXCEPT;
 
 /**
  * @brief Plan validation policy for the edges a pipeline uses (section 7); not scheduling.
@@ -461,7 +462,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_async_set_policy(anira_contract
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* contract,
-                                                               anira_edge_cost cost);
+                                                               anira_edge_cost cost) ANIRA_NOEXCEPT;
 
 /**
  * @brief Sets an extension on the contract (section 1b); v3.0.0 registers none for this host.
@@ -476,7 +477,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* c
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_set_ext(anira_contract* contract,
                                                          const anira_ext_header* ext,
-                                                         anira_error* err);
+                                                         anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief The JSON twin of anira_contract_set_ext.
@@ -494,7 +495,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_set_ext_json(anira_contract* co
                                                               const char* kind,
                                                               const char* utf8,
                                                               size_t len,
-                                                              anira_error* err);
+                                                              anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Whether the contract is Hard or Async.
@@ -504,7 +505,8 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_set_ext_json(anira_contract* co
  * [main-thread]
  * @since ABI 0.1
  */
-ANIRA_API anira_contract_kind ANIRA_CALL anira_contract_get_kind(const anira_contract* contract);
+ANIRA_API anira_contract_kind ANIRA_CALL anira_contract_get_kind(const anira_contract* contract)
+                                                                 ANIRA_NOEXCEPT;
 
 /**
  * @brief Destroys a contract; NULL-safe.
@@ -513,7 +515,7 @@ ANIRA_API anira_contract_kind ANIRA_CALL anira_contract_get_kind(const anira_con
  * [main-thread]
  * @since ABI 0.1
  */
-ANIRA_API void ANIRA_CALL anira_contract_destroy(anira_contract* contract);
+ANIRA_API void ANIRA_CALL anira_contract_destroy(anira_contract* contract) ANIRA_NOEXCEPT;
 
 /**
  * @brief Creates a machine config with the defaults: ANIRA_THREADS_AUTO threads, SPIN_BACKOFF,
@@ -527,7 +529,7 @@ ANIRA_API void ANIRA_CALL anira_contract_destroy(anira_contract* contract);
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_create(anira_machine_config** out,
-                                                              anira_error* err);
+                                                              anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief The inference thread pool the first machine sizes.
@@ -542,7 +544,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_create(anira_machine_conf
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_threads(anira_machine_config* config,
                                                                    uint32_t num_threads,
-                                                                   anira_wait_strategy wait);
+                                                                   anira_wait_strategy wait) ANIRA_NOEXCEPT;
 
 /**
  * @brief The runtime log level.
@@ -554,7 +556,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_threads(anira_machine
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log_level(anira_machine_config* config,
-                                                                     anira_log_level level);
+                                                                     anira_log_level level) ANIRA_NOEXCEPT;
 
 /**
  * @brief Who drains the real-time log queue and how often.
@@ -568,7 +570,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log_level(anira_machi
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log_drain(anira_machine_config* config,
                                                                      anira_log_drain drain,
-                                                                     uint32_t interval_ms);
+                                                                     uint32_t interval_ms) ANIRA_NOEXCEPT;
 
 /**
  * @brief The real-time log queue's capacity.
@@ -580,7 +582,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log_drain(anira_machi
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log_queue_capacity(anira_machine_config* config,
-                                                                              uint32_t capacity);
+                                                                              uint32_t capacity) ANIRA_NOEXCEPT;
 
 /**
  * @brief Log flags, e.g. ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK.
@@ -592,7 +594,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log_queue_capacity(an
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log_flags(anira_machine_config* config,
-                                                                     uint32_t flags);
+                                                                     uint32_t flags) ANIRA_NOEXCEPT;
 
 /**
  * @brief The machine's log sink; ignored on Wasm, where anira_em_set_log_hook is the sink.
@@ -606,7 +608,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log_flags(anira_machi
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log_sink(anira_machine_config* config,
                                                                     anira_log_fn callback,
-                                                                    void* user_data);
+                                                                    void* user_data) ANIRA_NOEXCEPT;
 
 /**
  * @brief The C one-shot convenience equal to the five scalar log setters.
@@ -619,7 +621,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log_sink(anira_machin
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log(anira_machine_config* config,
-                                                               const anira_log_desc* desc);
+                                                               const anira_log_desc* desc) ANIRA_NOEXCEPT;
 
 /**
  * @brief Declares the CUDA device block; presence is the user's declaration, no implicit
@@ -632,7 +634,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_log(anira_machine_con
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_cuda(anira_machine_config* config,
-                                                                const anira_cuda_desc* desc);
+                                                                const anira_cuda_desc* desc) ANIRA_NOEXCEPT;
 
 /**
  * @brief Declares the OpenGL device block.
@@ -644,7 +646,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_cuda(anira_machine_co
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_gl(anira_machine_config* config,
-                                                              const anira_gl_desc* desc);
+                                                              const anira_gl_desc* desc) ANIRA_NOEXCEPT;
 
 /**
  * @brief Declares the Vulkan device block.
@@ -656,7 +658,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_gl(anira_machine_conf
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_vulkan(anira_machine_config* config,
-                                                                  const anira_vulkan_desc* desc);
+                                                                  const anira_vulkan_desc* desc) ANIRA_NOEXCEPT;
 
 /**
  * @brief Declares the Metal device block.
@@ -668,7 +670,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_vulkan(anira_machine_
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_metal(anira_machine_config* config,
-                                                                 const anira_metal_desc* desc);
+                                                                 const anira_metal_desc* desc) ANIRA_NOEXCEPT;
 
 /**
  * @brief Declares the Direct3D 12 device block.
@@ -680,7 +682,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_metal(anira_machine_c
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_d3d12(anira_machine_config* config,
-                                                                 const anira_d3d12_desc* desc);
+                                                                 const anira_d3d12_desc* desc) ANIRA_NOEXCEPT;
 
 /**
  * @brief Declares the WebGPU device block (native Dawn); ANIRA_ERROR_NOT_SUPPORTED under
@@ -694,7 +696,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_d3d12(anira_machine_c
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_webgpu(anira_machine_config* config,
-                                                                  const anira_webgpu_desc* desc);
+                                                                  const anira_webgpu_desc* desc) ANIRA_NOEXCEPT;
 
 /**
  * @brief Sets an extension on the machine config (section 1b).
@@ -708,7 +710,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_webgpu(anira_machine_
  */
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_ext(anira_machine_config* config,
                                                                const anira_ext_header* ext,
-                                                               anira_error* err);
+                                                               anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief The JSON twin of anira_machine_config_set_ext.
@@ -726,7 +728,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_ext_json(anira_machin
                                                                     const char* kind,
                                                                     const char* utf8,
                                                                     size_t len,
-                                                                    anira_error* err);
+                                                                    anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Destroys a machine config; NULL-safe.
@@ -735,7 +737,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_set_ext_json(anira_machin
  * [main-thread]
  * @since ABI 0.1
  */
-ANIRA_API void ANIRA_CALL anira_machine_config_destroy(anira_machine_config* config);
+ANIRA_API void ANIRA_CALL anira_machine_config_destroy(anira_machine_config* config) ANIRA_NOEXCEPT;
 
 /**
  * @brief Release callback of borrowed model bytes: fires exactly once, when the last carrier of
@@ -758,7 +760,7 @@ typedef void (ANIRA_CALL* anira_bytes_release_fn)(const void* bytes, void* ctx);
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_create(anira_model_config** out,
-                                                            anira_error* err);
+                                                            anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Appends a model entry that loads from a file. Whether the engine is in this build is
@@ -778,7 +780,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_path(anira_model_
                                                                     anira_engine engine,
                                                                     const char* utf8_path,
                                                                     uint32_t* out_index,
-                                                                    anira_error* err);
+                                                                    anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Appends a model entry that loads from memory.
@@ -805,7 +807,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model
                                                                      anira_bytes_release_fn release,
                                                                      void* ctx,
                                                                      uint32_t* out_index,
-                                                                     anira_error* err);
+                                                                     anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Appends a model entry for a custom engine registered by name
@@ -825,7 +827,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_path_custom(anira
                                                                            const char* engine_id,
                                                                            const char* utf8_path,
                                                                            uint32_t* out_index,
-                                                                           anira_error* err);
+                                                                           anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief The bytes twin of anira_model_config_add_model_path_custom.
@@ -852,7 +854,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_bytes_custom(anir
                                                                             anira_bytes_release_fn release,
                                                                             void* ctx,
                                                                             uint32_t* out_index,
-                                                                            anira_error* err);
+                                                                            anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Replaces an entry's source with bytes, e.g. to patch a path entry a JSON file
@@ -879,7 +881,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_model_bytes(anira_model
                                                                      anira_bytes_ownership ownership,
                                                                      anira_bytes_release_fn release,
                                                                      void* ctx,
-                                                                     anira_error* err);
+                                                                     anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief The number of model entries.
@@ -889,7 +891,8 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_model_bytes(anira_model
  * [main-thread]
  * @since ABI 0.1
  */
-ANIRA_API uint32_t ANIRA_CALL anira_model_config_model_count(const anira_model_config* config);
+ANIRA_API uint32_t ANIRA_CALL anira_model_config_model_count(const anira_model_config* config)
+                                                             ANIRA_NOEXCEPT;
 
 /**
  * @brief The entry's engine.
@@ -901,7 +904,7 @@ ANIRA_API uint32_t ANIRA_CALL anira_model_config_model_count(const anira_model_c
  * @since ABI 0.1
  */
 ANIRA_API anira_engine ANIRA_CALL anira_model_config_model_engine(const anira_model_config* config,
-                                                                  uint32_t model_index);
+                                                                  uint32_t model_index) ANIRA_NOEXCEPT;
 
 /**
  * @brief The entry's custom engine name.
@@ -913,7 +916,7 @@ ANIRA_API anira_engine ANIRA_CALL anira_model_config_model_engine(const anira_mo
  * @since ABI 0.1
  */
 ANIRA_API const char* ANIRA_CALL anira_model_config_model_engine_id(const anira_model_config* config,
-                                                                    uint32_t model_index);
+                                                                    uint32_t model_index) ANIRA_NOEXCEPT;
 
 /**
  * @brief The entry's model path.
@@ -925,7 +928,7 @@ ANIRA_API const char* ANIRA_CALL anira_model_config_model_engine_id(const anira_
  * @since ABI 0.1
  */
 ANIRA_API const char* ANIRA_CALL anira_model_config_model_path(const anira_model_config* config,
-                                                               uint32_t model_index);
+                                                               uint32_t model_index) ANIRA_NOEXCEPT;
 
 /**
  * @brief The entry's model bytes.
@@ -942,7 +945,7 @@ ANIRA_API const char* ANIRA_CALL anira_model_config_model_path(const anira_model
 ANIRA_API anira_status ANIRA_CALL anira_model_config_model_bytes(const anira_model_config* config,
                                                                  uint32_t model_index,
                                                                  const void** bytes,
-                                                                 size_t* size);
+                                                                 size_t* size) ANIRA_NOEXCEPT;
 
 /**
  * @brief Records what this entry's file calls the tensor you named canonical, and switches that
@@ -972,7 +975,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_model_bytes(const anira_mod
 ANIRA_API anira_status ANIRA_CALL anira_model_config_set_tensor_name(anira_model_config* config,
                                                                      uint32_t model_index,
                                                                      const char* canonical,
-                                                                     const char* engine_name);
+                                                                     const char* engine_name) ANIRA_NOEXCEPT;
 
 /**
  * @brief The axis order in which this entry's file holds the tensor you named canonical, when
@@ -1002,7 +1005,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_tensor_layout(anira_mod
                                                                        uint32_t model_index,
                                                                        const char* canonical,
                                                                        const uint32_t* axes,
-                                                                       uint32_t ndim);
+                                                                       uint32_t ndim) ANIRA_NOEXCEPT;
 
 /**
  * @brief Sets an extension on one model entry (host "model"), e.g. anira_ext_entry.
@@ -1019,7 +1022,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_tensor_layout(anira_mod
 ANIRA_API anira_status ANIRA_CALL anira_model_config_set_model_ext(anira_model_config* config,
                                                                    uint32_t model_index,
                                                                    const anira_ext_header* ext,
-                                                                   anira_error* err);
+                                                                   anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief The JSON twin of anira_model_config_set_model_ext.
@@ -1040,7 +1043,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_model_ext_json(anira_mo
                                                                         const char* kind,
                                                                         const char* utf8,
                                                                         size_t len,
-                                                                        anira_error* err);
+                                                                        anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Appends an input tensor spec (copied; the caller keeps ownership of spec). The order
@@ -1055,7 +1058,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_model_ext_json(anira_mo
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_add_input(anira_model_config* config,
-                                                               const anira_tensor_spec* spec);
+                                                               const anira_tensor_spec* spec) ANIRA_NOEXCEPT;
 
 /**
  * @brief Appends an output tensor spec (copied). The order of the add_output calls is the slot
@@ -1069,7 +1072,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_input(anira_model_confi
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_add_output(anira_model_config* config,
-                                                                const anira_tensor_spec* spec);
+                                                                const anira_tensor_spec* spec) ANIRA_NOEXCEPT;
 
 /**
  * @brief The engine the handler starts on; whether it names an entry is checked at prepare.
@@ -1081,7 +1084,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_output(anira_model_conf
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_set_default_engine(anira_model_config* config,
-                                                                        anira_engine engine);
+                                                                        anira_engine engine) ANIRA_NOEXCEPT;
 
 /**
  * @brief The custom twin of anira_model_config_set_default_engine.
@@ -1093,7 +1096,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_default_engine(anira_mo
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_set_default_engine_custom(anira_model_config* config,
-                                                                               const char* engine_id);
+                                                                               const char* engine_id) ANIRA_NOEXCEPT;
 
 /**
  * @brief Whether the model carries state across inferences (v2's session_exclusive_processor).
@@ -1105,7 +1108,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_default_engine_custom(a
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_set_state(anira_model_config* config,
-                                                               anira_model_state state);
+                                                               anira_model_state state) ANIRA_NOEXCEPT;
 
 /**
  * @brief The ceiling within which the planner allocates lanes and pool instances (v2's
@@ -1118,7 +1121,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_state(anira_model_confi
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_set_max_instances(anira_model_config* config,
-                                                                       uint32_t max_instances);
+                                                                       uint32_t max_instances) ANIRA_NOEXCEPT;
 
 /**
  * @brief The anchor: the streamed tensor whose Time axis is the model's clock. A Hard
@@ -1136,7 +1139,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_max_instances(anira_mod
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_set_anchor(anira_model_config* config,
-                                                                const char* canonical);
+                                                                const char* canonical) ANIRA_NOEXCEPT;
 
 /**
  * @brief Sets an extension on the whole config (host "model_config").
@@ -1150,7 +1153,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_anchor(anira_model_conf
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_set_ext(anira_model_config* config,
                                                              const anira_ext_header* ext,
-                                                             anira_error* err);
+                                                             anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief The JSON twin of anira_model_config_set_ext.
@@ -1168,7 +1171,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_ext_json(anira_model_co
                                                                   const char* kind,
                                                                   const char* utf8,
                                                                   size_t len,
-                                                                  anira_error* err);
+                                                                  anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Destroys a model config; NULL-safe. Borrowed model bytes are released (their callback
@@ -1178,7 +1181,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_ext_json(anira_model_co
  * [main-thread]
  * @since ABI 0.1
  */
-ANIRA_API void ANIRA_CALL anira_model_config_destroy(anira_model_config* config);
+ANIRA_API void ANIRA_CALL anira_model_config_destroy(anira_model_config* config) ANIRA_NOEXCEPT;
 
 /**
  * @brief Creates job options with the defaults: no head trim, tail flush on, REJECT below the
@@ -1192,7 +1195,7 @@ ANIRA_API void ANIRA_CALL anira_model_config_destroy(anira_model_config* config)
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_job_options_create(anira_job_options** out,
-                                                           anira_error* err);
+                                                           anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Per-output head trim of an Async job's outputs.
@@ -1208,7 +1211,7 @@ ANIRA_API anira_status ANIRA_CALL anira_job_options_create(anira_job_options** o
  */
 ANIRA_API anira_status ANIRA_CALL anira_job_options_set_head_trim(anira_job_options* options,
                                                                   uint32_t count,
-                                                                  const int64_t* trims);
+                                                                  const int64_t* trims) ANIRA_NOEXCEPT;
 
 /**
  * @brief ViewChunker reassembly semantics: whether the tail of a job is flushed through the
@@ -1221,7 +1224,7 @@ ANIRA_API anira_status ANIRA_CALL anira_job_options_set_head_trim(anira_job_opti
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_job_options_set_tail_flush(anira_job_options* options,
-                                                                   anira_bool tail_flush);
+                                                                   anira_bool tail_flush) ANIRA_NOEXCEPT;
 
 /**
  * @brief What happens to a submitted buffer shorter than the window minimum.
@@ -1233,7 +1236,7 @@ ANIRA_API anira_status ANIRA_CALL anira_job_options_set_tail_flush(anira_job_opt
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_job_options_set_below_min(anira_job_options* options,
-                                                                  anira_pad_policy policy);
+                                                                  anira_pad_policy policy) ANIRA_NOEXCEPT;
 
 /**
  * @brief Sets a per-job extension (host "job"): borrowed, not copied, because submit is
@@ -1247,7 +1250,7 @@ ANIRA_API anira_status ANIRA_CALL anira_job_options_set_below_min(anira_job_opti
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_job_options_set_ext(anira_job_options* options,
-                                                            const anira_ext_header* ext);
+                                                            const anira_ext_header* ext) ANIRA_NOEXCEPT;
 
 /**
  * @brief The JSON twin every config handle carries; the parsed payload is owned by the options.
@@ -1265,7 +1268,7 @@ ANIRA_API anira_status ANIRA_CALL anira_job_options_set_ext(anira_job_options* o
 ANIRA_API anira_status ANIRA_CALL anira_job_options_set_ext_json(anira_job_options* options,
                                                                  const char* kind,
                                                                  const char* utf8,
-                                                                 size_t len);
+                                                                 size_t len) ANIRA_NOEXCEPT;
 
 /**
  * @brief Destroys job options; NULL-safe.
@@ -1274,7 +1277,7 @@ ANIRA_API anira_status ANIRA_CALL anira_job_options_set_ext_json(anira_job_optio
  * [main-thread]
  * @since ABI 0.1
  */
-ANIRA_API void ANIRA_CALL anira_job_options_destroy(anira_job_options* options);
+ANIRA_API void ANIRA_CALL anira_job_options_destroy(anira_job_options* options) ANIRA_NOEXCEPT;
 
 /**
  * @brief Loads a model config from JSON text (section 8.1). A version 2 document is upgraded
@@ -1303,7 +1306,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_from_json(const char* utf8,
                                                                size_t len,
                                                                const char* base_dir,
                                                                anira_model_config** out,
-                                                               anira_error* err);
+                                                               anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Reads a file and loads it as anira_model_config_from_json with base_dir = the file's
@@ -1318,7 +1321,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_from_json(const char* utf8,
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_from_json_file(const char* utf8_path,
                                                                     anira_model_config** out,
-                                                                    anira_error* err);
+                                                                    anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Writes the config in v3 spelling (section 8.1), fixed key order; reading a v2 file and
@@ -1337,7 +1340,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_from_json_file(const char* 
 ANIRA_API anira_status ANIRA_CALL anira_model_config_to_json(const anira_model_config* config,
                                                              char* buf,
                                                              size_t cap,
-                                                             size_t* out_len);
+                                                             size_t* out_len) ANIRA_NOEXCEPT;
 
 /**
  * @brief Hands out the Hard contract a version 2 upgrade held back (budget, warmup and wait
@@ -1351,7 +1354,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_to_json(const anira_model_c
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_take_legacy_contract(anira_model_config* config,
-                                                                          anira_contract** out);
+                                                                          anira_contract** out) ANIRA_NOEXCEPT;
 
 /**
  * @brief Loads a machine config from JSON text (section 8.2). Device blocks in JSON imply
@@ -1372,7 +1375,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_take_legacy_contract(anira_
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_from_json(const char* utf8,
                                                                  size_t len,
                                                                  anira_machine_config** out,
-                                                                 anira_error* err);
+                                                                 anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Writes the config in v3 spelling (section 8.2), fixed key order; the sink is code-only
@@ -1390,7 +1393,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_from_json(const char* utf
 ANIRA_API anira_status ANIRA_CALL anira_machine_config_to_json(const anira_machine_config* config,
                                                                char* buf,
                                                                size_t cap,
-                                                               size_t* out_len);
+                                                               size_t* out_len) ANIRA_NOEXCEPT;
 
 /**
  * @brief Loads a contract from JSON text (section 8.3): budget is "measured" or {"ms": x},
@@ -1410,7 +1413,7 @@ ANIRA_API anira_status ANIRA_CALL anira_machine_config_to_json(const anira_machi
 ANIRA_API anira_status ANIRA_CALL anira_contract_from_json(const char* utf8,
                                                            size_t len,
                                                            anira_contract** out,
-                                                           anira_error* err);
+                                                           anira_error* err) ANIRA_NOEXCEPT;
 
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 

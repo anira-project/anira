@@ -54,7 +54,7 @@ extern "C" {
  * [thread-safe] ANIRA_NONBLOCKING
  * @since ABI 0.1
  */
-ANIRA_API uint32_t ANIRA_CALL anira_abi_version(void) ANIRA_NONBLOCKING;
+ANIRA_API uint32_t ANIRA_CALL anira_abi_version(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
  * @brief Negotiates the header the caller compiled against with the library it loaded: ANIRA_OK
@@ -66,7 +66,8 @@ ANIRA_API uint32_t ANIRA_CALL anira_abi_version(void) ANIRA_NONBLOCKING;
  * [thread-safe] ANIRA_NONBLOCKING
  * @since ABI 0.1
  */
-ANIRA_API anira_status ANIRA_CALL anira_check_abi(uint32_t header_abi_version) ANIRA_NONBLOCKING;
+ANIRA_API anira_status ANIRA_CALL anira_check_abi(uint32_t header_abi_version)
+                                                  ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
  * @brief The library's release version, packed as ANIRA_MAKE_VERSION(major, minor, patch).
@@ -75,7 +76,7 @@ ANIRA_API anira_status ANIRA_CALL anira_check_abi(uint32_t header_abi_version) A
  * [thread-safe] ANIRA_NONBLOCKING
  * @since ABI 0.1
  */
-ANIRA_API uint32_t ANIRA_CALL anira_version(void) ANIRA_NONBLOCKING;
+ANIRA_API uint32_t ANIRA_CALL anira_version(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
  * @brief The library's full version string (git describe without the leading v), e.g.
@@ -86,7 +87,7 @@ ANIRA_API uint32_t ANIRA_CALL anira_version(void) ANIRA_NONBLOCKING;
  * [thread-safe] ANIRA_NONBLOCKING
  * @since ABI 0.1
  */
-ANIRA_API const char* ANIRA_CALL anira_version_string(void) ANIRA_NONBLOCKING;
+ANIRA_API const char* ANIRA_CALL anira_version_string(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 

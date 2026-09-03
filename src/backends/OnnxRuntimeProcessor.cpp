@@ -1,5 +1,6 @@
 #include <anira/ContextConfig.h>
 #include <anira/InferenceConfig.h>
+#include <anira/abi/status.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/backends/OnnxRuntimeProcessor.h>
 #include <anira/scheduler/SessionElement.h>
@@ -17,6 +18,9 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include "../utils/ModelFile.h"
+#include "../utils/StatusError.h"
 
 namespace anira {
 
@@ -152,21 +156,32 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config)
         assert(model_data && "Model data not found for binary model!");
 
         // Load model from binary data
-        m_session = std::make_unique<Ort::Session>(m_env,
-                                                   model_data->m_data,
-                                                   model_data->m_size,
-                                                   m_session_options);
+        try {
+            m_session = std::make_unique<Ort::Session>(m_env,
+                                                       model_data->m_data,
+                                                       model_data->m_size,
+                                                       m_session_options);
+        } catch (const Ort::Exception& e) {
+            throw StatusError(ANIRA_ERROR_MODEL_LOAD,
+                              model_file::message("onnxruntime", model_file::k_memory, e.what()));
+        }
     } else {
         // Load model from file path
+        std::string const modelpath = anira::model_file::require_readable(
+            m_inference_config.get_model_path(anira::InferenceBackend::ONNX),
+            "onnxruntime");
 #ifdef _WIN32
-        std::string modelpath_str =
-            m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
-        std::wstring modelpath = std::wstring(modelpath_str.begin(), modelpath_str.end());
+        // ORT's Windows API takes a wide path; the message keeps the UTF-8 one.
+        const std::wstring ort_path(modelpath.begin(), modelpath.end());
 #else
-        std::string const modelpath =
-            m_inference_config.get_model_path(anira::InferenceBackend::ONNX);
+        const std::string& ort_path = modelpath;
 #endif
-        m_session = std::make_unique<Ort::Session>(m_env, modelpath.c_str(), m_session_options);
+        try {
+            m_session = std::make_unique<Ort::Session>(m_env, ort_path.c_str(), m_session_options);
+        } catch (const Ort::Exception& e) {
+            throw StatusError(ANIRA_ERROR_MODEL_LOAD,
+                              model_file::message("onnxruntime", modelpath, e.what()));
+        }
     }
 
     m_input_names.resize(m_session->GetInputCount());
@@ -203,7 +218,11 @@ OnnxRuntimeProcessor::Instance::Instance(InferenceConfig& inference_config)
                                        m_input_names.size(),
                                        m_output_names.data(),
                                        m_output_names.size());
-        } catch (Ort::Exception& e) { ANIRA_LOG_ERROR(log_group::k_backend_onnx, "%s", e.what()); }
+        } catch (const Ort::Exception& e) {
+            // A warm-up that fails fails construction: the model cannot run.
+            throw StatusError(ANIRA_ERROR_ENGINE,
+                              model_file::message("onnxruntime", "warm-up", e.what()));
+        }
     }
 }
 
@@ -236,7 +255,13 @@ void OnnxRuntimeProcessor::Instance::process(std::vector<BufferF>& input,
                                    m_input_names.size(),
                                    m_output_names.data(),
                                    m_output_names.size());
-    } catch (Ort::Exception& e) { ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what()); }
+    } catch (const Ort::Exception& e) {
+        // No caller waits for this task: log once, and deliver zeros, never the previous
+        // job's output (docs/anira-v3-error-and-log-strategy.md, section 3).
+        ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what());
+        for (auto& buffer : output) { buffer.clear(); }
+        return;
+    }
 
     for (size_t i = 0; i < m_outputs.size(); i++) {
         const auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();

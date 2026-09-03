@@ -44,10 +44,12 @@ namespace log_group {
 inline constexpr const char* k_context = "anira.context";
 inline constexpr const char* k_scheduler = "anira.scheduler";
 inline constexpr const char* k_config = "anira.config";
+inline constexpr const char* k_capi = "anira.capi";
 inline constexpr const char* k_system = "anira.system";
 inline constexpr const char* k_web = "anira.web";
 inline constexpr const char* k_backend_libtorch = "anira.backend.libtorch";
 inline constexpr const char* k_backend_onnx = "anira.backend.onnxruntime";
+inline constexpr const char* k_backend_tflite = "anira.backend.tflite";
 inline constexpr const char* k_backend_litert = "anira.backend.litert";
 inline constexpr const char* k_backend_executorch = "anira.backend.executorch";
 }  // namespace log_group

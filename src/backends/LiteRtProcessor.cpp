@@ -1,6 +1,7 @@
 #ifdef USE_LITERT
 
 #include <anira/InferenceConfig.h>
+#include <anira/abi/status.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/backends/LiteRtProcessor.h>
 #include <anira/scheduler/SessionElement.h>
@@ -22,6 +23,8 @@
 #include <string>
 #include <vector>
 
+#include "../utils/ModelFile.h"
+#include "../utils/StatusError.h"
 #include "litert/c/litert_any.h"
 #include "litert/c/litert_common.h"
 #include "litert/c/litert_compiled_model.h"
@@ -42,10 +45,36 @@ namespace {
 // Every LiteRT C API call returns a LiteRtStatus. A failure here means a setup or
 // runtime problem, so we throw with the failing call + status — this keeps a broken
 // state from silently producing zeros (and avoids using the result of a failed call).
-inline void litert_check(LiteRtStatus status, const char* what) {
+// The status names of litert/c/litert_common.h, so a message reads "kLiteRtStatusErrorFileIO"
+// and not a number.
+const char* litert_status_name(LiteRtStatus status) {
+    switch (status) {
+        case kLiteRtStatusOk: return "kLiteRtStatusOk";
+        case kLiteRtStatusErrorInvalidArgument: return "kLiteRtStatusErrorInvalidArgument";
+        case kLiteRtStatusErrorMemoryAllocationFailure:
+            return "kLiteRtStatusErrorMemoryAllocationFailure";
+        case kLiteRtStatusErrorRuntimeFailure: return "kLiteRtStatusErrorRuntimeFailure";
+        case kLiteRtStatusErrorMissingInputTensor: return "kLiteRtStatusErrorMissingInputTensor";
+        case kLiteRtStatusErrorUnsupported: return "kLiteRtStatusErrorUnsupported";
+        case kLiteRtStatusErrorNotFound: return "kLiteRtStatusErrorNotFound";
+        case kLiteRtStatusErrorTimeoutExpired: return "kLiteRtStatusErrorTimeoutExpired";
+        case kLiteRtStatusErrorFileIO: return "kLiteRtStatusErrorFileIO";
+        case kLiteRtStatusErrorInvalidFlatbuffer: return "kLiteRtStatusErrorInvalidFlatbuffer";
+        default: return "LiteRtStatus";
+    }
+}
+
+// Control path: a failing call becomes ANIRA_ERROR_ENGINE (or the status the caller passes)
+// with the call and the status named.
+inline void litert_check(LiteRtStatus status,
+                         const char* what,
+                         anira_status failure = ANIRA_ERROR_ENGINE,
+                         const std::string& where = "") {
     if (status != kLiteRtStatusOk) {
-        throw std::runtime_error(std::string("[anira][LiteRT] ") + what + " failed with status " +
-                                 std::to_string(static_cast<int>(status)));
+        const std::string text = std::string(what) + " failed with " + litert_status_name(status) +
+                                 " (" + std::to_string(static_cast<int>(status)) + ")";
+        throw StatusError(failure,
+                          model_file::message("litert", where.empty() ? what : where, text));
     }
 }
 
@@ -151,12 +180,17 @@ LiteRtProcessor::Instance::Instance(InferenceConfig& inference_config)
                                                      model_data->m_data,
                                                      model_data->m_size,
                                                      &m_model),
-                         "LiteRtCreateModelFromBuffer");
+                         "LiteRtCreateModelFromBuffer",
+                         ANIRA_ERROR_MODEL_LOAD,
+                         model_file::k_memory);
         } else {
-            std::string const modelpath =
-                m_inference_config.get_model_path(anira::InferenceBackend::LITERT);
+            std::string const modelpath = model_file::require_readable(
+                m_inference_config.get_model_path(anira::InferenceBackend::LITERT),
+                "litert");
             litert_check(LiteRtCreateModelFromFile(m_env, modelpath.c_str(), &m_model),
-                         "LiteRtCreateModelFromFile");
+                         "LiteRtCreateModelFromFile",
+                         ANIRA_ERROR_MODEL_LOAD,
+                         modelpath);
         }
 
         // CPU compilation, pinned to a single thread to match the other backends (anira gets
@@ -326,7 +360,9 @@ void LiteRtProcessor::Instance::process(std::vector<BufferF>& input,
                          "LiteRtUnlockTensorBuffer (output)");
         }
     } catch (const std::exception& e) {
+        // No caller waits for this task: log once, deliver zeros, never stale output.
         ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+        for (auto& buffer : output) { buffer.clear(); }
     }
 }
 
