@@ -185,19 +185,21 @@ TEST(AbiTranslate, WindowMinusContextIsThePreprocessSize) {
 }
 
 // The upgraded HybridNN literal: {256, 1, 150} with size 256 is window 38400 / context 38144.
+// The fixture names one ONNX Runtime row, so the case needs that engine in the build.
 TEST(AbiTranslate, UpgradedHybridNnLiteralKeepsTheV2ProcessingSize) {
+#ifndef USE_ONNXRUNTIME
+    GTEST_SKIP() << "the fixture's only model entry is an ONNX Runtime row";
+#else
     ModelConfig model = ModelConfig::from_json(anira_test::k_hybrid_v2);
     ASSERT_TRUE(model.upgraded());
     const std::optional<ContractHandle> legacy = model.take_legacy_contract();
     if (!legacy.has_value()) { FAIL() << "the upgrade holds back a legacy contract"; }
     const std::vector<anira_engine> candidates = anira::v3compat::enabled_engines();
     const Outcome outcome = bridge(model, *legacy, &candidates);
-    if (outcome.m_status == ANIRA_ERROR_NOT_SUPPORTED && candidates.empty()) {
-        GTEST_SKIP() << "no engine in this build: " << outcome.m_message;
-    }
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
     EXPECT_EQ(outcome.m_config.get_preprocess_input_size(), (std::vector<size_t>{256}));
     EXPECT_EQ(outcome.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{256, 1, 150}}));
+#endif
 }
 
 TEST(AbiTranslate, ChannelExtentAndOutputLatencyLandInTheProcessingSpec) {
