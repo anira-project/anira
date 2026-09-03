@@ -1,15 +1,12 @@
 #include <anira/anira.h>
 #include <anira/benchmark.h>
+#include <anira/compat/v3_to_v2.h>
 #include <benchmark/benchmark.h>
 #include <gtest/gtest.h>
 
-#include "../../../extras/models/cnn/CNNConfig.h"
 #include "../../../extras/models/cnn/CNNPrePostProcessor.h"
-#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#include "../../../extras/models/model-pool/SimpleGainConfig.h"
-#include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
-#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../extras/models/model_files.h"
 
 /* ============================================================ *
  * ========================= Configs ========================== *
@@ -26,27 +23,32 @@
 
 typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
-// anira::InferenceConfig my_inference_config = cnn_config;
-// CNNPrePostProcessor my_pp_processor(my_inference_config);
-anira::InferenceConfig my_inference_config = hybridnn_config;
+// The model to benchmark: its model file and contract file (extras/models/model_files.h),
+// loaded with the 3.x API and bridged to the 2.x runtime classes the fixture still takes.
+// Pick another pair (and the matching pre/post processor) to benchmark another model:
+//   k_cnn_model_json / k_cnn_contract_json with CNNPrePostProcessor
+//   k_rnn_model_json / k_rnn_contract_json, k_gain_model_json / k_gain_contract_json or
+//   k_stereo_gain_model_json / k_stereo_gain_contract_json with anira::PrePostProcessor
+anira::ModelConfig my_model_config = anira::ModelConfig::from_file(k_hybridnn_model_json);
+anira::ContractHandle my_contract = anira::ContractHandle::from_file(k_hybridnn_contract_json);
+anira::InferenceConfig my_inference_config =
+    anira::v3compat::to_inference_config(my_model_config,
+                                         my_contract,
+                                         anira::v3compat::enabled_engines());
 HybridNNPrePostProcessor my_pp_processor(my_inference_config);
-// anira::InferenceConfig my_inference_config = rnn_config;
-// anira::PrePostProcessor my_pp_processor(my_inference_config);
-// anira::InferenceConfig my_inference_config = gain_config;
-// anira::PrePostProcessor my_pp_processor(my_inference_config);
-// anira::InferenceConfig my_inference_config = stereo_gain_config;
-// anira::PrePostProcessor my_pp_processor(my_inference_config);
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
-    // The buffer size return in get_buffer_size() is populated by state.range(0) param of the
-    // google benchmark
-    anira::HostConfig host_config = {static_cast<float>(get_buffer_size()), SAMPLE_RATE};
+    // The host geometry: the swept buffer size (state.range(0) of the google benchmark, read
+    // through get_buffer_size()) at SAMPLE_RATE, through the contract.
+    const auto block = static_cast<uint32_t>(get_buffer_size());
+    my_contract.hard_geometry(block, block, SAMPLE_RATE);
+    anira::HostConfig host_config = anira::v3compat::to_host_config(my_contract, my_model_config);
     anira::InferenceBackend inference_backend = anira::InferenceBackend::ONNX;
 
     // Only report errors, so the log output of the backends does not pollute the
     // benchmark results.
-    anira::ContextConfig context_config;
-    context_config.m_log.m_level = anira::LogLevel::Error;
+    const anira::ContextConfig context_config =
+        anira::v3compat::to_context_config(anira::MachineConfig{}.log_level(ANIRA_LOG_ERROR));
 
     m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor,
                                                                     my_inference_config,

@@ -15,46 +15,24 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                  nullptr,
                  juce::Identifier(getName()),
                  PluginParameters::createParameterLayout())
-    ,
-#if MODEL_TO_USE != 8
-    // Optional anira_context_config
-    anira_context_config(std::thread::hardware_concurrency() / 2 > 0
-                             ? std::thread::hardware_concurrency() / 2
-                             : 1  // Total number of threads
-                         )
-    ,
-#endif
-#if MODEL_TO_USE != 7 && MODEL_TO_USE != 8
-    pp_processor(inference_config)
-    ,
-#elif MODEL_TO_USE == 7
-    pp_processor_encoder(inference_config_encoder)
-    , pp_processor_decoder(inference_config_decoder)
-    ,
-#endif
-#if MODEL_TO_USE == 0 || MODEL_TO_USE == 1 || MODEL_TO_USE == 2
-    // The bypass_processor is not needed for inference, but for the round trip test to output audio
-    // when selecting the CUSTOM backend. It must be customized when default pp_processor is
-    // replaced by a custom one.
-    bypass_processor(inference_config)
-    , inference_handler(pp_processor, inference_config, bypass_processor, anira_context_config)
-    ,
-#elif MODEL_TO_USE == 3 || MODEL_TO_USE == 4 || MODEL_TO_USE == 5 || MODEL_TO_USE == 6
-    inference_handler(pp_processor, inference_config)
-    ,
-#elif MODEL_TO_USE == 7
-    inference_handler_encoder(pp_processor_encoder, inference_config_encoder)
-    , inference_handler_decoder(pp_processor_decoder, inference_config_decoder)
-    ,
-#elif MODEL_TO_USE == 8
-    json_config_loader(RAVE_MODEL_FUNK_DRUM_JSON_CONFIG_PATH)
-    , anira_context_config(std::move(*json_config_loader.get_context_config()))
-    , inference_config(std::move(*json_config_loader.get_inference_config()))
+// model_config, contract and inference_config are initialised in the header, from the files.
+// No ContextConfig is passed: the library default (half the hardware threads for inference)
+// is what this plugin wants; section 3.1 of the usage guide shows how to change it.
+#if MODEL_TO_USE != 7
     , pp_processor(inference_config)
+#if MODEL_TO_USE <= 2
+    , bypass_processor(inference_config)
+    , inference_handler(pp_processor, inference_config, bypass_processor)
+#else
     , inference_handler(pp_processor, inference_config)
-    ,
 #endif
-    dry_wet_mixer(32768)  // 32768 samples of max latency compensation for the dry-wet mixer
+#else
+    , pp_processor_encoder(inference_config_encoder)
+    , inference_handler_encoder(pp_processor_encoder, inference_config_encoder)
+    , pp_processor_decoder(inference_config_decoder)
+    , inference_handler_decoder(pp_processor_decoder, inference_config_decoder)
+#endif
+    , dry_wet_mixer(32768)  // 32768 samples of max latency compensation for the dry-wet mixer
 {
     for (auto& parameterID : PluginParameters::getPluginParameterList()) {
         parameters.addParameterListener(parameterID, this);
@@ -130,27 +108,23 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
 
     dry_wet_mixer.prepare(spec);
 
+    // The host geometry completes the contract: a fixed block of samplesPerBlock samples at
+    // sampleRate (a block_min of 1 would allow smaller blocks, at the price of more latency),
+    // and the bridge turns the contract and the model config into the 2.x HostConfig.
+    const auto block = static_cast<uint32_t>(samplesPerBlock);
 #if MODEL_TO_USE != 7
-    anira::HostConfig host_config{
-        static_cast<float>(samplesPerBlock),
-        static_cast<float>(sampleRate),
-        // true // Shall smaller buffers be allowed? If true more latency
-    };
-    inference_handler.prepare(host_config);
+    contract.hard_geometry(block, block, sampleRate);
+    inference_handler.prepare(anira::v3compat::to_host_config(contract, model_config));
 #else
-    anira::HostConfig host_config_encoder{
-        static_cast<float>(samplesPerBlock),
-        static_cast<float>(sampleRate),
-        // true // Shall smaller buffers be allowed? If true more latency
-    };
-    // The decoder needs to be prepared with the buffer size and sample rate of the latent space.
-    anira::HostConfig host_config_decoder{
-        static_cast<float>((float)samplesPerBlock / 2048.f),
-        static_cast<float>((float)sampleRate / 2048.f),
-        // true // Shall smaller buffers be allowed?
-    };
-    inference_handler_encoder.prepare(host_config_encoder);
-    inference_handler_decoder.prepare(host_config_decoder);
+    contract_encoder.hard_geometry(block, block, sampleRate);
+    inference_handler_encoder.prepare(
+        anira::v3compat::to_host_config(contract_encoder, model_config_encoder));
+    // The decoder anchors on its audio output (rave_funk_drum_decoder.model.json), so its
+    // geometry is the same block and rate; its latent input follows at one frame per 2048
+    // samples.
+    contract_decoder.hard_geometry(block, block, sampleRate);
+    inference_handler_decoder.prepare(
+        anira::v3compat::to_host_config(contract_decoder, model_config_decoder));
 #endif
 
 #if MODEL_TO_USE != 7

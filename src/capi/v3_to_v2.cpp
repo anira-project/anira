@@ -72,8 +72,4 @@ std::vector<anira_engine> enabled_engines() {
     return anira::capi::enabled_engines();
 }
 
-unsigned int v2_default_instances() noexcept {
-    return anira::capi::v2_default_instances();
-}
-
 }  // namespace anira::v3compat

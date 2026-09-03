@@ -25,11 +25,12 @@ using anira_test::filled_buffers;
 using anira_test::read_model_file;
 
 std::string rave_model_path() {
-    return std::string(RAVE_MODEL_DIR) + "/rave_funk_drum.ts";
+    return ANIRA_EXTRAS_MODELS_DIR "/third-party/ircam-acids/RAVE/rave_funk_drum.ts";
 }
 
 std::string gain_model_path() {
-    return std::string(SIMPLEGAIN_MODEL_PATH) + "/simple_gain_network_mono.pt";
+    return ANIRA_EXTRAS_MODELS_DIR
+        "/model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono.pt";
 }
 
 }  // namespace

@@ -1,0 +1,54 @@
+{
+  "models": [
+    {
+      "engine": "libtorch",
+      "path": "example-models/SimpleGainNetwork/models/simple_gain_network_stereo.pt"
+    },
+    {
+      "engine": "onnxruntime",
+      "path": "example-models/SimpleGainNetwork/models/simple_gain_network_stereo.onnx"
+    },
+    {
+      "engine": "tflite",
+      "path": "example-models/SimpleGainNetwork/models/simple_gain_network_stereo.tflite"
+    },
+    {
+      "engine": "litert",
+      "path": "example-models/SimpleGainNetwork/models/simple_gain_network_stereo.tflite"
+    },
+    {
+      "engine": "executorch",
+      "path": "example-models/SimpleGainNetwork/models/simple_gain_network_stereo.pte"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "audio_in",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 2], ["time", 512]],
+      "window": { "min": 512, "max": 512 }
+    },
+    {
+      "name": "gain",
+      "dtype": "float32",
+      "role": "static",
+      "axes": [["any", 1]]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "audio_out",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 2], ["time", 512]],
+      "window": { "min": 512, "max": 512 }
+    },
+    {
+      "name": "gain_out",
+      "dtype": "float32",
+      "role": "static",
+      "axes": [["any", 1]]
+    }
+  ]
+}

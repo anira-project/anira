@@ -140,19 +140,6 @@ TEST(AbiJsonUpgrade, SimpleGainUpgrades) {
         << "contract keys do not belong to the model file";
 }
 
-#ifndef __EMSCRIPTEN__
-TEST(AbiJsonUpgrade, TheGeneratedFixtureFileUpgrades) {
-    anira_model_config* config = nullptr;
-    anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(anira_model_config_from_json_file(SIMPLE_GAIN_JSON_CONFIG_PATH, &config, &err),
-              ANIRA_SUCCESS_UPGRADED)
-        << err.message;
-    EXPECT_EQ(config->m_models.size(), 5u);
-    EXPECT_NE(config->m_models[1].m_path.find("simple_gain_network_mono.onnx"), std::string::npos);
-    anira_model_config_destroy(config);
-}
-#endif
-
 TEST(AbiJsonUpgrade, RaveShapedDocument) {
     const Upgraded m(anira_test::k_rave_v2);
     ASSERT_EQ(m.m_status, ANIRA_SUCCESS_UPGRADED) << m.m_err.message;

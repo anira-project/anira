@@ -1,0 +1,30 @@
+{
+  "models": [
+    {
+      "engine": "libtorch",
+      "path": "RAVE/rave_funk_drum.ts",
+      "entry": { "name": "decode" }
+    }
+  ],
+  "state": "stateful",
+  "anchor": "audio_out",
+  "inputs": [
+    {
+      "name": "latent",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 4], ["time", 1]],
+      "window": { "min": 1, "max": 1 }
+    }
+  ],
+  "outputs": [
+    {
+      "name": "audio_out",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 1], ["time", 2048]],
+      "window": { "min": 2048, "max": 2048 },
+      "latency": 2048
+    }
+  ]
+}

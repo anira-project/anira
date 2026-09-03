@@ -3,8 +3,6 @@
 
 #include <anira/anira.h>
 
-#include "CNNConfig.h"
-
 class CNNPrePostProcessor : public anira::PrePostProcessor {
 public:
     using anira::PrePostProcessor::PrePostProcessor;

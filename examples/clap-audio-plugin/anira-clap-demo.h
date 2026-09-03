@@ -2,7 +2,9 @@
 #define ANIRA_CLAP_PLUGIN_EXAMPLE_H
 
 #include <anira/anira.h>
+#include <anira/compat/v3_to_v2.h>
 
+#include <anira/anira.hpp>
 #include <array>
 #include <atomic>
 #include <clap/helpers/plugin-proxy.hh>
@@ -12,8 +14,8 @@
 #include <unordered_map>
 
 #include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h"
-#include "../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../extras/models/model_files.h"
 #include "utils/DryWetMixer.h"
 
 namespace clap_plugin_example {
@@ -68,9 +70,13 @@ private:
     std::unordered_map<clap_id, double*> m_param_to_value;
     uint32_t m_plugin_latency;
 
-    anira::ContextConfig m_anira_context;
-
-    anira::InferenceConfig m_inference_config = hybridnn_config;
+    // The configuration: the model file and the contract file of GuitarLSTM (extras/models,
+    // loaded with anira/anira.hpp), bridged to the 2.x runtime classes this pre-release's
+    // InferenceHandler still takes (anira/compat/v3_to_v2.h). The model config outlives the
+    // InferenceConfig and the handler, so it is declared first.
+    anira::ModelConfig m_model_config;
+    anira::ContractHandle m_contract;
+    anira::InferenceConfig m_inference_config;
     HybridNNPrePostProcessor m_pp_processor;
     HybridNNBypassProcessor m_bypass_processor;
 

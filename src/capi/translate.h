@@ -58,9 +58,6 @@ ANIRA_API std::string engine_label(const ModelEntry& row);
 /// The engines this build carries an adapter for, in anira_engine order.
 ANIRA_API std::vector<anira_engine> enabled_engines();
 
-/// The 2.x default instance count (InferenceConfig::Defaults::m_num_parallel_processors).
-ANIRA_API unsigned int v2_default_instances() noexcept;
-
 /// Runs every section-2 rule the 2.x runtime can honour, in order, and derives the
 /// per-tensor quantities; contract may be NULL (no contract rule runs, flexible windows
 /// pin to window_min). Throws StatusError with ANIRA_ERROR_CONFIG for a rule the

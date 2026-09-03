@@ -14,11 +14,17 @@ namespace clap_plugin_example {
 AniraClapPluginExample::AniraClapPluginExample(const clap_host* host)
     : clap::helpers::Plugin<clap::helpers::MisbehaviourHandler::Terminate,
                             clap::helpers::CheckingLevel::Maximal>(&m_desc, host)
-    , m_bypass_processor(m_inference_config)
-    , m_anira_context(static_cast<int>(std::thread::hardware_concurrency() / 2))
+    , m_plugin_latency(0)
+    , m_model_config(anira::ModelConfig::from_file(k_hybridnn_model_json))
+    , m_contract(anira::ContractHandle::from_file(k_hybridnn_contract_json))
+    , m_inference_config(anira::v3compat::to_inference_config(m_model_config,
+                                                              m_contract,
+                                                              anira::v3compat::enabled_engines()))
     , m_pp_processor(m_inference_config)
-    , m_inference_handler(m_pp_processor, m_inference_config, m_bypass_processor, m_anira_context)
-    , m_plugin_latency(0) {
+    , m_bypass_processor(m_inference_config)
+    // No ContextConfig is passed: the library default (half the hardware threads for
+    // inference) is what this plugin wants; section 3.1 of the usage guide shows how to change it.
+    , m_inference_handler(m_pp_processor, m_inference_config, m_bypass_processor) {
     m_param_to_value[pmDryWet] = &m_param_dry_wet;
     m_param_to_value[pmBackend] = &m_param_backend;
 }
@@ -172,13 +178,16 @@ bool AniraClapPluginExample::audioPortsInfo(uint32_t index,
 bool AniraClapPluginExample::activate(double sampleRate,
                                       uint32_t minFrameCount,
                                       uint32_t maxFrameCount) noexcept {
-    anira::HostConfig host_config{
-        static_cast<float>(maxFrameCount),
-        static_cast<float>(sampleRate),
-        // true, // Allow smaller buffers? Introduces more latency
-    };
-
-    m_inference_handler.prepare(host_config);
+    // The host geometry completes the contract: a fixed block of maxFrameCount samples at
+    // sampleRate. Passing minFrameCount as block_min would allow smaller blocks, at the price
+    // of more latency.
+    try {
+        m_contract.hard_geometry(maxFrameCount, maxFrameCount, sampleRate);
+        m_inference_handler.prepare(anira::v3compat::to_host_config(m_contract, m_model_config));
+    } catch (const anira::Error& error) {
+        std::cerr << "anira: " << error.what() << std::endl;
+        return false;
+    }
 
     m_plugin_latency = (uint32_t)m_inference_handler.get_latency();
     m_dry_wet_mixer.prepare(sampleRate, maxFrameCount, (size_t)m_plugin_latency);

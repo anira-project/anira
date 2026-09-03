@@ -11,8 +11,9 @@
 #include <thread>
 
 #include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h"
-#include "../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../extras/models/model_files.h"
+#include "../support/extras_fixtures.h"
 #include "gtest/gtest.h"
 
 // Generous hang-guard, not a performance bound: the loop below exits as soon as the
@@ -30,7 +31,8 @@ TEST(UserManagedInferenceThread, ProcessesAudioWithoutAutoPool) {
     constexpr int k_buffer_size = 512;
     constexpr double k_sample_rate = 44100.0;
 
-    InferenceConfig inference_config = hybridnn_config;
+    InferenceConfig inference_config =
+        anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
     HybridNNPrePostProcessor pp_processor(inference_config);
     HybridNNBypassProcessor bypass_processor(inference_config);
 

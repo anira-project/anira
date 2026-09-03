@@ -23,6 +23,23 @@ Where the 2.x API stands in this pre-release
   configuration classes, which the transitional bridge ``<anira/compat/v3_to_v2.h>`` builds
   from the 3.x handles (:ref:`migration-bridge`); sections 2 to 5 of the :doc:`usage` guide
   describe it. The 3.x handler over the C ABI follows in a later pre-release.
+- **The bundled models.** The 2.x fixture headers with their ``anira::InferenceConfig`` statics
+  (``cnn_config``, ``hybridnn_config``, ``rnn_config``, ``gain_config``, ``stereo_gain_config``,
+  ``rave_funk_drum_config`` and the encoder and decoder) are gone. Every bundled model ships a
+  model file and a contract file next to its model directory (``extras/models/**/*.model.json``,
+  ``*.contract.json``; ``extras/models/model_files.h`` names them), which the examples load with
+  ``anira::ModelConfig::from_file`` and ``anira::ContractHandle::from_file`` and bridge to the
+  runtime (:ref:`migration-bridge`). ``CNNConfig.h``, ``HybridNNConfig.h`` and
+  ``StatefulRNNConfig.h`` keep builders (``cnn_model_config(hop, size)``,
+  ``hybridnn_model_config(batches)``, ``rnn_model_config(chunk)``) for the benchmark sweeps
+  alone, which vary the shapes with the host buffer. A project that included the old headers
+  (the nn-inference-template, for one) loads the files instead. The files set no instance
+  ceiling, so one processor per engine runs (the 2.x statics ran half the hardware threads);
+  a configuration that wants parallel instances says so with ``max_instances``. The
+  per-model CMake variables the old headers were compiled with (``GUITARLSTM_MODELS_PATH_*``,
+  ``STEERABLENAFX_MODELS_PATH_*``, ``STATEFULLSTM_MODELS_PATH_*``, ``SIMPLEGAIN_MODEL_PATH``,
+  ``RAVE_MODEL_DIR``, ``*_JSON_CONFIG_PATH``) are gone with them; ``ANIRA_EXTRAS_MODELS_DIR``,
+  the root of the model tree at run time, is the one definition left.
 - **Schedule.** The 2.x configuration classes become deprecated constructor shims
   (``anira/compat/v2.hpp``, ``namespace anira::v2``) once the 3.x handler lands, and are removed
   one minor release after 3.0.0. The 2.x JSON document is read by the 3.x loaders for as long as
@@ -177,8 +194,9 @@ decoder with ``samplesPerBlock / 2048.f``).
    * - ``Hard.budget_value`` (explicit); ``warmup`` ``FIXED n`` / ``NONE``; ``wait_ratio``
      - ``max_inference_time``; ``warm_up = n`` / ``0``; ``blocking_ratio``.
    * - ``state(ANIRA_MODEL_STATEFUL)``; ``max_instances``
-     - ``session_exclusive_processor``; ``num_parallel_processors``
-       (``anira::v3compat::v2_default_instances()`` is the 2.x default).
+     - ``session_exclusive_processor``; ``num_parallel_processors`` (a config that sets no
+       ``max_instances`` runs one processor per engine; the 2.x constructor default was half
+       the hardware threads, which the upgrade of a 2.x document keeps).
    * - ``Hard.block_max`` / ``rate``; ``block_min < block_max``; ``anchor``
      - ``HostConfig{buffer_size, sample_rate}``; ``allow_smaller_buffers``;
        ``tensor_index`` / ``tensor_is_input`` (the 2.x default when no anchor is set).
@@ -322,6 +340,20 @@ its default (the first streamed tensor), which is what the 2.x ``anira::HostConf
         anira_model_config_take_legacy_contract(cfg, &legacy);   /* max_inference_time, warm_up */
     }
 
+In C++ the same document goes through the ``anira.hpp`` loaders: the model config from its
+``inference_config`` block, the Hard contract that block held back, and the machine config
+from its ``context_config`` block. Bridged, they are the 2.x objects the file described:
+
+.. code-block:: cpp
+
+    anira::ModelConfig model_config = anira::ModelConfig::from_file("Config.json");
+    anira::ContractHandle contract = model_config.take_legacy_contract().value();  // upgraded()
+    anira::MachineConfig machine_config = anira::MachineConfig::from_file("Config.json");
+
+    anira::InferenceConfig inference_config = anira::v3compat::to_inference_config(
+        model_config, contract, anira::v3compat::enabled_engines());
+    anira::ContextConfig context_config = anira::v3compat::to_context_config(machine_config);
+
 **Converting a file.** Reading a 2.x file and writing the handle back is the migration tool:
 ``anira_model_config_to_json`` and ``anira_machine_config_to_json`` write the 3.x spelling with a
 fixed key order. Both take ``(buf, cap, out_len)`` and return ``ANIRA_ERROR_BUFFER_TOO_SMALL``
@@ -355,5 +387,4 @@ configuration that still has model data, a tensor shape and ``max_inference_time
 check. On WebAssembly builds ``"blocking"`` is coerced to ``"spin_backoff"``, a ``num_threads``
 other than ``0`` to ``0`` and ``drain`` to ``"manual"``, each with a warning: the context
 cannot run threads on the web, they are created from JavaScript via
-``AniraWeb.spinUpInferenceWorker()``. The JUCE plugin example (``MODEL_TO_USE == 8``) loads the
-RAVE model this way.
+``AniraWeb.spinUpInferenceWorker()``.

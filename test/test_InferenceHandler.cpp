@@ -24,9 +24,16 @@
 #include <vector>
 
 #include "../extras/models/hybrid-nn/HybridNNBypassProcessor.h"  // Only needed for round trip test
-#include "../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../extras/models/model_files.h"
 #include "gtest/gtest.h"
+#include "support/extras_fixtures.h"
+
+// The GuitarLSTM export directories: the wav files the round trips compare against.
+constexpr const char* k_guitarlstm_pytorch =
+    ANIRA_EXTRAS_MODELS_DIR "/hybrid-nn/GuitarLSTM/pytorch-version/models";
+constexpr const char* k_guitarlstm_tensorflow =
+    ANIRA_EXTRAS_MODELS_DIR "/hybrid-nn/GuitarLSTM/tensorflow-version/models";
 
 constexpr int k_inference_timeout_s = 2;
 using namespace anira;
@@ -120,7 +127,8 @@ TEST_P(InferenceTest, Simple) {
 
     // setup inference
     ContextConfig const anira_context_config;
-    InferenceConfig inference_config = hybridnn_config;
+    InferenceConfig inference_config =
+        anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
     HybridNNPrePostProcessor pp_processor(inference_config);
     HybridNNBypassProcessor bypass_processor(inference_config);
 
@@ -213,7 +221,8 @@ TEST_P(InferenceControlTest, WithCustomLatency) {
 
     // setup inference
     ContextConfig const anira_context_config;
-    InferenceConfig inference_config = hybridnn_config;
+    InferenceConfig inference_config =
+        anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
     HybridNNPrePostProcessor pp_processor(inference_config);
     HybridNNBypassProcessor bypass_processor(inference_config);
 
@@ -306,7 +315,8 @@ TEST_P(InferenceTest, Reset) {
 
     // setup inference
     ContextConfig const anira_context_config;
-    InferenceConfig inference_config = hybridnn_config;
+    InferenceConfig inference_config =
+        anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
     HybridNNPrePostProcessor pp_processor(inference_config);
     HybridNNBypassProcessor bypass_processor(inference_config);
 
@@ -459,7 +469,8 @@ TEST_P(InferenceControlTest, ResetStatefulHammer) {
     ASSERT_TRUE(data_reference.size() > 0);
 
     ContextConfig const anira_context_config;
-    InferenceConfig inference_config = hybridnn_config;
+    InferenceConfig inference_config =
+        anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
     // The point of this test: strict in-order, mutually-exclusive dispatch.
     inference_config.m_session_exclusive_processor = true;
     HybridNNPrePostProcessor pp_processor(inference_config);
@@ -607,82 +618,78 @@ std::string build_test_name(const testing::TestParamInfo<InferenceTest::ParamTyp
 INSTANTIATE_TEST_SUITE_P(
     InferenceBypass,
     InferenceTest,
-    ::testing::Values(
-        InferenceTestParams{anira::InferenceBackend::CUSTOM,
-                            HostConfig(2048, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            0,
-                            FLT_EPSILON,
-                            0},
-        InferenceTestParams{anira::InferenceBackend::CUSTOM,
-                            HostConfig(256, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            0,
-                            FLT_EPSILON,
-                            0}),
+    ::testing::Values(InferenceTestParams{anira::InferenceBackend::CUSTOM,
+                                          HostConfig(2048, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          0,
+                                          FLT_EPSILON,
+                                          0},
+                      InferenceTestParams{anira::InferenceBackend::CUSTOM,
+                                          HostConfig(256, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          0,
+                                          FLT_EPSILON,
+                                          0}),
     build_test_name);
 
 INSTANTIATE_TEST_SUITE_P(
     InferenceBypass,
     InferenceControlTest,
-    ::testing::Values(
-        InferenceTestParams{anira::InferenceBackend::CUSTOM,
-                            HostConfig(2048, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            0,
-                            FLT_EPSILON,
-                            0},
-        InferenceTestParams{anira::InferenceBackend::CUSTOM,
-                            HostConfig(256, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            0,
-                            FLT_EPSILON,
-                            0}),
+    ::testing::Values(InferenceTestParams{anira::InferenceBackend::CUSTOM,
+                                          HostConfig(2048, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          0,
+                                          FLT_EPSILON,
+                                          0},
+                      InferenceTestParams{anira::InferenceBackend::CUSTOM,
+                                          HostConfig(256, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          0,
+                                          FLT_EPSILON,
+                                          0}),
     build_test_name);
 
 #ifdef USE_LIBTORCH
 INSTANTIATE_TEST_SUITE_P(
     InferenceLibtorch,
     InferenceTest,
-    ::testing::Values(
-        InferenceTestParams{anira::InferenceBackend::LIBTORCH,
-                            HostConfig(2048, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
-                            149,
-                            1e-6f,
-                            2e-7f},
-        InferenceTestParams{anira::InferenceBackend::LIBTORCH,
-                            HostConfig(256, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
-                            149,
-                            1e-6f,
-                            2e-7f}),
+    ::testing::Values(InferenceTestParams{anira::InferenceBackend::LIBTORCH,
+                                          HostConfig(2048, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/y_pred.wav",
+                                          149,
+                                          1e-6f,
+                                          2e-7f},
+                      InferenceTestParams{anira::InferenceBackend::LIBTORCH,
+                                          HostConfig(256, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/y_pred.wav",
+                                          149,
+                                          1e-6f,
+                                          2e-7f}),
     build_test_name);
 
 INSTANTIATE_TEST_SUITE_P(
     InferenceLibtorch,
     InferenceControlTest,
-    ::testing::Values(
-        InferenceTestParams{anira::InferenceBackend::LIBTORCH,
-                            HostConfig(2048, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
-                            149,
-                            1e-6f,
-                            2e-7f},
-        InferenceTestParams{anira::InferenceBackend::LIBTORCH,
-                            HostConfig(256, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
-                            149,
-                            1e-6f,
-                            2e-7f}),
+    ::testing::Values(InferenceTestParams{anira::InferenceBackend::LIBTORCH,
+                                          HostConfig(2048, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/y_pred.wav",
+                                          149,
+                                          1e-6f,
+                                          2e-7f},
+                      InferenceTestParams{anira::InferenceBackend::LIBTORCH,
+                                          HostConfig(256, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/y_pred.wav",
+                                          149,
+                                          1e-6f,
+                                          2e-7f}),
     build_test_name);
 #endif
 
@@ -690,21 +697,20 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     InferenceOnnx,
     InferenceTest,
-    ::testing::Values(
-        InferenceTestParams{anira::InferenceBackend::ONNX,
-                            HostConfig(2048, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
-                            149,
-                            1e-6f,
-                            2e-7f},
-        InferenceTestParams{anira::InferenceBackend::ONNX,
-                            HostConfig(256, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
-                            149,
-                            1e-6f,
-                            2e-7f}),
+    ::testing::Values(InferenceTestParams{anira::InferenceBackend::ONNX,
+                                          HostConfig(2048, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/y_pred.wav",
+                                          149,
+                                          1e-6f,
+                                          2e-7f},
+                      InferenceTestParams{anira::InferenceBackend::ONNX,
+                                          HostConfig(256, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/y_pred.wav",
+                                          149,
+                                          1e-6f,
+                                          2e-7f}),
     build_test_name);
 #endif
 
@@ -713,22 +719,20 @@ INSTANTIATE_TEST_SUITE_P(
     InferenceTflite,
     InferenceTest,
     ::testing::Values(
-        InferenceTestParams{
-            anira::InferenceBackend::TFLITE,
-            HostConfig(2048, 44100),
-            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
-            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
-            149,
-            1e-6f,
-            2e-7f},
-        InferenceTestParams{
-            anira::InferenceBackend::TFLITE,
-            HostConfig(256, 44100),
-            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
-            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
-            149,
-            1e-6f,
-            2e-7f}),
+        InferenceTestParams{anira::InferenceBackend::TFLITE,
+                            HostConfig(2048, 44100),
+                            std::string(k_guitarlstm_tensorflow) + "/model_0/x_test.wav",
+                            std::string(k_guitarlstm_tensorflow) + "/model_0/y_pred_tflite.wav",
+                            149,
+                            1e-6f,
+                            2e-7f},
+        InferenceTestParams{anira::InferenceBackend::TFLITE,
+                            HostConfig(256, 44100),
+                            std::string(k_guitarlstm_tensorflow) + "/model_0/x_test.wav",
+                            std::string(k_guitarlstm_tensorflow) + "/model_0/y_pred_tflite.wav",
+                            149,
+                            1e-6f,
+                            2e-7f}),
     build_test_name);
 #endif
 
@@ -739,22 +743,20 @@ INSTANTIATE_TEST_SUITE_P(
     InferenceLiteRt,
     InferenceTest,
     ::testing::Values(
-        InferenceTestParams{
-            anira::InferenceBackend::LITERT,
-            HostConfig(2048, 44100),
-            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
-            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
-            149,
-            1e-6f,
-            2e-7f},
-        InferenceTestParams{
-            anira::InferenceBackend::LITERT,
-            HostConfig(256, 44100),
-            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/x_test.wav",
-            std::string(GUITARLSTM_MODELS_PATH_TENSORFLOW) + "/model_0/y_pred_tflite.wav",
-            149,
-            1e-6f,
-            2e-7f}),
+        InferenceTestParams{anira::InferenceBackend::LITERT,
+                            HostConfig(2048, 44100),
+                            std::string(k_guitarlstm_tensorflow) + "/model_0/x_test.wav",
+                            std::string(k_guitarlstm_tensorflow) + "/model_0/y_pred_tflite.wav",
+                            149,
+                            1e-6f,
+                            2e-7f},
+        InferenceTestParams{anira::InferenceBackend::LITERT,
+                            HostConfig(256, 44100),
+                            std::string(k_guitarlstm_tensorflow) + "/model_0/x_test.wav",
+                            std::string(k_guitarlstm_tensorflow) + "/model_0/y_pred_tflite.wav",
+                            149,
+                            1e-6f,
+                            2e-7f}),
     build_test_name);
 #endif
 
@@ -765,21 +767,20 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     InferenceExecuTorch,
     InferenceTest,
-    ::testing::Values(
-        InferenceTestParams{anira::InferenceBackend::EXECUTORCH,
-                            HostConfig(2048, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
-                            149,
-                            1e-4f,
-                            1e-5f},
-        InferenceTestParams{anira::InferenceBackend::EXECUTORCH,
-                            HostConfig(256, 44100),
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/x_test.wav",
-                            std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/y_pred.wav",
-                            149,
-                            1e-4f,
-                            1e-5f}),
+    ::testing::Values(InferenceTestParams{anira::InferenceBackend::EXECUTORCH,
+                                          HostConfig(2048, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/y_pred.wav",
+                                          149,
+                                          1e-4f,
+                                          1e-5f},
+                      InferenceTestParams{anira::InferenceBackend::EXECUTORCH,
+                                          HostConfig(256, 44100),
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/x_test.wav",
+                                          std::string(k_guitarlstm_pytorch) + "/model_0/y_pred.wav",
+                                          149,
+                                          1e-4f,
+                                          1e-5f}),
     build_test_name);
 #endif
 
@@ -787,7 +788,8 @@ INSTANTIATE_TEST_SUITE_P(
 // available in the build — a session no longer starts on the CUSTOM roundtrip
 // unless a custom processor was provided (or no configured backend exists).
 TEST(InferenceHandlerDefaultBackend, DefaultsToFirstConfiguredModel) {
-    InferenceConfig inference_config = hybridnn_config;
+    InferenceConfig inference_config =
+        anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
     HybridNNPrePostProcessor pp_processor(inference_config);
 
     InferenceHandler inference_handler(pp_processor, inference_config);
@@ -803,7 +805,8 @@ TEST(InferenceHandlerDefaultBackend, DefaultsToFirstConfiguredModel) {
 }
 
 TEST(InferenceHandlerDefaultBackend, CustomProcessorKeepsCustomBackend) {
-    InferenceConfig inference_config = hybridnn_config;
+    InferenceConfig inference_config =
+        anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
     HybridNNPrePostProcessor pp_processor(inference_config);
     HybridNNBypassProcessor bypass_processor(inference_config);
 
