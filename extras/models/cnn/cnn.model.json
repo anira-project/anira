@@ -1,0 +1,51 @@
+{
+  "models": [
+    {
+      "engine": "libtorch",
+      "path": "steerable-nafx/models/model_0/steerable-nafx-dynamic.pt"
+    },
+    {
+      "engine": "onnxruntime",
+      "path": "steerable-nafx/models/model_0/steerable-nafx-libtorch-dynamic.onnx"
+    },
+    {
+      "engine": "tflite",
+      "path": "steerable-nafx/models/model_0/steerable-nafx-dynamic.tflite",
+      "tensors": {
+        "audio_in": { "layout": [0, 2, 1] },
+        "audio_out": { "layout": [0, 2, 1] }
+      }
+    },
+    {
+      "engine": "litert",
+      "path": "steerable-nafx/models/model_0/steerable-nafx-dynamic.tflite",
+      "tensors": {
+        "audio_in": { "layout": [0, 2, 1] },
+        "audio_out": { "layout": [0, 2, 1] }
+      }
+    },
+    {
+      "engine": "executorch",
+      "path": "steerable-nafx/models/model_0/steerable-nafx-executorch.pte"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "audio_in",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 1], ["time", 15380]],
+      "window": { "min": 15380, "max": 15380 },
+      "context": 13332
+    }
+  ],
+  "outputs": [
+    {
+      "name": "audio_out",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 1], ["time", 2048]],
+      "window": { "min": 2048, "max": 2048 }
+    }
+  ]
+}

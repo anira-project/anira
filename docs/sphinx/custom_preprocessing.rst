@@ -135,7 +135,7 @@ These hooks are the correct place to handle state that must flow from one infere
     };
 
 .. note::
-    For stateful models, set ``session_exclusive_processor = true`` in the :cpp:class:`anira::InferenceConfig`. This guarantees that inferences execute strictly in submission order and never concurrently, which makes these hooks the only safe place to splice in cross-inference state.
+    For stateful models, give the model config the stateful state (``"state": "stateful"`` in the model file, ``cfg.state(ANIRA_MODEL_STATEFUL)`` on the builder). This guarantees that inferences execute strictly in submission order and never concurrently, which makes these hooks the only safe place to splice in cross-inference state.
 
 Integration with InferenceHandler
 ---------------------------------
@@ -144,8 +144,12 @@ Once you've implemented your custom preprocessor, integrate it with the inferenc
 
 .. code-block:: cpp
 
-    // First create your inference configuration
-    anira::InferenceConfig inference_config(/* your config parameters */);
+    // First create your inference configuration: the model and contract files (section 1 of
+    // the usage guide), bridged to the InferenceConfig the runtime of this pre-release takes
+    anira::ModelConfig model_config = anira::ModelConfig::from_file("model.json");
+    anira::ContractHandle contract = anira::ContractHandle::from_file("contract.json");
+    anira::InferenceConfig inference_config =
+        anira::v3compat::to_inference_config(model_config, contract);
     
     // Create your custom preprocessor instance
     // Note: The preprocessor requires an InferenceConfig reference

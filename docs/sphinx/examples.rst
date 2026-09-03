@@ -8,6 +8,37 @@ Built-in Examples
 
 anira comes with several built-in examples that demonstrate different use cases and integration patterns. These examples are available when building with ``-DANIRA_WITH_EXAMPLES=ON``.
 
+Model configuration files
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Location**: ``extras/models/``
+
+Every bundled model ships its configuration as files next to its model directory, in the format
+section 1.5 of the :doc:`usage` guide describes: a *model file* (``<model>.model.json``: the
+model's exports per engine with paths relative to the file, the tensor specs, the state) and a
+*contract file* (``<model>.contract.json``: the per-inference budget and the warm-up; the host
+geometry is patched in at prepare). ``extras/models/model_files.h`` names them for the examples
+and the tests. Covered are the steerable-nafx CNN in three sizes (``cnn/``), GuitarLSTM
+(``hybrid-nn/``), the stateful LSTM (``stateful-rnn/``), SimpleGainNetwork in mono and stereo
+(``model-pool/``) and RAVE funk drum as the whole model, its encoder and its decoder
+(``third-party/ircam-acids/``, LibTorch only).
+
+Every example loads a model the same way, in three lines, and the runtime takes it from there:
+
+.. code-block:: cpp
+
+    anira::ModelConfig model_config = anira::ModelConfig::from_file(k_cnn_model_json);
+    anira::ContractHandle contract = anira::ContractHandle::from_file(k_cnn_contract_json);
+    anira::InferenceConfig inference_config = anira::v3compat::to_inference_config(
+        model_config, contract, anira::v3compat::enabled_engines());
+
+The files set no instance ceiling, so one processor per engine runs; the plugins pass no
+machine configuration either, since the library default (half the hardware threads) is what
+they want. The one place a model is built in code is the benchmark sweeps: ``CNNConfig.h``,
+``HybridNNConfig.h`` and ``StatefulRNNConfig.h`` build the same configurations with the hop,
+the batch count or the chunk following the host buffer, which the fixed windows of the files
+cannot; a test keeps each builder equal to its file at the default size.
+
 JUCE Audio Plugin
 ~~~~~~~~~~~~~~~~~
 
@@ -34,7 +65,19 @@ Key files:
     cmake --build build --target anira-juce-plugin-example_VST3
 
 .. note::
-    In the JUCE plugin example, there are several different models available. You can select the model by changing the ``MODEL_TO_USE`` variable in the ``CMakeLists.txt`` file. ``MODEL_TO_USE == 8`` loads the RAVE model from a 2.x JSON configuration via :cpp:class:`anira::JsonConfigLoader` (see :ref:`migration-json`).
+    The JUCE plugin example runs one of the bundled models, picked with the ``MODEL_TO_USE``
+    cache variable (``-DMODEL_TO_USE=2``; the default is 1): 0 the steerable-nafx CNN, 1 the
+    same CNN with every file compiled into the plugin, 2 GuitarLSTM, 3 the stateful LSTM, 4
+    and 5 SimpleGainNetwork in mono and stereo, 6 RAVE funk drum, 7 RAVE as an encoder and a
+    decoder handler. Every variant is configured by the three lines above; what changes is the
+    pair of files and, for the CNN and GuitarLSTM, the custom pre/post processor. Variant 1
+    reads nothing from disk: the model file, the contract file and the four exports go into
+    JUCE's ``BinaryData``, the model config is loaded from the embedded text
+    (``ModelConfig::from_json``) and each entry's source is swapped for the embedded bytes of
+    its engine (``set_model_bytes``, ``ANIRA_BYTES_BORROW``), so the description of the model
+    stays in the file. Variant 7's decoder anchors on its audio output
+    (``rave_funk_drum_decoder.model.json``), so both handlers prepare with the host's block and
+    rate. A 2.x configuration file goes through the same loaders (:ref:`migration-json`).
 
 CLAP Plugin Example
 ~~~~~~~~~~~~~~~~~~~
@@ -105,7 +148,7 @@ Minimal Inference Examples
 
 **Location**: ``examples/minimal-inference/``
 
-These examples show the minimal code required to perform inference with each backend supported by anira. They do not use the anira library, but show how to use the underlying libraries directly.
+These examples show the minimal code required to perform inference with each backend supported by anira. They read the model path and the tensor shapes from anira's model files (through the bridge to the 2.x :cpp:struct:`anira::InferenceConfig`) and then drive the engine's own API directly, without the anira runtime. The ExecuTorch example is the exception: it does not link anira (anira embeds its own copy of the ExecuTorch runtime, which a second copy must stay isolated from), so it spells the path and the shapes out.
 
 External Examples
 -----------------

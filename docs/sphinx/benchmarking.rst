@@ -41,25 +41,31 @@ Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The fix
     #include <gtest/gtest.h>
     #include <benchmark/benchmark.h>
     #include <anira/anira.h>
+    #include <anira/anira.hpp>
     #include <anira/benchmark.h>
+    #include <anira/compat/v3_to_v2.h>
 
     typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
-    // Configure your inference setup (same as in regular usage)
-    anira::InferenceConfig my_inference_config(
-        // ... your model configuration
-    );
+    // Configure your inference setup (same as in regular usage): the model file and the
+    // contract file, bridged to the 2.x InferenceConfig the fixture takes
+    anira::ModelConfig my_model_config = anira::ModelConfig::from_file("model.json");
+    anira::ContractHandle my_contract = anira::ContractHandle::from_file("contract.json");
+    anira::InferenceConfig my_inference_config = anira::v3compat::to_inference_config(
+        my_model_config, my_contract, anira::v3compat::enabled_engines());
     anira::PrePostProcessor my_pp_processor(my_inference_config);
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
-        // Define the host configuration for the benchmark
-        anira::HostConfig host_config(BUFFER_SIZE, SAMPLE_RATE);
+        // The host geometry: the buffer size at SAMPLE_RATE, through the contract
+        my_contract.hard_geometry(BUFFER_SIZE, BUFFER_SIZE, SAMPLE_RATE);
+        anira::HostConfig host_config =
+            anira::v3compat::to_host_config(my_contract, my_model_config);
         anira::InferenceBackend inference_backend = anira::InferenceBackend::ONNX;
 
         // Only report errors, so the log output of the backends does not pollute
-        // the benchmark results (see anira::LogLevel)
-        anira::ContextConfig context_config;
-        context_config.m_log.m_level = anira::LogLevel::Error;
+        // the benchmark results (section 3.1 of the usage guide)
+        anira::ContextConfig context_config = anira::v3compat::to_context_config(
+            anira::MachineConfig{}.log_level(ANIRA_LOG_ERROR));
 
         // Create and prepare the InferenceHandler instance
         m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config, context_config);
@@ -248,8 +254,11 @@ Test different buffer sizes by passing arguments during registration:
     :caption: benchmark.cpp
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_BUFFER_SIZES)(::benchmark::State& state) {
-        // Use state.range(0) to get the buffer size argument
-        anira::HostConfig host_config = {(size_t) state.range(0), SAMPLE_RATE};
+        // state.range(0) is the buffer size argument: the host geometry of this run
+        const auto block = static_cast<uint32_t>(state.range(0));
+        my_contract.hard_geometry(block, block, SAMPLE_RATE);
+        anira::HostConfig host_config =
+            anira::v3compat::to_host_config(my_contract, my_model_config);
         anira::InferenceBackend inference_backend = anira::InferenceBackend::ONNX;
 
         m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config);
@@ -289,14 +298,19 @@ For complex configuration testing, define argument combinations using a custom f
     std::vector<anira::InferenceBackend> inference_backends = {
         anira::InferenceBackend::LIBTORCH, anira::InferenceBackend::ONNX, anira::InferenceBackend::TFLITE, anira::InferenceBackend::CUSTOM
     };
-    std::vector<anira::InferenceConfig> inference_configs = {
-        cnn_config, hybridnn_config, rnn_config
-    };
+    // One model per index. The shapes follow the buffer size, which the fixed windows of the
+    // configuration files cannot, so the benchmark builds each model config in code (the
+    // builders of extras/models/cnn/CNNConfig.h and friends), bridges it per run into
+    // inference_config and returns the host geometry through the model's contract file
+    // (see examples/benchmark/advanced-benchmark)
+    constexpr int num_models = 3;
+    anira::InferenceConfig inference_config;
+    anira::HostConfig configure(int model, int buffer_size);
 
     // Define argument combinations
     static void Arguments(::benchmark::internal::Benchmark* b) {
         for (int i = 0; i < buffer_sizes.size(); ++i) {
-            for (int j = 0; j < inference_configs.size(); ++j) {
+            for (int j = 0; j < num_models; ++j) {
                 for (int k = 0; k < inference_backends.size(); ++k) {
                     // Skip incompatible combinations (e.g., ONNX + stateful RNN)
                     if (!(j == 2 && k == 1)) {
@@ -309,8 +323,7 @@ For complex configuration testing, define argument combinations using a custom f
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)(::benchmark::State& state) {
         // Extract configuration from arguments
-        anira::HostConfig host_config = {(size_t) state.range(0), SAMPLE_RATE};
-        anira::InferenceConfig& inference_config = inference_configs[state.range(1)];
+        anira::HostConfig host_config = configure(state.range(1), state.range(0));
         anira::InferenceBackend inference_backend = inference_backends[state.range(2)];
 
         // Setup with selected configuration

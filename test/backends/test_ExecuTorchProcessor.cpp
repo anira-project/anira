@@ -27,7 +27,9 @@ using anira_test::filled_buffers;
 using anira_test::read_model_file;
 
 std::string multifunction_model_path() {
-    return std::string(SIMPLEGAIN_MODEL_PATH) + "/simple_gain_network_multifunction.pte";
+    return std::string(ANIRA_EXTRAS_MODELS_DIR
+                       "/model-pool/example-models/SimpleGainNetwork/models") +
+           "/simple_gain_network_multifunction.pte";
 }
 
 }  // namespace

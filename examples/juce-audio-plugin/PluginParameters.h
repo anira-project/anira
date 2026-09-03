@@ -25,7 +25,7 @@ public:
 #endif
         BACKEND_TYPE_NAME = "Backend Type", DRY_WET_NAME = "Dry/Wet";
 
-#if MODEL_TO_USE == 6 || MODEL_TO_USE == 7 || MODEL_TO_USE == 8
+#if MODEL_TO_USE == 6 || MODEL_TO_USE == 7
     inline static juce::StringArray backendTypes{"LIBTORCH", "BYPASS"};
     inline static juce::String defaultBackend = "LIBTORCH";
 #else

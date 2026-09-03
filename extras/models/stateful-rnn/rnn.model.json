@@ -1,0 +1,51 @@
+{
+  "models": [
+    {
+      "engine": "libtorch",
+      "path": "stateful-lstm/models/model_0/stateful-lstm-dynamic.pt"
+    },
+    {
+      "engine": "onnxruntime",
+      "path": "stateful-lstm/models/model_0/stateful-lstm-libtorch.onnx"
+    },
+    {
+      "engine": "tflite",
+      "path": "stateful-lstm/models/model_0/stateful-lstm-dynamic.tflite",
+      "tensors": {
+        "audio_in": { "layout": [1, 0, 2] },
+        "audio_out": { "layout": [1, 0, 2] }
+      }
+    },
+    {
+      "engine": "litert",
+      "path": "stateful-lstm/models/model_0/stateful-lstm-dynamic.tflite",
+      "tensors": {
+        "audio_in": { "layout": [1, 0, 2] },
+        "audio_out": { "layout": [1, 0, 2] }
+      }
+    },
+    {
+      "engine": "executorch",
+      "path": "stateful-lstm/models/model_0/stateful-lstm-executorch.pte"
+    }
+  ],
+  "state": "stateful",
+  "inputs": [
+    {
+      "name": "audio_in",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["time", 2048], ["batch", 1], ["channel", 1]],
+      "window": { "min": 2048, "max": 2048 }
+    }
+  ],
+  "outputs": [
+    {
+      "name": "audio_out",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["time", 2048], ["batch", 1], ["channel", 1]],
+      "window": { "min": 2048, "max": 2048 }
+    }
+  ]
+}

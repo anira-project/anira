@@ -122,10 +122,6 @@ ANIRA_API anira_status to_host_config(const anira_model_config* model,
 /// that lets one model config serve every build.
 ANIRA_API std::vector<anira_engine> enabled_engines();
 
-/// The 2.x default number of parallel processors (half the hardware threads, at least 1):
-/// what a model config's max_instances must be for the 2.x default.
-ANIRA_API unsigned int v2_default_instances() noexcept;
-
 }  // namespace anira::v3compat
 
 // ---- The C++ face over the anira.hpp handles (C++20) ----------------------------------------

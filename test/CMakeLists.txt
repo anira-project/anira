@@ -6,20 +6,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 
-add_compile_definitions(
-        GUITARLSTM_MODELS_PATH_TENSORFLOW="${GUITARLSTM_MODELS_PATH_TENSORFLOW}"
-        GUITARLSTM_MODELS_PATH_PYTORCH="${GUITARLSTM_MODELS_PATH_PYTORCH}"
-        STEERABLENAFX_MODELS_PATH_TENSORFLOW="${STEERABLENAFX_MODELS_PATH_TENSORFLOW}"
-        STEERABLENAFX_MODELS_PATH_PYTORCH="${STEERABLENAFX_MODELS_PATH_PYTORCH}"
-        STATEFULLSTM_MODELS_PATH_TENSORFLOW="${STATEFULLSTM_MODELS_PATH_TENSORFLOW}"
-        STATEFULLSTM_MODELS_PATH_PYTORCH="${STATEFULLSTM_MODELS_PATH_PYTORCH}"
-		RAVE_MODEL_FUNK_DRUM_JSON_CONFIG_PATH="${RAVE_MODEL_FUNK_DRUM_JSON_CONFIG_PATH}"
-		RAVE_MODEL_FUNK_DRUM_ENCODER_JSON_CONFIG_PATH="${RAVE_MODEL_FUNK_DRUM_ENCODER_JSON_CONFIG_PATH}"
-		RAVE_MODEL_FUNK_DRUM_DECODER_JSON_CONFIG_PATH="${RAVE_MODEL_FUNK_DRUM_DECODER_JSON_CONFIG_PATH}"
-		SIMPLE_GAIN_JSON_CONFIG_PATH="${SIMPLE_GAIN_JSON_CONFIG_PATH}"
-		SIMPLEGAIN_MODEL_PATH="${SIMPLEGAIN_MODEL_PATH}"
-		RAVE_MODEL_DIR="${RAVE_MODEL_DIR}"
-)
+# The root of the model tree at run time (extras/CMakeLists.txt); every model path the tests
+# spell is relative to it, and extras/models/model_files.h names the configuration files.
+add_compile_definitions(ANIRA_EXTRAS_MODELS_DIR="${ANIRA_EXTRAS_MODELS_DIR}")
 
 
 # One test binary per component, mirroring the source tree: test/<dir> covers
@@ -71,8 +60,6 @@ function(anira_add_test_binary TARGET)
     endif ()
 endfunction()
 
-# test_WavReader.cpp sits with the utils suite: it exercises the header-only
-# thl::core::read_wav, not the handler.
 anira_add_test_binary(test_utils
 	utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
@@ -81,7 +68,6 @@ anira_add_test_binary(test_utils
 	utils/test_JsonConfigLoaderErrors.cpp
 	utils/test_HelperFunctions.cpp
 	utils/test_Logger.cpp
-	utils/test_WavReader.cpp
 	system/test_HighPriorityThread.cpp
 )
 
@@ -130,6 +116,7 @@ anira_add_test_binary(test_abi
 	abi/test_anira_hpp.cpp
 	abi/test_Translate.cpp
 	abi/test_Bridge.cpp
+	abi/test_ExtrasFixtures.cpp
 )
 # capi_internal.h (the firewall probe) and the generated tables under src/capi/.
 target_include_directories(test_abi PRIVATE "${anira_SOURCE_DIR}/src")

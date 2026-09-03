@@ -5,17 +5,15 @@ Licence: Apache 2.0
 
 ========================================================================== */
 
+#include <anira/compat/v3_to_v2.h>
 #include <tensorflow/lite/c_api.h>
 
 #include <array>
 #include <cstdio>
 #include <iostream>
+#include <utility>
 
-#include "../../../extras/models/cnn/CNNConfig.h"
-#include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
-#include "../../../extras/models/model-pool/SimpleGainConfig.h"
-#include "../../../extras/models/model-pool/SimpleStereoGainConfig.h"
-#include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
+#include "../../../extras/models/model_files.h"
 #include "../../../include/anira/utils/Buffer.h"
 #include "../../../include/anira/utils/MemoryBlock.h"
 
@@ -145,14 +143,24 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 }
 
 int main(int argc, const char* argv[]) {
-    std::vector<anira::InferenceConfig> models_to_inference = {hybridnn_config,
-                                                               cnn_config,
-                                                               rnn_config,
-                                                               gain_config,
-                                                               stereo_gain_config};
+    // The bundled models: a model file and a contract file each (extras/models/model_files.h),
+    // loaded with the 3.x API and bridged to the 2.x InferenceConfig this example reads its
+    // model path and tensor shapes from. The candidate list keeps the entries of this build's
+    // engines only.
+    const std::array<std::pair<const char*, const char*>, 5> models_to_inference = {{
+        {k_hybridnn_model_json, k_hybridnn_contract_json},
+        {k_cnn_model_json, k_cnn_contract_json},
+        {k_rnn_model_json, k_rnn_contract_json},
+        {k_gain_model_json, k_gain_contract_json},
+        {k_stereo_gain_model_json, k_stereo_gain_contract_json},
+    }};
 
-    for (int i = 0; i < models_to_inference.size(); ++i) {
-        minimal_inference(models_to_inference[i]);
+    for (const auto& [model_json, contract_json] : models_to_inference) {
+        const anira::ModelConfig model_config = anira::ModelConfig::from_file(model_json);
+        const anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
+        minimal_inference(anira::v3compat::to_inference_config(model_config,
+                                                               contract,
+                                                               anira::v3compat::enabled_engines()));
     }
 
     return 0;

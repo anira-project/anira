@@ -30,16 +30,37 @@ An extensive documentation of anira can be found at [https://anira-project.githu
 
 ## Usage
 
+anira takes its configuration from two JSON files that travel with the model: the *model file* names the model's exports per inference engine (paths relative to the file) and describes the tensors, the *contract file* holds the per-inference budget and the warm-up. The host geometry is patched in at prepare.
+
+```json
+{
+  "models": [ { "engine": "onnxruntime", "path": "model.onnx" } ],
+  "inputs":  [ { "name": "audio_in",  "axes": [["time", 256], ["channel", 1], ["any", 1]],
+                 "window": { "min": 256, "max": 256 } } ],
+  "outputs": [ { "name": "audio_out", "axes": [["time", 256], ["any", 1]],
+                 "window": { "min": 256, "max": 256 } } ]
+}
+```
+
+```json
+{ "hard": { "budget": { "ms": 5.33 }, "warmup": { "fixed": 2 } } }
+```
+
 The basic usage of anira is as follows:
 
 ```cpp
 #include <anira/anira.h>
+#include <anira/anira.hpp>
+#include <anira/compat/v3_to_v2.h>
 
-anira::InferenceConfig inference_config(
-        {{"path/to/your/model.onnx", anira::InferenceBackend::ONNX}}, // Model path
-        {{{256, 1, 1}}, {{256, 1}}},  // Input, Output shape
-        5.33f // Maximum inference time in ms
-);
+// The configuration: the model file next to your model, and the contract file
+anira::ModelConfig model_config = anira::ModelConfig::from_file("path/to/model.json");
+anira::ContractHandle contract = anira::ContractHandle::from_file("path/to/contract.json");
+
+// The runtime of this pre-release still takes the 2.x classes; the bridge builds them
+// from the files, over the engines of this build
+anira::InferenceConfig inference_config = anira::v3compat::to_inference_config(
+    model_config, contract, anira::v3compat::enabled_engines());
 
 // Create a pre- and post-processor instance
 anira::PrePostProcessor pp_processor(inference_config);
@@ -47,8 +68,9 @@ anira::PrePostProcessor pp_processor(inference_config);
 // Create an InferenceHandler instance
 anira::InferenceHandler inference_handler(pp_processor, inference_config);
 
-// Pass the host configuration and allocate memory for audio processing
-inference_handler.prepare({buffer_size, sample_rate});
+// Complete the contract with the host geometry and allocate memory for audio processing
+contract.hard_geometry(buffer_size, buffer_size, sample_rate);
+inference_handler.prepare(anira::v3compat::to_host_config(contract, model_config));
 
 // Select the inference backend
 inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);

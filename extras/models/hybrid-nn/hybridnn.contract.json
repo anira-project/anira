@@ -1,0 +1,6 @@
+{
+  "hard": {
+    "budget": { "ms": 5.33 },
+    "warmup": { "fixed": 3 }
+  }
+}

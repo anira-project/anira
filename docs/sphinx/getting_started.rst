@@ -8,7 +8,7 @@ Prerequisites
 
 Before using anira, ensure you have:
 
-- A C++ compiler with C++17 support
+- A C++20 compiler (anira's C headers compile as C11 and C++17; the C++ builders of ``anira/anira.hpp`` and the examples need C++20)
 - CMake (version 3.14 or higher)
 - One of the supported neural network model formats:
     - ONNX model files (.onnx)
@@ -25,11 +25,6 @@ Installation
 
 Basic Usage Example
 -------------------
-
-.. note::
-    The example below is the README's and still uses the 2.x configuration classes, which
-    this pre-release ships alongside the 3.x configuration API (section 1 of the :doc:`usage`
-    guide). :doc:`migration` maps one onto the other.
 
 .. include:: ../../README.md
    :parser: myst_parser.sphinx_
@@ -73,33 +68,52 @@ An important distinction in multi-tensor processing is between **streamable** an
 - **Streamable tensors**: Contain data that varies over time (e.g., audio samples, time-series data). They can have multiple channels.
 - **Non-streamable tensors**: Contain static parameters or metadata (e.g., control parameters, configuration values, global settings). Only one channel is allowed.
 
-Here's how to configure and process multi-tensor models with anira:
+Here's how to configure and process multi-tensor models with anira. The model file names
+every tensor and gives the two control tensors the ``static`` role (one value per inference,
+no time axis); the streamed tensors carry a window:
+
+.. code-block:: json
+    :caption: multi_tensor.model.json
+
+    {
+      "models": [ { "engine": "onnxruntime", "path": "multi_tensor_model.onnx" } ],
+      "inputs": [
+        { "name": "audio_in", "axes": [["batch", 1], ["channel", 1], ["time", 2048]],
+          "window": { "min": 2048, "max": 2048 } },
+        { "name": "control", "role": "static", "axes": [["batch", 1], ["channel", 1], ["any", 4]] }
+      ],
+      "outputs": [
+        { "name": "audio_out", "axes": [["batch", 1], ["channel", 1], ["time", 2048]],
+          "window": { "min": 2048, "max": 2048 } },
+        { "name": "confidence", "role": "static", "axes": [["batch", 1], ["channel", 1], ["any", 1]] }
+      ]
+    }
 
 .. code-block:: cpp
     :linenos:
 
     #include <anira/anira.h>
+    #include <anira/anira.hpp>
+    #include <anira/compat/v3_to_v2.h>
 
-    // Configure a model with multiple inputs and outputs
-    anira::InferenceConfig multi_tensor_config(
-            {{"path/to/your/multi_tensor_model.onnx", anira::InferenceBackend::ONNX}},
-            {{{1, 1, 2048}, {1, 1, 4}},     // Two inputs: audio (2048 samples) + control params (4 values)
-             {{1, 1, 2048}, {1, 1, 1}}},    // Two outputs: processed audio (2048 samples) + confidence (1 value)
-            anira::ProcessingSpec(          // Optional processing specification
-                {1, 1},        // Input channels per tensor: [audio_channels, control_channels]
-                {1, 1},        // Output channels per tensor: [audio_channels, confidence_channels]  
-                {2048, 0},     // Input sizes: [streamable_audio, non_streamable_params]
-                {2048, 0}      // Output sizes: [streamable_audio, non_streamable_confidence]
-            ),
-            10.0f // Maximum inference time in ms
-    );
+    // The model file, and a Hard contract with a 10 ms budget written in code
+    anira::ModelConfig model_config = anira::ModelConfig::from_file("multi_tensor.model.json");
+    anira::ContractHandle contract{anira::Hard{
+        .budget = ANIRA_BUDGET_EXPLICIT, .budget_value = std::chrono::milliseconds(10),
+        .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2}};
+
+    // The runtime of this pre-release takes the 2.x InferenceConfig; the bridge builds it
+    // from the files, over the engines of this build
+    anira::InferenceConfig multi_tensor_config = anira::v3compat::to_inference_config(
+        model_config, contract, anira::v3compat::enabled_engines());
 
     // Create pre- and post-processor and inference handler
     anira::PrePostProcessor pp_processor(multi_tensor_config);
     anira::InferenceHandler inference_handler(pp_processor, multi_tensor_config);
 
-    // Prepare for processing
-    inference_handler.prepare({buffer_size, sample_rate});
+    // Prepare for processing: the host geometry completes the contract
+    contract.hard_geometry(buffer_size, buffer_size, sample_rate);
+    inference_handler.prepare(anira::v3compat::to_host_config(contract, model_config));
     inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
 
     // Optionally get the latency of the inference process in samples
@@ -165,14 +179,14 @@ Key Points for Multi-Tensor Processing
 
 **Tensor Organization and Indexing**
 
-- **Tensor indexing**: Tensors are indexed starting from 0, following the order specified in the ``TensorShape`` configuration
+- **Tensor indexing**: Tensors are indexed starting from 0, following the order of ``inputs`` and ``outputs`` in the model file (or of the ``input`` / ``output`` calls on the builder)
 - **Data structure**: Multi-tensor data uses a 3D array structure: ``[tensor_index][channel][sample]``
 
 **Streamable vs Non-Streamable Tensors**
 
 - **Streamable tensors**: Time-varying data (audio, time-series) that flows continuously through the processing pipeline
 - **Non-streamable tensors**: Static parameters or metadata that is updated asynchronously
-- **Configuration**: Set processing sizes to 0 for non-streamable tensors in the ``ProcessingSpec``
+- **Configuration**: Give a non-streamable tensor the ``static`` role (``"role": "static"`` in the model file, ``ANIRA_ROLE_STATIC`` on the builder)
 
 **Processing Methods**
 

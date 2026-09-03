@@ -181,7 +181,12 @@ every regenerated file: the ``anira_abi_generate`` test and the ``build_web`` wo
 the registry changes since a tag are appended (a minor or pre-release) or breaking (a
 major). The generated files carry a ``.clang-format`` with ``DisableFormat`` and a
 ``NOLINTBEGIN(readability-identifier-naming)`` block, so the pinned root configs stay
-untouched. The C-side tests and gates live in ``test/abi/`` (the ``test_abi`` binary,
+untouched. Every function entry of the registry carries a ``thread`` tag from the vocabulary
+of the architecture document (``main-thread``, ``driver-thread``, ``inference-thread``,
+``thread-safe``, with their state qualifiers), ``callback_safe`` where it applies and
+``nonblocking: true`` where the body is real-time; the generator refuses an entry without a
+tag, a 64-bit argument or an ``anira_error*`` on a nonblocking entry, and writes the tag as
+the ``@par Thread contract`` line of the generated Doxygen. The C-side tests and gates live in ``test/abi/`` (the ``test_abi`` binary,
 ``anira_abi_layout``, ``anira_header_c11`` / ``anira_header_cxx17`` /
 ``anira_header_coexist``); a Tier-1 layout may change only in a commit that changes
 ``ANIRA_ABI_MAJOR``, and ``anira_abi_layout_regen`` rewrites the committed table then.

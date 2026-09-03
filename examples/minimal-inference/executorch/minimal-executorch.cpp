@@ -39,9 +39,12 @@ static void print_shape(const char* label, const std::vector<executorch::aten::S
 
 int main(int argc, const char* argv[]) {
     // The GuitarLSTM example model, exported ahead-of-time from the same PyTorch
-    // weights as the LibTorch model (batched [256, 1, 150] -> [256, 1] interface).
-    const std::string model_path =
-        std::string(GUITARLSTM_MODELS_PATH_PYTORCH) + "/model_0/GuitarLSTM-executorch.pte";
+    // weights as the LibTorch model (batched [256, 1, 150] -> [256, 1] interface). The
+    // other minimal examples read the path and the shapes from the model file
+    // (extras/models/hybrid-nn/hybridnn.model.json) through anira; this one cannot link
+    // anira (see above), so it spells them out.
+    const std::string model_path = ANIRA_EXTRAS_MODELS_DIR
+        "/hybrid-nn/GuitarLSTM/pytorch-version/models/model_0/GuitarLSTM-executorch.pte";
     const std::vector<executorch::aten::SizesType> input_shape = {256, 1, 150};
     const std::vector<executorch::aten::SizesType> output_shape = {256, 1};
 

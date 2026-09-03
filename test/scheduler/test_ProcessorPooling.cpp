@@ -5,7 +5,8 @@
 
 #include <memory>
 
-#include "../../extras/models/hybrid-nn/HybridNNConfig.h"
+#include "../../extras/models/model_files.h"
+#include "../support/extras_fixtures.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
@@ -58,6 +59,8 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
 
     // Two hosts, each owning an equal-valued InferenceConfig. Session A's config is
     // heap-allocated so its storage can be freed deterministically mid-test.
+    const InferenceConfig hybridnn_config =
+        anira_test::bridged(k_hybridnn_model_json, k_hybridnn_contract_json);
     auto* config_a = new InferenceConfig(hybridnn_config);
     auto* pp_a = new PrePostProcessor(*config_a);
     auto session_a = Context::create_session(*pp_a, *config_a, nullptr, context_config);

@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "../support/inference_config_eq.h"
+#include "../support/v2_documents.h"
 #include "fixtures.h"
 
 namespace {
@@ -129,7 +130,7 @@ std::optional<anira_engine> missing_engine() {
 // InferenceConfig the 2.x constructor builds from them.
 TEST(AbiTranslate, TwinOfTheMinimalV2ConfigEqualsTheV2Constructor) {
     ModelConfig model = minimal();
-    model.max_instances(anira::v3compat::v2_default_instances());
+    model.max_instances(anira::InferenceConfig::Defaults::m_num_parallel_processors);
     const Outcome outcome = bridge(model);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
 
@@ -392,10 +393,10 @@ TEST(AbiTranslate, ALayoutBecomesABackendShape) {
 }
 
 #if !defined(__ANDROID__) && !defined(__APPLE__)
-// The SimpleGain 2.x file, upgraded and bridged, equals the 2.x fixture built by hand
-// (extras/models/model-pool/SimpleGainConfig.h, copied inline).
+// The SimpleGain 2.x document (test/support/v2_documents.h), upgraded and bridged, equals the
+// 2.x fixture header of anira 2.x built by hand (SimpleGainConfig.h, copied inline).
 TEST(AbiTranslate, UpgradedSimpleGainEqualsTheV2Fixture) {
-    ModelConfig model = ModelConfig::from_file(SIMPLE_GAIN_JSON_CONFIG_PATH);
+    ModelConfig model = ModelConfig::from_json(anira_test::gain_v2_document());
     ASSERT_TRUE(model.upgraded());
     const std::optional<ContractHandle> legacy = model.take_legacy_contract();
     if (!legacy.has_value()) { FAIL() << "the upgrade holds back a legacy contract"; }
@@ -404,26 +405,23 @@ TEST(AbiTranslate, UpgradedSimpleGainEqualsTheV2Fixture) {
     const Outcome outcome = bridge(model, *legacy, &candidates);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
 
+    const std::string dir =
+        ANIRA_EXTRAS_MODELS_DIR "/model-pool/example-models/SimpleGainNetwork/models";
     const std::vector<anira::ModelData> model_data = {
 #ifdef USE_LIBTORCH
-        {SIMPLEGAIN_MODEL_PATH + std::string("/simple_gain_network_mono.pt"),
-         anira::InferenceBackend::LIBTORCH},
+        {dir + std::string("/simple_gain_network_mono.pt"), anira::InferenceBackend::LIBTORCH},
 #endif
 #ifdef USE_ONNXRUNTIME
-        {SIMPLEGAIN_MODEL_PATH + std::string("/simple_gain_network_mono.onnx"),
-         anira::InferenceBackend::ONNX},
+        {dir + std::string("/simple_gain_network_mono.onnx"), anira::InferenceBackend::ONNX},
 #endif
 #ifdef USE_TFLITE
-        {SIMPLEGAIN_MODEL_PATH + std::string("/simple_gain_network_mono.tflite"),
-         anira::InferenceBackend::TFLITE},
+        {dir + std::string("/simple_gain_network_mono.tflite"), anira::InferenceBackend::TFLITE},
 #endif
 #ifdef USE_LITERT
-        {SIMPLEGAIN_MODEL_PATH + std::string("/simple_gain_network_mono.tflite"),
-         anira::InferenceBackend::LITERT},
+        {dir + std::string("/simple_gain_network_mono.tflite"), anira::InferenceBackend::LITERT},
 #endif
 #ifdef USE_EXECUTORCH
-        {SIMPLEGAIN_MODEL_PATH + std::string("/simple_gain_network_mono.pte"),
-         anira::InferenceBackend::EXECUTORCH},
+        {dir + std::string("/simple_gain_network_mono.pte"), anira::InferenceBackend::EXECUTORCH},
 #endif
     };
     const std::vector<anira::TensorShape> tensor_shape = {
@@ -975,6 +973,4 @@ TEST(AbiTranslate, EnabledEnginesMatchTheBuild) {
         return list;
     }();
     EXPECT_EQ(engines, expected);
-    EXPECT_EQ(anira::v3compat::v2_default_instances(),
-              anira::InferenceConfig::Defaults::m_num_parallel_processors);
 }

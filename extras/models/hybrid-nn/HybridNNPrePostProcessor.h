@@ -3,8 +3,6 @@
 
 #include <anira/anira.h>
 
-#include "HybridNNConfig.h"
-
 class HybridNNPrePostProcessor : public anira::PrePostProcessor {
 public:
     using anira::PrePostProcessor::PrePostProcessor;
@@ -33,7 +31,8 @@ public:
 #endif
         if (channels_last) {
             num_batches = m_inference_config.get_tensor_input_shape(channels_last_backend)[0][0];
-            num_input_samples = m_inference_config.get_tensor_input_shape(channels_last_backend)[0][1];
+            num_input_samples =
+                m_inference_config.get_tensor_input_shape(channels_last_backend)[0][1];
             num_output_samples =
                 m_inference_config.get_tensor_output_shape(channels_last_backend)[0][1];
         } else {

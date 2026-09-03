@@ -532,10 +532,6 @@ std::vector<anira_engine> enabled_engines() {
     return engines;
 }
 
-unsigned int v2_default_instances() noexcept {
-    return anira::InferenceConfig::Defaults::m_num_parallel_processors;
-}
-
 void validate(const anira_model_config& model,
               const anira_contract* contract,
               const anira_engine* candidates,

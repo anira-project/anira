@@ -1,0 +1,49 @@
+{
+  "models": [
+    {
+      "engine": "libtorch",
+      "path": "GuitarLSTM/pytorch-version/models/model_0/GuitarLSTM-dynamic.pt"
+    },
+    {
+      "engine": "onnxruntime",
+      "path": "GuitarLSTM/pytorch-version/models/model_0/GuitarLSTM-libtorch-dynamic.onnx"
+    },
+    {
+      "engine": "tflite",
+      "path": "GuitarLSTM/tensorflow-version/models/model_0/GuitarLSTM-256.tflite",
+      "tensors": {
+        "audio_in": { "layout": [0, 2, 1] }
+      }
+    },
+    {
+      "engine": "litert",
+      "path": "GuitarLSTM/tensorflow-version/models/model_0/GuitarLSTM-256.tflite",
+      "tensors": {
+        "audio_in": { "layout": [0, 2, 1] }
+      }
+    },
+    {
+      "engine": "executorch",
+      "path": "GuitarLSTM/pytorch-version/models/model_0/GuitarLSTM-executorch.pte"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "audio_in",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["any", 256], ["channel", 1], ["time", 150]],
+      "window": { "min": 405, "max": 405 },
+      "context": 149
+    }
+  ],
+  "outputs": [
+    {
+      "name": "audio_out",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["any", 256], ["time", 1]],
+      "window": { "min": 256, "max": 256 }
+    }
+  ]
+}

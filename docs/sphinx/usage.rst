@@ -180,7 +180,10 @@ not here, so one config serves every build.
   ``ANIRA_BYTES_COPY`` (the default) copies the bytes into the config; ``ANIRA_BYTES_BORROW``
   keeps your pointer, which must stay valid until the config is destroyed, when
   ``release(bytes, ctx)`` is called if given. ``set_model_bytes(i, bytes, ...)`` replaces the
-  source of an entry loaded from a file, e.g. to patch a path a JSON file named.
+  source of an entry loaded from a file, e.g. to patch a path a JSON file named: a plugin that
+  ships its model inside the binary loads the model file's text with ``from_json`` and swaps
+  each entry's source for the compiled-in bytes, matched by ``model_engine(i)``. The JUCE
+  example's variant 1 does exactly that (:doc:`examples`).
 - **Entry points.** A LibTorch or ExecuTorch file can carry several named methods (RAVE's
   ``encode`` and ``decode``). Name the one to run with the ``entry`` extension on the model
   entry:
@@ -470,29 +473,27 @@ In your application, you will need to create an instance of the :cpp:class:`anir
     // Create an InferenceHandler instance
     anira::InferenceHandler inference_handler(pp_processor, inference_config);
 
-3.1. (Optional) ContextConfig
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+3.1. (Optional) Machine configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-If you want to define a custom context configuration, you can do so by creating an instance of the :cpp:struct:`anira::ContextConfig` structure. This structure allows you to define the behaviour of the thread pool — the number of threads and how idle threads wait for new work — as well as the log level of anira and its inference backends.
+The machine configuration of section 1.4 (an ``anira::MachineConfig``, or the machine file of section 1.5) says how the inference threads behave — how many there are and how idle threads wait for new work — and how anira logs. The bridge turns it into the :cpp:struct:`anira::ContextConfig` the handler of this pre-release takes:
 
 .. code-block:: cpp
 
     // Use the existing anira::InferenceConfig and anira::PrePostProcessor instances
 
-    // Create an instance of anira::ContextConfig
-    anira::ContextConfig context_config {
-        4,                              // Number of threads
-        anira::WaitStrategy::Blocking,  // Idle threads block instead of polling
-        anira::LogLevel::Warning        // Only report warnings and errors
-    };
+    anira::MachineConfig machine;
+    machine.threads(4, ANIRA_WAIT_BLOCKING)  // four threads; idle threads block instead of polling
+        .log_level(ANIRA_LOG_WARNING);       // only report warnings and errors
+    anira::ContextConfig context_config = anira::v3compat::to_context_config(machine);
 
     // Create an InferenceHandler instance
     anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
 
-The wait strategy (:cpp:enum:`anira::WaitStrategy`) controls what an inference thread does while the shared inference queue is empty:
+The wait strategy (``ANIRA_WAIT_SPIN_BACKOFF`` / ``ANIRA_WAIT_BLOCKING``, :cpp:enum:`anira::WaitStrategy` on the 2.x side) controls what an inference thread does while the shared inference queue is empty:
 
-- ``anira::WaitStrategy::SpinBackoff`` (default): the thread polls the queue with an exponential backoff — a short hot-spin phase, then a yield/sleep loop with a period of roughly 100 µs. This gives the lowest possible pickup latency when new work arrives within microseconds of the thread going idle, at the cost of continuous polling syscalls and CPU wakeups for as long as the thread is idle.
-- ``anira::WaitStrategy::Blocking``: the thread blocks on the queue's semaphore and is woken directly by the enqueue. Idle threads consume no CPU, and the wakeup arrives immediately (typically within a few microseconds via a futex/semaphore signal). In exchange, the submitting thread pays one bounded, non-blocking semaphore signal per submission when a consumer is asleep — the same class of wakeup that audio servers like JACK and PipeWire issue from their real-time threads on every cycle.
+- ``ANIRA_WAIT_SPIN_BACKOFF`` (default): the thread polls the queue with an exponential backoff — a short hot-spin phase, then a yield/sleep loop with a period of roughly 100 µs. This gives the lowest possible pickup latency when new work arrives within microseconds of the thread going idle, at the cost of continuous polling syscalls and CPU wakeups for as long as the thread is idle.
+- ``ANIRA_WAIT_BLOCKING``: the thread blocks on the queue's semaphore and is woken directly by the enqueue. Idle threads consume no CPU, and the wakeup arrives immediately (typically within a few microseconds via a futex/semaphore signal). In exchange, the submitting thread pays one bounded, non-blocking semaphore signal per submission when a consumer is asleep — the same class of wakeup that audio servers like JACK and PipeWire issue from their real-time threads on every cycle.
 
 For models whose inference time dominates the round trip, the throughput of both strategies is identical within measurement noise — choose ``Blocking`` to eliminate idle CPU/power usage, and ``SpinBackoff`` only when sub-microsecond work-pickup latency matters.
 
@@ -503,32 +504,33 @@ For models whose inference time dominates the round trip, the throughput of both
     The thread pool exists exactly while :cpp:class:`anira::InferenceHandler` instances exist: the first instance's :cpp:struct:`anira::ContextConfig` builds it (its threads start with the first ``prepare()``), later instances' configurations are reconciled against it (the pool only shrinks, never grows, and never to zero; the most verbose log level wins), and destroying the last instance stops and joins every inference thread before its destructor returns. Once all instances are gone, the next instance's configuration takes effect afresh. For plugins this means the host may unload your library the moment the last instance is destroyed — see :ref:`plugin-library-unload` in the troubleshooting guide for the details and the Windows caveat.
 
 .. note::
-    On WebAssembly builds blocking waits are impossible — inference loops are driven cooperatively by JS Workers — so ``anira::WaitStrategy::Blocking`` is coerced to ``SpinBackoff`` with a warning, both by :cpp:class:`anira::JsonConfigLoader` and by the context itself.
+    On WebAssembly builds blocking waits are impossible — inference loops are driven cooperatively by JS Workers — so ``ANIRA_WAIT_BLOCKING`` is coerced to ``ANIRA_WAIT_SPIN_BACKOFF`` with a warning by the context.
 
 anira logs through `tanh-lib <https://github.com/tanh-lab/tanh-lib>`_'s ``thl::Logger``. Every record carries an ``anira.<component>`` group (``anira.context``, ``anira.scheduler``, ``anira.config``, ``anira.system``, ``anira.backend.<name>``, ``anira.web``), and anira never configures the sinks itself: where the messages end up is the host's decision, made with ``thl::Logger::set_config()`` / ``set_callback()``. By default tanh-lib writes to the platform log — ``os_log`` on macOS/iOS (visible in Console.app or ``log stream``), ``logcat`` on Android, stdout/stderr elsewhere; set ``LoggerConfig::m_console_enabled`` for a plain stdout/stderr console sink on Apple platforms.
 
-Messages from the audio thread and the inference threads are real-time safe: they are formatted on the caller's stack and pushed into a lock-free queue the context owns (a ``thl::Logger::rt::Queue``), and reach the same sinks a little later with ``source = "rt"``. :cpp:struct:`anira::LogConfig` (``ContextConfig::m_log``) says how that queue is drained:
+Messages from the audio thread and the inference threads are real-time safe: they are formatted on the caller's stack and pushed into a lock-free queue the context owns (a ``thl::Logger::rt::Queue``), and reach the same sinks a little later with ``source = "rt"``. The machine configuration (``machine.log_drain(...)`` and ``machine.log_queue_capacity(...)``, section 1.4; the ``log`` block of the machine file) says how that queue is drained:
 
-- ``LogDrain::Thread`` (the default natively): a low-priority thread (``thl::core::ThreadPriority::Low``, i.e. below UI work — under heavy CPU contention, e.g. more spinning inference threads than cores, delivery is delayed rather than competing with the audio path) owned by the context — started with the first :cpp:class:`anira::InferenceHandler`, stopped and joined when the last one is destroyed (and by :cpp:func:`anira::Context::shutdown`), exactly like the inference thread pool. Nothing of it survives the last handler, so a plugin host may unload the library right after.
-- ``LogDrain::Manual``: no thread. The host calls :cpp:func:`anira::InferenceHandler::drain_log` (or :cpp:func:`anira::Context::drain_log`) periodically, e.g. from a UI timer; the queue is shared by all handlers in the process, so pumping any one of them drains everything. The only mode on WebAssembly, where the web wrapper exposes it as ``drainAniraLog(wasmInstance)`` (``_anira_drain_log()``). Records logged before the last handler is destroyed are flushed on its release either way.
+- ``ANIRA_LOG_DRAIN_THREAD`` (the default natively): a low-priority thread (``thl::core::ThreadPriority::Low``, i.e. below UI work — under heavy CPU contention, e.g. more spinning inference threads than cores, delivery is delayed rather than competing with the audio path) owned by the context — started with the first :cpp:class:`anira::InferenceHandler`, stopped and joined when the last one is destroyed (and by :cpp:func:`anira::Context::shutdown`), exactly like the inference thread pool. Nothing of it survives the last handler, so a plugin host may unload the library right after.
+- ``ANIRA_LOG_DRAIN_MANUAL``: no thread. The host calls :cpp:func:`anira::InferenceHandler::drain_log` (or :cpp:func:`anira::Context::drain_log`) periodically, e.g. from a UI timer; the queue is shared by all handlers in the process, so pumping any one of them drains everything. The only mode on WebAssembly, where the web wrapper exposes it as ``drainAniraLog(wasmInstance)`` (``_anira_drain_log()``). Records logged before the last handler is destroyed are flushed on its release either way.
 
-``m_queue_capacity`` sizes the queue (rounded up to a power of two, clamped to [64, 65536]; a full queue drops and counts further records until the next drain, which then reports how many were lost) and ``m_drain_interval_ms`` the thread's pass interval; the rule of thumb is capacity ≥ burst rate × interval. The queue is created once per process by the first session and keeps its size — a later first session asking for more is told with a warning.
+``log_queue_capacity`` sizes the queue (rounded up to a power of two, clamped to [64, 65536]; a full queue drops and counts further records until the next drain, which then reports how many were lost) and the interval of ``log_drain`` the thread's pass interval; the rule of thumb is capacity ≥ burst rate × interval. The queue is created once per process by the first session and keeps its size — a later first session asking for more is told with a warning.
 
 .. note::
     What anira returns to you and what it logs, where the records go on each platform, and
     what anira promises about exceptions is the subject of :doc:`logging`. The paragraphs
     below describe the 2.x runtime's log configuration, which this pre-release still uses.
 
-The log level (:cpp:enum:`anira::LogLevel`, ``m_log.m_level``) is one setting for the whole inference stack: it is applied as the runtime level of ``thl::Logger`` and is forwarded to the logging facilities of the enabled backends — the ONNX Runtime environment severity, the LiteRT environment min-logger severity and the LibTorch/c10 log level (TFLite and ExecuTorch excepted — their prebuilt runtimes offer no runtime logging control). A message is emitted when its severity is at or above the configured level; the available levels are ``Debug``, ``Info``, ``Warning`` and ``Error``, where ``Debug`` additionally enables the backends' verbose output. The default is ``LogLevel::Info`` in debug builds and ``LogLevel::Error`` in release builds. Every level is compiled in on every build type (anira pins tanh-lib's compile-time ceiling, ``THL_LOG_COMPILED_MAX_LEVEL``, to its maximum), so the runtime level is the only filter.
+The log level (``machine.log_level``) is one setting for the whole inference stack: it is applied as the runtime level of ``thl::Logger`` and is forwarded to the logging facilities of the enabled backends — the ONNX Runtime environment severity, the LiteRT environment min-logger severity and the LibTorch/c10 log level (TFLite and ExecuTorch excepted — their prebuilt runtimes offer no runtime logging control). A message is emitted when its severity is at or above the configured level; the available levels are ``Debug``, ``Info``, ``Warning`` and ``Error``, where ``Debug`` additionally enables the backends' verbose output. The default is ``LogLevel::Info`` in debug builds and ``LogLevel::Error`` in release builds. Every level is compiled in on every build type (anira pins tanh-lib's compile-time ceiling, ``THL_LOG_COMPILED_MAX_LEVEL``, to its maximum), so the runtime level is the only filter.
 
 .. note::
-    Like the thread pool, the logging configuration is process-global — and the level also is ``thl::Logger``'s: a host that also uses tanh-lib shares one level with anira. If the ContextConfigs in a process disagree, the lowest (most verbose) requested level wins — no session can silence the diagnostics another session asked for — while drain mode, capacity and interval stay those of the first session; every mismatch is reported with a warning. The TFLite backend is exempt from the log level — the prebuilt TFLite C library does not export any runtime logging control, so its (rare) log lines are unaffected.
+    Like the thread pool, the logging configuration is process-global — and the level also is ``thl::Logger``'s: a host that also uses tanh-lib shares one level with anira. If the machine configurations in a process disagree, the lowest (most verbose) requested level wins — no session can silence the diagnostics another session asked for — while drain mode, capacity and interval stay those of the first session; every mismatch is reported with a warning. The TFLite backend is exempt from the log level — the prebuilt TFLite C library does not export any runtime logging control, so its (rare) log lines are unaffected.
 
-You can also opt out of the auto-managed thread pool entirely and supply your own threads. Pass ``0`` to :cpp:struct:`anira::ContextConfig` so the auto-pool stays empty, then create as many threads as you want via :cpp:func:`anira::Context::make_inference_thread`, call ``start()`` on each, and either call ``stop()`` or simply destroy the returned ``unique_ptr`` to tear them down.
+You can also opt out of the auto-managed thread pool entirely and supply your own threads. Ask for ``0`` threads (``machine.threads(0)``, or ``"num_threads": 0`` in the machine file) so the auto-pool stays empty, then create as many threads as you want via :cpp:func:`anira::Context::make_inference_thread`, call ``start()`` on each, and either call ``stop()`` or simply destroy the returned ``unique_ptr`` to tear them down.
 
 .. code-block:: cpp
 
-    anira::ContextConfig context_config { 0 }; // opt out of the auto-pool
+    anira::ContextConfig context_config =
+        anira::v3compat::to_context_config(anira::MachineConfig{}.threads(0));  // opt out of the auto-pool
     anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
 
     auto thread = anira::Context::make_inference_thread();
@@ -539,56 +541,33 @@ You can also opt out of the auto-managed thread pool entirely and supply your ow
 4. Get ready for Processing
 ---------------------------
 
-Before processing audio data, the :cpp:func:`anira::InferenceHandler::prepare` method of the :cpp:class:`anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The :cpp:func:`anira::InferenceHandler::prepare` method needs an instance of :cpp:struct:`anira::HostConfig` which defines the buffer size and sample rate of the host application. The active inference backend defaults to the first model in your :cpp:class:`anira::InferenceConfig` whose backend is available in the build (or to ``CUSTOM`` when a custom processor was passed to the constructor); to run a different backend, select it with the :cpp:func:`anira::InferenceHandler::set_inference_backend` method.
+Before processing audio data, the :cpp:func:`anira::InferenceHandler::prepare` method of the :cpp:class:`anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The :cpp:func:`anira::InferenceHandler::prepare` method needs an instance of :cpp:struct:`anira::HostConfig`, which the bridge builds from the Hard contract's geometry and the model config's anchor (4.1). The active inference backend defaults to the first model entry whose engine is in the build (or to ``CUSTOM`` when a custom processor was passed to the constructor); to run a different backend, select it with the :cpp:func:`anira::InferenceHandler::set_inference_backend` method.
 
-4.1. HostConfig
-~~~~~~~~~~~~~~~
+4.1. The host geometry
+~~~~~~~~~~~~~~~~~~~~~~
 
-The :cpp:struct:`anira::HostConfig` structure defines the host application's configuration, including buffer size and sample rate. This configuration is essential for the :cpp:class:`anira::InferenceHandler` to allocate appropriate memory and calculate processing latency.
-
-To construct :cpp:struct:`anira::HostConfig`, provide the buffer size and sample rate in samples of the *reference stream* — the streamable tensor whose samples are the unit of both values. By default the reference is resolved automatically: the first streamable input tensor, or, for generator models with no streamable input, the first streamable output tensor. For models with multiple streamable tensors you can name the reference explicitly with a tensor index and a direction (input or output). Naming a non-streamable or out-of-range tensor is an error: :cpp:func:`anira::InferenceHandler::prepare` throws ``std::invalid_argument`` instead of silently falling back.
-
-The structure also includes an optional parameter that controls whether the buffer size is seen as static or as the maximum buffer size. When this parameter is set to true, variable buffer sizes smaller than the specified maximum are allowed, which is useful for real-time applications with dynamic buffer sizes. However, this may increase the latency that anira calculates, since it needs to compensate for all possible size variations.
-
-**Create HostConfig with static buffer size (automatic reference):**
+The host's buffer size and sample rate are the geometry of the Hard contract (section 1.3): ``block_min`` and ``block_max`` in samples of the *anchor tensor* and ``rate`` in anchor samples per second. A contract loaded from a file carries no geometry; the host patches it in once it knows its block, and the bridge builds the :cpp:struct:`anira::HostConfig` that :cpp:func:`anira::InferenceHandler::prepare` takes from the contract and the model config:
 
 .. code-block:: cpp
 
-    anira::HostConfig host_config {
-        2048.f, // Buffer size in samples
-        44100.f // Sample rate in Hz
-    };
+    contract.hard_geometry(2048, 2048, 44100.0);  // a fixed block of 2048 samples at 44.1 kHz
+    inference_handler.prepare(anira::v3compat::to_host_config(contract, model_config));
 
-**Create HostConfig with maximum buffer size for input tensor 1:**
+``block_min == block_max`` is a fixed-block host. A ``block_min`` below ``block_max`` tells anira that the host may deliver smaller blocks up to the maximum, which is useful for real-time applications with dynamic buffer sizes; anira then reserves latency for every size the host may deliver.
 
 .. code-block:: cpp
 
-    anira::HostConfig host_config {
-        2048.f, // Buffer size in samples
-        44100.f, // Sample rate in Hz
-        true, // Allow smaller buffer sizes (optional, default is false)
-        1 // Reference tensor index (optional, default: first streamable tensor)
-    };
+    contract.hard_geometry(1, 2048, 44100.0);  // blocks of 1 to 2048 samples
 
-**Create HostConfig with an output tensor as the reference:**
-
-.. code-block:: cpp
-
-    anira::HostConfig host_config {
-        2048.f, // Buffer size in samples of output tensor 0
-        44100.f, // Sample rate in Hz
-        false, // Allow smaller buffer sizes
-        0, // Reference tensor index
-        false // The reference is an output tensor (optional, default is true = input)
-    };
+The anchor is the streamed tensor whose samples are the unit of both values. By default it is resolved automatically: the first streamed input, or, for generator models with no streamed input, the first streamed output. For models with several streamed tensors, name it with ``model_config.anchor("audio_out")`` (section 1.2) or ``"anchor": "audio_out"`` in the model file; a name that is not a streamed tensor is refused by the bridge with ``ANIRA_ERROR_CONFIG``.
 
 ..  note::
-    The buffer size parameter accepts floating-point values, allowing you to specify fractional relationships between the host buffer and the model processing buffer. For example, setting a buffer size of 0.5f means the :cpp:class:`anira::InferenceHandler` will receive one sample for the specified input tensor every two host buffer cycles. The latency calculation in anira accounts for this, assuming the sample is provided during the second host buffer cycle (worst-case scenario). If your model produces output at twice the input rate, the :cpp:class:`anira::InferenceHandler` can return one sample per host buffer cycle.
+    The second form of ``to_host_config`` takes the host's own numbers, which may be fractional: ``anira::v3compat::to_host_config(model_config, 0.5f, 44100.f / 2048.f)`` prepares a handler that receives one anchor sample every two host buffer cycles (the RAVE decoder of the JUCE example runs in the latent domain this way). The latency calculation accounts for this, assuming the sample is provided during the second host buffer cycle (the worst case). If your model produces output at twice the input rate, the :cpp:class:`anira::InferenceHandler` can return one sample per host buffer cycle.
 
 4.2. Prepare
 ~~~~~~~~~~~~
 
-The :cpp:func:`anira::InferenceHandler::prepare` method is called with an instance of :cpp:struct:`anira::HostConfig` to allocate the necessary memory for the inference process. This method must be called before processing audio data. You can optionally specify the latency compensation for the inference process by passing a latency value in samples for a specific output tensor or a vector of latency values for all output tensors. If you do not specify a latency value, anira will calculate a minimal latency based on the information in the :cpp:struct:`anira::HostConfig` and the :cpp:struct:`anira::InferenceConfig`. This latency calculation is quite sophisticated and you can read more about it in the :doc:`latency` section.
+The :cpp:func:`anira::InferenceHandler::prepare` method is called with an instance of :cpp:struct:`anira::HostConfig` to allocate the necessary memory for the inference process. This method must be called before processing audio data. You can optionally specify the latency compensation for the inference process by passing a latency value in samples for a specific output tensor or a vector of latency values for all output tensors. If you do not specify a latency value, anira will calculate a minimal latency based on the host geometry and the model configuration. This latency calculation is quite sophisticated and you can read more about it in the :doc:`latency` section.
 
 **Preparing without custom latency (automatic latency calculation):**
 
@@ -622,12 +601,14 @@ The :cpp:func:`anira::InferenceHandler::prepare` method is called with an instan
 
 Before processing audio, you must select which inference backend to use. The available backends depend on which ones were enabled during the build process. You can choose from:
 
-- ``anira::InferenceBackend::LIBTORCH`` - PyTorch/LibTorch models
-- ``anira::InferenceBackend::ONNX`` - ONNX Runtime models  
-- ``anira::InferenceBackend::TFLITE`` - TensorFlow Lite models
-- ``anira::InferenceBackend::CUSTOM`` - Custom backend implementations
+- ``anira::InferenceBackend::LIBTORCH`` - PyTorch/LibTorch models (``"engine": "libtorch"`` in the model file)
+- ``anira::InferenceBackend::ONNX`` - ONNX Runtime models (``"onnxruntime"``)
+- ``anira::InferenceBackend::LITERT`` - LiteRT models (``"litert"``; the default TensorFlow Lite family backend)
+- ``anira::InferenceBackend::TFLITE`` - legacy TensorFlow Lite models (``"tflite"``; mutually exclusive with LiteRT)
+- ``anira::InferenceBackend::EXECUTORCH`` - ExecuTorch programs (``"executorch"``)
+- ``anira::InferenceBackend::CUSTOM`` - Custom backend implementations (the ``anira.v2.custom`` engine)
 
-The first configured model's backend is selected automatically; to run another one, select the backend that corresponds to your model format:
+The first model entry's engine is selected automatically; to run another one, select the backend that corresponds to your model format:
 
 .. code-block:: cpp
 
@@ -779,7 +760,7 @@ The :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::Inferen
     delete[] output_data;
 
 .. note::
-    The :cpp:func:`anira::InferenceHandler::pop_data` method supports a wait_until parameter for blocking until data is available or timeout occurs. Use with the ``blocking_ratio`` in :cpp:struct:`anira::InferenceConfig` for proper latency compensation. Note that this blocks the real-time thread and is not fully lock-free, but this enables you to further reduce latency by waiting for the next available data.
+    The :cpp:func:`anira::InferenceHandler::pop_data` method supports a wait_until parameter for blocking until data is available or timeout occurs. Use with the contract's ``wait_ratio`` (section 1.3) for proper latency compensation. Note that this blocks the real-time thread and is not fully lock-free, but this enables you to further reduce latency by waiting for the next available data.
 
 .. note::
     :cpp:func:`anira::InferenceHandler::push_data` also collects finished inferences, as long as the receive buffers have room for them. Push-only usage is therefore fully supported for models whose results leave through non-streamable outputs (see section 5.4) — no periodic ``pop_data()`` or ``get_available_samples()`` call is needed. A *streamable* output must still be popped: if it never is, anira keeps the unread samples intact, stops collecting into the full buffer and logs a warning ("Output stream not consumed").
@@ -835,8 +816,8 @@ Streamable tensors may sit on one side only. A *generator* has no streamable inp
 
 .. code-block:: cpp
 
-    // Model: 4 control parameters in (non-streamable), 2048-sample audio stream out
-    // anira::InferenceConfig with ProcessingSpec({1}, {1}, {0}, {2048})
+    // Model file: one static input (the control parameters) and one streamed output of
+    // 2048 samples per inference
 
     void processBlock(float** audio_output, int num_samples, float frequency) {
         // Update the control parameters (any thread, captured at submission)
@@ -850,8 +831,7 @@ Streamable tensors may sit on one side only. A *generator* has no streamable inp
 
 .. code-block:: cpp
 
-    // Model: 2048-sample audio stream in + 1 control parameter in, 1 scalar out
-    // anira::InferenceConfig with ProcessingSpec({1, 1}, {1}, {2048, 0}, {0})
+    // Model file: a streamed 2048-sample input and a static input, one static output
 
     void processBlock(const float** audio_input, int num_samples) {
         // Push the stream; one inference runs per full 2048-sample window

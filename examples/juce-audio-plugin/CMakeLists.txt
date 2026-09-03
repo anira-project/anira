@@ -40,18 +40,18 @@ else()
 	set(FORMATS_TO_BUILD VST3 Standalone)
 endif()
 
-# Model options:
-# 0 -> steerable-nafx
-# 1 -> steerable-nafx - models loaded via binary data
+# The model the plugin runs. Every variant loads its model file and contract file from
+# extras/models (model_files.h) the same way; see PluginProcessor.h.
+# 0 -> steerable-nafx CNN
+# 1 -> steerable-nafx CNN, with the configuration files and the model files compiled into the
+#      plugin (juce_add_binary_data) instead of read from disk
 # 2 -> GuitarLSTM
-# 3 -> stateful-LSTM
-# 4 -> simple-gain
-# 5 -> simple-stereo-gain
-# 6 -> RAVE
-# 7 -> RAVE encoder-decoder
-# 8 -> RAVE - inference config loaded via json
-
-set(MODEL_TO_USE 1)
+# 3 -> stateful LSTM
+# 4 -> SimpleGainNetwork, mono
+# 5 -> SimpleGainNetwork, stereo
+# 6 -> RAVE funk drum
+# 7 -> RAVE funk drum as an encoder and a decoder handler
+set(MODEL_TO_USE 1 CACHE STRING "The model the example plugin runs, 0 to 7; see PluginProcessor.h")
 add_compile_definitions(MODEL_TO_USE=${MODEL_TO_USE})
 
 set (TARGET_NAME anira-juce-plugin-example)
@@ -134,14 +134,20 @@ target_link_libraries(${TARGET_NAME}
 )
 
 if(MODEL_TO_USE EQUAL 1)
+	# Variant 1 ships without the model tree: the CNN's model file, its contract file and the
+	# four exports the model file names are compiled into the plugin. The symbol names are
+	# JUCE's (the file name without punctuation, the extension after an underscore).
+	set(_cnn_dir "${ANIRA_EXTRAS_MODELS_DIR}/cnn")
 	juce_add_binary_data(BinaryData
 			HEADER_NAME "BinaryData.h"
 			NAMESPACE "BinaryData"
 			SOURCES
-
-			${STEERABLENAFX_MODELS_PATH_PYTORCH}/model_0/steerable-nafx-dynamic.pt
-			${STEERABLENAFX_MODELS_PATH_PYTORCH}/model_0/steerable-nafx-libtorch-dynamic.onnx
-			${STEERABLENAFX_MODELS_PATH_TENSORFLOW}/model_0/steerable-nafx-dynamic.tflite
+			${_cnn_dir}/cnn.model.json
+			${_cnn_dir}/cnn.contract.json
+			${_cnn_dir}/steerable-nafx/models/model_0/steerable-nafx-dynamic.pt
+			${_cnn_dir}/steerable-nafx/models/model_0/steerable-nafx-libtorch-dynamic.onnx
+			${_cnn_dir}/steerable-nafx/models/model_0/steerable-nafx-dynamic.tflite
+			${_cnn_dir}/steerable-nafx/models/model_0/steerable-nafx-executorch.pte
 	)
 
 	target_link_libraries(${TARGET_NAME}

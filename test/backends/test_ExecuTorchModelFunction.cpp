@@ -29,7 +29,9 @@ constexpr int k_timeout_secs = 5;
 
 anira::InferenceConfig make_config(const std::string& model_function) {
     const std::vector<anira::ModelData> model_data = {
-        {std::string(SIMPLEGAIN_MODEL_PATH) + "/simple_gain_network_multifunction.pte",
+        {std::string(ANIRA_EXTRAS_MODELS_DIR
+                     "/model-pool/example-models/SimpleGainNetwork/models") +
+             "/simple_gain_network_multifunction.pte",
          anira::InferenceBackend::EXECUTORCH,
          model_function},
     };
@@ -85,12 +87,13 @@ TEST(ExecuTorchModelFunction, NamedMethodSelectsItsGraph) {
 }
 
 TEST(ExecuTorchModelFunction, JsonConfigCarriesModelFunction) {
-    std::istringstream json{R"({
+    std::istringstream json{
+        R"({
         "inference_config": {
             "model_data": [
                 { "model_path": ")" +
-                            std::string(SIMPLEGAIN_MODEL_PATH) +
-                            R"(/simple_gain_network_multifunction.pte",
+        std::string(ANIRA_EXTRAS_MODELS_DIR "/model-pool/example-models/SimpleGainNetwork/models") +
+        R"(/simple_gain_network_multifunction.pte",
                   "inference_backend": "EXECUTORCH",
                   "model_function": "gain2" }
             ],

@@ -197,8 +197,7 @@ TEST(AbiBridge, HostConfigFromTheHardGeometryAndFromTheHostsOwn) {
     EXPECT_NE(thrown.m_what.find("geometry missing"), std::string::npos) << thrown.m_what;
 }
 
-TEST(AbiBridge, EnabledEnginesAndTheV2Default) {
+TEST(AbiBridge, EnabledEngines) {
     const std::vector<anira::Engine> engines = anira::v3compat::enabled_engines();
     for (const anira::Engine engine : engines) { EXPECT_NE(engine, ANIRA_ENGINE_NONE); }
-    EXPECT_GE(anira::v3compat::v2_default_instances(), 1U);
 }
