@@ -268,6 +268,14 @@ void Context::start_log_drain_locked(Core& c, const ContextConfig& context_confi
             logger_config.m_platform_tag = "anira";
             logger_config.m_platform_subsystem = "anira";
             logger_config.m_platform_category = "anira";
+            // set_config() also starts tanh-lib's own drain thread over its default
+            // real-time queue when m_rt_enabled is set, and the default config has it
+            // set. anira never uses that queue: the core owns its records (c.m_log_queue)
+            // and drains them itself (c.m_log_drain, or the host under LogDrain::Manual).
+            // A thread the core does not own would outlive every session, and inside a
+            // plugin it would still be alive when the host unloads the module (the
+            // LibraryUnload tests on the Windows static legs: the module stays mapped).
+            logger_config.m_rt_enabled = false;
             thl::Logger::set_config(logger_config);
         }
         // Once per core: the queue is what the real-time sites hold a pointer to, so it

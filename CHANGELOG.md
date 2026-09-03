@@ -42,6 +42,7 @@ The first pre-release of the 3.x line: the configuration layer of the versioned 
 
 ### Fixed
 
+- The context no longer starts tanh-lib's own log drain thread: setting the logger's platform identity at core start went through `thl::Logger::set_config()`, whose default `m_rt_enabled` also starts tanh-lib's drain thread over its default real-time queue, which anira never uses and never stopped. Inside a plugin that thread outlived every session and kept the module mapped after the host's `FreeLibrary` (the `LibraryUnload` tests on the Windows static release legs). The core passes `m_rt_enabled = false`; `Logger.TheCoreNeverStartsTanhLibsOwnDrainThread` pins it.
 - `test/abi`: the consumer-shaped compile gates now really compile without the test model-path defines (a directory-level clear; the target-level clear never applied to a parent `add_compile_definitions`), and the "2.x umbrella first" coexistence order is actually compiled (clang-format had regrouped the includes so both drivers compiled the same order).
 - A failing inference now delivers zeros for that task on every engine, never the previous job's output (ONNX Runtime copied stale outputs after a caught exception; LiteRT and ExecuTorch left the buffer untouched; TFLite ignored the status).
 - LibTorch: a `c10::Error` thrown by `forward` on the inference thread escaped the instance and left it marked busy forever (the pool loop then spun on the remaining instances). The inference now catches per task and the busy flag is released on every exit path.

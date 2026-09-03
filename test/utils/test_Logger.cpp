@@ -108,6 +108,21 @@ TEST(Logger, RtQueueExistsExactlyWhileTheCoreDoes) {
     }
 }
 
+TEST(Logger, TheCoreNeverStartsTanhLibsOwnDrainThread) {
+    // The core sets the logger's platform identity through set_config(), which would
+    // also start tanh-lib's drain thread over its default real-time queue if the config
+    // asked for it. anira drains its own queue (LogDrain::Thread or Manual); a thread
+    // the core does not own would survive every session and, inside a plugin, the
+    // host's unload of the module (LibraryUnload on the Windows static legs).
+    {
+        const Instance instance{make_context_config(LogDrain::Thread)};
+        EXPECT_FALSE(thl::Logger::rt::is_running())
+            << "tanh-lib's default drain thread runs while a session exists";
+    }
+    EXPECT_FALSE(thl::Logger::rt::is_running())
+        << "tanh-lib's default drain thread survived the last session";
+}
+
 #ifndef __EMSCRIPTEN__
 TEST(Logger, ThreadDrainDeliversRtRecordsWhileASessionExists) {
     RecordCollector collector;
