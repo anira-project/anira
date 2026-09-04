@@ -24,7 +24,7 @@ template anira::ModelConfig& anira::ModelConfig::model_ext<anira::ext::Entry>(
     uint32_t,
     const anira::ext::Entry&);
 template anira::ModelConfig& anira::ModelConfig::ext<anira::ext::Entry>(const anira::ext::Entry&);
-template anira::MachineConfig& anira::MachineConfig::ext<anira::ext::Entry>(
+template anira::ContextConfig& anira::ContextConfig::ext<anira::ext::Entry>(
     const anira::ext::Entry&);
 template anira::JobOptionsHandle& anira::JobOptionsHandle::ext<anira::ext::Entry>(
     const anira::ext::Entry&);
@@ -39,10 +39,10 @@ constexpr bool k_move_only =
 
 static_assert(k_move_only<anira::TensorSpec>);
 static_assert(k_move_only<anira::ModelConfig>);
-static_assert(k_move_only<anira::MachineConfig>);
+static_assert(k_move_only<anira::ContextConfig>);
 static_assert(k_move_only<anira::ContractHandle>);
 static_assert(k_move_only<anira::JobOptionsHandle>);
-static_assert(k_move_only<anira::Machine>);
+static_assert(k_move_only<anira::Context>);
 
 // The contract and job-option values are aggregates, spelled with designated initializers.
 static_assert(std::is_aggregate_v<anira::Hard>);
@@ -72,7 +72,7 @@ int anira_header_cxx20_probe() {
     if (false) {  // referenced so that it compiles; never run (no file, no C call)
         const std::filesystem::path path = "model.json";
         anira::ModelConfig model = anira::ModelConfig::from_file(path);
-        anira::MachineConfig machine = anira::MachineConfig::from_file(path);
+        anira::ContextConfig context = anira::ContextConfig::from_file(path);
         anira::ContractHandle loaded = anira::ContractHandle::from_file(path);
         anira::TensorSpec spec("x", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
         anira::JobOptionsHandle job(options);
@@ -80,13 +80,13 @@ int anira_header_cxx20_probe() {
             .axis(1, ANIRA_AXIS_TIME, ANIRA_DYNAMIC)
             .ext(anira::ext::Entry{.name = "x"});
         model.model_ext(0, anira::ext::Entry{.name = "decode"}).input(spec);
-        machine.ext(anira::ext::Entry{.name = "forward"});
+        context.ext(anira::ext::Entry{.name = "forward"});
         loaded.ext(anira::ext::Entry{.name = "forward"});
         job.ext(anira::ext::Entry{.name = "forward"});
         const anira::ContractHandle minted(contract);
-        checks += model.upgraded() || machine.upgraded() || loaded.upgraded() ? 1 : 0;
+        checks += model.upgraded() || context.upgraded() || loaded.upgraded() ? 1 : 0;
         checks += minted.native() != nullptr ? 1 : 0;
-        anira::Machine running(machine);
+        anira::Context running(context);
         const anira::Capabilities capabilities = running.capabilities();
         const std::vector<anira::BackendId> backends = capabilities.backends();
         const anira::BackendId first = backends.empty() ? anira::BackendId{} : backends.front();

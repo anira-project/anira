@@ -5,7 +5,7 @@
 // for the calls into it to return; a thread-local marks the entry whose callback is
 // running on the calling thread, which is how a remove from inside that sink is refused
 // instead of waiting for itself.
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
 #include <anira/utils/Logger.h>
@@ -177,7 +177,7 @@ void set_platform_sink_enabled(bool enabled) {
     if (config.m_platform_enabled == enabled) { return; }
     config.m_platform_enabled = enabled;
     // Never let set_config() start tanh-lib's own drain thread (see
-    // Context::start_log_drain_locked): the core drains its own queue.
+    // Core::start_log_drain_locked): the core drains its own queue.
     config.m_rt_enabled = false;
     thl::Logger::set_config(config);
 }

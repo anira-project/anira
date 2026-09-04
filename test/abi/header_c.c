@@ -5,10 +5,10 @@
  * uses. The per-file wrappers test/abi/CMakeLists.txt generates cover self-containment.
  */
 #include <anira/abi/config.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/log.h>
-#include <anira/abi/machine.h>
 #include <anira/abi/status.h>
 #include <anira/abi/thread.h>
 #include <anira/abi/version.h>
@@ -75,7 +75,7 @@ int anira_header_c_probe(void) {
                                                                                                 : 0;
     }
     {
-        /* The machine header's records and the entries a C host calls without a machine:
+        /* The context header's records and the entries a C host calls without a context:
            referenced so that the declarations compile; the object is never linked. */
         anira_backend_id backend = ANIRA_BACKEND_ID_INIT;
         anira_edge_info edge = ANIRA_EDGE_INFO_INIT;

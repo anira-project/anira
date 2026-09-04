@@ -9,14 +9,14 @@
 // fill *after* each pull makes the next pull deterministic regardless of
 // worker-thread scheduling.
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
 #include <anira/backends/BackendBase.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/HostConfig.h>
@@ -242,7 +242,7 @@ void drive_generator_with_process(InferenceHandler& handler,
 }
 
 // Collects what thl::Logger delivers to its sinks, so a test can assert on records anira
-// logs from the real-time paths. Those go into the context's lock-free queue; under
+// logs from the real-time paths. Those go into the core's lock-free queue; under
 // LogDrain::Manual the test delivers them deterministically with
 // InferenceHandler::drain_log() before it looks (instead of a drain thread racing the
 // assertions, or a stderr capture that never sees the sinks).
@@ -295,7 +295,7 @@ TEST_P(OneSidedStreamingTest, GeneratorProcessProducesParamAfterLatency) {
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, smaller));
 
     GeneratorModel model;
@@ -316,7 +316,7 @@ TEST_P(OneSidedStreamingTest, GeneratorPushPopEquivalent) {
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, smaller));
 
     GeneratorModel model;
@@ -354,7 +354,7 @@ TEST(OneSidedStreamingStandalone, GeneratorPushDataNeverSubmits) {
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     unsigned int const latency = handler.get_latency(0);
@@ -370,7 +370,7 @@ TEST(OneSidedStreamingStandalone, GeneratorPushDataNeverSubmits) {
         << "Only the latency pre-fill may be in the ring.";
 
     // The struct pool must be untouched: every struct free, no pending timestamps.
-    auto const sessions = Context::get_sessions();
+    auto const sessions = Core::get_sessions();
     ASSERT_EQ(sessions.size(), 1u);
     EXPECT_TRUE(sessions[0]->m_time_stamps.empty());
     for (const auto& ts_struct : sessions[0]->m_inference_queue) {
@@ -391,7 +391,7 @@ TEST_P(OneSidedStreamingTest, GeneratorResetReanchors) {
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, smaller));
 
     GeneratorModel model;
@@ -468,7 +468,7 @@ TEST_P(OneSidedStreamingTest, GeneratorPrepareReentry) {
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, smaller));
 
     GeneratorModel model;
@@ -499,7 +499,7 @@ TEST(OneSidedStreamingStandalone, GeneratorStatefulSessionExclusive) {
     InferenceConfig config = generator_config(/*session_exclusive=*/true);
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     GeneratorModel model;
@@ -518,7 +518,7 @@ TEST(OneSidedStreamingStandalone, GeneratorNonRealtimeIsDeterministic) {
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
     handler.set_non_realtime(true);
 
@@ -564,7 +564,7 @@ TEST_P(OneSidedStreamingTest, AnalyserProcessLatestCompleted) {
     InferenceConfig config = analyser_config();
     PrePostProcessor pp_processor(config);
     MeanPlusParamAnalyserBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, smaller));
 
     EXPECT_EQ(handler.get_latency(0), 0u) << "A non-streamable output has no stream latency.";
@@ -628,13 +628,13 @@ TEST(OneSidedStreamingStandalone, AnalyserPushOnlyNeverStalls) {
     InferenceConfig config = analyser_config();
     PrePostProcessor pp_processor(config);
     MeanPlusParamAnalyserBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     float const param = 10.f;
     pp_processor.set_input(param, 1, 0);
 
-    auto const sessions = Context::get_sessions();
+    auto const sessions = Core::get_sessions();
     ASSERT_EQ(sessions.size(), 1u);
     size_t const num_structs = sessions[0]->m_num_structs;
     ASSERT_GE(num_structs, 1u);
@@ -665,7 +665,7 @@ TEST(OneSidedStreamingStandalone, AnalyserResetKeepsLatestValue) {
     InferenceConfig config = analyser_config();
     PrePostProcessor pp_processor(config);
     MeanPlusParamAnalyserBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     pp_processor.set_input(2.f, 1, 0);
@@ -692,7 +692,7 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushEveryBlockPopEveryBlock) {
     InferenceConfig config = two_sided_config();
     PrePostProcessor pp_processor(config);
     CountingCopyBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     unsigned int const latency = handler.get_latency(0);
@@ -736,17 +736,17 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     PrePostProcessor pp_processor(config);
     CountingCopyBackend backend(config);
     // The warning asserted below is an ANIRA_LOG_RT_WARNING, filtered by the log level
-    // the Context applies from its ContextConfig (Error in release builds), and queued
-    // in the context's real-time log queue: with LogDrain::Manual the test drains it
+    // the Context applies from its CoreConfig (Error in release builds), and queued
+    // in the core's real-time log queue: with LogDrain::Manual the test drains it
     // itself, right before each assertion, into the LogRecordCollector below.
-    ContextConfig context_config(2, WaitStrategy::SpinBackoff, LogLevel::Warning);
-    context_config.m_log.m_drain = LogDrain::Manual;
-    InferenceHandler handler(pp_processor, config, backend, context_config);
+    CoreConfig core_config(2, WaitStrategy::SpinBackoff, LogLevel::Warning);
+    core_config.m_log.m_drain = LogDrain::Manual;
+    InferenceHandler handler(pp_processor, config, backend, core_config);
     handler.prepare(HostConfig(512, 48000, false));
     LogRecordCollector log_records;
 
     unsigned int const latency = handler.get_latency(0);
-    auto const sessions = Context::get_sessions();
+    auto const sessions = Core::get_sessions();
     ASSERT_EQ(sessions.size(), 1u);
     SessionElement& session = *sessions[0];
     size_t const num_structs = session.m_num_structs;
@@ -819,7 +819,7 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     handler.drain_log();
     std::string const captured_gated = log_records.take();
     // tanh-lib compiles records above THL_LOG_COMPILED_MAX_LEVEL out (Error only in
-    // Release builds, see the note on ContextConfig::m_log), so the warning can only be
+    // Release builds, see the note on CoreConfig::m_log), so the warning can only be
     // asserted where Warning is compiled in; the gate itself is asserted either way.
     constexpr bool k_warning_compiled_in =
         static_cast<std::uint32_t>(THL_LOG_COMPILED_MAX_LEVEL) >=
@@ -864,7 +864,7 @@ TEST(OneSidedStreamingStandalone, GeneratorInPlaceOverloadIsHarmless) {
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     std::vector<float> buffer(512, 0.5f);
@@ -882,7 +882,7 @@ TEST(OneSidedStreamingStandalone, GeneratorInPlaceOverloadIsHarmless) {
 TEST(OneSidedStreamingStandalone, PrepareCustomLatencyIndexOutOfRangeThrows) {
     InferenceConfig config = two_sided_config();
     PrePostProcessor pp_processor(config);
-    InferenceHandler handler(pp_processor, config, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, CoreConfig(2));
     EXPECT_THROW(handler.prepare(HostConfig(512, 48000), 128U, /*tensor_index=*/99),
                  std::invalid_argument);
 }
@@ -919,7 +919,7 @@ void drive_blocking_generator(int first_sleep_us,
     ParamFillGeneratorBackend backend(config);
     backend.m_first_sleep_us = first_sleep_us;
     backend.m_sleep_us = sleep_us;
-    InferenceHandler handler(pp_processor, config, backend, ContextConfig(2));
+    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(static_cast<float>(host_block), 48000, false));
     size_t const latency = handler.get_latency(0);
 

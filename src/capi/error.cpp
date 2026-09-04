@@ -1,6 +1,6 @@
 #include <anira/abi/export.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/utils/Logger.h>
 
 #include <array>
@@ -47,11 +47,11 @@ private:
 
 /// The failure-path drain (strategy section 4): the real-time records queued before the
 /// failure reach the sinks on the failing caller's thread, before the status does.
-/// Context::drain_log takes no lock and the queue is multi-consumer, so this is safe
+/// Core::drain_log takes no lock and the queue is multi-consumer, so this is safe
 /// beside the running drain thread; a sink that throws is not this entry's failure.
 void drain_on_failure() noexcept {
     try {
-        static_cast<void>(anira::Context::drain_log());
+        static_cast<void>(anira::Core::drain_log());
     } catch (...) {  // NOLINT(bugprone-empty-catch) nothing left to report on a noexcept path
     }
 }

@@ -186,7 +186,7 @@ set(TANH_WITH_TSAN ${ANIRA_WITH_TSAN})
 set(TANH_WITH_LSAN ${ANIRA_WITH_LSAN})
 set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
 # Every log level is compiled into anira's private logger in every build type, so that the
-# runtime level of the machine config is the only filter and a warning the call survives
+# runtime level of the context config is the only filter and a warning the call survives
 # exists in a shipped build (docs/anira-v3-error-and-log-strategy.md, rule 4). tanh-lib's
 # own default would compile everything below Error out of Release builds.
 set(TANH_LOG_COMPILED_MAX_LEVEL 4)
@@ -283,7 +283,7 @@ target_sources(${PROJECT_NAME}
         # Scheduler
         src/scheduler/InferenceManager.cpp
         src/scheduler/InferenceThread.cpp
-        src/scheduler/Context.cpp
+        src/scheduler/Core.cpp
         src/scheduler/SessionElement.cpp
         src/scheduler/LatencyCalculator.cpp
 
@@ -320,7 +320,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/json.cpp
     src/capi/layout.cpp
     src/capi/log.cpp
-    src/capi/machine.cpp
+    src/capi/context.cpp
     src/capi/thread.cpp
     src/capi/translate.cpp
     src/capi/v3_to_v2.cpp

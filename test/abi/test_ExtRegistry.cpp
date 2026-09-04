@@ -184,13 +184,13 @@ TEST(AbiExtRegistry, ConsumedOrFailWalkNamesTheOffender) {
     EXPECT_STREQ(err.message,
                  "extension 'entry' on model 1 is not consumed by any stage in this build");
 
-    // Machine and contract hosts are walked when given.
+    // Context and contract hosts are walked when given.
     model.m_models.clear();
-    anira_machine_config machine;
-    ASSERT_EQ(machine.m_ext.set(&unknown, &err), ANIRA_OK);
-    EXPECT_EQ(anira::capi::ext_check_consumed(model, &machine, nullptr, nullptr, 0, &err),
+    anira_context_config context;
+    ASSERT_EQ(context.m_ext.set(&unknown, &err), ANIRA_OK);
+    EXPECT_EQ(anira::capi::ext_check_consumed(model, &context, nullptr, nullptr, 0, &err),
               ANIRA_ERROR_EXTENSION_UNKNOWN);
-    EXPECT_NE(std::strstr(err.message, "on machine"), nullptr);
+    EXPECT_NE(std::strstr(err.message, "on context"), nullptr);
     anira_contract contract;
     ASSERT_EQ(contract.m_ext.set(&entry.header, &err), ANIRA_OK);
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, &contract, nullptr, 0, &err),

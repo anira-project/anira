@@ -16,7 +16,7 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                  juce::Identifier(getName()),
                  PluginParameters::createParameterLayout())
 // model_config, contract and inference_config are initialised in the header, from the files.
-// No ContextConfig is passed: the library default (half the hardware threads for inference)
+// No CoreConfig is passed: the library default (half the hardware threads for inference)
 // is what this plugin wants; section 3.1 of the usage guide shows how to change it.
 #if MODEL_TO_USE != 7
     , pp_processor(inference_config)

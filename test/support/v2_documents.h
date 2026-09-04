@@ -1,5 +1,5 @@
 // The 2.x configuration documents of four bundled models, as text: what a 2.x deployment wrote
-// by hand (an inference_config block, optionally a context_config block, absolute model paths).
+// by hand (an inference_config block, optionally a core_config block, absolute model paths).
 // The 2.x JsonConfigLoader reads them as they are and the 3.x loaders upgrade them; the tests
 // compare both against the 3.x files of extras/models. Built at run time because the 2.x
 // format takes absolute paths: @MODELS@ stands for ANIRA_EXTRAS_MODELS_DIR.

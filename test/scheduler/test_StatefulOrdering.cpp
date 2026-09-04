@@ -1,5 +1,5 @@
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
@@ -135,10 +135,10 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
     StatefulCounterBackend backend(config);
 
     // Use multiple threads to increase chance of out-of-order dequeue
-    ContextConfig context_config;
-    context_config.m_num_threads = 4;
+    CoreConfig core_config;
+    core_config.m_num_threads = 4;
 
-    InferenceHandler handler(pp_processor, config, backend, context_config);
+    InferenceHandler handler(pp_processor, config, backend, core_config);
 
     HostConfig const host_config(params.m_host_buffer_size, params.m_sample_rate);
     handler.prepare(host_config);

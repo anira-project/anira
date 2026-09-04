@@ -1,9 +1,9 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/backends/BackendBase.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 
@@ -20,7 +20,7 @@
 
 using namespace anira;
 
-// Regression tests for issue #106: Context::create_session() used to count the
+// Regression tests for issue #106: Core::create_session() used to count the
 // session before doing the work that can throw (loading the model in a backend
 // processor's constructor, a custom processor's prepare()) and registered it only
 // afterwards. A throw therefore left the active-session counter permanently
@@ -35,7 +35,7 @@ namespace {
 // asynchronously after prepare(); only the join side (count 0) is synchronous.
 bool wait_for_num_inference_threads(unsigned int expected) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (Context::get_num_inference_threads() != expected) {
+    while (Core::get_num_inference_threads() != expected) {
         if (std::chrono::steady_clock::now() > deadline) { return false; }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -61,10 +61,10 @@ struct ThrowingProcessor : public BackendBase {
 };
 
 void expect_clean_slate() {
-    EXPECT_EQ(Context::get_num_sessions(), 0) << "a failed session was left registered";
-    EXPECT_EQ(Context::get_num_inference_threads(), 0u)
+    EXPECT_EQ(Core::get_num_sessions(), 0) << "a failed session was left registered";
+    EXPECT_EQ(Core::get_num_inference_threads(), 0u)
         << "inference threads survived a failed session creation";
-    EXPECT_FALSE(Context::has_inference_threads())
+    EXPECT_FALSE(Core::has_inference_threads())
         << "a thread pool was built for a session that never existed";
 }
 
@@ -73,9 +73,9 @@ void expect_next_handler_lifecycle_intact() {
     {
         InferenceConfig inference_config = make_custom_config();
         PrePostProcessor pp_processor(inference_config);
-        InferenceHandler handler(pp_processor, inference_config, ContextConfig(2));
+        InferenceHandler handler(pp_processor, inference_config, CoreConfig(2));
         handler.prepare(HostConfig(512, 48000));
-        EXPECT_EQ(Context::get_num_sessions(), 1);
+        EXPECT_EQ(Core::get_num_sessions(), 1);
         EXPECT_TRUE(wait_for_num_inference_threads(2));
     }
     expect_clean_slate();
@@ -86,7 +86,7 @@ void expect_next_handler_lifecycle_intact() {
 // Several failures in a row must not accumulate anything either (the original
 // report: "each failed load adds another increment").
 TEST(CreateSessionFailureTest, RepeatedFailuresLeakNothing) {
-    ASSERT_EQ(Context::get_num_sessions(), 0);
+    ASSERT_EQ(Core::get_num_sessions(), 0);
 
     InferenceConfig inference_config = make_custom_config();
     PrePostProcessor pp_processor(inference_config);
@@ -101,7 +101,7 @@ TEST(CreateSessionFailureTest, RepeatedFailuresLeakNothing) {
                     const InferenceHandler handler(pp_processor,
                                                    inference_config,
                                                    throwing_processor,
-                                                   ContextConfig(2));
+                                                   CoreConfig(2));
                 },
                 std::runtime_error);
         } else {
@@ -109,7 +109,7 @@ TEST(CreateSessionFailureTest, RepeatedFailuresLeakNothing) {
                 const InferenceHandler handler(pp_processor,
                                                inference_config,
                                                throwing_processor,
-                                               ContextConfig(2));
+                                               CoreConfig(2));
             });
         }
         expect_clean_slate();
@@ -119,11 +119,11 @@ TEST(CreateSessionFailureTest, RepeatedFailuresLeakNothing) {
 
 // A failure while other sessions exist must leave those sessions' pool alone.
 TEST(CreateSessionFailureTest, FailureBesideLiveSessionKeepsItsPool) {
-    ASSERT_EQ(Context::get_num_sessions(), 0);
+    ASSERT_EQ(Core::get_num_sessions(), 0);
 
     InferenceConfig live_config = make_custom_config();
     PrePostProcessor live_pp(live_config);
-    InferenceHandler live_handler(live_pp, live_config, ContextConfig(2));
+    InferenceHandler live_handler(live_pp, live_config, CoreConfig(2));
     live_handler.prepare(HostConfig(512, 48000));
     ASSERT_TRUE(wait_for_num_inference_threads(2));
 
@@ -134,10 +134,10 @@ TEST(CreateSessionFailureTest, FailureBesideLiveSessionKeepsItsPool) {
         const InferenceHandler handler(pp_processor,
                                        inference_config,
                                        throwing_processor,
-                                       ContextConfig(2));
+                                       CoreConfig(2));
     });
 
-    EXPECT_EQ(Context::get_num_sessions(), 1);
+    EXPECT_EQ(Core::get_num_sessions(), 1);
     EXPECT_TRUE(wait_for_num_inference_threads(2));
 }
 
@@ -146,7 +146,7 @@ TEST(CreateSessionFailureTest, FailureBesideLiveSessionKeepsItsPool) {
 // OnnxRuntimeProcessor constructor, i.e. from inside create_session()'s processor
 // setup — the same path as the custom processor above, but through a real backend.
 TEST(CreateSessionFailureTest, UnloadableOnnxModelLeaksNothing) {
-    ASSERT_EQ(Context::get_num_sessions(), 0);
+    ASSERT_EQ(Core::get_num_sessions(), 0);
 
     const std::filesystem::path model_path =
         std::filesystem::temp_directory_path() / "anira_create_session_failure_not_a_model.onnx";
@@ -163,7 +163,7 @@ TEST(CreateSessionFailureTest, UnloadableOnnxModelLeaksNothing) {
         PrePostProcessor pp_processor(inference_config);
 
         EXPECT_ANY_THROW(
-            { const InferenceHandler handler(pp_processor, inference_config, ContextConfig(2)); });
+            { const InferenceHandler handler(pp_processor, inference_config, CoreConfig(2)); });
     }
     std::filesystem::remove(model_path);
 
@@ -203,7 +203,7 @@ void expect_missing_file_is_no_such_file(InferenceBackend backend, const char* e
         42.66f);
     PrePostProcessor pp_processor(inference_config);
     const anira::StatusError error = status_error_of(
-        [&] { const InferenceHandler handler(pp_processor, inference_config, ContextConfig(2)); });
+        [&] { const InferenceHandler handler(pp_processor, inference_config, CoreConfig(2)); });
     EXPECT_EQ(error.status(), ANIRA_ERROR_NO_SUCH_FILE) << error.what();
     const std::string what = error.what();
     EXPECT_NE(what.find(engine), std::string::npos) << what;
@@ -215,7 +215,7 @@ void expect_missing_file_is_no_such_file(InferenceBackend backend, const char* e
 }  // namespace
 
 TEST(CreateSessionFailureTest, MissingModelFileIsNoSuchFileOnEveryBackend) {
-    ASSERT_EQ(Context::get_num_sessions(), 0);
+    ASSERT_EQ(Core::get_num_sessions(), 0);
 #ifdef USE_ONNXRUNTIME
     expect_missing_file_is_no_such_file(InferenceBackend::ONNX, "onnxruntime");
 #endif
@@ -236,7 +236,7 @@ TEST(CreateSessionFailureTest, MissingModelFileIsNoSuchFileOnEveryBackend) {
 
 #ifdef USE_ONNXRUNTIME
 TEST(CreateSessionFailureTest, UnloadableModelIsModelLoadWithTheEngineText) {
-    ASSERT_EQ(Context::get_num_sessions(), 0);
+    ASSERT_EQ(Core::get_num_sessions(), 0);
     const std::filesystem::path model_path =
         std::filesystem::temp_directory_path() / "anira_create_session_failure_engine_text.onnx";
     {
@@ -249,9 +249,8 @@ TEST(CreateSessionFailureTest, UnloadableModelIsModelLoadWithTheEngineText) {
             std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
             42.66f);
         PrePostProcessor pp_processor(inference_config);
-        const anira::StatusError error = status_error_of([&] {
-            const InferenceHandler handler(pp_processor, inference_config, ContextConfig(2));
-        });
+        const anira::StatusError error = status_error_of(
+            [&] { const InferenceHandler handler(pp_processor, inference_config, CoreConfig(2)); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_MODEL_LOAD) << error.what();
         const std::string what = error.what();
         EXPECT_EQ(what.rfind("onnxruntime: ", 0), 0) << "the engine name leads: " << what;

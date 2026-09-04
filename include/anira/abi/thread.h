@@ -9,11 +9,11 @@
  * @file thread.h
  * @brief User-driven inference threads, the WebAssembly Worker's primitive.
  *
- * A host that configured its machine with num_threads = 0 drives inference itself: it creates
+ * A host that configured its context with num_threads = 0 drives inference itself: it creates
  * anira_inference_thread objects, bound to the core's queue, and either lets anira start an OS
  * thread for each (anira_inference_thread_start, native only) or runs the loop on a thread of
  * its own (anira_inference_thread_run_loop, the only form on WebAssembly, where the thread is a
- * Worker). The objects outlive the machine that created them and must be stopped before the
+ * Worker). The objects outlive the context that created them and must be stopped before the
  * library is unloaded.
  */
 
@@ -32,15 +32,15 @@ extern "C" {
  * @brief Creates an inference thread bound to the core's queue. Nothing runs until
  * anira_inference_thread_start or anira_inference_thread_run_loop; on WebAssembly the
  * object is created on the main instance and run in a Worker.
- * @param machine The machine whose core the thread serves; its wait strategy is the thread's.
+ * @param context The context whose core the thread serves; its wait strategy is the thread's.
  * @param out Receives the object on success.
  * @param err Nullable.
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL machine or out.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL context or out.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
-ANIRA_API anira_status ANIRA_CALL anira_inference_thread_create(anira_machine* machine,
+ANIRA_API anira_status ANIRA_CALL anira_inference_thread_create(anira_context* context,
                                                                 anira_inference_thread** out,
                                                                 anira_error* err) ANIRA_NOEXCEPT;
 
@@ -145,7 +145,7 @@ ANIRA_API void ANIRA_CALL anira_inference_thread_destroy(anira_inference_thread*
 
 /**
  * @brief The size of the default inference thread pool in this copy of anira: the pool exists
- * while a handler does, so 0 before the first handler and when the machine brought its
+ * while a handler does, so 0 before the first handler and when the context brought its
  * own threads. User-driven threads are not counted.
  * @return The pool size.
  * @par Thread contract

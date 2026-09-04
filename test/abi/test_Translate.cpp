@@ -2,9 +2,9 @@
 // face: every section-2 rule the 2.x runtime can honour returns ANIRA_ERROR_CONFIG with a
 // message naming the tensor or the entry, everything the 2.x runtime cannot do returns
 // ANIRA_ERROR_NOT_SUPPORTED, and a valid configuration maps onto the 2.x InferenceConfig,
-// ContextConfig and HostConfig the same way the 2.x constructors would build them.
+// CoreConfig and HostConfig the same way the 2.x constructors would build them.
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
@@ -31,9 +31,9 @@
 
 namespace {
 
+using anira::ContextConfig;
 using anira::ContractHandle;
 using anira::Hard;
-using anira::MachineConfig;
 using anira::ModelConfig;
 using anira::TensorSpec;
 
@@ -455,8 +455,8 @@ TEST(AbiTranslate, NullArgumentsAreInvalidArgument) {
                                                    out,
                                                    &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    anira::ContextConfig context;
-    EXPECT_EQ(anira::v3compat::to_context_config(nullptr, context, &err),
+    anira::CoreConfig context;
+    EXPECT_EQ(anira::v3compat::to_core_config(nullptr, context, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
     anira::HostConfig host;
     EXPECT_EQ(anira::v3compat::to_host_config(nullptr, model.native(), host, &err),
@@ -850,36 +850,36 @@ TEST(AbiTranslate, ContractRules) {
 }
 
 // ============================================================================
-// ContextConfig and HostConfig
+// CoreConfig and HostConfig
 // ============================================================================
 
-TEST(AbiTranslate, MachineScalarsLandInTheContextConfig) {
-    MachineConfig machine;
-    machine.threads(2, ANIRA_WAIT_BLOCKING)
+TEST(AbiTranslate, ContextScalarsLandInTheContextConfig) {
+    ContextConfig context;
+    context.threads(2, ANIRA_WAIT_BLOCKING)
         .log_level(ANIRA_LOG_ERROR)
         .log_drain(ANIRA_LOG_DRAIN_MANUAL, 25)
         .log_queue_capacity(1024);
-    anira::ContextConfig context;
+    anira::CoreConfig core;
     anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(anira::v3compat::to_context_config(machine.native(), context, &err), ANIRA_OK)
+    ASSERT_EQ(anira::v3compat::to_core_config(context.native(), core, &err), ANIRA_OK)
         << err.message;
-    EXPECT_EQ(context.m_num_threads, 2U);
-    EXPECT_EQ(context.m_wait_strategy, anira::WaitStrategy::Blocking);
-    EXPECT_EQ(context.m_log.m_level, anira::LogLevel::Error);
-    EXPECT_EQ(context.m_log.m_drain, anira::LogDrain::Manual);
-    EXPECT_EQ(context.m_log.m_drain_interval_ms, 25U);
-    EXPECT_EQ(context.m_log.m_queue_capacity, 1024U);
+    EXPECT_EQ(core.m_num_threads, 2U);
+    EXPECT_EQ(core.m_wait_strategy, anira::WaitStrategy::Blocking);
+    EXPECT_EQ(core.m_log.m_level, anira::LogLevel::Error);
+    EXPECT_EQ(core.m_log.m_drain, anira::LogDrain::Manual);
+    EXPECT_EQ(core.m_log.m_drain_interval_ms, 25U);
+    EXPECT_EQ(core.m_log.m_queue_capacity, 1024U);
 
-    const MachineConfig automatic;
-    ASSERT_EQ(anira::v3compat::to_context_config(automatic.native(), context, &err), ANIRA_OK);
-    EXPECT_EQ(context.m_num_threads, anira::default_num_threads());
-    EXPECT_EQ(context.m_wait_strategy, anira::WaitStrategy::SpinBackoff);
-    EXPECT_EQ(context.m_log.m_level, anira::LogLevel::Warning);
-    EXPECT_EQ(context.m_log.m_drain, anira::LogDrain::Thread);
+    const ContextConfig automatic;
+    ASSERT_EQ(anira::v3compat::to_core_config(automatic.native(), core, &err), ANIRA_OK);
+    EXPECT_EQ(core.m_num_threads, anira::default_num_threads());
+    EXPECT_EQ(core.m_wait_strategy, anira::WaitStrategy::SpinBackoff);
+    EXPECT_EQ(core.m_log.m_level, anira::LogLevel::Warning);
+    EXPECT_EQ(core.m_log.m_drain, anira::LogDrain::Thread);
 
-    MachineConfig unknown;
+    ContextConfig unknown;
     unknown.ext_json("de.example.unknown", R"({"version": 1})");
-    EXPECT_EQ(anira::v3compat::to_context_config(unknown.native(), context, &err),
+    EXPECT_EQ(anira::v3compat::to_core_config(unknown.native(), core, &err),
               ANIRA_ERROR_EXTENSION_UNKNOWN);
     expect_contains(err.message, "de.example.unknown");
 }

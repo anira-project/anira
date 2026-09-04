@@ -71,8 +71,8 @@ void SessionElement::clear() {
     //   - the send/receive ring buffers and timestamp bookkeeping (audio-thread only), and
     //   - the internals of structs that are currently FREE.
     // In-flight structs (m_free == false) are left entirely untouched. The generation
-    // bump in Context::reset_session() makes their eventual result be ignored
-    // (Context::new_data_request generation guard) and Context::reclaim_stale_structs()
+    // bump in Core::reset_session() makes their eventual result be ignored
+    // (Core::new_data_request generation guard) and Core::reclaim_stale_structs()
     // (run from new_data_submitted) reclaims them once the worker publishes completion.
     for (auto& buffer : m_send_buffer) { buffer.clear_with_positions(); }
     for (auto& buffer : m_receive_buffer) { buffer.clear_with_positions(); }
@@ -210,7 +210,7 @@ void SessionElement::discard_pending_dispatches() {
 }
 
 void SessionElement::force_reset_dispatch_chain() {
-    // Quiescent contexts only (Context::drain_inference_queue has run): no task of
+    // Quiescent contexts only (Core::drain_inference_queue has run): no task of
     // this session is queued or running, but a laggard worker — one that was
     // invisible to the drain and woke on the stale-skip path — may still
     // TRANSIENTLY hold the gate while it filters the pending queue. Never erase a
@@ -269,7 +269,7 @@ void SessionElement::prepare(const HostConfig& host_config,
     m_latency = latency_calculator.get_synced_output_latencies();
     // Twice the steady-state bound: a wait-free reset() leaves every in-flight
     // inference in its struct until the worker publishes completion (see
-    // Context::reclaim_stale_structs), while the fresh schedule already claims structs
+    // Core::reclaim_stale_structs), while the fresh schedule already claims structs
     // of its own. One pool drains, one pool serves, so a single reset never drops a hop.
     m_num_structs = 2 * latency_calculator.get_num_structs();
 

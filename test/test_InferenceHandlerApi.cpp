@@ -4,7 +4,7 @@
 // the small delegating accessors. A deterministic CUSTOM backend keeps this
 // independent of any engine or model file.
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
@@ -74,13 +74,13 @@ protected:
         : m_config(std::move(config)), m_pp_processor(m_config) {}
 
     InferenceHandler& prepared_handler() {
-        m_handler = std::make_unique<InferenceHandler>(m_pp_processor, m_config, ContextConfig(2));
+        m_handler = std::make_unique<InferenceHandler>(m_pp_processor, m_config, CoreConfig(2));
         m_handler->prepare(HostConfig(k_block, k_sample_rate));
         return *m_handler;
     }
 
     InferenceHandler& unprepared_handler() {
-        m_handler = std::make_unique<InferenceHandler>(m_pp_processor, m_config, ContextConfig(2));
+        m_handler = std::make_unique<InferenceHandler>(m_pp_processor, m_config, CoreConfig(2));
         return *m_handler;
     }
 
@@ -247,7 +247,7 @@ TEST_F(HandlerTest, PrepareRejectsAnOutOfRangeTensorIndex) {
 // through the fixture's handler factories.
 TEST_F(HandlerTest, CustomProcessorConstructor) {
     BackendBase backend(m_config);
-    InferenceHandler handler(m_pp_processor, m_config, backend, ContextConfig(2));
+    InferenceHandler handler(m_pp_processor, m_config, backend, CoreConfig(2));
     handler.prepare(HostConfig(k_block, k_sample_rate));
 
     std::vector<float> channel(k_block, 0.5F);

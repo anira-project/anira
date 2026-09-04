@@ -1,6 +1,6 @@
 #include "translate.h"
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
@@ -184,12 +184,12 @@ void check_spec(const anira_tensor_spec& spec,
             config_error(where + "window_max " + std::to_string(spec.m_window_max) +
                          " is below window_min " + std::to_string(spec.m_window_min));
         }
-        if (spec.m_context >= spec.m_window_min) {
-            config_error(where + "context " + std::to_string(spec.m_context) +
+        if (spec.m_core >= spec.m_window_min) {
+            config_error(where + "context " + std::to_string(spec.m_core) +
                          " must be below window_min " + std::to_string(spec.m_window_min));
         }
     } else {
-        if (spec.m_window_min != 0 || spec.m_window_max != 0 || spec.m_context != 0) {
+        if (spec.m_window_min != 0 || spec.m_window_max != 0 || spec.m_core != 0) {
             config_error(where + std::string("a ") + role + " tensor has no window");
         }
         if (spec.m_ratio_num != 0 || spec.m_ratio_den != 0) {
@@ -229,12 +229,12 @@ void check_spec(const anira_tensor_spec& spec,
                              std::to_string(den) + " gives a fractional hop for block_max " +
                              std::to_string(block));
             }
-            used = block * num / den + spec.m_context;
+            used = block * num / den + spec.m_core;
             used = std::max(used, spec.m_window_min);
             if (spec.m_window_max != ANIRA_UNBOUNDED) { used = std::min(used, spec.m_window_max); }
         }
         out.m_window_used = used;
-        out.m_hop = used - spec.m_context;
+        out.m_hop = used - spec.m_core;
         if (out.m_dims[*time_axis] == ANIRA_DYNAMIC) { out.m_dims[*time_axis] = used; }
     }
 }
@@ -450,13 +450,13 @@ void check_layouts(const anira_model_config& model, const Derived& derived) {
 }
 
 void check_extensions(const anira_model_config& model,
-                      const anira_machine_config* machine,
+                      const anira_context_config* context,
                       const anira_contract* contract,
                       const anira_engine* candidates,
                       uint32_t num_candidates) {
     anira_error local = ANIRA_ERROR_INIT;
     const anira_status status =
-        ext_check_consumed(model, machine, contract, candidates, num_candidates, &local);
+        ext_check_consumed(model, context, contract, candidates, num_candidates, &local);
     if (ANIRA_FAILED(status)) { refuse(status, local.message); }
 }
 
@@ -655,21 +655,21 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
             model.m_max_instances};
 }
 
-anira::ContextConfig make_context_config(const anira_machine_config& machine) {
+anira::CoreConfig make_core_config(const anira_context_config& context) {
     const anira_model_config no_model;
-    check_extensions(no_model, &machine, nullptr, nullptr, 0);
-    const unsigned int threads = machine.m_num_threads == ANIRA_THREADS_AUTO
+    check_extensions(no_model, &context, nullptr, nullptr, 0);
+    const unsigned int threads = context.m_num_threads == ANIRA_THREADS_AUTO
                                      ? anira::default_num_threads()
-                                     : machine.m_num_threads;
-    const anira::WaitStrategy wait = machine.m_wait == ANIRA_WAIT_BLOCKING
+                                     : context.m_num_threads;
+    const anira::WaitStrategy wait = context.m_wait == ANIRA_WAIT_BLOCKING
                                          ? anira::WaitStrategy::Blocking
                                          : anira::WaitStrategy::SpinBackoff;
-    anira::ContextConfig context(threads, wait, log_level_of(machine.m_log_level));
-    context.m_log.m_drain = machine.m_log_drain == ANIRA_LOG_DRAIN_MANUAL ? anira::LogDrain::Manual
-                                                                          : anira::LogDrain::Thread;
-    context.m_log.m_drain_interval_ms = machine.m_drain_interval_ms;
-    context.m_log.m_queue_capacity = machine.m_queue_capacity;
-    return context;
+    anira::CoreConfig core(threads, wait, log_level_of(context.m_log_level));
+    core.m_log.m_drain = context.m_log_drain == ANIRA_LOG_DRAIN_MANUAL ? anira::LogDrain::Manual
+                                                                       : anira::LogDrain::Thread;
+    core.m_log.m_drain_interval_ms = context.m_drain_interval_ms;
+    core.m_log.m_queue_capacity = context.m_queue_capacity;
+    return core;
 }
 
 anira::HostConfig make_host_config(const anira_contract& contract,

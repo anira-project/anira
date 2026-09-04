@@ -14,7 +14,7 @@ Where the 2.x API stands in this pre-release
 
 - **Configuration** is the 3.x API: the handles of section 1 of the :doc:`usage` guide and the
   JSON files of its section 1.5. The 2.x classes :cpp:struct:`anira::InferenceConfig`,
-  :cpp:struct:`anira::ContextConfig`, :cpp:struct:`anira::HostConfig`,
+  :cpp:struct:`anira::CoreConfig`, :cpp:struct:`anira::HostConfig`,
   :cpp:struct:`anira::ModelData`, :cpp:struct:`anira::TensorShape`,
   :cpp:struct:`anira::ProcessingSpec` and :cpp:class:`anira::JsonConfigLoader` remain public and
   exported through the alpha releases of the 3.x line.
@@ -51,10 +51,13 @@ Configuration in code
 ---------------------
 
 One 2.x ``anira::InferenceConfig`` becomes one ``anira::ModelConfig`` plus one Hard
-``anira::ContractHandle``; one ``anira::ContextConfig`` becomes one ``anira::MachineConfig``; the
+``anira::ContractHandle``; one 2.x ``ContextConfig`` becomes one ``anira::ContextConfig`` (the
+3.x name is the 2.x name: it is the same role, the per-handler request that the shared *core*
+reconciles; the 2.x struct itself is ``anira::CoreConfig`` on the 3.x line, and what it
+configures is ``anira::Core``, the object the 2.x API called ``Context``); the
 ``anira::HostConfig`` handed to ``prepare`` becomes the geometry of the Hard contract and the anchor of
 the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` (``cfg``,
-``spec``, ``contract`` and ``machine`` are the handles) with the C entry of
+``spec``, ``contract`` and ``context`` are the handles) with the C entry of
 ``anira/abi/config.h`` beside it; section 1 of the :doc:`usage` guide describes both.
 
 .. list-table::
@@ -111,14 +114,14 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
      - ``cfg.state(ANIRA_MODEL_STATEFUL)`` (``anira_model_config_set_state``).
    * - ``anira::InferenceConfig::num_parallel_processors``
      - ``cfg.max_instances(n)`` (``anira_model_config_set_max_instances``).
-   * - ``anira::ContextConfig::num_threads`` / ``wait_strategy``
-     - ``machine.threads(num_threads, wait)`` (``anira_machine_config_set_threads``);
+   * - ``anira::CoreConfig::num_threads`` / ``wait_strategy``
+     - ``context.threads(num_threads, wait)`` (``anira_context_config_set_threads``);
        ``ANIRA_THREADS_AUTO`` is the 2.x default, ``0`` means the host brings its own threads.
    * - ``anira::LogConfig`` (``level``, ``drain``, ``queue_capacity``, ``drain_interval_ms``)
-     - ``machine.log_level`` / ``log_drain`` / ``log_queue_capacity``
-       (``anira_machine_config_set_log_level`` / ``set_log_drain`` /
-       ``set_log_queue_capacity``), or all at once with ``machine.log(desc)``
-       (``anira_machine_config_set_log``).
+     - ``context.log_level`` / ``log_drain`` / ``log_queue_capacity``
+       (``anira_context_config_set_log_level`` / ``set_log_drain`` /
+       ``set_log_queue_capacity``), or all at once with ``context.log(desc)``
+       (``anira_context_config_set_log``).
    * - ``anira::HostConfig{buffer_size, sample_rate}``
      - ``anira::Hard{.block_min, .block_max, .rate}`` (``anira_contract_create_hard``) or
        ``contract.hard_geometry(block_min, block_max, rate)``
@@ -151,11 +154,11 @@ pre-release that ships the 3.x handler removes it.
     anira::Hard hard{.budget = ANIRA_BUDGET_EXPLICIT,
                      .budget_value = std::chrono::microseconds(42660),
                      .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2};
-    anira::MachineConfig machine;                 // section 1.4
+    anira::ContextConfig context;                 // section 1.4
 
     anira::InferenceConfig inference_config = anira::v3compat::to_inference_config(cfg, hard);
-    anira::ContextConfig context_config = anira::v3compat::to_context_config(machine);
-    anira::InferenceHandler handler(pp_processor, inference_config, context_config);
+    anira::CoreConfig core_config = anira::v3compat::to_core_config(context);
+    anira::InferenceHandler handler(pp_processor, inference_config, core_config);
 
     // prepare, once the host geometry is known
     hard.block_min = hard.block_max = samples_per_block;
@@ -163,7 +166,7 @@ pre-release that ships the 3.x handler removes it.
     handler.prepare(anira::v3compat::to_host_config(hard, cfg));
 
 The overloads over the ``anira.hpp`` handles (``ModelConfig``, ``ContractHandle`` or a
-``Hard`` aggregate, ``MachineConfig``) return the 2.x object and throw ``anira::Error`` with
+``Hard`` aggregate, ``ContextConfig``) return the 2.x object and throw ``anira::Error`` with
 the reason; the same four functions exist over the C handles with a status and an
 ``anira_error`` (``to_inference_config(const anira_model_config*, const anira_contract*,
 const anira_engine* candidates, uint32_t num_candidates, anira::InferenceConfig&,
@@ -200,9 +203,9 @@ decoder with ``samplesPerBlock / 2048.f``).
    * - ``Hard.block_max`` / ``rate``; ``block_min < block_max``; ``anchor``
      - ``HostConfig{buffer_size, sample_rate}``; ``allow_smaller_buffers``;
        ``tensor_index`` / ``tensor_is_input`` (the 2.x default when no anchor is set).
-   * - ``MachineConfig`` threads (``ANIRA_THREADS_AUTO`` = the 2.x default), wait strategy,
+   * - ``ContextConfig`` threads (``ANIRA_THREADS_AUTO`` = the 2.x default), wait strategy,
        log level, drain, interval and queue capacity
-     - ``ContextConfig`` and its ``LogConfig``. The log sink, the log flags and the device
+     - ``CoreConfig`` and its ``LogConfig``. The log sink, the log flags and the device
        descriptors have no 2.x counterpart and are not carried.
 
 **What the 2.x runtime cannot do** is refused with ``ANIRA_ERROR_NOT_SUPPORTED`` and a message
@@ -241,7 +244,7 @@ fixture uses, the order does not matter.
 JSON files
 ----------
 
-The 2.x configuration file has two roots, ``context_config`` and ``inference_config``, and
+The 2.x configuration file has two roots, ``core_config`` and ``inference_config``, and
 mirrors the 2.x structs:
 
 .. code-block:: json
@@ -276,7 +279,7 @@ mirrors the 2.x structs:
     }
 
 The 3.x loaders (``anira_model_config_from_json`` / ``_from_json_file``,
-``anira_machine_config_from_json``, ``anira_contract_from_json``) recognise such a document by
+``anira_context_config_from_json``, ``anira_contract_from_json``) recognise such a document by
 its roots and upgrade it in memory, returning ``ANIRA_SUCCESS_UPGRADED``. That is a success:
 test a loader's result with ``ANIRA_FAILED(status)``, never with ``status != ANIRA_OK``. One
 warning is logged per process. Unlike the 2.x loader, nothing is silently dropped: a malformed
@@ -288,10 +291,10 @@ entry is ``ANIRA_ERROR_JSON`` with the key path in ``anira_error::message``.
 
    * - 2.x key
      - 3.x
-   * - ``context_config.num_threads``, ``wait_strategy``
-     - The machine file's ``num_threads`` and ``wait_strategy``.
-   * - ``context_config.log`` (or the pre-2.3 bare ``log_level``)
-     - The machine file's ``log`` block; the bare key is accepted on this path only.
+   * - ``core_config.num_threads``, ``wait_strategy``
+     - The context file's ``num_threads`` and ``wait_strategy``.
+   * - ``core_config.log`` (or the pre-2.3 bare ``log_level``)
+     - The context file's ``log`` block; the bare key is accepted on this path only.
    * - ``model_data[].model_path``, ``inference_backend``
      - ``models[].path`` and ``engine``; the upper-case 2.x names are accepted on this path
        only (``"ONNX"`` becomes ``"onnxruntime"``), ``"CUSTOM"`` becomes the custom engine
@@ -341,21 +344,21 @@ its default (the first streamed tensor), which is what the 2.x ``anira::HostConf
     }
 
 In C++ the same document goes through the ``anira.hpp`` loaders: the model config from its
-``inference_config`` block, the Hard contract that block held back, and the machine config
-from its ``context_config`` block. Bridged, they are the 2.x objects the file described:
+``inference_config`` block, the Hard contract that block held back, and the context config
+from its ``core_config`` block. Bridged, they are the 2.x objects the file described:
 
 .. code-block:: cpp
 
     anira::ModelConfig model_config = anira::ModelConfig::from_file("Config.json");
     anira::ContractHandle contract = model_config.take_legacy_contract().value();  // upgraded()
-    anira::MachineConfig machine_config = anira::MachineConfig::from_file("Config.json");
+    anira::ContextConfig context_config = anira::ContextConfig::from_file("Config.json");
 
     anira::InferenceConfig inference_config = anira::v3compat::to_inference_config(
         model_config, contract, anira::v3compat::enabled_engines());
-    anira::ContextConfig context_config = anira::v3compat::to_context_config(machine_config);
+    anira::CoreConfig core_config = anira::v3compat::to_core_config(context_config);
 
 **Converting a file.** Reading a 2.x file and writing the handle back is the migration tool:
-``anira_model_config_to_json`` and ``anira_machine_config_to_json`` write the 3.x spelling with a
+``anira_model_config_to_json`` and ``anira_context_config_to_json`` write the 3.x spelling with a
 fixed key order. Both take ``(buf, cap, out_len)`` and return ``ANIRA_ERROR_BUFFER_TOO_SMALL``
 with the required length in ``out_len``, so call once with a NULL buffer to size it. The
 contract has no writer; write the ``{"hard": ...}`` file by hand from the values the legacy
@@ -375,7 +378,7 @@ the 2.x structs in this pre-release:
 .. code-block:: cpp
 
     anira::JsonConfigLoader json_config_loader("path/to/Config.json");
-    anira::ContextConfig context_config = std::move(*json_config_loader.get_context_config());
+    anira::CoreConfig core_config = std::move(*json_config_loader.get_core_config());
     anira::InferenceConfig inference_config = std::move(*json_config_loader.get_inference_config());
 
 Its getters return a ``std::unique_ptr`` each; move the value out before using it. The loader
@@ -385,6 +388,6 @@ value is reported through the log and skipped, an unparseable ``model_data`` or
 configuration that still has model data, a tensor shape and ``max_inference_time`` yields an
 :cpp:struct:`anira::InferenceConfig`; anything less returns ``nullptr``, which the caller must
 check. On WebAssembly builds ``"blocking"`` is coerced to ``"spin_backoff"``, a ``num_threads``
-other than ``0`` to ``0`` and ``drain`` to ``"manual"``, each with a warning: the context
+other than ``0`` to ``0`` and ``drain`` to ``"manual"``, each with a warning: the core
 cannot run threads on the web, they are created from JavaScript via
 ``AniraWeb.spinUpInferenceWorker()``.

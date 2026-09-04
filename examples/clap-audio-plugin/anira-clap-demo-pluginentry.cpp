@@ -1,4 +1,4 @@
-#include <anira/abi/machine.h>
+#include <anira/abi/context.h>
 
 #include <cmath>
 #include <cstring>
@@ -46,7 +46,7 @@ void clap_deinit() {
     // lock. anira's inference threads are already gone once the last plugin instance
     // was destroyed; this is the backstop for a static embedding — and the only place
     // where it can run on Windows. anira_shutdown() is idempotent and refuses
-    // (ANIRA_ERROR_INVALID_STATE, nothing happens) while a machine or a handler of this
+    // (ANIRA_ERROR_INVALID_STATE, nothing happens) while a context or a handler of this
     // copy of anira still exists, so it cannot silence another client's sessions.
     anira_shutdown();
 }

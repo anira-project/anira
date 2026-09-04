@@ -1,14 +1,14 @@
-// anira/abi/machine.h: the machine handle over the core, its Host-only capabilities, the
+// anira/abi/context.h: the context handle over the core, its Host-only capabilities, the
 // enabled-backends query, the steady clock and the shutdown family. Every control entry
 // sits behind the exception firewall of capi_internal.h.
-#include "machine.h"
+#include "context.h"
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
-#include <anira/abi/machine.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/utils/Logger.h>
 
 #include <algorithm>
@@ -30,9 +30,9 @@ using anira::capi::translate_exception;
 
 namespace {
 
-// The two process-wide switches a machine's log flags reach: the platform sink is off
-// while any live machine asked for that, the boundary trace is on while any live machine
-// asked for that. Counted, so a second machine's destroy does not undo the first's request.
+// The two process-wide switches a context's log flags reach: the platform sink is off
+// while any live context asked for that, the boundary trace is on while any live context
+// asked for that. Counted, so a second context's destroy does not undo the first's request.
 struct FlagCounts {
     std::mutex m_mutex;
     unsigned int m_platform_sink_disabled = 0;
@@ -44,10 +44,10 @@ FlagCounts& flag_counts() {
     return *k_counts;
 }
 
-void apply_log_flags(anira_machine& machine, bool acquire) {
-    if (machine.m_flags_applied == acquire) { return; }
-    machine.m_flags_applied = acquire;
-    const uint32_t flags = machine.m_config.m_log_flags;
+void apply_log_flags(anira_context& context, bool acquire) {
+    if (context.m_flags_applied == acquire) { return; }
+    context.m_flags_applied = acquire;
+    const uint32_t flags = context.m_config.m_log_flags;
     FlagCounts& counts = flag_counts();
     const std::scoped_lock<std::mutex> lock(counts.m_mutex);
     if ((flags & ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK) != 0) {
@@ -60,7 +60,7 @@ void apply_log_flags(anira_machine& machine, bool acquire) {
     }
 }
 
-bool has_device_block(const anira_machine_config& config) {
+bool has_device_block(const anira_context_config& config) {
     return config.m_cuda.has_value() || config.m_gl.has_value() || config.m_vulkan.has_value() ||
            config.m_metal.has_value() || config.m_d3d12.has_value() || config.m_webgpu.has_value();
 }
@@ -146,89 +146,89 @@ constexpr uint32_t k_edge_info_head = 7 * sizeof(uint32_t);
 
 namespace anira::capi {
 
-void machine_add_ref(anira_machine* machine) noexcept {
-    if (machine != nullptr) { machine->m_refcount.fetch_add(1, std::memory_order_acq_rel); }
+void context_add_ref(anira_context* context) noexcept {
+    if (context != nullptr) { context->m_refcount.fetch_add(1, std::memory_order_acq_rel); }
 }
 
-void machine_release(anira_machine* machine) noexcept {
-    if (machine != nullptr && machine->m_refcount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        delete machine;
+void context_release(anira_context* context) noexcept {
+    if (context != nullptr && context->m_refcount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        delete context;
     }
 }
 
 }  // namespace anira::capi
 
-// ==== the machine ===========================================================================
+// ==== the context ===========================================================================
 
-anira_status ANIRA_CALL anira_machine_create(const anira_machine_config* config,
-                                             anira_machine** out,
+anira_status ANIRA_CALL anira_context_create(const anira_context_config* config,
+                                             anira_context** out,
                                              anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(config != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "machine: NULL config");
-    ANIRA_CAPI_REQUIRE(out != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "machine: NULL out");
+                       "context: NULL config");
+    ANIRA_CAPI_REQUIRE(out != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "context: NULL out");
     ANIRA_CAPI_REQUIRE(!has_device_block(*config),
                        err,
                        ANIRA_ERROR_NOT_SUPPORTED,
-                       "machine: device blocks (cuda, gl, vulkan, metal, d3d12, webgpu) are not "
-                       "supported in this pre-release; the machine is Host-only");
-    auto machine = std::make_unique<anira_machine>();
-    machine->m_config = *config;
+                       "context: device blocks (cuda, gl, vulkan, metal, d3d12, webgpu) are not "
+                       "supported in this pre-release; the context is Host-only");
+    auto context = std::make_unique<anira_context>();
+    context->m_config = *config;
     // The 2.x spelling of the config, and the consumed-or-fail walk over its extensions.
-    machine->m_context_config = anira::capi::make_context_config(*config);
+    context->m_core_config = anira::capi::make_core_config(*config);
     // The sink first, so that it sees the reconciliation's own records.
-    machine->m_sink =
+    context->m_sink =
         anira::detail::add_log_sink(config->m_sink, config->m_sink_user_data, config->m_log_level);
     try {
-        anira::Context::register_machine(machine->m_context_config);
-        machine->m_registered = true;
-        apply_log_flags(*machine, true);
-        probe_host_only(machine->m_capabilities);
+        anira::Core::register_context(context->m_core_config);
+        context->m_registered = true;
+        apply_log_flags(*context, true);
+        probe_host_only(context->m_capabilities);
     } catch (...) {
-        apply_log_flags(*machine, false);
-        if (machine->m_registered) { anira::Context::unregister_machine(); }
-        anira::detail::remove_log_sink(machine->m_sink);
+        apply_log_flags(*context, false);
+        if (context->m_registered) { anira::Core::unregister_context(); }
+        anira::detail::remove_log_sink(context->m_sink);
         throw;
     }
-    *out = machine.release();
+    *out = context.release();
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
-void ANIRA_CALL anira_machine_destroy(anira_machine* machine) ANIRA_NOEXCEPT try {
-    if (machine == nullptr) { return; }
-    if (anira::detail::inside_log_sink(machine->m_sink)) {
+void ANIRA_CALL anira_context_destroy(anira_context* context) ANIRA_NOEXCEPT try {
+    if (context == nullptr) { return; }
+    if (anira::detail::inside_log_sink(context->m_sink)) {
         // Waiting for this sink's in-flight calls would wait for the caller itself.
         ANIRA_LOG_ERROR(anira::log_group::k_capi,
-                        "anira_machine_destroy: called from inside the machine's own log sink; "
-                        "nothing happens. Destroy the machine from a thread that is not "
+                        "anira_context_destroy: called from inside the context's own log sink; "
+                        "nothing happens. Destroy the context from a thread that is not "
                         "delivering its records.");
         return;
     }
     // The last user's flush runs while the sink is still registered, so the records
     // queued before the destroy reach it.
-    if (machine->m_registered) {
-        machine->m_registered = false;
-        anira::Context::unregister_machine();
+    if (context->m_registered) {
+        context->m_registered = false;
+        anira::Core::unregister_context();
     }
-    anira::detail::remove_log_sink(machine->m_sink);
-    machine->m_sink = 0;
-    apply_log_flags(*machine, false);
-    anira::capi::machine_release(machine);
+    anira::detail::remove_log_sink(context->m_sink);
+    context->m_sink = 0;
+    apply_log_flags(*context, false);
+    anira::capi::context_release(context);
 } catch (...) { anira::capi::report_void_failure(__func__); }
 
-anira_status ANIRA_CALL anira_machine_probe(anira_machine* machine,
+anira_status ANIRA_CALL anira_context_probe(anira_context* context,
                                             anira_bool force,
                                             anira_error* err) ANIRA_NOEXCEPT try {
-    ANIRA_CAPI_REQUIRE(machine != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "machine: NULL");
+    ANIRA_CAPI_REQUIRE(context != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "context: NULL");
     static_cast<void>(force);  // nothing is cached in the Host-only report
-    probe_host_only(machine->m_capabilities);
+    probe_host_only(context->m_capabilities);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
-const anira_capabilities* ANIRA_CALL anira_machine_capabilities(const anira_machine* machine)
+const anira_capabilities* ANIRA_CALL anira_context_capabilities(const anira_context* context)
     ANIRA_NOEXCEPT {
-    return machine == nullptr ? nullptr : &machine->m_capabilities;
+    return context == nullptr ? nullptr : &context->m_capabilities;
 }
 
 anira_status ANIRA_CALL anira_capabilities_backends(const anira_capabilities* capabilities,
@@ -301,28 +301,28 @@ anira_status ANIRA_CALL anira_enabled_backends(uint32_t element_size,
     return enumerate_records(backends, element_size, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-uint64_t ANIRA_CALL anira_machine_byte_image_bytes(const anira_machine* machine,
+uint64_t ANIRA_CALL anira_context_byte_image_bytes(const anira_context* context,
                                                    uint64_t num_elements,
                                                    anira_dtype dtype) ANIRA_NOEXCEPT {
-    if (machine == nullptr) { return 0; }
+    if (context == nullptr) { return 0; }
     const uint64_t bits = static_cast<uint64_t>(ANIRA_DTYPE_BITS(dtype)) * ANIRA_DTYPE_LANES(dtype);
     if (bits == 0) { return 0; }
     return num_elements * ((bits + 7) / 8);  // the dense host encoding
 }
 
-size_t ANIRA_CALL anira_machine_drain_log(anira_machine* machine) ANIRA_NOEXCEPT try {
-    if (machine == nullptr) { return 0; }
-    return anira::Context::drain_log();
+size_t ANIRA_CALL anira_context_drain_log(anira_context* context) ANIRA_NOEXCEPT try {
+    if (context == nullptr) { return 0; }
+    return anira::Core::drain_log();
 } catch (...) {
     // A sink that throws while draining must not recurse into the logger.
     anira::capi::report_void_failure_quiet(__func__);
     return 0;
 }
 
-uint32_t ANIRA_CALL anira_machine_num_inference_threads(const anira_machine* machine) ANIRA_NOEXCEPT
+uint32_t ANIRA_CALL anira_context_num_inference_threads(const anira_context* context) ANIRA_NOEXCEPT
     try {
-    if (machine == nullptr) { return 0; }
-    return static_cast<uint32_t>(anira::Context::get_thread_pool_size());
+    if (context == nullptr) { return 0; }
+    return static_cast<uint32_t>(anira::Core::get_thread_pool_size());
 } catch (...) {
     anira::capi::report_void_failure(__func__);
     return 0;
@@ -345,26 +345,26 @@ double ANIRA_CALL anira_now_ms(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
 
 anira_status ANIRA_CALL anira_shutdown(void) ANIRA_NOEXCEPT try {
     // Never construct the core: a binary that never used anira has nothing to shut down.
-    if (!anira::Context::has_core()) { return ANIRA_OK; }
-    if (anira::Context::get_num_machines() > 0 || anira::Context::get_num_sessions() > 0) {
+    if (!anira::Core::has_core()) { return ANIRA_OK; }
+    if (anira::Core::get_num_contexts() > 0 || anira::Core::get_num_sessions() > 0) {
         anira::capi::fail(nullptr,
                           ANIRA_ERROR_INVALID_STATE,
                           __func__,
-                          "a machine or a handler still exists in this copy of anira; nothing "
+                          "a context or a handler still exists in this copy of anira; nothing "
                           "was shut down");
         return ANIRA_ERROR_INVALID_STATE;
     }
-    anira::Context::shutdown();
+    anira::Core::shutdown();
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_bool ANIRA_CALL anira_release_core_if_idle(void) ANIRA_NOEXCEPT try {
-    return anira::Context::release_core_if_idle() ? 1U : 0U;
+    return anira::Core::release_core_if_idle() ? 1U : 0U;
 } catch (...) {
     anira::capi::report_void_failure(__func__);
     return 0U;
 }
 
 anira_bool ANIRA_CALL anira_has_core(void) ANIRA_NOEXCEPT {
-    return anira::Context::has_core() ? 1U : 0U;
+    return anira::Core::has_core() ? 1U : 0U;
 }

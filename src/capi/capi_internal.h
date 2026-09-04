@@ -88,8 +88,8 @@ void report_void_failure_quiet(const char* entry) noexcept;
 
 /// The boundary trace switch (ANIRA_LOG_FLAG_TRACE_FAILURES): while set, every failed
 /// status of every entry emits one Error record whose message bytes are the anira_error
-/// message prefixed by the entry and the status text. Process-global; the machine config
-/// stores the flag and the machine (M2) applies it. Exported for the tests.
+/// message prefixed by the entry and the status text. Process-global; the context config
+/// stores the flag and the context (M2) applies it. Exported for the tests.
 ANIRA_API void set_trace_failures(bool enabled) noexcept;
 ANIRA_API bool trace_failures() noexcept;
 

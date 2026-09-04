@@ -8,7 +8,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "anira/ContextConfig.h"
+#include "anira/CoreConfig.h"
 #include "anira/system/Exports.h"
 
 /**
@@ -28,11 +28,11 @@
  * - ANIRA_LOG_RT_{DEBUG,INFO,WARNING,ERROR}: real-time safe. Never allocates, locks
  *   or makes a system call: the message is formatted on the caller's stack with a
  *   locale-free printf subset (see tanh/core/RtFormat.h for the supported
- *   conversions) and pushed into the context's own bounded lock-free queue
+ *   conversions) and pushed into the core's own bounded lock-free queue
  *   (thl::Logger::rt::Queue, sized by LogConfig::m_queue_capacity), which a
- *   context-owned low-priority thread or the host (LogDrain) forwards to the sinks.
+ *   core-owned low-priority thread or the host (LogDrain) forwards to the sinks.
  *   Use these anywhere reachable from an ANIRA_REALTIME entry point or from an
- *   inference thread. A full queue drops and counts; no queue (no context core yet)
+ *   inference thread. A full queue drops and counts; no queue (no core yet)
  *   drops silently — no real-time path exists then anyway.
  *
  * Both take printf-style arguments: `ANIRA_LOG_ERROR(group, "fmt %d", value)` and are
@@ -44,7 +44,7 @@ namespace anira {
 
 /// Group tags for anira's log records (`anira.<component>`).
 namespace log_group {
-inline constexpr const char* k_context = "anira.context";
+inline constexpr const char* k_core = "anira.core";
 inline constexpr const char* k_scheduler = "anira.scheduler";
 inline constexpr const char* k_config = "anira.config";
 inline constexpr const char* k_capi = "anira.capi";
@@ -78,8 +78,8 @@ inline constexpr thl::Logger::LogLevel to_thl_log_level(LogLevel log_level) {
 }
 
 /**
- * @brief Process-global minimum log severity, applied from ContextConfig::m_log.m_level
- * whenever a context is created. Defaults to the build-type dependent
+ * @brief Process-global minimum log severity, applied from CoreConfig::m_log.m_level
+ * whenever a core is created. Defaults to the build-type dependent
  * default_log_level() until then.
  *
  * Kept as anira's own atomic (in anira's enum) because the backend processors
@@ -108,7 +108,7 @@ inline LogLevel get_log_level() {
 
 namespace anira::detail {
 /**
- * @brief The context-owned real-time log queue, or nullptr while no context core exists.
+ * @brief The core-owned real-time log queue, or nullptr while no core exists.
  *
  * Set by Context when it builds its core (before the first session is registered) and
  * cleared before the core is freed. Real-time log sites read it with one relaxed
@@ -123,7 +123,7 @@ ANIRA_API std::atomic<thl::Logger::rt::Queue*>& rt_log_queue_slot() noexcept;
  * registered and fans every record out to the entries whose level admits it, as the
  * anira_log_record projection of anira/abi/log.h (level, the REALTIME and
  * CONTRACT_VIOLATION flags, the drop count, sequence, timestamps, group and message; the
- * record is valid for the duration of the callback). A 3.x machine registers its config's
+ * record is valid for the duration of the callback). A 3.x context registers its config's
  * sink here for its lifetime; the tests register their collectors. The sink runs on
  * whichever thread logs, possibly with anira's lifecycle lock held, and must not call
  * anira.
@@ -151,7 +151,7 @@ ANIRA_API bool inside_log_sink(LogSinkId id) noexcept;
 /**
  * @brief Switches thl::Logger's platform sink (stderr, logcat, os_log) on or off without
  * touching anything else of its configuration, and never starts its drain thread.
- * ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK of a machine is applied through this.
+ * ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK of a context is applied through this.
  */
 ANIRA_API void set_platform_sink_enabled(bool enabled);
 
@@ -164,7 +164,7 @@ ANIRA_API void set_platform_sink_enabled(bool enabled);
 #define ANIRA_LOG_WARNING(group, ...) THL_LOG_WARNING(group, __VA_ARGS__)
 #define ANIRA_LOG_ERROR(group, ...) THL_LOG_ERROR(group, __VA_ARGS__)
 
-/// Real-time safe logging into the context's queue: ANIRA_LOG_RT_ERROR(group, fmt, ...).
+/// Real-time safe logging into the core's queue: ANIRA_LOG_RT_ERROR(group, fmt, ...).
 #define ANIRA_LOG_RT_IMPL(level, group, ...)                                                \
     do {                                                                                    \
         if (auto* anira_rt_queue_ =                                                         \

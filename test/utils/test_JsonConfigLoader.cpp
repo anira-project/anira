@@ -1,4 +1,4 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/utils/JsonConfigLoader.h>
 
@@ -77,7 +77,7 @@ TEST(JsonConfigLoader, ContextConfigLogBlock) {
         }
     })");
     anira::JsonConfigLoader loader(json);
-    const auto config = loader.get_context_config();
+    const auto config = loader.get_core_config();
     ASSERT_NE(config, nullptr);
     EXPECT_EQ(config->m_log.m_level, anira::LogLevel::Warning);
     EXPECT_EQ(config->m_log.m_drain, anira::LogDrain::Manual);
@@ -95,7 +95,7 @@ TEST(JsonConfigLoader, ContextConfigLegacyLogLevelKey) {
         }
     })");
     anira::JsonConfigLoader loader(json);
-    const auto config = loader.get_context_config();
+    const auto config = loader.get_core_config();
     ASSERT_NE(config, nullptr);
     EXPECT_EQ(config->m_log.m_level, anira::LogLevel::Debug);
     EXPECT_EQ(config->m_log.m_drain, anira::default_log_drain());

@@ -31,7 +31,7 @@ if(TANH_OPERATING_SYSTEM STREQUAL "Emscripten")
     return()
 endif()
 
-set(_abi_headers export status version enums log config machine thread)
+set(_abi_headers export status version enums log config context thread)
 set(_abi_include_dirs "${anira_SOURCE_DIR}/include" "${ANIRA_GENERATED_INCLUDE_DIR}")
 if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     set(_abi_on_device TRUE)

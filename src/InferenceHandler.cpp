@@ -1,9 +1,9 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/backends/BackendBase.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 
@@ -18,9 +18,9 @@ namespace anira {
 
 InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor,
                                    InferenceConfig& inference_config,
-                                   const ContextConfig& context_config)
+                                   const CoreConfig& core_config)
     : m_inference_config(inference_config)
-    , m_inference_manager(pp_processor, inference_config, nullptr, context_config)
+    , m_inference_manager(pp_processor, inference_config, nullptr, core_config)
     , m_num_input_tensors(inference_config.get_tensor_input_shape().size())
     , m_num_output_tensors(inference_config.get_tensor_output_shape().size()) {
     // Use malloc for better control over memory alignment
@@ -46,9 +46,9 @@ InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor,
 InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor,
                                    InferenceConfig& inference_config,
                                    BackendBase& custom_processor,
-                                   const ContextConfig& context_config)
+                                   const CoreConfig& core_config)
     : m_inference_config(inference_config)
-    , m_inference_manager(pp_processor, inference_config, &custom_processor, context_config)
+    , m_inference_manager(pp_processor, inference_config, &custom_processor, core_config)
     , m_num_input_tensors(inference_config.get_tensor_input_shape().size())
     , m_num_output_tensors(inference_config.get_tensor_output_shape().size()) {
     // Use malloc for better control over memory alignment
@@ -242,7 +242,7 @@ void InferenceHandler::set_non_realtime(bool is_non_realtime) {
 }
 
 unsigned int InferenceHandler::get_num_inference_threads() {
-    return Context::get_num_inference_threads();
+    return Core::get_num_inference_threads();
 }
 
 void InferenceHandler::reset() {

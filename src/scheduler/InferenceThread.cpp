@@ -1,4 +1,4 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
@@ -235,10 +235,10 @@ void InferenceThread::process_dequeued_inference() {
     // values and a "ghost" inference could run concurrently with SessionElement::clear().
     session->m_active_inferences.fetch_add(1, std::memory_order::seq_cst);
 
-    // A wait-free reset (Context::reset_session) bumps the session generation. A
+    // A wait-free reset (Core::reset_session) bumps the session generation. A
     // dispatch whose stamp is now stale would have its output discarded anyway, so
     // skip the model — but still publish the completion signal do_inference() would
-    // have set, so the audio thread's Context::reclaim_stale_structs() can return
+    // have set, so the audio thread's Core::reclaim_stale_structs() can return
     // this struct to the free pool. For a session-exclusive task the skipped
     // dispatch still ends its turn on the chain (release + dispatch-next), exactly
     // like a completed one — a skip path that missed the continuation would leave

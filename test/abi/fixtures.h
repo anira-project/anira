@@ -34,7 +34,7 @@ inline constexpr const char* k_model_v3 = R"({
   ]
 })";
 
-inline constexpr const char* k_machine_v3 = R"({
+inline constexpr const char* k_context_v3 = R"({
   "num_threads": 0,
   "wait_strategy": "spin_backoff",
   "log": { "level": "warning", "drain": "thread", "queue_capacity": 512, "drain_interval_ms": 10 },

@@ -1,8 +1,8 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 
@@ -17,7 +17,7 @@ using namespace anira;
 
 // Reproduces the unsynchronized session-lifecycle defect: the Context
 // singleton's static state (m_sessions vector, shared inference thread pool,
-// the m_context shared_ptr, and the "last session releases the pool" teardown
+// the m_core shared_ptr, and the "last session releases the pool" teardown
 // in release_session) is mutated by get_instance / create_session /
 // release_session / prepare_session without any serialization. Two handler
 // lifecycles overlapping on different threads therefore corrupt that state:
@@ -53,7 +53,7 @@ struct Instance {
 
     InferenceConfig m_inference_config = make_inference_config();
     PrePostProcessor m_pp_processor{m_inference_config};
-    InferenceHandler m_handler{m_pp_processor, m_inference_config, ContextConfig(2)};
+    InferenceHandler m_handler{m_pp_processor, m_inference_config, CoreConfig(2)};
 };
 
 // Spin gate so two threads hit their critical action as close to
@@ -101,11 +101,11 @@ TEST(ConcurrentLifecycleTest, ConcurrentDestroy) {
         thread_a.join();
         thread_b.join();
 
-        ASSERT_EQ(Context::get_num_sessions(), 0)
+        ASSERT_EQ(Core::get_num_sessions(), 0)
             << "session bookkeeping corrupted after concurrent destroy, iteration " << i;
-        ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+        ASSERT_EQ(Core::get_num_inference_threads(), 0u)
             << "inference threads survived the last release, iteration " << i;
-        ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+        ASSERT_EQ(Core::get_num_inference_threads(), 0u)
             << "inference threads survived the last release, iteration " << i;
     }
 }
@@ -130,11 +130,11 @@ TEST(ConcurrentLifecycleTest, DestroyCreateOverlap) {
         thread_a.join();
         thread_b.join();
 
-        ASSERT_EQ(Context::get_num_sessions(), 0)
+        ASSERT_EQ(Core::get_num_sessions(), 0)
             << "session bookkeeping corrupted after destroy/create overlap, iteration " << i;
-        ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+        ASSERT_EQ(Core::get_num_inference_threads(), 0u)
             << "inference threads survived the last release, iteration " << i;
-        ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+        ASSERT_EQ(Core::get_num_inference_threads(), 0u)
             << "inference threads survived the last release, iteration " << i;
     }
 }
@@ -152,10 +152,9 @@ TEST(ConcurrentLifecycleTest, ParallelChurn) {
     thread_a.join();
     thread_b.join();
 
-    ASSERT_EQ(Context::get_num_sessions(), 0)
-        << "session bookkeeping corrupted after parallel churn";
-    ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+    ASSERT_EQ(Core::get_num_sessions(), 0) << "session bookkeeping corrupted after parallel churn";
+    ASSERT_EQ(Core::get_num_inference_threads(), 0u)
         << "inference threads survived the last release";
-    ASSERT_EQ(Context::get_num_inference_threads(), 0u)
+    ASSERT_EQ(Core::get_num_inference_threads(), 0u)
         << "inference threads survived the last release";
 }

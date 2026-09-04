@@ -1,10 +1,10 @@
-// anira/abi/thread.h: user-driven inference threads over Context::make_inference_thread and
+// anira/abi/thread.h: user-driven inference threads over Core::make_inference_thread and
 // InferenceThread, the WebAssembly Worker's primitive.
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/status.h>
 #include <anira/abi/thread.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/utils/Logger.h>  // IWYU pragma: keep - the WebAssembly refusal logs
 
@@ -20,19 +20,19 @@ struct anira_inference_thread {
     std::unique_ptr<anira::InferenceThread> m_thread;
 };
 
-anira_status ANIRA_CALL anira_inference_thread_create(anira_machine* machine,
+anira_status ANIRA_CALL anira_inference_thread_create(anira_context* context,
                                                       anira_inference_thread** out,
                                                       anira_error* err) ANIRA_NOEXCEPT try {
-    ANIRA_CAPI_REQUIRE(machine != nullptr,
+    ANIRA_CAPI_REQUIRE(context != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "inference thread: NULL machine");
+                       "inference thread: NULL context");
     ANIRA_CAPI_REQUIRE(out != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "inference thread: NULL out");
     auto thread = std::make_unique<anira_inference_thread>();
-    thread->m_thread = anira::Context::make_inference_thread();
+    thread->m_thread = anira::Core::make_inference_thread();
     *out = thread.release();
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
@@ -107,7 +107,7 @@ void ANIRA_CALL anira_inference_thread_destroy(anira_inference_thread* thread) A
 } catch (...) { anira::capi::report_void_failure(__func__); }
 
 uint32_t ANIRA_CALL anira_num_inference_threads(void) ANIRA_NOEXCEPT try {
-    return static_cast<uint32_t>(anira::Context::get_thread_pool_size());
+    return static_cast<uint32_t>(anira::Core::get_thread_pool_size());
 } catch (...) {
     anira::capi::report_void_failure(__func__);
     return 0;

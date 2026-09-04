@@ -39,11 +39,11 @@ std::string model_text(const anira_model_config* config) {
     return {buf.data(), len};
 }
 
-std::string machine_text(const anira_machine_config* config) {
+std::string context_text(const anira_context_config* config) {
     size_t len = 0;
-    EXPECT_EQ(anira_machine_config_to_json(config, nullptr, 0, &len), ANIRA_ERROR_BUFFER_TOO_SMALL);
+    EXPECT_EQ(anira_context_config_to_json(config, nullptr, 0, &len), ANIRA_ERROR_BUFFER_TOO_SMALL);
     std::vector<char> buf(len + 1);
-    EXPECT_EQ(anira_machine_config_to_json(config, buf.data(), buf.size(), &len), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_to_json(config, buf.data(), buf.size(), &len), ANIRA_OK);
     return {buf.data(), len};
 }
 
@@ -102,7 +102,7 @@ TEST(AbiJsonModel, LoadsTheDocumentExample) {
     EXPECT_EQ(in.m_axes[2].m_extent, ANIRA_DYNAMIC);
     EXPECT_EQ(in.m_window_min, 2048);
     EXPECT_EQ(in.m_window_max, 8192);
-    EXPECT_EQ(in.m_context, 1024);
+    EXPECT_EQ(in.m_core, 1024);
     EXPECT_EQ(cfg.m_inputs[1].m_role, ANIRA_ROLE_STATIC);
     EXPECT_EQ(cfg.m_inputs[1].m_dtype, ANIRA_DTYPE_F32) << "dtype defaults to float32";
     ASSERT_EQ(cfg.m_outputs.size(), 1u);
@@ -253,13 +253,13 @@ TEST(AbiJsonModel, FromFileUsesTheFilesDirectoryAsBaseDir) {
     std::filesystem::remove_all(dir);
 }
 
-// ---- machine file ----------------------------------------------------------------------------
+// ---- context file ----------------------------------------------------------------------------
 
-TEST(AbiJsonMachine, LoadsTheDocumentExampleAndRoundTrips) {
-    anira_machine_config* mc = nullptr;
+TEST(AbiJsonContext, LoadsTheDocumentExampleAndRoundTrips) {
+    anira_context_config* mc = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(anira_machine_config_from_json(anira_test::k_machine_v3,
-                                             std::strlen(anira_test::k_machine_v3),
+    ASSERT_EQ(anira_context_config_from_json(anira_test::k_context_v3,
+                                             std::strlen(anira_test::k_context_v3),
                                              &mc,
                                              &err),
               ANIRA_OK)
@@ -284,16 +284,16 @@ TEST(AbiJsonMachine, LoadsTheDocumentExampleAndRoundTrips) {
               static_cast<uint32_t>(ANIRA_GL_CALLER_THREAD));
     EXPECT_FALSE(mc->m_d3d12.has_value());
     EXPECT_FALSE(mc->m_upgraded);
-    const std::string once = machine_text(mc);
-    anira_machine_config* again = nullptr;
-    ASSERT_EQ(anira_machine_config_from_json(once.c_str(), once.size(), &again, &err), ANIRA_OK)
+    const std::string once = context_text(mc);
+    anira_context_config* again = nullptr;
+    ASSERT_EQ(anira_context_config_from_json(once.c_str(), once.size(), &again, &err), ANIRA_OK)
         << err.message;
-    EXPECT_EQ(machine_text(again), once);
-    anira_machine_config_destroy(again);
-    anira_machine_config_destroy(mc);
+    EXPECT_EQ(context_text(again), once);
+    anira_context_config_destroy(again);
+    anira_context_config_destroy(mc);
 }
 
-TEST(AbiJsonMachine, Rejections) {
+TEST(AbiJsonContext, Rejections) {
     const char* npu = R"({"npu": {"plugins": "/opt"}})";
     const std::vector<std::pair<const char*, const char*>> cases = {
         {R"({"log_level": "warning"})", "version 2"},
@@ -304,21 +304,21 @@ TEST(AbiJsonMachine, Rejections) {
         {R"({"gl": {"threads": "many"}})", "gl.threads"},
     };
     for (const auto& [text, fragment] : cases) {
-        anira_machine_config* mc = nullptr;
+        anira_context_config* mc = nullptr;
         anira_error err = ANIRA_ERROR_INIT;
-        EXPECT_EQ(anira_machine_config_from_json(text, std::strlen(text), &mc, &err),
+        EXPECT_EQ(anira_context_config_from_json(text, std::strlen(text), &mc, &err),
                   ANIRA_ERROR_JSON)
             << text;
         EXPECT_EQ(mc, nullptr);
         EXPECT_NE(std::strstr(err.message, fragment), nullptr) << err.message;
     }
-    anira_machine_config* mc = nullptr;
+    anira_context_config* mc = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(anira_machine_config_from_json(npu, std::strlen(npu), &mc, &err), ANIRA_OK)
+    ASSERT_EQ(anira_context_config_from_json(npu, std::strlen(npu), &mc, &err), ANIRA_OK)
         << err.message;
     EXPECT_NE(mc->m_ext.find("npu"), nullptr)
         << "unknown keys are extensions that fail prepare by name";
-    anira_machine_config_destroy(mc);
+    anira_context_config_destroy(mc);
 }
 
 // ---- contract file ---------------------------------------------------------------------------

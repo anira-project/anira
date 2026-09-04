@@ -13,7 +13,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
 #include <anira/abi/config.h>
-#include <anira/abi/machine.h>
+#include <anira/abi/context.h>
 #include <anira/abi/thread.h>
 
 _Static_assert(sizeof(anira_status) == 4, "anira_status is a 32-bit enum");

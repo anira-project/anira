@@ -127,7 +127,7 @@ it covers, and the directory decides which ``test_*`` binary compiles it (see
 
 - ``test/<dir>/test_<Unit>.cpp`` covers ``include/anira/<dir>/<Unit>.h`` — so
   ``scheduler/``, ``backends/``, ``system/`` and ``utils/`` each map one to one.
-- Root-level units (``InferenceHandler``, ``InferenceConfig``, ``ContextConfig``,
+- Root-level units (``InferenceHandler``, ``InferenceConfig``, ``CoreConfig``,
   ``PrePostProcessor``) are covered by root-level ``test_*.cpp`` files, alongside the
   cross-unit integration suites (``test_OneSidedStreaming``).
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather

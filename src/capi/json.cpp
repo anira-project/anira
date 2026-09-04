@@ -1,5 +1,5 @@
 /*
- * The JSON loaders and writers of section 8: the three v3 files (model, machine,
+ * The JSON loaders and writers of section 8: the three v3 files (model, context,
  * contract), the version 2 auto-upgrade of section 8.4, and to_json in v3 spelling. All
  * of it over nlohmann::json, which never reaches a header. Loaders are dumb: strings to
  * enums, numbers, construct; semantic validation is prepare's.
@@ -345,8 +345,8 @@ void load_spec_v3(const Json& node,
                 }
             }
         } else if (key == "context") {
-            spec.m_context = require_i64(value, key_path);
-            if (spec.m_context < 0) { fail_json(key_path, "must not be negative"); }
+            spec.m_core = require_i64(value, key_path);
+            if (spec.m_core < 0) { fail_json(key_path, "must not be negative"); }
         } else if (key == "latency") {
             if (!is_output) { fail_json(key_path, "latency is an output key"); }
             spec.m_latency = require_i64(value, key_path);
@@ -553,9 +553,9 @@ void load_model_v3(const Json& root, const char* base_dir, anira_model_config& c
     check_spec_names(cfg);
 }
 
-// ---- v3 machine file (8.2) ----------------------------------------------------------------
+// ---- v3 context file (8.2) ----------------------------------------------------------------
 
-void load_log_block(const Json& node, const std::string& path, anira_machine_config& mc) {
+void load_log_block(const Json& node, const std::string& path, anira_context_config& mc) {
     require_object(node, path);
     for (const auto& [key, value] : node.items()) {
         const std::string key_path = child(path, key.c_str());
@@ -591,7 +591,7 @@ void load_device_block(const Json& node,
     slot = desc;
 }
 
-void load_machine_v3(const Json& root, anira_machine_config& mc) {
+void load_context_v3(const Json& root, anira_context_config& mc) {
     for (const auto& [key, value] : root.items()) {
         const std::string path = key;
         if (key == "num_threads") {
@@ -940,7 +940,7 @@ void upgrade_spec(const std::vector<int64_t>& dims,
     }
     spec.m_window_min = per_channel;
     spec.m_window_max = per_channel;
-    spec.m_context = per_channel - hop;
+    spec.m_core = per_channel - hop;
     spec.m_latency = latency;
 }
 
@@ -1215,7 +1215,7 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
     cfg.m_upgraded = true;
 }
 
-void upgrade_machine_v2(const Json& root, anira_machine_config& mc) {
+void upgrade_context_v2(const Json& root, anira_context_config& mc) {
     const auto context = root.find("context_config");
     if (context == root.end()) {
         mc.m_upgraded = true;  // a document with only inference_config: the defaults
@@ -1267,7 +1267,7 @@ Json spec_to_json(const anira_tensor_spec& spec, bool is_output) {
             window["max"] = spec.m_window_max;
         }
         object["window"] = window;
-        object["context"] = spec.m_context;
+        object["context"] = spec.m_core;
     }
     if (is_output && spec.m_latency != 0) { object["latency"] = spec.m_latency; }
     if (spec.m_ratio_num != 0 || spec.m_ratio_den != 0) {
@@ -1312,7 +1312,7 @@ Json model_to_json(const anira_model_config& cfg) {
     return root;
 }
 
-Json machine_to_json(const anira_machine_config& mc) {
+Json context_to_json(const anira_context_config& mc) {
     Json root = Json::object();
     if (mc.m_num_threads != ANIRA_THREADS_AUTO) { root["num_threads"] = mc.m_num_threads; }
     root["wait_strategy"] = word_of(mc.m_wait, k_waits);
@@ -1428,38 +1428,38 @@ anira_status ANIRA_CALL anira_model_config_take_legacy_contract(anira_model_conf
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_from_json(const char* utf8,
+anira_status ANIRA_CALL anira_context_config_from_json(const char* utf8,
                                                        size_t len,
-                                                       anira_machine_config** out,
+                                                       anira_context_config** out,
                                                        anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(out != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "machine config: NULL out");
+                       "context config: NULL out");
     ANIRA_CAPI_REQUIRE(utf8 != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "machine config: NULL JSON text");
+                       "context config: NULL JSON text");
     const Json root = parse_text(utf8, len);
-    auto mc = std::make_unique<anira_machine_config>();
+    auto mc = std::make_unique<anira_context_config>();
     anira_status status = ANIRA_OK;
     if (is_v2(root)) {
-        upgrade_machine_v2(root, *mc);
-        warn_upgraded_once("machine document");
+        upgrade_context_v2(root, *mc);
+        warn_upgraded_once("context document");
         status = ANIRA_SUCCESS_UPGRADED;
     } else {
-        load_machine_v3(root, *mc);
+        load_context_v3(root, *mc);
     }
     *out = mc.release();
     return status;
 } catch (...) { return translate_exception(err, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_to_json(const anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_to_json(const anira_context_config* config,
                                                      char* buf,
                                                      size_t cap,
                                                      size_t* out_len) ANIRA_NOEXCEPT try {
     if (config == nullptr || out_len == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    return write_text(machine_to_json(*config).dump(2), buf, cap, out_len);
+    return write_text(context_to_json(*config).dump(2), buf, cap, out_len);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_contract_from_json(const char* utf8,

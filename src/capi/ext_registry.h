@@ -19,7 +19,7 @@
 #include <vector>
 
 struct anira_model_config;
-struct anira_machine_config;
+struct anira_context_config;
 struct anira_contract;
 
 namespace anira::capi {
@@ -42,7 +42,7 @@ struct ExtRow {
 };
 
 /// A stage or adapter and what it reads, as "<host>:<kind>" entries (hosts: tensor_spec,
-/// model, model_config, machine, contract, job). The M1 table is anira's own adapters.
+/// model, model_config, context, contract, job). The M1 table is anira's own adapters.
 struct ExtConsumer {
     const char* m_name;
     anira_engine m_engine;  ///< ANIRA_ENGINE_NONE for a consumer that is not an engine adapter
@@ -124,12 +124,12 @@ struct EntryPayload {
 };
 
 /// The consumed-or-fail walk of section 1b over a model config (its specs, its entries, the
-/// config itself) and, when given, a machine config and a contract: every slot must be a
+/// config itself) and, when given, a context config and a contract: every slot must be a
 /// known kind that a consumer in the candidate set reads from that host. candidates == NULL
 /// means every consumer of this build; an engine adapter consumes only the entries of its
 /// own engine. On failure err carries the offending name.
 ANIRA_API anira_status ext_check_consumed(const anira_model_config& model,
-                                          const anira_machine_config* machine,
+                                          const anira_context_config* context,
                                           const anira_contract* contract,
                                           const anira_engine* candidates,
                                           uint32_t num_candidates,

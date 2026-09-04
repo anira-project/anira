@@ -115,11 +115,11 @@ typedef enum anira_status {
  */
 typedef struct anira_tensor_spec anira_tensor_spec;
 typedef struct anira_model_config anira_model_config;
-typedef struct anira_machine_config anira_machine_config;
+typedef struct anira_context_config anira_context_config;
 typedef struct anira_contract anira_contract;
 typedef struct anira_job_options anira_job_options;
 typedef struct anira_pipeline anira_pipeline;
-typedef struct anira_machine anira_machine;
+typedef struct anira_context anira_context;
 typedef struct anira_capabilities anira_capabilities;
 typedef struct anira_inference_thread anira_inference_thread;
 typedef struct anira_handler anira_handler;

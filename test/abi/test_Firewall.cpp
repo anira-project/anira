@@ -68,7 +68,7 @@ TEST(AbiFirewall, LongMessagesAreTruncatedAndTerminated) {
 
 // ---- the error strategy: what the firewall logs, and what it never logs ------------------
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
@@ -187,8 +187,8 @@ TEST(AbiFirewallLogging, TheTraceFlagEmitsTheErrorMessageOnce) {
 TEST(AbiFirewallLogging, AFailingEntryDrainsTheRealTimeQueueFirst) {
     const TraceOff off;
     // Manual drain: nothing pumps the queue but anira_drain_log, or a failing entry.
-    anira::ContextConfig context_config(1, anira::WaitStrategy::Blocking, anira::LogLevel::Error);
-    context_config.m_log.m_drain = anira::LogDrain::Manual;
+    anira::CoreConfig core_config(1, anira::WaitStrategy::Blocking, anira::LogLevel::Error);
+    core_config.m_log.m_drain = anira::LogDrain::Manual;
     anira::InferenceConfig inference_config(
         std::vector<anira::ModelData>{
             anira::ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
@@ -199,7 +199,7 @@ TEST(AbiFirewallLogging, AFailingEntryDrainsTheRealTimeQueueFirst) {
         0.f,
         2);
     anira::PrePostProcessor pp_processor(inference_config);
-    anira::InferenceHandler handler(pp_processor, inference_config, context_config);
+    anira::InferenceHandler handler(pp_processor, inference_config, core_config);
     handler.prepare(anira::HostConfig(512, 48000));
 
     FreshCollector collector;

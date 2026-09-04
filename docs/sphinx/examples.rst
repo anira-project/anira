@@ -33,7 +33,7 @@ Every example loads a model the same way, in three lines, and the runtime takes 
         model_config, contract, anira::v3compat::enabled_engines());
 
 The files set no instance ceiling, so one processor per engine runs; the plugins pass no
-machine configuration either, since the library default (half the hardware threads) is what
+context configuration either, since the library default (half the hardware threads) is what
 they want. The one place a model is built in code is the benchmark sweeps: ``CNNConfig.h``,
 ``HybridNNConfig.h`` and ``StatefulRNNConfig.h`` build the same configurations with the hop,
 the batch count or the chunk following the host buffer, which the fixed windows of the files

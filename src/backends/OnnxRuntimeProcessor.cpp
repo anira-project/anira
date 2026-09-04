@@ -1,4 +1,4 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/status.h>
 #include <anira/backends/BackendBase.h>

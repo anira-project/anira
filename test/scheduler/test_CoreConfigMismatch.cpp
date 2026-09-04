@@ -1,4 +1,4 @@
-// The context is process-global and the first session's ContextConfig is the one
+// The core is process-global and the first session's CoreConfig is the one
 // that takes effect. Every later session that asks for something different is
 // told so, and told what actually happens instead — these diagnostics are what a
 // plugin developer sees when two instances of their plugin disagree, so they are
@@ -7,11 +7,11 @@
 // Each test asserts the message text, and where the outcome is observable (the
 // log level in effect) the outcome too.
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <tanh/core/Logger.h>
@@ -41,8 +41,8 @@ InferenceConfig make_inference_config() {
 
 // One "plugin instance". Prepared on construction, like a host would.
 struct Instance {
-    explicit Instance(const ContextConfig& context_config)
-        : m_handler(m_pp_processor, m_inference_config, context_config) {
+    explicit Instance(const CoreConfig& core_config)
+        : m_handler(m_pp_processor, m_inference_config, core_config) {
         m_handler.prepare(HostConfig(512, 48000));
     }
 
@@ -52,21 +52,21 @@ struct Instance {
 };
 
 // A config whose log level lets the diagnostics through to the sinks. The
-// context applies the lowest requested level, so the first session sets the
+// core applies the lowest requested level, so the first session sets the
 // floor for the whole test.
-ContextConfig verbose_config(unsigned int num_threads = 1) {
-    ContextConfig config(num_threads, WaitStrategy::Blocking, LogLevel::Debug);
+CoreConfig verbose_config(unsigned int num_threads = 1) {
+    CoreConfig config(num_threads, WaitStrategy::Blocking, LogLevel::Debug);
     return config;
 }
 
-// The context outlives individual sessions, so a test that inspects "what the
+// The core outlives individual sessions, so a test that inspects "what the
 // first session established" must start from no sessions at all.
-class ContextConfigMismatchTest : public ::testing::Test {
+class CoreConfigMismatchTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        ASSERT_EQ(Context::get_num_sessions(), 0) << "a previous test left a session registered";
+        ASSERT_EQ(Core::get_num_sessions(), 0) << "a previous test left a session registered";
     }
-    void TearDown() override { EXPECT_EQ(Context::get_num_sessions(), 0); }
+    void TearDown() override { EXPECT_EQ(Core::get_num_sessions(), 0); }
 };
 
 // Release builds compile tanh-lib's logging down to Error only
@@ -83,17 +83,17 @@ void expect_diagnostic(RecordCollector& collector,
 
 }  // namespace
 
-// The queue is sized once per context and clamped to what the ring supports.
-TEST_F(ContextConfigMismatchTest, QueueCapacityOutsideTheSupportedRangeIsClamped) {
+// The queue is sized once per core and clamped to what the ring supports.
+TEST_F(CoreConfigMismatchTest, QueueCapacityOutsideTheSupportedRangeIsClamped) {
     // The clamp is reported when the core's queue is created, i.e. by the first session of
     // a core; on a leg that runs every suite in one process an earlier test may have left
     // the core alive, so start from none.
-    Context::shutdown();
-    if (!Context::release_core_if_idle() && Context::has_core()) {
+    Core::shutdown();
+    if (!Core::release_core_if_idle() && Core::has_core()) {
         GTEST_SKIP() << "the core is held by another test's objects";
     }
     RecordCollector collector;
-    ContextConfig config = verbose_config();
+    CoreConfig config = verbose_config();
     config.m_log.m_queue_capacity = 8;  // below the 64-record minimum
 
     const Instance instance(config);
@@ -103,15 +103,15 @@ TEST_F(ContextConfigMismatchTest, QueueCapacityOutsideTheSupportedRangeIsClamped
 // The queue is created once per core and never replaced, and the core outlives
 // the sessions — so even the first session of a *later* generation is told it
 // keeps the size the very first one asked for.
-TEST_F(ContextConfigMismatchTest, ALaterGenerationCannotGrowTheLogQueue) {
+TEST_F(CoreConfigMismatchTest, ALaterGenerationCannotGrowTheLogQueue) {
     RecordCollector collector;
-    ContextConfig first = verbose_config();
+    CoreConfig first = verbose_config();
     first.m_log.m_queue_capacity = 64;
     {
         const Instance instance(first);
     }  // last session released; the core, and its log queue, remain
 
-    ContextConfig second = first;
+    CoreConfig second = first;
     second.m_log.m_queue_capacity = 4096;
     const Instance later(second);
 
@@ -122,46 +122,42 @@ TEST_F(ContextConfigMismatchTest, ALaterGenerationCannotGrowTheLogQueue) {
 
 // The log level is process-global and the most verbose request wins — including
 // when the more verbose one arrives second.
-TEST_F(ContextConfigMismatchTest, TheMostVerboseLogLevelWins) {
+TEST_F(CoreConfigMismatchTest, TheMostVerboseLogLevelWins) {
     RecordCollector collector;
-    const Instance instance(ContextConfig(1, WaitStrategy::Blocking, LogLevel::Debug));
+    const Instance instance(CoreConfig(1, WaitStrategy::Blocking, LogLevel::Debug));
 
-    const ContextConfig quieter(1, WaitStrategy::Blocking, LogLevel::Error);
+    const CoreConfig quieter(1, WaitStrategy::Blocking, LogLevel::Error);
     const Instance later(quieter);
 
-    expect_diagnostic(collector,
-                      "ContextConfig log level mismatch",
-                      thl::Logger::LogLevel::Warning);
+    expect_diagnostic(collector, "CoreConfig log level mismatch", thl::Logger::LogLevel::Warning);
     // Debug was requested first and is the lower level, so it stays in effect —
     // the quieter second session does not raise the floor.
     expect_diagnostic(collector, "is now in effect", thl::Logger::LogLevel::Warning);
 }
 
 // The drain, its queue and its interval are process-global too.
-TEST_F(ContextConfigMismatchTest, MismatchedLogDrainIsReported) {
+TEST_F(CoreConfigMismatchTest, MismatchedLogDrainIsReported) {
     RecordCollector collector;
-    ContextConfig first = verbose_config();
+    CoreConfig first = verbose_config();
     first.m_log.m_drain_interval_ms = 10;
     const Instance instance(first);
 
-    ContextConfig second = first;
+    CoreConfig second = first;
     second.m_log.m_drain_interval_ms = 250;
     const Instance later(second);
 
-    expect_diagnostic(collector,
-                      "ContextConfig log drain mismatch",
-                      thl::Logger::LogLevel::Warning);
+    expect_diagnostic(collector, "CoreConfig log drain mismatch", thl::Logger::LogLevel::Warning);
 }
 
 // One thread pool per process means one wait strategy; the first one stays.
-TEST_F(ContextConfigMismatchTest, MismatchedWaitStrategyIsReported) {
+TEST_F(CoreConfigMismatchTest, MismatchedWaitStrategyIsReported) {
     RecordCollector collector;
-    const Instance instance(ContextConfig(1, WaitStrategy::Blocking, LogLevel::Debug));
+    const Instance instance(CoreConfig(1, WaitStrategy::Blocking, LogLevel::Debug));
 
-    const ContextConfig second(1, WaitStrategy::SpinBackoff, LogLevel::Debug);
+    const CoreConfig second(1, WaitStrategy::SpinBackoff, LogLevel::Debug);
     const Instance later(second);
 
     expect_diagnostic(collector,
-                      "ContextConfig wait strategy mismatch",
+                      "CoreConfig wait strategy mismatch",
                       thl::Logger::LogLevel::Warning);
 }

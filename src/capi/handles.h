@@ -125,7 +125,7 @@ struct anira_tensor_spec {
     uint32_t m_ndim = 0;
     int64_t m_window_min = 0;
     int64_t m_window_max = 0;
-    int64_t m_context = 0;
+    int64_t m_core = 0;
     int64_t m_ratio_num = 0;
     int64_t m_ratio_den = 0;
     int64_t m_latency = 0;
@@ -169,7 +169,7 @@ struct anira_model_config {
     bool m_upgraded = false;
 };
 
-struct anira_machine_config {
+struct anira_context_config {
     uint32_t m_num_threads = ANIRA_THREADS_AUTO;
     anira_wait_strategy m_wait = ANIRA_WAIT_SPIN_BACKOFF;
     anira_log_level m_log_level = ANIRA_LOG_WARNING;

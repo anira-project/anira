@@ -26,9 +26,9 @@ of section 1.5 are their file form.
      - How the model runs: **Hard** for a real-time stream (block range and rate, budget,
        warmup, miss policy) or **Async** for jobs (deadline and policy). Names the run; its
        file form is the contract file.
-   * - ``anira::MachineConfig``
+   * - ``anira::ContextConfig``
      - The process: the inference thread pool, logging, the devices anira may use. Lives on
-       the box; its file form is the machine file.
+       the box; its file form is the context file.
    * - :cpp:class:`anira::InferenceHandler`, :cpp:class:`anira::PrePostProcessor`
      - The runtime: offloads inference to the thread pool and returns the processed audio to
        the real-time thread, with optional custom pre- and post-processing. In this
@@ -39,7 +39,7 @@ of section 1.5 are their file form.
 
 The configuration is written with the builders of ``<anira/anira.hpp>``: ``anira::TensorSpec``,
 ``anira::ModelConfig``, ``anira::ContractHandle`` (minted from an ``anira::Hard`` or
-``anira::Async`` aggregate) and ``anira::MachineConfig``. Every method is one C call into
+``anira::Async`` aggregate) and ``anira::ContextConfig``. Every method is one C call into
 ``anira/abi/config.h`` (section 1.6); a call that fails throws ``anira::Error``, a
 ``std::runtime_error`` that carries the ``anira_status`` in ``.status`` and anira's message in
 ``what()``. The handles are move-only RAII objects: the destructor releases the C handle, and
@@ -263,17 +263,17 @@ handle is minted from either. ``contract.kind()`` tells the two apart, and a Har
 Async contract throws ``anira::Error`` with ``ANIRA_ERROR_WRONG_CONTRACT``. ``edge_cost``, on
 both aggregates, is the plan-validation policy for pipelines and does not affect scheduling.
 
-1.4. Machine configuration
+1.4. Context configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The machine config describes the process: every anira instance in it shares one inference
-thread pool, sized and configured by the first machine created (section 3.1 says how later
-machines are reconciled against it).
+The context config describes the process: every anira instance in it shares one inference
+thread pool, sized and configured by the first context created (section 3.1 says how later
+contexts are reconciled against it).
 
 .. code-block:: cpp
 
-    anira::MachineConfig machine;
-    machine.threads(4, ANIRA_WAIT_SPIN_BACKOFF)
+    anira::ContextConfig context;
+    context.threads(4, ANIRA_WAIT_SPIN_BACKOFF)
         .log_level(ANIRA_LOG_WARNING)
         .log_drain(ANIRA_LOG_DRAIN_THREAD, 10);   // every 10 ms
 
@@ -285,14 +285,14 @@ machines are reconciled against it).
   drains the real-time log queue and how often (``ANIRA_LOG_DRAIN_THREAD``, or
   ``ANIRA_LOG_DRAIN_MANUAL`` through ``anira_drain_log``), ``log_queue_capacity`` (clamped to
   64..65536), ``log_flags`` (``ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK``,
-  ``ANIRA_LOG_FLAG_TRACE_FAILURES``; both held while the machine lives) and a sink callback,
+  ``ANIRA_LOG_FLAG_TRACE_FAILURES``; both held while the context lives) and a sink callback,
   ``log_sink(callback, user_data)``; ``log(desc)`` takes all of it in one ``anira_log_desc``.
-  The sink receives every record as an ``anira_log_record`` while the machine lives
+  The sink receives every record as an ``anira_log_record`` while the context lives
   (:doc:`logging`).
 - **Devices.** ``cuda`` / ``gl`` / ``vulkan`` / ``metal`` / ``d3d12`` / ``webgpu`` declare the
   device blocks anira may use, each an ``ANIRA_*_DESC_INIT`` descriptor naming either a device
   anira creates and owns or a handle the host lends.
-- **WebAssembly.** The context cannot run threads on the web: use ``threads(0)`` (the workers
+- **WebAssembly.** The core cannot run threads on the web: use ``threads(0)`` (the workers
   are created from JavaScript via ``AniraWeb.spinUpInferenceWorker()``) and drain the log
   manually; ``webgpu`` throws ``ANIRA_ERROR_NOT_SUPPORTED`` there, the browser's WebGPU being a
   JavaScript backend.
@@ -302,8 +302,8 @@ machines are reconciled against it).
 
 anira describes a deployment in three JSON files with three lifetimes, each read by a static
 loader of its handle: the **model file** travels with the model
-(``anira::ModelConfig::from_file(path)``, or ``from_json(text, base_dir)``), the **machine
-file** lives on the box (``anira::MachineConfig::from_file`` / ``from_json``), and the
+(``anira::ModelConfig::from_file(path)``, or ``from_json(text, base_dir)``), the **context
+file** lives on the box (``anira::ContextConfig::from_file`` / ``from_json``), and the
 **contract file** names the run (``anira::ContractHandle::from_file`` / ``from_json``). Loaders
 are dumb, strings to enums and numbers; every semantic check happens once at prepare, the same
 way for JSON and for code, so a document that loads may still be refused there. Every loader
@@ -351,7 +351,7 @@ document), so a typo never turns into a default.
 - ``anchor`` is the canonical name of the streamed tensor that is the model's clock (section
   1.2); absent means the first streamed input, or the first streamed output of a generator.
 
-The machine file carries ``num_threads`` (absent = the library default, ``0`` = bring your own
+The context file carries ``num_threads`` (absent = the library default, ``0`` = bring your own
 threads), ``wait_strategy``, the ``log`` block (``level``, ``drain``, ``queue_capacity``,
 ``drain_interval_ms``) and the device blocks ``cuda``, ``vulkan``, ``metal``, ``gl``,
 ``d3d12`` and ``webgpu``, which imply that anira owns the device; borrowed handles are
@@ -366,20 +366,20 @@ by canonical name), and an optional top-level ``edge_cost``.
 
     try {
         anira::ModelConfig cfg = anira::ModelConfig::from_file("model.json");
-        anira::MachineConfig machine = anira::MachineConfig::from_file("machine.json");
+        anira::ContextConfig context = anira::ContextConfig::from_file("context.json");
         anira::ContractHandle contract = anira::ContractHandle::from_file("contract.json");
     } catch (const anira::Error& e) {
         std::fprintf(stderr, "%s\n", e.what());
         return 1;
     }
 
-``ModelConfig::to_json()`` and ``MachineConfig::to_json()`` return the handle in version 3
+``ModelConfig::to_json()`` and ``ContextConfig::to_json()`` return the handle in version 3
 spelling with a fixed key order as a ``std::string``; reading a 2.x file and writing it out is
 the migration tool (:ref:`migration-json`).
 
 .. note::
     Coming from anira 2.x? All three loaders read the 2.x document (``inference_config`` /
-    ``context_config`` roots) as well and upgrade it in memory: ``upgraded()`` says so and
+    ``core_config`` roots) as well and upgrade it in memory: ``upgraded()`` says so and
     ``ModelConfig::take_legacy_contract()`` hands out the Hard contract it held back;
     :ref:`migration-json` lists what becomes what.
 
@@ -390,8 +390,8 @@ The same configuration is reachable from C11 through ``anira/abi/config.h``, whi
 binary promise the builders are written over: one function per method, named
 ``anira_<handle>_<method>`` (``ModelConfig::tensor_layout`` is
 ``anira_model_config_set_tensor_layout``, ``TensorSpec::axis`` is
-``anira_tensor_spec_set_axis``, ``MachineConfig::threads`` is
-``anira_machine_config_set_threads``). Every entry returns an ``anira_status``: negative
+``anira_tensor_spec_set_axis``, ``ContextConfig::threads`` is
+``anira_context_config_set_threads``). Every entry returns an ``anira_status``: negative
 values are failures, ``ANIRA_OK`` and the positive values (``ANIRA_SUCCESS_UPGRADED``) are
 successes, so test with ``ANIRA_FAILED(status)`` rather than comparing with ``ANIRA_OK``.
 Entries that can fail for more than one reason take a caller-owned ``anira_error`` (initialise
@@ -421,16 +421,16 @@ do not want the message. The handles are opaque and single-owner: every ``*_crea
     /* ... anira_model_config_destroy(cfg) when done */
 
 The JSON files of section 1.5 are the same three loaders: ``anira_model_config_from_json`` /
-``anira_model_config_from_json_file``, ``anira_machine_config_from_json`` and
+``anira_model_config_from_json_file``, ``anira_context_config_from_json`` and
 ``anira_contract_from_json``, with ``anira_model_config_to_json`` /
-``anira_machine_config_to_json`` as the writers (``(buf, cap, out_len)``,
+``anira_context_config_to_json`` as the writers (``(buf, cap, out_len)``,
 ``ANIRA_ERROR_BUFFER_TOO_SMALL`` with the required length in ``out_len``); a 2.x document
 returns ``ANIRA_SUCCESS_UPGRADED`` and ``anira_model_config_take_legacy_contract`` hands out
 its Hard contract.
 
 .. note::
     In this pre-release the runtime, sections 2 to 5, still takes the 2.x configuration
-    classes :cpp:struct:`anira::InferenceConfig`, :cpp:struct:`anira::ContextConfig` and
+    classes :cpp:struct:`anira::InferenceConfig`, :cpp:struct:`anira::CoreConfig` and
     :cpp:struct:`anira::HostConfig`. The transitional bridge ``<anira/compat/v3_to_v2.h>``
     builds them from the handles above, so the configuration is written once, in the 3.x API:
 
@@ -439,7 +439,7 @@ its Hard contract.
         #include <anira/compat/v3_to_v2.h>
 
         anira::InferenceConfig inference_config = anira::v3compat::to_inference_config(cfg, hard);
-        anira::ContextConfig context_config = anira::v3compat::to_context_config(machine);
+        anira::CoreConfig core_config = anira::v3compat::to_core_config(context);
         // at prepare, once the host geometry is on the contract (section 1.3):
         anira::HostConfig host_config = anira::v3compat::to_host_config(hard, cfg);
 
@@ -477,38 +477,38 @@ In your application, you will need to create an instance of the :cpp:class:`anir
     // Create an InferenceHandler instance
     anira::InferenceHandler inference_handler(pp_processor, inference_config);
 
-3.1. (Optional) Machine configuration
+3.1. (Optional) Context configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The machine configuration of section 1.4 (an ``anira::MachineConfig``, or the machine file of section 1.5) says how the inference threads behave — how many there are and how idle threads wait for new work — and how anira logs. It is applied to the process in one of two ways.
+The context configuration of section 1.4 (an ``anira::ContextConfig``, or the context file of section 1.5) says how the inference threads behave — how many there are and how idle threads wait for new work — and how anira logs. It is applied to the process in one of two ways.
 
-**The machine.** ``anira::Machine`` (``anira_machine_create`` of ``anira/abi/machine.h``) is a handle over this copy of anira's core, the object every instance in the process shares. Creating it reconciles the config into the core, registers the config's log sink and probes what the machine can do; destroying it unregisters the sink again. Two machines in one process are two views of one core with two sinks; the inference thread pool is core-owned and exists while an inference handler does.
+**The context.** ``anira::Context`` (``anira_context_create`` of ``anira/abi/context.h``) is a handle over this copy of anira's core, the object every instance in the process shares. Creating it reconciles the config into the core, registers the config's log sink and probes what the context can do; destroying it unregisters the sink again. Two contexts in one process are two views of one core with two sinks; the inference thread pool is core-owned and exists while an inference handler does.
 
 .. code-block:: cpp
 
-    anira::MachineConfig config;
+    anira::ContextConfig config;
     config.threads(4, ANIRA_WAIT_BLOCKING).log_level(ANIRA_LOG_WARNING);
-    anira::Machine machine(config);                  // anira_machine_create
-    const anira::Capabilities caps = machine.capabilities();
+    anira::Context context(config);                  // anira_context_create
+    const anira::Capabilities caps = context.capabilities();
     for (const anira::BackendId& backend : caps.backends()) { /* engine, provider */ }
     for (const anira_edge_info& edge : caps.edges()) { /* from_domain -> (to_engine, to_provider) */ }
-    machine.num_inference_threads();                 // the pool size: 0 before the first handler
+    context.num_inference_threads();                 // the pool size: 0 before the first handler
 
-The same in C: ``anira_machine_create(config, &machine, &err)``, ``anira_machine_capabilities`` with the enumerators ``anira_capabilities_backends`` / ``domains`` / ``ext_kinds`` / ``edges`` / ``edge`` (``out == NULL`` asks for the count, a short buffer returns ``ANIRA_INCOMPLETE``, records are written at the caller's ``element_size``), ``anira_machine_probe``, ``anira_machine_drain_log``, ``anira_machine_num_inference_threads`` and ``anira_machine_destroy``. ``anira_enabled_backends`` (``anira::enabled_backends()``) says what this build compiled in without a machine; ``anira_capabilities_backends`` what is usable here. In this pre-release every machine is Host-only: the report is the compiled-in engines on ``ANIRA_PROVIDER_DEFAULT``, the host domain and one zero-copy edge per engine, and a device block on the config is refused with ``ANIRA_ERROR_NOT_SUPPORTED``. ``anira_now_ms`` / ``anira_now_ns`` are the steady clock deadlines will be spelled in; ``anira_shutdown`` (called by a plugin's module-exit entry point, see the CLAP example) stops the core's threads only when no machine and no handler exist, ``anira_has_core`` and ``anira_release_core_if_idle`` are the unload hook's questions.
+The same in C: ``anira_context_create(config, &context, &err)``, ``anira_context_capabilities`` with the enumerators ``anira_capabilities_backends`` / ``domains`` / ``ext_kinds`` / ``edges`` / ``edge`` (``out == NULL`` asks for the count, a short buffer returns ``ANIRA_INCOMPLETE``, records are written at the caller's ``element_size``), ``anira_context_probe``, ``anira_context_drain_log``, ``anira_context_num_inference_threads`` and ``anira_context_destroy``. ``anira_enabled_backends`` (``anira::enabled_backends()``) says what this build compiled in without a context; ``anira_capabilities_backends`` what is usable here. In this pre-release every context is Host-only: the report is the compiled-in engines on ``ANIRA_PROVIDER_DEFAULT``, the host domain and one zero-copy edge per engine, and a device block on the config is refused with ``ANIRA_ERROR_NOT_SUPPORTED``. ``anira_now_ms`` / ``anira_now_ns`` are the steady clock deadlines will be spelled in; ``anira_shutdown`` (called by a plugin's module-exit entry point, see the CLAP example) stops the core's threads only when no context and no handler exist, ``anira_has_core`` and ``anira_release_core_if_idle`` are the unload hook's questions.
 
-**The bridge.** The inference handler of this pre-release does not take a machine yet: it takes the :cpp:struct:`anira::ContextConfig` the bridge builds from the same config, and reconciles it into the core the same way (a machine and a handler's context config in one process are reconciled against each other by the rules below):
+**The bridge.** The inference handler of this pre-release does not take a context yet: it takes the :cpp:struct:`anira::CoreConfig` the bridge builds from the same config, and reconciles it into the core the same way (a context and a handler's core config in one process are reconciled against each other by the rules below):
 
 .. code-block:: cpp
 
     // Use the existing anira::InferenceConfig and anira::PrePostProcessor instances
 
-    anira::MachineConfig machine;
-    machine.threads(4, ANIRA_WAIT_BLOCKING)  // four threads; idle threads block instead of polling
+    anira::ContextConfig context;
+    context.threads(4, ANIRA_WAIT_BLOCKING)  // four threads; idle threads block instead of polling
         .log_level(ANIRA_LOG_WARNING);       // only report warnings and errors
-    anira::ContextConfig context_config = anira::v3compat::to_context_config(machine);
+    anira::CoreConfig core_config = anira::v3compat::to_core_config(context);
 
     // Create an InferenceHandler instance
-    anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
+    anira::InferenceHandler inference_handler(pp_processor, inference_config, core_config);
 
 The wait strategy (``ANIRA_WAIT_SPIN_BACKOFF`` / ``ANIRA_WAIT_BLOCKING``, :cpp:enum:`anira::WaitStrategy` on the 2.x side) controls what an inference thread does while the shared inference queue is empty:
 
@@ -518,20 +518,20 @@ The wait strategy (``ANIRA_WAIT_SPIN_BACKOFF`` / ``ANIRA_WAIT_BLOCKING``, :cpp:e
 For models whose inference time dominates the round trip, the throughput of both strategies is identical within measurement noise — choose ``Blocking`` to eliminate idle CPU/power usage, and ``SpinBackoff`` only when sub-microsecond work-pickup latency matters.
 
 .. note::
-    All anira instances in a process share one inference thread pool, so only one wait strategy can be in effect per process — the one of the first machine or instance created. If a later one requests a different strategy, the request is ignored and anira logs a warning. Since both strategies produce identical results, a mismatch is harmless; the warning only tells you that the requested performance characteristic is not the one in effect.
+    All anira instances in a process share one inference thread pool, so only one wait strategy can be in effect per process — the one of the first context or instance created. If a later one requests a different strategy, the request is ignored and anira logs a warning. Since both strategies produce identical results, a mismatch is harmless; the warning only tells you that the requested performance characteristic is not the one in effect.
 
 .. note::
-    The configuration in effect is the first user's (a machine or an instance); every later machine or instance is reconciled against it: the log level (the most verbose request wins), the wait strategy, the drain mode, the queue capacity and the drain interval (the first wins, with a warning on a mismatch), and the thread count (the pool only shrinks, never grows, and never to zero). The thread pool exists exactly while :cpp:class:`anira::InferenceHandler` instances exist: the first instance builds it from the configuration in effect (its threads start with the first ``prepare()``), and destroying the last instance stops and joins every inference thread before its destructor returns. Once every machine and instance is gone, the next configuration takes effect whole. For plugins this means the host may unload your library the moment the last instance is destroyed — see :ref:`plugin-library-unload` in the troubleshooting guide for the details and the Windows caveat.
+    The configuration in effect is the first user's (a context or an instance); every later context or instance is reconciled against it: the log level (the most verbose request wins), the wait strategy, the drain mode, the queue capacity and the drain interval (the first wins, with a warning on a mismatch), and the thread count (the pool only shrinks, never grows, and never to zero). The thread pool exists exactly while :cpp:class:`anira::InferenceHandler` instances exist: the first instance builds it from the configuration in effect (its threads start with the first ``prepare()``), and destroying the last instance stops and joins every inference thread before its destructor returns. Once every context and instance is gone, the next configuration takes effect whole. For plugins this means the host may unload your library the moment the last instance is destroyed — see :ref:`plugin-library-unload` in the troubleshooting guide for the details and the Windows caveat.
 
 .. note::
-    On WebAssembly builds blocking waits are impossible — inference loops are driven cooperatively by JS Workers — so ``ANIRA_WAIT_BLOCKING`` is coerced to ``ANIRA_WAIT_SPIN_BACKOFF`` with a warning by the context.
+    On WebAssembly builds blocking waits are impossible — inference loops are driven cooperatively by JS Workers — so ``ANIRA_WAIT_BLOCKING`` is coerced to ``ANIRA_WAIT_SPIN_BACKOFF`` with a warning by the core.
 
-anira logs through `tanh-lib <https://github.com/tanh-lab/tanh-lib>`_'s ``thl::Logger``. Every record carries an ``anira.<component>`` group (``anira.context``, ``anira.scheduler``, ``anira.config``, ``anira.system``, ``anira.backend.<name>``, ``anira.web``), and anira never configures the sinks itself: where the messages end up is the host's decision, made with ``thl::Logger::set_config()`` / ``set_callback()``. By default tanh-lib writes to the platform log — ``os_log`` on macOS/iOS (visible in Console.app or ``log stream``), ``logcat`` on Android, stdout/stderr elsewhere; set ``LoggerConfig::m_console_enabled`` for a plain stdout/stderr console sink on Apple platforms.
+anira logs through `tanh-lib <https://github.com/tanh-lab/tanh-lib>`_'s ``thl::Logger``. Every record carries an ``anira.<component>`` group (``anira.core``, ``anira.scheduler``, ``anira.config``, ``anira.system``, ``anira.backend.<name>``, ``anira.web``), and anira never configures the sinks itself: where the messages end up is the host's decision, made with ``thl::Logger::set_config()`` / ``set_callback()``. By default tanh-lib writes to the platform log — ``os_log`` on macOS/iOS (visible in Console.app or ``log stream``), ``logcat`` on Android, stdout/stderr elsewhere; set ``LoggerConfig::m_console_enabled`` for a plain stdout/stderr console sink on Apple platforms.
 
-Messages from the audio thread and the inference threads are real-time safe: they are formatted on the caller's stack and pushed into a lock-free queue the context owns (a ``thl::Logger::rt::Queue``), and reach the same sinks a little later with ``source = "rt"``. The machine configuration (``machine.log_drain(...)`` and ``machine.log_queue_capacity(...)``, section 1.4; the ``log`` block of the machine file) says how that queue is drained:
+Messages from the audio thread and the inference threads are real-time safe: they are formatted on the caller's stack and pushed into a lock-free queue the core owns (a ``thl::Logger::rt::Queue``), and reach the same sinks a little later with ``source = "rt"``. The context configuration (``context.log_drain(...)`` and ``context.log_queue_capacity(...)``, section 1.4; the ``log`` block of the context file) says how that queue is drained:
 
-- ``ANIRA_LOG_DRAIN_THREAD`` (the default natively): a low-priority thread of anira's own (``anira-log``, ``thl::core::ThreadPriority::Low``, i.e. below UI work — under heavy CPU contention, e.g. more spinning inference threads than cores, delivery is delayed rather than competing with the audio path) owned by the core — started with the first machine or :cpp:class:`anira::InferenceHandler`, stopped and joined when the last of them is destroyed (and by ``anira_shutdown``), which flushes the queue through the sinks on the destroying thread. Nothing of it survives the last user, so a plugin host may unload the library right after.
-- ``ANIRA_LOG_DRAIN_MANUAL``: no thread. The host calls ``anira_machine_drain_log`` (``anira::Machine::drain_log``, or :cpp:func:`anira::InferenceHandler::drain_log` / ``anira_drain_log``) periodically, e.g. from a UI timer; the queue is shared by every machine and handler in the process, so pumping any one of them drains everything. The only mode on WebAssembly, where the web wrapper exposes it as ``drainAniraLog(wasmInstance)`` (``_anira_drain_log()``). Records logged before the last machine or handler is destroyed are flushed on its release either way.
+- ``ANIRA_LOG_DRAIN_THREAD`` (the default natively): a low-priority thread of anira's own (``anira-log``, ``thl::core::ThreadPriority::Low``, i.e. below UI work — under heavy CPU contention, e.g. more spinning inference threads than cores, delivery is delayed rather than competing with the audio path) owned by the core — started with the first context or :cpp:class:`anira::InferenceHandler`, stopped and joined when the last of them is destroyed (and by ``anira_shutdown``), which flushes the queue through the sinks on the destroying thread. Nothing of it survives the last user, so a plugin host may unload the library right after.
+- ``ANIRA_LOG_DRAIN_MANUAL``: no thread. The host calls ``anira_context_drain_log`` (``anira::Context::drain_log``, or :cpp:func:`anira::InferenceHandler::drain_log` / ``anira_drain_log``) periodically, e.g. from a UI timer; the queue is shared by every context and handler in the process, so pumping any one of them drains everything. The only mode on WebAssembly, where the web wrapper exposes it as ``drainAniraLog(wasmInstance)`` (``_anira_drain_log()``). Records logged before the last context or handler is destroyed are flushed on its release either way.
 
 ``log_queue_capacity`` sizes the queue (rounded up to a power of two, clamped to [64, 65536]; a full queue drops and counts further records until the next drain, which then reports how many were lost) and the interval of ``log_drain`` the thread's pass interval; the rule of thumb is capacity ≥ burst rate × interval. The queue is created once per process by the first session and keeps its size — a later first session asking for more is told with a warning.
 
@@ -540,20 +540,20 @@ Messages from the audio thread and the inference threads are real-time safe: the
     what anira promises about exceptions is the subject of :doc:`logging`. The paragraphs
     below describe the 2.x runtime's log configuration, which this pre-release still uses.
 
-The log level (``machine.log_level``) is one setting for the whole inference stack: it is applied as the runtime level of ``thl::Logger`` and is forwarded to the logging facilities of the enabled backends — the ONNX Runtime environment severity, the LiteRT environment min-logger severity and the LibTorch/c10 log level (TFLite and ExecuTorch excepted — their prebuilt runtimes offer no runtime logging control). A message is emitted when its severity is at or above the configured level; the available levels are ``Debug``, ``Info``, ``Warning`` and ``Error``, where ``Debug`` additionally enables the backends' verbose output. The default is ``LogLevel::Info`` in debug builds and ``LogLevel::Error`` in release builds. Every level is compiled in on every build type (anira pins tanh-lib's compile-time ceiling, ``THL_LOG_COMPILED_MAX_LEVEL``, to its maximum), so the runtime level is the only filter.
+The log level (``context.log_level``) is one setting for the whole inference stack: it is applied as the runtime level of ``thl::Logger`` and is forwarded to the logging facilities of the enabled backends — the ONNX Runtime environment severity, the LiteRT environment min-logger severity and the LibTorch/c10 log level (TFLite and ExecuTorch excepted — their prebuilt runtimes offer no runtime logging control). A message is emitted when its severity is at or above the configured level; the available levels are ``Debug``, ``Info``, ``Warning`` and ``Error``, where ``Debug`` additionally enables the backends' verbose output. The default is ``LogLevel::Info`` in debug builds and ``LogLevel::Error`` in release builds. Every level is compiled in on every build type (anira pins tanh-lib's compile-time ceiling, ``THL_LOG_COMPILED_MAX_LEVEL``, to its maximum), so the runtime level is the only filter.
 
 .. note::
-    Like the thread pool, the logging configuration is process-global — and the level also is ``thl::Logger``'s: a host that also uses tanh-lib shares one level with anira. If the machine configurations in a process disagree, the lowest (most verbose) requested level wins — no session can silence the diagnostics another session asked for — while drain mode, capacity and interval stay those of the first session; every mismatch is reported with a warning. The TFLite backend is exempt from the log level — the prebuilt TFLite C library does not export any runtime logging control, so its (rare) log lines are unaffected.
+    Like the thread pool, the logging configuration is process-global — and the level also is ``thl::Logger``'s: a host that also uses tanh-lib shares one level with anira. If the context configurations in a process disagree, the lowest (most verbose) requested level wins — no session can silence the diagnostics another session asked for — while drain mode, capacity and interval stay those of the first session; every mismatch is reported with a warning. The TFLite backend is exempt from the log level — the prebuilt TFLite C library does not export any runtime logging control, so its (rare) log lines are unaffected.
 
-You can also opt out of the auto-managed thread pool entirely and supply your own threads. Ask for ``0`` threads (``machine.threads(0)``, or ``"num_threads": 0`` in the machine file) so the auto-pool stays empty, then create as many threads as you want: in C, ``anira_inference_thread_create(machine, &thread, &err)`` of ``anira/abi/thread.h``, then ``anira_inference_thread_start`` (an OS thread anira spawns; it returns a status, ``ANIRA_ERROR_INVALID_STATE`` for a thread already running and ``ANIRA_ERROR_OUT_OF_MEMORY`` when the operating system refused the thread) or ``anira_inference_thread_run_loop`` on a thread of your own, ``anira_inference_thread_stop`` (native: joins), ``anira_inference_thread_has_exited`` (true once the loop returned; what a WebAssembly Worker's owner polls) and ``anira_inference_thread_destroy``; in the 2.x C++ API, :cpp:func:`anira::Context::make_inference_thread`, ``start()`` on each, and either ``stop()`` or simply destroy the returned ``unique_ptr`` to tear them down. ``anira_num_inference_threads`` reports the pool's size and is 0 then.
+You can also opt out of the auto-managed thread pool entirely and supply your own threads. Ask for ``0`` threads (``context.threads(0)``, or ``"num_threads": 0`` in the context file) so the auto-pool stays empty, then create as many threads as you want: in C, ``anira_inference_thread_create(context, &thread, &err)`` of ``anira/abi/thread.h``, then ``anira_inference_thread_start`` (an OS thread anira spawns; it returns a status, ``ANIRA_ERROR_INVALID_STATE`` for a thread already running and ``ANIRA_ERROR_OUT_OF_MEMORY`` when the operating system refused the thread) or ``anira_inference_thread_run_loop`` on a thread of your own, ``anira_inference_thread_stop`` (native: joins), ``anira_inference_thread_has_exited`` (true once the loop returned; what a WebAssembly Worker's owner polls) and ``anira_inference_thread_destroy``; in the 2.x C++ API, :cpp:func:`anira::Core::make_inference_thread`, ``start()`` on each, and either ``stop()`` or simply destroy the returned ``unique_ptr`` to tear them down. ``anira_num_inference_threads`` reports the pool's size and is 0 then.
 
 .. code-block:: cpp
 
-    anira::ContextConfig context_config =
-        anira::v3compat::to_context_config(anira::MachineConfig{}.threads(0));  // opt out of the auto-pool
-    anira::InferenceHandler inference_handler(pp_processor, inference_config, context_config);
+    anira::CoreConfig core_config =
+        anira::v3compat::to_core_config(anira::ContextConfig{}.threads(0));  // opt out of the auto-pool
+    anira::InferenceHandler inference_handler(pp_processor, inference_config, core_config);
 
-    auto thread = anira::Context::make_inference_thread();
+    auto thread = anira::Core::make_inference_thread();
     thread->start();
     // ... process audio ...
     thread->stop(); // or just let `thread` go out of scope

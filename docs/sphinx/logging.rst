@@ -9,16 +9,16 @@ write, what a message contains, where the records go on each platform, and what 
 promises about exceptions.
 
 .. note::
-    The 3.x runtime (the :cpp:class:`anira::InferenceHandler` over the machine config) is not
+    The 3.x runtime (the :cpp:class:`anira::InferenceHandler` over the context config) is not
     part of this pre-release, so parts of this page describe the contract before the code that
     honours it is in the tree. What exists today: the statuses and ``anira_error`` of
     ``anira/abi/status.h``, ``anira::Error`` of ``anira/anira.hpp``, the exception firewall of
-    the C entries, the log block of the machine config (``anira/abi/log.h``), the real-time log
+    the C entries, the log block of the context config (``anira/abi/log.h``), the real-time log
     queue with its drain thread and ``anira_drain_log``, and the platform sink. Marked below as
     arriving with the 3.x runtime: ``anira_handler_rt_error``, the per-handler latch and the
     drain-thread summary. The ``anira_log_fn`` sink, the ``ANIRA_LOG_FLAG_*`` switches and
-    the ``anira_log_record`` projection are in effect from the machine
-    (``anira_machine_create``, :doc:`usage` section 3.1) on. The 2.x runtime of :doc:`usage`,
+    the ``anira_log_record`` projection are in effect from the context
+    (``anira_context_create``, :doc:`usage` section 3.1) on. The 2.x runtime of :doc:`usage`,
     sections 2 to 5, logs its real-time failures through the same queue without ``rt_error``
     and without latching.
 
@@ -54,8 +54,8 @@ the entry carries no error record).
 
     try {
         anira::ModelConfig cfg = anira::ModelConfig::from_file("model.json");
-        anira::MachineConfig machine;
-        machine.log_level(ANIRA_LOG_WARNING);
+        anira::ContextConfig context;
+        context.log_level(ANIRA_LOG_WARNING);
         if (cfg.upgraded()) {
             // a 2.x document, upgraded in memory: a success (ANIRA_SUCCESS_UPGRADED), reported
             // as a flag on the handle rather than as an exception
@@ -119,13 +119,13 @@ It is the one returned failure anira also logs, once, at Error, with the entry's
 the message is not anira's, you cannot act on it, and nothing below the firewall reported it.
 Report it with the log line.
 
-**The trace flag.** ``ANIRA_LOG_FLAG_TRACE_FAILURES`` on the machine config
-(``machine.log_flags(ANIRA_LOG_FLAG_TRACE_FAILURES)``, ``anira_machine_config_set_log_flags``,
+**The trace flag.** ``ANIRA_LOG_FLAG_TRACE_FAILURES`` on the context config
+(``context.log_flags(ANIRA_LOG_FLAG_TRACE_FAILURES)``, ``anira_context_config_set_log_flags``,
 or the ``flags`` field of ``anira_log_desc``) makes every failed status also an Error record
 whose text is the ``anira_error`` message prefixed by the entry and the status. It is off by
 default on every platform and exists for one situation: the application swallowed the status
-and the only thing you have is the device log. It is in effect while a machine that set it
-lives (counted across machines, so a second machine's destroy does not switch it off for the
+and the only thing you have is the device log. It is in effect while a context that set it
+lives (counted across contexts, so a second context's destroy does not switch it off for the
 first).
 
 .. _logging-realtime:
@@ -173,10 +173,10 @@ Levels
 
 anira's four levels are ``ANIRA_LOG_DEBUG`` (0) to ``ANIRA_LOG_ERROR`` (3). Every failure
 record anira writes is Error; Warning is a condition the call survived (a clamped value, a
-process-global setting a later machine could not change); Info is lifecycle (the pool started,
+process-global setting a later context could not change); Info is lifecycle (the pool started,
 a session prepared); Debug additionally switches the engines' verbose output on. The runtime
-level of the machine config (``log_level``; default ``ANIRA_LOG_WARNING``; the most verbose
-request across the machines of a process wins) is applied to anira's own logger and forwarded
+level of the context config (``log_level``; default ``ANIRA_LOG_WARNING``; the most verbose
+request across the contexts of a process wins) is applied to anira's own logger and forwarded
 to the engines' runtimes (ONNX Runtime, LiteRT, LibTorch/c10; TFLite and ExecuTorch expose no
 runtime level).
 
@@ -219,7 +219,7 @@ platform sink is stdout/stderr, Error and Warning on stderr, Info and Debug on s
 **Release builds.** tanh-lib, whose logger anira uses, compiles Warning, Info and Debug out of
 its own ``Release`` builds (``THL_LOG_COMPILED_MAX_LEVEL=1``). anira sets tanh-lib's
 ``TANH_LOG_COMPILED_MAX_LEVEL`` option to 4 for its private copy in every build type, so the
-runtime level of the machine config is the only filter and a warning the call survives exists
+runtime level of the context config is the only filter and a warning the call survives exists
 in a shipped build.
 
 Delivery
@@ -245,7 +245,7 @@ the real-time records that preceded the failure are in front of you before you a
 lock-free and the queue is multi-consumer, so this is safe beside the running drain thread; it
 means a real-time record may arrive on the failing caller's thread as well as on the drain
 thread, which the sink contract states. Releasing the last handler and ``anira_shutdown`` /
-:cpp:func:`anira::Context::shutdown` drain the queue as well.
+:cpp:func:`anira::Core::shutdown` drain the queue as well.
 
 **Manual mode and WebAssembly.** With ``ANIRA_LOG_DRAIN_MANUAL`` there is no thread; the host
 pumps ``anira_drain_log`` (:cpp:func:`anira::InferenceHandler::drain_log` on the 2.x runtime,
@@ -256,7 +256,7 @@ manual with a warning, and a page that never pumps never sees a real-time record
 
 **A full queue** drops and counts further records until the next drain, which then reports how
 many were lost. ``queue_capacity`` (``log_queue_capacity``, rounded up to a power of two and
-clamped to [64, 65536], fixed once the first machine created the core) against the burst rate
+clamped to [64, 65536], fixed once the first context created the core) against the burst rate
 times the drain interval is the rule of thumb.
 
 **On a crash.** Everything a control-path call logged is already at its sink. What is in the
@@ -268,17 +268,17 @@ to you, keep them on the host side, as in the next section.
 Sinks
 -----
 
-The host owns the sinks. anira never decides where a record ends up; the machine config says
+The host owns the sinks. anira never decides where a record ends up; the context config says
 which sinks run.
 
 **The platform sink** is on by default: logcat on Android, ``os_log`` on macOS and iOS
 (on macOS additionally stdout/stderr, and stdout/stderr *only* while a debugger is attached),
 stdout/stderr on Linux and Windows, the browser console on WebAssembly.
-``ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK`` in ``log_flags`` switches it off while that machine
-lives (counted across machines), for a host that shows its own log or a DAW that mirrors
+``ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK`` in ``log_flags`` switches it off while that context
+lives (counted across contexts), for a host that shows its own log or a DAW that mirrors
 stderr.
 
-**The host sink.** ``log_sink(callback, user_data)`` (``anira_machine_config_set_log_sink``, or
+**The host sink.** ``log_sink(callback, user_data)`` (``anira_context_config_set_log_sink``, or
 the ``callback`` field of ``anira_log_desc``) registers an ``anira_log_fn`` that receives
 **every** record the platform sink would, as an ``anira_log_record``: ``level``, ``flags``
 (``ANIRA_LOG_RECORD_REALTIME`` when the record came through the queue,
@@ -286,8 +286,8 @@ the ``callback`` field of ``anira_log_desc``) registers an ``anira_log_fn`` that
 ``dropped_before`` (records the queue lost before this one), ``sequence``, ``timestamp_ms``
 (UTC), ``monotonic_ns``, ``group`` (``"anira.<component>"``) and ``message``, valid until the
 callback returns. The sink runs on whichever thread logs, never on the driver thread, possibly
-with anira's lifecycle lock held, and must not call anira. Each machine's sink is called only
-while that machine lives: destroying the machine unregisters it and waits for a call in
+with anira's lifecycle lock held, and must not call anira. Each context's sink is called only
+while that context lives: destroying the context unregisters it and waits for a call in
 flight.
 
 A sink that must survive a crash keeps a ring and lets the host's own crash handler write it
@@ -321,7 +321,7 @@ storage, each slot is written completely before it is published, and the handler
         }
     }
 
-    /* machine.log_sink(ring_sink) or anira_machine_config_set_log_sink(config, ring_sink, NULL) */
+    /* context.log_sink(ring_sink) or anira_context_config_set_log_sink(config, ring_sink, NULL) */
 
 One slot may be torn when the crash lands in the middle of a ``snprintf``; that is the price
 of a lock-free ring and the reason the handler writes the slot's recorded length rather than
@@ -330,7 +330,7 @@ scanning for a terminator.
 **Where to look.** anira's private logger files every record under anira's own identity: the
 Android tag and the Apple subsystem and category are ``anira``, and every line reads
 ``[<source>][<group>] <message>`` with ``source`` = ``native`` or ``rt`` and ``group`` =
-``anira.<component>`` (``anira.context``, ``anira.scheduler``, ``anira.config``,
+``anira.<component>`` (``anira.core``, ``anira.scheduler``, ``anira.config``,
 ``anira.system``, ``anira.backend.<engine>``, ``anira.web``, ``anira.capi``). A host that also
 uses tanh-lib has a second logger under ``thl``, which anira never touches.
 

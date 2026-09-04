@@ -9,7 +9,7 @@
 #include <tanh/core/threading/Thread.h>
 #endif
 
-#include "../ContextConfig.h"
+#include "../CoreConfig.h"
 #include "../utils/Buffer.h"
 #include "SessionElement.h"
 #ifdef __x86_64__
@@ -146,7 +146,7 @@ public:
      * Counts run_loop() entries and exits wherever they happen, so on WebAssembly a
      * Worker that is still inside its loop after the main instance called stop() is
      * counted until it leaves (there get_num_active_threads() already says 0).
-     * Context::release_core_if_idle() consults it.
+     * Core::release_core_if_idle() consults it.
      */
     static unsigned int get_num_loop_active();
 

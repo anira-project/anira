@@ -1,8 +1,8 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/log.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/utils/Logger.h>
 #include <tanh/core/Logger.h>
 
@@ -28,7 +28,7 @@ anira::LogLevel to_anira_level(anira_log_level level) noexcept {
 }  // namespace
 
 size_t ANIRA_CALL anira_drain_log(void) ANIRA_NOEXCEPT try {
-    return anira::Context::drain_log();
+    return anira::Core::drain_log();
 } catch (...) {
     // A sink that throws while draining must not recurse into the logger.
     anira::capi::report_void_failure_quiet(__func__);

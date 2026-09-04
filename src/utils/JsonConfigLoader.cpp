@@ -1,4 +1,4 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/JsonConfigLoader.h>
@@ -27,8 +27,8 @@ anira::JsonConfigLoader::JsonConfigLoader(std::istream& stream) {
     initialize_from_stream(stream);
 }
 
-std::unique_ptr<anira::ContextConfig> anira::JsonConfigLoader::get_context_config() {
-    return std::move(m_context_config);
+std::unique_ptr<anira::CoreConfig> anira::JsonConfigLoader::get_core_config() {
+    return std::move(m_core_config);
 }
 
 std::unique_ptr<anira::InferenceConfig> anira::JsonConfigLoader::get_inference_config() {
@@ -46,12 +46,12 @@ void anira::JsonConfigLoader::initialize_from_stream(std::istream& stream) {
 }
 
 void anira::JsonConfigLoader::parse(const nlohmann::json& config) {
-    parse_context_config(config);
+    parse_core_config(config);
     parse_inference_config(config);
 }
 
-void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config) {
-    m_context_config = std::make_unique<anira::ContextConfig>();
+void anira::JsonConfigLoader::parse_core_config(const nlohmann::json& config) {
+    m_core_config = std::make_unique<anira::CoreConfig>();
 
     if (!config.contains("context_config")) { return; }
     const auto& context_json = config.at("context_config");
@@ -59,7 +59,7 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
     if (context_json.contains("num_threads")) {
         if (context_json.at("num_threads").is_number_unsigned()) {
 #ifdef __EMSCRIPTEN__
-            // The context cannot run inference threads on WebAssembly — they are
+            // The core cannot run inference threads on WebAssembly — they are
             // always supplied externally (e.g. AniraWeb.spinUpInferenceWorker()).
             // Accept the (valid) value so shared config files keep working, but
             // coerce it.
@@ -70,7 +70,7 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
                                   "AniraWeb.spinUpInferenceWorker()). Using num_threads = 0.");
             }
 #else
-            m_context_config->m_num_threads = context_json.at("num_threads").get<unsigned int>();
+            m_core_config->m_num_threads = context_json.at("num_threads").get<unsigned int>();
 #endif
         } else {
             ANIRA_LOG_ERROR(anira::log_group::k_config,
@@ -83,7 +83,7 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
         std::string const strategy =
             strategy_json.is_string() ? strategy_json.get<std::string>() : std::string();
         if (strategy == "spin_backoff") {
-            m_context_config->m_wait_strategy = anira::WaitStrategy::SpinBackoff;
+            m_core_config->m_wait_strategy = anira::WaitStrategy::SpinBackoff;
         } else if (strategy == "blocking") {
 #ifdef __EMSCRIPTEN__
             // Blocking waits are impossible on WebAssembly: inference loops are
@@ -94,7 +94,7 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
                               "wait_strategy 'blocking' is not supported on WebAssembly builds. "
                               "Using 'spin_backoff'.");
 #else
-            m_context_config->m_wait_strategy = anira::WaitStrategy::Blocking;
+            m_core_config->m_wait_strategy = anira::WaitStrategy::Blocking;
 #endif
         } else {
             ANIRA_LOG_ERROR(anira::log_group::k_config,
@@ -107,13 +107,13 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
         std::string const level =
             level_json.is_string() ? level_json.get<std::string>() : std::string();
         if (level == "debug") {
-            m_context_config->m_log.m_level = anira::LogLevel::Debug;
+            m_core_config->m_log.m_level = anira::LogLevel::Debug;
         } else if (level == "info") {
-            m_context_config->m_log.m_level = anira::LogLevel::Info;
+            m_core_config->m_log.m_level = anira::LogLevel::Info;
         } else if (level == "warning") {
-            m_context_config->m_log.m_level = anira::LogLevel::Warning;
+            m_core_config->m_log.m_level = anira::LogLevel::Warning;
         } else if (level == "error") {
-            m_context_config->m_log.m_level = anira::LogLevel::Error;
+            m_core_config->m_log.m_level = anira::LogLevel::Error;
         } else {
             ANIRA_LOG_ERROR(anira::log_group::k_config,
                             "Invalid '%s' value: expected \"debug\", \"info\", \"warning\" or "
@@ -145,12 +145,12 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
                 ANIRA_LOG_WARNING(anira::log_group::k_config,
                                   "log.drain 'thread' is not supported on WebAssembly builds: "
                                   "no thread can drain the log queue there. Using 'manual'.");
-                m_context_config->m_log.m_drain = anira::LogDrain::Manual;
+                m_core_config->m_log.m_drain = anira::LogDrain::Manual;
 #else
-                m_context_config->m_log.m_drain = anira::LogDrain::Thread;
+                m_core_config->m_log.m_drain = anira::LogDrain::Thread;
 #endif
             } else if (drain == "manual") {
-                m_context_config->m_log.m_drain = anira::LogDrain::Manual;
+                m_core_config->m_log.m_drain = anira::LogDrain::Manual;
             } else {
                 ANIRA_LOG_ERROR(anira::log_group::k_config,
                                 "Invalid 'log.drain' value: expected \"thread\" or \"manual\". "
@@ -160,7 +160,7 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
         if (log_json.contains("queue_capacity")) {
             const auto& capacity_json = log_json.at("queue_capacity");
             if (capacity_json.is_number_unsigned()) {
-                m_context_config->m_log.m_queue_capacity = capacity_json.get<size_t>();
+                m_core_config->m_log.m_queue_capacity = capacity_json.get<size_t>();
             } else {
                 ANIRA_LOG_ERROR(anira::log_group::k_config,
                                 "Invalid 'log.queue_capacity' value: expected an unsigned "
@@ -170,7 +170,7 @@ void anira::JsonConfigLoader::parse_context_config(const nlohmann::json& config)
         if (log_json.contains("drain_interval_ms")) {
             const auto& interval_json = log_json.at("drain_interval_ms");
             if (interval_json.is_number_unsigned()) {
-                m_context_config->m_log.m_drain_interval_ms = interval_json.get<uint32_t>();
+                m_core_config->m_log.m_drain_interval_ms = interval_json.get<uint32_t>();
             } else {
                 ANIRA_LOG_ERROR(anira::log_group::k_config,
                                 "Invalid 'log.drain_interval_ms' value: expected an unsigned "

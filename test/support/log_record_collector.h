@@ -3,7 +3,7 @@
 
 // Collects the records anira's logging delivers, so a test can assert on a
 // diagnostic instead of only on its side effects. The collector is a sink of anira's
-// own registry (anira::detail::add_log_sink, what a 3.x machine's anira_log_fn goes
+// own registry (anira::detail::add_log_sink, what a 3.x context's anira_log_fn goes
 // through as well), so it receives every record as the anira_log_record projection;
 // a thl::Logger::set_callback of its own would replace the registry's trampoline.
 

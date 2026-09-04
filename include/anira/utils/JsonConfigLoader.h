@@ -1,7 +1,7 @@
 #ifndef JSONCONFIGLOADER_H
 #define JSONCONFIGLOADER_H
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 
 #include <fstream>
@@ -14,7 +14,7 @@ public:
     JsonConfigLoader(const std::string& file_path);
     JsonConfigLoader(std::istream& stream);
 
-    std::unique_ptr<anira::ContextConfig> get_context_config();
+    std::unique_ptr<anira::CoreConfig> get_core_config();
     std::unique_ptr<anira::InferenceConfig> get_inference_config();
 
 private:
@@ -32,7 +32,7 @@ private:
     void initialize_from_stream(std::istream& stream);
 
     void parse(const nlohmann::json& config);
-    void parse_context_config(const nlohmann::json& config);
+    void parse_core_config(const nlohmann::json& config);
     void parse_inference_config(const nlohmann::json& config);
 
     static std::vector<anira::ModelData> create_model_data_from_config(
@@ -49,7 +49,7 @@ private:
         const nlohmann::basic_json<>& config,
         bool& necessary_parameter_set);
 
-    std::unique_ptr<anira::ContextConfig> m_context_config;
+    std::unique_ptr<anira::CoreConfig> m_core_config;
     std::unique_ptr<anira::InferenceConfig> m_inference_config;
 };
 }  // namespace anira
