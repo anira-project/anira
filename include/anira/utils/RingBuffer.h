@@ -4,6 +4,7 @@
 #include <anira/abi/enums.h>
 #include <tanh/core/RingBuffer.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -23,20 +24,37 @@
  * Every input and output ring of the inference pipeline is one instantiation of
  * thl::core::RingBuffer<T> (anira::RingBufferT<T>), with T the element type of the ring dtype
  * the host declared for the slot on the Hard contract (`anira_contract_hard_set_ring_dtype`;
- * float32 when nothing was declared). This holder owns that instantiation behind a dtype tag,
- * so a std::vector of rings can mix element types, and dispatches every block operation to it.
+ * float32 when nothing was declared). This holder owns that instantiation behind the dtype and
+ * dispatches every block operation to it, so a std::vector of rings can mix element types.
+ *
+ * One rule: one instantiation per scalar dtype the ABI pins, with T the dtype's C type.
+ * float32 -> float, float64 -> double, int8 -> int8_t, uint8 -> uint8_t, int16 -> int16_t,
+ * int32 -> int32_t, int64 -> int64_t; the three dtypes without a C type are stored as their bit
+ * patterns, bool8 as uint8_t and float16 and bfloat16 as uint16_t. No two dtypes share a ring:
+ * a ring initialised as bool8 is a bool8 ring and refuses uint8 data. A dtype with more than one
+ * lane, an opaque or complex dtype is refused at initialize_with_positions(), which is what the
+ * 3.x prepare reports as a configuration error.
  *
  * The rings never convert: what the driver pushes into an input ring is what the pre-processor
  * pops out of it, and what the post-processor pushes into an output ring is what the driver pops
- * out of it, byte for byte (section 7 of the architecture document). The block API therefore
- * takes the caller's dtype beside the data and refuses, returning 0 with nothing written, when
- * it is not the ring's own. The two 16-bit floating-point dtypes are stored as their uint16_t bit
- * patterns: no arithmetic happens on a ring element.
+ * out of it, byte for byte (section 7 of the architecture document); no arithmetic happens on a
+ * ring element. The block API therefore takes the caller's dtype beside the data and refuses,
+ * returning 0 with nothing written, when it is not the ring's own.
  *
- * The nine scalar dtypes the rings store are float32, float16, bfloat16, int8, uint8, bool8,
- * int16, int32 and int64; a dtype with more than one lane, an opaque dtype or float64 is refused
- * at initialize_with_positions(), which is what the 3.x prepare reports as a configuration
- * error.
+ * ABI. This is a C++ type with a std::variant inside: like every 2.x class it is compiled into
+ * the library and into whoever includes this header, so it is not a stable binary interface and
+ * its layout may change with any release. What crosses the ABI is the opaque `anira_ring*` and
+ * the C accessors of `abi/stage.h` (`anira_ring_dtype`, `anira_ring_push_block`, ...), which are
+ * implemented on top of these members inside the library; a 3.x stage pops its samples through
+ * those, or through the `anira.hpp` wrapper over them, never through this struct. The 2.x
+ * pre/post processors of this pre-release use the members directly, as they used the previous
+ * float ring, under the 2.x rule that the library and the plugin are built together.
+ *
+ * Dispatch. The arms live in a std::variant, which holds exactly one of them at a time and
+ * remembers which; std::visit calls the given lambda with the active arm, instantiating the
+ * lambda once per arm at compile time and selecting the arm through the variant's index at run
+ * time. It is one indexed jump per block call: no virtual function, no allocation, nothing that
+ * can block, so it is legal on the driver thread.
  *
  * Semantics of the storage (tanh-lib's Apache-2.0 core component, thl::core::RingBuffer):
  *  - push_sample() into a full channel silently overwrites the oldest sample (the read
@@ -74,14 +92,13 @@ public:
      * @brief Makes this a ring of `dtype`, `num_channels` channels and `num_samples` elements
      * each, cleared.
      *
-     * @return true; false, with the ring left as it was, when `dtype` is not one of the nine
-     * scalar dtypes the rings store (a dtype with more than one lane, an opaque dtype, float64).
+     * @return true; false, with the ring left as it was, when `dtype` is not one of the ten
+     * scalar dtypes the rings store (a dtype with more than one lane, an opaque or complex one).
      */
     bool initialize_with_positions(size_t num_channels, size_t num_samples, anira_dtype dtype) {
         size_t index = 0;
         if (!arm_index_of(dtype, index)) { return false; }
         if (m_storage.index() != index) { emplace_arm(index); }
-        m_dtype = dtype;
         std::visit([&](auto& ring) { ring.initialize_with_positions(num_channels, num_samples); },
                    m_storage);
         return true;
@@ -93,7 +110,7 @@ public:
     }
 
     /// The element type this ring stores (float32 for a ring that was never initialised).
-    [[nodiscard]] anira_dtype dtype() const noexcept { return m_dtype; }
+    [[nodiscard]] anira_dtype dtype() const noexcept { return k_arm_dtypes[m_storage.index()]; }
 
     [[nodiscard]] size_t num_channels() const {
         return std::visit([](const auto& ring) { return ring.get_num_channels(); }, m_storage);
@@ -124,7 +141,7 @@ public:
     /// Pushes `count` elements of `dtype` from `data` into `channel` (the oldest are overwritten
     /// when the ring is full).
     size_t push_block(size_t channel, const void* data, anira_dtype dtype, size_t count) {
-        if (dtype != m_dtype) { return 0; }
+        if (dtype != this->dtype()) { return 0; }
         std::visit(
             [&](auto& ring) {
                 using T = element_t<decltype(ring)>;
@@ -137,7 +154,7 @@ public:
     /// Pops `count` elements of `dtype` from `channel` into `data`; the elements beyond the
     /// available ones are value-initialised.
     size_t pop_block(size_t channel, void* data, anira_dtype dtype, size_t count) {
-        if (dtype != m_dtype) { return 0; }
+        if (dtype != this->dtype()) { return 0; }
         std::visit(
             [&](auto& ring) {
                 using T = element_t<decltype(ring)>;
@@ -150,7 +167,7 @@ public:
     /// Copies the `count` most recently consumed elements of `channel` (history) into `data`,
     /// oldest first, without popping.
     size_t peek_past_block(size_t channel, void* data, anira_dtype dtype, size_t count) const {
-        if (dtype != m_dtype) { return 0; }
+        if (dtype != this->dtype()) { return 0; }
         std::visit(
             [&](const auto& ring) {
                 using T = element_t<decltype(ring)>;
@@ -162,7 +179,7 @@ public:
 
     /// Pushes `count` copies of the element of `dtype` at `value` into `channel`.
     size_t push_fill(size_t channel, const void* value, anira_dtype dtype, size_t count) {
-        if (dtype != m_dtype) { return 0; }
+        if (dtype != this->dtype()) { return 0; }
         std::visit(
             [&](auto& ring) {
                 using T = element_t<decltype(ring)>;
@@ -207,7 +224,7 @@ public:
                        size_t num_old,
                        size_t offset,
                        size_t num_batches) {
-        if (dtype != m_dtype) { return 0; }
+        if (dtype != this->dtype()) { return 0; }
         const size_t window = num_new + num_old;
         std::visit(
             [&](auto& ring) {
@@ -271,15 +288,28 @@ public:
     [[nodiscard]] size_t get_num_samples() const { return capacity(); }
 
 private:
-    // One arm per stored element type; the two 16-bit floats and the two 8-bit unsigned
-    // dtypes share a carrier, told apart by m_dtype.
-    using Storage = std::variant<thl::core::RingBuffer<float>,
-                                 thl::core::RingBuffer<int16_t>,
-                                 thl::core::RingBuffer<int32_t>,
-                                 thl::core::RingBuffer<int8_t>,
-                                 thl::core::RingBuffer<uint8_t>,
-                                 thl::core::RingBuffer<int64_t>,
-                                 thl::core::RingBuffer<uint16_t>>;
+    // One arm per scalar dtype, in the order of k_arm_dtypes: the variant's index is the dtype.
+    using Storage = std::variant<thl::core::RingBuffer<float>,     // float32
+                                 thl::core::RingBuffer<double>,    // float64
+                                 thl::core::RingBuffer<uint16_t>,  // float16, as bits
+                                 thl::core::RingBuffer<uint16_t>,  // bfloat16, as bits
+                                 thl::core::RingBuffer<int8_t>,    // int8
+                                 thl::core::RingBuffer<uint8_t>,   // uint8
+                                 thl::core::RingBuffer<uint8_t>,   // bool8, as bits
+                                 thl::core::RingBuffer<int16_t>,   // int16
+                                 thl::core::RingBuffer<int32_t>,   // int32
+                                 thl::core::RingBuffer<int64_t>>;  // int64
+    static constexpr size_t k_num_arms = std::variant_size_v<Storage>;
+    static constexpr std::array<anira_dtype, k_num_arms> k_arm_dtypes{ANIRA_DTYPE_F32,
+                                                                      ANIRA_DTYPE_F64,
+                                                                      ANIRA_DTYPE_F16,
+                                                                      ANIRA_DTYPE_BF16,
+                                                                      ANIRA_DTYPE_I8,
+                                                                      ANIRA_DTYPE_U8,
+                                                                      ANIRA_DTYPE_BOOL8,
+                                                                      ANIRA_DTYPE_I16,
+                                                                      ANIRA_DTYPE_I32,
+                                                                      ANIRA_DTYPE_I64};
 
     template <typename Ring>
     struct element_of;
@@ -291,40 +321,24 @@ private:
     using element_t = typename element_of<std::remove_cvref_t<Ring>>::type;
 
     static bool arm_index_of(anira_dtype dtype, size_t& index) noexcept {
-        switch (static_cast<uint32_t>(dtype)) {
-            case ANIRA_DTYPE_F32: index = 0; return true;
-            case ANIRA_DTYPE_I16: index = 1; return true;
-            case ANIRA_DTYPE_I32: index = 2; return true;
-            case ANIRA_DTYPE_I8: index = 3; return true;
-            case ANIRA_DTYPE_U8:
-            case ANIRA_DTYPE_BOOL8: index = 4; return true;
-            case ANIRA_DTYPE_I64: index = 5; return true;
-            case ANIRA_DTYPE_F16:
-            case ANIRA_DTYPE_BF16: index = 6; return true;
-            default: return false;
+        for (size_t i = 0; i < k_num_arms; ++i) {
+            if (k_arm_dtypes[i] == dtype) {
+                index = i;
+                return true;
+            }
         }
+        return false;
     }
 
-    void emplace_arm(size_t index) {
-        switch (index) {
-            case 0: m_storage.emplace<0>(); break;
-            case 1: m_storage.emplace<1>(); break;
-            case 2: m_storage.emplace<2>(); break;
-            case 3: m_storage.emplace<3>(); break;
-            case 4: m_storage.emplace<4>(); break;
-            case 5: m_storage.emplace<5>(); break;
-            default: m_storage.emplace<6>(); break;
-        }
+    template <size_t... I>
+    void emplace_arm(size_t index, std::index_sequence<I...> /*arms*/) {
+        ((index == I ? (void)m_storage.emplace<I>() : void()), ...);
     }
+    void emplace_arm(size_t index) { emplace_arm(index, std::make_index_sequence<k_num_arms>{}); }
 
-    thl::core::RingBuffer<float>* f32() noexcept {
-        return m_dtype == ANIRA_DTYPE_F32 ? std::get_if<0>(&m_storage) : nullptr;
-    }
-    const thl::core::RingBuffer<float>* f32() const noexcept {
-        return m_dtype == ANIRA_DTYPE_F32 ? std::get_if<0>(&m_storage) : nullptr;
-    }
+    thl::core::RingBuffer<float>* f32() noexcept { return std::get_if<0>(&m_storage); }
+    const thl::core::RingBuffer<float>* f32() const noexcept { return std::get_if<0>(&m_storage); }
 
-    anira_dtype m_dtype = ANIRA_DTYPE_F32;
     Storage m_storage;  ///< Default-constructed: the float32 arm, no capacity
 };
 // NOLINTEND(readability-identifier-naming)

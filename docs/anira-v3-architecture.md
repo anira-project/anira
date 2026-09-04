@@ -41,7 +41,7 @@ typedef uint32_t anira_dtype;                              /* code | bits << 8 |
 #define ANIRA_DTYPE_CODE(d)  ((d) & 0xffu)
 #define ANIRA_DTYPE_BITS(d)  (((d) >> 8) & 0xffu)
 #define ANIRA_DTYPE_LANES(d) ((d) >> 16)
-#define ANIRA_DTYPE_F32 ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)   /* also F16, BF16, I8, U8, I16, I32, I64, BOOL8 */
+#define ANIRA_DTYPE_F32 ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)   /* also F64, F16, BF16, I8, U8, I16, I32, I64, BOOL8 */
 #define ANIRA_MAX_RANK 8
 
 /* abi/tensor.h -- Tier-1 PODs, frozen at M2. ANIRA_API / ANIRA_CALL elided; NB = ANIRA_NONBLOCKING;

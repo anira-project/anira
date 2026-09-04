@@ -43,15 +43,15 @@ InferenceBackend InferenceManager::get_backend() const {
 }
 
 void InferenceManager::prepare(HostConfig new_config, std::vector<long> custom_latency) {
-    prepare(new_config, std::move(custom_latency), RingDtypes{});
+    prepare(new_config, CustomLatencies{std::move(custom_latency)}, RingDtypes{});
 }
 
 void InferenceManager::prepare(HostConfig new_config,
-                               std::vector<long> custom_latency,
+                               const CustomLatencies& custom_latencies,
                                const RingDtypes& ring_dtypes) {
     m_host_config = new_config;
 
-    m_context.prepare_session(m_session, m_host_config, std::move(custom_latency), ring_dtypes);
+    m_context.prepare_session(m_session, m_host_config, custom_latencies, ring_dtypes);
 
     m_missing_samples.clear();
     m_missing_samples.resize(m_inference_config.get_tensor_output_shape().size(), 0);

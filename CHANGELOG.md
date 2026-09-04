@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ABI (unstable):** `ANIRA_DTYPE_F64`, the 64-bit float dtype (`ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 64, 1)`), beside the nine scalar dtypes the headers already pinned; `"float64"` in the JSON dtype vocabulary and `web/src/abi/enums.ts`.
+
 ### Changed
 
-- Every input and output ring of the pipeline is an instantiation of `RingBufferT<T>` with `T` the element type of the slot's ring dtype: `anira_ring` (`anira/utils/RingBuffer.h`, the type `anira::RingBuffer` now names) holds one of the nine scalar dtypes the rings store (float32, float16, bfloat16, int8, uint8, bool8, int16, int32, int64; float32 unless a slot says otherwise) behind a dtype tag, chosen at prepare: `SessionElement::prepare` and `Context::prepare_session` take the per-slot `RingDtypes`, which the 2.x `InferenceManager::prepare` leaves at float32 for every slot (a new overload carries them for the 3.x prepare). The ring's block API (`push_block`, `pop_block`, `peek_past_block`, `push_fill`, `push_zeros`, `discard`, `pop_windows`, which now holds the batched sliding-window pop of `PrePostProcessor::pop_samples_from_buffer`) takes the caller's dtype, returns 0 and writes nothing on a disagreement, and never converts; the 2.x float API stays as the float32 face, so every 2.x pre/post processor compiles unchanged. Storage only: the typed Hard entries that reach the rings follow with the 3.x handler.
+- Every input and output ring of the pipeline is an instantiation of `RingBufferT<T>` with `T` the element type of the slot's ring dtype: `anira_ring` (`anira/utils/RingBuffer.h`, the type `anira::RingBuffer` now names) holds one instantiation per scalar dtype the ABI pins (float32, float64, float16, bfloat16, int8, uint8, bool8, int16, int32, int64, with `T` the dtype's C type and the three that have none stored as their bits; no two dtypes share a ring; float32 unless a slot says otherwise), chosen at prepare: `SessionElement::prepare` and `Context::prepare_session` take the per-slot `RingDtypes` and the caller's `CustomLatencies` (the former `std::vector<long>`, named), which the 2.x `InferenceManager::prepare` fills from its arguments (a new overload carries both for the 3.x prepare). The ring's block API (`push_block`, `pop_block`, `peek_past_block`, `push_fill`, `push_zeros`, `discard`, `pop_windows`, which now holds the batched sliding-window pop of `PrePostProcessor::pop_samples_from_buffer`) takes the caller's dtype, returns 0 and writes nothing on a disagreement, and never converts; the 2.x float API stays as the float32 face, so every 2.x pre/post processor compiles unchanged. Storage only: the typed Hard entries that reach the rings follow with the 3.x handler.
 
 ## [v3.0.0-alpha.1] - 2026-09-03
 

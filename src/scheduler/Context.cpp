@@ -763,7 +763,7 @@ bool Context::release_core_if_idle() {
 
 void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
                               HostConfig new_config,
-                              std::vector<long> custom_latency,
+                              const CustomLatencies& custom_latencies,
                               const RingDtypes& ring_dtypes) {
     // seq_cst: pairs with the worker's register-before-check in
     // InferenceThread::process_dequeued_inference().
@@ -780,7 +780,7 @@ void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
 
     drain_inference_queue(session);
 
-    session->prepare(new_config, std::move(custom_latency), ring_dtypes);
+    session->prepare(new_config, custom_latencies, ring_dtypes);
 
     {
         // Only the pool start touches shared state; the drain and the

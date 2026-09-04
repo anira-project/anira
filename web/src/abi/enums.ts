@@ -324,6 +324,7 @@ export const ANIRA_DTYPE_CODE = (d: number): number => d & 0xff
 export const ANIRA_DTYPE_BITS = (d: number): number => (d >>> 8) & 0xff
 export const ANIRA_DTYPE_LANES = (d: number): number => d >>> 16
 export const ANIRA_DTYPE_F32 = 0x00012002
+export const ANIRA_DTYPE_F64 = 0x00014002
 export const ANIRA_DTYPE_F16 = 0x00011002
 export const ANIRA_DTYPE_BF16 = 0x00011004
 export const ANIRA_DTYPE_I8 = 0x00010800

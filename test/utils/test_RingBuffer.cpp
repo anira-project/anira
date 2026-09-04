@@ -138,6 +138,9 @@ void round_trip(anira_dtype dtype) {
 TEST(RingBufferTyped, Float32) {
     round_trip<float>(ANIRA_DTYPE_F32);
 }
+TEST(RingBufferTyped, Float64) {
+    round_trip<double>(ANIRA_DTYPE_F64);
+}
 TEST(RingBufferTyped, Float16IsStoredAsItsBits) {
     round_trip<uint16_t>(ANIRA_DTYPE_F16);
 }
@@ -163,9 +166,9 @@ TEST(RingBufferTyped, Int64) {
     round_trip<int64_t>(ANIRA_DTYPE_I64);
 }
 
-TEST(RingBufferTyped, TheCarrierDtypeIsTheOneAsked) {
-    // uint8 and bool8 share a carrier, as do float16 and bfloat16: the ring reports the dtype
-    // it was initialised with and refuses the sibling.
+TEST(RingBufferTyped, EveryDtypeIsItsOwnRing) {
+    // uint8 and bool8 store the same bytes, as do float16 and bfloat16, but no two dtypes share
+    // a ring: the ring reports the dtype it was initialised with and refuses the sibling.
     anira::RingBuffer ring;
     ASSERT_TRUE(ring.initialize_with_positions(1, 4, ANIRA_DTYPE_BOOL8));
     EXPECT_EQ(ring.dtype(), ANIRA_DTYPE_BOOL8);
@@ -189,8 +192,10 @@ TEST(RingBufferTyped, DtypesTheRingsCannotStoreAreRefusedAtInitialize) {
     EXPECT_FALSE(ring.initialize_with_positions(1, 4, ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4)))
         << "lanes > 1";
     EXPECT_FALSE(ring.initialize_with_positions(1, 4, ANIRA_MAKE_DTYPE(ANIRA_DTYPE_OPAQUE, 64, 1)));
-    EXPECT_FALSE(ring.initialize_with_positions(1, 4, ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 64, 1)))
-        << "float64";
+    EXPECT_FALSE(
+        ring.initialize_with_positions(1, 4, ANIRA_MAKE_DTYPE(ANIRA_DTYPE_COMPLEX, 64, 1)));
+    EXPECT_FALSE(ring.initialize_with_positions(1, 4, ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 128, 1)))
+        << "a width no dtype has";
     EXPECT_EQ(ring.dtype(), ANIRA_DTYPE_F32) << "the ring is left as it was";
     EXPECT_EQ(ring.available(0), 1U);
     EXPECT_FLOAT_EQ(ring.pop_sample(0), 1.0F);

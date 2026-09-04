@@ -82,6 +82,20 @@ struct RingDtypes {
     std::vector<anira_dtype> m_outputs;  ///< Per output tensor: the receive ring's element type
 };
 
+/**
+ * @brief A caller's latency per output tensor, replacing the computed one.
+ *
+ * One entry per output tensor, in samples of that output's stream: a value of 0 or more
+ * replaces the latency LatencyCalculator computed for that output (clamped up to the model's
+ * internal latency, which the receive ring must still cover), a negative value keeps the
+ * computed one. An empty vector, or one whose length is not the number of output tensors,
+ * keeps every computed latency. A non-streamable output has no stream latency whatever its
+ * entry says.
+ */
+struct CustomLatencies {
+    std::vector<long> m_outputs;  ///< Per output tensor: the latency in samples, or negative
+};
+
 class ANIRA_API SessionElement {
 public:
     /**
@@ -134,18 +148,18 @@ public:
      * real-time path.
      *
      * @param spec Host configuration containing sample rate, buffer size, and audio settings
-     * @param custom_latency Optional vector of custom latency values for each tensor (empty for
-     * automatic calculation); entries for non-streamable outputs are ignored, their latency is
-     * always 0
-     * @param ring_dtypes The element type of every send and receive ring, per slot (float32
-     * for every slot the vectors do not name); the ring sizes are element counts, so they do not
-     * depend on it
+     * @param custom_latencies A caller's latency per output tensor (see CustomLatencies; empty
+     * keeps every computed latency); entries for non-streamable outputs are ignored, their
+     * latency is always 0
+     * @param ring_dtypes The element type of every send and receive ring, per slot (see
+     * RingDtypes; float32 for every slot the vectors do not name); the ring sizes are element
+     * counts, so they do not depend on it
      * @throws std::invalid_argument if the host config's reference stream cannot be resolved
      *         (explicit reference out of range or not streamable, or no streamable tensor at all),
      *         or if a ring dtype is not one of the scalar dtypes the rings store
      */
     void prepare(const HostConfig& spec,
-                 std::vector<long> custom_latency = {},
+                 const CustomLatencies& custom_latencies = {},
                  const RingDtypes& ring_dtypes = {});
 
     /**

@@ -252,8 +252,9 @@ void SessionElement::complete_with_zeros(
 }
 
 void SessionElement::prepare(const HostConfig& host_config,
-                             std::vector<long> custom_latency,
+                             const CustomLatencies& custom_latencies,
                              const RingDtypes& ring_dtypes) {
+    const std::vector<long>& custom_latency = custom_latencies.m_outputs;
     // Resolve the reference stream first: an unresolvable host config throws before any
     // session state is touched. The result is read on the real-time path and never
     // re-resolved there.
