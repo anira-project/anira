@@ -728,6 +728,7 @@ def emit_link_probe(reg: dict) -> str:
     ]
     for header in reg["headers"]:
         out.append(f"#include <anira/abi/{header['file']}>")
+    names = promised + draft
     out += [
         "",
         "struct anira_link_entry {",
@@ -735,24 +736,27 @@ def emit_link_probe(reg: dict) -> str:
         "    uintptr_t address;",
         "};",
         "",
-        "static const struct anira_link_entry k_entries[] = {",
-    ]
-    for name in promised + draft:
-        out.append(f'    {{"{name}", (uintptr_t)&{name}}},')
-    out += [
-        "};",
+        f"#define ANIRA_LINK_PROBE_COUNT {len(names)}",
         "",
+        "/* The addresses are taken by assignment at run time, never in a static initializer:",
+        "   MSVC refuses the address of a dllimport there (C4232, identity not guaranteed). */",
         "int main(void) {",
-        "    const size_t count = sizeof(k_entries) / sizeof(k_entries[0]);",
+        "    struct anira_link_entry entries[ANIRA_LINK_PROBE_COUNT];",
         "    size_t missing = 0;",
         "    size_t i;",
-        "    for (i = 0; i < count; ++i) {",
-        "        if (k_entries[i].address == 0) {",
-        '            printf("missing: %s\\n", k_entries[i].name);',
+    ]
+    for index, name in enumerate(names):
+        out.append(f'    entries[{index}].name = "{name}";')
+        out.append(f"    entries[{index}].address = (uintptr_t)&{name};")
+    out += [
+        "    for (i = 0; i < ANIRA_LINK_PROBE_COUNT; ++i) {",
+        "        if (entries[i].address == 0) {",
+        '            printf("missing: %s\\n", entries[i].name);',
         "            ++missing;",
         "        }",
         "    }",
-        '    printf("%zu of %zu entry points linked\\n", count - missing, count);',
+        '    printf("%zu of %zu entry points linked\\n", (size_t)ANIRA_LINK_PROBE_COUNT - missing,',
+        "           (size_t)ANIRA_LINK_PROBE_COUNT);",
         "    return missing == 0 ? 0 : 1;",
         "}",
     ]
