@@ -8,6 +8,7 @@
 // NOLINTBEGIN(misc-include-cleaner)
 #include <anira/anira.hpp>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <stdexcept>
@@ -91,14 +92,16 @@ int anira_header_cxx20_probe() {
         const anira::BackendId first = backends.empty() ? anira::BackendId{} : backends.front();
         const anira_edge_info edge = capabilities.edge(ANIRA_DOMAIN_HOST, first);
         running.probe(true);
-        checks += capabilities.domains().size() + capabilities.ext_kinds().size() +
-                          capabilities.edges().size() + running.num_inference_threads() +
-                          running.drain_log() + edge.available +
-                          static_cast<int>(running.byte_image_bytes(1, ANIRA_DTYPE_F32)) +
-                          anira::enabled_backends().size() +
-                          static_cast<int>(anira::now_ns() - anira::now_ns()) +
-                          static_cast<int>(anira::now_ms()) + anira::shutdown() +
-                          (anira::has_core() || anira::release_core_if_idle() ? 1 : 0);
+        const std::size_t rows = capabilities.domains().size() + capabilities.ext_kinds().size() +
+                                 capabilities.edges().size() + anira::enabled_backends().size() +
+                                 running.drain_log();
+        const uint64_t numbers = running.num_inference_threads() + edge.available +
+                                 running.byte_image_bytes(1, ANIRA_DTYPE_F32) + anira::now_ns();
+        checks += rows > 0 ? 1 : 0;
+        checks += numbers > 0 ? 1 : 0;
+        checks += anira::now_ms() > 0.0 ? 1 : 0;
+        checks += anira::shutdown() == ANIRA_OK ? 1 : 0;
+        checks += anira::has_core() || anira::release_core_if_idle() ? 1 : 0;
     }
     return checks;
 }
