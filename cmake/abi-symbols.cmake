@@ -78,6 +78,9 @@ endif()
 # ------------------------------------------------------------------------------
 # Script mode: the check.
 # ------------------------------------------------------------------------------
+# A -P script starts with no policy settings: say what this file relies on (IN_LIST).
+cmake_minimum_required(VERSION 3.18)
+cmake_policy(SET CMP0057 NEW)
 if(NOT FORMAT MATCHES "^(ELF|MACHO|PE)$")
     message(FATAL_ERROR "abi-symbols: FORMAT must be ELF, MACHO or PE (got '${FORMAT}')")
 endif()
