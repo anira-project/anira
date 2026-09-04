@@ -34,13 +34,17 @@
 namespace anira {
 
 namespace {
-// Process-wide count of threads executing their run loop (Emscripten: started and not yet
-// stopped). Static storage duration; on WebAssembly that is shared memory, so every WASM
-// instance sees the same value. Deliberately not an inline static class member — see
-// InferenceThread.h.
-std::atomic<unsigned int> s_num_active_threads{0};
-// Threads inside run_loop() right now, on every platform (see get_num_loop_active()).
+// Process-wide count of threads inside run_loop() right now, maintained by the loop itself
+// on every platform. Static storage duration; on WebAssembly that is shared memory, so
+// every WASM instance sees the same value. Deliberately not an inline static class member
+// — see InferenceThread.h. Natively this is also the active count.
 std::atomic<unsigned int> s_num_loop_active{0};
+#ifdef __EMSCRIPTEN__
+// The active count on WebAssembly: threads between start() and stop(), maintained on the
+// main instance, since the Worker enters run_loop() asynchronously (see
+// get_num_active_threads()).
+std::atomic<unsigned int> s_num_active_threads{0};
+#endif
 }  // namespace
 
 InferenceThread::InferenceThread(InferenceQueue& next_inference, WaitStrategy wait_strategy)
@@ -98,7 +102,11 @@ bool InferenceThread::is_running() const {
 #endif
 
 unsigned int InferenceThread::get_num_active_threads() {
+#ifdef __EMSCRIPTEN__
     return s_num_active_threads.load(std::memory_order::relaxed);
+#else
+    return s_num_loop_active.load(std::memory_order::acquire);
+#endif
 }
 
 unsigned int InferenceThread::get_num_loop_active() {
@@ -115,8 +123,8 @@ bool InferenceThread::is_in_loop() const {
 
 void InferenceThread::run_loop() {
     // Count this thread as inside its loop, and mark the exit on the object, on every
-    // platform: what release_core_if_idle() and (on WebAssembly) the destroy of a
-    // user-driven thread consult.
+    // platform: natively the active count, everywhere what release_core_if_idle() and
+    // (on WebAssembly) the destroy of a user-driven thread consult.
     struct LoopGuard {
         LoopGuard(std::atomic<bool>& has_exited, std::atomic<bool>& in_loop)
             : m_has_exited(has_exited), m_in_loop(in_loop) {
@@ -135,14 +143,6 @@ void InferenceThread::run_loop() {
         std::atomic<bool>& m_in_loop;
     } const loop_guard(m_has_exited, m_in_loop);
 #ifndef __EMSCRIPTEN__
-    // Count this thread as active for the lifetime of its pumping loop. Under
-    // Emscripten the count is maintained by start()/stop() instead, which run
-    // synchronously on the main instance (run_loop() entry in the JS Worker is
-    // asynchronous and would race callers that just spun the worker up).
-    struct ActiveGuard {
-        ActiveGuard() { s_num_active_threads.fetch_add(1, std::memory_order::relaxed); }
-        ~ActiveGuard() { s_num_active_threads.fetch_sub(1, std::memory_order::relaxed); }
-    } const active_guard;
     if (m_wait_strategy == WaitStrategy::Blocking) {
         run_loop_blocking();
         return;

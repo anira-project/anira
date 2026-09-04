@@ -126,24 +126,24 @@ public:
     /**
      * @brief Number of inference threads currently active in the process.
      *
-     * Native: threads currently executing run_loop() — the auto-managed pool
-     * once started plus any user-created threads. WebAssembly: externally
-     * driven threads between start() and stop(); counted there (start() runs
-     * synchronously on the main instance) rather than at run_loop() entry, so
-     * the count is already visible when AniraWeb.spinUpInferenceWorker()
-     * returns, before the worker asynchronously enters its loop. The counter
-     * has static storage duration — on WebAssembly that is shared memory, so
-     * every WASM instance sees the same value.
+     * Native: threads inside run_loop() right now — the auto-managed pool once started
+     * plus any user-created threads; the same number as get_num_loop_active().
+     * WebAssembly: externally driven threads between start() and stop(); counted there
+     * (start() runs synchronously on the main instance) rather than at run_loop() entry,
+     * so the count is already visible when AniraWeb.spinUpInferenceWorker() returns,
+     * before the worker asynchronously enters its loop. The counters have static storage
+     * duration — on WebAssembly that is shared memory, so every WASM instance sees the
+     * same value.
      */
     static unsigned int get_num_active_threads();
 
     /**
      * @brief Number of threads inside run_loop() right now, on every platform.
      *
-     * Unlike get_num_active_threads(), which on WebAssembly counts start()/stop() on the
-     * main instance, this counts run_loop() entries and exits wherever they happen: a
+     * Counts run_loop() entries and exits wherever they happen, so on WebAssembly a
      * Worker that is still inside its loop after the main instance called stop() is
-     * counted until it leaves. Context::release_core_if_idle() consults it.
+     * counted until it leaves (there get_num_active_threads() already says 0).
+     * Context::release_core_if_idle() consults it.
      */
     static unsigned int get_num_loop_active();
 
@@ -234,8 +234,8 @@ private:
     InferenceData m_inference_data;    ///< Current inference data being processed by this thread
     WaitStrategy m_wait_strategy;  ///< How run_loop() waits for new work when the queue is empty
 
-    // The active-thread counter (see get_num_active_threads()) is defined in
-    // InferenceThread.cpp rather than as an inline static member: an exported inline
+    // The thread counters (see get_num_active_threads()) are defined in
+    // InferenceThread.cpp rather than as inline static members: an exported inline
     // variable would be bound STB_GNU_UNIQUE by GCC, which makes glibc refuse to ever
     // unload the library (see Context).
 
