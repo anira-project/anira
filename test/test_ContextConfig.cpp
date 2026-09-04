@@ -4,10 +4,7 @@
 // (ContextConfig's own operator==/!= are private and unreachable from here.)
 
 #include <anira/ContextConfig.h>
-#include <anira/utils/InferenceBackend.h>
 
-#include <algorithm>
-#include <cstddef>
 #include <thread>
 
 #include "gtest/gtest.h"
