@@ -763,7 +763,8 @@ bool Context::release_core_if_idle() {
 
 void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
                               HostConfig new_config,
-                              std::vector<long> custom_latency) {
+                              const CustomLatencies& custom_latencies,
+                              const RingDtypes& ring_dtypes) {
     // seq_cst: pairs with the worker's register-before-check in
     // InferenceThread::process_dequeued_inference().
     session->m_initialized.store(false, std::memory_order::seq_cst);
@@ -779,7 +780,7 @@ void Context::prepare_session(const std::shared_ptr<SessionElement>& session,
 
     drain_inference_queue(session);
 
-    session->prepare(new_config, std::move(custom_latency));
+    session->prepare(new_config, custom_latencies, ring_dtypes);
 
     {
         // Only the pool start touches shared state; the drain and the
@@ -853,10 +854,10 @@ void Context::new_data_submitted(const std::shared_ptr<SessionElement>& session)
                      channel <
                      session->m_inference_config.get_postprocess_output_channels()[tensor_index];
                      channel++) {
-                    // Non-streamable parameters have no output size
-                    session->m_receive_buffer[tensor_index].push_fill(
+                    // Non-streamable parameters have no output size; the zeros are of the
+                    // ring's own element type
+                    session->m_receive_buffer[tensor_index].push_zeros(
                         channel,
-                        0.f,
                         session->m_inference_config.get_postprocess_output_size()[tensor_index]);
                 }
             }

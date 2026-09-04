@@ -21,6 +21,9 @@ Anira supports two types of tensors that require different handling in custom pr
 - Have ``preprocess_input_size > 0`` and ``postprocess_output_size > 0``
 - Data comes from :cpp:class:`anira::RingBuffer` instances via the ``input`` parameter
 - Use helper methods like ``pop_samples_from_buffer()`` to extract data
+- Every ring stores the element type of its slot's ring dtype (float32 unless the contract
+  declares another one, see the usage guide's contract section); the float helpers and the
+  float ring calls are the float32 face and do nothing on a ring of another type
 
 **Non-Streamable Tensors:**
 - Control parameters, static values, or metadata (non-time-varying)

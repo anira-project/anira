@@ -325,6 +325,7 @@ headers:
         ts: "(d: number): number => d >>> 16"
         doc: "The lane count of a packed dtype."
       - {kind: define, name: ANIRA_DTYPE_F32, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)", ts: "0x00012002", doc: "32-bit float, one lane: the type of every v2 stream and the only one the Hard entries carry."}
+      - {kind: define, name: ANIRA_DTYPE_F64, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 64, 1)", ts: "0x00014002", doc: "64-bit float, one lane."}
       - {kind: define, name: ANIRA_DTYPE_F16, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 16, 1)", ts: "0x00011002", doc: "16-bit float."}
       - {kind: define, name: ANIRA_DTYPE_BF16, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_BFLOAT, 16, 1)", ts: "0x00011004", doc: "bfloat16."}
       - {kind: define, name: ANIRA_DTYPE_I8, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_INT, 8, 1)", ts: "0x00010800", doc: "Signed 8-bit integer."}

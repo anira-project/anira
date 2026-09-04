@@ -1,5 +1,6 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/enums.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/RingBuffer.h>
@@ -132,13 +133,16 @@ void PrePostProcessor::pop_samples_from_buffer(RingBuffer& input,
                                                size_t num_old_samples,
                                                size_t offset,
                                                size_t num_batches) {
-    size_t const window_size = num_new_samples + num_old_samples;
-    for (size_t batch = 0; batch < num_batches; ++batch) {
-        pop_samples_from_buffer(input,
-                                output,
-                                num_new_samples,
-                                num_old_samples,
-                                offset + batch * window_size);
+    // The batch loop is the ring's (anira_ring::pop_windows); every channel writes the same
+    // windows, as the single-window overload above does (these are mono windows).
+    for (size_t i = 0; i < input.get_num_channels(); i++) {
+        input.pop_windows(i,
+                          output.get_write_pointer(0, 0),
+                          ANIRA_DTYPE_F32,
+                          num_new_samples,
+                          num_old_samples,
+                          offset,
+                          num_batches);
     }
 }
 

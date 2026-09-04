@@ -81,6 +81,11 @@ typedef enum anira_dtype_code {
 #define ANIRA_DTYPE_F32 ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)
 
 /**
+ * @brief 64-bit float, one lane.
+ */
+#define ANIRA_DTYPE_F64 ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 64, 1)
+
+/**
  * @brief 16-bit float.
  */
 #define ANIRA_DTYPE_F16 ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 16, 1)

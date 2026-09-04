@@ -147,8 +147,9 @@ const std::array<std::pair<const char*, anira_engine>, 5> k_engines_v2{{
     {"EXECUTORCH", ANIRA_ENGINE_EXECUTORCH},
 }};
 constexpr const char* k_v2_custom_engine = "anira.v2.custom";
-const std::array<std::pair<const char*, anira_dtype>, 9> k_dtypes{{
+const std::array<std::pair<const char*, anira_dtype>, 10> k_dtypes{{
     {"float32", ANIRA_DTYPE_F32},
+    {"float64", ANIRA_DTYPE_F64},
     {"float16", ANIRA_DTYPE_F16},
     {"bfloat16", ANIRA_DTYPE_BF16},
     {"int8", ANIRA_DTYPE_I8},

@@ -529,6 +529,13 @@
         },
         {
           "kind": "define",
+          "name": "ANIRA_DTYPE_F64",
+          "value": "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 64, 1)",
+          "ts": "0x00014002",
+          "doc": "64-bit float, one lane."
+        },
+        {
+          "kind": "define",
           "name": "ANIRA_DTYPE_F16",
           "value": "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 16, 1)",
           "ts": "0x00011002",
