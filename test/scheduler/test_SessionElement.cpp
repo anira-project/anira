@@ -1,5 +1,6 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/enums.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
@@ -14,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <iomanip>
 #include <ios>
 #include <ostream>
@@ -110,6 +112,52 @@ TEST_P(SessionElementTest, LatencyStructAndRingbuffers) {
             << ". Expected: " << test_params.m_expected_receive_buffer_sizes[i]
             << ", Got: " << session_element.m_receive_buffer_size[i];
     }
+}
+
+// The rings store the element type of their slot's ring dtype: a slot named int16 gets an int16
+// ring of the same element count as the float run (the sizes are element counts), a slot not
+// named stays float32, the latency priming is zeros of the ring's own type, and a dtype the
+// rings cannot store is refused like an unresolvable reference stream.
+TEST(SessionElementRingDtypes, ASlotsRingHoldsItsRingDtype) {
+    InferenceConfig config({ModelData("placeholder", InferenceBackend::CUSTOM)},
+                           {TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
+                           5.0F);
+    PrePostProcessor pp_processor(config);
+    InferenceQueue inference_queue;
+    const HostConfig host_config(512, 48000.0);
+
+    SessionElement floats(0, pp_processor, config, moodycamel::ProducerToken(inference_queue));
+    floats.prepare(host_config);
+    ASSERT_EQ(floats.m_send_buffer[0].dtype(), ANIRA_DTYPE_F32);
+    ASSERT_EQ(floats.m_receive_buffer[0].dtype(), ANIRA_DTYPE_F32);
+
+    RingDtypes dtypes;
+    dtypes.m_inputs = {ANIRA_DTYPE_I16};
+    SessionElement int16_in(1, pp_processor, config, moodycamel::ProducerToken(inference_queue));
+    int16_in.prepare(host_config, {}, dtypes);
+    EXPECT_EQ(int16_in.m_send_buffer[0].dtype(), ANIRA_DTYPE_I16);
+    EXPECT_EQ(int16_in.m_receive_buffer[0].dtype(), ANIRA_DTYPE_F32) << "not named: float32";
+    EXPECT_EQ(int16_in.m_send_buffer_size, floats.m_send_buffer_size);
+    EXPECT_EQ(int16_in.m_receive_buffer_size, floats.m_receive_buffer_size);
+    EXPECT_EQ(int16_in.m_send_buffer[0].capacity(), floats.m_send_buffer[0].capacity());
+    EXPECT_EQ(int16_in.m_send_buffer[0].num_channels(), floats.m_send_buffer[0].num_channels());
+
+    dtypes = RingDtypes{};
+    dtypes.m_outputs = {ANIRA_DTYPE_I16};
+    SessionElement int16_out(2, pp_processor, config, moodycamel::ProducerToken(inference_queue));
+    int16_out.prepare(host_config, {}, dtypes);
+    EXPECT_EQ(int16_out.m_receive_buffer[0].dtype(), ANIRA_DTYPE_I16);
+    EXPECT_EQ(int16_out.m_receive_buffer[0].capacity(), floats.m_receive_buffer[0].capacity());
+    EXPECT_EQ(int16_out.m_receive_buffer[0].available(0), floats.m_receive_buffer[0].available(0))
+        << "the latency priming is the same element count, typed";
+    int16_t primed = 7;
+    ASSERT_EQ(int16_out.m_receive_buffer[0].pop_block(0, &primed, ANIRA_DTYPE_I16, 1), 1U);
+    EXPECT_EQ(primed, 0);
+
+    dtypes = RingDtypes{};
+    dtypes.m_inputs = {ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4)};
+    SessionElement lanes(3, pp_processor, config, moodycamel::ProducerToken(inference_queue));
+    EXPECT_THROW(lanes.prepare(host_config, {}, dtypes), std::invalid_argument);
 }
 
 namespace {

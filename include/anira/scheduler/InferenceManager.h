@@ -85,6 +85,19 @@ public:
     void prepare(HostConfig config, std::vector<long> custom_latency = {});
 
     /**
+     * @brief The prepare of the 3.x path: like prepare(HostConfig, std::vector<long>), with
+     * the element type of every send and receive ring named per slot.
+     *
+     * @param config Host configuration containing sample rate, buffer size, and audio settings
+     * @param custom_latency Optional vector of custom latency values for each tensor
+     * @param ring_dtypes The ring dtype of every slot (see RingDtypes); the two-argument
+     * overload passes float32 for every slot
+     */
+    void prepare(HostConfig config,
+                 std::vector<long> custom_latency,
+                 const RingDtypes& ring_dtypes);
+
+    /**
      * @brief Processes multi-tensor audio data with separate input and output buffers
      *
      * Performs complete inference processing for multiple tensors simultaneously,

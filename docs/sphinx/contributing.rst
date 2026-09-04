@@ -200,9 +200,11 @@ build. Select a component with ``ctest -L test_scheduler`` (the label is the
 binary name).
 
 Do not re-test what tanh-lib already covers upstream: ``anira::Buffer``,
-``RingBuffer``, ``MemoryBlock`` and the threading primitives are thin aliases over
-``thl::core``, which has its own suite. anira keeps only tests of its own contract on
-top of them; coverage that belongs to the underlying container goes to tanh-lib.
+``MemoryBlock`` and the threading primitives are thin aliases over ``thl::core``, which
+has its own suite, and ``anira::RingBuffer`` (``anira_ring``) holds one
+``thl::core::RingBuffer<T>`` per ring dtype. anira keeps only tests of its own contract on
+top of them (the ring's dtype tag, its refusals and its window pop; not the storage);
+coverage that belongs to the underlying container goes to tanh-lib.
 
 Sanitizers
 ~~~~~~~~~~

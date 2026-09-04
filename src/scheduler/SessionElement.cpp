@@ -1,5 +1,6 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/enums.h>
 #include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
@@ -23,11 +24,15 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -94,9 +99,8 @@ void SessionElement::clear() {
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0 && m_latency[i] > 0) {
             for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
-                m_receive_buffer[i].push_fill(
+                m_receive_buffer[i].push_zeros(
                     j,
-                    0.f,
                     m_latency[i] - m_inference_config.get_internal_model_latency()[i]);
             }
         }
@@ -247,7 +251,9 @@ void SessionElement::complete_with_zeros(
     }
 }
 
-void SessionElement::prepare(const HostConfig& host_config, std::vector<long> custom_latency) {
+void SessionElement::prepare(const HostConfig& host_config,
+                             std::vector<long> custom_latency,
+                             const RingDtypes& ring_dtypes) {
     // Resolve the reference stream first: an unresolvable host config throws before any
     // session state is touched. The result is read on the real-time path and never
     // re-resolved there.
@@ -322,32 +328,54 @@ void SessionElement::prepare(const HostConfig& host_config, std::vector<long> cu
     m_send_buffer.resize(m_inference_config.get_tensor_input_shape().size());
     m_receive_buffer.resize(m_inference_config.get_tensor_output_shape().size());
 
+    // Every ring stores the element type of its slot's ring dtype (float32 unless the host
+    // declared another one); the sizes above are element counts, so they are the same whatever
+    // the type. A dtype the rings cannot store is a configuration error, like an unresolvable
+    // reference stream.
+    const auto ring_dtype = [](const std::vector<anira_dtype>& dtypes, size_t slot) {
+        return slot < dtypes.size() ? dtypes[slot] : ANIRA_DTYPE_F32;
+    };
+    const auto refuse = [](const char* side, size_t slot, anira_dtype dtype) {
+        std::array<char, 16> code{};
+        (void)std::snprintf(code.data(), code.size(), "0x%x", static_cast<unsigned>(dtype));
+        throw std::invalid_argument(std::string("SessionElement::prepare: the ring dtype ") +
+                                    code.data() + " of " + side + " " + std::to_string(slot) +
+                                    " is not a scalar dtype the rings store (float32, float16, "
+                                    "bfloat16, int8, uint8, bool8, int16, int32 or int64)");
+    };
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
+        const anira_dtype dtype = ring_dtype(ring_dtypes.m_inputs, i);
         if (m_send_buffer_size[i] > 0) {
-            m_send_buffer[i].initialize_with_positions(
-                m_inference_config.get_preprocess_input_channels()[i],
-                m_send_buffer_size[i]);
+            if (!m_send_buffer[i].initialize_with_positions(
+                    m_inference_config.get_preprocess_input_channels()[i],
+                    m_send_buffer_size[i],
+                    dtype)) {
+                refuse("input", i, dtype);
+            }
         } else {
             m_send_buffer[i].clear_with_positions();
         }
     }
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+        const anira_dtype dtype = ring_dtype(ring_dtypes.m_outputs, i);
         if (m_receive_buffer_size[i] > 0) {
-            m_receive_buffer[i].initialize_with_positions(
-                m_inference_config.get_postprocess_output_channels()[i],
-                m_receive_buffer_size[i]);
+            if (!m_receive_buffer[i].initialize_with_positions(
+                    m_inference_config.get_postprocess_output_channels()[i],
+                    m_receive_buffer_size[i],
+                    dtype)) {
+                refuse("output", i, dtype);
+            }
         } else {
             m_receive_buffer[i].clear_with_positions();
         }
     }
 
-    // Push back 0.f for latency
+    // Prime the latency with zeros of the ring's own element type
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_latency[i] > 0) {
             for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
-                m_receive_buffer[i].push_fill(
+                m_receive_buffer[i].push_zeros(
                     j,
-                    0.f,
                     m_latency[i] - m_inference_config.get_internal_model_latency()[i]);
             }
         }

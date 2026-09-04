@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Every input and output ring of the pipeline is an instantiation of `RingBufferT<T>` with `T` the element type of the slot's ring dtype: `anira_ring` (`anira/utils/RingBuffer.h`, the type `anira::RingBuffer` now names) holds one of the nine scalar dtypes the rings store (float32, float16, bfloat16, int8, uint8, bool8, int16, int32, int64; float32 unless a slot says otherwise) behind a dtype tag, chosen at prepare: `SessionElement::prepare` and `Context::prepare_session` take the per-slot `RingDtypes`, which the 2.x `InferenceManager::prepare` leaves at float32 for every slot (a new overload carries them for the 3.x prepare). The ring's block API (`push_block`, `pop_block`, `peek_past_block`, `push_fill`, `push_zeros`, `discard`, `pop_windows`, which now holds the batched sliding-window pop of `PrePostProcessor::pop_samples_from_buffer`) takes the caller's dtype, returns 0 and writes nothing on a disagreement, and never converts; the 2.x float API stays as the float32 face, so every 2.x pre/post processor compiles unchanged. Storage only: the typed Hard entries that reach the rings follow with the 3.x handler.
+
 ## [v3.0.0-alpha.1] - 2026-09-03
 
 The first pre-release of the 3.x line: the configuration layer of the versioned C ABI (`anira/abi/*.h`, ABI 0.1) with its JSON loaders, the C++20 builders of `anira/anira.hpp`, and a transitional bridge to the unchanged 2.x runtime. Nothing in it is a binary promise before v3.0.0: while the ABI major is 0 a library accepts only the exact ABI version its headers were generated with, and every pre-release may still change any of it. The soname stays 3 until the 3.x handler lands and flips it to the ABI major. The npm package is still the 2.x TypeScript API, published under the `next` tag.

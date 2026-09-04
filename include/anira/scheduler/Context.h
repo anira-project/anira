@@ -242,6 +242,8 @@ public:
      * @param session Shared pointer to the session to prepare
      * @param new_config New host configuration with audio settings
      * @param custom_latency Optional vector of custom latency values for each tensor
+     * @param ring_dtypes The element type of every send and receive ring, per slot (see
+     * RingDtypes; float32 for every slot not named, which is what the 2.x path passes)
      *
      * @note Thread-safe with respect to other sessions' lifecycle calls. Not
      *       safe against concurrent processing calls on the *same* session —
@@ -249,7 +251,8 @@ public:
      */
     void prepare_session(const std::shared_ptr<SessionElement>& session,
                          HostConfig new_config,
-                         std::vector<long> custom_latency = {});
+                         std::vector<long> custom_latency = {},
+                         const RingDtypes& ring_dtypes = {});
 
     /**
      * @brief Gets the number of registered inference sessions

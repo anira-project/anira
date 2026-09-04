@@ -4,6 +4,7 @@
 #include <anira/backends/BackendBase.h>
 #include <anira/scheduler/Context.h>
 #include <anira/scheduler/InferenceManager.h>
+#include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
@@ -42,9 +43,15 @@ InferenceBackend InferenceManager::get_backend() const {
 }
 
 void InferenceManager::prepare(HostConfig new_config, std::vector<long> custom_latency) {
+    prepare(new_config, std::move(custom_latency), RingDtypes{});
+}
+
+void InferenceManager::prepare(HostConfig new_config,
+                               std::vector<long> custom_latency,
+                               const RingDtypes& ring_dtypes) {
     m_host_config = new_config;
 
-    m_context.prepare_session(m_session, m_host_config, std::move(custom_latency));
+    m_context.prepare_session(m_session, m_host_config, std::move(custom_latency), ring_dtypes);
 
     m_missing_samples.clear();
     m_missing_samples.resize(m_inference_config.get_tensor_output_shape().size(), 0);
@@ -189,7 +196,7 @@ size_t* InferenceManager::process_output(float* const* const* output_data, size_
     bool enough_samples = true;
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-            if (m_session->m_receive_buffer[i].get_available_samples(0) < (size_t)num_samples[i]) {
+            if (m_session->m_receive_buffer[i].get_available_samples(0) < num_samples[i]) {
                 enough_samples = false;
                 break;
             }
