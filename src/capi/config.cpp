@@ -425,6 +425,13 @@ void ANIRA_CALL anira_contract_destroy(anira_contract* contract) ANIRA_NOEXCEPT 
 
 // ==== machine config ========================================================================
 
+namespace {
+/// The ANIRA_LOG_FLAG_* bits a machine config accepts; the machine applies both while it
+/// lives (the platform sink off, the boundary trace on).
+constexpr uint32_t k_known_log_flags =
+    ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK | ANIRA_LOG_FLAG_TRACE_FAILURES;
+}  // namespace
+
 anira_status ANIRA_CALL anira_machine_config_create(anira_machine_config** out,
                                                     anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(out != nullptr,
@@ -474,9 +481,7 @@ anira_status ANIRA_CALL anira_machine_config_set_log_queue_capacity(anira_machin
 anira_status ANIRA_CALL anira_machine_config_set_log_flags(anira_machine_config* config,
                                                            uint32_t flags) ANIRA_NOEXCEPT try {
     if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if ((flags & ~ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK) != 0) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
+    if ((flags & ~k_known_log_flags) != 0) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     config->m_log_flags = flags;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
@@ -503,7 +508,7 @@ anira_status ANIRA_CALL anira_machine_config_set_log(anira_machine_config* confi
     if (ANIRA_FAILED(anira_check_abi(value.abi_version))) { return ANIRA_ERROR_ABI_VERSION; }
     if (!valid_log_level(static_cast<anira_log_level>(value.level)) ||
         !valid_log_drain(static_cast<anira_log_drain>(value.drain)) ||
-        (value.flags & ~ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK) != 0) {
+        (value.flags & ~k_known_log_flags) != 0) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     config->m_log_level = static_cast<anira_log_level>(value.level);

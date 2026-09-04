@@ -1,7 +1,9 @@
 #include <anira/abi/status.h>
+#include <anira/utils/Logger.h>
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <mutex>
 #include <string>
 
 #include "capi/capi_internal.h"
@@ -75,7 +77,6 @@ TEST(AbiFirewall, LongMessagesAreTruncatedAndTerminated) {
 #include <anira/abi/log.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
-#include <tanh/core/Logger.h>
 
 #include <vector>
 
@@ -90,7 +91,8 @@ using anira_test::RecordCollector;
 // The firewall logs on the sync path, which the collector sees immediately.
 int native_records(RecordCollector& collector, const char* fragment) {
     int count = 0;
-    for (const thl::Logger::LogRecord& record : collector.m_records) {
+    const std::scoped_lock<std::mutex> lock(collector.m_mutex);
+    for (const RecordCollector::Record& record : collector.m_records) {
         if (record.m_source == "native" && record.m_message.find(fragment) != std::string::npos) {
             ++count;
         }
@@ -100,7 +102,8 @@ int native_records(RecordCollector& collector, const char* fragment) {
 
 int native_record_count(RecordCollector& collector) {
     int count = 0;
-    for (const thl::Logger::LogRecord& record : collector.m_records) {
+    const std::scoped_lock<std::mutex> lock(collector.m_mutex);
+    for (const RecordCollector::Record& record : collector.m_records) {
         if (record.m_source == "native") { ++count; }
     }
     return count;
@@ -216,18 +219,22 @@ TEST(AbiFirewallLogging, ASinkThatFailsAnEntryDoesNotRecurse) {
     // the nested failure from draining (and from re-entering this sink) again.
     static int nested_calls = 0;
     nested_calls = 0;
-    thl::Logger::set_callback([](const thl::Logger::LogRecord& record) {
-        if (record.m_message.find("outer failure") == std::string::npos) { return; }
-        if (nested_calls++ > 0) { return; }
-        anira_error inner = ANIRA_ERROR_INIT;
-        anira_model_config* config = nullptr;
-        static_cast<void>(anira_model_config_from_json("{", 1, nullptr, &config, &inner));
-    });
+    struct ReentrantSink {
+        static void on_record(const anira_log_record* record, void* /*user_data*/) {
+            if (std::strstr(record->message, "outer failure") == nullptr) { return; }
+            if (nested_calls++ > 0) { return; }
+            anira_error inner = ANIRA_ERROR_INIT;
+            anira_model_config* config = nullptr;
+            static_cast<void>(anira_model_config_from_json("{", 1, nullptr, &config, &inner));
+        }
+    };
+    const anira::detail::LogSinkId sink =
+        anira::detail::add_log_sink(&ReentrantSink::on_record, nullptr, ANIRA_LOG_DEBUG);
     set_trace_failures(true);
     anira_error err = ANIRA_ERROR_INIT;
     EXPECT_EQ(firewall_probe(2, ANIRA_ERROR_JSON, "outer failure", &err, nullptr),
               ANIRA_ERROR_JSON);
     set_trace_failures(false);
-    thl::Logger::clear_callback();
+    anira::detail::remove_log_sink(sink);
     EXPECT_EQ(nested_calls, 1) << "the inner failure ran once and did not re-enter the sink";
 }

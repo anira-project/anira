@@ -5,12 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <string>
 #include <thread>
-#include <vector>
 
 #include "anira/system/Exports.h"
-#include "anira/utils/InferenceBackend.h"
 
 namespace anira {
 
@@ -205,7 +202,7 @@ inline unsigned int default_num_threads() noexcept {
  * configurations while sessions exist; once the last session is released, the next
  * session's configuration takes effect again.
  *
- * @see Context, InferenceHandler, InferenceBackend
+ * @see Context, InferenceHandler
  */
 struct ANIRA_API ContextConfig {
     /**
@@ -246,21 +243,6 @@ struct ANIRA_API ContextConfig {
                   LogLevel log_level = default_log_level())
         : m_num_threads(num_threads), m_wait_strategy(wait_strategy) {
         m_log.m_level = log_level;
-#ifdef USE_LIBTORCH
-        m_enabled_backends.push_back(InferenceBackend::LIBTORCH);
-#endif
-#ifdef USE_ONNXRUNTIME
-        m_enabled_backends.push_back(InferenceBackend::ONNX);
-#endif
-#ifdef USE_TFLITE
-        m_enabled_backends.push_back(InferenceBackend::TFLITE);
-#endif
-#ifdef USE_LITERT
-        m_enabled_backends.push_back(InferenceBackend::LITERT);
-#endif
-#ifdef USE_EXECUTORCH
-        m_enabled_backends.push_back(InferenceBackend::EXECUTORCH);
-#endif
     }
 
     /**
@@ -302,35 +284,6 @@ struct ANIRA_API ContextConfig {
      * warning.
      */
     LogConfig m_log;
-
-    /**
-     * @brief Version string of the anira library
-     *
-     * Contains the version of the anira library that was used to create this
-     * configuration. This is useful for debugging, logging, and ensuring
-     * compatibility when serializing/deserializing configurations.
-     *
-     * @note This field is automatically populated with the ANIRA_VERSION
-     * macro during construction and should not be modified manually.
-     */
-    std::string m_anira_version = ANIRA_VERSION;
-
-    /**
-     * @brief List of available inference backends
-     *
-     * Contains all inference backends that were detected as available during
-     * compilation. This list is automatically populated in the constructor
-     * based on compile-time feature flags:
-     *
-     * - InferenceBackend::LIBTORCH (if USE_LIBTORCH is defined)
-     * - InferenceBackend::ONNX (if USE_ONNXRUNTIME is defined)
-     * - InferenceBackend::TFLITE (if USE_TFLITE is defined)
-     * - InferenceBackend::CUSTOM (always available)
-     *
-     * @note The CUSTOM backend is not automatically added to this list but is
-     * always available for use with custom backend implementations.
-     */
-    std::vector<InferenceBackend> m_enabled_backends;
 };
 
 }  // namespace anira

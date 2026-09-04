@@ -536,7 +536,9 @@ TEST(AbiMachineConfig, DefaultsScalarsAndClamps) {
     EXPECT_EQ(m.m_config->m_queue_capacity, 65536u);
     EXPECT_EQ(anira_machine_config_set_log_flags(m.m_config, ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK),
               ANIRA_OK);
-    EXPECT_EQ(anira_machine_config_set_log_flags(m.m_config, 2u), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_machine_config_set_log_flags(m.m_config, ANIRA_LOG_FLAG_TRACE_FAILURES),
+              ANIRA_OK);
+    EXPECT_EQ(anira_machine_config_set_log_flags(m.m_config, 4u), ANIRA_ERROR_INVALID_ARGUMENT);
     int user_data = 0;
     EXPECT_EQ(anira_machine_config_set_log_sink(m.m_config, nullptr, &user_data), ANIRA_OK);
     EXPECT_EQ(m.m_config->m_sink_user_data, nullptr) << "no sink, no user data";

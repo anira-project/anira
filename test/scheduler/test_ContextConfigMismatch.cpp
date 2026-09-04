@@ -120,47 +120,6 @@ TEST_F(ContextConfigMismatchTest, ALaterGenerationCannotGrowTheLogQueue) {
                       thl::Logger::LogLevel::Warning);
 }
 
-// A major-version difference implies API/ABI incompatibility and is an error;
-// anything below that is only a warning.
-TEST_F(ContextConfigMismatchTest, MajorVersionMismatchIsReportedAsIncompatible) {
-    RecordCollector collector;
-    const Instance instance(verbose_config());
-
-    ContextConfig second = verbose_config();
-    second.m_anira_version = "99.0.0";
-    const Instance later(second);
-
-    expect_diagnostic(collector, "The major versions differ", thl::Logger::LogLevel::Error);
-}
-
-TEST_F(ContextConfigMismatchTest, MinorVersionMismatchIsOnlyAWarning) {
-    RecordCollector collector;
-    const ContextConfig first = verbose_config();
-    const Instance instance(first);
-
-    ContextConfig second = first;
-    // Same major version, different minor: compatible, but worth aligning.
-    second.m_anira_version =
-        first.m_anira_version.substr(0, first.m_anira_version.find('.')) + ".99.99";
-    const Instance later(second);
-
-    expect_diagnostic(collector, "The major versions match", thl::Logger::LogLevel::Warning);
-}
-
-// The enabled-backend set is baked into the context by its first session.
-TEST_F(ContextConfigMismatchTest, MismatchedEnabledBackendsAreReported) {
-    RecordCollector collector;
-    const Instance instance(verbose_config());
-
-    ContextConfig second = verbose_config();
-    second.m_enabled_backends.push_back(InferenceBackend::CUSTOM);
-    const Instance later(second);
-
-    expect_diagnostic(collector,
-                      "Context already initialized with different backends",
-                      thl::Logger::LogLevel::Error);
-}
-
 // The log level is process-global and the most verbose request wins — including
 // when the more verbose one arrives second.
 TEST_F(ContextConfigMismatchTest, TheMostVerboseLogLevelWins) {

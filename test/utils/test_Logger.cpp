@@ -1,4 +1,5 @@
 #include <anira/ContextConfig.h>
+#include <anira/abi/enums.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
@@ -10,7 +11,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -137,7 +137,7 @@ TEST(Logger, ThreadDrainDeliversRtRecordsWhileASessionExists) {
     for (const auto& record : collector.m_records) {
         if (record.m_message.find("from the test") != std::string::npos) {
             EXPECT_EQ(record.m_group, "anira.scheduler");
-            EXPECT_EQ(record.m_level, static_cast<std::uint32_t>(thl::Logger::LogLevel::Error));
+            EXPECT_EQ(record.m_level, static_cast<std::uint32_t>(ANIRA_LOG_ERROR));
         }
     }
 }

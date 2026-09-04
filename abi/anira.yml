@@ -1912,3 +1912,366 @@ headers:
         since: "0.1"
         doc: "Loads a contract from JSON text (section 8.3): budget is \"measured\" or {\"ms\": x}, warmup is \"until_stable\", \"none\" or {\"fixed\": n}; a file with both roots or neither is ANIRA_ERROR_JSON. A version 2 document yields its legacy Hard contract directly (ANIRA_SUCCESS_UPGRADED)."
         return_doc: "ANIRA_OK or ANIRA_SUCCESS_UPGRADED, or ANIRA_ERROR_JSON with the key path."
+
+  # ----------------------------------------------------------------------------
+  - file: machine.h
+    guard: ANIRA_ABI_MACHINE_H
+    brief: "The machine handle over the core, its capabilities and the probe, the steady clock, and the shutdown family."
+    doc: >-
+      anira_machine is a refcounted handle over the immortal core, one core per copy of
+      anira (a shared library has one, every static embedding its own). anira_machine_create
+      reconciles the machine config into the core (the first machine's config takes effect
+      whole; later machines reconcile per field: wait strategy first wins, log level most
+      verbose wins, the thread pool only shrinks and never to zero, drain mode, queue capacity
+      and drain interval first win with a warning), registers the config's log sink and
+      probes the capabilities. Two machines in one copy are two views of one core with two
+      log sinks. Thread pool and inference queue are core-owned and exist exactly while any
+      handler in this copy exists; anira_shutdown is refused while a machine or a handler
+      lives. In this pre-release every machine is Host-only: the probe reports the compiled-in
+      engines on ANIRA_PROVIDER_DEFAULT, the host domain and one zero-copy edge per engine; a
+      device block on the config is ANIRA_ERROR_NOT_SUPPORTED at create.
+    includes: ["<stddef.h>", "<stdint.h>", "export.h", "status.h", "enums.h"]
+    entities:
+      - kind: struct
+        name: anira_backend_id
+        tier: 2
+        doc: "A backend, where the pair must travel as one item: an engine on a provider. Tier 2, struct_size first; enumerated at the caller's stride. engine_id is NULL for a built-in engine and the registered name for a custom one (a later pre-release)."
+        fields:
+          - {name: struct_size, type: uint32_t, doc: "sizeof(anira_backend_id) of the caller's header."}
+          - {name: engine, type: uint32_t, doc: "anira_engine."}
+          - {name: provider, type: uint32_t, doc: "anira_provider."}
+          - {name: engine_id, type: const char*, doc: "NULL for a built-in engine; the registered reverse-URI name of a custom engine. Static storage of the library when anira wrote it."}
+        init:
+          name: ANIRA_BACKEND_ID_INIT
+          value: "sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, NULL"
+          doc: "No engine on the default provider."
+      - kind: struct
+        name: anira_edge_info
+        tier: 2
+        doc: "One row of the edge registry: whether a tensor in domain from_domain can reach the backend (to_engine, to_provider), how (edge_class), how sure the probe is (rung), and why not (reason). Valid for the duration of the enumerating call."
+        fields:
+          - {name: struct_size, type: uint32_t, doc: "sizeof(anira_edge_info) of the caller's header."}
+          - {name: from_domain, type: uint32_t, doc: "anira_domain of the tensor."}
+          - {name: to_engine, type: uint32_t, doc: "anira_engine of the backend."}
+          - {name: to_provider, type: uint32_t, doc: "anira_provider of the backend."}
+          - {name: edge_class, type: uint32_t, doc: "anira_edge_class: the cost class of the edge, ANIRA_EDGE_UNAVAILABLE when there is none."}
+          - {name: rung, type: uint32_t, doc: "anira_rung: how the availability was established."}
+          - {name: available, type: uint32_t, doc: "1 when the edge can be used here, else 0."}
+          - {name: reason, type: const char*, doc: "Why the edge is unavailable, or what makes it available; static storage of the library, NULL when there is nothing to say."}
+        init:
+          name: ANIRA_EDGE_INFO_INIT
+          value: "sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL"
+          doc: "No edge."
+      - kind: function
+        name: anira_machine_create
+        returns: anira_status
+        params:
+          - {type: const anira_machine_config*, name: config, doc: "The machine config; copied, destroyable right after."}
+          - {type: anira_machine**, name: out, doc: "Receives the handle on success."}
+          - {type: anira_error*, name: err, doc: "Nullable."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Creates a machine over this copy's core: reconciles the config into the core (see the file comment), registers the config's log sink so that it receives every record from here on, applies the config's ANIRA_LOG_FLAG_* switches while the machine lives, and probes the capabilities. A device block on the config is refused in this pre-release. On WebAssembly a nonzero num_threads, ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD are coerced with a warning, as the machine file section says."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out, ANIRA_ERROR_NOT_SUPPORTED for a device block, ANIRA_ERROR_EXTENSION_UNCONSUMED for a machine extension nothing consumes."
+      - kind: function
+        name: anira_machine_destroy
+        returns: void
+        params:
+          - {type: anira_machine*, name: machine, doc: "The handle; NULL is a no-op."}
+        thread: main-thread & !loader-lock
+        status: promised
+        since: "0.2"
+        doc: "Drops the user's reference: flushes the real-time log queue when this was the last user of the core, unregisters the machine's log sink and waits for its in-flight calls, withdraws its ANIRA_LOG_FLAG_* switches, and invalidates the handle for the caller whatever the internal count (a handler that added a reference keeps the memory alive). Joins nothing. A destroy issued from inside the machine's own sink is refused with one Error record and nothing happens."
+      - kind: function
+        name: anira_machine_probe
+        returns: anira_status
+        params:
+          - {type: anira_machine*, name: machine, doc: "The handle."}
+          - {type: anira_bool, name: force, doc: "Nonzero re-runs every rung even where a cached answer exists."}
+          - {type: anira_error*, name: err, doc: "Nullable."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Re-runs the probe and refreshes the capabilities the handle reports. Host-only in this pre-release: the answer is the compiled-in engines and one zero-copy host edge per engine, and force changes nothing."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL machine."
+      - kind: function
+        name: anira_machine_capabilities
+        returns: const anira_capabilities*
+        params:
+          - {type: const anira_machine*, name: machine, doc: "The handle."}
+        thread: thread-safe
+        status: promised
+        since: "0.2"
+        doc: "The capabilities the last probe established; machine-owned, valid while the machine is, replaced in place by anira_machine_probe."
+        return_doc: "The capabilities, or NULL for a NULL machine."
+      - kind: function
+        name: anira_capabilities_backends
+        returns: anira_status
+        params:
+          - {type: const anira_capabilities*, name: capabilities, doc: "The capabilities."}
+          - {type: uint32_t, name: element_size, doc: "sizeof(anira_backend_id) of the caller's header, the stride of out."}
+          - {type: uint32_t*, name: count, doc: "In: the capacity of out in elements; out: the number of backends."}
+          - {type: anira_backend_id*, name: out, doc: "Receives the rows at the caller's stride, or NULL to ask for the count only."}
+        thread: thread-safe
+        status: promised
+        since: "0.2"
+        doc: "The backends that are compiled in and usable here, one record per (engine, provider). Stride-explicit enumeration: min(element_size, the library's record size) bytes are written per element."
+        return_doc: "ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, or ANIRA_ERROR_INVALID_ARGUMENT for NULL capabilities or count or an element_size below the struct_size slot."
+      - kind: function
+        name: anira_capabilities_domains
+        returns: anira_status
+        params:
+          - {type: const anira_capabilities*, name: capabilities, doc: "The capabilities."}
+          - {type: uint32_t*, name: count, doc: "In: the capacity of out; out: the number of domains."}
+          - {type: anira_domain*, name: out, doc: "Receives the domains, or NULL to ask for the count only."}
+        thread: thread-safe
+        status: promised
+        since: "0.2"
+        doc: "The memory domains a tensor may live in on this machine; ANIRA_DOMAIN_HOST alone in this pre-release."
+        return_doc: "ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, or ANIRA_ERROR_INVALID_ARGUMENT for NULL capabilities or count."
+      - kind: function
+        name: anira_capabilities_ext_kinds
+        returns: anira_status
+        params:
+          - {type: const anira_capabilities*, name: capabilities, doc: "The capabilities."}
+          - {type: uint32_t*, name: count, doc: "In: the capacity of out; out: the number of kinds."}
+          - {type: const char**, name: out, doc: "Receives the kind names (static storage), or NULL to ask for the count only."}
+        thread: thread-safe
+        status: promised
+        since: "0.2"
+        doc: "The extension kinds this build understands, beside the probed edges and the enabled backends; the same list as anira_registered_ext_kinds."
+        return_doc: "ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, or ANIRA_ERROR_INVALID_ARGUMENT for NULL capabilities or count."
+      - kind: function
+        name: anira_capabilities_edges
+        returns: anira_status
+        params:
+          - {type: const anira_capabilities*, name: capabilities, doc: "The capabilities."}
+          - {type: uint32_t, name: element_size, doc: "sizeof(anira_edge_info) of the caller's header, the stride of out."}
+          - {type: uint32_t*, name: count, doc: "In: the capacity of out in elements; out: the number of edges."}
+          - {type: anira_edge_info*, name: out, doc: "Receives the rows at the caller's stride, or NULL to ask for the count only."}
+        thread: thread-safe
+        status: promised
+        since: "0.2"
+        doc: "Every row of the edge registry, available or not; one zero-copy edge from ANIRA_DOMAIN_HOST to each enabled backend in this pre-release. Stride-explicit enumeration."
+        return_doc: "ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, or ANIRA_ERROR_INVALID_ARGUMENT for NULL capabilities or count or an element_size below the struct_size slot."
+      - kind: function
+        name: anira_capabilities_edge
+        returns: anira_status
+        params:
+          - {type: const anira_capabilities*, name: capabilities, doc: "The capabilities."}
+          - {type: anira_domain, name: from, doc: "The tensor's domain."}
+          - {type: const anira_backend_id*, name: to, doc: "The backend; read within its struct_size."}
+          - {type: anira_edge_info*, name: out, doc: "Receives the row, read and written within its struct_size (set it before the call)."}
+        thread: thread-safe
+        status: promised
+        since: "0.2"
+        doc: "One row of the edge registry, by domain and backend."
+        return_doc: "ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no row for the pair (out untouched); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the fixed fields."
+      - kind: function
+        name: anira_enabled_backends
+        returns: anira_status
+        params:
+          - {type: uint32_t, name: element_size, doc: "sizeof(anira_backend_id) of the caller's header, the stride of out."}
+          - {type: uint32_t*, name: count, doc: "In: the capacity of out in elements; out: the number of backends."}
+          - {type: anira_backend_id*, name: out, doc: "Receives the rows at the caller's stride, or NULL to ask for the count only."}
+        thread: thread-safe
+        status: promised
+        since: "0.2"
+        doc: "What this build compiled in, without a machine: every engine with an adapter, on ANIRA_PROVIDER_DEFAULT, in anira_engine order. Whether a backend is usable here is anira_capabilities_backends on a probed machine."
+        return_doc: "ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL count or an element_size below the struct_size slot."
+      - kind: function
+        name: anira_machine_byte_image_bytes
+        returns: uint64_t
+        params:
+          - {type: const anira_machine*, name: machine, doc: "The handle."}
+          - {type: uint64_t, name: num_elements, doc: "Elements of the tensor."}
+          - {type: anira_dtype, name: dtype, doc: "The element type."}
+        thread: thread-safe
+        status: promised
+        since: "0.2"
+        doc: "The size in bytes of a tensor's byte image on this machine (section 7): the dense encoding, num_elements times the element size, in this pre-release."
+        return_doc: "The byte count, 0 for a NULL machine or a dtype without a size."
+      - kind: function
+        name: anira_machine_drain_log
+        returns: size_t
+        params:
+          - {type: anira_machine*, name: machine, doc: "The handle."}
+        thread: thread-safe, !audio-thread
+        status: promised
+        since: "0.2"
+        doc: "Delivers the queued real-time records of the core behind this machine to the sinks: the host's pump under ANIRA_LOG_DRAIN_MANUAL. The queue is shared by every machine of the copy, so pumping any one of them drains everything."
+        return_doc: "The number of records delivered; 0 for a NULL machine."
+      - kind: function
+        name: anira_machine_num_inference_threads
+        returns: uint32_t
+        params:
+          - {type: const anira_machine*, name: machine, doc: "The handle."}
+        thread: thread-safe
+        status: promised
+        since: "0.2"
+        doc: "The size of the inference thread pool serving this machine: the default pool of the copy, which exists while a handler does, so 0 before the first handler and for a machine that brought its own threads."
+        return_doc: "The pool size; 0 for a NULL machine."
+      - kind: function
+        name: anira_now_ms
+        returns: double
+        params: []
+        thread: thread-safe
+        callback_safe: true
+        nonblocking: true
+        status: promised
+        since: "0.2"
+        doc: "The steady clock in milliseconds, for deadlines and submit timestamps; the same clock as anira_now_ns."
+        return_doc: "Milliseconds since an unspecified steady epoch."
+      - kind: function
+        name: anira_now_ns
+        returns: uint64_t
+        params: []
+        thread: thread-safe
+        callback_safe: true
+        nonblocking: true
+        status: promised
+        since: "0.2"
+        doc: "The steady clock in nanoseconds; the one allowlisted 64-bit return on an ANIRA_NONBLOCKING declaration."
+        return_doc: "Nanoseconds since an unspecified steady epoch."
+      - kind: function
+        name: anira_shutdown
+        returns: anira_status
+        params: []
+        thread: main-thread & !loader-lock
+        status: promised
+        since: "0.2"
+        doc: "Stops and joins the core's inference threads and its log drain thread and flushes the queue, for a static embedding that is about to be unloaded (called from clap_deinit or ExitDll). Idempotent, never creates the core, and effective only when no machine and no handler exist in this copy: otherwise nothing happens, so one client of a shared library cannot silence another's sessions."
+        return_doc: "ANIRA_OK (also without a core); ANIRA_ERROR_INVALID_STATE while a machine or a handler lives."
+      - kind: function
+        name: anira_release_core_if_idle
+        returns: anira_bool
+        params: []
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Frees the core when nothing uses it: no machine, no handler, no pool thread, no user-driven inference thread and, on WebAssembly, no inference loop still running. Never blocks; the unload hook's call."
+        return_doc: "Nonzero when the core was freed."
+      - kind: function
+        name: anira_has_core
+        returns: anira_bool
+        params: []
+        thread: thread-safe
+        status: promised
+        since: "0.2"
+        doc: "Whether this copy of anira holds a core."
+        return_doc: "Nonzero while the core exists."
+
+  # ----------------------------------------------------------------------------
+  - file: thread.h
+    guard: ANIRA_ABI_THREAD_H
+    brief: "User-driven inference threads, the WebAssembly Worker's primitive."
+    doc: >-
+      A host that configured its machine with num_threads = 0 drives inference itself: it
+      creates anira_inference_thread objects, bound to the core's queue, and either lets
+      anira start an OS thread for each (anira_inference_thread_start, native only) or runs
+      the loop on a thread of its own (anira_inference_thread_run_loop, the only form on
+      WebAssembly, where the thread is a Worker). The objects outlive the machine that
+      created them and must be stopped before the library is unloaded.
+    includes: ["<stdint.h>", "export.h", "status.h", "enums.h"]
+    entities:
+      - kind: function
+        name: anira_inference_thread_create
+        returns: anira_status
+        params:
+          - {type: anira_machine*, name: machine, doc: "The machine whose core the thread serves; its wait strategy is the thread's."}
+          - {type: anira_inference_thread**, name: out, doc: "Receives the object on success."}
+          - {type: anira_error*, name: err, doc: "Nullable."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Creates an inference thread bound to the core's queue. Nothing runs until anira_inference_thread_start or anira_inference_thread_run_loop; on WebAssembly the object is created on the main instance and run in a Worker."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL machine or out."
+      - kind: function
+        name: anira_inference_thread_run_loop
+        returns: void
+        params:
+          - {type: anira_inference_thread*, name: thread, doc: "The object."}
+        thread: inference-thread
+        status: promised
+        since: "0.2"
+        doc: "Runs the inference loop on the calling thread until anira_inference_thread_stop; sets has_exited on return. The caller's thread is an inference thread while it is inside."
+      - kind: function
+        name: anira_inference_thread_execute
+        returns: anira_bool
+        params:
+          - {type: anira_inference_thread*, name: thread, doc: "The object."}
+        thread: inference-thread
+        status: promised
+        since: "0.2"
+        doc: "One step of the loop: dequeues and dispatches one inference if any is pending. The dequeue is allocation-free; the engine call and host callbacks may allocate and block."
+        return_doc: "Nonzero when an inference was dispatched."
+      - kind: function
+        name: anira_inference_thread_start
+        returns: void
+        params:
+          - {type: anira_inference_thread*, name: thread, doc: "The object."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Native: spawns an OS thread at the inference-thread scheduling class (real-time where granted) that runs the loop. WebAssembly: marks the object running; the loop is entered by the Worker through anira_inference_thread_run_loop."
+      - kind: function
+        name: anira_inference_thread_stop
+        returns: void
+        params:
+          - {type: anira_inference_thread*, name: thread, doc: "The object."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Requests the loop to exit. Native: joins the OS thread before returning. WebAssembly: requests only; poll anira_inference_thread_has_exited."
+      - kind: function
+        name: anira_inference_thread_has_exited
+        returns: anira_bool
+        params:
+          - {type: const anira_inference_thread*, name: thread, doc: "The object."}
+        thread: thread-safe
+        nonblocking: true
+        status: promised
+        since: "0.2"
+        doc: "Nonzero once a run of the loop returned (a shared-memory atomic, readable from every WebAssembly instance); required before anira_inference_thread_destroy on WebAssembly."
+        return_doc: "Nonzero after the loop returned; 0 before it ran and while it runs."
+      - kind: function
+        name: anira_inference_thread_should_exit
+        returns: anira_bool
+        params:
+          - {type: const anira_inference_thread*, name: thread, doc: "The object."}
+        thread: thread-safe
+        nonblocking: true
+        status: promised
+        since: "0.2"
+        doc: "Nonzero once a stop was requested."
+        return_doc: "The stop flag."
+      - kind: function
+        name: anira_inference_thread_is_running
+        returns: anira_bool
+        params:
+          - {type: const anira_inference_thread*, name: thread, doc: "The object."}
+        thread: thread-safe
+        nonblocking: true
+        status: promised
+        since: "0.2"
+        doc: "Nonzero while the loop is running (native: the OS thread exists and has not returned; WebAssembly: between start and stop)."
+        return_doc: "The running flag."
+      - kind: function
+        name: anira_inference_thread_destroy
+        returns: void
+        params:
+          - {type: anira_inference_thread*, name: thread, doc: "The object; NULL is a no-op."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Destroys a stopped object. Native: stops and joins first if the caller did not. WebAssembly: refused with one Error record unless has_exited (the Worker may still be inside the loop)."
+      - kind: function
+        name: anira_num_inference_threads
+        returns: uint32_t
+        params: []
+        thread: thread-safe
+        status: promised
+        since: "0.2"
+        doc: "The size of the default inference thread pool in this copy of anira: the pool exists while a handler does, so 0 before the first handler and when the machine brought its own threads. User-driven threads are not counted."
+        return_doc: "The pool size."

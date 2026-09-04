@@ -117,6 +117,8 @@ anira_add_test_binary(test_abi
 	abi/test_Translate.cpp
 	abi/test_Bridge.cpp
 	abi/test_ExtrasFixtures.cpp
+	abi/test_Machine.cpp
+	abi/test_Thread.cpp
 )
 # capi_internal.h (the firewall probe) and the generated tables under src/capi/.
 target_include_directories(test_abi PRIVATE "${anira_SOURCE_DIR}/src")
@@ -137,6 +139,7 @@ if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$")
         CXX_STANDARD_REQUIRED ON)
     target_include_directories(anira_header_isolation PRIVATE
         "${anira_SOURCE_DIR}/include"
+        "${ANIRA_GENERATED_INCLUDE_DIR}"
         $<TARGET_PROPERTY:concurrentqueue,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:tanh::Core,INTERFACE_INCLUDE_DIRECTORIES>)

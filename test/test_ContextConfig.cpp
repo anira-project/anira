@@ -67,42 +67,6 @@ TEST(ContextConfigValues, DefaultConstructedMatchesTheDefaults) {
     EXPECT_EQ(config.m_log.m_drain_interval_ms, 10U);
 }
 
-// The constructor registers exactly the backends compiled into this build, so
-// the list must agree with the USE_* macros the rest of the library branches on.
-// (The enum members themselves are compile-time conditional, hence the #ifdefs.)
-TEST(ContextConfigValues, EnabledBackendsFollowTheBuild) {
-    const anira::ContextConfig config;
-    const auto& backends = config.m_enabled_backends;
-    const auto has = [&backends](anira::InferenceBackend backend) {
-        return std::ranges::find(backends, backend) != backends.end();
-    };
-
-    size_t expected_count = 0;
-#ifdef USE_LIBTORCH
-    EXPECT_TRUE(has(anira::InferenceBackend::LIBTORCH));
-    ++expected_count;
-#endif
-#ifdef USE_ONNXRUNTIME
-    EXPECT_TRUE(has(anira::InferenceBackend::ONNX));
-    ++expected_count;
-#endif
-#ifdef USE_TFLITE
-    EXPECT_TRUE(has(anira::InferenceBackend::TFLITE));
-    ++expected_count;
-#endif
-#ifdef USE_LITERT
-    EXPECT_TRUE(has(anira::InferenceBackend::LITERT));
-    ++expected_count;
-#endif
-#ifdef USE_EXECUTORCH
-    EXPECT_TRUE(has(anira::InferenceBackend::EXECUTORCH));
-    ++expected_count;
-#endif
-    EXPECT_EQ(backends.size(), expected_count);
-    // CUSTOM is always available but never auto-registered.
-    EXPECT_FALSE(has(anira::InferenceBackend::CUSTOM));
-}
-
 TEST(ContextConfigValues, LogConfigEquality) {
     anira::LogConfig lhs;
     anira::LogConfig rhs;
@@ -137,5 +101,4 @@ TEST(ContextConfigValues, ConstructorArgumentsLandWhereExpected) {
     EXPECT_EQ(config.m_num_threads, 2U);
     EXPECT_EQ(config.m_wait_strategy, anira::WaitStrategy::Blocking);
     EXPECT_EQ(config.m_log.m_level, anira::LogLevel::Warning);
-    EXPECT_FALSE(config.m_anira_version.empty());
 }

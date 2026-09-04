@@ -13,6 +13,8 @@
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/log.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/scheduler/Context.h>
 #include <anira/scheduler/SessionElement.h>
@@ -245,14 +247,14 @@ void drive_generator_with_process(InferenceHandler& handler,
 // InferenceHandler::drain_log() before it looks (instead of a drain thread racing the
 // assertions, or a stderr capture that never sees the sinks).
 struct LogRecordCollector {
-    LogRecordCollector() {
-        thl::Logger::set_callback([this](const thl::Logger::LogRecord& record) {
-            const std::scoped_lock lock(m_mutex);
-            m_messages += record.m_message;
-            m_messages += '\n';
-        });
+    LogRecordCollector() { m_sink = anira::detail::add_log_sink(&on_record, this, ANIRA_LOG_DEBUG); }
+    ~LogRecordCollector() { anira::detail::remove_log_sink(m_sink); }
+    static void on_record(const anira_log_record* record, void* user_data) {
+        auto* self = static_cast<LogRecordCollector*>(user_data);
+        const std::scoped_lock lock(self->m_mutex);
+        self->m_messages += record->message;
+        self->m_messages += '\n';
     }
-    ~LogRecordCollector() { thl::Logger::clear_callback(); }
     LogRecordCollector(const LogRecordCollector&) = delete;
     LogRecordCollector& operator=(const LogRecordCollector&) = delete;
     LogRecordCollector(LogRecordCollector&&) = delete;
@@ -268,11 +270,12 @@ struct LogRecordCollector {
 
     std::mutex m_mutex;
     std::string m_messages;
+    anira::detail::LogSinkId m_sink = 0;
 };
 
-}  // namespace
-
 class OneSidedStreamingTest : public ::testing::TestWithParam<bool> {};
+
+}  // namespace
 
 INSTANTIATE_TEST_SUITE_P(OneSidedStreaming,
                          OneSidedStreamingTest,

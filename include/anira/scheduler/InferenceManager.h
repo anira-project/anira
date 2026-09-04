@@ -2,6 +2,7 @@
 #define ANIRA_INFERENCEMANAGER_H
 
 #include "../ContextConfig.h"
+#include "../utils/InferenceBackend.h"
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
 #include "../utils/HostConfig.h"

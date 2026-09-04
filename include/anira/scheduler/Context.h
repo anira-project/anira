@@ -1,7 +1,6 @@
 #ifndef ANIRA_CONTEXT_H
 #define ANIRA_CONTEXT_H
 
-#include <tanh/core/Logger.h>
 
 #include <atomic>
 #include <chrono>
@@ -10,6 +9,7 @@
 #include <vector>
 
 #include "../ContextConfig.h"
+#include "../utils/InferenceBackend.h"
 #include "../PrePostProcessor.h"
 #include "../utils/HostConfig.h"
 #include "../utils/RealtimeSanitizer.h"
@@ -33,6 +33,9 @@
 #endif
 
 namespace anira {
+
+/// The core-owned real-time log drain thread (Context.cpp); anira's own, not tanh-lib's.
+class LogDrainLoop;
 
 /**
  * @brief Process-wide inference context: session registry, inference thread pool, backend
@@ -230,6 +233,38 @@ public:
      * @return True if the core is allocated
      */
     static bool has_core();
+
+    /**
+     * @brief Registers a 3.x machine as a user of the core
+     *
+     * A live machine counts like a session for the configuration in effect and for the
+     * real-time log queue: the first user's configuration (machine or session) is the one
+     * in effect, every later one is reconciled against it (log level most verbose wins;
+     * wait strategy, drain mode, queue capacity and interval first win with a warning; the
+     * thread count only shrinks and never to zero), the log queue and, in LogDrain::Thread
+     * mode, the drain thread exist while any user does. The inference thread pool is
+     * still built by the first session and torn down with the last one.
+     *
+     * @param context_config The machine's configuration (the 2.x spelling of its config)
+     * @throws std::runtime_error when the drain thread cannot be started
+     */
+    static void register_machine(const ContextConfig& context_config);
+
+    /**
+     * @brief Unregisters a machine; when it was the last user of the core the drain
+     * thread is stopped and the queue flushed through the sinks on the calling thread.
+     */
+    static void unregister_machine();
+
+    /// Number of registered machines (0 without a core).
+    static unsigned int get_num_machines();
+
+    /**
+     * @brief Size of the inference thread pool right now (0 without a core, before the
+     * first prepared session and for a configuration that brings its own threads);
+     * what anira_num_inference_threads reports.
+     */
+    static size_t get_thread_pool_size();
 
     /**
      * @brief Prepares a session for processing with new audio configuration
@@ -476,43 +511,61 @@ private:
      */
     static ContextConfig sanitize_config(const ContextConfig& context_config);
 
+    /// Whether a session or a machine uses the core (the configuration in effect is
+    /// meaningful exactly then). Called with the lifecycle lock held.
+    static bool has_users_locked(const Core& core);
+
     /**
-     * @brief Applies the log level a session requests, honoring "most verbose wins"
+     * @brief Applies the log level a user requests, honoring "most verbose wins"
      *
-     * Called with the lifecycle lock held, before anything on the session-creation path
-     * logs. With an empty registry the requested level takes effect; otherwise the lower
-     * (more verbose) of the level in effect and the requested one does.
+     * Called with the lifecycle lock held, before anything on the creation path logs.
+     * Without users the requested level takes effect; otherwise the lower (more verbose)
+     * of the level in effect and the requested one does.
      *
      * @param core The context core
-     * @param context_config Sanitized configuration of the session being created
+     * @param context_config Sanitized configuration of the session or machine
      */
     static void apply_log_level_locked(Core& core, const ContextConfig& context_config);
 
     /**
-     * @brief Makes sure the core owns the real-time log queue and, in LogDrain::Thread
-     * mode, starts its drain thread
+     * @brief Makes sure the core owns the real-time log queue
      *
-     * Called with the lifecycle lock held by the first session of a generation. The
-     * queue is created once per core (its capacity is fixed by the first session that
-     * ever builds it) and published to the real-time log sites; the drain thread runs
-     * at low priority exactly while sessions exist.
+     * Called with the lifecycle lock held. The queue is created once per core (its
+     * capacity is fixed by the first user that ever builds it) and published to the
+     * real-time log sites; a later request for a larger queue is reported.
      */
-    static void start_log_drain_locked(Core& core, const ContextConfig& context_config);
+    static void ensure_log_queue_locked(Core& core, const LogConfig& log_config);
 
     /**
-     * @brief Applies a configuration into an empty registry, or reconciles it otherwise
+     * @brief Starts the drain thread when the configuration in effect says
+     * LogDrain::Thread and none runs
      *
-     * Called with the lifecycle lock held. Registry empty: the configuration becomes the
-     * one in effect and the inference thread pool is built from it (threads are created
-     * but not started). Registry non-empty: the configuration is compared with the one in
-     * effect — anira version, enabled backends, log level (most verbose wins), wait
-     * strategy (first wins) and thread count (the pool only shrinks, and never to zero) —
-     * and every mismatch is reported.
+     * Called with the lifecycle lock held, after ensure_log_queue_locked(). The thread is
+     * anira's own (a low-priority thl::core::Thread named "anira-log" running
+     * Queue::drain() every drain interval) and lives exactly while a session or a machine
+     * does; the last user's release stops it and flushes the queue.
+     */
+    static void start_log_drain_locked(Core& core);
+
+    /**
+     * @brief Applies a configuration when the core has no user, or reconciles it otherwise
+     *
+     * Called with the lifecycle lock held. No user: the configuration becomes the one in
+     * effect. Otherwise it is compared with the one in effect — log level (most verbose
+     * wins), wait strategy (first wins), drain mode, queue capacity and interval (first
+     * win) and thread count (the pool only shrinks, and never to zero) — and every
+     * mismatch is reported. Then the log queue and the drain thread are made to exist,
+     * and for the first session of a generation the inference thread pool is built from
+     * the configuration in effect (threads are created but not started).
      *
      * @param core The context core
-     * @param context_config Sanitized configuration of the session being created
+     * @param context_config Sanitized configuration of the session or machine
+     * @param builds_pool True for a session (the pool exists while sessions do), false
+     *        for a machine
      */
-    static void apply_or_compare_config_locked(Core& core, const ContextConfig& context_config);
+    static void apply_or_compare_config_locked(Core& core,
+                                               const ContextConfig& context_config,
+                                               bool builds_pool);
 
     /**
      * @brief Adds a fully constructed session to the registry
@@ -543,7 +596,7 @@ private:
      * queue through the log sinks — and a host's log callback may call back into the
      * context — so the returned object is destroyed after the lock is released.
      */
-    static std::unique_ptr<thl::Logger::rt::DrainThread> take_log_drain_locked(Core& core);
+    static std::unique_ptr<LogDrainLoop> take_log_drain_locked(Core& core);
 
     /**
      * @brief Size the pool will have once the given configuration has been applied

@@ -2,6 +2,8 @@
 #include <cstring>
 #include <iostream>
 
+#include <anira/abi/machine.h>
+
 #include "anira-clap-demo.h"
 
 namespace clap_plugin_example::pluginentry {
@@ -42,10 +44,11 @@ bool clap_init(const char* p) {
 void clap_deinit() {
     // The host calls this before it unloads the plugin library, outside any loader
     // lock. anira's inference threads are already gone once the last plugin instance
-    // was destroyed; this is the backstop for hosts that unload with live instances —
-    // and the only place where that backstop can run on Windows (see
-    // anira::Context::shutdown()).
-    anira::Context::shutdown();
+    // was destroyed; this is the backstop for a static embedding — and the only place
+    // where it can run on Windows. anira_shutdown() is idempotent and refuses
+    // (ANIRA_ERROR_INVALID_STATE, nothing happens) while a machine or a handler of this
+    // copy of anira still exists, so it cannot silence another client's sessions.
+    anira_shutdown();
 }
 
 }  // namespace clap_plugin_example::pluginentry

@@ -114,6 +114,16 @@ public:
     bool is_running() const;
 
     /**
+     * @brief True once a run of run_loop() has returned; false before the loop ran and
+     * while it runs. A shared-memory atomic on WebAssembly, so the main instance can see
+     * that a Worker left the loop before it destroys the object.
+     */
+    bool has_exited() const;
+
+    /// True while a thread is inside run_loop() on this object (any platform).
+    bool is_in_loop() const;
+
+    /**
      * @brief Number of inference threads currently active in the process.
      *
      * Native: threads currently executing run_loop() — the auto-managed pool
@@ -126,6 +136,16 @@ public:
      * every WASM instance sees the same value.
      */
     static unsigned int get_num_active_threads();
+
+    /**
+     * @brief Number of threads inside run_loop() right now, on every platform.
+     *
+     * Unlike get_num_active_threads(), which on WebAssembly counts start()/stop() on the
+     * main instance, this counts run_loop() entries and exits wherever they happen: a
+     * Worker that is still inside its loop after the main instance called stop() is
+     * counted until it leaves. Context::release_core_if_idle() consults it.
+     */
+    static unsigned int get_num_loop_active();
 
 private:
     /**
@@ -219,6 +239,8 @@ private:
     // variable would be bound STB_GNU_UNIQUE by GCC, which makes glibc refuse to ever
     // unload the library (see Context).
 
+    std::atomic<bool> m_has_exited{false};  ///< Set by run_loop() on return, cleared on entry
+    std::atomic<bool> m_in_loop{false};     ///< Set on run_loop() entry, cleared on return
 #ifdef __EMSCRIPTEN__
     std::atomic<bool> m_should_exit{false};
     std::atomic<bool> m_is_running{false};

@@ -15,11 +15,12 @@ promises about exceptions.
     ``anira/abi/status.h``, ``anira::Error`` of ``anira/anira.hpp``, the exception firewall of
     the C entries, the log block of the machine config (``anira/abi/log.h``), the real-time log
     queue with its drain thread and ``anira_drain_log``, and the platform sink. Marked below as
-    arriving with the 3.x runtime: ``anira_handler_rt_error``, the per-handler latch, the
-    drain-thread summary, the ``anira_log_fn`` sink and the ``ANIRA_LOG_FLAG_*`` switches
-    taking effect (the machine config stores them today), and the ``anira_log_record``
-    projection. The 2.x runtime of :doc:`usage`, sections 2 to 5, logs its real-time failures
-    through the same queue without ``rt_error`` and without latching.
+    arriving with the 3.x runtime: ``anira_handler_rt_error``, the per-handler latch and the
+    drain-thread summary. The ``anira_log_fn`` sink, the ``ANIRA_LOG_FLAG_*`` switches and
+    the ``anira_log_record`` projection are in effect from the machine
+    (``anira_machine_create``, :doc:`usage` section 3.1) on. The 2.x runtime of :doc:`usage`,
+    sections 2 to 5, logs its real-time failures through the same queue without ``rt_error``
+    and without latching.
 
 The rule
 --------
@@ -123,8 +124,9 @@ Report it with the log line.
 or the ``flags`` field of ``anira_log_desc``) makes every failed status also an Error record
 whose text is the ``anira_error`` message prefixed by the entry and the status. It is off by
 default on every platform and exists for one situation: the application swallowed the status
-and the only thing you have is the device log. The machine config stores the flag now; the
-runtime honours it from the 3.x runtime on.
+and the only thing you have is the device log. It is in effect while a machine that set it
+lives (counted across machines, so a second machine's destroy does not switch it off for the
+first).
 
 .. _logging-realtime:
 
@@ -273,9 +275,8 @@ which sinks run.
 (on macOS additionally stdout/stderr, and stdout/stderr *only* while a debugger is attached),
 stdout/stderr on Linux and Windows, the browser console on WebAssembly.
 ``ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK`` in ``log_flags`` switches it off while that machine
-lives, for a host that shows its own log or a DAW that mirrors stderr (the 3.x runtime applies
-the flag; the 2.x runtime's equivalent is tanh-lib's ``thl::Logger::set_config`` with
-``m_platform_enabled = false``, see :doc:`usage`, section 3.1).
+lives (counted across machines), for a host that shows its own log or a DAW that mirrors
+stderr.
 
 **The host sink.** ``log_sink(callback, user_data)`` (``anira_machine_config_set_log_sink``, or
 the ``callback`` field of ``anira_log_desc``) registers an ``anira_log_fn`` that receives

@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 // The ext<Ext> members, instantiated for the one extension kind of 3.0.
 template anira::TensorSpec& anira::TensorSpec::ext<anira::ext::Entry>(const anira::ext::Entry&);
@@ -40,6 +41,7 @@ static_assert(k_move_only<anira::ModelConfig>);
 static_assert(k_move_only<anira::MachineConfig>);
 static_assert(k_move_only<anira::ContractHandle>);
 static_assert(k_move_only<anira::JobOptionsHandle>);
+static_assert(k_move_only<anira::Machine>);
 
 // The contract and job-option values are aggregates, spelled with designated initializers.
 static_assert(std::is_aggregate_v<anira::Hard>);
@@ -83,6 +85,20 @@ int anira_header_cxx20_probe() {
         const anira::ContractHandle minted(contract);
         checks += model.upgraded() || machine.upgraded() || loaded.upgraded() ? 1 : 0;
         checks += minted.native() != nullptr ? 1 : 0;
+        anira::Machine running(machine);
+        const anira::Capabilities capabilities = running.capabilities();
+        const std::vector<anira::BackendId> backends = capabilities.backends();
+        const anira::BackendId first = backends.empty() ? anira::BackendId{} : backends.front();
+        const anira_edge_info edge = capabilities.edge(ANIRA_DOMAIN_HOST, first);
+        running.probe(true);
+        checks += capabilities.domains().size() + capabilities.ext_kinds().size() +
+                          capabilities.edges().size() + running.num_inference_threads() +
+                          running.drain_log() + edge.available +
+                          static_cast<int>(running.byte_image_bytes(1, ANIRA_DTYPE_F32)) +
+                          anira::enabled_backends().size() +
+                          static_cast<int>(anira::now_ns() - anira::now_ns()) +
+                          static_cast<int>(anira::now_ms()) + anira::shutdown() +
+                          (anira::has_core() || anira::release_core_if_idle() ? 1 : 0);
     }
     return checks;
 }

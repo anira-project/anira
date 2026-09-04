@@ -190,6 +190,13 @@ the ``@par Thread contract`` line of the generated Doxygen. The C-side tests and
 ``anira_abi_layout``, ``anira_header_c11`` / ``anira_header_cxx17`` /
 ``anira_header_coexist``); a Tier-1 layout may change only in a commit that changes
 ``ANIRA_ABI_MAJOR``, and ``anira_abi_layout_regen`` rewrites the committed table then.
+Three presence gates make sure every promised and draft entry point has a body on every
+leg: ``anira_abi_link`` (the generated ``test/abi/generated/link_probe.c`` takes the address
+of every name and links ``anira::anira`` like a consumer, on static and shared legs alike),
+``anira_symbol_baseline`` (``cmake/abi-symbols.cmake``: every name is in the shared
+library's real export table, read with ``nm`` or ``dumpbin``) and the WebAssembly link,
+whose ``-sEXPORTED_FUNCTIONS`` is the generated ``web/src/abi/exports_wasm.txt``. So a
+registry entry needs its body — including on Emscripten — in the same pull request.
 
 Reproducing CI locally
 ~~~~~~~~~~~~~~~~~~~~~~

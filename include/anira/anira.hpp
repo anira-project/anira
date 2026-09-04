@@ -53,9 +53,11 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>  // IWYU pragma: keep - the umbrella of the C headers
 #include <anira/abi/log.h>
+#include <anira/abi/machine.h>
 #include <anira/abi/status.h>
 #include <anira/abi/version.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -85,6 +87,7 @@ using Domain = anira_domain;
 using SyncKind = anira_sync_kind;
 using Role = anira_role;
 using AxisTag = anira_axis_tag;
+using BackendId = anira_backend_id;
 
 namespace detail {
 
@@ -1062,6 +1065,163 @@ private:
     anira_machine_config* m_config = nullptr;
     bool m_upgraded = false;
 };
+
+// ---- machine (section 4) -------------------------------------------------------------------
+
+namespace detail {
+
+/**
+ * @brief Runs the two-call enumeration protocol of section 6a: the count, then the rows.
+ * `call(count, out)` is the C entry with everything but those two bound; a stride-explicit
+ * entry binds sizeof(T).
+ */
+template <class T, class Call>
+std::vector<T> enumerate(Call&& call, const char* entry) {
+    uint32_t count = 0;
+    check(call(&count, static_cast<T*>(nullptr)), entry);
+    std::vector<T> rows(count);
+    if (count == 0) { return rows; }
+    check(call(&count, rows.data()), entry);
+    rows.resize(std::min<std::size_t>(count, rows.size()));
+    return rows;
+}
+
+}  // namespace detail
+
+/**
+ * @brief A view over a machine's probed capabilities (anira_capabilities): what backends are
+ * usable here, which memory domains a tensor may live in, the extension kinds this build
+ * understands, and the edge registry. Valid while the Machine is; refreshed in place by
+ * Machine::probe.
+ */
+class Capabilities {
+public:
+    explicit Capabilities(const anira_capabilities* capabilities) noexcept
+        : m_capabilities(capabilities) {}
+
+    /// The backends compiled in and usable here.
+    std::vector<BackendId> backends() const {
+        return detail::enumerate<BackendId>(
+            [this](uint32_t* count, BackendId* out) {
+                return anira_capabilities_backends(m_capabilities, sizeof(BackendId), count, out);
+            },
+            "anira_capabilities_backends");
+    }
+    std::vector<Domain> domains() const {
+        return detail::enumerate<Domain>(
+            [this](uint32_t* count, Domain* out) {
+                return anira_capabilities_domains(m_capabilities, count, out);
+            },
+            "anira_capabilities_domains");
+    }
+    std::vector<std::string> ext_kinds() const {
+        const std::vector<const char*> kinds = detail::enumerate<const char*>(
+            [this](uint32_t* count, const char** out) {
+                return anira_capabilities_ext_kinds(m_capabilities, count, out);
+            },
+            "anira_capabilities_ext_kinds");
+        return {kinds.begin(), kinds.end()};
+    }
+    /// Every row of the edge registry, available or not.
+    std::vector<anira_edge_info> edges() const {
+        return detail::enumerate<anira_edge_info>(
+            [this](uint32_t* count, anira_edge_info* out) {
+                return anira_capabilities_edges(
+                    m_capabilities, sizeof(anira_edge_info), count, out);
+            },
+            "anira_capabilities_edges");
+    }
+    /// One row, by domain and backend.
+    /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no such row.
+    anira_edge_info edge(Domain from, const BackendId& to) const {
+        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
+        detail::check(anira_capabilities_edge(m_capabilities, from, &to, &row),
+                      "anira_capabilities_edge");
+        return row;
+    }
+
+    const anira_capabilities* native() const noexcept { return m_capabilities; }
+
+private:
+    const anira_capabilities* m_capabilities;
+};
+
+/**
+ * @brief An anira_machine with its lifetime: a refcounted handle over this copy's core,
+ * created from a MachineConfig (section 4). Two machines in one copy are two views of one
+ * core with two log sinks.
+ */
+class Machine {
+public:
+    /// @throws Error when the C entry refuses the config (a device block, an unconsumed
+    /// machine extension).
+    explicit Machine(const MachineConfig& config) {
+        detail::abi_check_once();
+        anira_error err{};
+        detail::check(anira_machine_create(config.native(), &m_machine, &err), err);
+    }
+    ~Machine() { anira_machine_destroy(m_machine); }
+    Machine(const Machine&) = delete;
+    Machine& operator=(const Machine&) = delete;
+    Machine(Machine&& other) noexcept : m_machine(std::exchange(other.m_machine, nullptr)) {}
+    Machine& operator=(Machine&& other) noexcept {
+        if (this != &other) {
+            anira_machine_destroy(m_machine);
+            m_machine = std::exchange(other.m_machine, nullptr);
+        }
+        return *this;
+    }
+
+    Capabilities capabilities() const { return Capabilities(anira_machine_capabilities(m_machine)); }
+    /// Re-runs the probe; `force` re-runs every rung even where a cached answer exists.
+    void probe(bool force = false) {
+        anira_error err{};
+        detail::check(anira_machine_probe(m_machine, force ? 1U : 0U, &err), err);
+    }
+    /// Delivers the queued real-time records to the sinks (ANIRA_LOG_DRAIN_MANUAL).
+    std::size_t drain_log() { return anira_machine_drain_log(m_machine); }
+    /// The size of the inference thread pool serving this machine.
+    uint32_t num_inference_threads() const { return anira_machine_num_inference_threads(m_machine); }
+    /// The size of a tensor's byte image on this machine.
+    uint64_t byte_image_bytes(uint64_t num_elements, DType dtype) const {
+        return anira_machine_byte_image_bytes(m_machine, num_elements, dtype);
+    }
+
+    const anira_machine* native() const noexcept { return m_machine; }
+    anira_machine* native() noexcept { return m_machine; }
+
+private:
+    anira_machine* m_machine = nullptr;
+};
+
+/// What this build compiled in, without a machine (anira_enabled_backends).
+inline std::vector<BackendId> enabled_backends() {
+    return detail::enumerate<BackendId>(
+        [](uint32_t* count, BackendId* out) {
+            return anira_enabled_backends(sizeof(BackendId), count, out);
+        },
+        "anira_enabled_backends");
+}
+
+/// The steady clock of anira_now_ms / anira_now_ns, for deadlines and submit timestamps.
+inline double now_ms() noexcept {
+    return anira_now_ms();
+}
+inline uint64_t now_ns() noexcept {
+    return anira_now_ns();
+}
+
+/// anira_shutdown: effective only when no Machine and no handler exist in this copy.
+inline anira_status shutdown() noexcept {
+    return anira_shutdown();
+}
+/// anira_release_core_if_idle: true when the core was freed.
+inline bool release_core_if_idle() noexcept {
+    return anira_release_core_if_idle() != 0U;
+}
+inline bool has_core() noexcept {
+    return anira_has_core() != 0U;
+}
 
 // ---- job options (section 6) ---------------------------------------------------------------
 

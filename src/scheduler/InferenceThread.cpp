@@ -39,6 +39,8 @@ namespace {
 // instance sees the same value. Deliberately not an inline static class member — see
 // InferenceThread.h.
 std::atomic<unsigned int> s_num_active_threads{0};
+// Threads inside run_loop() right now, on every platform (see get_num_loop_active()).
+std::atomic<unsigned int> s_num_loop_active{0};
 }  // namespace
 
 InferenceThread::InferenceThread(InferenceQueue& next_inference, WaitStrategy wait_strategy)
@@ -99,7 +101,39 @@ unsigned int InferenceThread::get_num_active_threads() {
     return s_num_active_threads.load(std::memory_order::relaxed);
 }
 
+unsigned int InferenceThread::get_num_loop_active() {
+    return s_num_loop_active.load(std::memory_order::acquire);
+}
+
+bool InferenceThread::has_exited() const {
+    return m_has_exited.load(std::memory_order::acquire);
+}
+
+bool InferenceThread::is_in_loop() const {
+    return m_in_loop.load(std::memory_order::acquire);
+}
+
 void InferenceThread::run_loop() {
+    // Count this thread as inside its loop, and mark the exit on the object, on every
+    // platform: what release_core_if_idle() and (on WebAssembly) the destroy of a
+    // user-driven thread consult.
+    struct LoopGuard {
+        LoopGuard(std::atomic<bool>& has_exited, std::atomic<bool>& in_loop)
+            : m_has_exited(has_exited), m_in_loop(in_loop) {
+            m_has_exited.store(false, std::memory_order::release);
+            m_in_loop.store(true, std::memory_order::release);
+            s_num_loop_active.fetch_add(1, std::memory_order::acq_rel);
+        }
+        ~LoopGuard() {
+            s_num_loop_active.fetch_sub(1, std::memory_order::acq_rel);
+            m_in_loop.store(false, std::memory_order::release);
+            m_has_exited.store(true, std::memory_order::release);
+        }
+        LoopGuard(const LoopGuard&) = delete;
+        LoopGuard& operator=(const LoopGuard&) = delete;
+        std::atomic<bool>& m_has_exited;
+        std::atomic<bool>& m_in_loop;
+    } const loop_guard(m_has_exited, m_in_loop);
 #ifndef __EMSCRIPTEN__
     // Count this thread as active for the lifetime of its pumping loop. Under
     // Emscripten the count is maintained by start()/stop() instead, which run
