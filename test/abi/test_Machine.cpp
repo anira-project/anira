@@ -272,7 +272,8 @@ TEST(AbiMachine, TheRecordProjectionOfARealTimeRecord) {
     const Config config;
     ASSERT_EQ(anira_machine_config_set_log_drain(config.m_config, ANIRA_LOG_DRAIN_MANUAL, 0),
               ANIRA_OK);
-    ASSERT_EQ(anira_machine_config_set_log_sink(config.m_config, &Sink::on_record, &sink), ANIRA_OK);
+    ASSERT_EQ(anira_machine_config_set_log_sink(config.m_config, &Sink::on_record, &sink),
+              ANIRA_OK);
     anira_machine* machine = create(config);
     ASSERT_NE(machine, nullptr);
 #ifdef ENABLE_LOGGING
@@ -338,16 +339,16 @@ TEST(AbiMachine, DestroyFromInsideTheSinkIsRefused) {
         std::atomic<bool> m_called{false};
     } sink;
     const Config config;
-    ASSERT_EQ(anira_machine_config_set_log_sink(config.m_config,
-                                                &SelfDestroyingSink::on_record,
-                                                &sink),
-              ANIRA_OK);
+    ASSERT_EQ(
+        anira_machine_config_set_log_sink(config.m_config, &SelfDestroyingSink::on_record, &sink),
+        ANIRA_OK);
     sink.m_machine = create(config);
     ASSERT_NE(sink.m_machine, nullptr);
     const unsigned int before = Context::get_num_machines();
     anira_log(ANIRA_LOG_ERROR, "anira.test", "destroy me");
     EXPECT_TRUE(sink.m_called.load());
-    EXPECT_EQ(Context::get_num_machines(), before) << "the destroy from inside the sink did nothing";
+    EXPECT_EQ(Context::get_num_machines(), before)
+        << "the destroy from inside the sink did nothing";
     // The machine is intact: a destroy from outside the sink works.
     anira_machine_destroy(sink.m_machine);
     EXPECT_EQ(Context::get_num_machines(), before - 1);
@@ -377,12 +378,12 @@ TEST(AbiMachine, ThePlatformSinkIsOffWhileAMachineAsksForIt) {
     EXPECT_TRUE(thl::Logger::get_config().m_platform_enabled);
     const Config config_a;
     const Config config_b;
-    ASSERT_EQ(anira_machine_config_set_log_flags(config_a.m_config,
-                                                 ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK),
-              ANIRA_OK);
-    ASSERT_EQ(anira_machine_config_set_log_flags(config_b.m_config,
-                                                 ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK),
-              ANIRA_OK);
+    ASSERT_EQ(
+        anira_machine_config_set_log_flags(config_a.m_config, ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK),
+        ANIRA_OK);
+    ASSERT_EQ(
+        anira_machine_config_set_log_flags(config_b.m_config, ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK),
+        ANIRA_OK);
     anira_machine* a = create(config_a);
     EXPECT_FALSE(thl::Logger::get_config().m_platform_enabled);
     anira_machine* b = create(config_b);
@@ -400,7 +401,8 @@ TEST(AbiMachine, LaterMachinesReconcilePerField) {
     if (!fresh_core()) { GTEST_SKIP() << "the core is held by another test's objects"; }
     RecordCollector collector;
     const Config config_a;
-    ASSERT_EQ(anira_machine_config_set_threads(config_a.m_config, 2, ANIRA_WAIT_BLOCKING), ANIRA_OK);
+    ASSERT_EQ(anira_machine_config_set_threads(config_a.m_config, 2, ANIRA_WAIT_BLOCKING),
+              ANIRA_OK);
     ASSERT_EQ(anira_machine_config_set_log_level(config_a.m_config, ANIRA_LOG_ERROR), ANIRA_OK);
     ASSERT_EQ(anira_machine_config_set_log_drain(config_a.m_config, ANIRA_LOG_DRAIN_MANUAL, 5),
               ANIRA_OK);
@@ -476,7 +478,8 @@ TEST(AbiMachine, TheDrainThreadDeliversAndTheLastMachineFlushes) {
     const Config config;
     ASSERT_EQ(anira_machine_config_set_log_drain(config.m_config, ANIRA_LOG_DRAIN_THREAD, 1),
               ANIRA_OK);
-    ASSERT_EQ(anira_machine_config_set_log_sink(config.m_config, &Sink::on_record, &sink), ANIRA_OK);
+    ASSERT_EQ(anira_machine_config_set_log_sink(config.m_config, &Sink::on_record, &sink),
+              ANIRA_OK);
     anira_machine* machine = create(config);
     ASSERT_NE(machine, nullptr);
     EXPECT_FALSE(thl::Logger::rt::is_running()) << "tanh-lib's own drain thread runs";
@@ -544,7 +547,8 @@ TEST(AbiMachine, HostOnlyCapabilityRows) {
     const std::vector<anira_engine> expected = compiled_engines();
 
     uint32_t count = 0;
-    EXPECT_EQ(anira_capabilities_backends(caps, sizeof(anira_backend_id), &count, nullptr), ANIRA_OK);
+    EXPECT_EQ(anira_capabilities_backends(caps, sizeof(anira_backend_id), &count, nullptr),
+              ANIRA_OK);
     EXPECT_EQ(count, expected.size());
     std::vector<anira_backend_id> backends(count + 1);
     count = static_cast<uint32_t>(backends.size());
@@ -577,7 +581,8 @@ TEST(AbiMachine, HostOnlyCapabilityRows) {
     EXPECT_EQ(count, expected.size()) << "one host edge per enabled backend";
     std::vector<anira_edge_info> edges(count + 1);
     count = static_cast<uint32_t>(edges.size());
-    EXPECT_EQ(anira_capabilities_edges(caps, sizeof(anira_edge_info), &count, edges.data()), ANIRA_OK);
+    EXPECT_EQ(anira_capabilities_edges(caps, sizeof(anira_edge_info), &count, edges.data()),
+              ANIRA_OK);
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_EQ(edges[i].struct_size, sizeof(anira_edge_info));
         EXPECT_EQ(edges[i].from_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
@@ -637,10 +642,12 @@ TEST(AbiMachine, ByteImageBytesIsTheDenseEncoding) {
     EXPECT_EQ(anira_machine_byte_image_bytes(machine, 10, ANIRA_DTYPE_F64), 80U);
     EXPECT_EQ(anira_machine_byte_image_bytes(machine, 10, ANIRA_DTYPE_F16), 20U);
     EXPECT_EQ(anira_machine_byte_image_bytes(machine, 10, ANIRA_DTYPE_BOOL8), 10U);
-    EXPECT_EQ(anira_machine_byte_image_bytes(machine, 10, ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4)),
-              160U);
-    EXPECT_EQ(anira_machine_byte_image_bytes(machine, 10, ANIRA_MAKE_DTYPE(ANIRA_DTYPE_OPAQUE, 0, 1)),
-              0U);
+    EXPECT_EQ(
+        anira_machine_byte_image_bytes(machine, 10, ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4)),
+        160U);
+    EXPECT_EQ(
+        anira_machine_byte_image_bytes(machine, 10, ANIRA_MAKE_DTYPE(ANIRA_DTYPE_OPAQUE, 0, 1)),
+        0U);
     EXPECT_EQ(anira_machine_byte_image_bytes(nullptr, 10, ANIRA_DTYPE_F32), 0U);
     anira_machine_destroy(machine);
 }

@@ -1,8 +1,8 @@
 #include <anira/ContextConfig.h>
-#include <anira/abi/enums.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/enums.h>
 #include <anira/scheduler/Context.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>

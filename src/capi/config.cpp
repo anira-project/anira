@@ -343,8 +343,8 @@ anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contract* contr
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_contract_hard_set_ring_dtype(anira_contract* contract,
-                                                             const char* canonical,
-                                                             anira_dtype dtype) ANIRA_NOEXCEPT try {
+                                                           const char* canonical,
+                                                           anira_dtype dtype) ANIRA_NOEXCEPT try {
     if (contract == nullptr || !non_empty(canonical) || dtype == 0) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }

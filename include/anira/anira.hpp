@@ -1126,8 +1126,10 @@ public:
     std::vector<anira_edge_info> edges() const {
         return detail::enumerate<anira_edge_info>(
             [this](uint32_t* count, anira_edge_info* out) {
-                return anira_capabilities_edges(
-                    m_capabilities, sizeof(anira_edge_info), count, out);
+                return anira_capabilities_edges(m_capabilities,
+                                                sizeof(anira_edge_info),
+                                                count,
+                                                out);
             },
             "anira_capabilities_edges");
     }
@@ -1172,7 +1174,9 @@ public:
         return *this;
     }
 
-    Capabilities capabilities() const { return Capabilities(anira_machine_capabilities(m_machine)); }
+    Capabilities capabilities() const {
+        return Capabilities(anira_machine_capabilities(m_machine));
+    }
     /// Re-runs the probe; `force` re-runs every rung even where a cached answer exists.
     void probe(bool force = false) {
         anira_error err{};
@@ -1181,7 +1185,9 @@ public:
     /// Delivers the queued real-time records to the sinks (ANIRA_LOG_DRAIN_MANUAL).
     std::size_t drain_log() { return anira_machine_drain_log(m_machine); }
     /// The size of the inference thread pool serving this machine.
-    uint32_t num_inference_threads() const { return anira_machine_num_inference_threads(m_machine); }
+    uint32_t num_inference_threads() const {
+        return anira_machine_num_inference_threads(m_machine);
+    }
     /// The size of a tensor's byte image on this machine.
     uint64_t byte_image_bytes(uint64_t num_elements, DType dtype) const {
         return anira_machine_byte_image_bytes(m_machine, num_elements, dtype);

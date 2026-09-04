@@ -24,8 +24,8 @@ namespace anira_test {
 struct RecordCollector {
     /// One delivered record, copied out of the callback (the C record is valid only inside).
     struct Record {
-        uint32_t m_level = 0;   ///< anira_log_level
-        uint32_t m_flags = 0;   ///< ANIRA_LOG_RECORD_* bits
+        uint32_t m_level = 0;  ///< anira_log_level
+        uint32_t m_flags = 0;  ///< ANIRA_LOG_RECORD_* bits
         uint32_t m_dropped_before = 0;
         uint64_t m_sequence = 0;
         std::string m_group;

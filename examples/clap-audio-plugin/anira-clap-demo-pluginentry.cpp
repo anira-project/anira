@@ -1,8 +1,8 @@
+#include <anira/abi/machine.h>
+
 #include <cmath>
 #include <cstring>
 #include <iostream>
-
-#include <anira/abi/machine.h>
 
 #include "anira-clap-demo.h"
 

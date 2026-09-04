@@ -429,8 +429,9 @@ void Context::start_log_drain_locked(Core& c) {
 #ifndef __EMSCRIPTEN__
     if (c.m_context_config.m_log.m_drain == LogDrain::Thread && !c.m_log_drain) {
         assert(c.m_log_queue && "drain thread before the queue");
-        c.m_log_drain = std::make_unique<LogDrainLoop>(
-            *c.m_log_queue, c.m_context_config.m_log.m_drain_interval_ms);
+        c.m_log_drain =
+            std::make_unique<LogDrainLoop>(*c.m_log_queue,
+                                           c.m_context_config.m_log.m_drain_interval_ms);
     }
 #else
     static_cast<void>(c);
@@ -1179,7 +1180,12 @@ void Context::post_process(
 
 void Context::start_thread_pool_locked(Core& c) {
     for (const auto& i : c.m_thread_pool) {
-        if (!i->is_running()) { i->start(); }
+        if (!i->is_running() && !i->start()) {
+            // Waiting for is_running() below would never return: say it instead.
+            throw std::runtime_error(
+                "anira: the operating system refused to create an "
+                "inference thread of the pool");
+        }
         while (!i->is_running()) { std::this_thread::sleep_for(std::chrono::microseconds(50)); }
     }
 }

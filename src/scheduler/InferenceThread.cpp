@@ -55,11 +55,12 @@ InferenceThread::~InferenceThread() {
 }
 
 #ifndef __EMSCRIPTEN__
-void InferenceThread::start() {
+bool InferenceThread::start() {
     thl::core::ThreadOptions options;
     options.m_priority = thl::core::ThreadPriority::RealTime;
     options.m_name = "anira-inference";
-    m_thread.start(options, [this](const thl::core::Thread&) { run_loop(); });
+    // False when already running or when the OS refused the thread; the caller decides.
+    return m_thread.start(options, [this](const thl::core::Thread&) { run_loop(); });
 }
 
 void InferenceThread::stop() {
@@ -75,14 +76,14 @@ bool InferenceThread::is_running() const {
     return m_thread.is_running();
 }
 #else
-void InferenceThread::start() {
+bool InferenceThread::start() {
     m_should_exit.store(false, std::memory_order::release);
     // Count only the false→true transition so repeated start() calls (and the
     // stop() in the destructor of a never-started thread) keep the process-wide
-    // active count balanced.
-    if (!m_is_running.exchange(true, std::memory_order::acq_rel)) {
-        s_num_active_threads.fetch_add(1, std::memory_order::relaxed);
-    }
+    // active count balanced; a repeated start() is reported, like the native one.
+    if (m_is_running.exchange(true, std::memory_order::acq_rel)) { return false; }
+    s_num_active_threads.fetch_add(1, std::memory_order::relaxed);
+    return true;
 }
 
 void InferenceThread::stop() {

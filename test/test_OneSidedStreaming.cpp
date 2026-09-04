@@ -247,7 +247,9 @@ void drive_generator_with_process(InferenceHandler& handler,
 // InferenceHandler::drain_log() before it looks (instead of a drain thread racing the
 // assertions, or a stderr capture that never sees the sinks).
 struct LogRecordCollector {
-    LogRecordCollector() { m_sink = anira::detail::add_log_sink(&on_record, this, ANIRA_LOG_DEBUG); }
+    LogRecordCollector() {
+        m_sink = anira::detail::add_log_sink(&on_record, this, ANIRA_LOG_DEBUG);
+    }
     ~LogRecordCollector() { anira::detail::remove_log_sink(m_sink); }
     static void on_record(const anira_log_record* record, void* user_data) {
         auto* self = static_cast<LogRecordCollector*>(user_data);

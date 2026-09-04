@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <thread>
 
 #include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h"
@@ -62,7 +63,7 @@ TEST(AbiInferenceThread, NullArgumentsAreRefused) {
     EXPECT_EQ(anira_inference_thread_should_exit(nullptr), 0U);
     EXPECT_EQ(anira_inference_thread_is_running(nullptr), 0U);
     EXPECT_EQ(anira_inference_thread_execute(nullptr), 0U);
-    anira_inference_thread_start(nullptr);
+    EXPECT_EQ(anira_inference_thread_start(nullptr, &err), ANIRA_ERROR_INVALID_ARGUMENT);
     anira_inference_thread_stop(nullptr);
     anira_inference_thread_run_loop(nullptr);
     anira_inference_thread_destroy(nullptr);
@@ -78,7 +79,7 @@ TEST(AbiInferenceThread, TheFlagsFollowTheLoop) {
     EXPECT_EQ(anira_inference_thread_should_exit(thread), 0U);
     EXPECT_EQ(anira_inference_thread_has_exited(thread), 0U);
     EXPECT_EQ(anira_inference_thread_execute(thread), 0U) << "nothing queued";
-    anira_inference_thread_start(thread);
+    EXPECT_EQ(anira_inference_thread_start(thread, &err), ANIRA_OK) << err.message;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(k_timeout_s);
     while (anira_inference_thread_is_running(thread) == 0U &&
            std::chrono::steady_clock::now() < deadline) {
@@ -86,6 +87,9 @@ TEST(AbiInferenceThread, TheFlagsFollowTheLoop) {
     }
     EXPECT_NE(anira_inference_thread_is_running(thread), 0U);
     EXPECT_EQ(anira_inference_thread_has_exited(thread), 0U);
+    // A second start while the loop runs is refused, not silently ignored.
+    EXPECT_EQ(anira_inference_thread_start(thread, &err), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_NE(std::strstr(err.message, "already running"), nullptr) << err.message;
     anira_inference_thread_stop(thread);  // native: joins
     EXPECT_EQ(anira_inference_thread_is_running(thread), 0U);
     EXPECT_NE(anira_inference_thread_should_exit(thread), 0U);
@@ -134,7 +138,7 @@ TEST(AbiInferenceThread, ServesASessionWithoutAPool) {
     anira_error err = ANIRA_ERROR_INIT;
     ASSERT_EQ(anira_inference_thread_create(machine.m_machine, &thread, &err), ANIRA_OK)
         << err.message;
-    anira_inference_thread_start(thread);
+    ASSERT_EQ(anira_inference_thread_start(thread, &err), ANIRA_OK) << err.message;
 
     inference_handler.prepare(HostConfig{k_buffer_size, k_sample_rate});
     inference_handler.set_inference_backend(InferenceBackend::CUSTOM);

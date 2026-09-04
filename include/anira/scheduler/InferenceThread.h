@@ -99,8 +99,11 @@ public:
     /**
      * @brief Starts the thread (native: a real-time priority OS thread running
      * run_loop(); WebAssembly: marks the externally driven loop as running).
+     *
+     * @return False when the thread is already running, or (native) when the operating
+     *         system refused to create it; is_running() stays false in the latter case.
      */
-    void start();
+    bool start();
 
     /**
      * @brief Stops the thread: asks run_loop() to return and, natively, joins it.

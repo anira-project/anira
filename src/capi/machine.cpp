@@ -1,6 +1,8 @@
 // anira/abi/machine.h: the machine handle over the core, its Host-only capabilities, the
 // enabled-backends query, the steady clock and the shutdown family. Every control entry
 // sits behind the exception firewall of capi_internal.h.
+#include "machine.h"
+
 #include <anira/ContextConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
@@ -22,7 +24,6 @@
 
 #include "capi_internal.h"
 #include "ext_registry.h"
-#include "machine.h"
 #include "translate.h"
 
 using anira::capi::translate_exception;
@@ -61,8 +62,7 @@ void apply_log_flags(anira_machine& machine, bool acquire) {
 
 bool has_device_block(const anira_machine_config& config) {
     return config.m_cuda.has_value() || config.m_gl.has_value() || config.m_vulkan.has_value() ||
-           config.m_metal.has_value() || config.m_d3d12.has_value() ||
-           config.m_webgpu.has_value();
+           config.m_metal.has_value() || config.m_d3d12.has_value() || config.m_webgpu.has_value();
 }
 
 // The Host-only capability report of this pre-release: every compiled-in engine on the
@@ -163,7 +163,10 @@ void machine_release(anira_machine* machine) noexcept {
 anira_status ANIRA_CALL anira_machine_create(const anira_machine_config* config,
                                              anira_machine** out,
                                              anira_error* err) ANIRA_NOEXCEPT try {
-    ANIRA_CAPI_REQUIRE(config != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "machine: NULL config");
+    ANIRA_CAPI_REQUIRE(config != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "machine: NULL config");
     ANIRA_CAPI_REQUIRE(out != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "machine: NULL out");
     ANIRA_CAPI_REQUIRE(!has_device_block(*config),
                        err,
@@ -175,9 +178,8 @@ anira_status ANIRA_CALL anira_machine_create(const anira_machine_config* config,
     // The 2.x spelling of the config, and the consumed-or-fail walk over its extensions.
     machine->m_context_config = anira::capi::make_context_config(*config);
     // The sink first, so that it sees the reconciliation's own records.
-    machine->m_sink = anira::detail::add_log_sink(config->m_sink,
-                                                  config->m_sink_user_data,
-                                                  config->m_log_level);
+    machine->m_sink =
+        anira::detail::add_log_sink(config->m_sink, config->m_sink_user_data, config->m_log_level);
     try {
         anira::Context::register_machine(machine->m_context_config);
         machine->m_registered = true;
@@ -317,8 +319,8 @@ size_t ANIRA_CALL anira_machine_drain_log(anira_machine* machine) ANIRA_NOEXCEPT
     return 0;
 }
 
-uint32_t ANIRA_CALL anira_machine_num_inference_threads(const anira_machine* machine)
-    ANIRA_NOEXCEPT try {
+uint32_t ANIRA_CALL anira_machine_num_inference_threads(const anira_machine* machine) ANIRA_NOEXCEPT
+    try {
     if (machine == nullptr) { return 0; }
     return static_cast<uint32_t>(anira::Context::get_thread_pool_size());
 } catch (...) {

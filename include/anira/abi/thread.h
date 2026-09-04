@@ -70,14 +70,20 @@ ANIRA_API anira_bool ANIRA_CALL anira_inference_thread_execute(anira_inference_t
 /**
  * @brief Native: spawns an OS thread at the inference-thread scheduling class (real-time where
  * granted) that runs the loop. WebAssembly: marks the object running; the loop is
- * entered by the Worker through anira_inference_thread_run_loop.
+ * entered by the Worker through anira_inference_thread_run_loop. A second start while
+ * the loop runs, and an operating system that refuses the thread, are returned, never
+ * silent: is_running stays 0 then.
  * @param thread The object.
+ * @param err Nullable.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL thread; ANIRA_ERROR_INVALID_STATE
+ *         when it is already running; ANIRA_ERROR_OUT_OF_MEMORY when the operating system
+ *         refused to create the thread (a thread limit or its stack).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
-ANIRA_API void ANIRA_CALL anira_inference_thread_start(anira_inference_thread* thread)
-                                                       ANIRA_NOEXCEPT;
+ANIRA_API anira_status ANIRA_CALL anira_inference_thread_start(anira_inference_thread* thread,
+                                                               anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Requests the loop to exit. Native: joins the OS thread before returning. WebAssembly:

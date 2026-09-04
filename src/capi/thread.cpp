@@ -27,7 +27,10 @@ anira_status ANIRA_CALL anira_inference_thread_create(anira_machine* machine,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "inference thread: NULL machine");
-    ANIRA_CAPI_REQUIRE(out != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "inference thread: NULL out");
+    ANIRA_CAPI_REQUIRE(out != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "inference thread: NULL out");
     auto thread = std::make_unique<anira_inference_thread>();
     thread->m_thread = anira::Context::make_inference_thread();
     *out = thread.release();
@@ -39,8 +42,8 @@ void ANIRA_CALL anira_inference_thread_run_loop(anira_inference_thread* thread) 
     thread->m_thread->run_loop();
 } catch (...) { anira::capi::report_void_failure(__func__); }
 
-anira_bool ANIRA_CALL anira_inference_thread_execute(anira_inference_thread* thread)
-    ANIRA_NOEXCEPT try {
+anira_bool ANIRA_CALL anira_inference_thread_execute(anira_inference_thread* thread) ANIRA_NOEXCEPT
+    try {
     if (thread == nullptr) { return 0U; }
     return thread->m_thread->execute() ? 1U : 0U;
 } catch (...) {
@@ -48,10 +51,22 @@ anira_bool ANIRA_CALL anira_inference_thread_execute(anira_inference_thread* thr
     return 0U;
 }
 
-void ANIRA_CALL anira_inference_thread_start(anira_inference_thread* thread) ANIRA_NOEXCEPT try {
-    if (thread == nullptr) { return; }
-    thread->m_thread->start();
-} catch (...) { anira::capi::report_void_failure(__func__); }
+anira_status ANIRA_CALL anira_inference_thread_start(anira_inference_thread* thread,
+                                                     anira_error* err) ANIRA_NOEXCEPT try {
+    ANIRA_CAPI_REQUIRE(thread != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "inference thread: NULL");
+    ANIRA_CAPI_REQUIRE(!thread->m_thread->is_running(),
+                       err,
+                       ANIRA_ERROR_INVALID_STATE,
+                       "inference thread: already running");
+    ANIRA_CAPI_REQUIRE(thread->m_thread->start(),
+                       err,
+                       ANIRA_ERROR_OUT_OF_MEMORY,
+                       "inference thread: the operating system refused to create the thread");
+    return ANIRA_OK;
+} catch (...) { return translate_exception(err, __func__); }
 
 void ANIRA_CALL anira_inference_thread_stop(anira_inference_thread* thread) ANIRA_NOEXCEPT try {
     if (thread == nullptr) { return; }

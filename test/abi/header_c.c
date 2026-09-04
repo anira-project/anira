@@ -80,9 +80,8 @@ int anira_header_c_probe(void) {
         anira_backend_id backend = ANIRA_BACKEND_ID_INIT;
         anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
         uint32_t count = 0;
-        checks += backend.struct_size == sizeof(anira_backend_id) && backend.engine_id == NULL
-                      ? 1
-                      : 0;
+        checks +=
+            backend.struct_size == sizeof(anira_backend_id) && backend.engine_id == NULL ? 1 : 0;
         checks += edge.struct_size == sizeof(anira_edge_info) && edge.available == 0u ? 1 : 0;
         if (checks < 0) { /* never true: keeps the calls out of the probe's own result */
             const double now = anira_now_ms();

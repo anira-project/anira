@@ -33,11 +33,11 @@ struct anira_capabilities {
 /// memory outlives the user's destroy while a handler needs it.
 struct anira_machine {
     std::atomic<uint32_t> m_refcount{1};
-    anira_machine_config m_config;           ///< the caller's config, copied
-    anira::ContextConfig m_context_config;   ///< its 2.x spelling, what the core reconciles
-    anira::detail::LogSinkId m_sink = 0;     ///< the config's sink in the sink registry, or 0
-    bool m_flags_applied = false;            ///< the config's ANIRA_LOG_FLAG_* switches are held
-    bool m_registered = false;               ///< counted among the core's users
+    anira_machine_config m_config;          ///< the caller's config, copied
+    anira::ContextConfig m_context_config;  ///< its 2.x spelling, what the core reconciles
+    anira::detail::LogSinkId m_sink = 0;    ///< the config's sink in the sink registry, or 0
+    bool m_flags_applied = false;           ///< the config's ANIRA_LOG_FLAG_* switches are held
+    bool m_registered = false;              ///< counted among the core's users
     anira_capabilities m_capabilities;
 };
 

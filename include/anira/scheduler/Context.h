@@ -1,7 +1,6 @@
 #ifndef ANIRA_CONTEXT_H
 #define ANIRA_CONTEXT_H
 
-
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -9,9 +8,9 @@
 #include <vector>
 
 #include "../ContextConfig.h"
-#include "../utils/InferenceBackend.h"
 #include "../PrePostProcessor.h"
 #include "../utils/HostConfig.h"
+#include "../utils/InferenceBackend.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "InferenceThread.h"
 #include "SessionElement.h"

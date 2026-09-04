@@ -5042,18 +5042,24 @@
         {
           "kind": "function",
           "name": "anira_inference_thread_start",
-          "returns": "void",
+          "returns": "anira_status",
           "params": [
             {
               "type": "anira_inference_thread*",
               "name": "thread",
               "doc": "The object."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
             }
           ],
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Native: spawns an OS thread at the inference-thread scheduling class (real-time where granted) that runs the loop. WebAssembly: marks the object running; the loop is entered by the Worker through anira_inference_thread_run_loop."
+          "doc": "Native: spawns an OS thread at the inference-thread scheduling class (real-time where granted) that runs the loop. WebAssembly: marks the object running; the loop is entered by the Worker through anira_inference_thread_run_loop. A second start while the loop runs, and an operating system that refuses the thread, are returned, never silent: is_running stays 0 then.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL thread; ANIRA_ERROR_INVALID_STATE when it is already running; ANIRA_ERROR_OUT_OF_MEMORY when the operating system refused to create the thread (a thread limit or its stack)."
         },
         {
           "kind": "function",
