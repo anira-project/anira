@@ -106,7 +106,7 @@ inline std::vector<anira_backend_id> custom_candidates() {
     std::vector<anira_backend_id> out;
     for (anira_engine engine : oracle_engines()) {
         out.push_back({.struct_size = sizeof(anira_backend_id),
-                       .engine = engine,
+                       .engine = static_cast<uint32_t>(engine),
                        .provider = ANIRA_PROVIDER_DEFAULT,
                        .engine_id = nullptr});
     }
@@ -122,7 +122,7 @@ inline std::vector<anira_backend_id> engine_candidates() {
     std::vector<anira_backend_id> out;
     for (anira_engine engine : oracle_engines()) {
         out.push_back({.struct_size = sizeof(anira_backend_id),
-                       .engine = engine,
+                       .engine = static_cast<uint32_t>(engine),
                        .provider = ANIRA_PROVIDER_DEFAULT,
                        .engine_id = nullptr});
     }
