@@ -31,9 +31,9 @@
 
 namespace {
 
+using anira::ContextConfig;
 using anira::ContractHandle;
 using anira::JobOptionsHandle;
-using anira::MachineConfig;
 using anira::ModelConfig;
 using anira::TensorSpec;
 
@@ -133,7 +133,7 @@ TEST(AbiCxx, HandlesAreMoveOnlyAndMoveTheNativePointer) {
     expect_move_semantics(TensorSpec("a", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED),
                           TensorSpec("b", ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC));
     expect_move_semantics(ModelConfig(), ModelConfig());
-    expect_move_semantics(MachineConfig(), MachineConfig());
+    expect_move_semantics(ContextConfig(), ContextConfig());
     expect_move_semantics(ContractHandle(anira::Hard{}), ContractHandle(anira::Async{}));
     expect_move_semantics(JobOptionsHandle(), JobOptionsHandle());
 }
@@ -144,8 +144,8 @@ TEST(AbiCxx, MoveCarriesTheUpgradedFlagAndTheHandleContents) {
     const ModelConfig moved(std::move(source));
     EXPECT_TRUE(moved.upgraded());
     EXPECT_EQ(moved.model_count(), 5u);
-    MachineConfig target;
-    target = MachineConfig::from_json(anira_test::k_rave_v2);
+    ContextConfig target;
+    target = ContextConfig::from_json(anira_test::k_rave_v2);
     EXPECT_TRUE(target.upgraded());
     EXPECT_EQ(target.native()->m_num_threads, 2u);
     ContractHandle contract = ContractHandle::from_json(anira_test::k_simple_gain_v2);
@@ -198,10 +198,10 @@ TEST(AbiCxx, LoaderFailuresCarryTheParsersMessage) {
     EXPECT_EQ(key_path.m_status, ANIRA_ERROR_JSON);
     EXPECT_NE(key_path.m_what.find("models[0].engine"), std::string::npos) << key_path.m_what;
 
-    const Thrown machine =
-        thrown_by([] { MachineConfig::from_json(R"({"wait_strategy": "nap"})"); });
-    EXPECT_EQ(machine.m_status, ANIRA_ERROR_JSON);
-    EXPECT_NE(machine.m_what.find("wait_strategy"), std::string::npos) << machine.m_what;
+    const Thrown context =
+        thrown_by([] { ContextConfig::from_json(R"({"wait_strategy": "nap"})"); });
+    EXPECT_EQ(context.m_status, ANIRA_ERROR_JSON);
+    EXPECT_NE(context.m_what.find("wait_strategy"), std::string::npos) << context.m_what;
 
     const Thrown contract =
         thrown_by([] { ContractHandle::from_json(R"({"hard": {}, "async": {}})"); });
@@ -464,44 +464,44 @@ TEST(AbiCxx, ContractHandleFromJsonReportsAnUpgrade) {
     EXPECT_DOUBLE_EQ(legacy.native()->hard()->m_budget_ms, 5.0);
 }
 
-// ---- machine config --------------------------------------------------------------------------
+// ---- context config --------------------------------------------------------------------------
 
-TEST(AbiCxx, MachineConfigSettersLandInTheHandle) {
-    MachineConfig machine;
-    const anira_machine_config& defaults = *machine.native();
+TEST(AbiCxx, ContextConfigSettersLandInTheHandle) {
+    ContextConfig context;
+    const anira_context_config& defaults = *context.native();
     EXPECT_EQ(defaults.m_num_threads, ANIRA_THREADS_AUTO);
     EXPECT_EQ(defaults.m_wait, ANIRA_WAIT_SPIN_BACKOFF);
     EXPECT_EQ(defaults.m_log_level, ANIRA_LOG_WARNING);
-    EXPECT_FALSE(machine.upgraded());
+    EXPECT_FALSE(context.upgraded());
 
-    machine.threads(2, ANIRA_WAIT_BLOCKING)
+    context.threads(2, ANIRA_WAIT_BLOCKING)
         .log_level(ANIRA_LOG_ERROR)
         .log_drain(ANIRA_LOG_DRAIN_MANUAL, 25)
         .log_queue_capacity(1024);
-    const anira_machine_config& fields = *machine.native();
+    const anira_context_config& fields = *context.native();
     EXPECT_EQ(fields.m_num_threads, 2u);
     EXPECT_EQ(fields.m_wait, ANIRA_WAIT_BLOCKING);
     EXPECT_EQ(fields.m_log_level, ANIRA_LOG_ERROR);
     EXPECT_EQ(fields.m_log_drain, ANIRA_LOG_DRAIN_MANUAL);
     EXPECT_EQ(fields.m_drain_interval_ms, 25u);
     EXPECT_EQ(fields.m_queue_capacity, 1024u);
-    const std::string text = machine.to_json();
+    const std::string text = context.to_json();
     EXPECT_NE(text.find("\"num_threads\": 2"), std::string::npos) << text;
     EXPECT_NE(text.find("\"drain\": \"manual\""), std::string::npos) << text;
 }
 
-TEST(AbiCxx, MachineConfigFromJsonRoundTripsByteStably) {
-    const MachineConfig machine = MachineConfig::from_json(anira_test::k_machine_v3);
-    EXPECT_FALSE(machine.upgraded());
-    EXPECT_EQ(machine.native()->m_num_threads, 0u) << "0 = bring your own threads";
-    EXPECT_EQ(machine.native()->m_queue_capacity, 512u);
-    EXPECT_TRUE(machine.native()->m_cuda.has_value());
-    EXPECT_TRUE(machine.native()->m_vulkan.has_value());
-    EXPECT_FALSE(machine.native()->m_d3d12.has_value());
-    const std::string once = machine.to_json();
-    EXPECT_EQ(MachineConfig::from_json(once).to_json(), once);
+TEST(AbiCxx, ContextConfigFromJsonRoundTripsByteStably) {
+    const ContextConfig context = ContextConfig::from_json(anira_test::k_context_v3);
+    EXPECT_FALSE(context.upgraded());
+    EXPECT_EQ(context.native()->m_num_threads, 0u) << "0 = bring your own threads";
+    EXPECT_EQ(context.native()->m_queue_capacity, 512u);
+    EXPECT_TRUE(context.native()->m_cuda.has_value());
+    EXPECT_TRUE(context.native()->m_vulkan.has_value());
+    EXPECT_FALSE(context.native()->m_d3d12.has_value());
+    const std::string once = context.to_json();
+    EXPECT_EQ(ContextConfig::from_json(once).to_json(), once);
 
-    const MachineConfig legacy = MachineConfig::from_json(anira_test::k_rave_v2);
+    const ContextConfig legacy = ContextConfig::from_json(anira_test::k_rave_v2);
     EXPECT_TRUE(legacy.upgraded()) << "a 2.x context_config upgrades";
     EXPECT_EQ(legacy.native()->m_log_level, ANIRA_LOG_ERROR);
 }
@@ -569,12 +569,12 @@ TEST(AbiCxx, ModelConfigFromFileResolvesPathsAgainstTheFilesDirectory) {
     EXPECT_EQ(model.native()->m_inputs[0].m_window_min, 64);
 }
 
-TEST(AbiCxx, MachineAndContractFromFileReadTheFixtures) {
-    const ScratchDir scratch("machine-contract");
-    const MachineConfig machine =
-        MachineConfig::from_file(scratch.write("machine.json", anira_test::k_machine_v3));
-    EXPECT_FALSE(machine.upgraded());
-    EXPECT_EQ(machine.to_json(), MachineConfig::from_json(anira_test::k_machine_v3).to_json());
+TEST(AbiCxx, ContextAndContractFromFileReadTheFixtures) {
+    const ScratchDir scratch("context-contract");
+    const ContextConfig context =
+        ContextConfig::from_file(scratch.write("context.json", anira_test::k_context_v3));
+    EXPECT_FALSE(context.upgraded());
+    EXPECT_EQ(context.to_json(), ContextConfig::from_json(anira_test::k_context_v3).to_json());
 
     const ContractHandle hard =
         ContractHandle::from_file(scratch.write("hard.json", anira_test::k_contract_hard_v3));
@@ -601,10 +601,10 @@ TEST(AbiCxx, FromFileOnAMissingFileThrowsNoSuchFile) {
     EXPECT_TRUE(model.m_thrown);
     EXPECT_EQ(model.m_status, ANIRA_ERROR_NO_SUCH_FILE);
     EXPECT_NE(model.m_what.find("nope.json"), std::string::npos) << model.m_what;
-    const Thrown machine = thrown_by([&] { MachineConfig::from_file(missing); });
-    EXPECT_TRUE(machine.m_thrown);
-    EXPECT_EQ(machine.m_status, ANIRA_ERROR_NO_SUCH_FILE);
-    EXPECT_NE(machine.m_what.find("nope.json"), std::string::npos) << machine.m_what;
+    const Thrown context = thrown_by([&] { ContextConfig::from_file(missing); });
+    EXPECT_TRUE(context.m_thrown);
+    EXPECT_EQ(context.m_status, ANIRA_ERROR_NO_SUCH_FILE);
+    EXPECT_NE(context.m_what.find("nope.json"), std::string::npos) << context.m_what;
     const Thrown contract = thrown_by([&] { ContractHandle::from_file(missing); });
     EXPECT_TRUE(contract.m_thrown);
     EXPECT_EQ(contract.m_status, ANIRA_ERROR_NO_SUCH_FILE);
@@ -712,12 +712,12 @@ TEST(AbiCxx, TensorLayoutEmptySpanClears) {
 }
 
 TEST(AbiCxx, DeviceBlockClearsWithNull) {
-    MachineConfig machine;
+    ContextConfig context;
     const anira_cuda_desc cuda = ANIRA_CUDA_DESC_INIT;
-    machine.cuda(cuda);
-    EXPECT_TRUE(machine.native()->m_cuda.has_value());
-    machine.cuda(nullptr);
-    EXPECT_FALSE(machine.native()->m_cuda.has_value());
+    context.cuda(cuda);
+    EXPECT_TRUE(context.native()->m_cuda.has_value());
+    context.cuda(nullptr);
+    EXPECT_FALSE(context.native()->m_cuda.has_value());
 }
 
 TEST(AbiCxx, RegisteredExtKindsListsEntry) {
@@ -733,7 +733,7 @@ TEST(AbiCxx, EmptyTextIsAJsonErrorNotANullPointer) {
 
 TEST(AbiCxx, ReadingADirectoryIsNoSuchFile) {
     const Thrown directory =
-        thrown_by([] { MachineConfig::from_file(std::filesystem::temp_directory_path()); });
+        thrown_by([] { ContextConfig::from_file(std::filesystem::temp_directory_path()); });
     EXPECT_TRUE(directory.m_thrown);
     EXPECT_EQ(directory.m_status, ANIRA_ERROR_NO_SUCH_FILE);
 }

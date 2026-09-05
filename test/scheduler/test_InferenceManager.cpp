@@ -1,5 +1,5 @@
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/backends/BackendBase.h>
@@ -106,13 +106,13 @@ TEST_P(InferenceManagerTest, Simple) {
 
     PrePostProcessor pp_processor(test_params.m_inference_config);
     BackendBase* custom_processor = nullptr;  // Use default processor
-    ContextConfig const context_config(2);  // Use 2 threads for testing, gh runner max on macOS is
-                                            // 3
+    CoreConfig const core_config(2);  // Use 2 threads for testing, gh runner max on macOS is
+                                      // 3
 
     InferenceManager inference_manager(pp_processor,
                                        test_params.m_inference_config,
                                        custom_processor,
-                                       context_config);
+                                       core_config);
 
     inference_manager.prepare(test_params.m_host_config);
 
@@ -129,13 +129,13 @@ TEST_P(InferenceManagerCustomLatencySubset, WithCustomLatency) {
 
     PrePostProcessor pp_processor(test_params.m_inference_config);
     BackendBase* custom_processor = nullptr;  // Use default processor
-    ContextConfig const context_config(2);  // Use 2 threads for testing, gh runner max on macOS is
-                                            // 3
+    CoreConfig const core_config(2);  // Use 2 threads for testing, gh runner max on macOS is
+                                      // 3
 
     InferenceManager inference_manager(pp_processor,
                                        test_params.m_inference_config,
                                        custom_processor,
-                                       context_config);
+                                       core_config);
 
     // Create custom latency values - double the expected values for testing
     std::vector<long> custom_latency;
@@ -164,13 +164,13 @@ TEST_P(InferenceManagerCustomLatencySubset, WithEmptyCustomLatency) {
 
     PrePostProcessor pp_processor(test_params.m_inference_config);
     BackendBase* custom_processor = nullptr;  // Use default processor
-    ContextConfig const context_config(2);  // Use 2 threads for testing, gh runner max on macOS is
-                                            // 3
+    CoreConfig const core_config(2);  // Use 2 threads for testing, gh runner max on macOS is
+                                      // 3
 
     InferenceManager inference_manager(pp_processor,
                                        test_params.m_inference_config,
                                        custom_processor,
-                                       context_config);
+                                       core_config);
 
     // Prepare with empty custom latency vector
     std::vector<long> const empty_custom_latency;
@@ -200,13 +200,13 @@ TEST_P(InferenceManagerCustomLatencySubset, WithPartialCustomLatency) {
 
     PrePostProcessor pp_processor(test_params.m_inference_config);
     BackendBase* custom_processor = nullptr;  // Use default processor
-    ContextConfig const context_config(2);  // Use 2 threads for testing, gh runner max on macOS is
-                                            // 3
+    CoreConfig const core_config(2);  // Use 2 threads for testing, gh runner max on macOS is
+                                      // 3
 
     InferenceManager inference_manager(pp_processor,
                                        test_params.m_inference_config,
                                        custom_processor,
-                                       context_config);
+                                       core_config);
 
     // Create partial custom latency (only for the first tensor)
     std::vector<long> partial_custom_latency(test_params.m_expected_latency.size(), -1);
@@ -293,16 +293,16 @@ TEST(InferenceManagerCustomLatency, ClampsToInternalModelLatency) {
 
     {
         PrePostProcessor pp_processor(inference_config);
-        ContextConfig const context_config(2);
-        InferenceManager inference_manager(pp_processor, inference_config, nullptr, context_config);
+        CoreConfig const core_config(2);
+        InferenceManager inference_manager(pp_processor, inference_config, nullptr, core_config);
         inference_manager.prepare(host_config, std::vector<long>{10});
         EXPECT_EQ(inference_manager.get_latency()[0], k_internal_latency)
             << "custom latency below the internal model latency must be clamped";
     }
     {
         PrePostProcessor pp_processor(inference_config);
-        ContextConfig const context_config(2);
-        InferenceManager inference_manager(pp_processor, inference_config, nullptr, context_config);
+        CoreConfig const core_config(2);
+        InferenceManager inference_manager(pp_processor, inference_config, nullptr, core_config);
         inference_manager.prepare(host_config, std::vector<long>{500});
         EXPECT_EQ(inference_manager.get_latency()[0], 500u)
             << "custom latency above the internal model latency must be kept";
@@ -594,9 +594,9 @@ TEST(InferenceManagerOneSided, GeneratorLatencyEqualsTwoSidedTwin) {
 
     PrePostProcessor generator_pp(generator);
     PrePostProcessor twin_pp(twin);
-    ContextConfig const context_config(2);
-    InferenceManager generator_manager(generator_pp, generator, nullptr, context_config);
-    InferenceManager twin_manager(twin_pp, twin, nullptr, context_config);
+    CoreConfig const core_config(2);
+    InferenceManager generator_manager(generator_pp, generator, nullptr, core_config);
+    InferenceManager twin_manager(twin_pp, twin, nullptr, core_config);
 
     generator_manager.prepare(HostConfig(512, 48000, true));
     twin_manager.prepare(HostConfig(512, 48000, true));
@@ -610,7 +610,7 @@ TEST(InferenceManagerOneSided, AnalyserLatencyIsZero) {
                               ProcessingSpec({1, 1}, {1}, {2048, 0}, {0}));
 
     PrePostProcessor pp_processor(analyser);
-    InferenceManager manager(pp_processor, analyser, nullptr, ContextConfig(2));
+    InferenceManager manager(pp_processor, analyser, nullptr, CoreConfig(2));
     manager.prepare(HostConfig(512, 48000, true));
 
     EXPECT_EQ(manager.get_latency(), std::vector<unsigned int>{0});
@@ -622,7 +622,7 @@ TEST(InferenceManagerOneSided, InvalidReferenceThrowsFromPrepare) {
                               ProcessingSpec({1}, {1}, {0}, {2048}));
 
     PrePostProcessor pp_processor(generator);
-    InferenceManager manager(pp_processor, generator, nullptr, ContextConfig(2));
+    InferenceManager manager(pp_processor, generator, nullptr, CoreConfig(2));
 
     // Explicitly naming the non-streamable input as the reference is an error, not a
     // silent fallback.

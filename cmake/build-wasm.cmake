@@ -39,6 +39,12 @@ target_link_libraries(anira_wasm_wrappers PUBLIC anira::anira)
 target_compile_features(anira_wasm_wrappers PUBLIC cxx_std_20)
 add_library(anira::wasm_wrappers ALIAS anira_wasm_wrappers)
 
+# The C ABI's export list is the generated web/src/abi/exports_wasm.txt (one _-prefixed
+# name per line: _malloc, _free and every promised and draft entry point of abi/anira.yml;
+# tools/abi/gen.py --check keeps it in step with the registry, and build_web runs that
+# check before this build). A registry entry without a definition on Emscripten fails
+# this link: the presence gate of the wasm leg. The wrapper's own EMSCRIPTEN_KEEPALIVE
+# entries stay exported through EXPORT_KEEPALIVE.
 set(ANIRA_WASM_LINK_FLAGS "\
   --no-entry \
   --emit-tsd=${ANIRA_WASM_OUTPUT_FOLDER}/${ANIRA_WASM_TARGET_NAME}.d.ts \
@@ -54,7 +60,7 @@ set(ANIRA_WASM_LINK_FLAGS "\
   -s ASSERTIONS=1 \
   -s NO_DISABLE_EXCEPTION_CATCHING \
   -s STACK_SIZE=33554432 \
-  -s EXPORTED_FUNCTIONS='[\"_free\",\"_malloc\",\"_anira_drain_log\"]' \
+  -s EXPORTED_FUNCTIONS=@${CMAKE_CURRENT_SOURCE_DIR}/web/src/abi/exports_wasm.txt \
   -s EXPORT_KEEPALIVE=1 \
   -s EXPORTED_RUNTIME_METHODS='[\"UTF8ToString\",\"HEAPU32\",\"HEAPF32\",\"stackSave\",\"stackRestore\"]' \
   ")

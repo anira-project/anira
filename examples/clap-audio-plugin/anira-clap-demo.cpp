@@ -22,7 +22,7 @@ AniraClapPluginExample::AniraClapPluginExample(const clap_host* host)
                                                               anira::v3compat::enabled_engines()))
     , m_pp_processor(m_inference_config)
     , m_bypass_processor(m_inference_config)
-    // No ContextConfig is passed: the library default (half the hardware threads for
+    // No CoreConfig is passed: the library default (half the hardware threads for
     // inference) is what this plugin wants; section 3.1 of the usage guide shows how to change it.
     , m_inference_handler(m_pp_processor, m_inference_config, m_bypass_processor) {
     m_param_to_value[pmDryWet] = &m_param_dry_wet;

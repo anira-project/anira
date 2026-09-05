@@ -1,12 +1,12 @@
 // The plugin-shaped test module: anira embedded in a loadable library, driven through
 // a C API. See CMakeLists.txt in this directory for what the test proves.
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/backends/BackendBase.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/HostConfig.h>
@@ -36,14 +36,14 @@ InferenceConfig make_inference_config() {
         2);
 }
 
-ContextConfig make_context_config() {
+CoreConfig make_core_config() {
     return {2, WaitStrategy::SpinBackoff, LogLevel::Warning};
 }
 
 struct Instance {
     InferenceConfig m_inference_config = make_inference_config();
     PrePostProcessor m_pp_processor{m_inference_config};
-    InferenceHandler m_handler{m_pp_processor, m_inference_config, make_context_config()};
+    InferenceHandler m_handler{m_pp_processor, m_inference_config, make_core_config()};
     BufferF m_buffer{1, k_block_size};
 };
 
@@ -85,35 +85,35 @@ int unloadtest_create_throwing(void) {
         const InferenceHandler handler(pp_processor,
                                        inference_config,
                                        throwing_processor,
-                                       make_context_config());
+                                       make_core_config());
     } catch (const std::exception&) { return 1; }
     return 0;
 }
 
 unsigned int unloadtest_num_inference_threads(void) {
-    return Context::get_num_inference_threads();
+    return Core::get_num_inference_threads();
 }
 
 int unloadtest_has_inference_threads(void) {
-    return Context::has_inference_threads() ? 1 : 0;
+    return Core::has_inference_threads() ? 1 : 0;
 }
 
 int unloadtest_num_sessions(void) {
-    return Context::get_num_sessions();
+    return Core::get_num_sessions();
 }
 
 int unloadtest_has_core(void) {
-    return Context::has_core() ? 1 : 0;
+    return Core::has_core() ? 1 : 0;
 }
 
 void unloadtest_shutdown(void) {
-    Context::shutdown();
+    Core::shutdown();
 }
 
 void unloadtest_leak_thread(void) {
     // SpinBackoff (the configuration's default): the thread wakes every <= 100 us, so
     // it runs into the unmapped code within a millisecond of the unload.
-    InferenceThread* leaked = Context::make_inference_thread().release();
+    InferenceThread* leaked = Core::make_inference_thread().release();
     leaked->start();
 }
 }

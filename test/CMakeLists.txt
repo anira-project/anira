@@ -73,8 +73,8 @@ anira_add_test_binary(test_utils
 
 anira_add_test_binary(test_scheduler
 	scheduler/test_ConcurrentLifecycle.cpp
-	scheduler/test_ContextConfigMismatch.cpp
-	scheduler/test_ContextLifecycle.cpp
+	scheduler/test_CoreConfigMismatch.cpp
+	scheduler/test_CoreLifecycle.cpp
 	scheduler/test_CreateSessionFailure.cpp
 	scheduler/test_FallbackPaths.cpp
 	scheduler/test_InferenceManager.cpp
@@ -94,7 +94,7 @@ anira_add_test_binary(test_backends
 
 anira_add_test_binary(test_handler
 	contracts/test_BackendLinkage.cpp
-	test_ContextConfig.cpp
+	test_CoreConfig.cpp
 	test_InferenceConfig.cpp
 	test_InferenceHandler.cpp
 	test_InferenceHandlerApi.cpp
@@ -117,6 +117,8 @@ anira_add_test_binary(test_abi
 	abi/test_Translate.cpp
 	abi/test_Bridge.cpp
 	abi/test_ExtrasFixtures.cpp
+	abi/test_Context.cpp
+	abi/test_Thread.cpp
 )
 # capi_internal.h (the firewall probe) and the generated tables under src/capi/.
 target_include_directories(test_abi PRIVATE "${anira_SOURCE_DIR}/src")
@@ -137,6 +139,7 @@ if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$")
         CXX_STANDARD_REQUIRED ON)
     target_include_directories(anira_header_isolation PRIVATE
         "${anira_SOURCE_DIR}/include"
+        "${ANIRA_GENERATED_INCLUDE_DIR}"
         $<TARGET_PROPERTY:concurrentqueue,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:tanh::Core,INTERFACE_INCLUDE_DIRECTORIES>)

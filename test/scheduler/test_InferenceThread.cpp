@@ -1,8 +1,8 @@
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 
@@ -37,14 +37,14 @@ TEST(UserManagedInferenceThread, ProcessesAudioWithoutAutoPool) {
     HybridNNBypassProcessor bypass_processor(inference_config);
 
     // Zero auto-pool threads — the user owns the threading.
-    ContextConfig const context_config(0);
+    CoreConfig const core_config(0);
 
     InferenceHandler inference_handler(pp_processor,
                                        inference_config,
                                        bypass_processor,
-                                       context_config);
+                                       core_config);
 
-    auto user_thread = Context::make_inference_thread();
+    auto user_thread = Core::make_inference_thread();
     ASSERT_NE(user_thread, nullptr);
     user_thread->start();
 

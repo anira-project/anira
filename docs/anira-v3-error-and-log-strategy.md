@@ -65,7 +65,7 @@ The only control-path records: (a) `ANIRA_ERROR_INTERNAL`, logged once at Error 
 with the entry name — the non-fatal CHECK: not anira's message, not actionable by the caller,
 and nothing below logged it; (b) a failure swallowed by a void or destroy entry, one Error
 record naming the entry (today `translate_exception(nullptr)` swallows silently); (c) the
-optional boundary trace, `ANIRA_LOG_FLAG_TRACE_FAILURES` on the machine config: one Error
+optional boundary trace, `ANIRA_LOG_FLAG_TRACE_FAILURES` on the context config: one Error
 record per failed status whose bytes are the `anira_error` message prefixed by entry and
 status. Off by default; it is the switch for "the app swallowed the error and I only have
 logcat". Control-path contract misuse (`INVALID_STATE`, `WRONG_CONTRACT`, `NOT_PREPARED` on a
@@ -118,7 +118,7 @@ where it matters: **the firewall's failure path drains the real-time queue on th
 caller's thread before returning a negative status**, for `[main-thread]` entries only (not
 for `[callback-safe]` entries such as the future `ticket_error`, and not when the entry runs
 inside a sink), so the real-time records that preceded a failure are in front of the host
-before it acts. `Context::drain_log` is already lock-free and the queue is MPMC, so this is
+before it acts. `Core::drain_log` is already lock-free and the queue is MPMC, so this is
 safe beside the running drain thread. It changes the thread contract of real-time records
 (they may arrive on the failing caller's thread as well as the drain thread); the thread-tag
 table says so. The last-session release and `shutdown` already flush.

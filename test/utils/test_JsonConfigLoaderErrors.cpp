@@ -5,9 +5,9 @@
 // The contract under test throughout: a malformed value is reported and
 // *skipped*, never fatal. A config that still has model data, a tensor shape
 // and max_inference_time yields an InferenceConfig; anything less yields
-// nullptr. The ContextConfig is always produced, falling back to defaults.
+// nullptr. The CoreConfig is always produced, falling back to defaults.
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/utils/JsonConfigLoader.h>
 
@@ -35,10 +35,10 @@ std::unique_ptr<anira::InferenceConfig> load_inference_config(const std::string&
     return loader.get_inference_config();
 }
 
-std::unique_ptr<anira::ContextConfig> load_context_config(const std::string& json) {
+std::unique_ptr<anira::CoreConfig> load_context_config(const std::string& json) {
     std::istringstream stream(json);
     anira::JsonConfigLoader loader(stream);
-    return loader.get_context_config();
+    return loader.get_core_config();
 }
 
 // Wraps an "inference_config" body around the three keys, overriding whichever
@@ -108,7 +108,7 @@ std::string model_data_for(const char* backend) {
 // parse — so neither config is produced, exactly as for malformed JSON.
 TEST(JsonConfigLoaderErrors, UnopenableFileYieldsNoConfigs) {
     anira::JsonConfigLoader loader("this/path/does/not/exist.json");
-    EXPECT_EQ(loader.get_context_config(), nullptr);
+    EXPECT_EQ(loader.get_core_config(), nullptr);
     EXPECT_EQ(loader.get_inference_config(), nullptr);
 }
 
@@ -116,14 +116,14 @@ TEST(JsonConfigLoaderErrors, MalformedJsonIsReportedNotThrown) {
     std::istringstream stream(R"({"inference_config": )");
     anira::JsonConfigLoader loader(stream);
     // parse() never ran, so neither config was built.
-    EXPECT_EQ(loader.get_context_config(), nullptr);
+    EXPECT_EQ(loader.get_core_config(), nullptr);
     EXPECT_EQ(loader.get_inference_config(), nullptr);
 }
 
 TEST(JsonConfigLoaderErrors, MissingInferenceConfigKey) {
-    const auto context_config = load_context_config(R"({"context_config": {"num_threads": 1}})");
-    ASSERT_NE(context_config, nullptr);
-    EXPECT_EQ(context_config->m_num_threads, 1U);
+    const auto core_config = load_context_config(R"({"context_config": {"num_threads": 1}})");
+    ASSERT_NE(core_config, nullptr);
+    EXPECT_EQ(core_config->m_num_threads, 1U);
     EXPECT_EQ(load_inference_config(R"({"context_config": {"num_threads": 1}})"), nullptr);
 }
 

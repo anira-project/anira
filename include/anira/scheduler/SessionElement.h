@@ -46,12 +46,12 @@ class ExecuTorchProcessor;
 #endif
 
 /**
- * @brief Core session management class for individual inference instances
+ * @brief Session management class for individual inference instances
  *
  * The SessionElement class represents a single inference session, managing all
  * resources and state required for neural network inference processing. Each session
  * is independent and can have different configurations, backends, and processing
- * parameters while sharing the global inference thread pool and context.
+ * parameters while sharing the global inference thread pool and core.
  *
  * Key responsibilities:
  * - Managing input/output ring buffers for continuous audio streaming
@@ -122,14 +122,14 @@ public:
      * Resets the audio-thread-owned state (send/receive ring buffers, timestamp
      * bookkeeping, latency re-seed) and any ThreadSafeStruct that is currently
      * free, but never touches a struct that a worker still holds in flight
-     * (m_free == false). It therefore does NOT require Context::drain_inference_queue()
+     * (m_free == false). It therefore does NOT require Core::drain_inference_queue()
      * as a precondition and never blocks the caller.
      *
      * Correctness is provided by the session generation (see m_generation): the
-     * caller (Context::reset_session) bumps the generation first, which makes every
+     * caller (Core::reset_session) bumps the generation first, which makes every
      * already-dispatched inference "stale" — its result is ignored by
-     * Context::new_data_request() and its struct is reclaimed by
-     * Context::reclaim_stale_structs() (run from new_data_submitted()) once the
+     * Core::new_data_request() and its struct is reclaimed by
+     * Core::reclaim_stale_structs() (run from new_data_submitted()) once the
      * worker publishes completion. Valid for all session types; the stateful
      * dispatch chain is reconciled separately (see discard_pending_dispatches()
      * and the generation filter in try_acquire_next_dispatch()).
@@ -179,7 +179,7 @@ public:
      *
      * True if each streamable output's ring buffer has at least postprocess_output_size
      * free samples (trivially true when no output is streamable). Used by the push-side
-     * collection in Context::collect_completed() so that a completed result is only
+     * collection in Core::collect_completed() so that a completed result is only
      * post-processed when it fits, and unread output is never overwritten.
      *
      * @return True if a completed inference can be post-processed without overflowing a ring
@@ -227,7 +227,7 @@ public:
                                      ///< only on the session's driving (audio) thread — keep it
                                      ///< that way; it is a plain field.
         // Session generation this struct was dispatched under (stamped in
-        // Context::pre_process). A wait-free reset bumps SessionElement::m_generation;
+        // Core::pre_process). A wait-free reset bumps SessionElement::m_generation;
         // a dispatch whose stamp no longer matches is "stale" — its result is discarded
         // and the struct reclaimed. Written on the audio thread at dispatch, read on the
         // worker thread and audio thread; a dispatch's stamp is stable for its lifetime,
@@ -253,7 +253,7 @@ public:
     std::atomic<InferenceBackend> m_current_backend{CUSTOM};  ///< Currently active inference
                                                               ///< backend for this session.
                                                               ///< Initialized by
-                                                              ///< Context::create_session to the
+                                                              ///< Core::create_session to the
                                                               ///< first configured model's
                                                               ///< available backend (CUSTOM when a
                                                               ///< custom processor was provided or
@@ -273,8 +273,8 @@ public:
     std::atomic<int> m_active_inferences{0};  ///< Atomic counter of currently active inference
                                               ///< operations
 
-    // Monotonic generation counter, bumped by Context::reset_session() (audio
-    // thread) and Context::prepare_session() (control thread, quiescent). Every
+    // Monotonic generation counter, bumped by Core::reset_session() (audio
+    // thread) and Core::prepare_session() (control thread, quiescent). Every
     // inference dispatched under an earlier generation is "stale": its output is
     // discarded and its struct reclaimed, without the caller ever waiting for the
     // worker. Workers read it to decide whether to skip a stale dispatch. seq_cst
@@ -376,14 +376,14 @@ public:
 
     // Written by InferenceManager::set_non_realtime() -- typically from a control/UI
     // thread, e.g. a host toggling offline bounce/render mode -- and read on the
-    // audio thread inside Context::new_data_request(). A plain bool would be a
+    // audio thread inside Core::new_data_request(). A plain bool would be a
     // data race between those two threads, so this needs real synchronization.
     std::atomic<bool> m_is_non_real_time{false};  ///< True forces new_data_request() to
                                                   ///< block until each pending inference
                                                   ///< completes, ignoring blocking_ratio
                                                   ///< and any deadline, trading real-time
                                                   ///< safety for complete, deterministic
-                                                  ///< output (see Context::new_data_request).
+                                                  ///< output (see Core::new_data_request).
 
     std::vector<unsigned int> m_latency;  ///< Calculated latency values for each output tensor in
                                           ///< samples, index-aligned with the output tensor list;
@@ -483,7 +483,7 @@ struct InferenceData {
  * inference threads can optionally block on the queue's semaphore instead of
  * polling (see WaitStrategy). The blocking queue is a strict superset of the
  * plain ConcurrentQueue API, and as long as no consumer ever blocks, its
- * enqueue never makes a syscall — so ContextConfigs using
+ * enqueue never makes a syscall — so CoreConfigs using
  * WaitStrategy::SpinBackoff keep the exact lock-free behavior of the plain
  * queue, at the cost of one extra atomic operation per enqueue/dequeue.
  *

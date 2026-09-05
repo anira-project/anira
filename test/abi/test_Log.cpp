@@ -1,11 +1,11 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
 #include <anira/abi/version.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
 
@@ -33,16 +33,16 @@ InferenceConfig make_inference_config() {
         2);
 }
 
-ContextConfig make_context_config(LogDrain drain) {
-    ContextConfig config(1, WaitStrategy::Blocking, LogLevel::Error);
+CoreConfig make_core_config(LogDrain drain) {
+    CoreConfig config(1, WaitStrategy::Blocking, LogLevel::Error);
     config.m_log.m_drain = drain;
     config.m_log.m_drain_interval_ms = 1;
     return config;
 }
 
 struct Instance {
-    explicit Instance(const ContextConfig& context_config)
-        : m_handler(m_pp_processor, m_inference_config, context_config) {
+    explicit Instance(const CoreConfig& core_config)
+        : m_handler(m_pp_processor, m_inference_config, core_config) {
         m_handler.prepare(HostConfig(512, 48000));
     }
 
@@ -69,10 +69,8 @@ TEST(AbiLog, DescInitCarriesTheDefaults) {
 }
 
 TEST(AbiLog, DrainWithoutACoreReturnsZero) {
-    Context::shutdown();
-    if (Context::release_core_if_idle() || !Context::has_core()) {
-        EXPECT_EQ(anira_drain_log(), 0u);
-    }
+    Core::shutdown();
+    if (Core::release_core_if_idle() || !Core::has_core()) { EXPECT_EQ(anira_drain_log(), 0u); }
 }
 
 TEST(AbiLog, NullArgumentsAreIgnored) {
@@ -87,7 +85,7 @@ TEST(AbiLog, NullArgumentsAreIgnored) {
 
 TEST(AbiLog, RtRecordReachesTheSinkWhenTheHostDrains) {
     RecordCollector collector;
-    const Instance instance{make_context_config(LogDrain::Manual)};
+    const Instance instance{make_core_config(LogDrain::Manual)};
     // Error level: the only one tanh-lib compiles in for Release builds.
     anira_log_rt(ANIRA_LOG_ERROR, "anira.test", "abi rt record", 1, 2);
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -99,7 +97,7 @@ TEST(AbiLog, RtRecordReachesTheSinkWhenTheHostDrains) {
 
 TEST(AbiLog, SyncRecordReachesTheSinkImmediately) {
     RecordCollector collector;
-    const Instance instance{make_context_config(LogDrain::Manual)};
+    const Instance instance{make_core_config(LogDrain::Manual)};
     anira_log(ANIRA_LOG_ERROR, "anira.test", "abi sync record");
     EXPECT_TRUE(collector.has("abi sync record", "native"));
 }

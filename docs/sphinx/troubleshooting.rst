@@ -114,11 +114,11 @@ Model Loading Failures
 Wait Strategy Mismatch
 ^^^^^^^^^^^^^^^^^^^^^^
 
-**Issue**: The log shows ``[WARNING] ContextConfig wait strategy mismatch``.
+**Issue**: The log shows ``[WARNING] CoreConfig wait strategy mismatch``.
 
-All anira instances in a process share one inference thread pool, and the pool's threads wait for work according to the :cpp:enum:`anira::WaitStrategy` of the *first* :cpp:struct:`anira::ContextConfig` the context was created with. A later instance that requests a different strategy has no effect — the warning tells you the originally configured strategy stays active. This is harmless (both strategies produce identical results), but the requested idle-CPU/latency characteristic is not the one in effect.
+All anira instances in a process share one inference thread pool, and the pool's threads wait for work according to the :cpp:enum:`anira::WaitStrategy` of the *first* :cpp:struct:`anira::CoreConfig` the core was created with. A later instance that requests a different strategy has no effect — the warning tells you the originally configured strategy stays active. This is harmless (both strategies produce identical results), but the requested idle-CPU/latency characteristic is not the one in effect.
 
-**Solution**: Use the same ``wait_strategy`` in every :cpp:struct:`anira::ContextConfig` (and the ``wait_strategy`` key of every machine file) that the process loads.
+**Solution**: Use the same ``wait_strategy`` in every :cpp:struct:`anira::CoreConfig` (and the ``wait_strategy`` key of every context file) that the process loads.
 
 Thread Priority Issues
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -155,8 +155,8 @@ in ``destroy`` entries, in sinks) and the real-time refusals. :doc:`logging` exp
 Where the records are on each platform:
 
 - **Linux, Windows**: ``stderr`` for Error and Warning, ``stdout`` for Info and Debug, flushed
-  per record. Set the runtime level with the machine config or, for the 2.x runtime,
-  ``ContextConfig::m_log.m_level``.
+  per record. Set the runtime level with the context config or, for the 2.x runtime,
+  ``CoreConfig::m_log.m_level``.
 - **Android**: ``adb logcat -s anira:V``; anira's component is inside the message as
   ``[native][anira.backend.onnxruntime] ...``. The engines keep their own tags:
   ``adb logcat -s anira:V onnxruntime:V tflite:V ExecuTorch:V``.
@@ -171,10 +171,10 @@ Where the records are on each platform:
 **Issue**: The application swallowed the error and the log is empty.
 
 **Solution**: Two switches, neither on by default. ``ANIRA_LOG_FLAG_TRACE_FAILURES`` on the
-machine config makes every failed status also an Error record with the entry name, the status
+context config makes every failed status also an Error record with the entry name, the status
 and the message (the 3.x runtime applies it; in this pre-release
 ``anira::capi::set_trace_failures(true)`` is the process-wide switch). Or install your own
-sink (``anira_log_fn`` on the machine config, ``thl::Logger::set_callback`` for the 2.x
+sink (``anira_log_fn`` on the context config, ``thl::Logger::set_callback`` for the 2.x
 runtime), which receives every record, and keep the last N in a ring you write out from your
 crash handler.
 
@@ -219,19 +219,21 @@ once the last instance is gone; any thread still running inside it then executes
 unmapped code. anira holds the required invariant — *no anira thread exists once the
 last* :cpp:class:`anira::InferenceHandler` *is destroyed* — by construction: the
 inference threads exist exactly while handler instances exist, and destroying the
-last one stops and joins them before its destructor returns. The context's state is
+last one stops and joins them before its destructor returns. The core's state is
 never destroyed while the library is loaded (calling into anira is valid at any time,
 even from late-running static destructors) and is reclaimed at unload.
 
 **Solutions**:
     1. **Host unloads with a live instance** (a host bug, but it happens): on Linux
-       and macOS a library-unload hook calls :cpp:func:`anira::Context::shutdown`
+       and macOS a library-unload hook calls the core's shutdown
        automatically. On Windows nothing that runs at ``DLL_PROCESS_DETACH`` may join a
-       thread (loader lock), so call ``anira::Context::shutdown()`` from your module-exit
-       entry point — CLAP ``deinit``, VST3 ``ExitDll`` — as ``examples/clap-audio-plugin``
-       does. It is idempotent and cheap when there is nothing to do.
-    2. **You manage inference threads yourself** (``ContextConfig(0)`` +
-       :cpp:func:`anira::Context::make_inference_thread`): stop them before your library
+       thread (loader lock), so call ``anira_shutdown()`` from your module-exit entry
+       point — CLAP ``deinit``, VST3 ``ExitDll`` — as ``examples/clap-audio-plugin``
+       does. It is idempotent and cheap when there is nothing to do, and it refuses
+       (``ANIRA_ERROR_INVALID_STATE``, nothing happens) while a context or a handler of
+       this copy of anira still exists.
+    2. **You manage inference threads yourself** (``CoreConfig(0)`` +
+       :cpp:func:`anira::Core::make_inference_thread`): stop them before your library
        can be unloaded; the hook only joins anira's own pool.
     3. **The library silently never unloads (GCC/Linux)**: glibc never unloads an object
        that defines an ``STB_GNU_UNIQUE`` symbol, which GCC emits for exported inline

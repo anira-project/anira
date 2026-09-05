@@ -56,12 +56,12 @@ public:
      *
      * @param pp_processor Reference to the pre/post processor for data transformation
      * @param inference_config Reference to the inference configuration containing model settings
-     * @param context_config Optional context configuration for advanced settings (default:
-     * ContextConfig())
+     * @param core_config Optional core configuration for advanced settings (default:
+     * CoreConfig())
      */
     InferenceHandler(PrePostProcessor& pp_processor,
                      InferenceConfig& inference_config,
-                     const ContextConfig& context_config = ContextConfig());
+                     const CoreConfig& core_config = CoreConfig());
 
     /**
      * @brief Constructs an InferenceHandler with custom backend processor
@@ -69,13 +69,13 @@ public:
      * @param pp_processor Reference to the pre/post processor for data transformation
      * @param inference_config Reference to the inference configuration containing model settings
      * @param custom_processor Reference to a custom backend processor implementation
-     * @param context_config Optional context configuration for advanced settings (default:
-     * ContextConfig())
+     * @param core_config Optional core configuration for advanced settings (default:
+     * CoreConfig())
      */
     InferenceHandler(PrePostProcessor& pp_processor,
                      InferenceConfig& inference_config,
                      BackendBase& custom_processor,
-                     const ContextConfig& context_config = ContextConfig());
+                     const CoreConfig& core_config = CoreConfig());
 
     /**
      * @brief Destructor that properly cleans up inference resources
@@ -401,8 +401,8 @@ public:
     /**
      * @brief Forwards the records anira's real-time paths have logged to the log sinks
      *
-     * With ContextConfig::m_log.m_drain == LogDrain::Manual the host calls this
-     * periodically (e.g. from a UI timer); with LogDrain::Thread the context's own
+     * With CoreConfig::m_log.m_drain == LogDrain::Manual the host calls this
+     * periodically (e.g. from a UI timer); with LogDrain::Thread the core's own
      * low-priority thread does it and this is merely an extra flush. The queue is
      * shared by all handlers in the process, so calling it on any one of them drains
      * everything. Returns the number of records delivered.
@@ -419,7 +419,7 @@ public:
      * auto-managed pool once started plus any user-created threads.
      * WebAssembly: the inference workers currently spun up (started and not
      * yet stopped). Useful e.g. to verify threads exist before enabling
-     * non-real-time mode. See Context::get_num_inference_threads().
+     * non-real-time mode. See Core::get_num_inference_threads().
      *
      * @return Number of active inference threads.
      */

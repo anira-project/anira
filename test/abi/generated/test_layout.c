@@ -13,6 +13,9 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
 #include <anira/abi/config.h>
+#include <anira/abi/context.h>
+#include <anira/abi/core.h>
+#include <anira/abi/thread.h>
 
 _Static_assert(sizeof(anira_status) == 4, "anira_status is a 32-bit enum");
 _Static_assert(ANIRA_STATUS_FORCE32 == 0x7fffffff, "anira_status terminator");
@@ -142,6 +145,10 @@ _Static_assert(offsetof(anira_metal_desc, struct_size) == 0, "anira_metal_desc.s
 _Static_assert(offsetof(anira_d3d12_desc, struct_size) == 0, "anira_d3d12_desc.struct_size first");
 
 _Static_assert(offsetof(anira_webgpu_desc, struct_size) == 0, "anira_webgpu_desc.struct_size first");
+
+_Static_assert(offsetof(anira_backend_id, struct_size) == 0, "anira_backend_id.struct_size first");
+
+_Static_assert(offsetof(anira_edge_info, struct_size) == 0, "anira_edge_info.struct_size first");
 
 int main(void) {
     printf("struct anira_error size %u align %u\n", (unsigned)sizeof(anira_error), (unsigned)_Alignof(anira_error));

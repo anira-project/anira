@@ -1,6 +1,6 @@
 #include "anira/InferenceConfig.h"
 
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/val.h>
 

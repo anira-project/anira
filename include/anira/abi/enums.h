@@ -154,7 +154,7 @@ typedef enum anira_domain {
     ANIRA_DOMAIN_VULKAN_BUFFER = 4,  /**< A VkBuffer with its VkDeviceMemory. */
     ANIRA_DOMAIN_OPAQUE_FD = 5,  /**< Exported opaque memory (fd, or the NT handle on Windows). */
     ANIRA_DOMAIN_METAL_BUFFER = 6,  /**< An id<MTLBuffer>. */
-    ANIRA_DOMAIN_WGPU_BUFFER = 7,  /**< A WGPUBuffer of the machine's Dawn device. */
+    ANIRA_DOMAIN_WGPU_BUFFER = 7,  /**< A WGPUBuffer of the context's Dawn device. */
     ANIRA_DOMAIN_DMABUF = 8,  /**< Exported buffer memory as a dma-buf. */
     ANIRA_DOMAIN_IOSURFACE = 9,  /**< An IOSurfaceRef, plane 0, byte-image encoded. */
     ANIRA_DOMAIN_AHARDWAREBUFFER = 10,  /**< An AHardwareBuffer* (BLOB). */
@@ -485,7 +485,7 @@ typedef enum anira_edge_class {
 } anira_edge_class;
 
 /**
- * @brief The rung a machine probe reached for an edge (section 4).
+ * @brief The rung a context probe reached for an edge (section 4).
  */
 typedef enum anira_probe_rung {
     ANIRA_RUNG_STATIC = 0,  /**< Compiled-in knowledge only. */
@@ -500,7 +500,7 @@ typedef enum anira_probe_rung {
 #define ANIRA_THREADS_AUTO 0xffffffffu
 
 /**
- * @brief Log flag: switch the platform sink (stderr, logcat, os_log) off while this machine
+ * @brief Log flag: switch the platform sink (stderr, logcat, os_log) off while this context
  * lives.
  */
 #define ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK 1u
@@ -509,9 +509,9 @@ typedef enum anira_probe_rung {
  * @brief Log flag: every failed status of every C entry also emits one Error record whose text
  * is the anira_error message prefixed by the entry and the status (the boundary trace,
  * for an application that swallowed the status and a developer who only has the device
- * log). Off by default on every platform. The machine config stores the flag; the
- * machine of the 3.x runtime applies it, in this pre-release the process-wide switch is
- * anira::capi::set_trace_failures.
+ * log). Off by default on every platform. Held while a context that set it lives,
+ * counted across contexts.x runtime applies it, in this pre-release the process-wide
+ * switch is anira::capi::set_trace_failures.
  */
 #define ANIRA_LOG_FLAG_TRACE_FAILURES 2u
 

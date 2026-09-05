@@ -40,12 +40,12 @@ struct Model {
     anira_error m_err = ANIRA_ERROR_INIT;
 };
 
-struct Machine {
-    Machine() { EXPECT_EQ(anira_machine_config_create(&m_config, &m_err), ANIRA_OK); }
-    ~Machine() { anira_machine_config_destroy(m_config); }
-    Machine(const Machine&) = delete;
-    Machine& operator=(const Machine&) = delete;
-    anira_machine_config* m_config = nullptr;
+struct Config {
+    Config() { EXPECT_EQ(anira_context_config_create(&m_config, &m_err), ANIRA_OK); }
+    ~Config() { anira_context_config_destroy(m_config); }
+    Config(const Config&) = delete;
+    Config& operator=(const Config&) = delete;
+    anira_context_config* m_config = nullptr;
     anira_error m_err = ANIRA_ERROR_INIT;
 };
 
@@ -516,75 +516,77 @@ TEST(AbiLayout, StableFillReproducesTheTreesPerBackendShapes) {
         << "a material axis missing";
 }
 
-// ---- machine config --------------------------------------------------------------------------
+// ---- context config --------------------------------------------------------------------------
 
-TEST(AbiMachineConfig, DefaultsScalarsAndClamps) {
-    const Machine m;
+TEST(AbiContextConfig, DefaultsScalarsAndClamps) {
+    const Config m;
     EXPECT_EQ(m.m_config->m_num_threads, ANIRA_THREADS_AUTO);
     EXPECT_EQ(m.m_config->m_queue_capacity, 512u);
-    EXPECT_EQ(anira_machine_config_set_threads(m.m_config, 2, ANIRA_WAIT_BLOCKING), ANIRA_OK);
-    EXPECT_EQ(anira_machine_config_set_threads(m.m_config, 2, bad_enum<anira_wait_strategy>(9)),
+    EXPECT_EQ(anira_context_config_set_threads(m.m_config, 2, ANIRA_WAIT_BLOCKING), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_threads(m.m_config, 2, bad_enum<anira_wait_strategy>(9)),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_machine_config_set_log_level(m.m_config, ANIRA_LOG_DEBUG), ANIRA_OK);
-    EXPECT_EQ(anira_machine_config_set_log_level(m.m_config, bad_enum<anira_log_level>(4)),
+    EXPECT_EQ(anira_context_config_set_log_level(m.m_config, ANIRA_LOG_DEBUG), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_log_level(m.m_config, bad_enum<anira_log_level>(4)),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_machine_config_set_log_drain(m.m_config, ANIRA_LOG_DRAIN_MANUAL, 0), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_log_drain(m.m_config, ANIRA_LOG_DRAIN_MANUAL, 0), ANIRA_OK);
     EXPECT_EQ(m.m_config->m_drain_interval_ms, 10u) << "0 keeps the default";
-    EXPECT_EQ(anira_machine_config_set_log_queue_capacity(m.m_config, 63), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_log_queue_capacity(m.m_config, 63), ANIRA_OK);
     EXPECT_EQ(m.m_config->m_queue_capacity, 64u);
-    EXPECT_EQ(anira_machine_config_set_log_queue_capacity(m.m_config, 70000), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_log_queue_capacity(m.m_config, 70000), ANIRA_OK);
     EXPECT_EQ(m.m_config->m_queue_capacity, 65536u);
-    EXPECT_EQ(anira_machine_config_set_log_flags(m.m_config, ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK),
+    EXPECT_EQ(anira_context_config_set_log_flags(m.m_config, ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK),
               ANIRA_OK);
-    EXPECT_EQ(anira_machine_config_set_log_flags(m.m_config, 2u), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_context_config_set_log_flags(m.m_config, ANIRA_LOG_FLAG_TRACE_FAILURES),
+              ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_log_flags(m.m_config, 4u), ANIRA_ERROR_INVALID_ARGUMENT);
     int user_data = 0;
-    EXPECT_EQ(anira_machine_config_set_log_sink(m.m_config, nullptr, &user_data), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_log_sink(m.m_config, nullptr, &user_data), ANIRA_OK);
     EXPECT_EQ(m.m_config->m_sink_user_data, nullptr) << "no sink, no user data";
 }
 
-TEST(AbiMachineConfig, LogDescriptorIsReadWithinItsSizeAndChecksTheAbi) {
-    const Machine m;
+TEST(AbiContextConfig, LogDescriptorIsReadWithinItsSizeAndChecksTheAbi) {
+    const Config m;
     anira_log_desc desc = ANIRA_LOG_DESC_INIT;
     desc.level = ANIRA_LOG_ERROR;
     desc.queue_capacity = 32;
-    EXPECT_EQ(anira_machine_config_set_log(m.m_config, &desc), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_log(m.m_config, &desc), ANIRA_OK);
     EXPECT_EQ(m.m_config->m_log_level, ANIRA_LOG_ERROR);
     EXPECT_EQ(m.m_config->m_queue_capacity, 64u) << "clamped";
     desc.abi_version = ANIRA_MAKE_ABI_VERSION(ANIRA_ABI_MAJOR + 1, 0);
-    EXPECT_EQ(anira_machine_config_set_log(m.m_config, &desc), ANIRA_ERROR_ABI_VERSION);
+    EXPECT_EQ(anira_context_config_set_log(m.m_config, &desc), ANIRA_ERROR_ABI_VERSION);
     desc = ANIRA_LOG_DESC_INIT;
     desc.struct_size = 8;
-    EXPECT_EQ(anira_machine_config_set_log(m.m_config, &desc), ANIRA_ERROR_INVALID_ARGUMENT)
+    EXPECT_EQ(anira_context_config_set_log(m.m_config, &desc), ANIRA_ERROR_INVALID_ARGUMENT)
         << "shorter than {struct_size, abi_version, user_data}";
-    EXPECT_EQ(anira_machine_config_set_log(m.m_config, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_context_config_set_log(m.m_config, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
-TEST(AbiMachineConfig, DeviceDescriptorsAreCopiedWithinStructSize) {
-    const Machine m;
+TEST(AbiContextConfig, DeviceDescriptorsAreCopiedWithinStructSize) {
+    const Config m;
     anira_cuda_desc cuda{};
     cuda.struct_size = 12;  // struct_size, ownership, device: an older, shorter header
     cuda.ownership = ANIRA_OWNERSHIP_BORROWED;
     cuda.device = 3;
-    EXPECT_EQ(anira_machine_config_set_cuda(m.m_config, &cuda), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_cuda(m.m_config, &cuda), ANIRA_OK);
     ASSERT_TRUE(m.m_config->m_cuda.has_value());
     const anira_cuda_desc stored = m.m_config->m_cuda.value_or(anira_cuda_desc{});
     EXPECT_EQ(stored.struct_size, sizeof(anira_cuda_desc)) << "normalized to this build's size";
     EXPECT_EQ(stored.ownership, static_cast<uint32_t>(ANIRA_OWNERSHIP_BORROWED));
     EXPECT_EQ(stored.device, 3);
     EXPECT_EQ(stored.pinned_pool_limit, 0u) << "the tail keeps the default";
-    EXPECT_EQ(anira_machine_config_set_cuda(m.m_config, nullptr), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_cuda(m.m_config, nullptr), ANIRA_OK);
     EXPECT_FALSE(m.m_config->m_cuda.has_value()) << "NULL clears the block";
     anira_gl_desc gl = ANIRA_GL_DESC_INIT;
     gl.struct_size = 2;
-    EXPECT_EQ(anira_machine_config_set_gl(m.m_config, &gl), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_context_config_set_gl(m.m_config, &gl), ANIRA_ERROR_INVALID_ARGUMENT);
     const anira_vulkan_desc vulkan = ANIRA_VULKAN_DESC_INIT;
     const anira_metal_desc metal = ANIRA_METAL_DESC_INIT;
     const anira_d3d12_desc d3d12 = ANIRA_D3D12_DESC_INIT;
     const anira_webgpu_desc webgpu = ANIRA_WEBGPU_DESC_INIT;
-    EXPECT_EQ(anira_machine_config_set_vulkan(m.m_config, &vulkan), ANIRA_OK);
-    EXPECT_EQ(anira_machine_config_set_metal(m.m_config, &metal), ANIRA_OK);
-    EXPECT_EQ(anira_machine_config_set_d3d12(m.m_config, &d3d12), ANIRA_OK);
-    EXPECT_EQ(anira_machine_config_set_webgpu(m.m_config, &webgpu), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_vulkan(m.m_config, &vulkan), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_metal(m.m_config, &metal), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_d3d12(m.m_config, &d3d12), ANIRA_OK);
+    EXPECT_EQ(anira_context_config_set_webgpu(m.m_config, &webgpu), ANIRA_OK);
     EXPECT_TRUE(m.m_config->m_vulkan && m.m_config->m_metal && m.m_config->m_d3d12 &&
                 m.m_config->m_webgpu);
 }

@@ -64,11 +64,11 @@ Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The fix
 
         // Only report errors, so the log output of the backends does not pollute
         // the benchmark results (section 3.1 of the usage guide)
-        anira::ContextConfig context_config = anira::v3compat::to_context_config(
-            anira::MachineConfig{}.log_level(ANIRA_LOG_ERROR));
+        anira::CoreConfig core_config = anira::v3compat::to_core_config(
+            anira::ContextConfig{}.log_level(ANIRA_LOG_ERROR));
 
         // Create and prepare the InferenceHandler instance
-        m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config, context_config);
+        m_inference_handler = std::make_unique<anira::InferenceHandler>(my_pp_processor, my_inference_config, core_config);
         m_inference_handler->prepare(host_config);
         m_inference_handler->set_inference_backend(inference_backend);
 

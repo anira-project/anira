@@ -9,7 +9,7 @@
 #include <tanh/core/threading/Thread.h>
 #endif
 
-#include "../ContextConfig.h"
+#include "../CoreConfig.h"
 #include "../utils/Buffer.h"
 #include "SessionElement.h"
 #ifdef __x86_64__
@@ -99,8 +99,11 @@ public:
     /**
      * @brief Starts the thread (native: a real-time priority OS thread running
      * run_loop(); WebAssembly: marks the externally driven loop as running).
+     *
+     * @return False when the thread is already running, or (native) when the operating
+     *         system refused to create it; is_running() stays false in the latter case.
      */
-    void start();
+    bool start();
 
     /**
      * @brief Stops the thread: asks run_loop() to return and, natively, joins it.
@@ -114,18 +117,38 @@ public:
     bool is_running() const;
 
     /**
+     * @brief True once a run of run_loop() has returned; false before the loop ran and
+     * while it runs. A shared-memory atomic on WebAssembly, so the main instance can see
+     * that a Worker left the loop before it destroys the object.
+     */
+    bool has_exited() const;
+
+    /// True while a thread is inside run_loop() on this object (any platform).
+    bool is_in_loop() const;
+
+    /**
      * @brief Number of inference threads currently active in the process.
      *
-     * Native: threads currently executing run_loop() — the auto-managed pool
-     * once started plus any user-created threads. WebAssembly: externally
-     * driven threads between start() and stop(); counted there (start() runs
-     * synchronously on the main instance) rather than at run_loop() entry, so
-     * the count is already visible when AniraWeb.spinUpInferenceWorker()
-     * returns, before the worker asynchronously enters its loop. The counter
-     * has static storage duration — on WebAssembly that is shared memory, so
-     * every WASM instance sees the same value.
+     * Native: threads inside run_loop() right now — the auto-managed pool once started
+     * plus any user-created threads; the same number as get_num_loop_active().
+     * WebAssembly: externally driven threads between start() and stop(); counted there
+     * (start() runs synchronously on the main instance) rather than at run_loop() entry,
+     * so the count is already visible when AniraWeb.spinUpInferenceWorker() returns,
+     * before the worker asynchronously enters its loop. The counters have static storage
+     * duration — on WebAssembly that is shared memory, so every WASM instance sees the
+     * same value.
      */
     static unsigned int get_num_active_threads();
+
+    /**
+     * @brief Number of threads inside run_loop() right now, on every platform.
+     *
+     * Counts run_loop() entries and exits wherever they happen, so on WebAssembly a
+     * Worker that is still inside its loop after the main instance called stop() is
+     * counted until it leaves (there get_num_active_threads() already says 0).
+     * Core::release_core_if_idle() consults it.
+     */
+    static unsigned int get_num_loop_active();
 
 private:
     /**
@@ -142,7 +165,7 @@ private:
                       const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct);
 
     /**
-     * @brief Executes the core inference operation with input/output buffers
+     * @brief Executes the inference operation itself with input/output buffers
      *
      * Performs the actual neural network inference using the session's backend
      * and the provided input/output buffer arrays. This is the lowest-level
@@ -214,11 +237,13 @@ private:
     InferenceData m_inference_data;    ///< Current inference data being processed by this thread
     WaitStrategy m_wait_strategy;  ///< How run_loop() waits for new work when the queue is empty
 
-    // The active-thread counter (see get_num_active_threads()) is defined in
-    // InferenceThread.cpp rather than as an inline static member: an exported inline
+    // The thread counters (see get_num_active_threads()) are defined in
+    // InferenceThread.cpp rather than as inline static members: an exported inline
     // variable would be bound STB_GNU_UNIQUE by GCC, which makes glibc refuse to ever
-    // unload the library (see Context).
+    // unload the library (see Core).
 
+    std::atomic<bool> m_has_exited{false};  ///< Set by run_loop() on return, cleared on entry
+    std::atomic<bool> m_in_loop{false};     ///< Set on run_loop() entry, cleared on return
 #ifdef __EMSCRIPTEN__
     std::atomic<bool> m_should_exit{false};
     std::atomic<bool> m_is_running{false};

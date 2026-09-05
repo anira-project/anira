@@ -26,7 +26,7 @@ or more inference worker threads.
 The number of inference workers is up to you. Each call to
 ``aniraWeb.spinUpInferenceWorker()`` spawns a new Web Worker hosting an
 ``InferenceThread`` — the same primitive anira uses for its desktop
-thread pool. One worker is enough for simple models on most machines; spawn more if
+thread pool. One worker is enough for simple models on most hardware; spawn more if
 you see audio dropouts, so anira can run inference on multiple batches
 in parallel.
 

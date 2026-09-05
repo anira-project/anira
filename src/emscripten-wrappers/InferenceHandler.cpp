@@ -2,7 +2,7 @@
 
 #include <emscripten/emscripten.h>
 
-#include "anira/ContextConfig.h"
+#include "anira/CoreConfig.h"
 #include "anira/utils/InferenceBackend.h"
 
 // ------ InferenceHandler C API ----
@@ -12,23 +12,23 @@ extern "C" {
 // Constructor/Destructor
 EMSCRIPTEN_KEEPALIVE
 uintptr_t inferencehandler_create(uintptr_t preprocessor_ptr, uintptr_t config_ptr) {
-    anira::ContextConfig context_config(0);
+    anira::CoreConfig core_config(0);
     return reinterpret_cast<uintptr_t>(
         new anira::InferenceHandler(*reinterpret_cast<anira::PrePostProcessor*>(preprocessor_ptr),
                                     *reinterpret_cast<anira::InferenceConfig*>(config_ptr),
-                                    context_config));
+                                    core_config));
 }
 
 EMSCRIPTEN_KEEPALIVE
 uintptr_t inferencehandler_create_with_custom_processor(uintptr_t preprocessor_ptr,
                                                         uintptr_t config_ptr,
                                                         uintptr_t custom_processor_ptr) {
-    anira::ContextConfig context_config(0);
+    anira::CoreConfig core_config(0);
     return reinterpret_cast<uintptr_t>(
         new anira::InferenceHandler(*reinterpret_cast<anira::PrePostProcessor*>(preprocessor_ptr),
                                     *reinterpret_cast<anira::InferenceConfig*>(config_ptr),
                                     *reinterpret_cast<anira::BackendBase*>(custom_processor_ptr),
-                                    context_config));
+                                    core_config));
 }
 
 EMSCRIPTEN_KEEPALIVE

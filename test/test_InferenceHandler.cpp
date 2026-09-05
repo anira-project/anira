@@ -1,5 +1,5 @@
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/utils/Buffer.h>
@@ -126,7 +126,7 @@ TEST_P(InferenceTest, Simple) {
     ASSERT_TRUE(data_reference.size() > 0);
 
     // setup inference
-    ContextConfig const anira_context_config;
+    CoreConfig const anira_context_config;
     InferenceConfig inference_config =
         anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
     HybridNNPrePostProcessor pp_processor(inference_config);
@@ -220,7 +220,7 @@ TEST_P(InferenceControlTest, WithCustomLatency) {
     ASSERT_TRUE(data_reference.size() > 0);
 
     // setup inference
-    ContextConfig const anira_context_config;
+    CoreConfig const anira_context_config;
     InferenceConfig inference_config =
         anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
     HybridNNPrePostProcessor pp_processor(inference_config);
@@ -314,7 +314,7 @@ TEST_P(InferenceTest, Reset) {
     ASSERT_TRUE(data_reference.size() > 0);
 
     // setup inference
-    ContextConfig const anira_context_config;
+    CoreConfig const anira_context_config;
     InferenceConfig inference_config =
         anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
     HybridNNPrePostProcessor pp_processor(inference_config);
@@ -468,7 +468,7 @@ TEST_P(InferenceControlTest, ResetStatefulHammer) {
     ASSERT_TRUE(data_input.size() > 0);
     ASSERT_TRUE(data_reference.size() > 0);
 
-    ContextConfig const anira_context_config;
+    CoreConfig const anira_context_config;
     InferenceConfig inference_config =
         anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
     // The point of this test: strict in-order, mutually-exclusive dispatch.

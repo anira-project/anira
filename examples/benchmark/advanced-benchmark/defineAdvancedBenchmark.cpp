@@ -101,13 +101,13 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
 
     // Only report errors, so the log output of the backends does not pollute the
     // benchmark results.
-    const anira::ContextConfig context_config =
-        anira::v3compat::to_context_config(anira::MachineConfig{}.log_level(ANIRA_LOG_ERROR));
+    const anira::CoreConfig core_config =
+        anira::v3compat::to_core_config(anira::ContextConfig{}.log_level(ANIRA_LOG_ERROR));
 
     m_inference_handler = std::make_unique<anira::InferenceHandler>(*my_pp_processor,
                                                                     inference_config,
                                                                     clear_custom_processor,
-                                                                    context_config);
+                                                                    core_config);
     m_inference_handler->prepare(host_config);
     m_inference_handler->set_inference_backend(inference_backends[state.range(2)]);
 

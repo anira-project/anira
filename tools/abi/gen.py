@@ -12,6 +12,8 @@ validates it against the header conventions of docs/anira-v3-architecture.md
   web/src/abi/exports_wasm.txt            the Emscripten export list (_-prefixed)
   src/capi/generated/status_strings.inc   ANIRA_STATUS_TEXT(name, "text") per status
   test/abi/generated/test_layout.c        gate 3: _Static_asserts and the layout printer
+  test/abi/generated/link_probe.c         the presence gate anira_abi_link: the address of every
+                                          promised and draft entry in one table
   docs/sphinx/api/enum/<enum>.rst         one Breathe page per enum
   abi/anira.json                          the registry as JSON, for tools without YAML
 
@@ -709,6 +711,58 @@ def emit_layout_test(reg: dict) -> str:
     return "\n".join(out) + "\n"
 
 
+def emit_link_probe(reg: dict) -> str:
+    """test/abi/generated/link_probe.c: a consumer-shaped executable that takes the address of
+    every promised and draft entry point, so that a registry entry without a definition (on
+    any leg, static ones included) fails the link of anira_abi_link, not a user's build."""
+    promised, draft = symbol_lists(reg)
+    out = [
+        "/*",
+        " * test/abi/generated/link_probe.c -- the presence gate anira_abi_link, generated from",
+        " * abi/anira.yml by tools/abi/gen.py. Takes the address of every promised and draft entry",
+        " * point, so an entry without a definition fails this link, not a consumer's. Do not edit.",
+        " */",
+        "#include <stdint.h>",
+        "#include <stdio.h>",
+        "",
+    ]
+    for header in reg["headers"]:
+        out.append(f"#include <anira/abi/{header['file']}>")
+    names = promised + draft
+    out += [
+        "",
+        "struct anira_link_entry {",
+        "    const char* name;",
+        "    uintptr_t address;",
+        "};",
+        "",
+        f"#define ANIRA_LINK_PROBE_COUNT {len(names)}",
+        "",
+        "/* The addresses are taken by assignment at run time, never in a static initializer:",
+        "   MSVC refuses the address of a dllimport there (C4232, identity not guaranteed). */",
+        "int main(void) {",
+        "    struct anira_link_entry entries[ANIRA_LINK_PROBE_COUNT];",
+        "    size_t missing = 0;",
+        "    size_t i;",
+    ]
+    for index, name in enumerate(names):
+        out.append(f'    entries[{index}].name = "{name}";')
+        out.append(f"    entries[{index}].address = (uintptr_t)&{name};")
+    out += [
+        "    for (i = 0; i < ANIRA_LINK_PROBE_COUNT; ++i) {",
+        "        if (entries[i].address == 0) {",
+        '            printf("missing: %s\\n", entries[i].name);',
+        "            ++missing;",
+        "        }",
+        "    }",
+        '    printf("%zu of %zu entry points linked\\n", (size_t)ANIRA_LINK_PROBE_COUNT - missing,',
+        "           (size_t)ANIRA_LINK_PROBE_COUNT);",
+        "    return missing == 0 ? 0 : 1;",
+        "}",
+    ]
+    return "\n".join(out) + "\n"
+
+
 def emit_layout_table(reg: dict) -> str:
     """The expected abi/layout-<major>.txt, from the registry's natural-alignment model."""
     struct_sizes: dict[str, tuple[int, int]] = {}
@@ -759,6 +813,7 @@ def generate(reg: dict) -> dict[str, str]:
     files["web/src/abi/exports_wasm.txt"] = "".join(f"_{n}\n" for n in ["malloc", "free"] + promised + draft)
     files["src/capi/generated/status_strings.inc"] = emit_status_strings(reg)
     files["test/abi/generated/test_layout.c"] = emit_layout_test(reg)
+    files["test/abi/generated/link_probe.c"] = emit_link_probe(reg)
     files[f"abi/layout-{major}.txt"] = emit_layout_table(reg)
     for _, ent in entities(reg, "enum"):
         files[f"docs/sphinx/api/enum/{ent['name']}.rst"] = emit_enum_page(ent)

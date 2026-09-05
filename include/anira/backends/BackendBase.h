@@ -42,7 +42,7 @@ public:
      *
      * The configuration is copied (not referenced) so that the processor's lifetime is
      * fully decoupled from the session that created it. Processors are pooled and shared
-     * between sessions whose configs compare equal (see Context::set_processor); a shared
+     * between sessions whose configs compare equal (see Core::set_processor); a shared
      * processor can outlive the session that first created it. If it held a reference into
      * that session's InferenceConfig, releasing the session while another session still
      * shares the pooled processor would leave the reference dangling, causing a

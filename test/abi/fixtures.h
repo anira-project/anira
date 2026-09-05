@@ -23,18 +23,18 @@ inline constexpr const char* k_model_v3 = R"({
   "inputs": [
     { "name": "audio_in", "dtype": "float32", "role": "streamed",
       "axes": [ ["batch", 1], ["channel", 2], ["time", "dynamic"] ],
-      "window": { "min": 2048, "max": 8192 }, "context": 1024 },
+      "window": { "min": 2048, "max": 8192 }, "overlap": 1024 },
     { "name": "gain", "role": "static", "axes": [ ["any", 1] ] }
   ],
   "outputs": [
     { "name": "mask_out", "dtype": "float32", "role": "streamed",
       "axes": [ ["batch", 1], ["channel", 2], ["time", "dynamic"] ],
-      "window": { "min": 2048, "max": "unbounded" }, "context": 1024, "latency": 512,
+      "window": { "min": 2048, "max": "unbounded" }, "overlap": 1024, "latency": 512,
       "time_ratio": [1, 2] }
   ]
 })";
 
-inline constexpr const char* k_machine_v3 = R"({
+inline constexpr const char* k_context_v3 = R"({
   "num_threads": 0,
   "wait_strategy": "spin_backoff",
   "log": { "level": "warning", "drain": "thread", "queue_capacity": 512, "drain_interval_ms": 10 },

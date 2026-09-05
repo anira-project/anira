@@ -8,15 +8,15 @@
  * 2.x C++ classes (it includes no anira/system, anira/utils or third-party header), and it
  * can be included beside <anira/anira.h>.
  *
- * Scope at this pre-release: the configuration half only (tensor specs, model, machine and
- * contract configuration, job options). The Machine, the InferenceHandler and the _wait twins
+ * Scope at this pre-release: the configuration half only (tensor specs, model, context and
+ * contract configuration, job options). The Context, the InferenceHandler and the _wait twins
  * arrive with the 3.x runtime.
  *
  * Deviations from the architecture document, section 6 (stated here and on the docs page):
  * anira::JsonConfigLoader is not declared (the 2.x class of that name is still in every
- * example; use ModelConfig::from_file, MachineConfig::from_file, ContractHandle::from_file);
+ * example; use ModelConfig::from_file, ContextConfig::from_file, ContractHandle::from_file);
  * ModelConfig::take_legacy_contract returns std::optional<ContractHandle>, since a handle
- * cannot be read back into a Hard aggregate; MachineConfig::log_sink takes the raw
+ * cannot be read back into a Hard aggregate; ContextConfig::log_sink takes the raw
  * (anira_log_fn, void*) pair; ModelConfig::anchor takes the tensor's canonical name;
  * ContractHandle, JobOptionsHandle and the upgraded() queries are additions; set_model_bytes
  * chains (the document's returns void); add_model_bytes and set_model_bytes carry the
@@ -50,12 +50,16 @@
 #endif
 
 #include <anira/abi/config.h>
+#include <anira/abi/context.h>
+#include <anira/abi/core.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>  // IWYU pragma: keep - the umbrella of the C headers
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
+#include <anira/abi/thread.h>
 #include <anira/abi/version.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -85,6 +89,7 @@ using Domain = anira_domain;
 using SyncKind = anira_sync_kind;
 using Role = anira_role;
 using AxisTag = anira_axis_tag;
+using BackendId = anira_backend_id;
 
 namespace detail {
 
@@ -252,7 +257,7 @@ struct KeptExt {
 
 /**
  * @brief One input or output of the model: your canonical name, the data type, the role, the
- * tagged axes in the model's memory order, and, for a streamed tensor, the window and context
+ * tagged axes in the model's memory order, and, for a streamed tensor, the window and overlap
  * it is consumed with. Move-only; copied into a ModelConfig by input()/output().
  */
 class TensorSpec {
@@ -285,8 +290,8 @@ public:
         return *this;
     }
     /// Streamed only: elements along the Time axis per inference and the context kept.
-    TensorSpec& window(int64_t window_min, int64_t window_max, int64_t context) {
-        detail::check(anira_tensor_spec_set_window(m_spec, window_min, window_max, context),
+    TensorSpec& window(int64_t window_min, int64_t window_max, int64_t overlap) {
+        detail::check(anira_tensor_spec_set_window(m_spec, window_min, window_max, overlap),
                       "anira_tensor_spec_set_window");
         return *this;
     }
@@ -905,42 +910,42 @@ private:
     bool m_upgraded = false;
 };
 
-// ---- machine config (section 4) ------------------------------------------------------------
+// ---- context config (section 4) ------------------------------------------------------------
 
 /**
  * @brief The process: the inference thread pool, logging, the devices anira may use.
  * Move-only.
  */
-class MachineConfig {
+class ContextConfig {
 public:
     /// @throws Error when the C entry refuses the call; the status says why.
-    MachineConfig() {
+    ContextConfig() {
         detail::abi_check_once();
         anira_error err{};
-        detail::check(anira_machine_config_create(&m_config, &err), err);
+        detail::check(anira_context_config_create(&m_config, &err), err);
     }
-    /// A machine file (section 8.2); a 2.x document's context_config is upgraded.
-    static MachineConfig from_json(std::string_view utf8) {
+    /// A context file (section 8.2); a 2.x document's context_config root is upgraded.
+    static ContextConfig from_json(std::string_view utf8) {
         detail::abi_check_once();
         anira_error err{};
-        anira_machine_config* config = nullptr;
+        anira_context_config* config = nullptr;
         const anira_status status =
-            anira_machine_config_from_json(detail::text_of(utf8), utf8.size(), &config, &err);
+            anira_context_config_from_json(detail::text_of(utf8), utf8.size(), &config, &err);
         detail::check(status, err);
         return {config, status == ANIRA_SUCCESS_UPGRADED};
     }
-    static MachineConfig from_file(const std::filesystem::path& path) {
+    static ContextConfig from_file(const std::filesystem::path& path) {
         return from_json(detail::read_text(path));
     }
 
-    ~MachineConfig() { anira_machine_config_destroy(m_config); }
-    MachineConfig(const MachineConfig&) = delete;
-    MachineConfig& operator=(const MachineConfig&) = delete;
-    MachineConfig(MachineConfig&& other) noexcept
+    ~ContextConfig() { anira_context_config_destroy(m_config); }
+    ContextConfig(const ContextConfig&) = delete;
+    ContextConfig& operator=(const ContextConfig&) = delete;
+    ContextConfig(ContextConfig&& other) noexcept
         : m_config(std::exchange(other.m_config, nullptr)), m_upgraded(other.m_upgraded) {}
-    MachineConfig& operator=(MachineConfig&& other) noexcept {
+    ContextConfig& operator=(ContextConfig&& other) noexcept {
         if (this != &other) {
-            anira_machine_config_destroy(m_config);
+            anira_context_config_destroy(m_config);
             m_config = std::exchange(other.m_config, nullptr);
             m_upgraded = other.m_upgraded;
         }
@@ -948,95 +953,95 @@ public:
     }
 
     /// The thread pool: ANIRA_THREADS_AUTO sizes it, 0 means the host brings its threads.
-    MachineConfig& threads(uint32_t num_threads,
+    ContextConfig& threads(uint32_t num_threads,
                            anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF) {
-        detail::check(anira_machine_config_set_threads(m_config, num_threads, wait),
-                      "anira_machine_config_set_threads");
+        detail::check(anira_context_config_set_threads(m_config, num_threads, wait),
+                      "anira_context_config_set_threads");
         return *this;
     }
-    MachineConfig& log_level(anira_log_level level) {
-        detail::check(anira_machine_config_set_log_level(m_config, level),
-                      "anira_machine_config_set_log_level");
+    ContextConfig& log_level(anira_log_level level) {
+        detail::check(anira_context_config_set_log_level(m_config, level),
+                      "anira_context_config_set_log_level");
         return *this;
     }
-    MachineConfig& log_drain(anira_log_drain drain, uint32_t interval_ms = 10) {
-        detail::check(anira_machine_config_set_log_drain(m_config, drain, interval_ms),
-                      "anira_machine_config_set_log_drain");
+    ContextConfig& log_drain(anira_log_drain drain, uint32_t interval_ms = 10) {
+        detail::check(anira_context_config_set_log_drain(m_config, drain, interval_ms),
+                      "anira_context_config_set_log_drain");
         return *this;
     }
-    MachineConfig& log_queue_capacity(uint32_t capacity) {
-        detail::check(anira_machine_config_set_log_queue_capacity(m_config, capacity),
-                      "anira_machine_config_set_log_queue_capacity");
+    ContextConfig& log_queue_capacity(uint32_t capacity) {
+        detail::check(anira_context_config_set_log_queue_capacity(m_config, capacity),
+                      "anira_context_config_set_log_queue_capacity");
         return *this;
     }
-    MachineConfig& log_flags(uint32_t flags) {
-        detail::check(anira_machine_config_set_log_flags(m_config, flags),
-                      "anira_machine_config_set_log_flags");
+    ContextConfig& log_flags(uint32_t flags) {
+        detail::check(anira_context_config_set_log_flags(m_config, flags),
+                      "anira_context_config_set_log_flags");
         return *this;
     }
     /// The sink callback and its user data (the raw pair at this pre-release).
-    MachineConfig& log_sink(anira_log_fn callback, void* user_data = nullptr) {
-        detail::check(anira_machine_config_set_log_sink(m_config, callback, user_data),
-                      "anira_machine_config_set_log_sink");
+    ContextConfig& log_sink(anira_log_fn callback, void* user_data = nullptr) {
+        detail::check(anira_context_config_set_log_sink(m_config, callback, user_data),
+                      "anira_context_config_set_log_sink");
         return *this;
     }
     /// The one-shot descriptor equal to the five scalar log setters.
-    MachineConfig& log(const anira_log_desc& desc) {
-        detail::check(anira_machine_config_set_log(m_config, &desc),
-                      "anira_machine_config_set_log");
+    ContextConfig& log(const anira_log_desc& desc) {
+        detail::check(anira_context_config_set_log(m_config, &desc),
+                      "anira_context_config_set_log");
         return *this;
     }
-    MachineConfig& cuda(const anira_cuda_desc& desc) { return cuda(&desc); }
+    ContextConfig& cuda(const anira_cuda_desc& desc) { return cuda(&desc); }
     /// The pointer form: NULL clears the block.
-    MachineConfig& cuda(const anira_cuda_desc* desc) {
-        detail::check(anira_machine_config_set_cuda(m_config, desc),
-                      "anira_machine_config_set_cuda");
+    ContextConfig& cuda(const anira_cuda_desc* desc) {
+        detail::check(anira_context_config_set_cuda(m_config, desc),
+                      "anira_context_config_set_cuda");
         return *this;
     }
-    MachineConfig& gl(const anira_gl_desc& desc) { return gl(&desc); }
+    ContextConfig& gl(const anira_gl_desc& desc) { return gl(&desc); }
     /// The pointer form: NULL clears the block.
-    MachineConfig& gl(const anira_gl_desc* desc) {
-        detail::check(anira_machine_config_set_gl(m_config, desc), "anira_machine_config_set_gl");
+    ContextConfig& gl(const anira_gl_desc* desc) {
+        detail::check(anira_context_config_set_gl(m_config, desc), "anira_context_config_set_gl");
         return *this;
     }
-    MachineConfig& vulkan(const anira_vulkan_desc& desc) { return vulkan(&desc); }
+    ContextConfig& vulkan(const anira_vulkan_desc& desc) { return vulkan(&desc); }
     /// The pointer form: NULL clears the block.
-    MachineConfig& vulkan(const anira_vulkan_desc* desc) {
-        detail::check(anira_machine_config_set_vulkan(m_config, desc),
-                      "anira_machine_config_set_vulkan");
+    ContextConfig& vulkan(const anira_vulkan_desc* desc) {
+        detail::check(anira_context_config_set_vulkan(m_config, desc),
+                      "anira_context_config_set_vulkan");
         return *this;
     }
-    MachineConfig& metal(const anira_metal_desc& desc) { return metal(&desc); }
+    ContextConfig& metal(const anira_metal_desc& desc) { return metal(&desc); }
     /// The pointer form: NULL clears the block.
-    MachineConfig& metal(const anira_metal_desc* desc) {
-        detail::check(anira_machine_config_set_metal(m_config, desc),
-                      "anira_machine_config_set_metal");
+    ContextConfig& metal(const anira_metal_desc* desc) {
+        detail::check(anira_context_config_set_metal(m_config, desc),
+                      "anira_context_config_set_metal");
         return *this;
     }
-    MachineConfig& d3d12(const anira_d3d12_desc& desc) { return d3d12(&desc); }
+    ContextConfig& d3d12(const anira_d3d12_desc& desc) { return d3d12(&desc); }
     /// The pointer form: NULL clears the block.
-    MachineConfig& d3d12(const anira_d3d12_desc* desc) {
-        detail::check(anira_machine_config_set_d3d12(m_config, desc),
-                      "anira_machine_config_set_d3d12");
+    ContextConfig& d3d12(const anira_d3d12_desc* desc) {
+        detail::check(anira_context_config_set_d3d12(m_config, desc),
+                      "anira_context_config_set_d3d12");
         return *this;
     }
-    MachineConfig& webgpu(const anira_webgpu_desc& desc) { return webgpu(&desc); }
+    ContextConfig& webgpu(const anira_webgpu_desc& desc) { return webgpu(&desc); }
     /// The pointer form: NULL clears the block.
-    MachineConfig& webgpu(const anira_webgpu_desc* desc) {
-        detail::check(anira_machine_config_set_webgpu(m_config, desc),
-                      "anira_machine_config_set_webgpu");
+    ContextConfig& webgpu(const anira_webgpu_desc* desc) {
+        detail::check(anira_context_config_set_webgpu(m_config, desc),
+                      "anira_context_config_set_webgpu");
         return *this;
     }
     template <class Ext>
-    MachineConfig& ext(const Ext& value) {
+    ContextConfig& ext(const Ext& value) {
         const auto native = detail::ExtTraits<Ext>::mint(value);
         anira_error err{};
-        detail::check(anira_machine_config_set_ext(m_config, &native.header, &err), err);
+        detail::check(anira_context_config_set_ext(m_config, &native.header, &err), err);
         return *this;
     }
-    MachineConfig& ext_json(std::string_view kind, std::string_view utf8) {
+    ContextConfig& ext_json(std::string_view kind, std::string_view utf8) {
         anira_error err{};
-        detail::check(anira_machine_config_set_ext_json(m_config,
+        detail::check(anira_context_config_set_ext_json(m_config,
                                                         std::string(kind).c_str(),
                                                         detail::text_of(utf8),
                                                         utf8.size(),
@@ -1045,23 +1050,190 @@ public:
         return *this;
     }
     std::string to_json() const {
-        return detail::write_json("anira_machine_config_to_json",
+        return detail::write_json("anira_context_config_to_json",
                                   [this](char* buf, std::size_t cap, std::size_t* len) {
-                                      return anira_machine_config_to_json(m_config, buf, cap, len);
+                                      return anira_context_config_to_json(m_config, buf, cap, len);
                                   });
     }
     bool upgraded() const noexcept { return m_upgraded; }
 
-    const anira_machine_config* native() const noexcept { return m_config; }
-    anira_machine_config* native() noexcept { return m_config; }
+    const anira_context_config* native() const noexcept { return m_config; }
+    anira_context_config* native() noexcept { return m_config; }
 
 private:
-    MachineConfig(anira_machine_config* config, bool upgraded) noexcept
+    ContextConfig(anira_context_config* config, bool upgraded) noexcept
         : m_config(config), m_upgraded(upgraded) {}
 
-    anira_machine_config* m_config = nullptr;
+    anira_context_config* m_config = nullptr;
     bool m_upgraded = false;
 };
+
+// ---- context (section 4) -------------------------------------------------------------------
+
+namespace detail {
+
+/**
+ * @brief Runs the two-call enumeration protocol of section 6a: the count, then the rows.
+ * `call(count, out)` is the C entry with everything but those two bound; a stride-explicit
+ * entry binds sizeof(T).
+ */
+template <class T, class Call>
+std::vector<T> enumerate(Call&& call, const char* entry) {
+    uint32_t count = 0;
+    check(call(&count, static_cast<T*>(nullptr)), entry);
+    std::vector<T> rows(count);
+    if (count == 0) { return rows; }
+    check(call(&count, rows.data()), entry);
+    rows.resize(std::min<std::size_t>(count, rows.size()));
+    return rows;
+}
+
+}  // namespace detail
+
+/**
+ * @brief A view over a context's probed capabilities (anira_capabilities): what backends are
+ * usable here, which memory domains a tensor may live in, the extension kinds this build
+ * understands, and the edge registry. Valid while the Context is; refreshed in place by
+ * Context::probe.
+ */
+class Capabilities {
+public:
+    explicit Capabilities(const anira_capabilities* capabilities) noexcept
+        : m_capabilities(capabilities) {}
+
+    /// The backends compiled in and usable here.
+    std::vector<BackendId> backends() const {
+        return detail::enumerate<BackendId>(
+            [this](uint32_t* count, BackendId* out) {
+                return anira_capabilities_backends(m_capabilities, sizeof(BackendId), count, out);
+            },
+            "anira_capabilities_backends");
+    }
+    std::vector<Domain> domains() const {
+        return detail::enumerate<Domain>(
+            [this](uint32_t* count, Domain* out) {
+                return anira_capabilities_domains(m_capabilities, count, out);
+            },
+            "anira_capabilities_domains");
+    }
+    std::vector<std::string> ext_kinds() const {
+        const std::vector<const char*> kinds = detail::enumerate<const char*>(
+            [this](uint32_t* count, const char** out) {
+                return anira_capabilities_ext_kinds(m_capabilities, count, out);
+            },
+            "anira_capabilities_ext_kinds");
+        return {kinds.begin(), kinds.end()};
+    }
+    /// Every row of the edge registry, available or not.
+    std::vector<anira_edge_info> edges() const {
+        return detail::enumerate<anira_edge_info>(
+            [this](uint32_t* count, anira_edge_info* out) {
+                return anira_capabilities_edges(m_capabilities,
+                                                sizeof(anira_edge_info),
+                                                count,
+                                                out);
+            },
+            "anira_capabilities_edges");
+    }
+    /// One row, by domain and backend.
+    /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no such row.
+    anira_edge_info edge(Domain from, const BackendId& to) const {
+        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
+        detail::check(anira_capabilities_edge(m_capabilities, from, &to, &row),
+                      "anira_capabilities_edge");
+        return row;
+    }
+
+    const anira_capabilities* native() const noexcept { return m_capabilities; }
+
+private:
+    const anira_capabilities* m_capabilities;
+};
+
+/**
+ * @brief An anira_context with its lifetime: a refcounted handle over this copy's core,
+ * created from a ContextConfig (section 4). Two contexts in one copy are two views of one
+ * core with two log sinks.
+ */
+class Context {
+public:
+    /// @throws Error when the C entry refuses the config (a device block, an unconsumed
+    /// context extension).
+    explicit Context(const ContextConfig& config) {
+        detail::abi_check_once();
+        anira_error err{};
+        detail::check(anira_context_create(config.native(), &m_context, &err), err);
+    }
+    ~Context() { anira_context_destroy(m_context); }
+    Context(const Context&) = delete;
+    Context& operator=(const Context&) = delete;
+    Context(Context&& other) noexcept : m_context(std::exchange(other.m_context, nullptr)) {}
+    Context& operator=(Context&& other) noexcept {
+        if (this != &other) {
+            anira_context_destroy(m_context);
+            m_context = std::exchange(other.m_context, nullptr);
+        }
+        return *this;
+    }
+
+    Capabilities capabilities() const {
+        return Capabilities(anira_context_capabilities(m_context));
+    }
+    /// Re-runs the probe; `force` re-runs every rung even where a cached answer exists.
+    void probe(bool force = false) {
+        anira_error err{};
+        detail::check(anira_context_probe(m_context, force ? 1U : 0U, &err), err);
+    }
+    /// The size of a tensor's byte image under the edges this context probed.
+    uint64_t byte_image_bytes(uint64_t num_elements, DType dtype) const {
+        return anira_context_byte_image_bytes(m_context, num_elements, dtype);
+    }
+
+    const anira_context* native() const noexcept { return m_context; }
+    anira_context* native() noexcept { return m_context; }
+
+private:
+    anira_context* m_context = nullptr;
+};
+
+/// What this build compiled in, without a context (anira_enabled_backends).
+inline std::vector<BackendId> enabled_backends() {
+    return detail::enumerate<BackendId>(
+        [](uint32_t* count, BackendId* out) {
+            return anira_enabled_backends(sizeof(BackendId), count, out);
+        },
+        "anira_enabled_backends");
+}
+
+/// The steady clock of anira_now_ms / anira_now_ns, for deadlines and submit timestamps.
+inline double now_ms() noexcept {
+    return anira_now_ms();
+}
+inline uint64_t now_ns() noexcept {
+    return anira_now_ns();
+}
+
+/// anira_drain_log: delivers the queued real-time records of the core to the sinks, the
+/// host's pump under ANIRA_LOG_DRAIN_MANUAL.
+inline std::size_t drain_log() noexcept {
+    return anira_drain_log();
+}
+/// anira_num_inference_threads: the size of the core's inference thread pool.
+inline uint32_t num_inference_threads() noexcept {
+    return anira_num_inference_threads();
+}
+
+/// anira_shutdown: effective only when no Context and no handler exist in this copy.
+inline anira_status shutdown() noexcept {
+    return anira_shutdown();
+}
+/// anira_release_core_if_idle: true when the core was freed.
+inline bool release_core_if_idle() noexcept {
+    return anira_release_core_if_idle() != 0U;
+}
+inline bool has_core() noexcept {
+    return anira_has_core() != 0U;
+}
 
 // ---- job options (section 6) ---------------------------------------------------------------
 

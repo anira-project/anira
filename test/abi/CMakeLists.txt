@@ -15,6 +15,12 @@
 #   anira_header_coexist  the v2 C++ umbrella and the C headers in one TU, both orders
 #   anira_header_cxx20_with_v2
 #                         the v2 C++ umbrella and anira.hpp in one TU, both orders
+#   anira_abi_link        presence: generated/link_probe.c takes the address of every
+#                         promised and draft entry point and links anira::anira the way a
+#                         consumer does; an entry without a body fails this link (on a
+#                         static library the only presence check there is)
+#   anira_symbol_baseline presence: every promised and draft entry point is in the shared
+#                         library's real export table (cmake/abi-symbols.cmake)
 #
 # On desktop the compile gates are EXCLUDE_FROM_ALL objects driven by a CTest (a
 # regression shows up as a failed test with the compiler's error); on Android/iOS they
@@ -25,7 +31,7 @@ if(TANH_OPERATING_SYSTEM STREQUAL "Emscripten")
     return()
 endif()
 
-set(_abi_headers export status version enums log config)
+set(_abi_headers export status version enums log config context core thread)
 set(_abi_include_dirs "${anira_SOURCE_DIR}/include" "${ANIRA_GENERATED_INCLUDE_DIR}")
 if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     set(_abi_on_device TRUE)
@@ -177,6 +183,28 @@ else()
         COMMENT "Rewriting ${_layout_file} from the built layout printer")
 endif()
 anira_abi_consumer_target(anira_abi_layout C)
+
+# ---- the presence gates ------------------------------------------------------------------
+# The link probe is a consumer-shaped executable: anira's include directories, no anira
+# define of its own (the PUBLIC ones of anira::anira reach it like any consumer), the
+# strict flags, and the link against anira::anira — shared or static. It runs on desktop
+# (the table is printed); on Android/iOS it is built as a member of ALL, which is the check.
+add_executable(anira_abi_link generated/link_probe.c)
+target_link_libraries(anira_abi_link PRIVATE anira::anira)
+anira_abi_consumer_target(anira_abi_link C)
+if(NOT _abi_on_device)
+    add_test(NAME anira_abi_link COMMAND anira_abi_link)
+    if(MSVC AND ANIRA_SHARED_LIBS_WIN)
+        # Windows: anira.dll and the runtime DLLs are searched next to the executable.
+        add_custom_command(TARGET anira_abi_link PRE_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${ANIRA_SHARED_LIBS_WIN} $<TARGET_FILE_DIR:anira_abi_link>)
+    endif()
+    include("${anira_SOURCE_DIR}/cmake/abi-symbols.cmake")
+    anira_add_symbol_baseline(NAME anira_symbol_baseline LIBRARY anira
+        SYMBOLS "${anira_SOURCE_DIR}/abi/symbols-${ANIRA_ABI_MAJOR}.txt"
+                "${anira_SOURCE_DIR}/abi/symbols-draft.txt")
+endif()
 
 # ---- the registry check ------------------------------------------------------------------
 if(NOT _abi_on_device)

@@ -4,7 +4,7 @@
  *
  * In this pre-release the runtime (anira::InferenceHandler, prepare, process) still takes the
  * 2.x configuration classes. This header turns a 3.x configuration (a model config, a Hard
- * contract, a machine config) into them: anira::InferenceConfig, anira::ContextConfig and
+ * contract, a context config) into them: anira::InferenceConfig, anira::CoreConfig and
  * anira::HostConfig. It validates the section-2 rules the 2.x runtime can honour and refuses,
  * with ANIRA_ERROR_NOT_SUPPORTED, what the 2.x runtime cannot do (an Async contract, a
  * MEASURED budget, UNTIL_STABLE warmup, a miss policy other than BYPASS, a dtype other than
@@ -31,7 +31,7 @@
 #ifndef ANIRA_COMPAT_V3_TO_V2_H
 #define ANIRA_COMPAT_V3_TO_V2_H
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
@@ -75,18 +75,18 @@ ANIRA_API anira_status to_inference_config(const anira_model_config* model,
                                            anira_error* err) noexcept;
 
 /**
- * @brief The 2.x ContextConfig of a machine config: the thread count (ANIRA_THREADS_AUTO is
+ * @brief The 2.x CoreConfig of a context config: the thread count (ANIRA_THREADS_AUTO is
  * the 2.x default), the wait strategy and the log level, drain, interval and queue capacity.
  *
  * The log sink, the log flags and the device descriptors have no 2.x counterpart and are not
- * carried; a machine extension the walk cannot consume fails the call by name.
+ * carried; a context extension the walk cannot consume fails the call by name.
  *
- * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL machine config;
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL context config;
  * ANIRA_ERROR_EXTENSION_UNKNOWN / _UNCONSUMED.
  */
-ANIRA_API anira_status to_context_config(const anira_machine_config* machine,
-                                         anira::ContextConfig& out,
-                                         anira_error* err) noexcept;
+ANIRA_API anira_status to_core_config(const anira_context_config* config,
+                                      anira::CoreConfig& out,
+                                      anira_error* err) noexcept;
 
 /**
  * @brief The 2.x HostConfig of a Hard contract's geometry and a model config's anchor.
@@ -167,11 +167,11 @@ anira::InferenceConfig to_inference_config(anira::ModelConfig&& model,
                                            const anira::Hard& hard,
                                            std::span<const anira::Engine> candidates = {}) = delete;
 
-/// to_context_config over the handle; throws anira::Error with the reason.
-inline anira::ContextConfig to_context_config(const anira::MachineConfig& machine) {
-    anira::ContextConfig out;
+/// to_core_config over the handle; throws anira::Error with the reason.
+inline anira::CoreConfig to_core_config(const anira::ContextConfig& config) {
+    anira::CoreConfig out;
     anira_error err = ANIRA_ERROR_INIT;
-    const anira_status status = to_context_config(machine.native(), out, &err);
+    const anira_status status = to_core_config(config.native(), out, &err);
     if (ANIRA_FAILED(status)) { throw anira::Error(err); }
     return out;
 }

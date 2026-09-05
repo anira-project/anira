@@ -68,7 +68,7 @@ typedef struct anira_log_record {
 typedef void (ANIRA_CALL* anira_log_fn)(const anira_log_record* record, void* user_data);
 
 /**
- * @brief The log block of a machine config, handed once to anira_machine_config_set_log; the C
+ * @brief The log block of a context config, handed once to anira_context_config_set_log; the C
  * one-shot equivalent of the five scalar setters.
  */
 typedef struct anira_log_desc {
@@ -76,7 +76,7 @@ typedef struct anira_log_desc {
     uint32_t abi_version;  /**< ANIRA_ABI_VERSION the caller compiled against. */
     void* user_data;  /**< Passed to callback. */
     anira_log_fn callback;  /**< The sink; NULL keeps the platform sink only. */
-    uint32_t level;  /**< anira_log_level; the most verbose request across machines wins. */
+    uint32_t level;  /**< anira_log_level; the most verbose request across contexts wins. */
     uint32_t drain;  /**< anira_log_drain. */
     /**
      * Real-time queue records, clamped to [64, 65536]; fixed for the life of the core.

@@ -5,10 +5,13 @@
  * uses. The per-file wrappers test/abi/CMakeLists.txt generates cover self-containment.
  */
 #include <anira/abi/config.h>
+#include <anira/abi/context.h>
+#include <anira/abi/core.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
+#include <anira/abi/thread.h>
 #include <anira/abi/version.h>
 #include <stddef.h>
 #include <string.h>
@@ -71,6 +74,23 @@ int anira_header_c_probe(void) {
         checks +=
             webgpu.struct_size == sizeof(anira_webgpu_desc) && webgpu.exec == ANIRA_EXEC_WORKER ? 1
                                                                                                 : 0;
+    }
+    {
+        /* The context header's records and the entries a C host calls without a context:
+           referenced so that the declarations compile; the object is never linked. */
+        anira_backend_id backend = ANIRA_BACKEND_ID_INIT;
+        anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
+        uint32_t count = 0;
+        checks +=
+            backend.struct_size == sizeof(anira_backend_id) && backend.engine_id == NULL ? 1 : 0;
+        checks += edge.struct_size == sizeof(anira_edge_info) && edge.available == 0u ? 1 : 0;
+        if (checks < 0) { /* never true: keeps the calls out of the probe's own result */
+            const double now = anira_now_ms();
+            const anira_status status =
+                anira_enabled_backends((uint32_t)sizeof(anira_backend_id), &count, NULL);
+            checks += now > 0.0 && ANIRA_SUCCEEDED(status) && count > 0u ? 1 : 0;
+            checks += anira_num_inference_threads() == 0u ? 1 : 0;
+        }
     }
     return checks;
 }

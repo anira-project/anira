@@ -3,7 +3,7 @@
 // are test_Translate's; here each overload is exercised once, plus what only the C++ face
 // adds (the Hard aggregate minted on the way, the thrown message).
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
@@ -23,9 +23,9 @@
 
 namespace {
 
+using anira::ContextConfig;
 using anira::ContractHandle;
 using anira::Hard;
-using anira::MachineConfig;
 using anira::ModelConfig;
 using anira::TensorSpec;
 
@@ -155,23 +155,23 @@ TEST(AbiBridge, BorrowedBytesKeepTheirPointer) {
     EXPECT_TRUE(cfg.m_model_data[0].m_is_binary);
 }
 
-TEST(AbiBridge, ContextConfigFromTheMachineHandle) {
-    MachineConfig machine;
-    machine.threads(2, ANIRA_WAIT_BLOCKING)
+TEST(AbiBridge, CoreConfigFromTheContextHandle) {
+    ContextConfig context;
+    context.threads(2, ANIRA_WAIT_BLOCKING)
         .log_level(ANIRA_LOG_ERROR)
         .log_drain(ANIRA_LOG_DRAIN_MANUAL, 25)
         .log_queue_capacity(1024);
-    const anira::ContextConfig context = anira::v3compat::to_context_config(machine);
-    EXPECT_EQ(context.m_num_threads, 2U);
-    EXPECT_EQ(context.m_wait_strategy, anira::WaitStrategy::Blocking);
-    EXPECT_EQ(context.m_log.m_level, anira::LogLevel::Error);
-    EXPECT_EQ(context.m_log.m_drain, anira::LogDrain::Manual);
-    EXPECT_EQ(context.m_log.m_drain_interval_ms, 25U);
-    EXPECT_EQ(context.m_log.m_queue_capacity, 1024U);
+    const anira::CoreConfig core = anira::v3compat::to_core_config(context);
+    EXPECT_EQ(core.m_num_threads, 2U);
+    EXPECT_EQ(core.m_wait_strategy, anira::WaitStrategy::Blocking);
+    EXPECT_EQ(core.m_log.m_level, anira::LogLevel::Error);
+    EXPECT_EQ(core.m_log.m_drain, anira::LogDrain::Manual);
+    EXPECT_EQ(core.m_log.m_drain_interval_ms, 25U);
+    EXPECT_EQ(core.m_log.m_queue_capacity, 1024U);
 
-    MachineConfig unknown;
+    ContextConfig unknown;
     unknown.ext_json("de.example.unknown", R"({"version": 1})");
-    const Thrown thrown = thrown_by([&] { anira::v3compat::to_context_config(unknown); });
+    const Thrown thrown = thrown_by([&] { anira::v3compat::to_core_config(unknown); });
     ASSERT_TRUE(thrown.m_thrown);
     EXPECT_EQ(thrown.m_status, ANIRA_ERROR_EXTENSION_UNKNOWN);
 }

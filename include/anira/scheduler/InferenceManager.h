@@ -1,11 +1,12 @@
 #ifndef ANIRA_INFERENCEMANAGER_H
 #define ANIRA_INFERENCEMANAGER_H
 
-#include "../ContextConfig.h"
+#include "../CoreConfig.h"
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
 #include "../utils/HostConfig.h"
-#include "Context.h"
+#include "../utils/InferenceBackend.h"
+#include "Core.h"
 #include "InferenceThread.h"
 
 namespace anira {
@@ -36,7 +37,7 @@ namespace anira {
  *       as the primary interface for inference operations rather than directly
  *       accessing lower-level components.
  *
- * @see InferenceThread, PrePostProcessor, Context, HostConfig, InferenceConfig
+ * @see InferenceThread, PrePostProcessor, Core, HostConfig, InferenceConfig
  */
 class ANIRA_API InferenceManager {
 public:
@@ -49,19 +50,19 @@ public:
      * @brief Constructor that initializes the inference manager with all required components
      *
      * Creates an inference manager with the specified preprocessing/postprocessing pipeline,
-     * inference configuration, and optional custom backend. Initializes the context and
+     * inference configuration, and optional custom backend. Initializes the core and
      * prepares for session management.
      *
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration containing model settings
      * @param custom_processor Pointer to a custom backend processor (can be nullptr for default
      * backends)
-     * @param context_config Configuration for the inference context and thread management
+     * @param core_config Configuration for the inference core and thread management
      */
     InferenceManager(PrePostProcessor& pp_processor,
                      InferenceConfig& inference_config,
                      BackendBase* custom_processor,
-                     const ContextConfig& context_config);
+                     const CoreConfig& core_config);
 
     /**
      * @brief Destructor that properly cleans up inference resources
@@ -125,7 +126,7 @@ public:
      * decoupled input/output processing where data can be pushed and popped
      * independently for buffered processing scenarios. Finished inferences are
      * collected here as well, as long as the receive buffers have room for them
-     * (Context::collect_completed()), so push-only usage never exhausts the
+     * (Core::collect_completed()), so push-only usage never exhausts the
      * inference structs; a host that never pops a streamed output is warned. On a
      * generator session (no streamable input) this only stores the parameter
      * values: inference is driven by the output demand of process()/pop_data().
@@ -220,16 +221,6 @@ public:
     size_t get_available_samples(size_t tensor_index, size_t channel) const;
 
     /**
-     * @brief Gets a const reference to the inference context (for unit testing)
-     *
-     * Provides access to the internal inference context for testing and debugging.
-     * This method should primarily be used for unit testing purposes.
-     *
-     * @return Const reference to the internal Context object
-     */
-    const Context& get_context() const;
-
-    /**
      * @brief Gets the current session ID
      *
      * Returns the unique identifier for the current inference session.
@@ -242,7 +233,7 @@ public:
     /**
      * @brief Configures the session for non-real-time (offline) operation
      *
-     * When enabled, Context::new_data_request() blocks the calling thread until
+     * When enabled, Core::new_data_request() blocks the calling thread until
      * every pending inference for this session completes, instead of returning
      * early (blocking_ratio == 0) or giving up at a deadline (blocking_ratio > 0).
      * This means process()/pop_data() always yield complete output -- never a
@@ -254,7 +245,7 @@ public:
      * mode), false to restore the bounded/non-blocking real-time behavior
      *
      * @warning Not real-time safe while enabled. Requires at least one
-     * inference thread to exist (Context::has_inference_threads()) — without
+     * inference thread to exist (Core::has_inference_threads()) — without
      * one the blocking waits could never complete, so the call is refused with
      * a warning. On WebAssembly that means spinning up at least one inference
      * worker (AniraWeb.spinUpInferenceWorker()) before enabling this mode; the
@@ -266,7 +257,7 @@ public:
     void set_non_realtime(bool is_non_realtime) const;
 
     /**
-     * @brief Drains the context's real-time log queue into the log sinks
+     * @brief Drains the core's real-time log queue into the log sinks
      * (see InferenceHandler::drain_log()). Not real-time safe.
      */
     size_t drain_log() const;
@@ -275,7 +266,7 @@ public:
      * @brief Wait-free reset of the inference session to its initial state.
      *
      * Clears the session's buffers and re-anchors the inference grid without ever
-     * blocking on in-flight inferences (see Context::reset_session): every
+     * blocking on in-flight inferences (see Core::reset_session): every
      * already-dispatched inference is invalidated via the session generation, its
      * result discarded and its structure reclaimed lazily. Safe to call from the
      * audio thread, for all session types. Also resets the missing-samples
@@ -316,7 +307,7 @@ private:
      * @brief Registers the host's output demand on a generator session
      *
      * For a session without streamable input the requested sample count of the
-     * reference output is what drives inference (see Context::new_data_submitted()).
+     * reference output is what drives inference (see Core::new_data_submitted()).
      * No-op for input-driven sessions.
      *
      * @param num_output_samples Array of requested output sample counts for each tensor
@@ -346,9 +337,6 @@ private:
                     const std::vector<size_t>& num_channels);
 
 private:
-    Context& m_context;  ///< The process-wide inference context managing threads and
-                         ///< sessions (immortal, see Context)
-
     InferenceConfig& m_inference_config;  ///< Reference to the inference configuration containing
                                           ///< model settings
     PrePostProcessor& m_pp_processor;  ///< Reference to the preprocessing/postprocessing pipeline
@@ -360,7 +348,7 @@ private:
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr
-    Context* __doxygen_force_0;  ///< Placeholder for Doxygen to find Context class documentation
+    Core* __doxygen_force_0;  ///< Placeholder for Doxygen to find Core class documentation
     SessionElement* __doxygen_force_1;  ///< Placeholder for Doxygen to find SessionElement class
                                         ///< documentation
 #endif

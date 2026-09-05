@@ -1,4 +1,4 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
@@ -34,11 +34,17 @@
 namespace anira {
 
 namespace {
-// Process-wide count of threads executing their run loop (Emscripten: started and not yet
-// stopped). Static storage duration; on WebAssembly that is shared memory, so every WASM
-// instance sees the same value. Deliberately not an inline static class member — see
-// InferenceThread.h.
+// Process-wide count of threads inside run_loop() right now, maintained by the loop itself
+// on every platform. Static storage duration; on WebAssembly that is shared memory, so
+// every WASM instance sees the same value. Deliberately not an inline static class member
+// — see InferenceThread.h. Natively this is also the active count.
+std::atomic<unsigned int> s_num_loop_active{0};
+#ifdef __EMSCRIPTEN__
+// The active count on WebAssembly: threads between start() and stop(), maintained on the
+// main instance, since the Worker enters run_loop() asynchronously (see
+// get_num_active_threads()).
 std::atomic<unsigned int> s_num_active_threads{0};
+#endif
 }  // namespace
 
 InferenceThread::InferenceThread(InferenceQueue& next_inference, WaitStrategy wait_strategy)
@@ -49,11 +55,12 @@ InferenceThread::~InferenceThread() {
 }
 
 #ifndef __EMSCRIPTEN__
-void InferenceThread::start() {
+bool InferenceThread::start() {
     thl::core::ThreadOptions options;
     options.m_priority = thl::core::ThreadPriority::RealTime;
     options.m_name = "anira-inference";
-    m_thread.start(options, [this](const thl::core::Thread&) { run_loop(); });
+    // False when already running or when the OS refused the thread; the caller decides.
+    return m_thread.start(options, [this](const thl::core::Thread&) { run_loop(); });
 }
 
 void InferenceThread::stop() {
@@ -69,14 +76,14 @@ bool InferenceThread::is_running() const {
     return m_thread.is_running();
 }
 #else
-void InferenceThread::start() {
+bool InferenceThread::start() {
     m_should_exit.store(false, std::memory_order::release);
     // Count only the false→true transition so repeated start() calls (and the
     // stop() in the destructor of a never-started thread) keep the process-wide
-    // active count balanced.
-    if (!m_is_running.exchange(true, std::memory_order::acq_rel)) {
-        s_num_active_threads.fetch_add(1, std::memory_order::relaxed);
-    }
+    // active count balanced; a repeated start() is reported, like the native one.
+    if (m_is_running.exchange(true, std::memory_order::acq_rel)) { return false; }
+    s_num_active_threads.fetch_add(1, std::memory_order::relaxed);
+    return true;
 }
 
 void InferenceThread::stop() {
@@ -96,19 +103,47 @@ bool InferenceThread::is_running() const {
 #endif
 
 unsigned int InferenceThread::get_num_active_threads() {
+#ifdef __EMSCRIPTEN__
     return s_num_active_threads.load(std::memory_order::relaxed);
+#else
+    return s_num_loop_active.load(std::memory_order::acquire);
+#endif
+}
+
+unsigned int InferenceThread::get_num_loop_active() {
+    return s_num_loop_active.load(std::memory_order::acquire);
+}
+
+bool InferenceThread::has_exited() const {
+    return m_has_exited.load(std::memory_order::acquire);
+}
+
+bool InferenceThread::is_in_loop() const {
+    return m_in_loop.load(std::memory_order::acquire);
 }
 
 void InferenceThread::run_loop() {
+    // Count this thread as inside its loop, and mark the exit on the object, on every
+    // platform: natively the active count, everywhere what release_core_if_idle() and
+    // (on WebAssembly) the destroy of a user-driven thread consult.
+    struct LoopGuard {
+        LoopGuard(std::atomic<bool>& has_exited, std::atomic<bool>& in_loop)
+            : m_has_exited(has_exited), m_in_loop(in_loop) {
+            m_has_exited.store(false, std::memory_order::release);
+            m_in_loop.store(true, std::memory_order::release);
+            s_num_loop_active.fetch_add(1, std::memory_order::acq_rel);
+        }
+        ~LoopGuard() {
+            s_num_loop_active.fetch_sub(1, std::memory_order::acq_rel);
+            m_in_loop.store(false, std::memory_order::release);
+            m_has_exited.store(true, std::memory_order::release);
+        }
+        LoopGuard(const LoopGuard&) = delete;
+        LoopGuard& operator=(const LoopGuard&) = delete;
+        std::atomic<bool>& m_has_exited;
+        std::atomic<bool>& m_in_loop;
+    } const loop_guard(m_has_exited, m_in_loop);
 #ifndef __EMSCRIPTEN__
-    // Count this thread as active for the lifetime of its pumping loop. Under
-    // Emscripten the count is maintained by start()/stop() instead, which run
-    // synchronously on the main instance (run_loop() entry in the JS Worker is
-    // asynchronous and would race callers that just spun the worker up).
-    struct ActiveGuard {
-        ActiveGuard() { s_num_active_threads.fetch_add(1, std::memory_order::relaxed); }
-        ~ActiveGuard() { s_num_active_threads.fetch_sub(1, std::memory_order::relaxed); }
-    } const active_guard;
     if (m_wait_strategy == WaitStrategy::Blocking) {
         run_loop_blocking();
         return;
@@ -200,10 +235,10 @@ void InferenceThread::process_dequeued_inference() {
     // values and a "ghost" inference could run concurrently with SessionElement::clear().
     session->m_active_inferences.fetch_add(1, std::memory_order::seq_cst);
 
-    // A wait-free reset (Context::reset_session) bumps the session generation. A
+    // A wait-free reset (Core::reset_session) bumps the session generation. A
     // dispatch whose stamp is now stale would have its output discarded anyway, so
     // skip the model — but still publish the completion signal do_inference() would
-    // have set, so the audio thread's Context::reclaim_stale_structs() can return
+    // have set, so the audio thread's Core::reclaim_stale_structs() can return
     // this struct to the free pool. For a session-exclusive task the skipped
     // dispatch still ends its turn on the chain (release + dispatch-next), exactly
     // like a completed one — a skip path that missed the continuation would leave

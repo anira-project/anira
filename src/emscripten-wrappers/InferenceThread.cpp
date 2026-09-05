@@ -2,7 +2,7 @@
 
 #include <emscripten/emscripten.h>
 
-#include "anira/scheduler/Context.h"
+#include "anira/scheduler/Core.h"
 
 /**
  * C API wrapper over anira::InferenceThread for the Emscripten build.
@@ -25,7 +25,7 @@ extern "C" {
 EMSCRIPTEN_KEEPALIVE
 uintptr_t inference_thread_create_from_context() {
     // Ownership passes to JS; inference_thread_destroy() deletes the object.
-    return reinterpret_cast<uintptr_t>(anira::Context::make_inference_thread().release());
+    return reinterpret_cast<uintptr_t>(anira::Core::make_inference_thread().release());
 }
 
 // Number of inference threads currently spun up (started and not yet stopped)
@@ -33,7 +33,7 @@ uintptr_t inference_thread_create_from_context() {
 // shared static memory.
 EMSCRIPTEN_KEEPALIVE
 unsigned int get_num_inference_threads() {
-    return anira::Context::get_num_inference_threads();
+    return anira::Core::get_num_inference_threads();
 }
 
 EMSCRIPTEN_KEEPALIVE

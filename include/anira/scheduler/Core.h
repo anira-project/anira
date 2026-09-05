@@ -1,7 +1,5 @@
-#ifndef ANIRA_CONTEXT_H
-#define ANIRA_CONTEXT_H
-
-#include <tanh/core/Logger.h>
+#ifndef ANIRA_CORE_H
+#define ANIRA_CORE_H
 
 #include <atomic>
 #include <chrono>
@@ -9,9 +7,10 @@
 #include <memory>
 #include <vector>
 
-#include "../ContextConfig.h"
+#include "../CoreConfig.h"
 #include "../PrePostProcessor.h"
 #include "../utils/HostConfig.h"
+#include "../utils/InferenceBackend.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "InferenceThread.h"
 #include "SessionElement.h"
@@ -34,19 +33,23 @@
 
 namespace anira {
 
+/// The core-owned real-time log drain thread (src/scheduler/LogDrainLoop.h); anira's own, not
+/// tanh-lib's.
+class LogDrainLoop;
+
 /**
- * @brief Process-wide inference context: session registry, inference thread pool, backend
+ * @brief Process-wide inference core: session registry, inference thread pool, backend
  * processor pools and the global inference queue
  *
- * The Context coordinates every inference session in a process (or, for a plugin, in the
+ * The core coordinates every inference session in a process (or, for a plugin, in the
  * binary that embeds anira): it owns the shared inference thread pool, pools backend
  * processors between sessions with equal configurations, and hands out the global
  * inference queue that the inference threads consume from.
  *
  * @par Lifetime
- * The context is immortal: its state lives in one heap-allocated core that is created on
+ * The core is immortal: its state lives in one heap-allocated State that is created on
  * first use and is never destroyed while the library is loaded. Nothing of it runs during
- * static teardown, so calling into the context is valid at any time, from any thread —
+ * static teardown, so calling into the core is valid at any time, from any thread —
  * including from destructors of static or host-owned objects that happen to run late. The
  * core is reclaimed only when the library is unloaded and nothing is left (see
  * release_core_if_idle()); a plugin that is merely scanned (loaded and unloaded without
@@ -55,7 +58,7 @@ namespace anira {
  * @par Thread pool lifetime
  * The inference threads exist exactly while sessions exist. This is a rule enforced by the
  * session registry, not a side effect of reference counting: create_session() builds the
- * pool (from that session's ContextConfig) when it registers the first session, and
+ * pool (from that session's CoreConfig) when it registers the first session, and
  * release_session() stops and joins every pool thread — before it returns, inside the same
  * critical section — when it unregisters the last one. A plugin host may therefore unload
  * the plugin's shared library as soon as the last InferenceHandler has been destroyed: no
@@ -68,63 +71,37 @@ namespace anira {
  * (CLAP `deinit`, VST3 `ExitDll`) — see the troubleshooting guide.
  *
  * @par Configuration
- * The ContextConfig travels with the session: create_session() applies it when the
+ * The CoreConfig travels with the session: create_session() applies it when the
  * registry is empty and reconciles it against the configuration in effect otherwise
  * (log level: the most verbose requested level wins; wait strategy: the first wins;
  * thread count: the pool only shrinks, and never to zero). Decision and mutation happen in
  * one critical section, so no session can observe a configuration other than the one its
  * pool was built with.
  *
- * @note One context per binary. A shared libanira is shared by everything that links it;
+ * @note One core per binary. A shared libanira is shared by everything that links it;
  *       a plugin that embeds anira statically has its own. (On GCC/Linux, two such plugins
- *       used to share one context by accident through unique-symbol binding; they no
+ *       used to share one core by accident through unique-symbol binding; they no
  *       longer do.)
  *
- * @see ContextConfig, SessionElement, InferenceThread, PrePostProcessor, BackendBase
+ * @see CoreConfig, SessionElement, InferenceThread, PrePostProcessor, BackendBase
  */
-class ANIRA_API Context {
+class ANIRA_API Core {
 public:
-    Context(const Context&) = delete;
-    Context& operator=(const Context&) = delete;
-    Context(Context&&) = delete;
-    Context& operator=(Context&&) = delete;
-    ~Context() = default;
-
-    /**
-     * @brief Returns the process-wide context
-     *
-     * The context is immortal and always valid to call (see the class description), so
-     * the returned reference never dangles.
-     *
-     * @return Reference to the context
-     */
-    static Context& get_instance();
-
-    /**
-     * @brief Deprecated: returns the context and stages a configuration for the
-     * deprecated three-argument create_session()
-     *
-     * Kept for one minor release so existing code compiles unchanged. The returned
-     * shared_ptr is non-owning (the context is never destroyed). The configuration is
-     * applied when the next session is created via the three-argument
-     * create_session() — pass it to the four-argument create_session() directly instead.
-     *
-     * @param context_config Configuration to apply with the next session
-     * @return Non-owning shared pointer to the context
-     *
-     * @deprecated Use get_instance() and create_session(PrePostProcessor&,
-     *             InferenceConfig&, BackendBase*, const ContextConfig&).
-     */
-    [[deprecated("Use get_instance() and pass the ContextConfig to create_session().")]]
-    static std::shared_ptr<Context> get_instance(const ContextConfig& context_config);
+    // Never instantiated: every member is static over the one State of this copy of anira.
+    Core() = delete;
+    Core(const Core&) = delete;
+    Core& operator=(const Core&) = delete;
+    Core(Core&&) = delete;
+    Core& operator=(Core&&) = delete;
+    ~Core() = delete;
 
     /**
      * @brief Creates and registers a new inference session
      *
-     * Applies or reconciles the given ContextConfig (see the class description), builds the
+     * Applies or reconciles the given CoreConfig (see the class description), builds the
      * session with its preprocessing/postprocessing pipeline, inference configuration and
      * optional custom backend, and registers it. When this is the first session, the
-     * inference thread pool is built from @p context_config (its threads are started by
+     * inference thread pool is built from @p core_config (its threads are started by
      * prepare_session()).
      *
      * Registration is the last step: if anything before it throws (typically a backend
@@ -135,7 +112,7 @@ public:
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration
      * @param custom_processor Pointer to a custom backend processor (nullptr for default backends)
-     * @param context_config Configuration of the context as requested by this session
+     * @param core_config Configuration of the core as requested by this session
      * @return Shared pointer to the newly created session
      *
      * @note Thread-safe: may be called from any non-realtime thread, including
@@ -144,18 +121,7 @@ public:
     static std::shared_ptr<SessionElement> create_session(PrePostProcessor& pp_processor,
                                                           InferenceConfig& inference_config,
                                                           BackendBase* custom_processor,
-                                                          const ContextConfig& context_config);
-
-    /**
-     * @brief Deprecated: creates a session with the configuration staged by the deprecated
-     * get_instance(const ContextConfig&) (or the one in effect, or a default one)
-     *
-     * @deprecated Pass the ContextConfig to create_session() directly.
-     */
-    [[deprecated("Pass the ContextConfig to create_session() directly.")]]
-    static std::shared_ptr<SessionElement> create_session(PrePostProcessor& pp_processor,
-                                                          InferenceConfig& inference_config,
-                                                          BackendBase* custom_processor);
+                                                          const CoreConfig& core_config);
 
     /**
      * @brief Releases an inference session and its resources
@@ -176,7 +142,7 @@ public:
      * @brief Stops and joins the inference thread pool, regardless of registered sessions
      *
      * Idempotent and cheap when there is nothing to do (in particular it never creates the
-     * context: a binary that never created a session pays nothing). Registered sessions
+     * core: a binary that never created a session pays nothing). Registered sessions
      * stay registered; the pool is rebuilt by the next create_session() into an empty
      * registry.
      *
@@ -197,8 +163,8 @@ public:
      * @brief Forwards the records anira's real-time paths have logged to the log sinks
      *
      * The audio thread and the inference threads log into a lock-free queue owned by
-     * the context (see LogConfig). With LogDrain::Manual the host calls this
-     * periodically (e.g. from a UI timer); with LogDrain::Thread the context's own
+     * the core (see LogConfig). With LogDrain::Manual the host calls this
+     * periodically (e.g. from a UI timer); with LogDrain::Thread the core's own
      * thread does it and this call is just an extra flush. Returns the number of
      * records delivered. Not real-time safe: the sinks (platform log, file, the host's
      * callback) run on the calling thread.
@@ -206,11 +172,11 @@ public:
     static size_t drain_log();
 
     /**
-     * @brief Frees the context core if nothing uses it
+     * @brief Frees the core if nothing uses it
      *
      * Deletes the core when no session is registered, no pool thread exists and no
      * user-managed inference thread is active (see make_inference_thread()). The next call
-     * into the context creates a fresh core. Called from the library-unload hook after
+     * into the core creates a fresh core. Called from the library-unload hook after
      * shutdown(), so that a plugin's load/unload cycle leaves no memory behind.
      *
      * @warning Only safe when no other thread can call into anira concurrently (which is
@@ -222,7 +188,7 @@ public:
     static bool release_core_if_idle();
 
     /**
-     * @brief Whether the context core currently exists
+     * @brief Whether the core currently exists
      *
      * True from the first call that needs the core (typically create_session()) until
      * release_core_if_idle() frees it. Diagnostic; used by the tests.
@@ -230,6 +196,38 @@ public:
      * @return True if the core is allocated
      */
     static bool has_core();
+
+    /**
+     * @brief Registers a 3.x context as a user of the core
+     *
+     * A live context counts like a session for the configuration in effect and for the
+     * real-time log queue: the first user's configuration (context or session) is the one
+     * in effect, every later one is reconciled against it (log level most verbose wins;
+     * wait strategy, drain mode, queue capacity and interval first win with a warning; the
+     * thread count only shrinks and never to zero), the log queue and, in LogDrain::Thread
+     * mode, the drain thread exist while any user does. The inference thread pool is
+     * still built by the first session and torn down with the last one.
+     *
+     * @param core_config The context's configuration (the 2.x spelling of its config)
+     * @throws std::runtime_error when the drain thread cannot be started
+     */
+    static void register_context(const CoreConfig& core_config);
+
+    /**
+     * @brief Unregisters a context; when it was the last user of the core the drain
+     * thread is stopped and the queue flushed through the sinks on the calling thread.
+     */
+    static void unregister_context();
+
+    /// Number of registered contexts (0 without a core).
+    static unsigned int get_num_contexts();
+
+    /**
+     * @brief Size of the inference thread pool right now (0 without a core, before the
+     * first prepared session and for a configuration that brings its own threads);
+     * what anira_num_inference_threads reports.
+     */
+    static size_t get_thread_pool_size();
 
     /**
      * @brief Prepares a session for processing with new audio configuration
@@ -250,10 +248,10 @@ public:
      *       safe against concurrent processing calls on the *same* session —
      *       the host must not process a session it is currently preparing.
      */
-    void prepare_session(const std::shared_ptr<SessionElement>& session,
-                         HostConfig new_config,
-                         const CustomLatencies& custom_latencies = {},
-                         const RingDtypes& ring_dtypes = {});
+    static void prepare_session(const std::shared_ptr<SessionElement>& session,
+                                HostConfig new_config,
+                                const CustomLatencies& custom_latencies = {},
+                                const RingDtypes& ring_dtypes = {});
 
     /**
      * @brief Gets the number of registered inference sessions
@@ -263,7 +261,7 @@ public:
     static int get_num_sessions();
 
     /**
-     * @brief Notifies the context that new data has been submitted for a session
+     * @brief Notifies the core that new data has been submitted for a session
      *
      * Signals to the inference system that new audio data is available for processing
      * by the specified session. This triggers the inference pipeline to begin
@@ -274,7 +272,7 @@ public:
      *
      * @param session Shared pointer to the session that has new data available
      */
-    void new_data_submitted(const std::shared_ptr<SessionElement>& session);
+    static void new_data_submitted(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Collects completed inferences on the push side, as far as they fit
@@ -293,7 +291,7 @@ public:
      * @return False if a completed result could not be placed because a receive ring is
      *         full, true otherwise
      */
-    bool collect_completed(const std::shared_ptr<SessionElement>& session);
+    static bool collect_completed(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Requests new data processing for a session
@@ -310,7 +308,7 @@ public:
      *       InferenceManager::set_non_realtime()), this blocks until the pending
      *       inference completes instead of returning immediately.
      */
-    void new_data_request(const std::shared_ptr<SessionElement>& session);
+    static void new_data_request(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Requests new data processing for a session at a specific time
@@ -327,8 +325,8 @@ public:
      *       InferenceManager::set_non_realtime()), this blocks until the pending
      *       inference completes instead of honoring wait_until.
      */
-    void new_data_request(const std::shared_ptr<SessionElement>& session,
-                          std::chrono::steady_clock::time_point wait_until);
+    static void new_data_request(const std::shared_ptr<SessionElement>& session,
+                                 std::chrono::steady_clock::time_point wait_until);
 
     /**
      * @brief Gets a snapshot of all registered sessions
@@ -364,7 +362,7 @@ public:
      *
      * @param session Shared pointer to the session to reset
      */
-    void reset_session(const std::shared_ptr<SessionElement>& session);
+    static void reset_session(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Get a reference to the global inference queue
@@ -374,7 +372,7 @@ public:
      * worker-driven) that consume from the global queue; dequeueing is
      * non-tokenized and allocation-free.
      *
-     * The queue lives in the immortal context core, so the reference stays valid for as
+     * The queue lives in the immortal core, so the reference stays valid for as
      * long as the library is loaded — in particular after all sessions were released.
      *
      * @return Reference to the global inference queue
@@ -388,16 +386,16 @@ public:
      * The thread is not started automatically — call start() on the returned object
      * to begin processing. The caller must also call stop() (or simply destroy the
      * object) before program exit — and, for a plugin, before its library is unloaded:
-     * the unload hook joins only the context's own pool.
+     * the unload hook joins only the core's own pool.
      *
      * This is purely additive: the auto-managed thread pool sized via
-     * ContextConfig::m_num_threads continues to work unchanged. Users who want full
-     * control over threading typically construct their sessions with ContextConfig(0) so
+     * CoreConfig::m_num_threads continues to work unchanged. Users who want full
+     * control over threading typically construct their sessions with CoreConfig(0) so
      * that no auto-pool threads exist, then create and manage threads themselves
      * via this factory.
      *
      * The returned thread references the global inference queue, which lives in the
-     * immortal context core — so the thread remains valid even after all sessions have
+     * immortal core — so the thread remains valid even after all sessions have
      * been released.
      *
      * @return Unique pointer to a new user-owned InferenceThread.
@@ -434,16 +432,14 @@ public:
     static bool has_inference_threads();
 
 private:
-    Context() = default;
-
     /**
-     * @brief The context's state: registry, thread pool, queue, processor pools
+     * @brief The core's state: registry, thread pool, queue, processor pools
      *
-     * Defined in Context.cpp. Allocated once on first use and never destroyed while the
+     * Defined in Core.cpp. Allocated once on first use and never destroyed while the
      * library is loaded (see the class description); freed only by
      * release_core_if_idle().
      */
-    struct Core;
+    struct State;
 
     /**
      * @brief Returns the core, creating it on first use
@@ -452,7 +448,7 @@ private:
      *
      * @return Reference to the core
      */
-    static Core& core();
+    static State& get_state();
 
     /**
      * @brief Returns the already-existing core
@@ -462,67 +458,86 @@ private:
      *
      * @return Reference to the core
      */
-    static Core& existing_core();
+    static State& existing_state();
 
     /**
      * @brief Coerces a requested configuration to what this platform can honor
      *
-     * WebAssembly: blocking waits and context-run threads are impossible, so
+     * WebAssembly: blocking waits and core-run threads are impossible, so
      * WaitStrategy::Blocking becomes SpinBackoff and m_num_threads becomes 0, each with a
      * warning. Native: returns the configuration unchanged.
      *
-     * @param context_config Configuration as requested by a session
+     * @param core_config Configuration as requested by a session
      * @return Configuration to apply
      */
-    static ContextConfig sanitize_config(const ContextConfig& context_config);
+    static CoreConfig sanitize_config(const CoreConfig& core_config);
+
+    /// Whether a session or a context uses the core (the configuration in effect is
+    /// meaningful exactly then). Called with the lifecycle lock held.
+    static bool has_users_locked(const State& state);
 
     /**
-     * @brief Applies the log level a session requests, honoring "most verbose wins"
+     * @brief Applies the log level a user requests, honoring "most verbose wins"
      *
-     * Called with the lifecycle lock held, before anything on the session-creation path
-     * logs. With an empty registry the requested level takes effect; otherwise the lower
-     * (more verbose) of the level in effect and the requested one does.
+     * Called with the lifecycle lock held, before anything on the creation path logs.
+     * Without users the requested level takes effect; otherwise the lower (more verbose)
+     * of the level in effect and the requested one does.
      *
-     * @param core The context core
-     * @param context_config Sanitized configuration of the session being created
+     * @param state The core's state
+     * @param core_config Sanitized configuration of the session or context
      */
-    static void apply_log_level_locked(Core& core, const ContextConfig& context_config);
+    static void apply_log_level_locked(State& state, const CoreConfig& core_config);
 
     /**
-     * @brief Makes sure the core owns the real-time log queue and, in LogDrain::Thread
-     * mode, starts its drain thread
+     * @brief Makes sure the core owns the real-time log queue
      *
-     * Called with the lifecycle lock held by the first session of a generation. The
-     * queue is created once per core (its capacity is fixed by the first session that
-     * ever builds it) and published to the real-time log sites; the drain thread runs
-     * at low priority exactly while sessions exist.
+     * Called with the lifecycle lock held. The queue is created once per core (its
+     * capacity is fixed by the first user that ever builds it) and published to the
+     * real-time log sites; a later request for a larger queue is reported.
      */
-    static void start_log_drain_locked(Core& core, const ContextConfig& context_config);
+    static void ensure_log_queue_locked(State& state, const LogConfig& log_config);
 
     /**
-     * @brief Applies a configuration into an empty registry, or reconciles it otherwise
+     * @brief Starts the drain thread when the configuration in effect says
+     * LogDrain::Thread and none runs
      *
-     * Called with the lifecycle lock held. Registry empty: the configuration becomes the
-     * one in effect and the inference thread pool is built from it (threads are created
-     * but not started). Registry non-empty: the configuration is compared with the one in
-     * effect — anira version, enabled backends, log level (most verbose wins), wait
-     * strategy (first wins) and thread count (the pool only shrinks, and never to zero) —
-     * and every mismatch is reported.
-     *
-     * @param core The context core
-     * @param context_config Sanitized configuration of the session being created
+     * Called with the lifecycle lock held, after ensure_log_queue_locked(). The thread is
+     * anira's own (a low-priority thl::core::Thread named "anira-log" running
+     * Queue::drain() every drain interval) and lives exactly while a session or a context
+     * does; the last user's release stops it and flushes the queue.
      */
-    static void apply_or_compare_config_locked(Core& core, const ContextConfig& context_config);
+    static void start_log_drain_locked(State& state);
+
+    /**
+     * @brief Applies a configuration when the core has no user, or reconciles it otherwise
+     *
+     * Called with the lifecycle lock held. No user: the configuration becomes the one in
+     * effect. Otherwise it is compared with the one in effect — log level (most verbose
+     * wins), wait strategy (first wins), drain mode, queue capacity and interval (first
+     * win) and thread count (the pool only shrinks, and never to zero) — and every
+     * mismatch is reported. Then the log queue and the drain thread are made to exist,
+     * and for the first session of a generation the inference thread pool is built from
+     * the configuration in effect (threads are created but not started).
+     *
+     * @param state The core's state
+     * @param core_config Sanitized configuration of the session or context
+     * @param builds_pool True for a session (the pool exists while sessions do), false
+     *        for a context
+     */
+    static void apply_or_compare_config_locked(State& state,
+                                               const CoreConfig& core_config,
+                                               bool builds_pool);
 
     /**
      * @brief Adds a fully constructed session to the registry
      *
      * Called with the lifecycle lock held, as the last step of create_session().
      *
-     * @param core The context core
+     * @param state The core's state
      * @param session The session to register
      */
-    static void register_session_locked(Core& core, const std::shared_ptr<SessionElement>& session);
+    static void register_session_locked(State& state,
+                                        const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Removes a session from the registry and enforces the pool policy
@@ -530,10 +545,10 @@ private:
      * Called with the lifecycle lock held. When the registry becomes empty, every
      * inference thread of the pool is stopped and joined before this returns.
      *
-     * @param core The context core
+     * @param state The core's state
      * @param session The session to unregister
      */
-    static void unregister_session_locked(Core& core,
+    static void unregister_session_locked(State& state,
                                           const std::shared_ptr<SessionElement>& session);
 
     /**
@@ -541,9 +556,9 @@ private:
      *
      * Called with the lifecycle lock held. Stopping joins the thread and flushes the
      * queue through the log sinks — and a host's log callback may call back into the
-     * context — so the returned object is destroyed after the lock is released.
+     * core — so the returned object is destroyed after the lock is released.
      */
-    static std::unique_ptr<thl::Logger::rt::DrainThread> take_log_drain_locked(Core& core);
+    static std::unique_ptr<LogDrainLoop> take_log_drain_locked(State& state);
 
     /**
      * @brief Size the pool will have once the given configuration has been applied
@@ -551,12 +566,11 @@ private:
      * Side-effect free; used by create_session() to clamp a session's parallel-processor
      * count before the pool exists (it is built at registration, the last step).
      *
-     * @param core The context core
-     * @param context_config Sanitized configuration of the session being created
+     * @param state The core's state
+     * @param core_config Sanitized configuration of the session being created
      * @return Number of pool threads after apply_or_compare_config_locked()
      */
-    static size_t prospective_pool_size_locked(const Core& core,
-                                               const ContextConfig& context_config);
+    static size_t prospective_pool_size_locked(const State& state, const CoreConfig& core_config);
 
     /**
      * @brief Resizes the inference thread pool
@@ -564,19 +578,19 @@ private:
      * Called with the lifecycle lock held. Creates (unstarted) threads to grow, or stops
      * and joins threads to shrink.
      *
-     * @param core The context core
+     * @param state The core's state
      * @param new_num_threads New number of threads for the inference thread pool
      */
-    static void resize_pool_locked(Core& core, unsigned int new_num_threads);
+    static void resize_pool_locked(State& state, unsigned int new_num_threads);
 
     /**
      * @brief Starts every pool thread that is not running yet
      *
      * Called with the lifecycle lock held, from prepare_session().
      *
-     * @param core The context core
+     * @param state The core's state
      */
-    static void start_thread_pool_locked(Core& core);
+    static void start_thread_pool_locked(State& state);
 
     /**
      * @brief Performs preprocessing for a session
@@ -699,7 +713,7 @@ private:
      *
      * @warning Blocking (sleeps in 50us steps) — never reachable from a
      *          real-time path; annotated ANIRA_BLOCKING so RealtimeSanitizer
-     *          reports any call from a [[clang::nonblocking]] context
+     *          reports any call from a [[clang::nonblocking]] core
      *          deterministically.
      * @warning Make sure to uninitialize the session before calling this method.
      */
@@ -733,13 +747,13 @@ private:
      * another registered session with an equal configuration shares it.
      *
      * @tparam T Backend processor type (LibtorchProcessor, OnnxRuntimeProcessor, etc.)
-     * @param core The context core
+     * @param state The core's state
      * @param inference_config Inference configuration
      * @param processors Vector of available processors of type T
      * @param processor Processor to release
      */
     template <typename T>
-    static void release_processor(Core& core,
+    static void release_processor(State& state,
                                   InferenceConfig& inference_config,
                                   std::vector<std::shared_ptr<T>>& processors,
                                   std::shared_ptr<T>& processor);
@@ -776,4 +790,4 @@ private:
 
 }  // namespace anira
 
-#endif  // ANIRA_CONTEXT_H
+#endif  // ANIRA_CORE_H

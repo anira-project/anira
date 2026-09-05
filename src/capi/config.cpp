@@ -193,13 +193,13 @@ anira_status ANIRA_CALL anira_tensor_spec_set_axis(anira_tensor_spec* spec,
 anira_status ANIRA_CALL anira_tensor_spec_set_window(anira_tensor_spec* spec,
                                                      int64_t window_min,
                                                      int64_t window_max,
-                                                     int64_t context) ANIRA_NOEXCEPT try {
+                                                     int64_t overlap) ANIRA_NOEXCEPT try {
     if (spec == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if (window_min < 0 || context < 0) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (window_min < 0 || overlap < 0) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (window_max < 0 && window_max != ANIRA_UNBOUNDED) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     spec->m_window_min = window_min;
     spec->m_window_max = window_max;
-    spec->m_context = context;
+    spec->m_overlap = overlap;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
@@ -343,8 +343,8 @@ anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contract* contr
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_contract_hard_set_ring_dtype(anira_contract* contract,
-                                                             const char* canonical,
-                                                             anira_dtype dtype) ANIRA_NOEXCEPT try {
+                                                           const char* canonical,
+                                                           anira_dtype dtype) ANIRA_NOEXCEPT try {
     if (contract == nullptr || !non_empty(canonical) || dtype == 0) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
@@ -423,19 +423,26 @@ void ANIRA_CALL anira_contract_destroy(anira_contract* contract) ANIRA_NOEXCEPT 
     delete contract;
 } catch (...) { report_void_failure(__func__); }
 
-// ==== machine config ========================================================================
+// ==== context config ========================================================================
 
-anira_status ANIRA_CALL anira_machine_config_create(anira_machine_config** out,
+namespace {
+/// The ANIRA_LOG_FLAG_* bits a context config accepts; the context applies both while it
+/// lives (the platform sink off, the boundary trace on).
+constexpr uint32_t k_known_log_flags =
+    ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK | ANIRA_LOG_FLAG_TRACE_FAILURES;
+}  // namespace
+
+anira_status ANIRA_CALL anira_context_config_create(anira_context_config** out,
                                                     anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(out != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "machine config: NULL out");
-    *out = new anira_machine_config();
+                       "context config: NULL out");
+    *out = new anira_context_config();
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_threads(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_threads(anira_context_config* config,
                                                          uint32_t num_threads,
                                                          anira_wait_strategy wait) ANIRA_NOEXCEPT
     try {
@@ -445,7 +452,7 @@ anira_status ANIRA_CALL anira_machine_config_set_threads(anira_machine_config* c
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_log_level(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_log_level(anira_context_config* config,
                                                            anira_log_level level) ANIRA_NOEXCEPT
     try {
     if (config == nullptr || !valid_log_level(level)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -453,7 +460,7 @@ anira_status ANIRA_CALL anira_machine_config_set_log_level(anira_machine_config*
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_log_drain(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_log_drain(anira_context_config* config,
                                                            anira_log_drain drain,
                                                            uint32_t interval_ms) ANIRA_NOEXCEPT
     try {
@@ -463,7 +470,7 @@ anira_status ANIRA_CALL anira_machine_config_set_log_drain(anira_machine_config*
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_log_queue_capacity(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_log_queue_capacity(anira_context_config* config,
                                                                     uint32_t capacity)
     ANIRA_NOEXCEPT try {
     if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -471,17 +478,15 @@ anira_status ANIRA_CALL anira_machine_config_set_log_queue_capacity(anira_machin
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_log_flags(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_log_flags(anira_context_config* config,
                                                            uint32_t flags) ANIRA_NOEXCEPT try {
     if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if ((flags & ~ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK) != 0) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
+    if ((flags & ~k_known_log_flags) != 0) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     config->m_log_flags = flags;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_log_sink(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_log_sink(anira_context_config* config,
                                                           anira_log_fn callback,
                                                           void* user_data) ANIRA_NOEXCEPT try {
     if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -490,7 +495,7 @@ anira_status ANIRA_CALL anira_machine_config_set_log_sink(anira_machine_config* 
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_log(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_log(anira_context_config* config,
                                                      const anira_log_desc* desc) ANIRA_NOEXCEPT
     try {
     if (config == nullptr || desc == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -503,7 +508,7 @@ anira_status ANIRA_CALL anira_machine_config_set_log(anira_machine_config* confi
     if (ANIRA_FAILED(anira_check_abi(value.abi_version))) { return ANIRA_ERROR_ABI_VERSION; }
     if (!valid_log_level(static_cast<anira_log_level>(value.level)) ||
         !valid_log_drain(static_cast<anira_log_drain>(value.drain)) ||
-        (value.flags & ~ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK) != 0) {
+        (value.flags & ~k_known_log_flags) != 0) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     config->m_log_level = static_cast<anira_log_level>(value.level);
@@ -516,7 +521,7 @@ anira_status ANIRA_CALL anira_machine_config_set_log(anira_machine_config* confi
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_cuda(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_cuda(anira_context_config* config,
                                                       const anira_cuda_desc* desc) ANIRA_NOEXCEPT
     try {
     if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -524,14 +529,14 @@ anira_status ANIRA_CALL anira_machine_config_set_cuda(anira_machine_config* conf
     return copy_desc(config->m_cuda, desc, k_defaults);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_gl(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_gl(anira_context_config* config,
                                                     const anira_gl_desc* desc) ANIRA_NOEXCEPT try {
     if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     static const anira_gl_desc k_defaults = ANIRA_GL_DESC_INIT;
     return copy_desc(config->m_gl, desc, k_defaults);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_vulkan(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_vulkan(anira_context_config* config,
                                                         const anira_vulkan_desc* desc)
     ANIRA_NOEXCEPT try {
     if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -539,7 +544,7 @@ anira_status ANIRA_CALL anira_machine_config_set_vulkan(anira_machine_config* co
     return copy_desc(config->m_vulkan, desc, k_defaults);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_metal(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_metal(anira_context_config* config,
                                                        const anira_metal_desc* desc) ANIRA_NOEXCEPT
     try {
     if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -547,7 +552,7 @@ anira_status ANIRA_CALL anira_machine_config_set_metal(anira_machine_config* con
     return copy_desc(config->m_metal, desc, k_defaults);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_d3d12(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_d3d12(anira_context_config* config,
                                                        const anira_d3d12_desc* desc) ANIRA_NOEXCEPT
     try {
     if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -555,7 +560,7 @@ anira_status ANIRA_CALL anira_machine_config_set_d3d12(anira_machine_config* con
     return copy_desc(config->m_d3d12, desc, k_defaults);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_webgpu(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_webgpu(anira_context_config* config,
                                                         const anira_webgpu_desc* desc)
     ANIRA_NOEXCEPT try {
     if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -568,17 +573,17 @@ anira_status ANIRA_CALL anira_machine_config_set_webgpu(anira_machine_config* co
 #endif
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_ext(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_ext(anira_context_config* config,
                                                      const anira_ext_header* ext,
                                                      anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(config != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "machine config: NULL handle");
+                       "context config: NULL handle");
     return config->m_ext.set(ext, err);
 } catch (...) { return translate_exception(err, __func__); }
 
-anira_status ANIRA_CALL anira_machine_config_set_ext_json(anira_machine_config* config,
+anira_status ANIRA_CALL anira_context_config_set_ext_json(anira_context_config* config,
                                                           const char* kind,
                                                           const char* utf8,
                                                           size_t len,
@@ -586,11 +591,11 @@ anira_status ANIRA_CALL anira_machine_config_set_ext_json(anira_machine_config* 
     ANIRA_CAPI_REQUIRE(config != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "machine config: NULL handle");
+                       "context config: NULL handle");
     return set_ext_json(config->m_ext, kind, utf8, len, err);
 } catch (...) { return translate_exception(err, __func__); }
 
-void ANIRA_CALL anira_machine_config_destroy(anira_machine_config* config) ANIRA_NOEXCEPT try {
+void ANIRA_CALL anira_context_config_destroy(anira_context_config* config) ANIRA_NOEXCEPT try {
     delete config;
 } catch (...) { report_void_failure(__func__); }
 

@@ -31,7 +31,7 @@ ANIRA_TEST_EXPORT unsigned int unloadtest_num_inference_threads(void);
 ANIRA_TEST_EXPORT int unloadtest_has_inference_threads(void);
 ANIRA_TEST_EXPORT int unloadtest_num_sessions(void);
 ANIRA_TEST_EXPORT int unloadtest_has_core(void);
-/// anira::Context::shutdown() — what a plugin calls from its module-exit entry point.
+/// anira::Core::shutdown() — what a plugin calls from its module-exit entry point.
 ANIRA_TEST_EXPORT void unloadtest_shutdown(void);
 /// Starts a user-managed inference thread and never stops it. The negative control:
 /// a thread that is still alive when the module is unloaded must crash the process.

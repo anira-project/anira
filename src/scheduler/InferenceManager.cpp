@@ -1,8 +1,8 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/backends/BackendBase.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
@@ -21,17 +21,14 @@ namespace anira {
 InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
                                    InferenceConfig& inference_config,
                                    BackendBase* custom_processor,
-                                   const ContextConfig& context_config)
-    : m_context(Context::get_instance())
-    , m_inference_config(inference_config)
+                                   const CoreConfig& core_config)
+    : m_inference_config(inference_config)
     , m_pp_processor(pp_processor)
-    , m_session(Context::create_session(pp_processor,
-                                        inference_config,
-                                        custom_processor,
-                                        context_config)) {}
+    , m_session(
+          Core::create_session(pp_processor, inference_config, custom_processor, core_config)) {}
 
 InferenceManager::~InferenceManager() {
-    Context::release_session(m_session);
+    Core::release_session(m_session);
 }
 
 void InferenceManager::set_backend(InferenceBackend new_inference_backend) {
@@ -51,7 +48,7 @@ void InferenceManager::prepare(HostConfig new_config,
                                const RingDtypes& ring_dtypes) {
     m_host_config = new_config;
 
-    m_context.prepare_session(m_session, m_host_config, custom_latencies, ring_dtypes);
+    Core::prepare_session(m_session, m_host_config, custom_latencies, ring_dtypes);
 
     m_missing_samples.clear();
     m_missing_samples.resize(m_inference_config.get_tensor_output_shape().size(), 0);
@@ -64,7 +61,7 @@ size_t* InferenceManager::process(const float* const* const* input_data,
     process_input(input_data, num_input_samples);
     request_output(num_output_samples);
 
-    m_context.new_data_submitted(m_session);
+    Core::new_data_submitted(m_session);
     if (m_inference_config.m_blocking_ratio > 0.f) {
         std::chrono::steady_clock::time_point wait_until = std::chrono::steady_clock::now();
         // The host block is measured in samples of the reference stream (input or output).
@@ -76,9 +73,9 @@ size_t* InferenceManager::process(const float* const* const* input_data,
         auto time_to_process = std::chrono::microseconds(
             static_cast<long>(buffer_size_in_sec * 1e6 * m_inference_config.m_blocking_ratio));
         wait_until += time_to_process;
-        m_context.new_data_request(m_session, wait_until);
+        Core::new_data_request(m_session, wait_until);
     } else {
-        m_context.new_data_request(m_session);
+        Core::new_data_request(m_session);
     }
 
     return process_output(output_data, num_output_samples);
@@ -92,18 +89,18 @@ void InferenceManager::push_data(const float* const* const* input_data, size_t* 
     // on the pop side. Results are placed only while the receive rings have room; a host
     // that never pops a streamed output is told so instead of having unread output
     // overwritten.
-    if (!m_context.collect_completed(m_session)) {
+    if (!Core::collect_completed(m_session)) {
         ANIRA_LOG_RT_WARNING(log_group::k_scheduler,
                              "Output stream not consumed in session: %d! A receive buffer is "
                              "full; call pop_data() or process() to pop the output stream.",
                              m_session->m_session_id);
     }
-    m_context.new_data_submitted(m_session);
+    Core::new_data_submitted(m_session);
 }
 
 void InferenceManager::request_output(const size_t* num_output_samples) {
     // A generator is pulled: the samples the host asks for on the reference output are the
-    // demand that drives inference (see Context::new_data_submitted). Input-driven sessions
+    // demand that drives inference (see Core::new_data_submitted). Input-driven sessions
     // are unaffected.
     if (!m_session->m_input_driven) {
         m_session->m_pending_pull_samples += num_output_samples[m_session->m_reference.m_index];
@@ -113,12 +110,12 @@ void InferenceManager::request_output(const size_t* num_output_samples) {
 void InferenceManager::collect_nonblocking() {
     // Collects with the completion signal this session actually uses (atomic flag or
     // semaphore try_acquire), never waiting.
-    m_context.collect_completed(m_session);
+    Core::collect_completed(m_session);
 }
 
 size_t* InferenceManager::pop_data(float* const* const* output_data, size_t* num_output_samples) {
     request_output(num_output_samples);
-    if (!m_session->m_input_driven) { m_context.new_data_submitted(m_session); }
+    if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
     collect_nonblocking();
 
     return process_output(output_data, num_output_samples);
@@ -128,9 +125,9 @@ size_t* InferenceManager::pop_data(float* const* const* output_data,
                                    size_t* num_output_samples,
                                    std::chrono::steady_clock::time_point wait_until) {
     request_output(num_output_samples);
-    if (!m_session->m_input_driven) { m_context.new_data_submitted(m_session); }
+    if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
     if (m_inference_config.m_blocking_ratio > 0.f) {
-        m_context.new_data_request(m_session, wait_until);
+        Core::new_data_request(m_session, wait_until);
     } else {
         ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
                            "InferenceConfig does not use blocking_ratio and does not use "
@@ -267,14 +264,10 @@ std::vector<unsigned int> InferenceManager::get_latency() const {
     return m_session->m_latency;
 }
 
-const Context& InferenceManager::get_context() const {
-    return m_context;
-}
-
 size_t InferenceManager::get_available_samples(size_t tensor_index, size_t channel) const {
     // Collect with the completion signal this session actually uses: before, the realtime
     // overload polled m_done_atomic, which a blocking_ratio > 0 session never sets.
-    m_context.collect_completed(m_session);
+    Core::collect_completed(m_session);
     if (m_inference_config.get_postprocess_output_size()[tensor_index] > 0) {
         return m_session->m_receive_buffer[tensor_index].get_available_samples(channel);
     } else {
@@ -287,22 +280,22 @@ int InferenceManager::get_session_id() const {
 }
 
 size_t InferenceManager::drain_log() const {
-    return Context::drain_log();
+    return Core::drain_log();
 }
 
 void InferenceManager::set_non_realtime(bool is_non_realtime) const {
-    // The unbounded wait this flag triggers in Context::new_data_request() is
+    // The unbounded wait this flag triggers in Core::new_data_request() is
     // only ever satisfied by an inference thread completing the task. Without
     // any thread that could do so — no auto-managed pool (always the case on
     // WebAssembly, where threads are JS Workers spun up externally) and no
     // externally driven thread active — process()/pop_data() would hang
     // instead of blocking briefly. Refuse instead of arming a guaranteed hang.
-    if (is_non_realtime && !Context::has_inference_threads()) {
+    if (is_non_realtime && !Core::has_inference_threads()) {
         ANIRA_LOG_WARNING(log_group::k_scheduler,
                           "set_non_realtime(true) refused: no inference threads are "
                           "configured or running, so the resulting blocking waits could never "
-                          "complete. Configure ContextConfig::m_num_threads > 0, start a thread "
-                          "from Context::make_inference_thread(), or spin up an inference worker "
+                          "complete. Configure CoreConfig::m_num_threads > 0, start a thread "
+                          "from Core::make_inference_thread(), or spin up an inference worker "
                           "(web: AniraWeb.spinUpInferenceWorker()) first.");
         return;
     }
@@ -310,7 +303,7 @@ void InferenceManager::set_non_realtime(bool is_non_realtime) const {
 }
 
 void InferenceManager::reset() {
-    m_context.reset_session(m_session);
+    Core::reset_session(m_session);
     for (size_t& missing_samples : m_missing_samples) {
         missing_samples = 0;  // Reset missing samples to zero
     }

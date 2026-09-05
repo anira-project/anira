@@ -1,6 +1,6 @@
 /*
  * The section-2 validator and the translation of the 3.x configuration handles into the 2.x
- * runtime's InferenceConfig / ContextConfig / HostConfig. Private to src/capi (the tests reach
+ * runtime's InferenceConfig / CoreConfig / HostConfig. Private to src/capi (the tests reach
  * it through the src/ include directory); the exported face is anira/compat/v3_to_v2.h.
  *
  * Every function here throws anira::StatusError (the status the C boundary returns, with the
@@ -11,7 +11,7 @@
 #ifndef ANIRA_CAPI_TRANSLATE_H
 #define ANIRA_CAPI_TRANSLATE_H
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/system/Exports.h>
@@ -74,8 +74,8 @@ ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config&
                                                        const anira_engine* candidates,
                                                        uint32_t num_candidates);
 
-/// The 2.x ContextConfig of a machine config: threads, wait strategy and the log scalars.
-ANIRA_API anira::ContextConfig make_context_config(const anira_machine_config& machine);
+/// The 2.x CoreConfig of a context config: threads, wait strategy and the log scalars.
+ANIRA_API anira::CoreConfig make_core_config(const anira_context_config& config);
 
 /// The 2.x HostConfig of a Hard contract's geometry and the model config's anchor.
 ANIRA_API anira::HostConfig make_host_config(const anira_contract& contract,

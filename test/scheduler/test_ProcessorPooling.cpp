@@ -1,7 +1,7 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
-#include <anira/scheduler/Context.h>
+#include <anira/scheduler/Core.h>
 
 #include <memory>
 
@@ -44,7 +44,7 @@ using namespace anira;
 // reference would dangle and the next inference on the surviving session would
 // dereference freed memory.
 //
-// This reproduces the scenario at the Context level — two independently-owned
+// This reproduces the scenario at the core level — two independently-owned
 // configs with equal values (e.g. two anira~ patches), sharing one pooled
 // processor, then the first is released and its config freed.
 //
@@ -55,7 +55,7 @@ using namespace anira;
 // reference's referent), so it equals the released storage. With the fix, the
 // processor owns its config in its own storage, so the addresses differ.
 TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
-    ContextConfig const context_config;
+    CoreConfig const core_config;
 
     // Two hosts, each owning an equal-valued InferenceConfig. Session A's config is
     // heap-allocated so its storage can be freed deterministically mid-test.
@@ -63,11 +63,11 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
         anira_test::bridged(k_hybridnn_model_json, k_hybridnn_contract_json);
     auto* config_a = new InferenceConfig(hybridnn_config);
     auto* pp_a = new PrePostProcessor(*config_a);
-    auto session_a = Context::create_session(*pp_a, *config_a, nullptr, context_config);
+    auto session_a = Core::create_session(*pp_a, *config_a, nullptr, core_config);
 
     auto config_b = std::make_unique<InferenceConfig>(hybridnn_config);
     auto pp_b = std::make_unique<PrePostProcessor>(*config_b);
-    auto session_b = Context::create_session(*pp_b, *config_b, nullptr, context_config);
+    auto session_b = Core::create_session(*pp_b, *config_b, nullptr, core_config);
 
     // Precondition: equal configs must actually share one pooled processor, otherwise
     // the test would not exercise the bug at all.
@@ -76,13 +76,13 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
         << "Sessions with equal configs are expected to share one pooled processor";
 
     // Keep the pooled processor alive independently so it can be inspected after
-    // session A is gone (this is what the Context's processor pool does internally).
+    // session A is gone (this is what the core's processor pool does internally).
     auto pooled = POOL_PROCESSOR(session_b);
     const void* released_config_storage = static_cast<const void*>(config_a);
 
     // Release session A and free its config — exactly as a host destroying one plugin
     // instance would. Session B and the pooled processor live on.
-    Context::release_session(session_a);
+    Core::release_session(session_a);
     session_a.reset();
     delete pp_a;
     delete config_a;  // Session A's InferenceConfig storage is now freed.
@@ -95,7 +95,7 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
            "(use-after-free, issue #76)";
 
     // Cleanup: releasing the last session tears the shared thread pool down.
-    Context::release_session(session_b);
+    Core::release_session(session_b);
 }
 
 #else

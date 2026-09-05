@@ -1,4 +1,4 @@
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
@@ -106,7 +106,7 @@ TEST(AbiJsonUpgrade, SimpleGainUpgrades) {
                 {1, 1, 512});
     EXPECT_EQ(cfg.m_inputs[0].m_window_min, 512);
     EXPECT_EQ(cfg.m_inputs[0].m_window_max, 512);
-    EXPECT_EQ(cfg.m_inputs[0].m_context, 0);
+    EXPECT_EQ(cfg.m_inputs[0].m_overlap, 0);
     EXPECT_EQ(cfg.m_inputs[1].m_role, ANIRA_ROLE_STATIC) << "size 0 = static";
     expect_axes(cfg.m_inputs[1], {ANIRA_AXIS_ANY}, {1});
     EXPECT_EQ(cfg.m_outputs[0].m_role, ANIRA_ROLE_STREAMED);
@@ -153,7 +153,7 @@ TEST(AbiJsonUpgrade, RaveShapedDocument) {
     ASSERT_EQ(cfg.m_inputs.size(), 1u);
     expect_axes(cfg.m_inputs[0], {ANIRA_AXIS_ANY, ANIRA_AXIS_CHANNEL, ANIRA_AXIS_TIME}, {1, 4, 1});
     EXPECT_EQ(cfg.m_inputs[0].m_window_min, 1);
-    EXPECT_EQ(cfg.m_inputs[0].m_context, 0);
+    EXPECT_EQ(cfg.m_inputs[0].m_overlap, 0);
     ASSERT_EQ(cfg.m_outputs.size(), 1u);
     expect_axes(cfg.m_outputs[0],
                 {ANIRA_AXIS_ANY, ANIRA_AXIS_CHANNEL, ANIRA_AXIS_TIME},
@@ -162,19 +162,19 @@ TEST(AbiJsonUpgrade, RaveShapedDocument) {
     EXPECT_EQ(cfg.m_outputs[0].m_latency, 2048);
 
     // The same document through the other two loaders.
-    anira_machine_config* mc = nullptr;
+    anira_context_config* context_config = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(anira_machine_config_from_json(anira_test::k_rave_v2,
+    ASSERT_EQ(anira_context_config_from_json(anira_test::k_rave_v2,
                                              std::strlen(anira_test::k_rave_v2),
-                                             &mc,
+                                             &context_config,
                                              &err),
               ANIRA_SUCCESS_UPGRADED)
         << err.message;
-    EXPECT_EQ(mc->m_num_threads, 2u);
-    EXPECT_EQ(mc->m_wait, ANIRA_WAIT_BLOCKING);
-    EXPECT_EQ(mc->m_log_level, ANIRA_LOG_ERROR) << "the bare log_level key upgrades";
-    EXPECT_TRUE(mc->m_upgraded);
-    anira_machine_config_destroy(mc);
+    EXPECT_EQ(context_config->m_num_threads, 2u);
+    EXPECT_EQ(context_config->m_wait, ANIRA_WAIT_BLOCKING);
+    EXPECT_EQ(context_config->m_log_level, ANIRA_LOG_ERROR) << "the bare log_level key upgrades";
+    EXPECT_TRUE(context_config->m_upgraded);
+    anira_context_config_destroy(context_config);
     anira_contract* contract = nullptr;
     ASSERT_EQ(anira_contract_from_json(anira_test::k_rave_v2,
                                        std::strlen(anira_test::k_rave_v2),
@@ -195,13 +195,13 @@ TEST(AbiJsonUpgrade, HybridShapedDocumentUsesThePerChannelWindow) {
     const anira_tensor_spec& in = m.m_config->m_inputs[0];
     expect_axes(in, {ANIRA_AXIS_ANY, ANIRA_AXIS_CHANNEL, ANIRA_AXIS_TIME}, {256, 1, 150});
     EXPECT_EQ(in.m_window_min, 38400) << "elements / channels";
-    EXPECT_EQ(in.m_context, 38400 - 256);
+    EXPECT_EQ(in.m_overlap, 38400 - 256);
     const anira_tensor_spec& out = m.m_config->m_outputs[0];
     // The axis carrying the per-channel element count (256) is Time; the other unit axis
     // carries the channel count 1.
     expect_axes(out, {ANIRA_AXIS_TIME, ANIRA_AXIS_CHANNEL}, {256, 1});
     EXPECT_EQ(out.m_window_min, 256);
-    EXPECT_EQ(out.m_context, 0);
+    EXPECT_EQ(out.m_overlap, 0);
 }
 
 TEST(AbiJsonUpgrade, TensorShapeSpellings) {
@@ -221,7 +221,7 @@ TEST(AbiJsonUpgrade, TensorShapeSpellings) {
     EXPECT_EQ(a.m_config->m_models[0].m_engine_id, "anira.v2.custom");
     EXPECT_EQ(a.m_config->m_inputs[0].m_window_min, 512)
         << "no processing_spec: the whole tensor per inference";
-    EXPECT_EQ(a.m_config->m_inputs[0].m_context, 0);
+    EXPECT_EQ(a.m_config->m_inputs[0].m_overlap, 0);
 
     const char* universal =
         R"({"inference_config": {"model_data": [{"model_path": "m", "inference_backend": "ONNX"}],
@@ -310,7 +310,7 @@ TEST(AbiJsonUpgrade, TimeFirstShapesKeepTheirTimeAxis) {
                 {ANIRA_AXIS_TIME, ANIRA_AXIS_ANY, ANIRA_AXIS_CHANNEL},
                 {2048, 1, 1});
     EXPECT_EQ(m.m_config->m_inputs[0].m_window_min, 2048);
-    EXPECT_EQ(m.m_config->m_inputs[0].m_context, 0);
+    EXPECT_EQ(m.m_config->m_inputs[0].m_overlap, 0);
     EXPECT_EQ(m.m_config->m_models[1].m_tensors.at("input_0").m_layout,
               (std::vector<uint32_t>{1, 0, 2}));
     EXPECT_EQ(m.m_config->m_models[1].m_tensors.at("output_0").m_layout,
@@ -336,4 +336,34 @@ TEST(AbiJsonUpgrade, RejectionsNameTheKeyPath) {
         EXPECT_EQ(m.m_status, ANIRA_ERROR_JSON) << text;
         EXPECT_NE(std::strstr(m.m_err.message, fragment), nullptr) << m.m_err.message;
     }
+}
+
+// A version 2 root beside a 3.x key is one document too many: refused by name, never read
+// as 2.x with the 3.x key silently ignored.
+TEST(AbiJsonUpgrade, AMixedRootIsRefusedByName) {
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_context_config* context_config = nullptr;
+    const char* mixed_context = R"({"context_config": {"num_threads": 1}, "num_threads": 2})";
+    EXPECT_EQ(anira_context_config_from_json(mixed_context,
+                                             std::strlen(mixed_context),
+                                             &context_config,
+                                             &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_EQ(context_config, nullptr);
+    EXPECT_NE(std::strstr(err.message, "num_threads"), nullptr) << err.message;
+    anira_model_config* cfg = nullptr;
+    const char* mixed_model = R"({"inference_config": {"model_data": []}, "models": []})";
+    EXPECT_EQ(
+        anira_model_config_from_json(mixed_model, std::strlen(mixed_model), nullptr, &cfg, &err),
+        ANIRA_ERROR_JSON);
+    EXPECT_EQ(cfg, nullptr);
+    EXPECT_NE(std::strstr(err.message, "models"), nullptr) << err.message;
+    anira_contract* contract = nullptr;
+    const char* mixed_contract =
+        R"({"inference_config": {"model_data": []}, "hard": {"budget": "measured"}})";
+    EXPECT_EQ(
+        anira_contract_from_json(mixed_contract, std::strlen(mixed_contract), &contract, &err),
+        ANIRA_ERROR_JSON);
+    EXPECT_EQ(contract, nullptr);
+    EXPECT_NE(std::strstr(err.message, "hard"), nullptr) << err.message;
 }

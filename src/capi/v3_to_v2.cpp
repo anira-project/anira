@@ -1,7 +1,7 @@
 // The exported face of the translator (anira/compat/v3_to_v2.h): every entry is the boundary
 // where a failure is said once (capi_internal.h), like the C entries of config.cpp.
 
-#include <anira/ContextConfig.h>
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
@@ -39,11 +39,11 @@ anira_status to_inference_config(const anira_model_config* model,
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
-anira_status to_context_config(const anira_machine_config* machine,
-                               anira::ContextConfig& out,
-                               anira_error* err) noexcept try {
-    ANIRA_CAPI_REQUIRE(machine != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "machine is NULL");
-    out = anira::capi::make_context_config(*machine);
+anira_status to_core_config(const anira_context_config* config,
+                            anira::CoreConfig& out,
+                            anira_error* err) noexcept try {
+    ANIRA_CAPI_REQUIRE(config != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "config is NULL");
+    out = anira::capi::make_core_config(*config);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 

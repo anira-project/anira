@@ -9,7 +9,7 @@
 #include "backends/LiteRtProcessor.h"
 #include "backends/OnnxRuntimeProcessor.h"
 #include "backends/TFLiteProcessor.h"
-#include "scheduler/Context.h"
+#include "scheduler/Core.h"
 #include "scheduler/InferenceManager.h"
 #include "scheduler/InferenceThread.h"
 #include "scheduler/LatencyCalculator.h"
