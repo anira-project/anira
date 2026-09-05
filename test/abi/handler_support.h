@@ -45,7 +45,8 @@ namespace anira_test {
 
 constexpr size_t k_block = 512;  // the gain model's hop (gain.model.json: window 512/512)
 constexpr double k_rate = 48000.0;
-constexpr int k_wait_s = 2;  // test_InferenceHandler.cpp's k_inference_timeout_s
+constexpr int k_wait_s = 20;  // a passing test never waits this long; an ExecuTorch CNN block
+                              // takes about 0.7 s here and several seconds under a loaded runner
 constexpr const char* k_custom = "anira.v2.custom";
 
 // ---- context and handler ---------------------------------------------------------------------
