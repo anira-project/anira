@@ -199,7 +199,7 @@ anira_status ANIRA_CALL anira_tensor_spec_set_window(anira_tensor_spec* spec,
     if (window_max < 0 && window_max != ANIRA_UNBOUNDED) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     spec->m_window_min = window_min;
     spec->m_window_max = window_max;
-    spec->m_core = context;
+    spec->m_context = context;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 

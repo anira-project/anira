@@ -39,11 +39,11 @@ anira_status to_inference_config(const anira_model_config* model,
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
-anira_status to_core_config(const anira_context_config* context,
+anira_status to_core_config(const anira_context_config* config,
                             anira::CoreConfig& out,
                             anira_error* err) noexcept try {
-    ANIRA_CAPI_REQUIRE(context != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "context is NULL");
-    out = anira::capi::make_core_config(*context);
+    ANIRA_CAPI_REQUIRE(config != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "config is NULL");
+    out = anira::capi::make_core_config(*config);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 

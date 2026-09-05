@@ -75,7 +75,7 @@ ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config&
                                                        uint32_t num_candidates);
 
 /// The 2.x CoreConfig of a context config: threads, wait strategy and the log scalars.
-ANIRA_API anira::CoreConfig make_core_config(const anira_context_config& context);
+ANIRA_API anira::CoreConfig make_core_config(const anira_context_config& config);
 
 /// The 2.x HostConfig of a Hard contract's geometry and the model config's anchor.
 ANIRA_API anira::HostConfig make_host_config(const anira_contract& contract,

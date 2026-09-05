@@ -1,6 +1,6 @@
 // Reclaims the core once every test in the binary has run.
 //
-// The Context is immortal by design, so at process exit it still owns the inference
+// The core is immortal by design, so at process exit it still owns the inference
 // queue and LeakSanitizer reports it — after the tests themselves have passed. Rather
 // than suppress that, do what a well-behaved host does on the way out and call the
 // public reclaim API, which frees the core only when nothing references it. Registered

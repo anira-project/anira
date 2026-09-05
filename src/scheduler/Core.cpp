@@ -631,7 +631,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     if (pool_size > 0 && inference_config.m_num_parallel_processors > pool_size) {
         ANIRA_LOG_WARNING(log_group::k_core,
                           "Session %d requested more parallel processors than threads are "
-                          "available in Context. Using number of threads as number of parallel "
+                          "available in the core. Using number of threads as number of parallel "
                           "processors.",
                           session_id);
         inference_config.m_num_parallel_processors = static_cast<unsigned int>(pool_size);

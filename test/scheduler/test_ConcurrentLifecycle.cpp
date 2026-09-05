@@ -15,7 +15,7 @@
 
 using namespace anira;
 
-// Reproduces the unsynchronized session-lifecycle defect: the Context
+// Reproduces the unsynchronized session-lifecycle defect: the core
 // singleton's static state (m_sessions vector, shared inference thread pool,
 // the m_core shared_ptr, and the "last session releases the pool" teardown
 // in release_session) is mutated by get_instance / create_session /
@@ -47,7 +47,7 @@ InferenceConfig make_inference_config() {
 }
 
 // One "plugin instance": config + processor + handler, prepared on
-// construction so the session is registered with the shared Context.
+// construction so the session is registered with the shared core.
 struct Instance {
     Instance() { m_handler.prepare(HostConfig(512, 48000)); }
 

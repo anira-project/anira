@@ -32,7 +32,8 @@ extern "C" {
  * @brief Creates an inference thread bound to the core's queue. Nothing runs until
  * anira_inference_thread_start or anira_inference_thread_run_loop; on WebAssembly the
  * object is created on the main instance and run in a Worker.
- * @param context The context whose core the thread serves; its wait strategy is the thread's.
+ * @param context The context whose core the thread serves; the thread waits with the core's
+ *        reconciled wait strategy, the first user's.
  * @param out Receives the object on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL context or out.

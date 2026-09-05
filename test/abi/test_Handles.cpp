@@ -40,11 +40,11 @@ struct Model {
     anira_error m_err = ANIRA_ERROR_INIT;
 };
 
-struct ContextConfigHandle {
-    ContextConfigHandle() { EXPECT_EQ(anira_context_config_create(&m_config, &m_err), ANIRA_OK); }
-    ~ContextConfigHandle() { anira_context_config_destroy(m_config); }
-    ContextConfigHandle(const ContextConfigHandle&) = delete;
-    ContextConfigHandle& operator=(const ContextConfigHandle&) = delete;
+struct Config {
+    Config() { EXPECT_EQ(anira_context_config_create(&m_config, &m_err), ANIRA_OK); }
+    ~Config() { anira_context_config_destroy(m_config); }
+    Config(const Config&) = delete;
+    Config& operator=(const Config&) = delete;
     anira_context_config* m_config = nullptr;
     anira_error m_err = ANIRA_ERROR_INIT;
 };
@@ -519,7 +519,7 @@ TEST(AbiLayout, StableFillReproducesTheTreesPerBackendShapes) {
 // ---- context config --------------------------------------------------------------------------
 
 TEST(AbiContextConfig, DefaultsScalarsAndClamps) {
-    const ContextConfigHandle m;
+    const Config m;
     EXPECT_EQ(m.m_config->m_num_threads, ANIRA_THREADS_AUTO);
     EXPECT_EQ(m.m_config->m_queue_capacity, 512u);
     EXPECT_EQ(anira_context_config_set_threads(m.m_config, 2, ANIRA_WAIT_BLOCKING), ANIRA_OK);
@@ -545,7 +545,7 @@ TEST(AbiContextConfig, DefaultsScalarsAndClamps) {
 }
 
 TEST(AbiContextConfig, LogDescriptorIsReadWithinItsSizeAndChecksTheAbi) {
-    const ContextConfigHandle m;
+    const Config m;
     anira_log_desc desc = ANIRA_LOG_DESC_INIT;
     desc.level = ANIRA_LOG_ERROR;
     desc.queue_capacity = 32;
@@ -562,7 +562,7 @@ TEST(AbiContextConfig, LogDescriptorIsReadWithinItsSizeAndChecksTheAbi) {
 }
 
 TEST(AbiContextConfig, DeviceDescriptorsAreCopiedWithinStructSize) {
-    const ContextConfigHandle m;
+    const Config m;
     anira_cuda_desc cuda{};
     cuda.struct_size = 12;  // struct_size, ownership, device: an older, shorter header
     cuda.ownership = ANIRA_OWNERSHIP_BORROWED;

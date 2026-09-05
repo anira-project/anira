@@ -40,7 +40,7 @@ class LogDrainLoop;
  * @brief Process-wide inference core: session registry, inference thread pool, backend
  * processor pools and the global inference queue
  *
- * The Context coordinates every inference session in a process (or, for a plugin, in the
+ * The core coordinates every inference session in a process (or, for a plugin, in the
  * binary that embeds anira): it owns the shared inference thread pool, pools backend
  * processors between sessions with equal configurations, and hands out the global
  * inference queue that the inference threads consume from.

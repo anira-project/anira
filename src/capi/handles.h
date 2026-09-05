@@ -125,7 +125,7 @@ struct anira_tensor_spec {
     uint32_t m_ndim = 0;
     int64_t m_window_min = 0;
     int64_t m_window_max = 0;
-    int64_t m_core = 0;
+    int64_t m_context = 0;
     int64_t m_ratio_num = 0;
     int64_t m_ratio_den = 0;
     int64_t m_latency = 0;

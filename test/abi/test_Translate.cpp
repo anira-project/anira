@@ -853,7 +853,7 @@ TEST(AbiTranslate, ContractRules) {
 // CoreConfig and HostConfig
 // ============================================================================
 
-TEST(AbiTranslate, ContextScalarsLandInTheContextConfig) {
+TEST(AbiTranslate, ContextScalarsLandInTheCoreConfig) {
     ContextConfig context;
     context.threads(2, ANIRA_WAIT_BLOCKING)
         .log_level(ANIRA_LOG_ERROR)

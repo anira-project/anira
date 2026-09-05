@@ -37,7 +37,7 @@ namespace anira {
  *       as the primary interface for inference operations rather than directly
  *       accessing lower-level components.
  *
- * @see InferenceThread, PrePostProcessor, Context, HostConfig, InferenceConfig
+ * @see InferenceThread, PrePostProcessor, Core, HostConfig, InferenceConfig
  */
 class ANIRA_API InferenceManager {
 public:
@@ -226,7 +226,7 @@ public:
      * Provides access to the internal inference core for testing and debugging.
      * This method should primarily be used for unit testing purposes.
      *
-     * @return Const reference to the internal Context object
+     * @return Const reference to the internal Core object
      */
     const Core& get_core() const;
 
@@ -348,7 +348,7 @@ private:
 
 private:
     Core& m_core;  ///< The process-wide inference core managing threads and
-                   ///< sessions (immortal, see Context)
+                   ///< sessions (immortal, see Core)
 
     InferenceConfig& m_inference_config;  ///< Reference to the inference configuration containing
                                           ///< model settings
@@ -361,7 +361,7 @@ private:
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr
-    Core* __doxygen_force_0;  ///< Placeholder for Doxygen to find Context class documentation
+    Core* __doxygen_force_0;  ///< Placeholder for Doxygen to find Core class documentation
     SessionElement* __doxygen_force_1;  ///< Placeholder for Doxygen to find SessionElement class
                                         ///< documentation
 #endif

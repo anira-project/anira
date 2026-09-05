@@ -46,7 +46,7 @@ class ExecuTorchProcessor;
 #endif
 
 /**
- * @brief Core session management class for individual inference instances
+ * @brief Session management class for individual inference instances
  *
  * The SessionElement class represents a single inference session, managing all
  * resources and state required for neural network inference processing. Each session
@@ -483,7 +483,7 @@ struct InferenceData {
  * inference threads can optionally block on the queue's semaphore instead of
  * polling (see WaitStrategy). The blocking queue is a strict superset of the
  * plain ConcurrentQueue API, and as long as no consumer ever blocks, its
- * enqueue never makes a syscall — so ContextConfigs using
+ * enqueue never makes a syscall — so CoreConfigs using
  * WaitStrategy::SpinBackoff keep the exact lock-free behavior of the plain
  * queue, at the cost of one extra atomic operation per enqueue/dequeue.
  *

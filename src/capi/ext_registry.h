@@ -129,7 +129,7 @@ struct EntryPayload {
 /// means every consumer of this build; an engine adapter consumes only the entries of its
 /// own engine. On failure err carries the offending name.
 ANIRA_API anira_status ext_check_consumed(const anira_model_config& model,
-                                          const anira_context_config* context,
+                                          const anira_context_config* config,
                                           const anira_contract* contract,
                                           const anira_engine* candidates,
                                           uint32_t num_candidates,

@@ -109,9 +109,10 @@ typedef enum anira_status {
 #define ANIRA_ERROR_MESSAGE_CAPACITY 512
 
 /**
- * @brief The opaque handle types. Config handles are value-like (copied at
- * anira_handler_create, destroyable right after); the runtime handles are refcounted
- * internally. Every anira_<x>_destroy is NULL-safe.
+ * @brief The opaque handle types. Config handles are value-like (copied at the create that
+ * takes them, anira_context_create today and anira_handler_create with the 3.x handler,
+ * destroyable right after); the runtime handles are refcounted internally. Every
+ * anira_<x>_destroy is NULL-safe.
  */
 typedef struct anira_tensor_spec anira_tensor_spec;
 typedef struct anira_model_config anira_model_config;

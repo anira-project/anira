@@ -502,7 +502,7 @@ TEST(AbiCxx, ContextConfigFromJsonRoundTripsByteStably) {
     EXPECT_EQ(ContextConfig::from_json(once).to_json(), once);
 
     const ContextConfig legacy = ContextConfig::from_json(anira_test::k_rave_v2);
-    EXPECT_TRUE(legacy.upgraded()) << "a 2.x core_config upgrades";
+    EXPECT_TRUE(legacy.upgraded()) << "a 2.x context_config upgrades";
     EXPECT_EQ(legacy.native()->m_log_level, ANIRA_LOG_ERROR);
 }
 

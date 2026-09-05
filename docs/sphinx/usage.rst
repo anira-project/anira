@@ -96,7 +96,7 @@ length; a streamed spec has exactly one Time axis and at most one Channel axis.
 A streamed spec also carries its **window**, ``window(window_min, window_max, context)``: how
 many elements along the Time axis one inference consumes (``window_min`` and ``window_max``,
 equal for a fixed window, ``window_max = ANIRA_UNBOUNDED`` for an open one) and how many of
-them are **context**, the elements kept from the previous window. The advance per inference,
+them are **context** (the left context), the elements kept from the previous window. The advance per inference,
 the hop, is the window minus the context. A receptive-field model whose export takes 15380
 samples and yields 2048 fresh ones is a window of 15380 with a context of 13332.
 
@@ -267,7 +267,7 @@ both aggregates, is the plan-validation policy for pipelines and does not affect
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The context config describes the process: every anira instance in it shares one inference
-thread pool, sized and configured by the first context created (section 3.1 says how later
+thread pool, sized and configured by its first user, a context or an inference handler (section 3.1 says how later
 contexts are reconciled against it).
 
 .. code-block:: cpp
@@ -379,7 +379,7 @@ the migration tool (:ref:`migration-json`).
 
 .. note::
     Coming from anira 2.x? All three loaders read the 2.x document (``inference_config`` /
-    ``core_config`` roots) as well and upgrade it in memory: ``upgraded()`` says so and
+    ``context_config`` roots) as well and upgrade it in memory: ``upgraded()`` says so and
     ``ModelConfig::take_legacy_contract()`` hands out the Hard contract it held back;
     :ref:`migration-json` lists what becomes what.
 
@@ -526,7 +526,7 @@ For models whose inference time dominates the round trip, the throughput of both
 .. note::
     On WebAssembly builds blocking waits are impossible — inference loops are driven cooperatively by JS Workers — so ``ANIRA_WAIT_BLOCKING`` is coerced to ``ANIRA_WAIT_SPIN_BACKOFF`` with a warning by the core.
 
-anira logs through `tanh-lib <https://github.com/tanh-lab/tanh-lib>`_'s ``thl::Logger``. Every record carries an ``anira.<component>`` group (``anira.core``, ``anira.scheduler``, ``anira.config``, ``anira.system``, ``anira.backend.<name>``, ``anira.web``), and anira never configures the sinks itself: where the messages end up is the host's decision, made with ``thl::Logger::set_config()`` / ``set_callback()``. By default tanh-lib writes to the platform log — ``os_log`` on macOS/iOS (visible in Console.app or ``log stream``), ``logcat`` on Android, stdout/stderr elsewhere; set ``LoggerConfig::m_console_enabled`` for a plain stdout/stderr console sink on Apple platforms.
+anira logs through `tanh-lib <https://github.com/tanh-lab/tanh-lib>`_'s ``thl::Logger``. Every record carries an ``anira.<component>`` group (``anira.core``, ``anira.scheduler``, ``anira.config``, ``anira.capi``, ``anira.system``, ``anira.backend.<name>``, ``anira.web``), and anira never configures the sinks itself: where the messages end up is the host's decision, made with ``thl::Logger::set_config()`` / ``set_callback()``. By default tanh-lib writes to the platform log — ``os_log`` on macOS/iOS (visible in Console.app or ``log stream``), ``logcat`` on Android, stdout/stderr elsewhere; set ``LoggerConfig::m_console_enabled`` for a plain stdout/stderr console sink on Apple platforms.
 
 Messages from the audio thread and the inference threads are real-time safe: they are formatted on the caller's stack and pushed into a lock-free queue the core owns (a ``thl::Logger::rt::Queue``), and reach the same sinks a little later with ``source = "rt"``. The context configuration (``context.log_drain(...)`` and ``context.log_queue_capacity(...)``, section 1.4; the ``log`` block of the context file) says how that queue is drained:
 

@@ -165,7 +165,7 @@ private:
                       const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct);
 
     /**
-     * @brief Executes the core inference operation with input/output buffers
+     * @brief Executes the inference operation itself with input/output buffers
      *
      * Performs the actual neural network inference using the session's backend
      * and the provided input/output buffer arrays. This is the lowest-level
@@ -240,7 +240,7 @@ private:
     // The thread counters (see get_num_active_threads()) are defined in
     // InferenceThread.cpp rather than as inline static members: an exported inline
     // variable would be bound STB_GNU_UNIQUE by GCC, which makes glibc refuse to ever
-    // unload the library (see Context).
+    // unload the library (see Core).
 
     std::atomic<bool> m_has_exited{false};  ///< Set by run_loop() on return, cleared on entry
     std::atomic<bool> m_in_loop{false};     ///< Set on run_loop() entry, cleared on return

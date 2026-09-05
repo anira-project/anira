@@ -255,7 +255,7 @@ struct KeptExt {
 
 /**
  * @brief One input or output of the model: your canonical name, the data type, the role, the
- * tagged axes in the model's memory order, and, for a streamed tensor, the window and context
+ * tagged axes in the model's memory order, and, for a streamed tensor, the window and left context
  * it is consumed with. Move-only; copied into a ModelConfig by input()/output().
  */
 class TensorSpec {
@@ -922,7 +922,7 @@ public:
         anira_error err{};
         detail::check(anira_context_config_create(&m_config, &err), err);
     }
-    /// A context file (section 8.2); a 2.x document's core_config is upgraded.
+    /// A context file (section 8.2); a 2.x document's context_config root is upgraded.
     static ContextConfig from_json(std::string_view utf8) {
         detail::abi_check_once();
         anira_error err{};
@@ -1188,7 +1188,7 @@ public:
     uint32_t num_inference_threads() const {
         return anira_context_num_inference_threads(m_context);
     }
-    /// The size of a tensor's byte image on this context.
+    /// The size of a tensor's byte image under the edges this context probed.
     uint64_t byte_image_bytes(uint64_t num_elements, DType dtype) const {
         return anira_context_byte_image_bytes(m_context, num_elements, dtype);
     }

@@ -44,7 +44,7 @@ using namespace anira;
 // reference would dangle and the next inference on the surviving session would
 // dereference freed memory.
 //
-// This reproduces the scenario at the Context level — two independently-owned
+// This reproduces the scenario at the core level — two independently-owned
 // configs with equal values (e.g. two anira~ patches), sharing one pooled
 // processor, then the first is released and its config freed.
 //
@@ -76,7 +76,7 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
         << "Sessions with equal configs are expected to share one pooled processor";
 
     // Keep the pooled processor alive independently so it can be inspected after
-    // session A is gone (this is what the Context's processor pool does internally).
+    // session A is gone (this is what the core's processor pool does internally).
     auto pooled = POOL_PROCESSOR(session_b);
     const void* released_config_storage = static_cast<const void*>(config_a);
 

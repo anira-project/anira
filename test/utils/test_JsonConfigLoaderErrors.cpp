@@ -136,7 +136,7 @@ TEST(JsonConfigLoaderErrors, MissingContextConfigKeyKeepsDefaults) {
 }
 
 // ============================================================================
-// core_config
+// context_config
 // ============================================================================
 
 TEST(JsonConfigLoaderErrors, NumThreadsWrongType) {

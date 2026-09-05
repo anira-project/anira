@@ -164,8 +164,8 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_backends(const anira_capabi
                                                               anira_backend_id* out) ANIRA_NOEXCEPT;
 
 /**
- * @brief The memory domains a tensor may live in on this context; ANIRA_DOMAIN_HOST alone in
- * this pre-release.
+ * @brief The memory domains a tensor may live in here; ANIRA_DOMAIN_HOST alone in this
+ * pre-release.
  * @param capabilities The capabilities.
  * @param count In: the capacity of out; out: the number of domains.
  * @param out Receives the domains, or NULL to ask for the count only.
@@ -251,8 +251,9 @@ ANIRA_API anira_status ANIRA_CALL anira_enabled_backends(uint32_t element_size,
                                                          anira_backend_id* out) ANIRA_NOEXCEPT;
 
 /**
- * @brief The size in bytes of a tensor's byte image on this context (section 7): the dense
- * encoding, num_elements times the element size, in this pre-release.
+ * @brief The size in bytes of a tensor's byte image under the edges this context probed
+ * (section 7): the dense encoding, num_elements times the element size, in this
+ * pre-release.
  * @param context The handle.
  * @param num_elements Elements of the tensor.
  * @param dtype The element type.

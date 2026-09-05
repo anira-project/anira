@@ -736,7 +736,7 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     PrePostProcessor pp_processor(config);
     CountingCopyBackend backend(config);
     // The warning asserted below is an ANIRA_LOG_RT_WARNING, filtered by the log level
-    // the Context applies from its CoreConfig (Error in release builds), and queued
+    // the core applies from its CoreConfig (Error in release builds), and queued
     // in the core's real-time log queue: with LogDrain::Manual the test drains it
     // itself, right before each assertion, into the LogRecordCollector below.
     CoreConfig core_config(2, WaitStrategy::SpinBackoff, LogLevel::Warning);

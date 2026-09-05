@@ -551,7 +551,7 @@ ANIRA_API void ANIRA_CALL anira_contract_destroy(anira_contract* contract) ANIRA
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_create(anira_context_config** out,
                                                               anira_error* err) ANIRA_NOEXCEPT;
@@ -565,7 +565,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_create(anira_context_conf
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown wait strategy.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_threads(anira_context_config* config,
                                                                    uint32_t num_threads,
@@ -578,7 +578,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_threads(anira_context
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown level.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_level(anira_context_config* config,
                                                                      anira_log_level level) ANIRA_NOEXCEPT;
@@ -591,7 +591,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_level(anira_conte
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown drain.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_drain(anira_context_config* config,
                                                                      anira_log_drain drain,
@@ -604,7 +604,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_drain(anira_conte
  * @return ANIRA_OK.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_queue_capacity(anira_context_config* config,
                                                                               uint32_t capacity) ANIRA_NOEXCEPT;
@@ -616,7 +616,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_queue_capacity(an
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown bit.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_flags(anira_context_config* config,
                                                                      uint32_t flags) ANIRA_NOEXCEPT;
@@ -629,7 +629,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_flags(anira_conte
  * @return ANIRA_OK.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_sink(anira_context_config* config,
                                                                     anira_log_fn callback,
@@ -643,7 +643,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_sink(anira_contex
  *         ANIRA_ERROR_ABI_VERSION when desc->abi_version fails anira_check_abi.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log(anira_context_config* config,
                                                                const anira_log_desc* desc) ANIRA_NOEXCEPT;
@@ -656,7 +656,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log(anira_context_con
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_cuda(anira_context_config* config,
                                                                 const anira_cuda_desc* desc) ANIRA_NOEXCEPT;
@@ -668,7 +668,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_cuda(anira_context_co
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_gl(anira_context_config* config,
                                                               const anira_gl_desc* desc) ANIRA_NOEXCEPT;
@@ -680,7 +680,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_gl(anira_context_conf
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_vulkan(anira_context_config* config,
                                                                   const anira_vulkan_desc* desc) ANIRA_NOEXCEPT;
@@ -692,7 +692,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_vulkan(anira_context_
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_metal(anira_context_config* config,
                                                                  const anira_metal_desc* desc) ANIRA_NOEXCEPT;
@@ -704,7 +704,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_metal(anira_context_c
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_d3d12(anira_context_config* config,
                                                                  const anira_d3d12_desc* desc) ANIRA_NOEXCEPT;
@@ -718,7 +718,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_d3d12(anira_context_c
  *         descriptor.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_webgpu(anira_context_config* config,
                                                                   const anira_webgpu_desc* desc) ANIRA_NOEXCEPT;
@@ -731,7 +731,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_webgpu(anira_context_
  * @return As anira_tensor_spec_set_ext.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_ext(anira_context_config* config,
                                                                const anira_ext_header* ext,
@@ -747,7 +747,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_ext(anira_context_con
  * @return As anira_tensor_spec_set_ext_json.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_set_ext_json(anira_context_config* config,
                                                                     const char* kind,
@@ -760,7 +760,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_ext_json(anira_contex
  * @param config The config, or NULL.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API void ANIRA_CALL anira_context_config_destroy(anira_context_config* config) ANIRA_NOEXCEPT;
 
@@ -1384,9 +1384,10 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_take_legacy_contract(anira_
 /**
  * @brief Loads a context config from JSON text (section 8.2). Device blocks in JSON imply
  * ANIRA_OWNERSHIP_OWNED; borrowed handles are code-only and patched afterwards with the
- * device setters. A version 2 document is upgraded (core_config; the bare log_level key
- * becomes log.level) and returns ANIRA_SUCCESS_UPGRADED.
- * @param utf8 The document text (a v3 context file, or a v2 document with a core_config root).
+ * device setters. A version 2 document is upgraded (context_config; the bare log_level
+ * key becomes log.level) and returns ANIRA_SUCCESS_UPGRADED.
+ * @param utf8 The document text (a v3 context file, or a v2 document with a context_config
+ *        root).
  * @param len Length of utf8 in bytes.
  * @param out Receives the handle on success.
  * @param err Nullable.
@@ -1394,7 +1395,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_take_legacy_contract(anira_
  *         text, a wrong type or an unknown vocabulary value.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_from_json(const char* utf8,
                                                                  size_t len,
@@ -1412,7 +1413,7 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_from_json(const char* utf
  *         ANIRA_ERROR_INVALID_ARGUMENT.
  * @par Thread contract
  * [main-thread]
- * @since ABI 0.1
+ * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_config_to_json(const anira_context_config* config,
                                                                char* buf,

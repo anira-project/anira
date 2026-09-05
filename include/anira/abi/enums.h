@@ -509,9 +509,9 @@ typedef enum anira_probe_rung {
  * @brief Log flag: every failed status of every C entry also emits one Error record whose text
  * is the anira_error message prefixed by the entry and the status (the boundary trace,
  * for an application that swallowed the status and a developer who only has the device
- * log). Off by default on every platform. The context config stores the flag; the
- * context of the 3.x runtime applies it, in this pre-release the process-wide switch is
- * anira::capi::set_trace_failures.
+ * log). Off by default on every platform. Held while a context that set it lives,
+ * counted across contexts.x runtime applies it, in this pre-release the process-wide
+ * switch is anira::capi::set_trace_failures.
  */
 #define ANIRA_LOG_FLAG_TRACE_FAILURES 2u
 

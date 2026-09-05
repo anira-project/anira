@@ -110,7 +110,7 @@ namespace anira::detail {
 /**
  * @brief The core-owned real-time log queue, or nullptr while no core exists.
  *
- * Set by Context when it builds its core (before the first session is registered) and
+ * Set by Core when it builds its State (before the first session is registered) and
  * cleared before the core is freed. Real-time log sites read it with one relaxed
  * load; no session — and hence no real-time path — exists while it is null.
  */

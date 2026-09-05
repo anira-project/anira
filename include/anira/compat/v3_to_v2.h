@@ -84,7 +84,7 @@ ANIRA_API anira_status to_inference_config(const anira_model_config* model,
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL context config;
  * ANIRA_ERROR_EXTENSION_UNKNOWN / _UNCONSUMED.
  */
-ANIRA_API anira_status to_core_config(const anira_context_config* context,
+ANIRA_API anira_status to_core_config(const anira_context_config* config,
                                       anira::CoreConfig& out,
                                       anira_error* err) noexcept;
 
@@ -168,10 +168,10 @@ anira::InferenceConfig to_inference_config(anira::ModelConfig&& model,
                                            std::span<const anira::Engine> candidates = {}) = delete;
 
 /// to_core_config over the handle; throws anira::Error with the reason.
-inline anira::CoreConfig to_core_config(const anira::ContextConfig& context) {
+inline anira::CoreConfig to_core_config(const anira::ContextConfig& config) {
     anira::CoreConfig out;
     anira_error err = ANIRA_ERROR_INIT;
-    const anira_status status = to_core_config(context.native(), out, &err);
+    const anira_status status = to_core_config(config.native(), out, &err);
     if (ANIRA_FAILED(status)) { throw anira::Error(err); }
     return out;
 }

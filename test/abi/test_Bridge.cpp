@@ -155,7 +155,7 @@ TEST(AbiBridge, BorrowedBytesKeepTheirPointer) {
     EXPECT_TRUE(cfg.m_model_data[0].m_is_binary);
 }
 
-TEST(AbiBridge, ContextConfigFromTheContextHandle) {
+TEST(AbiBridge, CoreConfigFromTheContextHandle) {
     ContextConfig context;
     context.threads(2, ANIRA_WAIT_BLOCKING)
         .log_level(ANIRA_LOG_ERROR)

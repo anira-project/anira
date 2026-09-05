@@ -244,7 +244,7 @@ fixture uses, the order does not matter.
 JSON files
 ----------
 
-The 2.x configuration file has two roots, ``core_config`` and ``inference_config``, and
+The 2.x configuration file has two roots, ``context_config`` and ``inference_config``, and
 mirrors the 2.x structs:
 
 .. code-block:: json
@@ -345,7 +345,7 @@ its default (the first streamed tensor), which is what the 2.x ``anira::HostConf
 
 In C++ the same document goes through the ``anira.hpp`` loaders: the model config from its
 ``inference_config`` block, the Hard contract that block held back, and the context config
-from its ``core_config`` block. Bridged, they are the 2.x objects the file described:
+from its ``context_config`` block. Bridged, they are the 2.x objects the file described:
 
 .. code-block:: cpp
 

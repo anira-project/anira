@@ -225,11 +225,13 @@ even from late-running static destructors) and is reclaimed at unload.
 
 **Solutions**:
     1. **Host unloads with a live instance** (a host bug, but it happens): on Linux
-       and macOS a library-unload hook calls :cpp:func:`anira::Core::shutdown`
+       and macOS a library-unload hook calls the core's shutdown
        automatically. On Windows nothing that runs at ``DLL_PROCESS_DETACH`` may join a
-       thread (loader lock), so call ``anira::Core::shutdown()`` from your module-exit
-       entry point — CLAP ``deinit``, VST3 ``ExitDll`` — as ``examples/clap-audio-plugin``
-       does. It is idempotent and cheap when there is nothing to do.
+       thread (loader lock), so call ``anira_shutdown()`` from your module-exit entry
+       point — CLAP ``deinit``, VST3 ``ExitDll`` — as ``examples/clap-audio-plugin``
+       does. It is idempotent and cheap when there is nothing to do, and it refuses
+       (``ANIRA_ERROR_INVALID_STATE``, nothing happens) while a context or a handler of
+       this copy of anira still exists.
     2. **You manage inference threads yourself** (``CoreConfig(0)`` +
        :cpp:func:`anira::Core::make_inference_thread`): stop them before your library
        can be unloaded; the hook only joins anira's own pool.

@@ -151,7 +151,7 @@ headers:
         value: "512"
         doc: "Capacity of anira_error::message including the terminating NUL."
       - kind: handles
-        doc: "The opaque handle types. Config handles are value-like (copied at anira_handler_create, destroyable right after); the runtime handles are refcounted internally. Every anira_<x>_destroy is NULL-safe."
+        doc: "The opaque handle types. Config handles are value-like (copied at the create that takes them, anira_context_create today and anira_handler_create with the 3.x handler, destroyable right after); the runtime handles are refcounted internally. Every anira_<x>_destroy is NULL-safe."
         names:
           - anira_tensor_spec
           - anira_model_config
@@ -636,7 +636,7 @@ headers:
       - kind: define
         name: ANIRA_LOG_FLAG_TRACE_FAILURES
         value: "2u"
-        doc: "Log flag: every failed status of every C entry also emits one Error record whose text is the anira_error message prefixed by the entry and the status (the boundary trace, for an application that swallowed the status and a developer who only has the device log). Off by default on every platform. The context config stores the flag; the context of the 3.x runtime applies it, in this pre-release the process-wide switch is anira::capi::set_trace_failures."
+        doc: "Log flag: every failed status of every C entry also emits one Error record whose text is the anira_error message prefixed by the entry and the status (the boundary trace, for an application that swallowed the status and a developer who only has the device log). Off by default on every platform. Held while a context that set it lives, counted across contexts.x runtime applies it, in this pre-release the process-wide switch is anira::capi::set_trace_failures."
       - kind: enum
         name: anira_model_state
         terminator: ANIRA_MODEL_STATE_FORCE32
@@ -1235,7 +1235,7 @@ headers:
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Creates a context config with the defaults: ANIRA_THREADS_AUTO threads, SPIN_BACKOFF, log level WARNING, the drain thread every 10 ms, a 512-record queue, no sink, no device blocks."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out."
       - kind: function
@@ -1247,7 +1247,7 @@ headers:
           - {type: anira_wait_strategy, name: wait, doc: "SPIN_BACKOFF (default) or BLOCKING."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "The inference thread pool the first context sizes."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown wait strategy."
       - kind: function
@@ -1258,7 +1258,7 @@ headers:
           - {type: anira_log_level, name: level, doc: "Default WARNING; the most verbose request across contexts wins."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "The runtime log level."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown level."
       - kind: function
@@ -1270,7 +1270,7 @@ headers:
           - {type: uint32_t, name: interval_ms, doc: "Drain-thread period in milliseconds; 0 keeps the default of 10."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Who drains the real-time log queue and how often."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown drain."
       - kind: function
@@ -1281,7 +1281,7 @@ headers:
           - {type: uint32_t, name: capacity, doc: "Records; clamped to [64, 65536]; fixed for the life of the core."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "The real-time log queue's capacity."
         return_doc: "ANIRA_OK."
       - kind: function
@@ -1292,7 +1292,7 @@ headers:
           - {type: uint32_t, name: flags, doc: "ANIRA_LOG_FLAG_* bits."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Log flags, e.g. ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown bit."
       - kind: function
@@ -1304,7 +1304,7 @@ headers:
           - {type: void*, name: user_data, doc: "Passed to callback."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "The context's log sink; ignored on Wasm, where anira_em_set_log_hook is the sink."
         return_doc: "ANIRA_OK."
       - kind: function
@@ -1315,7 +1315,7 @@ headers:
           - {type: const anira_log_desc*, name: desc, doc: "The log block; read within min(struct_size, sizeof(anira_log_desc))."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "The C one-shot convenience equal to the five scalar log setters."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL or short descriptor; ANIRA_ERROR_ABI_VERSION when desc->abi_version fails anira_check_abi."
       - kind: function
@@ -1326,7 +1326,7 @@ headers:
           - {type: const anira_cuda_desc*, name: desc, doc: "The block, or NULL = domain unavailable, edges pruned."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Declares the CUDA device block; presence is the user's declaration, no implicit probing."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
       - kind: function
@@ -1337,7 +1337,7 @@ headers:
           - {type: const anira_gl_desc*, name: desc, doc: "The block, or NULL."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Declares the OpenGL device block."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
       - kind: function
@@ -1348,7 +1348,7 @@ headers:
           - {type: const anira_vulkan_desc*, name: desc, doc: "The block, or NULL."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Declares the Vulkan device block."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
       - kind: function
@@ -1359,7 +1359,7 @@ headers:
           - {type: const anira_metal_desc*, name: desc, doc: "The block, or NULL."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Declares the Metal device block."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
       - kind: function
@@ -1370,7 +1370,7 @@ headers:
           - {type: const anira_d3d12_desc*, name: desc, doc: "The block, or NULL."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Declares the Direct3D 12 device block."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
       - kind: function
@@ -1381,7 +1381,7 @@ headers:
           - {type: const anira_webgpu_desc*, name: desc, doc: "The block, or NULL."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Declares the WebGPU device block (native Dawn); ANIRA_ERROR_NOT_SUPPORTED under Emscripten in 3.0."
         return_doc: "ANIRA_OK, ANIRA_ERROR_NOT_SUPPORTED, or ANIRA_ERROR_INVALID_ARGUMENT for a short descriptor."
       - kind: function
@@ -1393,7 +1393,7 @@ headers:
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Sets an extension on the context config (section 1b)."
         return_doc: "As anira_tensor_spec_set_ext."
       - kind: function
@@ -1407,7 +1407,7 @@ headers:
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "The JSON twin of anira_context_config_set_ext."
         return_doc: "As anira_tensor_spec_set_ext_json."
       - kind: function
@@ -1417,7 +1417,7 @@ headers:
           - {type: anira_context_config*, name: config, doc: "The config, or NULL."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Destroys a context config; NULL-safe."
       # ---- model config ----
       - kind: callback
@@ -1877,14 +1877,14 @@ headers:
         name: anira_context_config_from_json
         returns: anira_status
         params:
-          - {type: const char*, name: utf8, doc: "The document text (a v3 context file, or a v2 document with a core_config root)."}
+          - {type: const char*, name: utf8, doc: "The document text (a v3 context file, or a v2 document with a context_config root)."}
           - {type: size_t, name: len, doc: "Length of utf8 in bytes."}
           - {type: anira_context_config**, name: out, doc: "Receives the handle on success."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
-        since: "0.1"
-        doc: "Loads a context config from JSON text (section 8.2). Device blocks in JSON imply ANIRA_OWNERSHIP_OWNED; borrowed handles are code-only and patched afterwards with the device setters. A version 2 document is upgraded (core_config; the bare log_level key becomes log.level) and returns ANIRA_SUCCESS_UPGRADED."
+        since: "0.2"
+        doc: "Loads a context config from JSON text (section 8.2). Device blocks in JSON imply ANIRA_OWNERSHIP_OWNED; borrowed handles are code-only and patched afterwards with the device setters. A version 2 document is upgraded (context_config; the bare log_level key becomes log.level) and returns ANIRA_SUCCESS_UPGRADED."
         return_doc: "ANIRA_OK or ANIRA_SUCCESS_UPGRADED; ANIRA_ERROR_JSON with the key path for malformed text, a wrong type or an unknown vocabulary value."
       - kind: function
         name: anira_context_config_to_json
@@ -1896,7 +1896,7 @@ headers:
           - {type: size_t*, name: out_len, doc: "Receives the text length without the NUL; always written."}
         thread: main-thread
         status: promised
-        since: "0.1"
+        since: "0.2"
         doc: "Writes the config in v3 spelling (section 8.2), fixed key order; the sink is code-only and not written, device blocks are written without their borrowed handles."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_BUFFER_TOO_SMALL (out_len holds the required length) or ANIRA_ERROR_INVALID_ARGUMENT."
       - kind: function
@@ -2028,7 +2028,7 @@ headers:
         thread: thread-safe
         status: promised
         since: "0.2"
-        doc: "The memory domains a tensor may live in on this context; ANIRA_DOMAIN_HOST alone in this pre-release."
+        doc: "The memory domains a tensor may live in here; ANIRA_DOMAIN_HOST alone in this pre-release."
         return_doc: "ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, or ANIRA_ERROR_INVALID_ARGUMENT for NULL capabilities or count."
       - kind: function
         name: anira_capabilities_ext_kinds
@@ -2090,7 +2090,7 @@ headers:
         thread: thread-safe
         status: promised
         since: "0.2"
-        doc: "The size in bytes of a tensor's byte image on this context (section 7): the dense encoding, num_elements times the element size, in this pre-release."
+        doc: "The size in bytes of a tensor's byte image under the edges this context probed (section 7): the dense encoding, num_elements times the element size, in this pre-release."
         return_doc: "The byte count, 0 for a NULL context or a dtype without a size."
       - kind: function
         name: anira_context_drain_log
@@ -2179,7 +2179,7 @@ headers:
         name: anira_inference_thread_create
         returns: anira_status
         params:
-          - {type: anira_context*, name: context, doc: "The context whose core the thread serves; its wait strategy is the thread's."}
+          - {type: anira_context*, name: context, doc: "The context whose core the thread serves; the thread waits with the core's reconciled wait strategy, the first user's."}
           - {type: anira_inference_thread**, name: out, doc: "Receives the object on success."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread

@@ -62,7 +62,7 @@ inline const char* to_string(WaitStrategy wait_strategy) {
  * export any runtime logging control, so its (rare) log lines are unaffected.
  *
  * @note The level is process-global, like the inference thread pool. When the
- * ContextConfigs in a process disagree, the lowest (most verbose) requested
+ * CoreConfigs in a process disagree, the lowest (most verbose) requested
  * level wins — no session can silence the diagnostics another session asked
  * for — and the mismatch is reported with a warning.
  *
@@ -202,7 +202,7 @@ inline unsigned int default_num_threads() noexcept {
  * configurations while sessions exist; once the last session is released, the next
  * session's configuration takes effect again.
  *
- * @see Context, InferenceHandler
+ * @see Core, InferenceHandler
  */
 struct ANIRA_API CoreConfig {
     /**
@@ -228,7 +228,7 @@ struct ANIRA_API CoreConfig {
      *                   session's config and joined when the last session is released.
      * @param wait_strategy How idle inference threads wait for new work.
      *                   Default: WaitStrategy::SpinBackoff (see WaitStrategy for the
-     *                   trade-offs). Must be identical across all ContextConfigs in
+     *                   trade-offs). Must be identical across all CoreConfigs in
      *                   a process, since all sessions share one thread pool.
      * @param log_level Minimum severity of log messages emitted by anira and its
      *                   backends (see LogLevel); stored in m_log.m_level. Default:
@@ -278,7 +278,7 @@ struct ANIRA_API CoreConfig {
      *
      * See LogConfig. The level is applied process-globally when the core is
      * created and forwarded to the backend runtimes (see LogLevel); when
-     * ContextConfigs disagree, the lowest (most verbose) requested level wins and a
+     * CoreConfigs disagree, the lowest (most verbose) requested level wins and a
      * warning is logged. The drain mode, queue capacity and interval are those of the
      * first session; later sessions requesting different values are reported with a
      * warning.

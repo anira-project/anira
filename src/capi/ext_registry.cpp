@@ -393,7 +393,7 @@ anira_status check_bag(const ExtBag& bag,
 }  // namespace
 
 anira_status ext_check_consumed(const anira_model_config& model,
-                                const anira_context_config* context,
+                                const anira_context_config* config,
                                 const anira_contract* contract,
                                 const anira_engine* candidates,
                                 uint32_t num_candidates,
@@ -438,8 +438,8 @@ anira_status ext_check_consumed(const anira_model_config& model,
                                           num_candidates,
                                           err);
     if (ANIRA_FAILED(status)) { return status; }
-    if (context != nullptr) {
-        const anira_status context_status = check_bag(context->m_ext,
+    if (config != nullptr) {
+        const anira_status context_status = check_bag(config->m_ext,
                                                       "context",
                                                       "",
                                                       ANIRA_ENGINE_NONE,
