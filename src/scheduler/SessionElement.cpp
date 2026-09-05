@@ -5,6 +5,7 @@
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/Logger.h>
+#include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
 
 #ifdef USE_LIBTORCH

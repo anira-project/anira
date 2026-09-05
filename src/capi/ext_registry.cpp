@@ -1,6 +1,7 @@
 #include "ext_registry.h"
 
 #include <anira/abi/config.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 
@@ -406,7 +407,8 @@ anira_status check_bag(const ExtBag& bag,
         if (rows != nullptr) {
             std::string at = host_name(host);
             if (!where.empty()) { at += " " + where; }
-            rows->push_back(ExtPlanRow{std::move(at), slot.kind(), consumer});
+            rows->push_back(
+                ExtPlanRow{.m_host = std::move(at), .m_kind = slot.kind(), .m_consumer = consumer});
         }
     }
     return ANIRA_OK;

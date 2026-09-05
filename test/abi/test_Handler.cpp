@@ -20,10 +20,13 @@
 #include <gtest/gtest.h>
 
 #include <anira/anira.hpp>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -41,6 +44,7 @@ namespace {
 using anira_test::attach_processor;
 using anira_test::Context;
 using anira_test::custom_candidates;
+using anira_test::DestroyFirst;
 using anira_test::engine_candidates;
 using anira_test::expect_all;
 using anira_test::expect_same_block;
@@ -59,11 +63,11 @@ using anira_test::wait_for_push;
 /// The call form both sides are driven through.
 enum class Form { InPlace, Separate, Multi, PushPop, PushPopMulti };
 
-constexpr Form k_forms[] = {Form::InPlace,
-                            Form::Separate,
-                            Form::Multi,
-                            Form::PushPop,
-                            Form::PushPopMulti};
+constexpr std::array<Form, 5> k_forms{Form::InPlace,
+                                      Form::Separate,
+                                      Form::Multi,
+                                      Form::PushPop,
+                                      Form::PushPopMulti};
 
 /// The 2.x side's core config: the same threads, wait strategy and drain as the Context
 /// default, so the two users reconcile without a mismatch warning.
@@ -165,8 +169,8 @@ struct Oracle {
         v = in;
         std::vector<float> c_out(block, -1.0F);
         std::vector<float> v_out(block, -1.0F);
-        float gain_in_c = 1.0F;
-        float gain_in_v = 1.0F;
+        const float gain_in_c = 1.0F;
+        const float gain_in_v = 1.0F;
         float gain_out_c = -1.0F;
         float gain_out_v = -1.0F;
 
@@ -175,50 +179,56 @@ struct Oracle {
 
         switch (form) {
             case Form::InPlace: {
-                float* c_ch[1] = {c.data()};
-                float* v_ch[1] = {v.data()};
-                n_c = anira_handler_process(h(), c_ch, block, 0);
+                const std::array<float*, 1> c_ch{c.data()};
+                const std::array<float*, 1> v_ch{v.data()};
+                n_c = anira_handler_process(h(), c_ch.data(), block, 0);
                 wait_for_block(h(), prev_c);
-                n_v = m_v2.process(v_ch, block);
+                n_v = m_v2.process(v_ch.data(), block);
                 wait_for_block(m_v2, prev_v);
                 break;
             }
             case Form::Separate: {
-                const float* c_in[1] = {c.data()};
-                float* c_ch[1] = {c_out.data()};
-                const float* v_in[1] = {v.data()};
-                float* v_ch[1] = {v_out.data()};
-                n_c = anira_handler_process_separate(h(), c_in, block, c_ch, block, 0);
+                const std::array<const float*, 1> c_in{c.data()};
+                const std::array<float*, 1> c_ch{c_out.data()};
+                const std::array<const float*, 1> v_in{v.data()};
+                const std::array<float*, 1> v_ch{v_out.data()};
+                n_c =
+                    anira_handler_process_separate(h(), c_in.data(), block, c_ch.data(), block, 0);
                 wait_for_block(h(), prev_c);
-                n_v = m_v2.process(v_in, block, v_ch, block);
+                n_v = m_v2.process(v_in.data(), block, v_ch.data(), block);
                 wait_for_block(m_v2, prev_v);
                 c = c_out;
                 v = v_out;
                 break;
             }
             case Form::Multi: {
-                const float* c_in_ch[1] = {c.data()};
-                const float* c_gain_ch[1] = {&gain_in_c};
-                const float* const* c_in[2] = {c_in_ch, c_gain_ch};
-                size_t c_num_in[2] = {block, 1};
-                float* c_out_ch[1] = {c_out.data()};
-                float* c_gout_ch[1] = {&gain_out_c};
-                float* const* c_outs[2] = {c_out_ch, c_gout_ch};
-                size_t c_num_out[2] = {block, 1};
-                EXPECT_EQ(anira_handler_process_multi(h(), c_in, c_num_in, c_outs, c_num_out),
+                const std::array<const float*, 1> c_in_ch{c.data()};
+                const std::array<const float*, 1> c_gain_ch{&gain_in_c};
+                const std::array<const float* const*, 2> c_in{c_in_ch.data(), c_gain_ch.data()};
+                const std::array<size_t, 2> c_num_in{block, 1};
+                const std::array<float*, 1> c_out_ch{c_out.data()};
+                const std::array<float*, 1> c_gout_ch{&gain_out_c};
+                const std::array<float* const*, 2> c_outs{c_out_ch.data(), c_gout_ch.data()};
+                std::array<size_t, 2> c_num_out{block, 1};
+                EXPECT_EQ(anira_handler_process_multi(h(),
+                                                      c_in.data(),
+                                                      c_num_in.data(),
+                                                      c_outs.data(),
+                                                      c_num_out.data()),
                           ANIRA_OK);
                 n_c = c_num_out[0];
                 wait_for_block(h(), prev_c);
 
-                const float* v_in_ch[1] = {v.data()};
-                const float* v_gain_ch[1] = {&gain_in_v};
-                const float* const* v_in[2] = {v_in_ch, v_gain_ch};
-                size_t v_num_in[2] = {block, 1};
-                float* v_out_ch[1] = {v_out.data()};
-                float* v_gout_ch[1] = {&gain_out_v};
-                float* const* v_outs[2] = {v_out_ch, v_gout_ch};
-                size_t v_num_out[2] = {block, 1};
-                n_v = m_v2.process(v_in, v_num_in, v_outs, v_num_out)[0];
+                const std::array<const float*, 1> v_in_ch{v.data()};
+                const std::array<const float*, 1> v_gain_ch{&gain_in_v};
+                const std::array<const float* const*, 2> v_in{v_in_ch.data(), v_gain_ch.data()};
+                std::array<size_t, 2> v_num_in{block, 1};
+                const std::array<float*, 1> v_out_ch{v_out.data()};
+                const std::array<float*, 1> v_gout_ch{&gain_out_v};
+                const std::array<float* const*, 2> v_outs{v_out_ch.data(), v_gout_ch.data()};
+                std::array<size_t, 2> v_num_out{block, 1};
+                n_v =
+                    m_v2.process(v_in.data(), v_num_in.data(), v_outs.data(), v_num_out.data())[0];
                 wait_for_block(m_v2, prev_v);
                 if (m_num_outputs > 1) {
                     EXPECT_EQ(c_num_out[1], 1U) << "block " << k;
@@ -230,45 +240,47 @@ struct Oracle {
                 break;
             }
             case Form::PushPop: {
-                const float* c_in[1] = {c.data()};
-                float* c_ch[1] = {c_out.data()};
-                EXPECT_EQ(anira_handler_push_data(h(), c_in, block, 0), ANIRA_OK);
+                const std::array<const float*, 1> c_in{c.data()};
+                const std::array<float*, 1> c_ch{c_out.data()};
+                EXPECT_EQ(anira_handler_push_data(h(), c_in.data(), block, 0), ANIRA_OK);
                 wait_for_push(h(), prev_c, block);
-                n_c = anira_handler_pop_data(h(), c_ch, block, 0);
-                const float* v_in[1] = {v.data()};
-                float* v_ch[1] = {v_out.data()};
-                m_v2.push_data(v_in, block);
+                n_c = anira_handler_pop_data(h(), c_ch.data(), block, 0);
+                const std::array<const float*, 1> v_in{v.data()};
+                const std::array<float*, 1> v_ch{v_out.data()};
+                m_v2.push_data(v_in.data(), block);
                 wait_for_push(m_v2, prev_v, block);
-                n_v = m_v2.pop_data(v_ch, block);
+                n_v = m_v2.pop_data(v_ch.data(), block);
                 c = c_out;
                 v = v_out;
                 break;
             }
             case Form::PushPopMulti: {
-                const float* c_in_ch[1] = {c.data()};
-                const float* c_gain_ch[1] = {&gain_in_c};
-                const float* const* c_in[2] = {c_in_ch, c_gain_ch};
-                size_t c_num_in[2] = {block, 1};
-                float* c_out_ch[1] = {c_out.data()};
-                float* c_gout_ch[1] = {&gain_out_c};
-                float* const* c_outs[2] = {c_out_ch, c_gout_ch};
-                size_t c_num_out[2] = {block, 1};
-                EXPECT_EQ(anira_handler_push_data_multi(h(), c_in, c_num_in), ANIRA_OK);
+                const std::array<const float*, 1> c_in_ch{c.data()};
+                const std::array<const float*, 1> c_gain_ch{&gain_in_c};
+                const std::array<const float* const*, 2> c_in{c_in_ch.data(), c_gain_ch.data()};
+                const std::array<size_t, 2> c_num_in{block, 1};
+                const std::array<float*, 1> c_out_ch{c_out.data()};
+                const std::array<float*, 1> c_gout_ch{&gain_out_c};
+                const std::array<float* const*, 2> c_outs{c_out_ch.data(), c_gout_ch.data()};
+                std::array<size_t, 2> c_num_out{block, 1};
+                EXPECT_EQ(anira_handler_push_data_multi(h(), c_in.data(), c_num_in.data()),
+                          ANIRA_OK);
                 wait_for_push(h(), prev_c, block);
-                EXPECT_EQ(anira_handler_pop_data_multi(h(), c_outs, c_num_out), ANIRA_OK);
+                EXPECT_EQ(anira_handler_pop_data_multi(h(), c_outs.data(), c_num_out.data()),
+                          ANIRA_OK);
                 n_c = c_num_out[0];
 
-                const float* v_in_ch[1] = {v.data()};
-                const float* v_gain_ch[1] = {&gain_in_v};
-                const float* const* v_in[2] = {v_in_ch, v_gain_ch};
-                size_t v_num_in[2] = {block, 1};
-                float* v_out_ch[1] = {v_out.data()};
-                float* v_gout_ch[1] = {&gain_out_v};
-                float* const* v_outs[2] = {v_out_ch, v_gout_ch};
-                size_t v_num_out[2] = {block, 1};
-                m_v2.push_data(v_in, v_num_in);
+                const std::array<const float*, 1> v_in_ch{v.data()};
+                const std::array<const float*, 1> v_gain_ch{&gain_in_v};
+                const std::array<const float* const*, 2> v_in{v_in_ch.data(), v_gain_ch.data()};
+                std::array<size_t, 2> v_num_in{block, 1};
+                const std::array<float*, 1> v_out_ch{v_out.data()};
+                const std::array<float*, 1> v_gout_ch{&gain_out_v};
+                const std::array<float* const*, 2> v_outs{v_out_ch.data(), v_gout_ch.data()};
+                std::array<size_t, 2> v_num_out{block, 1};
+                m_v2.push_data(v_in.data(), v_num_in.data());
                 wait_for_push(m_v2, prev_v, block);
-                n_v = m_v2.pop_data(v_outs, v_num_out)[0];
+                n_v = m_v2.pop_data(v_outs.data(), v_num_out.data())[0];
                 if (m_num_outputs > 1) { EXPECT_EQ(gain_out_c, gain_out_v) << "block " << k; }
                 c = c_out;
                 v = v_out;
@@ -334,10 +346,11 @@ TEST(AbiHandler, NullArgumentsAreRefused) {
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
     const anira::ModelConfig model = gain_with_custom();
-    const anira_model_config* variants[] = {model.native()};
-    EXPECT_EQ(anira_pipeline_add_inference(nullptr, variants, 1, nullptr, 0, &err),
+    const std::array<const anira_model_config*, 1> variants{model.native()};
+    EXPECT_EQ(anira_pipeline_add_inference(nullptr, variants.data(), 1, nullptr, 0, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    ASSERT_EQ(anira_pipeline_add_inference(pipeline, variants, 1, nullptr, 0, &err), ANIRA_OK)
+    ASSERT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, nullptr, 0, &err),
+              ANIRA_OK)
         << err.message;
 
     anira_handler* handler = nullptr;
@@ -350,17 +363,22 @@ TEST(AbiHandler, NullArgumentsAreRefused) {
     EXPECT_EQ(handler, nullptr);
 
     std::vector<float> block(k_block, 0.0F);
-    float* ptrs[1] = {block.data()};
-    const float* in_ptrs[1] = {block.data()};
-    const float* const* in_multi[1] = {in_ptrs};
-    float* const* out_multi[1] = {ptrs};
-    size_t num_in[1] = {k_block};
-    size_t num_out[1] = {k_block};
+    const std::array<float*, 1> ptrs{block.data()};
+    const std::array<const float*, 1> in_ptrs{block.data()};
+    const std::array<const float* const*, 1> in_multi{in_ptrs.data()};
+    const std::array<float* const*, 1> out_multi{ptrs.data()};
+    const std::array<size_t, 1> num_in{k_block};
+    std::array<size_t, 1> num_out{k_block};
     uint32_t count = 0;
-    EXPECT_EQ(anira_handler_process(nullptr, ptrs, k_block, 0), 0U);
-    EXPECT_EQ(anira_handler_push_data(nullptr, in_ptrs, k_block, 0), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_handler_pop_data(nullptr, ptrs, k_block, 0), 0U);
-    EXPECT_EQ(anira_handler_process_multi(nullptr, in_multi, num_in, out_multi, num_out),
+    EXPECT_EQ(anira_handler_process(nullptr, ptrs.data(), k_block, 0), 0U);
+    EXPECT_EQ(anira_handler_push_data(nullptr, in_ptrs.data(), k_block, 0),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_pop_data(nullptr, ptrs.data(), k_block, 0), 0U);
+    EXPECT_EQ(anira_handler_process_multi(nullptr,
+                                          in_multi.data(),
+                                          num_in.data(),
+                                          out_multi.data(),
+                                          num_out.data()),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_get_latency(nullptr, 0), 0U);
     EXPECT_EQ(anira_handler_get_latencies(nullptr, &count, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
@@ -396,24 +414,30 @@ TEST(AbiHandler, UnpreparedEntriesRecordNotPrepared) {
     ASSERT_NE(h, nullptr);
 
     std::vector<float> block(k_block, 0.25F);
-    float* ptrs[1] = {block.data()};
-    const float* in_ptrs[1] = {block.data()};
-    void* typed_ptrs[1] = {block.data()};
-    const float* const* in_multi[1] = {in_ptrs};
-    float* const* out_multi[1] = {ptrs};
-    size_t num_in[1] = {k_block};
-    size_t num_out[1] = {k_block};
+    const std::array<float*, 1> ptrs{block.data()};
+    const std::array<const float*, 1> in_ptrs{block.data()};
+    const std::array<void*, 1> typed_ptrs{block.data()};
+    const std::array<const float* const*, 1> in_multi{in_ptrs.data()};
+    const std::array<float* const*, 1> out_multi{ptrs.data()};
+    const std::array<size_t, 1> num_in{k_block};
+    std::array<size_t, 1> num_out{k_block};
 
-    EXPECT_EQ(anira_handler_process(h, ptrs, k_block, 0), 0U);
+    EXPECT_EQ(anira_handler_process(h, ptrs.data(), k_block, 0), 0U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_push_data(h, in_ptrs, k_block, 0), ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_pop_data(h, ptrs, k_block, 0), 0U);
-    EXPECT_EQ(anira_handler_process_multi(h, in_multi, num_in, out_multi, num_out),
+    EXPECT_EQ(anira_handler_push_data(h, in_ptrs.data(), k_block, 0), ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_pop_data(h, ptrs.data(), k_block, 0), 0U);
+    EXPECT_EQ(anira_handler_process_multi(h,
+                                          in_multi.data(),
+                                          num_in.data(),
+                                          out_multi.data(),
+                                          num_out.data()),
               ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_push_data_multi(h, in_multi, num_in), ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_pop_data_multi(h, out_multi, num_out), ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_process_typed(h, typed_ptrs, k_block, 0), 0U);
-    EXPECT_EQ(anira_handler_process_wait(h, ptrs, k_block, ANIRA_WAIT_FOREVER, 0), 0U);
+    EXPECT_EQ(anira_handler_push_data_multi(h, in_multi.data(), num_in.data()),
+              ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_pop_data_multi(h, out_multi.data(), num_out.data()),
+              ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_process_typed(h, typed_ptrs.data(), k_block, 0), 0U);
+    EXPECT_EQ(anira_handler_process_wait(h, ptrs.data(), k_block, ANIRA_WAIT_FOREVER, 0), 0U);
     EXPECT_EQ(anira_handler_get_available_samples(h, 0, 0), 0U);
     EXPECT_EQ(anira_handler_get_latency(h, 0), 0U);
     EXPECT_EQ(anira_handler_set_plan(h, 0), ANIRA_ERROR_NOT_PREPARED);
@@ -597,7 +621,7 @@ TEST(AbiHandler, TypedTwinsAreBitEqualOnF32Slots) {
     anira_handler* t = typed.m_handler;
 
     size_t k = 1;
-    for (Form form : k_forms) {
+    for (const Form form : k_forms) {
         for (size_t i = 0; i < 4; ++i, ++k) {
             const std::vector<float> in = ramp(k);
             std::vector<float> f_buf = in;
@@ -612,62 +636,84 @@ TEST(AbiHandler, TypedTwinsAreBitEqualOnF32Slots) {
             const size_t prev_f = anira_handler_get_available_samples(f, 0, 0);
             const size_t prev_t = anira_handler_get_available_samples(t, 0, 0);
 
-            float* f_ch[1] = {f_buf.data()};
-            void* t_ch[1] = {t_buf.data()};
-            const float* f_in[1] = {f_buf.data()};
-            const void* t_in[1] = {t_buf.data()};
-            float* f_o[1] = {f_out.data()};
-            void* t_o[1] = {t_out.data()};
-            const float* f_gain_ch[1] = {&gain};
-            const void* t_gain_ch[1] = {&gain};
-            const float* const* f_ins[2] = {f_in, f_gain_ch};
-            const void* const* t_ins[2] = {t_in, t_gain_ch};
-            size_t f_num_in[2] = {k_block, 1};
-            size_t t_num_in[2] = {k_block, 1};
-            float* f_gout_ch[1] = {&f_gain_out};
-            void* t_gout_ch[1] = {&t_gain_out};
-            float* const* f_outs[2] = {f_o, f_gout_ch};
-            void* const* t_outs[2] = {t_o, t_gout_ch};
-            size_t f_num_out[2] = {k_block, 1};
-            size_t t_num_out[2] = {k_block, 1};
+            const std::array<float*, 1> f_ch{f_buf.data()};
+            const std::array<void*, 1> t_ch{t_buf.data()};
+            const std::array<const float*, 1> f_in{f_buf.data()};
+            const std::array<const void*, 1> t_in{t_buf.data()};
+            const std::array<float*, 1> f_o{f_out.data()};
+            const std::array<void*, 1> t_o{t_out.data()};
+            const std::array<const float*, 1> f_gain_ch{&gain};
+            const std::array<const void*, 1> t_gain_ch{&gain};
+            const std::array<const float* const*, 2> f_ins{f_in.data(), f_gain_ch.data()};
+            const std::array<const void* const*, 2> t_ins{t_in.data(), t_gain_ch.data()};
+            const std::array<size_t, 2> f_num_in{k_block, 1};
+            const std::array<size_t, 2> t_num_in{k_block, 1};
+            const std::array<float*, 1> f_gout_ch{&f_gain_out};
+            const std::array<void*, 1> t_gout_ch{&t_gain_out};
+            const std::array<float* const*, 2> f_outs{f_o.data(), f_gout_ch.data()};
+            const std::array<void* const*, 2> t_outs{t_o.data(), t_gout_ch.data()};
+            std::array<size_t, 2> f_num_out{k_block, 1};
+            std::array<size_t, 2> t_num_out{k_block, 1};
 
             switch (form) {
                 case Form::InPlace:
-                    n_f = anira_handler_process(f, f_ch, k_block, 0);
-                    n_t = anira_handler_process_typed(t, t_ch, k_block, 0);
+                    n_f = anira_handler_process(f, f_ch.data(), k_block, 0);
+                    n_t = anira_handler_process_typed(t, t_ch.data(), k_block, 0);
                     f_out = f_buf;
                     t_out = t_buf;
                     break;
                 case Form::Separate:
-                    n_f = anira_handler_process_separate(f, f_in, k_block, f_o, k_block, 0);
-                    n_t = anira_handler_process_separate_typed(t, t_in, k_block, t_o, k_block, 0);
+                    n_f = anira_handler_process_separate(f,
+                                                         f_in.data(),
+                                                         k_block,
+                                                         f_o.data(),
+                                                         k_block,
+                                                         0);
+                    n_t = anira_handler_process_separate_typed(t,
+                                                               t_in.data(),
+                                                               k_block,
+                                                               t_o.data(),
+                                                               k_block,
+                                                               0);
                     break;
                 case Form::Multi:
-                    EXPECT_EQ(anira_handler_process_multi(f, f_ins, f_num_in, f_outs, f_num_out),
+                    EXPECT_EQ(anira_handler_process_multi(f,
+                                                          f_ins.data(),
+                                                          f_num_in.data(),
+                                                          f_outs.data(),
+                                                          f_num_out.data()),
                               ANIRA_OK);
-                    EXPECT_EQ(
-                        anira_handler_process_multi_typed(t, t_ins, t_num_in, t_outs, t_num_out),
-                        ANIRA_OK);
+                    EXPECT_EQ(anira_handler_process_multi_typed(t,
+                                                                t_ins.data(),
+                                                                t_num_in.data(),
+                                                                t_outs.data(),
+                                                                t_num_out.data()),
+                              ANIRA_OK);
                     n_f = f_num_out[0];
                     n_t = t_num_out[0];
                     EXPECT_EQ(f_num_out[1], t_num_out[1]);
                     EXPECT_EQ(f_gain_out, t_gain_out);
                     break;
                 case Form::PushPop:
-                    EXPECT_EQ(anira_handler_push_data(f, f_in, k_block, 0), ANIRA_OK);
-                    EXPECT_EQ(anira_handler_push_data_typed(t, t_in, k_block, 0), ANIRA_OK);
+                    EXPECT_EQ(anira_handler_push_data(f, f_in.data(), k_block, 0), ANIRA_OK);
+                    EXPECT_EQ(anira_handler_push_data_typed(t, t_in.data(), k_block, 0), ANIRA_OK);
                     wait_for_push(f, prev_f, k_block);
                     wait_for_push(t, prev_t, k_block);
-                    n_f = anira_handler_pop_data(f, f_o, k_block, 0);
-                    n_t = anira_handler_pop_data_typed(t, t_o, k_block, 0);
+                    n_f = anira_handler_pop_data(f, f_o.data(), k_block, 0);
+                    n_t = anira_handler_pop_data_typed(t, t_o.data(), k_block, 0);
                     break;
                 case Form::PushPopMulti:
-                    EXPECT_EQ(anira_handler_push_data_multi(f, f_ins, f_num_in), ANIRA_OK);
-                    EXPECT_EQ(anira_handler_push_data_multi_typed(t, t_ins, t_num_in), ANIRA_OK);
+                    EXPECT_EQ(anira_handler_push_data_multi(f, f_ins.data(), f_num_in.data()),
+                              ANIRA_OK);
+                    EXPECT_EQ(anira_handler_push_data_multi_typed(t, t_ins.data(), t_num_in.data()),
+                              ANIRA_OK);
                     wait_for_push(f, prev_f, k_block);
                     wait_for_push(t, prev_t, k_block);
-                    EXPECT_EQ(anira_handler_pop_data_multi(f, f_outs, f_num_out), ANIRA_OK);
-                    EXPECT_EQ(anira_handler_pop_data_multi_typed(t, t_outs, t_num_out), ANIRA_OK);
+                    EXPECT_EQ(anira_handler_pop_data_multi(f, f_outs.data(), f_num_out.data()),
+                              ANIRA_OK);
+                    EXPECT_EQ(
+                        anira_handler_pop_data_multi_typed(t, t_outs.data(), t_num_out.data()),
+                        ANIRA_OK);
                     n_f = f_num_out[0];
                     n_t = t_num_out[0];
                     EXPECT_EQ(f_num_out[1], t_num_out[1]);
@@ -703,9 +749,9 @@ TEST(AbiHandler, AvailableSamplesTracksTheOutputRing) {
     EXPECT_EQ(anira_handler_get_available_samples(h, 0, 0), anira_handler_get_latency(h, 0));
     for (size_t k = 1; k <= 4; ++k) {
         std::vector<float> block = ramp(k);
-        float* ptrs[1] = {block.data()};
+        const std::array<float*, 1> ptrs{block.data()};
         const size_t prev = anira_handler_get_available_samples(h, 0, 0);
-        EXPECT_EQ(anira_handler_process(h, ptrs, k_block, 0), k_block);
+        EXPECT_EQ(anira_handler_process(h, ptrs.data(), k_block, 0), k_block);
         wait_for_block(h, prev);
     }
     EXPECT_LE(anira_handler_get_available_samples(h, 0, 0), 8 * k_block);
@@ -725,27 +771,27 @@ TEST(AbiHandler, LatencyVectorIsIndexAlignedWithZeroForStaticOutputs) {
     GainOracle oracle(context);
     oracle.m_v2.set_inference_backend(anira::InferenceBackend::CUSTOM);
     ASSERT_NO_FATAL_FAILURE(oracle.prepare(file_contract(k_gain_contract_json, k_block), k_block));
-    anira_handler* h = oracle.h();
+    const anira_handler* h = oracle.h();
 
     uint32_t count = 0;
     EXPECT_EQ(anira_handler_get_latencies(h, &count, nullptr), ANIRA_OK);
     EXPECT_EQ(count, 2U);
-    uint32_t out[2] = {0, 0};
+    std::array<uint32_t, 2> out{0, 0};
     count = 2;
-    EXPECT_EQ(anira_handler_get_latencies(h, &count, out), ANIRA_OK);
+    EXPECT_EQ(anira_handler_get_latencies(h, &count, out.data()), ANIRA_OK);
     EXPECT_EQ(count, 2U);
     EXPECT_EQ(out[0], anira_handler_get_latency(h, 0));
     EXPECT_GT(out[0], 0U);
     EXPECT_EQ(out[1], 0U) << "gain_out is Static";
     EXPECT_EQ(anira_handler_get_latency(h, 1), 0U);
 
-    uint32_t one[2] = {0, 77};
+    std::array<uint32_t, 2> one{0, 77};
     count = 1;
-    EXPECT_EQ(anira_handler_get_latencies(h, &count, one), ANIRA_INCOMPLETE);
+    EXPECT_EQ(anira_handler_get_latencies(h, &count, one.data()), ANIRA_INCOMPLETE);
     EXPECT_EQ(one[0], out[0]);
     EXPECT_EQ(one[1], 77U) << "only what fit is written";
     EXPECT_EQ(count, 2U);
-    EXPECT_EQ(anira_handler_get_latencies(h, nullptr, out), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_get_latencies(h, nullptr, out.data()), ANIRA_ERROR_INVALID_ARGUMENT);
 
     const std::vector<unsigned int> v2 = oracle.m_v2.get_latency_vector();
     ASSERT_EQ(v2.size(), 2U);
@@ -763,8 +809,8 @@ TEST(AbiHandler, ResetReSeedsTheStreamAndClearsRtError) {
     oracle.run_blocks(3, k_block, Form::InPlace);
 
     std::vector<float> block = ramp(99);
-    float* ptrs[1] = {block.data()};
-    EXPECT_EQ(anira_handler_process(h, ptrs, k_block, 99), 0U);
+    const std::array<float*, 1> ptrs{block.data()};
+    EXPECT_EQ(anira_handler_process(h, ptrs.data(), k_block, 99), 0U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
     oracle.reset();
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
@@ -823,9 +869,9 @@ TEST(AbiHandler, PlanReportRows) {
     ASSERT_NE(report, nullptr);
     for (size_t k = 1; k <= 2; ++k) {
         std::vector<float> block = ramp(k);
-        float* ptrs[1] = {block.data()};
+        const std::array<float*, 1> ptrs{block.data()};
         const size_t prev = anira_handler_get_available_samples(h, 0, 0);
-        EXPECT_EQ(anira_handler_process(h, ptrs, k_block, 0), k_block);
+        EXPECT_EQ(anira_handler_process(h, ptrs.data(), k_block, 0), k_block);
         wait_for_block(h, prev);
     }
     EXPECT_EQ(anira_handler_plan_report(h), report) << "the same report between prepares";
@@ -853,9 +899,9 @@ TEST(AbiHandler, PlanReportRows) {
               ANIRA_ERROR_INVALID_ARGUMENT);
 
     // Slots: two inputs, two outputs, every one a host slot.
-    anira_plan_slot slots[2] = {ANIRA_PLAN_SLOT_INIT, ANIRA_PLAN_SLOT_INIT};
+    std::array<anira_plan_slot, 2> slots{ANIRA_PLAN_SLOT_INIT, ANIRA_PLAN_SLOT_INIT};
     count = 2;
-    EXPECT_EQ(anira_plan_report_slots(report, 0, 1, sizeof(anira_plan_slot), &count, slots),
+    EXPECT_EQ(anira_plan_report_slots(report, 0, 1, sizeof(anira_plan_slot), &count, slots.data()),
               ANIRA_OK);
     ASSERT_EQ(count, 2U);
     for (uint32_t i = 0; i < 2; ++i) {
@@ -872,7 +918,7 @@ TEST(AbiHandler, PlanReportRows) {
         EXPECT_EQ(slots[i].reason, nullptr);
     }
     count = 2;
-    EXPECT_EQ(anira_plan_report_slots(report, 0, 0, sizeof(anira_plan_slot), &count, slots),
+    EXPECT_EQ(anira_plan_report_slots(report, 0, 0, sizeof(anira_plan_slot), &count, slots.data()),
               ANIRA_OK);
     EXPECT_EQ(count, 2U);
     for (uint32_t i = 0; i < 2; ++i) {
@@ -880,7 +926,12 @@ TEST(AbiHandler, PlanReportRows) {
         EXPECT_EQ(slots[i].is_input, 0U);
     }
     count = 2;
-    EXPECT_EQ(anira_plan_report_slots(report, num_plans, 1, sizeof(anira_plan_slot), &count, slots),
+    EXPECT_EQ(anira_plan_report_slots(report,
+                                      num_plans,
+                                      1,
+                                      sizeof(anira_plan_slot),
+                                      &count,
+                                      slots.data()),
               ANIRA_ERROR_INVALID_ARGUMENT);
 
     // Extensions: the gain files carry none.
@@ -890,26 +941,26 @@ TEST(AbiHandler, PlanReportRows) {
 
     // A caller with a larger stride: the row fills the slot record only.
     struct Padded {
-        anira_plan_slot s;
-        uint64_t pad[2];
+        anira_plan_slot m_slot;
+        std::array<uint64_t, 2> m_pad;
     };
     static_assert(sizeof(Padded) == sizeof(anira_plan_slot) + 16);
-    Padded padded[2];
+    std::array<Padded, 2> padded;
     for (Padded& p : padded) {
-        p.s = ANIRA_PLAN_SLOT_INIT;
-        p.pad[0] = 0xA5A5A5A5A5A5A5A5ULL;
-        p.pad[1] = 0x5A5A5A5A5A5A5A5AULL;
+        p.m_slot = ANIRA_PLAN_SLOT_INIT;
+        p.m_pad[0] = 0xA5A5A5A5A5A5A5A5ULL;
+        p.m_pad[1] = 0x5A5A5A5A5A5A5A5AULL;
     }
     count = 2;
-    EXPECT_EQ(anira_plan_report_slots(report, 0, 1, sizeof(Padded), &count, &padded[0].s),
+    EXPECT_EQ(anira_plan_report_slots(report, 0, 1, sizeof(Padded), &count, &padded[0].m_slot),
               ANIRA_OK);
     EXPECT_EQ(count, 2U);
     for (uint32_t i = 0; i < 2; ++i) {
-        EXPECT_EQ(padded[i].s.slot, i);
-        EXPECT_EQ(padded[i].s.is_input, 1U);
-        EXPECT_STREQ(padded[i].s.recipe, "host");
-        EXPECT_EQ(padded[i].pad[0], 0xA5A5A5A5A5A5A5A5ULL);
-        EXPECT_EQ(padded[i].pad[1], 0x5A5A5A5A5A5A5A5AULL);
+        EXPECT_EQ(padded[i].m_slot.slot, i);
+        EXPECT_EQ(padded[i].m_slot.is_input, 1U);
+        EXPECT_STREQ(padded[i].m_slot.recipe, "host");
+        EXPECT_EQ(padded[i].m_pad[0], 0xA5A5A5A5A5A5A5A5ULL);
+        EXPECT_EQ(padded[i].m_pad[1], 0x5A5A5A5A5A5A5A5AULL);
     }
 
     // A second context asking for BLOCKING while the first lives reports the strategy the core
@@ -944,9 +995,9 @@ TEST(AbiHandler, ConfigsAreCopiedAndDestroyableRightAfterCreate) {
         const std::vector<anira_backend_id> candidates = custom_candidates();
         anira_pipeline* pipeline = nullptr;
         ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
-        const anira_model_config* variants[] = {model.native()};
+        const std::array<const anira_model_config*, 1> variants{model.native()};
         ASSERT_EQ(anira_pipeline_add_inference(pipeline,
-                                               variants,
+                                               variants.data(),
                                                1,
                                                candidates.data(),
                                                static_cast<uint32_t>(candidates.size()),
@@ -963,9 +1014,9 @@ TEST(AbiHandler, ConfigsAreCopiedAndDestroyableRightAfterCreate) {
     }
     for (size_t k = 1; k <= 4; ++k) {
         std::vector<float> block = ramp(k);
-        float* ptrs[1] = {block.data()};
+        const std::array<float*, 1> ptrs{block.data()};
         const size_t prev = anira_handler_get_available_samples(h, 0, 0);
-        EXPECT_EQ(anira_handler_process(h, ptrs, k_block, 0), k_block);
+        EXPECT_EQ(anira_handler_process(h, ptrs.data(), k_block, 0), k_block);
         wait_for_block(h, prev);
         if (k == 1) {
             expect_all(block, 0.0F, "the priming zeros");
@@ -1001,8 +1052,10 @@ TEST(AbiHandler, GeneratorPushIsANoOpAndPopPulls) {
     constexpr size_t k_hop = 2048;
     const Context context;
     const anira::ModelConfig model = anira_test::generator_model();
-    const std::vector<anira_backend_id> none{
-        {sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, nullptr}};
+    const std::vector<anira_backend_id> none{{.struct_size = sizeof(anira_backend_id),
+                                              .engine = ANIRA_ENGINE_NONE,
+                                              .provider = ANIRA_PROVIDER_DEFAULT,
+                                              .engine_id = nullptr}};
     Handler handler(context, model, none);
     ASSERT_EQ(handler.prepare(explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, 0.0, 10.0)),
               ANIRA_OK)
@@ -1010,25 +1063,28 @@ TEST(AbiHandler, GeneratorPushIsANoOpAndPopPulls) {
     anira_handler* h = handler.m_handler;
     anira_test::SleepingParamFillBackend backend(h->m_inference_config);
     ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
+    const DestroyFirst destroy_first(handler);
     EXPECT_EQ(anira_handler_get_latency(h, 0), k_hop) << "a generator counts from its first pull";
 
     // A push on a generator's static input submits nothing.
-    const float params[4] = {3.0F, 0.0F, 0.0F, 0.0F};
-    const float* param_ch[1] = {params};
-    EXPECT_EQ(anira_handler_push_data(h, param_ch, 4, 0), ANIRA_OK);
+    const std::array<float, 4> params{3.0F, 0.0F, 0.0F, 0.0F};
+    const std::array<const float*, 1> param_ch{params.data()};
+    EXPECT_EQ(anira_handler_push_data(h, param_ch.data(), 4, 0), ANIRA_OK);
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     EXPECT_EQ(backend.m_calls.load(), 0);
 
     // A pull delivers the priming block first, then the parameter's fill.
     for (int call = 0; call < 2; ++call) {
         std::vector<float> out(k_hop, -1.0F);
-        const float* const* in[1] = {param_ch};
-        size_t num_in[1] = {4};
-        float* out_ch[1] = {out.data()};
-        float* const* outs[1] = {out_ch};
-        size_t num_out[1] = {k_hop};
+        const std::array<const float* const*, 1> in{param_ch.data()};
+        const std::array<size_t, 1> num_in{4};
+        const std::array<float*, 1> out_ch{out.data()};
+        const std::array<float* const*, 1> outs{out_ch.data()};
+        std::array<size_t, 1> num_out{k_hop};
         const size_t prev = anira_handler_get_available_samples(h, 0, 0);
-        ASSERT_EQ(anira_handler_process_multi(h, in, num_in, outs, num_out), ANIRA_OK);
+        ASSERT_EQ(
+            anira_handler_process_multi(h, in.data(), num_in.data(), outs.data(), num_out.data()),
+            ANIRA_OK);
         EXPECT_EQ(num_out[0], k_hop) << "call " << call;
         wait_for_block(h, prev);
         expect_all(out, call == 0 ? 0.0F : 3.0F, call == 0 ? "the priming zeros" : "the fill");

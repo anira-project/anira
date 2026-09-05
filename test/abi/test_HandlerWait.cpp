@@ -13,7 +13,6 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <anira/anira.hpp>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -28,6 +27,7 @@ namespace {
 
 using anira_test::attach_processor;
 using anira_test::Context;
+using anira_test::DestroyFirst;
 using anira_test::explicit_contract;
 using anira_test::generator_model;
 using anira_test::Handler;
@@ -40,7 +40,10 @@ constexpr int k_thread_timeout_s = 30;
 
 /// The NONE entry alone: the custom row is the generator's only plan.
 std::vector<anira_backend_id> none_only() {
-    return {{sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, nullptr}};
+    return {{.struct_size = sizeof(anira_backend_id),
+             .engine = ANIRA_ENGINE_NONE,
+             .provider = ANIRA_PROVIDER_DEFAULT,
+             .engine_id = nullptr}};
 }
 
 /// One pull through anira_handler_process_multi_wait: the parameter travels with the multi
@@ -54,17 +57,21 @@ struct Pull {
 Pull pull(anira_handler* handler, float param, std::vector<float>& out, double timeout_ms) {
     const size_t n = out.size();
     const std::array<float, 4> params{param, 0.0F, 0.0F, 0.0F};
-    std::fill(out.begin(), out.end(), -1.0F);
-    const float* param_ch[1] = {params.data()};
-    const float* const* in[1] = {param_ch};
-    size_t num_in[1] = {4};
-    float* out_ch[1] = {out.data()};
-    float* const* outs[1] = {out_ch};
-    size_t num_out[1] = {n};
+    std::ranges::fill(out, -1.0F);
+    const std::array<const float*, 1> param_ch{params.data()};
+    const std::array<const float* const*, 1> in{param_ch.data()};
+    const std::array<size_t, 1> num_in{4};
+    const std::array<float*, 1> out_ch{out.data()};
+    const std::array<float* const*, 1> outs{out_ch.data()};
+    std::array<size_t, 1> num_out{n};
     Pull result;
     const auto start = std::chrono::steady_clock::now();
-    result.m_status =
-        anira_handler_process_multi_wait(handler, in, num_in, outs, num_out, timeout_ms);
+    result.m_status = anira_handler_process_multi_wait(handler,
+                                                       in.data(),
+                                                       num_in.data(),
+                                                       outs.data(),
+                                                       num_out.data(),
+                                                       timeout_ms);
     result.m_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start);
     result.m_received = num_out[0];
@@ -97,6 +104,7 @@ void drive_contract_wait(int first_sleep_us,
     backend.m_first_sleep_us = first_sleep_us;
     backend.m_sleep_us = sleep_us;
     ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
+    const DestroyFirst destroy_first(handler);
     const size_t latency = anira_handler_get_latency(h, 0);
 
     const size_t n = host_block;
@@ -189,6 +197,7 @@ TEST_P(AbiHandlerWaitRatio, ForeverIsTheDeterministicGenerator) {
     backend.m_first_sleep_us = 50000;
     backend.m_sleep_us = 5000;
     ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
+    const DestroyFirst destroy_first(handler);
     const size_t latency = anira_handler_get_latency(h, 0);
 
     const auto start = std::chrono::steady_clock::now();
@@ -199,8 +208,8 @@ TEST_P(AbiHandlerWaitRatio, ForeverIsTheDeterministicGenerator) {
         ASSERT_EQ(result.m_status, ANIRA_OK) << "block " << block;
         ASSERT_EQ(result.m_received, k_hop) << "block " << block << ": never a miss";
         for (size_t s = 0; s < k_hop; ++s, ++position) {
-            const float expected =
-                position < latency ? 0.0F : 1.0F + static_cast<float>((position - latency) / k_hop);
+            const size_t hop = position < latency ? 0 : (position - latency) / k_hop;
+            const float expected = position < latency ? 0.0F : 1.0F + static_cast<float>(hop);
             ASSERT_EQ(out[s], expected) << "block " << block << ", sample " << s;
         }
     }
@@ -219,40 +228,45 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
                   ANIRA_OK)
             << handler.m_err.message;
         anira_handler* h = handler.m_handler;
+        // Every inference stalls for 1 s: far beyond the deadlines and the 500 ms bounds
+        // below, so a loaded runner cannot let an inference land inside a wait that is
+        // expected to miss.
         SleepingParamFillBackend backend(h->m_inference_config);
-        backend.m_first_sleep_us = 200000;
-        backend.m_sleep_us = 200000;
+        backend.m_first_sleep_us = 1000000;
+        backend.m_sleep_us = 1000000;
         ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
+        const DestroyFirst destroy_first(handler);
 
         // The first pull delivers the priming zeros; the second finds the ring starved.
-        Pull first = pull(h, 1.0F, out, 20.0);
+        const Pull first = pull(h, 1.0F, out, 20.0);
         EXPECT_EQ(first.m_status, ANIRA_OK);
         EXPECT_EQ(first.m_received, k_hop);
-        Pull second = pull(h, 2.0F, out, 20.0);
+        const Pull second = pull(h, 2.0F, out, 20.0);
         EXPECT_EQ(second.m_status, ANIRA_OK) << "a miss, not a refusal";
         EXPECT_EQ(second.m_received, 0U);
         EXPECT_GE(second.m_elapsed, std::chrono::milliseconds(20));
-        EXPECT_LT(second.m_elapsed, std::chrono::milliseconds(150));
+        EXPECT_LT(second.m_elapsed, std::chrono::milliseconds(500))
+            << "the deadline, not the stall";
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
-        Pull forever = pull(h, 3.0F, out, ANIRA_WAIT_FOREVER);
+        const Pull forever = pull(h, 3.0F, out, ANIRA_WAIT_FOREVER);
         EXPECT_EQ(forever.m_status, ANIRA_OK);
         EXPECT_EQ(forever.m_received, k_hop);
 
         // The pop twin with an explicit timeout, from a re-seeded stream: the priming block,
         // then the stalled one.
         anira_handler_reset(h);
-        float* out_ch[1] = {out.data()};
-        EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch, k_hop, 20.0, 0), k_hop);
+        const std::array<float*, 1> out_ch{out.data()};
+        EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch.data(), k_hop, 20.0, 0), k_hop);
         const auto start = std::chrono::steady_clock::now();
-        EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch, k_hop, 20.0, 0), 0U);
+        EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch.data(), k_hop, 20.0, 0), 0U);
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start);
         EXPECT_GE(elapsed, std::chrono::milliseconds(20));
-        EXPECT_LT(elapsed, std::chrono::milliseconds(150));
+        EXPECT_LT(elapsed, std::chrono::milliseconds(500)) << "the deadline, not the stall";
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
 
         // A timeout at or above 1e12 ms is without limit: the pull delivers, never early.
-        Pull huge = pull(h, 4.0F, out, 1e13);
+        const Pull huge = pull(h, 4.0F, out, 1e13);
         EXPECT_EQ(huge.m_status, ANIRA_OK);
         EXPECT_EQ(huge.m_received, k_hop);
         EXPECT_GE(huge.m_elapsed, std::chrono::milliseconds(100)) << "it waited for the stall";
@@ -266,20 +280,22 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
             << handler.m_err.message;
         anira_handler* h = handler.m_handler;
         SleepingParamFillBackend backend(h->m_inference_config);
-        backend.m_first_sleep_us = 200000;
-        backend.m_sleep_us = 200000;
+        backend.m_first_sleep_us = 1000000;
+        backend.m_sleep_us = 1000000;
         ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
-        float* out_ch[1] = {out.data()};
+        const DestroyFirst destroy_first(handler);
+        const std::array<float*, 1> out_ch{out.data()};
         if (anira_handler_get_latency(h, 0) > 0) {
-            EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch, k_hop, ANIRA_WAIT_CONTRACT, 0), k_hop)
+            EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0),
+                      k_hop)
                 << "the priming block";
         }
         const auto start = std::chrono::steady_clock::now();
-        EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch, k_hop, ANIRA_WAIT_CONTRACT, 0), 0U);
+        EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0), 0U);
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start);
         EXPECT_GE(elapsed, std::chrono::milliseconds(21)) << "2048 / 48000 s";
-        EXPECT_LT(elapsed, std::chrono::milliseconds(150));
+        EXPECT_LT(elapsed, std::chrono::milliseconds(500)) << "the deadline, not the stall";
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
     }
 }
@@ -295,6 +311,7 @@ TEST_P(AbiHandlerWaitRatio, InvalidStateWithoutAnActiveThread) {
     anira_handler* h = handler.m_handler;
     SleepingParamFillBackend backend(h->m_inference_config);
     ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
+    const DestroyFirst destroy_first(handler);
     anira_drain_log();
     RecordCollector collector;
     std::vector<float> out(k_hop);
@@ -303,17 +320,17 @@ TEST_P(AbiHandlerWaitRatio, InvalidStateWithoutAnActiveThread) {
 
     // Both primitives refuse at once; the stem ran first: the priming block on the first
     // call, a miss on the second.
-    Pull first = pull(h, 1.0F, out, ANIRA_WAIT_FOREVER);
+    const Pull first = pull(h, 1.0F, out, ANIRA_WAIT_FOREVER);
     EXPECT_EQ(first.m_status, ANIRA_ERROR_INVALID_STATE);
-    EXPECT_LT(first.m_elapsed, std::chrono::milliseconds(100));
+    EXPECT_LT(first.m_elapsed, std::chrono::milliseconds(500)) << "refused, not waited for";
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(first.m_received, priming) << "what the nonblocking stem wrote";
-    Pull second = pull(h, 2.0F, out, ANIRA_WAIT_FOREVER);
+    const Pull second = pull(h, 2.0F, out, ANIRA_WAIT_FOREVER);
     EXPECT_EQ(second.m_status, ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(second.m_received, 0U) << "a miss: nothing runs the queued inference";
-    float* out_ch[1] = {out.data()};
-    EXPECT_EQ(anira_handler_process_wait(h, out_ch, k_hop, ANIRA_WAIT_FOREVER, 0), 0U);
-    EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch, k_hop, ANIRA_WAIT_CONTRACT, 0), 0U);
+    const std::array<float*, 1> out_ch{out.data()};
+    EXPECT_EQ(anira_handler_process_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_FOREVER, 0), 0U);
+    EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0), 0U);
     anira_drain_log();
 #ifdef ENABLE_LOGGING
     EXPECT_EQ(anira_test::count_records(collector,
@@ -342,7 +359,7 @@ TEST_P(AbiHandlerWaitRatio, InvalidStateWithoutAnActiveThread) {
     }
     ASSERT_NE(anira_inference_thread_is_running(thread), 0U);
     ASSERT_GT(anira::InferenceThread::get_num_loop_active(), 0U);
-    Pull served = pull(h, 3.0F, out, ANIRA_WAIT_FOREVER);
+    const Pull served = pull(h, 3.0F, out, ANIRA_WAIT_FOREVER);
     EXPECT_EQ(served.m_status, ANIRA_OK);
     EXPECT_EQ(served.m_received, k_hop);
     anira_inference_thread_stop(thread);

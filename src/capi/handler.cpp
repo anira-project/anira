@@ -12,12 +12,15 @@
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/InferenceThread.h>
+#include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
+#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 
@@ -29,6 +32,7 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <ratio>
 #include <string>
 #include <utility>
 #include <vector>
@@ -121,20 +125,21 @@ bool outputs_are_f32(anira_handler& handler, const char* entry) noexcept ANIRA_N
     return true;
 }
 
-// The argument predicates of the forms (the pointers are checked for NULL only).
-bool both_slots(const anira_handler& handler,
-                const void* in,
-                const void* out,
-                uint32_t slot) noexcept {
+// The argument predicates of the forms (the pointers are checked for NULL only; templates,
+// so the typed channel arrays need no cast down to void).
+template <typename In, typename Out>
+bool both_slots(const anira_handler& handler, In* in, Out* out, uint32_t slot) noexcept {
     return in != nullptr && out != nullptr && slot < handler.m_num_inputs &&
            slot < handler.m_num_outputs;
 }
 
-bool input_slot(const anira_handler& handler, const void* in, uint32_t slot) noexcept {
+template <typename In>
+bool input_slot(const anira_handler& handler, In* in, uint32_t slot) noexcept {
     return in != nullptr && slot < handler.m_num_inputs;
 }
 
-bool output_slot(const anira_handler& handler, const void* out, uint32_t slot) noexcept {
+template <typename Out>
+bool output_slot(const anira_handler& handler, Out* out, uint32_t slot) noexcept {
     return out != nullptr && slot < handler.m_num_outputs;
 }
 
@@ -440,8 +445,15 @@ void build_plans(anira_handler& handler,
         const anira::capi::ModelEntry& row = model.m_models[row_index];
         anira::capi::Plan plan;
         plan.m_row = row_index;
-        // validate kept the rows this build has an adapter for.
-        plan.m_backend = anira::capi::backend_of(row).value();
+        // validate kept the rows this build has an adapter for; a row without one here is a
+        // defect of that check, not of the configuration.
+        const std::optional<anira::InferenceBackend> backend = anira::capi::backend_of(row);
+        if (!backend.has_value()) {
+            throw StatusError(ANIRA_ERROR_INTERNAL,
+                              "handler: model entry " + std::to_string(row_index) +
+                                  " passed validate without a 2.x adapter");
+        }
+        plan.m_backend = *backend;
         plan.m_info.variant = 0;
         plan.m_info.engine = static_cast<uint32_t>(row.m_engine);
         plan.m_info.provider = ANIRA_PROVIDER_DEFAULT;
@@ -491,10 +503,12 @@ void build_report(anira_handler& handler,
     for (const anira::capi::Plan& plan : handler.m_plans) {
         report.m_plans.push_back(plan.m_info);
         std::vector<anira_plan_slot> inputs;
+        inputs.reserve(handler.m_num_inputs);
         for (uint32_t i = 0; i < handler.m_num_inputs; ++i) {
             inputs.push_back(host_slot(i, true, wait));
         }
         std::vector<anira_plan_slot> outputs;
+        outputs.reserve(handler.m_num_outputs);
         for (uint32_t i = 0; i < handler.m_num_outputs; ++i) {
             outputs.push_back(host_slot(i, false, wait));
         }
@@ -525,8 +539,9 @@ void build_report(anira_handler& handler,
 // anira_handler_prepare's body, step by step; any throw leaves through the caller, which
 // unprepares the handler.
 void prepare_handler(anira_handler& handler, const anira_contract& contract) {
-    // The snapshot: the handle may be destroyed when the call returns.
-    const anira_contract snapshot = contract;
+    // The snapshot: the handle may be destroyed when the call returns; the handler keeps it
+    // (moved into handler.m_contract below, after the last use of hard).
+    anira_contract snapshot = contract;
     const anira_model_config& model = handler.m_pipeline.m_variants[0];
     const std::vector<anira_backend_id> ids = handler.m_pipeline.candidate_ids();
     const auto num_ids = static_cast<uint32_t>(ids.size());
@@ -579,7 +594,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     build_plans(handler, model, derived, hard);
     build_report(handler, model, snapshot);
 
-    handler.m_contract = snapshot;
+    handler.m_contract = std::move(snapshot);
     handler.m_host_config = host;
     const uint32_t suppressed = handler.m_rt.rearm();
     if (suppressed > 0) {

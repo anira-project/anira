@@ -42,10 +42,10 @@ anira_status to_inference_config(const anira_model_config* model,
     if (candidates != nullptr) {
         ids.reserve(num_candidates);
         for (uint32_t i = 0; i < num_candidates; ++i) {
-            ids.push_back(anira_backend_id{sizeof(anira_backend_id),
-                                           static_cast<uint32_t>(candidates[i]),
-                                           ANIRA_PROVIDER_DEFAULT,
-                                           nullptr});
+            ids.push_back(anira_backend_id{.struct_size = sizeof(anira_backend_id),
+                                           .engine = static_cast<uint32_t>(candidates[i]),
+                                           .provider = ANIRA_PROVIDER_DEFAULT,
+                                           .engine_id = nullptr});
         }
     }
     out = anira::capi::make_inference_config(*model,

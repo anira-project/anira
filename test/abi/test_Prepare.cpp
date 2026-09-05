@@ -3,6 +3,7 @@
 // legacy contract's ZEROS, the structural rules at create, a model that does not load, the
 // second prepare, the failed prepare, and the context that outlives its destroy while a
 // handler lives.
+#include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
 #include <anira/abi/enums.h>
@@ -14,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include <anira/anira.hpp>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +43,7 @@ using anira::TensorSpec;
 using anira_test::attach_processor;
 using anira_test::Context;
 using anira_test::custom_candidates;
+using anira_test::DestroyFirst;
 using anira_test::expect_all;
 using anira_test::expect_same_block;
 using anira_test::explicit_contract;
@@ -102,10 +105,10 @@ CreateOutcome try_create(const Context& context,
     anira_error err = ANIRA_ERROR_INIT;
     anira_pipeline* pipeline = nullptr;
     EXPECT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
-    const anira_model_config* variants[] = {model.native()};
+    const std::array<const anira_model_config*, 1> variants{model.native()};
     outcome.m_status =
         anira_pipeline_add_inference(pipeline,
-                                     variants,
+                                     variants.data(),
                                      1,
                                      candidates.empty() ? nullptr : candidates.data(),
                                      static_cast<uint32_t>(candidates.size()),
@@ -123,16 +126,16 @@ CreateOutcome try_create(const Context& context,
 /// One in-place gain block through a prepared handler, waited.
 void run_waited_block(anira_handler* handler, size_t block_index, size_t n = k_block) {
     std::vector<float> block = ramp(block_index, n);
-    float* ptrs[1] = {block.data()};
+    const std::array<float*, 1> ptrs{block.data()};
     const size_t prev = anira_handler_get_available_samples(handler, 0, 0);
-    EXPECT_EQ(anira_handler_process(handler, ptrs, n, 0), n) << "block " << block_index;
+    EXPECT_EQ(anira_handler_process(handler, ptrs.data(), n, 0), n) << "block " << block_index;
     wait_for_block(handler, prev);
 }
 
 void expect_unprepared(anira_handler* handler) {
     std::vector<float> block(k_block, 0.5F);
-    float* ptrs[1] = {block.data()};
-    EXPECT_EQ(anira_handler_process(handler, ptrs, k_block, 0), 0U);
+    const std::array<float*, 1> ptrs{block.data()};
+    EXPECT_EQ(anira_handler_process(handler, ptrs.data(), k_block, 0), 0U);
     EXPECT_EQ(anira_handler_rt_error(handler), ANIRA_ERROR_NOT_PREPARED);
 }
 
@@ -246,8 +249,10 @@ TEST(AbiPrepare, HoldLastAndZerosAreAccepted) {
 TEST(AbiPrepare, BypassIsRefusedOnAGenerator) {
     const Context context;
     const ModelConfig model = generator_model();
-    const std::vector<anira_backend_id> none{
-        {sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, nullptr}};
+    const std::vector<anira_backend_id> none{{.struct_size = sizeof(anira_backend_id),
+                                              .engine = ANIRA_ENGINE_NONE,
+                                              .provider = ANIRA_PROVIDER_DEFAULT,
+                                              .engine_id = nullptr}};
     Handler handler(context, model, none);
     anira_error err = ANIRA_ERROR_INIT;
     EXPECT_EQ(handler.prepare(explicit_contract(2048, k_rate, ANIRA_MISS_BYPASS, 0.0, 10.0), &err),
@@ -297,27 +302,33 @@ size_t call(anira_handler* handler,
     switch (form) {
         case Form::InPlace: {
             out = in;
-            float* ch[1] = {out.data()};
-            return anira_handler_process(handler, ch, k_block, 0);
+            const std::array<float*, 1> ch{out.data()};
+            return anira_handler_process(handler, ch.data(), k_block, 0);
         }
         case Form::Separate: {
             out.assign(k_block, -1.0F);
-            const float* i[1] = {in.data()};
-            float* o[1] = {out.data()};
-            return anira_handler_process_separate(handler, i, k_block, o, k_block, 0);
+            const std::array<const float*, 1> i{in.data()};
+            const std::array<float*, 1> o{out.data()};
+            return anira_handler_process_separate(handler, i.data(), k_block, o.data(), k_block, 0);
         }
         case Form::Multi: {
             out.assign(k_block, -1.0F);
-            float gain = 1.0F;
-            const float* in_ch[1] = {in.data()};
-            const float* gain_ch[1] = {&gain};
-            const float* const* ins[2] = {in_ch, gain_ch};
-            size_t num_in[2] = {k_block, 1};
-            float* out_ch[1] = {out.data()};
-            float* gain_out_ch[1] = {&gain_out};
-            float* const* outs[2] = {out_ch, static_out ? gain_out_ch : nullptr};
-            size_t num_out[2] = {k_block, static_out ? 1U : 0U};
-            EXPECT_EQ(anira_handler_process_multi(handler, ins, num_in, outs, num_out), ANIRA_OK);
+            const float gain = 1.0F;
+            const std::array<const float*, 1> in_ch{in.data()};
+            const std::array<const float*, 1> gain_ch{&gain};
+            const std::array<const float* const*, 2> ins{in_ch.data(), gain_ch.data()};
+            const std::array<size_t, 2> num_in{k_block, 1};
+            const std::array<float*, 1> out_ch{out.data()};
+            const std::array<float*, 1> gain_out_ch{&gain_out};
+            const std::array<float* const*, 2> outs{out_ch.data(),
+                                                    static_out ? gain_out_ch.data() : nullptr};
+            std::array<size_t, 2> num_out{k_block, static_out ? 1U : 0U};
+            EXPECT_EQ(anira_handler_process_multi(handler,
+                                                  ins.data(),
+                                                  num_in.data(),
+                                                  outs.data(),
+                                                  num_out.data()),
+                      ANIRA_OK);
             return num_out[0];
         }
     }
@@ -342,6 +353,7 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
     RecordCollector collector;
     GateBackend gate(h->m_inference_config);
     ASSERT_NO_FATAL_FAILURE(attach_processor(h, gate));
+    const DestroyFirst destroy_first(handler, &gate);
     std::vector<float> out;
     float gain_out = -1.0F;
 
@@ -390,18 +402,18 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
         // A pop has no input block: the ring's block first, then zeros on the starved pop.
         gate.m_open.store(false);
         const std::vector<float> in = ramp(6);
-        const float* in_ch[1] = {in.data()};
-        EXPECT_EQ(anira_handler_push_data(h, in_ch, k_block, 0), ANIRA_OK);
+        const std::array<const float*, 1> in_ch{in.data()};
+        EXPECT_EQ(anira_handler_push_data(h, in_ch.data(), k_block, 0), ANIRA_OK);
         std::vector<float> popped(k_block, -1.0F);
-        float* popped_ch[1] = {popped.data()};
-        EXPECT_EQ(anira_handler_pop_data(h, popped_ch, k_block, 0), k_block);
+        const std::array<float*, 1> popped_ch{popped.data()};
+        EXPECT_EQ(anira_handler_pop_data(h, popped_ch.data(), k_block, 0), k_block);
         expect_same_block(popped, ramp(5), 6);
         popped.assign(k_block, -1.0F);
-        EXPECT_EQ(anira_handler_pop_data(h, popped_ch, k_block, 0), 0U);
+        EXPECT_EQ(anira_handler_pop_data(h, popped_ch.data(), k_block, 0), 0U);
         expect_all(popped, 0.0F, "the starved pop");
     }
     gate.m_open.store(true);  // before the handler is destroyed: the release waits for the
-                              // in-flight inference
+                              // in-flight inference (what destroy_first does either way)
 }
 
 }  // namespace
@@ -428,8 +440,8 @@ TEST(AbiPrepare, ZerosZeroFillsAStarvedBlock) {
 TEST(AbiPrepare, TheLegacyContractCarriesZeros) {
     {
         ModelConfig gain = ModelConfig::from_json(anira_test::k_simple_gain_v2);
-        std::optional<ContractHandle> legacy = gain.take_legacy_contract();
-        ASSERT_TRUE(legacy.has_value());
+        const std::optional<ContractHandle> legacy = gain.take_legacy_contract();
+        if (!legacy.has_value()) { FAIL() << "a version 2 document carries a legacy contract"; }
         ASSERT_NE(legacy->native()->hard(), nullptr);
         EXPECT_EQ(legacy->native()->hard()->m_on_miss, ANIRA_MISS_ZEROS);
     }
@@ -462,7 +474,7 @@ TEST(AbiPrepare, TheLegacyContractCarriesZeros) {
         ModelConfig model = ModelConfig::from_json(anira_test::gain_v2_document());
         model.add_model_path(k_custom, "custom-processor");
         std::optional<ContractHandle> legacy = model.take_legacy_contract();
-        ASSERT_TRUE(legacy.has_value());
+        if (!legacy.has_value()) { FAIL() << "a version 2 document carries a legacy contract"; }
         legacy->hard_geometry(512, 512, 48000.0);
         const std::vector<anira_backend_id> candidates = custom_candidates();
         Handler handler(context, model, candidates);
@@ -477,8 +489,10 @@ TEST(AbiPrepare, ZeroPlansIsConfigAtCreate) {
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in"));
     model.output(streamed("out"));
-    const std::vector<anira_backend_id> only_onnx{
-        {sizeof(anira_backend_id), ANIRA_ENGINE_ONNXRUNTIME, ANIRA_PROVIDER_DEFAULT, nullptr}};
+    const std::vector<anira_backend_id> only_onnx{{.struct_size = sizeof(anira_backend_id),
+                                                   .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                                   .provider = ANIRA_PROVIDER_DEFAULT,
+                                                   .engine_id = nullptr}};
     const CreateOutcome outcome = try_create(context, model, only_onnx);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "none of the 1 model entries names a candidate engine");
@@ -518,10 +532,10 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
             EXPECT_EQ(anira_plan_report_num_plans(anira_handler_plan_report(handler.m_handler)),
                       1U);
         }
-        const std::vector<anira_backend_id> missing_only{{sizeof(anira_backend_id),
-                                                          static_cast<uint32_t>(*missing),
-                                                          ANIRA_PROVIDER_DEFAULT,
-                                                          nullptr}};
+        const std::vector<anira_backend_id> missing_only{{.struct_size = sizeof(anira_backend_id),
+                                                          .engine = static_cast<uint32_t>(*missing),
+                                                          .provider = ANIRA_PROVIDER_DEFAULT,
+                                                          .engine_id = nullptr}};
         CreateOutcome outcome = try_create(context, with_custom, missing_only);
         EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
         expect_contains(outcome.m_message, "is not in this build");
@@ -537,8 +551,8 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
 
     // anira_pipeline_add_inference's own refusals.
     const ModelConfig model = gain_with_custom();
-    const anira_model_config* variants[] = {model.native()};
-    const anira_model_config* two[] = {model.native(), model.native()};
+    const std::array<const anira_model_config*, 1> variants{model.native()};
+    const std::array<const anira_model_config*, 2> two{model.native(), model.native()};
     anira_error err = ANIRA_ERROR_INIT;
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
@@ -549,23 +563,27 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
         expect_contains(err.message, "no inference stage");
         EXPECT_EQ(handler, nullptr);
     }
-    EXPECT_EQ(anira_pipeline_add_inference(pipeline, two, 2, nullptr, 0, &err),
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, two.data(), 2, nullptr, 0, &err),
               ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(err.message, "one variant per inference stage");
-    const anira_backend_id cuda{sizeof(anira_backend_id),
-                                ANIRA_ENGINE_ONNXRUNTIME,
-                                ANIRA_PROVIDER_CUDA,
-                                nullptr};
-    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants, 1, &cuda, 1, &err),
+    const anira_backend_id cuda{.struct_size = sizeof(anira_backend_id),
+                                .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                .provider = ANIRA_PROVIDER_CUDA,
+                                .engine_id = nullptr};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &cuda, 1, &err),
               ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(err.message, "Host-only");
-    const anira_backend_id short_row{4, ANIRA_ENGINE_ONNXRUNTIME, ANIRA_PROVIDER_DEFAULT, nullptr};
-    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants, 1, &short_row, 1, &err),
+    const anira_backend_id short_row{.struct_size = 4,
+                                     .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                     .provider = ANIRA_PROVIDER_DEFAULT,
+                                     .engine_id = nullptr};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &short_row, 1, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
     expect_contains(err.message, "struct_size");
-    ASSERT_EQ(anira_pipeline_add_inference(pipeline, variants, 1, nullptr, 0, &err), ANIRA_OK)
+    ASSERT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, nullptr, 0, &err),
+              ANIRA_OK)
         << err.message;
-    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants, 1, nullptr, 0, &err),
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, nullptr, 0, &err),
               ANIRA_ERROR_CONFIG);
     expect_contains(err.message, "a second inference stage");
     anira_pipeline_destroy(pipeline);
@@ -645,8 +663,8 @@ TEST(AbiPrepare, ASecondPrepareReplacesTheSessionWhole) {
     // Two 256-sample blocks: one 512-sample hop, one inference.
     for (size_t k = 1; k <= 2; ++k) {
         std::vector<float> block = ramp(k, 256);
-        float* ptrs[1] = {block.data()};
-        EXPECT_EQ(anira_handler_process(h, ptrs, 256, 0), 256U);
+        const std::array<float*, 1> ptrs{block.data()};
+        EXPECT_EQ(anira_handler_process(h, ptrs.data(), 256, 0), 256U);
     }
     wait_for_available(h, latency);
 }
@@ -683,9 +701,9 @@ TEST(AbiPrepare, TheContextOutlivesItsDestroyWhileAHandlerLives) {
     const std::vector<anira_backend_id> candidates = custom_candidates();
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
-    const anira_model_config* variants[] = {model.native()};
+    const std::array<const anira_model_config*, 1> variants{model.native()};
     ASSERT_EQ(anira_pipeline_add_inference(pipeline,
-                                           variants,
+                                           variants.data(),
                                            1,
                                            candidates.data(),
                                            static_cast<uint32_t>(candidates.size()),

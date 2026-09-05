@@ -2,6 +2,7 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/scheduler/SessionElement.h>

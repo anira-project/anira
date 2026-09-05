@@ -1,8 +1,9 @@
 // The shared fixtures of the anira/abi/handler.h tests (test_Handler, test_HandlerWait,
 // test_Prepare, test_RtError and the AbiCxx pipeline cases): a context and a handler with
 // their lifetimes, the bundled gain model with the engine-free custom row, the hand-built
-// generator and channel-mismatch models, the contracts, the block data, the waits, and the
-// test backends a session runs through its custom-processor pointer.
+// generator and channel-mismatch models, the contracts, the block data, the waits, the test
+// backends a session runs through its custom-processor pointer, and the guard that destroys
+// the handler before such a backend dies.
 #ifndef ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 #define ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 
@@ -103,9 +104,15 @@ inline std::vector<anira_engine> oracle_engines() {
 inline std::vector<anira_backend_id> custom_candidates() {
     std::vector<anira_backend_id> out;
     for (anira_engine engine : oracle_engines()) {
-        out.push_back({sizeof(anira_backend_id), engine, ANIRA_PROVIDER_DEFAULT, nullptr});
+        out.push_back({.struct_size = sizeof(anira_backend_id),
+                       .engine = engine,
+                       .provider = ANIRA_PROVIDER_DEFAULT,
+                       .engine_id = nullptr});
     }
-    out.push_back({sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, nullptr});
+    out.push_back({.struct_size = sizeof(anira_backend_id),
+                   .engine = ANIRA_ENGINE_NONE,
+                   .provider = ANIRA_PROVIDER_DEFAULT,
+                   .engine_id = nullptr});
     return out;
 }
 
@@ -113,7 +120,10 @@ inline std::vector<anira_backend_id> custom_candidates() {
 inline std::vector<anira_backend_id> engine_candidates() {
     std::vector<anira_backend_id> out;
     for (anira_engine engine : oracle_engines()) {
-        out.push_back({sizeof(anira_backend_id), engine, ANIRA_PROVIDER_DEFAULT, nullptr});
+        out.push_back({.struct_size = sizeof(anira_backend_id),
+                       .engine = engine,
+                       .provider = ANIRA_PROVIDER_DEFAULT,
+                       .engine_id = nullptr});
     }
     return out;
 }
@@ -221,16 +231,23 @@ struct Handler {
         EXPECT_EQ(anira_handler_create(context.m_context, m_pipeline, &m_handler, &m_err), ANIRA_OK)
             << m_err.message;
     }
-    ~Handler() {
-        anira_handler_destroy(m_handler);
-        anira_pipeline_destroy(m_pipeline);
-    }
+    ~Handler() { destroy(); }
     Handler(const Handler&) = delete;
     Handler& operator=(const Handler&) = delete;
 
     anira_status prepare(const anira::ContractHandle& contract, anira_error* err = nullptr) {
         m_err = ANIRA_ERROR_INIT;
         return anira_handler_prepare(m_handler, contract.native(), err != nullptr ? err : &m_err);
+    }
+
+    /// Destroys the handler and the pipeline now and nulls the pointers (idempotent; the
+    /// destructor calls it): the destroy drains the in-flight work and joins the pool with
+    /// the last session.
+    void destroy() {
+        anira_handler_destroy(m_handler);
+        m_handler = nullptr;
+        anira_pipeline_destroy(m_pipeline);
+        m_pipeline = nullptr;
     }
 
     anira_handler* m_handler = nullptr;
@@ -321,7 +338,10 @@ inline std::shared_ptr<anira::SessionElement> session_of(const anira_handler* ha
 }
 
 /// Control thread, after prepare and before the first block, while the selected plan is the
-/// custom row: the inference thread reads the pointer per inference.
+/// custom row: the inference thread reads the pointer per inference. The backend must outlive
+/// the handler (an inference thread may be inside its process() until the handler's destroy
+/// has drained the in-flight work), and a stack backend built from h->m_inference_config is
+/// declared after the handler: declare a DestroyFirst right after the attach.
 inline void attach_processor(const anira_handler* handler, anira::BackendBase& backend) {
     const std::shared_ptr<anira::SessionElement> session = session_of(handler);
     ASSERT_NE(session, nullptr);
@@ -426,6 +446,24 @@ public:
     std::atomic<int> m_started{0};
     int m_sleep_us = 0;
     int m_first_sleep_us = 0;
+};
+
+/// Declared right after a stack backend attach_processor() handed to the session, so at scope
+/// exit it runs before the backend's destructor: it opens a held gate so the in-flight
+/// inference can finish, then destroys the handler, which drains the in-flight work and joins
+/// the pool. No inference thread is inside the backend's process() when the backend dies.
+struct DestroyFirst {
+    explicit DestroyFirst(Handler& handler, GateBackend* gate = nullptr)
+        : m_handler(handler), m_gate(gate) {}
+    ~DestroyFirst() {
+        if (m_gate != nullptr) { m_gate->m_open.store(true); }
+        m_handler.destroy();
+    }
+    DestroyFirst(const DestroyFirst&) = delete;
+    DestroyFirst& operator=(const DestroyFirst&) = delete;
+
+    Handler& m_handler;
+    GateBackend* m_gate = nullptr;
 };
 
 }  // namespace anira_test

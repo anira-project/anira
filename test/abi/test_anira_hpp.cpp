@@ -27,7 +27,6 @@
 #include <utility>
 #include <vector>
 
-#include "../../extras/models/model_files.h"
 #include "capi/ext_registry.h"
 #include "capi/handles.h"
 #include "fixtures.h"
@@ -756,7 +755,8 @@ TEST(AbiCxx, PipelineIsMoveOnlyAndHoldsOneInferenceStage) {
     EXPECT_NE(second.m_what.find("a second inference stage"), std::string::npos) << second.m_what;
 
     const Thrown variants = thrown_by([&] {
-        anira::Pipeline two{anira::stage::Inference({std::cref(model), std::cref(model)}, {})};
+        const anira::Pipeline two{
+            anira::stage::Inference({std::cref(model), std::cref(model)}, {})};
     });
     EXPECT_TRUE(variants.m_thrown);
     EXPECT_EQ(variants.m_status, ANIRA_ERROR_NOT_SUPPORTED);
@@ -764,11 +764,12 @@ TEST(AbiCxx, PipelineIsMoveOnlyAndHoldsOneInferenceStage) {
         << variants.m_what;
 
     const Thrown provider = thrown_by([&] {
-        anira::Pipeline gpu{anira::stage::Inference(model,
-                                                    {anira::BackendId{sizeof(anira::BackendId),
-                                                                      ANIRA_ENGINE_ONNXRUNTIME,
-                                                                      ANIRA_PROVIDER_CUDA,
-                                                                      nullptr}})};
+        const anira::Pipeline gpu{
+            anira::stage::Inference(model,
+                                    {anira::BackendId{.struct_size = sizeof(anira::BackendId),
+                                                      .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                                      .provider = ANIRA_PROVIDER_CUDA,
+                                                      .engine_id = nullptr}})};
     });
     EXPECT_TRUE(provider.m_thrown);
     EXPECT_EQ(provider.m_status, ANIRA_ERROR_NOT_SUPPORTED);
@@ -780,14 +781,15 @@ TEST(AbiCxx, PipelineIsMoveOnlyAndHoldsOneInferenceStage) {
 
 TEST(AbiCxx, PlanReportRoundTripsOverAPreparedHandler) {
     static_assert(std::is_copy_constructible_v<anira::PlanReport>);
-    anira_test::Context context;
+    const anira_test::Context context;
     const anira::ModelConfig model = anira_test::gain_with_custom();
     // The custom row alone: one plan on every leg, the engine-less ones included.
-    anira::Pipeline pipe{anira::stage::Inference(model,
-                                                 {anira::BackendId{sizeof(anira::BackendId),
-                                                                   ANIRA_ENGINE_NONE,
-                                                                   ANIRA_PROVIDER_DEFAULT,
-                                                                   nullptr}})};
+    anira::Pipeline pipe{
+        anira::stage::Inference(model,
+                                {anira::BackendId{.struct_size = sizeof(anira::BackendId),
+                                                  .engine = ANIRA_ENGINE_NONE,
+                                                  .provider = ANIRA_PROVIDER_DEFAULT,
+                                                  .engine_id = nullptr}})};
     anira_handler* h = nullptr;
     anira_error err{};
     ASSERT_EQ(anira_handler_create(context.m_context, pipe.native(), &h, &err), ANIRA_OK)

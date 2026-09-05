@@ -167,9 +167,9 @@ void unloadtest_prepare(void* instance) {
 
 void unloadtest_process(void* instance, int num_blocks) {
     auto* i = static_cast<Instance*>(instance);
-    float* channel = i->m_buffer.data();
+    const std::array<float*, 1> channels{i->m_buffer.data()};
     for (int block = 0; block < num_blocks; ++block) {
-        static_cast<void>(anira_handler_process(i->m_handler, &channel, k_block_size, 0));
+        static_cast<void>(anira_handler_process(i->m_handler, channels.data(), k_block_size, 0));
     }
 }
 

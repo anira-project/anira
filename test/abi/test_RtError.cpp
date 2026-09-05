@@ -4,7 +4,6 @@
 // prepare; a throwing inference zero-fills, records ENGINE and keeps the pool; CAPACITY never
 // latches; the violation record carries its flags and the drain thread delivers it.
 #include <anira/abi/context.h>
-#include <anira/abi/core.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
@@ -16,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include <anira/anira.hpp>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -33,6 +33,7 @@ using anira_test::attach_processor;
 using anira_test::Context;
 using anira_test::count_records;
 using anira_test::custom_candidates;
+using anira_test::DestroyFirst;
 using anira_test::expect_all;
 using anira_test::expect_same_block;
 using anira_test::explicit_contract;
@@ -59,16 +60,17 @@ struct DebugContext : Context {
 /// The persistent INVALID_ARGUMENT: a process call with a tensor index the model has not.
 size_t bad_process(anira_handler* handler) {
     float sample = 0.0F;
-    float* ptrs[1] = {&sample};
-    return anira_handler_process(handler, ptrs, 1, 99);
+    const std::array<float*, 1> ptrs{&sample};
+    return anira_handler_process(handler, ptrs.data(), 1, 99);
 }
 
 /// One in-place gain block, waited, returned for the assertions.
 std::vector<float> waited_block(anira_handler* handler, size_t block_index) {
     std::vector<float> block = ramp(block_index);
-    float* ptrs[1] = {block.data()};
+    const std::array<float*, 1> ptrs{block.data()};
     const size_t prev = anira_handler_get_available_samples(handler, 0, 0);
-    EXPECT_EQ(anira_handler_process(handler, ptrs, k_block, 0), k_block) << "block " << block_index;
+    EXPECT_EQ(anira_handler_process(handler, ptrs.data(), k_block, 0), k_block)
+        << "block " << block_index;
     wait_for_block(handler, prev);
     return block;
 }
@@ -89,9 +91,13 @@ TEST(AbiRtError, TheFirstOccurrenceRecordsOnceAndLaterOnesAreCounted) {
     anira_handler* h = handler.m_handler;
 
     std::vector<float> block(k_block, 0.0F);
-    float* ptrs[1] = {block.data()};
-    for (int i = 0; i < 5; ++i) { EXPECT_EQ(anira_handler_process(h, ptrs, k_block, 0), 0U); }
-    for (int i = 0; i < 3; ++i) { EXPECT_EQ(anira_handler_pop_data(h, ptrs, k_block, 0), 0U); }
+    const std::array<float*, 1> ptrs{block.data()};
+    for (int i = 0; i < 5; ++i) {
+        EXPECT_EQ(anira_handler_process(h, ptrs.data(), k_block, 0), 0U);
+    }
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_EQ(anira_handler_pop_data(h, ptrs.data(), k_block, 0), 0U);
+    }
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_PREPARED);
     anira_drain_log();
 #ifdef ENABLE_LOGGING
@@ -271,12 +277,13 @@ TEST(AbiRtError, SiteLatchesLogOncePerPrepareAndSummarise) {
     RecordCollector collector;
     GateBackend gate(h->m_inference_config);
     ASSERT_NO_FATAL_FAILURE(attach_processor(h, gate));
+    const DestroyFirst destroy_first(handler, &gate);
     gate.m_open.store(false);
 
     std::vector<float> block(k_block, 0.25F);
-    float* ptrs[1] = {block.data()};
+    const std::array<float*, 1> ptrs{block.data()};
     const auto starved_call = [&] {
-        anira_handler_process(h, ptrs, k_block, 0);
+        anira_handler_process(h, ptrs.data(), k_block, 0);
         anira_drain_log();
     };
     // The first call delivers the priming block, the rest starve: the S7 site latches once.
@@ -339,12 +346,13 @@ TEST(AbiRtError, EngineAfterAThrowingInferenceZeroFillsAndKeepsTheThread) {
     RecordCollector collector;
     ThrowingBackend backend(h->m_inference_config);
     ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
+    const DestroyFirst destroy_first(handler);
 
     {
         std::vector<float> block = ramp(1);
-        float* ptrs[1] = {block.data()};
+        const std::array<float*, 1> ptrs{block.data()};
         const size_t prev = anira_handler_get_available_samples(h, 0, 0);
-        EXPECT_EQ(anira_handler_process(h, ptrs, k_block, 0), k_block);
+        EXPECT_EQ(anira_handler_process(h, ptrs.data(), k_block, 0), k_block);
         expect_all(block, 0.0F, "block 1: the priming zeros");
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (anira_handler_rt_error(h) != ANIRA_ERROR_ENGINE &&
@@ -416,15 +424,15 @@ TEST(AbiRtLatch, CapacityNeverLatches) {
     EXPECT_EQ(latch.m_reported.load(), 0U);
     EXPECT_TRUE(latch.record(ANIRA_ERROR_WRONG_CONTRACT)) << "re-armed";
 
-    for (anira_status status : {ANIRA_ERROR_WRONG_CONTRACT,
-                                ANIRA_ERROR_NOT_PREPARED,
-                                ANIRA_ERROR_CONFIG,
-                                ANIRA_ERROR_INVALID_STATE,
-                                ANIRA_ERROR_INVALID_ARGUMENT,
-                                ANIRA_ERROR_ENGINE}) {
+    for (const anira_status status : {ANIRA_ERROR_WRONG_CONTRACT,
+                                      ANIRA_ERROR_NOT_PREPARED,
+                                      ANIRA_ERROR_CONFIG,
+                                      ANIRA_ERROR_INVALID_STATE,
+                                      ANIRA_ERROR_INVALID_ARGUMENT,
+                                      ANIRA_ERROR_ENGINE}) {
         EXPECT_NE(anira::rt_kind_bit(status), 0U) << status;
     }
-    for (anira_status status : {ANIRA_OK, ANIRA_TIMEOUT, ANIRA_ERROR_INTERNAL}) {
+    for (const anira_status status : {ANIRA_OK, ANIRA_TIMEOUT, ANIRA_ERROR_INTERNAL}) {
         EXPECT_EQ(anira::rt_kind_bit(status), 0U) << status;
     }
 
@@ -446,8 +454,8 @@ TEST(AbiRtError, AViolationRecordCarriesTheFlagsAndTheDrainDeliversIt) {
     Handler handler(context, model, candidates);
     anira_handler* h = handler.m_handler;
     std::vector<float> block(k_block, 0.0F);
-    float* ptrs[1] = {block.data()};
-    EXPECT_EQ(anira_handler_process(h, ptrs, k_block, 0), 0U);
+    const std::array<float*, 1> ptrs{block.data()};
+    EXPECT_EQ(anira_handler_process(h, ptrs.data(), k_block, 0), 0U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_PREPARED);
 #ifdef ENABLE_LOGGING
     EXPECT_TRUE(collector.wait_for("handler not prepared", "rt")) << "the drain thread delivers";

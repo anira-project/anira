@@ -1,4 +1,5 @@
 #include <anira/abi/config.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <gtest/gtest.h>
@@ -155,17 +156,17 @@ TEST(AbiExtRegistry, ConsumedOrFailWalkNamesTheOffender) {
     libtorch.m_path = "model.pt";
     ASSERT_EQ(libtorch.m_ext.set(&entry.header, &err), ANIRA_OK);
     model.m_models.push_back(libtorch);
-    const anira_backend_id only_onnx{sizeof(anira_backend_id),
-                                     ANIRA_ENGINE_ONNXRUNTIME,
-                                     ANIRA_PROVIDER_DEFAULT,
-                                     nullptr};
+    const anira_backend_id only_onnx{.struct_size = sizeof(anira_backend_id),
+                                     .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                     .provider = ANIRA_PROVIDER_DEFAULT,
+                                     .engine_id = nullptr};
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, &only_onnx, 1, &err),
               ANIRA_OK)
         << "a LibTorch entry that is not a candidate is not walked";
-    const anira_backend_id only_libtorch{sizeof(anira_backend_id),
-                                         ANIRA_ENGINE_LIBTORCH,
-                                         ANIRA_PROVIDER_DEFAULT,
-                                         nullptr};
+    const anira_backend_id only_libtorch{.struct_size = sizeof(anira_backend_id),
+                                         .engine = ANIRA_ENGINE_LIBTORCH,
+                                         .provider = ANIRA_PROVIDER_DEFAULT,
+                                         .engine_id = nullptr};
 #ifdef USE_LIBTORCH
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err), ANIRA_OK)
         << err.message;

@@ -1,6 +1,7 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/scheduler/Core.h>
@@ -9,6 +10,7 @@
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+#include <anira/utils/RtLatch.h>
 
 #include <algorithm>
 #include <atomic>

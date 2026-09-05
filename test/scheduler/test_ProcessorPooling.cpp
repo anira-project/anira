@@ -1,12 +1,13 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
 
 #include <memory>
 
 #include "../../extras/models/model_files.h"
 #include "../support/extras_fixtures.h"
-#include "capi/handles.h"
+#include "capi/handles.h"  // IWYU pragma: keep - defines anira_context_config
 #include "gtest/gtest.h"
 
 using namespace anira;
