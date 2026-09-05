@@ -8,6 +8,7 @@
  */
 
 #include <anira/abi/config.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/system/Exports.h>
@@ -126,14 +127,30 @@ struct EntryPayload {
 /// The consumed-or-fail walk of section 1b over a model config (its specs, its entries, the
 /// config itself) and, when given, a context config and a contract: every slot must be a
 /// known kind that a consumer in the candidate set reads from that host. candidates == NULL
-/// means every consumer of this build; an engine adapter consumes only the entries of its
-/// own engine. On failure err carries the offending name.
+/// means every consumer of this build; a built-in engine names its adapter, an engine_id a
+/// custom engine's rows, {ANIRA_ENGINE_NONE, DEFAULT, NULL} the custom rows (the provider
+/// is not read); an engine adapter consumes only the entries of its own engine. On failure
+/// err carries the offending name.
 ANIRA_API anira_status ext_check_consumed(const anira_model_config& model,
                                           const anira_context_config* config,
                                           const anira_contract* contract,
-                                          const anira_engine* candidates,
+                                          const anira_backend_id* candidates,
                                           uint32_t num_candidates,
                                           anira_error* err);
+
+/// One row of anira_plan_ext: a consumed slot and its consumer.
+struct ExtPlanRow {
+    std::string m_host;      ///< the host and where on it ("tensor 'in'", "model 0", "contract")
+    std::string m_kind;      ///< the extension kind
+    std::string m_consumer;  ///< the consumer's registered name
+};
+
+/// The extensions one plan consumes, in walk order (specs, the candidate entries, the model
+/// config, the contract). Never fails: ext_check_consumed ran first.
+ANIRA_API std::vector<ExtPlanRow> ext_consumed_rows(const anira_model_config& model,
+                                                    const anira_contract* contract,
+                                                    const anira_backend_id* candidates,
+                                                    uint32_t num_candidates);
 
 }  // namespace anira::capi
 

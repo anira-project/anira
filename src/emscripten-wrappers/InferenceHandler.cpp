@@ -88,7 +88,7 @@ void inferencehandler_prepare_with_latency_vector(uintptr_t ptr,
         latency_vector);
 }
 
-// Real-time safe: no allocations, thin wrapper over ANIRA_REALTIME method
+// Real-time safe: no allocations, thin wrapper over ANIRA_NONBLOCKING method
 EMSCRIPTEN_KEEPALIVE
 size_t inferencehandler_process(uintptr_t ptr,
                                 uintptr_t data_ptr,
@@ -100,7 +100,7 @@ size_t inferencehandler_process(uintptr_t ptr,
                                                                     tensor_index);
 }
 
-// Real-time safe: no allocations, thin wrapper over ANIRA_REALTIME method
+// Real-time safe: no allocations, thin wrapper over ANIRA_NONBLOCKING method
 EMSCRIPTEN_KEEPALIVE
 size_t inferencehandler_process_separate(uintptr_t ptr,
                                          uintptr_t input_ptr,
@@ -117,7 +117,7 @@ size_t inferencehandler_process_separate(uintptr_t ptr,
                                                                     tensor_index);
 }
 
-// Real-time safe: no allocations, thin wrapper over ANIRA_REALTIME method
+// Real-time safe: no allocations, thin wrapper over ANIRA_NONBLOCKING method
 EMSCRIPTEN_KEEPALIVE
 uintptr_t inferencehandler_process_multi(uintptr_t ptr,
                                          uintptr_t input_ptr,
@@ -136,7 +136,7 @@ uintptr_t inferencehandler_process_multi(uintptr_t ptr,
     return reinterpret_cast<uintptr_t>(result);
 }
 
-// Real-time safe: no allocations, thin wrapper over ANIRA_REALTIME method
+// Real-time safe: no allocations, thin wrapper over ANIRA_NONBLOCKING method
 EMSCRIPTEN_KEEPALIVE
 void inferencehandler_push_data(uintptr_t ptr,
                                 uintptr_t input_ptr,
@@ -148,7 +148,7 @@ void inferencehandler_push_data(uintptr_t ptr,
                                                                tensor_index);
 }
 
-// Real-time safe: no allocations, thin wrapper over ANIRA_REALTIME method
+// Real-time safe: no allocations, thin wrapper over ANIRA_NONBLOCKING method
 EMSCRIPTEN_KEEPALIVE
 void inferencehandler_push_data_multi(uintptr_t ptr,
                                       uintptr_t input_ptr,
@@ -158,7 +158,7 @@ void inferencehandler_push_data_multi(uintptr_t ptr,
     reinterpret_cast<anira::InferenceHandler*>(ptr)->push_data(input_data, num_input_samples);
 }
 
-// Real-time safe: no allocations, thin wrapper over ANIRA_REALTIME method
+// Real-time safe: no allocations, thin wrapper over ANIRA_NONBLOCKING method
 EMSCRIPTEN_KEEPALIVE
 size_t inferencehandler_pop_data(uintptr_t ptr,
                                  uintptr_t output_ptr,
@@ -186,7 +186,7 @@ size_t inferencehandler_pop_data_blocking(uintptr_t ptr,
                                                                      tensor_index);
 }
 
-// Real-time safe: no allocations, thin wrapper over ANIRA_REALTIME method
+// Real-time safe: no allocations, thin wrapper over ANIRA_NONBLOCKING method
 EMSCRIPTEN_KEEPALIVE
 uintptr_t inferencehandler_pop_data_multi(uintptr_t ptr,
                                           uintptr_t output_ptr,

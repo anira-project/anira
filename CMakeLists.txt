@@ -291,6 +291,7 @@ target_sources(${PROJECT_NAME}
         src/utils/JsonConfigLoader.cpp
         src/utils/Logger.cpp
         src/utils/LogSinks.cpp
+        src/utils/RtLatch.cpp
 
         # Interface
         src/InferenceHandler.cpp
@@ -326,6 +327,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/translate.cpp
     src/capi/v3_to_v2.cpp
     src/capi/version.cpp
+    src/capi/handler.cpp
 )
 
 # Shared between the anira target and the isolated ExecuTorch object target below —
@@ -346,6 +348,13 @@ set(ANIRA_COMPILE_DEFINITIONS
 target_compile_definitions(${PROJECT_NAME}
     PUBLIC
     ${ANIRA_COMPILE_DEFINITIONS}
+)
+
+# The internal chain behind the ANIRA_NONBLOCKING entries is annotated post-3.0; until
+# then clang's function-effects analysis is silenced for the library alone (consumer-shaped
+# targets carry -Werror=function-effects from the tensor PR on).
+target_compile_options(${PROJECT_NAME} PRIVATE
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-Wno-function-effects>
 )
 
 if(ANIRA_WITH_RTSAN OR ANIRA_WITH_ASAN OR ANIRA_WITH_UBSAN OR ANIRA_WITH_TSAN OR ANIRA_WITH_LSAN)

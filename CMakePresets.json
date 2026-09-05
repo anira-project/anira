@@ -360,7 +360,7 @@
         {
             "name": "desktop-tests-rtsan",
             "inherits": "ci-clang-base",
-            "description": "RTSan gate for the ANIRA_REALTIME hot path (clang >= 20; tanh-lib built with TANH_WITH_RTSAN).",
+            "description": "RTSan gate for the ANIRA_NONBLOCKING hot path (clang >= 20; tanh-lib built with TANH_WITH_RTSAN).",
             "binaryDir": "${sourceDir}/build/ci/rtsan",
             "cacheVariables": {
                 "BUILD_SHARED_LIBS": "ON",

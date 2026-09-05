@@ -11,6 +11,7 @@
 #include <anira/abi/log.h>
 #include <anira/utils/Logger.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -35,7 +36,16 @@ struct RecordCollector {
         std::string m_source;
     };
 
-    RecordCollector() { m_sink = anira::detail::add_log_sink(&on_record, this, ANIRA_LOG_DEBUG); }
+    /// Registers the sink, then arms the collector. anira's registry installs the logger's
+    /// callback with its first sink, and thl::Logger replays the records it buffered while no
+    /// callback was registered (its early buffer, 64 records) into that callback before
+    /// add_log_sink returns: what earlier tests logged or drained after their own collector
+    /// was gone. Those records predate this collector and are dropped; a record delivered
+    /// once the registration has returned is collected.
+    RecordCollector() {
+        m_sink = anira::detail::add_log_sink(&on_record, this, ANIRA_LOG_DEBUG);
+        m_armed.store(true, std::memory_order_release);
+    }
     ~RecordCollector() { anira::detail::remove_log_sink(m_sink); }
 
     RecordCollector(const RecordCollector&) = delete;
@@ -65,6 +75,7 @@ struct RecordCollector {
 
     static void on_record(const anira_log_record* record, void* user_data) {
         auto* self = static_cast<RecordCollector*>(user_data);
+        if (!self->m_armed.load(std::memory_order_acquire)) { return; }
         Record copy;
         copy.m_level = record->level;
         copy.m_flags = record->flags;
@@ -80,6 +91,7 @@ struct RecordCollector {
     std::mutex m_mutex;
     std::vector<Record> m_records;
     anira::detail::LogSinkId m_sink = 0;
+    std::atomic<bool> m_armed{false};
 };
 
 }  // namespace anira_test

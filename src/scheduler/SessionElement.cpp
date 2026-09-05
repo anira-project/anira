@@ -5,6 +5,7 @@
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/Logger.h>
+#include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
 
 #ifdef USE_LIBTORCH
@@ -42,7 +43,8 @@ namespace anira {
 SessionElement::SessionElement(int new_session_id,
                                PrePostProcessor& pp_processor,
                                InferenceConfig& inference_config,
-                               moodycamel::ProducerToken&& producer_token)
+                               moodycamel::ProducerToken&& producer_token,
+                               anira::RtLatch* rt_latch)
     : m_session_id(new_session_id)
     , m_producer_token(std::move(producer_token))
     // One slot per ThreadSafeStruct plus this queue's single explicit producer,
@@ -54,7 +56,10 @@ SessionElement::SessionElement(int new_session_id,
     , m_pp_processor(pp_processor)
     , m_inference_config(inference_config)
     , m_default_processor(m_inference_config)
-    , m_custom_processor(&m_default_processor) {}
+    , m_custom_processor(&m_default_processor)
+    // A 2.x session records into its own latch; a 3.x session into its handler's, which
+    // outlives the session (the handler destroys its manager first).
+    , m_rt(rt_latch != nullptr ? rt_latch : &m_rt_own) {}
 
 SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<size_t>& tensor_input_size,
                                                    const std::vector<size_t>& tensor_output_size) {
@@ -116,9 +121,10 @@ void SessionElement::enqueue_pending_dispatch(
     if (!m_dispatch_pending.try_enqueue(m_dispatch_producer_token, std::move(thread_safe_struct))) {
         // Unreachable while the capacity bound holds (pending entries are
         // distinct ThreadSafeStructs); handled like any other queue-full drop.
-        ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
-                           "Could not enqueue pending stateful dispatch! Dropping the inference "
-                           "and zero-filling its output.");
+        ANIRA_LOG_RT_ERROR_ONCE(RtSite::PendingDispatchDropped,
+                                log_group::k_scheduler,
+                                "Could not enqueue pending stateful dispatch! Dropping the "
+                                "inference and zero-filling its output.");
         complete_with_zeros(thread_safe_struct);
     }
 }

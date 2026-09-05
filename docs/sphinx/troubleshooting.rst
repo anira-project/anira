@@ -114,7 +114,7 @@ Model Loading Failures
 Wait Strategy Mismatch
 ^^^^^^^^^^^^^^^^^^^^^^
 
-**Issue**: The log shows ``[WARNING] CoreConfig wait strategy mismatch``.
+**Issue**: The log shows ``[WARNING] wait strategy mismatch``.
 
 All anira instances in a process share one inference thread pool, and the pool's threads wait for work according to the :cpp:enum:`anira::WaitStrategy` of the *first* :cpp:struct:`anira::CoreConfig` the core was created with. A later instance that requests a different strategy has no effect — the warning tells you the originally configured strategy stays active. This is harmless (both strategies produce identical results), but the requested idle-CPU/latency characteristic is not the one in effect.
 

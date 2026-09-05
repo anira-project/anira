@@ -31,7 +31,8 @@ double ANIRA_CALL anira_now_ms(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
 anira_status ANIRA_CALL anira_shutdown(void) ANIRA_NOEXCEPT try {
     // Never construct the core: a binary that never used anira has nothing to shut down.
     if (!anira::Core::has_core()) { return ANIRA_OK; }
-    if (anira::Core::get_num_contexts() > 0 || anira::Core::get_num_sessions() > 0) {
+    if (anira::Core::get_num_contexts() > 0 || anira::Core::get_num_sessions() > 0 ||
+        anira::Core::get_num_handlers() > 0) {
         anira::capi::fail(nullptr,
                           ANIRA_ERROR_INVALID_STATE,
                           __func__,

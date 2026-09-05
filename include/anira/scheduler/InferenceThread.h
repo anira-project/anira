@@ -1,6 +1,8 @@
 #ifndef ANIRA_INFERENCETHREAD_H
 #define ANIRA_INFERENCETHREAD_H
 
+#include <anira/abi/enums.h>
+
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -9,7 +11,6 @@
 #include <tanh/core/threading/Thread.h>
 #endif
 
-#include "../CoreConfig.h"
 #include "../utils/Buffer.h"
 #include "SessionElement.h"
 #ifdef __x86_64__
@@ -53,11 +54,12 @@ public:
      * @param next_inference Reference to a thread-safe concurrent queue containing
      *                      inference data structures to process
      * @param wait_strategy How run_loop() waits for new work when the queue is
-     *                      empty (see WaitStrategy). Ignored on WebAssembly builds,
+     *                      empty (anira_wait_strategy: spin with backoff, or block on
+     *                      the queue's semaphore). Ignored on WebAssembly builds,
      *                      where JS Workers drive the loop cooperatively.
      */
     InferenceThread(InferenceQueue& next_inference,
-                    WaitStrategy wait_strategy = WaitStrategy::SpinBackoff);
+                    anira_wait_strategy wait_strategy = ANIRA_WAIT_SPIN_BACKOFF);
 
     ~InferenceThread();
 
@@ -89,10 +91,14 @@ public:
      *
      * Natively, this is invoked by the inherited HighPriorityThread via the
      * run() override, and waits for work according to the configured
-     * WaitStrategy: either the exponential-backoff polling loop or a blocking
+     * wait strategy: either the exponential-backoff polling loop or a blocking
      * wait on the queue's semaphore. Under Emscripten, JS Workers call this
      * directly and the loop always polls (blocking is not possible there).
      * Returns when should_exit() becomes true.
+     *
+     * Nothing the loop body calls may throw; as a last resort an exception that reaches
+     * the loop is logged once per prepare (anira::RtSite::InferenceThreadBodyThrew) and the
+     * loop continues, so no exception ever ends a pool thread.
      */
     void run_loop();
 
@@ -150,6 +156,17 @@ public:
      */
     static unsigned int get_num_loop_active();
 
+    /**
+     * @brief True while at least one thread is inside run_loop(), on every platform.
+     *
+     * The relaxed read of the same count get_num_loop_active() reports (the auto-managed
+     * pool plus every user-created thread that runs the loop), for the bounded waits of
+     * Core::new_data_request(): a wait whose completion no thread could ever signal ends
+     * with Core::WaitOutcome::NoThread instead of running to its deadline. A host that
+     * drives execute() itself without run_loop() is not counted. Wait-free.
+     */
+    static bool any_loop_active() noexcept;
+
 private:
     /**
      * @brief Performs inference processing for a specific session
@@ -158,11 +175,20 @@ private:
      * session and thread-safe data structures. This method coordinates the
      * inference execution while maintaining thread safety and real-time constraints.
      *
+     * A backend, a custom processor or a before/after hook that throws does not unwind the
+     * thread: the failed inference delivers zeros, the done signal is published exactly as
+     * on success, and the failure is recorded as ANIRA_ERROR_ENGINE on the session's latch
+     * (SessionElement::m_rt), logged on the first occurrence since the latch's re-arm.
+     *
      * @param session Shared pointer to the SessionElement containing inference configuration
      * @param thread_safe_struct Shared pointer to thread-safe data structures for the session
+     * @param signalled Set to true right after the struct's done signal is published (on
+     * success and on a failed inference alike), so the caller's last-resort handler never
+     * signals a struct twice
      */
     void do_inference(const std::shared_ptr<SessionElement>& session,
-                      const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct);
+                      const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
+                      bool& signalled);
 
     /**
      * @brief Executes the inference operation itself with input/output buffers
@@ -195,11 +221,13 @@ private:
 
 #ifndef __EMSCRIPTEN__
     /**
-     * @brief Processing loop for WaitStrategy::Blocking
+     * @brief Processing loop for ANIRA_WAIT_BLOCKING
      *
      * Blocks on the queue's semaphore until work is enqueued, waking
      * periodically (a few ms) to check should_exit(). The wakeup on enqueue is
-     * immediate — the timeout only bounds shutdown latency.
+     * immediate — the timeout only bounds shutdown latency. The same last resort as
+     * run_loop(): an exception that reaches the loop body is logged once per prepare
+     * (anira::RtSite::InferenceThreadBodyThrew) and the loop continues.
      */
     void run_loop_blocking();
 #endif
@@ -212,7 +240,10 @@ private:
      * reset) or its session is momentarily uninitialized (a prepare/release drain
      * is in progress), otherwise runs do_inference(). Skip paths still publish
      * the completion signal, and for session-exclusive tasks end the task's turn
-     * on the dispatch chain.
+     * on the dispatch chain. The session's active-inference count is released on
+     * every exit path, and a last-resort handler completes a struct that was not
+     * signalled yet with zeros (never signalling one twice), ends its turn on the
+     * chain and records ANIRA_ERROR_ENGINE on the session's latch.
      */
     void process_dequeued_inference();
 
@@ -231,11 +262,12 @@ private:
     void dispatch_next_pending(const std::shared_ptr<SessionElement>& session);
 
 private:
-    InferenceQueue& m_next_inference;  ///< Reference to the thread-safe
-                                       ///< queue containing inference
-                                       ///< requests
-    InferenceData m_inference_data;    ///< Current inference data being processed by this thread
-    WaitStrategy m_wait_strategy;  ///< How run_loop() waits for new work when the queue is empty
+    InferenceQueue& m_next_inference;     ///< Reference to the thread-safe
+                                          ///< queue containing inference
+                                          ///< requests
+    InferenceData m_inference_data;       ///< Current inference data being processed by this thread
+    anira_wait_strategy m_wait_strategy;  ///< How run_loop() waits for new work when the queue
+                                          ///< is empty
 
     // The thread counters (see get_num_active_threads()) are defined in
     // InferenceThread.cpp rather than as inline static members: an exported inline

@@ -10,6 +10,7 @@
 
 #include "anira/CoreConfig.h"
 #include "anira/system/Exports.h"
+#include "anira/utils/RtLatch.h"
 
 /**
  * @file Logger.h
@@ -29,15 +30,25 @@
  *   or makes a system call: the message is formatted on the caller's stack with a
  *   locale-free printf subset (see tanh/core/RtFormat.h for the supported
  *   conversions) and pushed into the core's own bounded lock-free queue
- *   (thl::Logger::rt::Queue, sized by LogConfig::m_queue_capacity), which a
- *   core-owned low-priority thread or the host (LogDrain) forwards to the sinks.
- *   Use these anywhere reachable from an ANIRA_REALTIME entry point or from an
+ *   (thl::Logger::rt::Queue, sized by the queue capacity of the context config in
+ *   effect: anira_context_config_set_log_queue_capacity, LogConfig::m_queue_capacity on
+ *   the 2.x path), which a core-owned low-priority thread or the host (the drain mode)
+ *   forwards to the sinks.
+ *   Use these anywhere reachable from an ANIRA_NONBLOCKING entry point or from an
  *   inference thread. A full queue drops and counts; no queue (no core yet)
  *   drops silently — no real-time path exists then anyway.
  *
  * Both take printf-style arguments: `ANIRA_LOG_ERROR(group, "fmt %d", value)` and are
  * aliases of tanh-lib's THL_LOG_* / THL_LOG_RT_*. With ANIRA_WITH_LOGGING=OFF every
  * macro expands to nothing.
+ *
+ * Three gated forms of the real-time family (see anira/utils/RtLatch.h):
+ * - ANIRA_LOG_RT_VIOLATION: an Error record flagged ANIRA_LOG_RECORD_CONTRACT_VIOLATION at
+ *   the sinks, for a refused real-time entry; the caller gates it with an RtLatch.
+ * - ANIRA_LOG_RT_{WARNING,ERROR}_ONCE(site, ...): the record of an operational site of the
+ *   scheduler (anira::RtSite), logged on the site's first occurrence since the last
+ *   prepare and counted afterwards for the drain's summary (Core::report_rt_latches).
+ *   The count is kept even with ANIRA_WITH_LOGGING=OFF.
  */
 
 namespace anira {
@@ -77,9 +88,29 @@ inline constexpr thl::Logger::LogLevel to_thl_log_level(LogLevel log_level) {
     return thl::Logger::LogLevel::Error;
 }
 
+// The backends cast anira::LogLevel to their numeric scales and the core stores the C
+// level; the two enums agree number for number, and to_log_level below keeps them in step.
+static_assert(static_cast<int>(LogLevel::Debug) == ANIRA_LOG_DEBUG);
+static_assert(static_cast<int>(LogLevel::Info) == ANIRA_LOG_INFO);
+static_assert(static_cast<int>(LogLevel::Warning) == ANIRA_LOG_WARNING);
+static_assert(static_cast<int>(LogLevel::Error) == ANIRA_LOG_ERROR);
+
+/// The C level of a context config (anira_log_level, anira/abi/enums.h) to anira::LogLevel;
+/// anything outside the four values is Error.
+inline constexpr LogLevel to_log_level(anira_log_level level) noexcept {
+    switch (level) {
+        case ANIRA_LOG_DEBUG: return LogLevel::Debug;
+        case ANIRA_LOG_INFO: return LogLevel::Info;
+        case ANIRA_LOG_WARNING: return LogLevel::Warning;
+        case ANIRA_LOG_ERROR:
+        default: return LogLevel::Error;
+    }
+}
+
 /**
- * @brief Process-global minimum log severity, applied from CoreConfig::m_log.m_level
- * whenever a core is created. Defaults to the build-type dependent
+ * @brief Process-global minimum log severity, applied from the log level of the context
+ * config in effect (anira_context_config_set_log_level; CoreConfig::m_log.m_level on the
+ * 2.x path) whenever a core is created. Defaults to the build-type dependent
  * default_log_level() until then.
  *
  * Kept as anira's own atomic (in anira's enum) because the backend processors
@@ -177,6 +208,34 @@ ANIRA_API void set_platform_sink_enabled(bool enabled);
 #define ANIRA_LOG_RT_INFO(group, ...) ANIRA_LOG_RT_IMPL(Info, group, __VA_ARGS__)
 #define ANIRA_LOG_RT_WARNING(group, ...) ANIRA_LOG_RT_IMPL(Warning, group, __VA_ARGS__)
 #define ANIRA_LOG_RT_ERROR(group, ...) ANIRA_LOG_RT_IMPL(Error, group, __VA_ARGS__)
+
+/// A contract-violation record through the real-time queue: an Error record flagged
+/// ANIRA_LOG_RECORD_CONTRACT_VIOLATION at the sinks (beside the REALTIME flag every record
+/// of the queue carries). Gate it with an RtLatch: ANIRA_LOG_RT_VIOLATION(group, fmt, ...).
+#define ANIRA_LOG_RT_VIOLATION(group, ...)                                                    \
+    do {                                                                                      \
+        if (auto* anira_rt_queue_ =                                                           \
+                ::anira::detail::rt_log_queue_slot().load(std::memory_order_relaxed)) {       \
+            static_cast<void>(anira_rt_queue_->logf(::thl::Logger::LogLevel::Error,           \
+                                                    ::thl::Logger::k_flag_contract_violation, \
+                                                    group,                                    \
+                                                    __VA_ARGS__));                            \
+        }                                                                                     \
+    } while (false)
+
+/// The per-site latched forms of the real-time macros: the first occurrence since the
+/// site's re-arm (every Core::prepare_session) logs, later ones are counted for the
+/// drain's summary. `site` is an anira::RtSite.
+#define ANIRA_LOG_RT_ONCE_IMPL(level, site, group, ...)   \
+    do {                                                  \
+        if (::anira::detail::rt_site(site).first()) {     \
+            ANIRA_LOG_RT_IMPL(level, group, __VA_ARGS__); \
+        }                                                 \
+    } while (false)
+#define ANIRA_LOG_RT_WARNING_ONCE(site, group, ...) \
+    ANIRA_LOG_RT_ONCE_IMPL(Warning, site, group, __VA_ARGS__)
+#define ANIRA_LOG_RT_ERROR_ONCE(site, group, ...) \
+    ANIRA_LOG_RT_ONCE_IMPL(Error, site, group, __VA_ARGS__)
 #else
 // ANIRA_WITH_LOGGING=OFF: anira's own calls compile out (arguments unevaluated) without
 // touching tanh-lib's THL_LOGGING_DISABLED, which a host may use independently.
@@ -188,6 +247,12 @@ ANIRA_API void set_platform_sink_enabled(bool enabled);
 #define ANIRA_LOG_RT_INFO(group, ...) static_cast<void>(0)
 #define ANIRA_LOG_RT_WARNING(group, ...) static_cast<void>(0)
 #define ANIRA_LOG_RT_ERROR(group, ...) static_cast<void>(0)
+#define ANIRA_LOG_RT_VIOLATION(group, ...) static_cast<void>(0)
+// The site latch still counts without logging, so the re-arm and summary counts stay right.
+#define ANIRA_LOG_RT_WARNING_ONCE(site, group, ...) \
+    static_cast<void>(::anira::detail::rt_site(site).first())
+#define ANIRA_LOG_RT_ERROR_ONCE(site, group, ...) \
+    static_cast<void>(::anira::detail::rt_site(site).first())
 #endif
 
 #endif  // ANIRA_LOGGER_H

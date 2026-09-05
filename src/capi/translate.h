@@ -13,6 +13,7 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/system/Exports.h>
 #include <anira/utils/HostConfig.h>
@@ -25,6 +26,11 @@
 #include <vector>
 
 #include "handles.h"
+
+namespace anira {
+/// The ring dtype of every slot (include/anira/scheduler/SessionElement.h).
+struct RingDtypes;
+}  // namespace anira
 
 namespace anira::capi {
 
@@ -60,22 +66,47 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 
 /// Runs every section-2 rule the 2.x runtime can honour, in order, and derives the
 /// per-tensor quantities; contract may be NULL (no contract rule runs, flexible windows
-/// pin to window_min). Throws StatusError with ANIRA_ERROR_CONFIG for a rule the
-/// configuration breaks and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do.
+/// pin to window_min). The candidates narrow the model entries: NULL keeps every row (the
+/// bridge's rule; the handler always names its set), a built-in engine keeps its rows,
+/// {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps the custom rows, a non-NULL engine_id keeps
+/// the custom rows of that name; the provider is not read. Throws StatusError with
+/// ANIRA_ERROR_CONFIG for a rule the configuration breaks (no surviving row among them)
+/// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do.
 ANIRA_API void validate(const anira_model_config& model,
                         const anira_contract* contract,
-                        const anira_engine* candidates,
+                        const anira_backend_id* candidates,
                         uint32_t num_candidates,
                         Derived& out);
 
 /// The 2.x InferenceConfig of a model config under a Hard contract (validate, then map).
 ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                                        const anira_contract& contract,
-                                                       const anira_engine* candidates,
+                                                       const anira_backend_id* candidates,
                                                        uint32_t num_candidates);
 
-/// The 2.x CoreConfig of a context config: threads, wait strategy and the log scalars.
+/// The ring dtype of every slot: two vectors sized to the model's input and output lists,
+/// ANIRA_DTYPE_F32 everywhere, then each entry of the Hard contract's ring dtypes resolved
+/// by tensor name into its slot. Run validate first: it refuses a name that matches no
+/// tensor, a non-Streamed tensor, and a dtype other than the spec's (nothing converts).
+ANIRA_API anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
+                                             const anira_model_config& model);
+
+/// The 2.x CoreConfig of a context config: threads, wait strategy and the log scalars, after
+/// check_context_extensions. Kept for the bridge (anira::v3compat::to_core_config); the core
+/// itself reads the context config.
 ANIRA_API anira::CoreConfig make_core_config(const anira_context_config& config);
+
+/// The context config of a 2.x CoreConfig, field by field: threads, wait strategy, log
+/// level, drain, interval and queue capacity; no sink, no flags, no device block, no
+/// extensions. The log level is copied explicitly (CoreConfig defaults to Info/Error,
+/// anira_context_config to WARNING). The 2.x InferenceManager constructor is the only
+/// caller; it leaves with the 2.x classes at the cut-over.
+ANIRA_API anira_context_config make_context_config(const anira::CoreConfig& core_config);
+
+/// The consumed-or-fail walk over a context config's extension bag alone (the model,
+/// contract and spec bags are walked at anira_handler_create and prepare). Throws
+/// StatusError with ANIRA_ERROR_EXTENSION_UNKNOWN / _UNCONSUMED naming the kind.
+ANIRA_API void check_context_extensions(const anira_context_config& config);
 
 /// The 2.x HostConfig of a Hard contract's geometry and the model config's anchor.
 ANIRA_API anira::HostConfig make_host_config(const anira_contract& contract,

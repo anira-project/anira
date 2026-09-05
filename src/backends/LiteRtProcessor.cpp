@@ -25,6 +25,7 @@
 
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
+#include "ProcessingGuard.h"
 #include "litert/c/litert_any.h"
 #include "litert/c/litert_common.h"
 #include "litert/c/litert_compiled_model.h"
@@ -145,8 +146,11 @@ void LiteRtProcessor::process(std::vector<BufferF>& input,
     while (true) {
         for (auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
+                // The flag is released on every path, a throw of a type the instance's
+                // catch does not name included, so a failing inference can never leave the
+                // instance busy forever.
+                const detail::ProcessingGuard guard(instance->m_processing);
                 instance->process(input, output, session);
-                instance->m_processing.exchange(false);
                 return;
             }
         }
@@ -323,10 +327,10 @@ void LiteRtProcessor::Instance::prepare() {
 
 void LiteRtProcessor::Instance::process(std::vector<BufferF>& input,
                                         std::vector<BufferF>& output,
-                                        const std::shared_ptr<SessionElement>&) {
+                                        const std::shared_ptr<SessionElement>& session) {
     // Catch+log like the other backends (cf. OnnxRuntimeProcessor): a LiteRT runtime
-    // failure must not throw out onto the real-time inference thread, and must not
-    // skip the caller's m_processing reset (which would wedge this instance).
+    // failure must not throw out onto the real-time inference thread (the caller's
+    // ProcessingGuard releases m_processing either way).
     try {
         for (size_t i = 0; i < m_input_buffers.size(); ++i) {
             void* host = nullptr;
@@ -360,8 +364,13 @@ void LiteRtProcessor::Instance::process(std::vector<BufferF>& input,
                          "LiteRtUnlockTensorBuffer (output)");
         }
     } catch (const std::exception& e) {
-        // No caller waits for this task: log once, deliver zeros, never stale output.
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+        // No caller waits for this task: deliver zeros, never stale output. The failure is
+        // ENGINE on the session's latch (a 3.x handler's word), logged on the first failure
+        // since the latch's re-arm and counted afterwards; the direct processor tests pass
+        // no session and get every record.
+        if (session == nullptr || session->m_rt->record(ANIRA_ERROR_ENGINE)) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+        }
         for (auto& buffer : output) { buffer.clear(); }
     }
 }

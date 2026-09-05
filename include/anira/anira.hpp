@@ -8,9 +8,11 @@
  * 2.x C++ classes (it includes no anira/system, anira/utils or third-party header), and it
  * can be included beside <anira/anira.h>.
  *
- * Scope at this pre-release: the configuration half only (tensor specs, model, context and
- * contract configuration, job options). The Context, the InferenceHandler and the _wait twins
- * arrive with the 3.x runtime.
+ * Scope at this pre-release: the configuration half (tensor specs, model, context and
+ * contract configuration, job options), the Context over the core, and the pipeline half of
+ * section 6: Pipeline, stage::Inference and PlanReport. The InferenceHandler class and the
+ * _wait twins arrive with the runtime cut-over; until then a handler is driven through the C
+ * entries of anira/abi/handler.h.
  *
  * Deviations from the architecture document, section 6 (stated here and on the docs page):
  * anira::JsonConfigLoader is not declared (the 2.x class of that name is still in every
@@ -54,6 +56,7 @@
 #include <anira/abi/core.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>  // IWYU pragma: keep - the umbrella of the C headers
+#include <anira/abi/handler.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/abi/thread.h>
@@ -65,6 +68,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <initializer_list>
 #include <ios>
 #include <iterator>
 #include <memory>
@@ -505,9 +510,10 @@ public:
         return *this;
     }
     /// The ring dtype of one tensor under this Hard contract, by canonical name: the element
-    /// type of the host's samples, which the ring holds as is (the pre- and post-processor
-    /// convert to the spec's dtype); F32 for every tensor never set. Data only in this
-    /// pre-release: the bridge to the 2.x runtime accepts F32 alone.
+    /// type the typed Hard entries carry across the ABI and the ring holds as is; F32 for
+    /// every tensor never set, which is what the float entries are legal on. Nothing converts:
+    /// a name that is not a Streamed tensor, or a ring dtype that differs from the spec's dtype,
+    /// is ANIRA_ERROR_CONFIG at anira_handler_prepare.
     ContractHandle& hard_ring_dtype(std::string_view canonical, DType dtype) {
         const std::string name(canonical);
         detail::check(anira_contract_hard_set_ring_dtype(m_contract, name.c_str(), dtype),
@@ -1234,6 +1240,158 @@ inline bool release_core_if_idle() noexcept {
 inline bool has_core() noexcept {
     return anira_has_core() != 0U;
 }
+
+// ---- pipeline and plan report (section 6) --------------------------------------------------
+
+namespace stage {
+
+/**
+ * @brief The inference stage of a Pipeline: the model configuration(s) it may run and the
+ * candidate backends (empty = the default set: every engine this build carries, on
+ * ANIRA_PROVIDER_DEFAULT, plus the custom entries). Holds pointers into the ModelConfigs,
+ * which must outlive the Pipeline's construction; the pipeline copies them
+ * (anira_pipeline_add_inference). One variant in this pre-release.
+ */
+class Inference {
+public:
+    /// One model with its candidate backends (empty = the default set).
+    Inference(const ModelConfig& model, std::initializer_list<BackendId> candidates = {})
+        : m_variants{model.native()}, m_candidates(candidates) {}
+    /// Several variants of one stage; the C entry refuses more than one with
+    /// ANIRA_ERROR_NOT_SUPPORTED until plan sets land.
+    Inference(std::initializer_list<std::reference_wrapper<const ModelConfig>> variants,
+              std::initializer_list<BackendId> candidates)
+        : m_candidates(candidates) {
+        m_variants.reserve(variants.size());
+        for (const ModelConfig& variant : variants) { m_variants.push_back(variant.native()); }
+    }
+
+    /// The variants' native configs, in the order given.
+    std::span<const anira_model_config* const> variants() const noexcept { return m_variants; }
+    /// The candidate backends, in the order given; empty for the default set.
+    std::span<const BackendId> candidates() const noexcept { return m_candidates; }
+
+private:
+    std::vector<const anira_model_config*> m_variants;
+    std::vector<BackendId> m_candidates;
+};
+
+}  // namespace stage
+
+/**
+ * @brief An anira_pipeline with its lifetime: the stages a handler runs, exactly one
+ * stage::Inference in this pre-release (stage::Custom and stage::CustomBackend widen the
+ * variant in later pre-releases). Move-only; copied by the handler that takes it.
+ */
+class Pipeline {
+public:
+    using Stage = std::variant<stage::Inference>;
+
+    /// @throws Error when a C entry refuses the call; the status says why.
+    Pipeline() {
+        detail::abi_check_once();
+        anira_error err{};
+        detail::check(anira_pipeline_create(&m_pipeline, &err), err);
+    }
+    /// Creates the pipeline and adds every stage in order.
+    /// @throws Error as add does.
+    Pipeline(std::initializer_list<Stage> stages) : Pipeline() {
+        for (const Stage& stage : stages) { add(stage); }
+    }
+    ~Pipeline() { anira_pipeline_destroy(m_pipeline); }
+    Pipeline(const Pipeline&) = delete;
+    Pipeline& operator=(const Pipeline&) = delete;
+    Pipeline(Pipeline&& other) noexcept : m_pipeline(std::exchange(other.m_pipeline, nullptr)) {}
+    Pipeline& operator=(Pipeline&& other) noexcept {
+        if (this != &other) {
+            anira_pipeline_destroy(m_pipeline);
+            m_pipeline = std::exchange(other.m_pipeline, nullptr);
+        }
+        return *this;
+    }
+
+    /// Adds the inference stage (anira_pipeline_add_inference).
+    Pipeline& inference(const ModelConfig& model,
+                        std::initializer_list<BackendId> candidates = {}) {
+        return add(stage::Inference(model, candidates));
+    }
+    /// Adds one stage of any kind.
+    /// @throws Error when the C entry refuses it: a second inference stage is
+    /// ANIRA_ERROR_CONFIG, more than one variant or a non-default provider
+    /// ANIRA_ERROR_NOT_SUPPORTED.
+    Pipeline& add(const Stage& stage) {
+        std::visit([this](const auto& value) { add_stage(value); }, stage);
+        return *this;
+    }
+
+    const anira_pipeline* native() const noexcept { return m_pipeline; }
+    anira_pipeline* native() noexcept { return m_pipeline; }
+
+private:
+    void add_stage(const stage::Inference& stage) {
+        anira_error err{};
+        const std::span<const anira_model_config* const> variants = stage.variants();
+        const std::span<const BackendId> candidates = stage.candidates();
+        detail::check(anira_pipeline_add_inference(m_pipeline,
+                                                   variants.data(),
+                                                   static_cast<uint32_t>(variants.size()),
+                                                   candidates.empty() ? nullptr : candidates.data(),
+                                                   static_cast<uint32_t>(candidates.size()),
+                                                   &err),
+                      err);
+    }
+
+    anira_pipeline* m_pipeline = nullptr;
+};
+
+/**
+ * @brief A view of a handler's anira_plan_report (valid until its next prepare or destroy):
+ * the rows copied into vectors through the stride-explicit enumerators. Plan 0 is the only
+ * plan of a single-candidate pipeline; the budget is the row field anira_plan_info::budget_ms.
+ */
+class PlanReport {
+public:
+    /// Wraps a handler's report; a null report has no plans and its enumerators throw
+    /// ANIRA_ERROR_INVALID_ARGUMENT.
+    explicit PlanReport(const anira_plan_report* report) noexcept : m_report(report) {}
+
+    /// The number of plans; a plan is a dense index below it.
+    uint32_t num_plans() const noexcept { return anira_plan_report_num_plans(m_report); }
+    /// One anira_plan_info per plan, in plan order.
+    std::vector<anira_plan_info> plans() const {
+        return detail::enumerate<anira_plan_info>(
+            [this](uint32_t* count, anira_plan_info* out) {
+                return anira_plan_report_plans(m_report, sizeof(anira_plan_info), count, out);
+            },
+            "anira_plan_report_plans");
+    }
+    /// The input (inputs == true) or output slots of one plan, in tensor order.
+    std::vector<anira_plan_slot> slots(uint32_t plan, bool inputs) const {
+        return detail::enumerate<anira_plan_slot>(
+            [this, plan, inputs](uint32_t* count, anira_plan_slot* out) {
+                return anira_plan_report_slots(m_report,
+                                               plan,
+                                               inputs ? 1U : 0U,
+                                               sizeof(anira_plan_slot),
+                                               count,
+                                               out);
+            },
+            "anira_plan_report_slots");
+    }
+    /// The extensions one plan consumes.
+    std::vector<anira_plan_ext> extensions(uint32_t plan) const {
+        return detail::enumerate<anira_plan_ext>(
+            [this, plan](uint32_t* count, anira_plan_ext* out) {
+                return anira_plan_report_exts(m_report, plan, sizeof(anira_plan_ext), count, out);
+            },
+            "anira_plan_report_exts");
+    }
+
+    const anira_plan_report* native() const noexcept { return m_report; }
+
+private:
+    const anira_plan_report* m_report;
+};
 
 // ---- job options (section 6) ---------------------------------------------------------------
 

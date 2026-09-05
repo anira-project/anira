@@ -22,7 +22,9 @@ Where the 2.x API stands in this pre-release
   ``prepare`` and ``process``) is unchanged in this pre-release and still takes the 2.x
   configuration classes, which the transitional bridge ``<anira/compat/v3_to_v2.h>`` builds
   from the 3.x handles (:ref:`migration-bridge`); sections 2 to 5 of the :doc:`usage` guide
-  describe it. The 3.x handler over the C ABI follows in a later pre-release.
+  describe it. The 3.x handler over the C ABI is in this pre-release (``anira/abi/handler.h``,
+  :doc:`usage` section 3.2); the ``anira::InferenceHandler`` class of ``anira/anira.hpp`` and
+  the removal of the 2.x runtime follow with the cut-over.
 - **The bundled models.** The 2.x fixture headers with their ``anira::InferenceConfig`` statics
   (``cnn_config``, ``hybridnn_config``, ``rnn_config``, ``gain_config``, ``stereo_gain_config``,
   ``rave_funk_drum_config`` and the encoder and decoder) are gone. Every bundled model ships a
@@ -110,7 +112,8 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
      - ``anira::Hard{.warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = n}``
        (``anira_contract_hard_set_warmup``); ``0`` is ``ANIRA_WARMUP_NONE``.
    * - ``anira::InferenceConfig::blocking_ratio``
-     - ``anira::Hard{.wait_ratio = ...}`` (``anira_contract_hard_set_wait_ratio``).
+     - ``anira::Hard{.wait_ratio = ...}`` (``anira_contract_hard_set_wait_ratio``); consumed by
+       the ``_wait`` twins with ``ANIRA_WAIT_CONTRACT``.
    * - ``anira::InferenceConfig::session_exclusive_processor``
      - ``cfg.state(ANIRA_MODEL_STATEFUL)`` (``anira_model_config_set_state``).
    * - ``anira::InferenceConfig::num_parallel_processors``
@@ -133,8 +136,9 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        (``anira_model_config_set_anchor``); an empty name (``NULL`` in C) is the 2.x default
        (the first streamable tensor).
    * - ``anira::InferenceHandler::set_inference_backend`` (the starting backend)
-     - ``cfg.default_engine(engine)`` (``anira_model_config_set_default_engine``); switching
-       at run time stays a handler call.
+     - ``cfg.default_engine(engine)`` (``anira_model_config_set_default_engine``) selects the
+       starting plan; switching at run time is ``anira_handler_set_plan`` over the plan report
+       (``set_inference_backend`` on the 2.x handler).
 
 .. _migration-bridge:
 
@@ -144,7 +148,7 @@ The bridge to the 2.x runtime
 ``<anira/compat/v3_to_v2.h>`` (``namespace anira::v3compat``) turns a 3.x configuration into
 the 2.x classes the runtime of this pre-release takes, so a host writes its configuration once
 and the runtime sections of the :doc:`usage` guide apply unchanged. It is transitional: the
-pre-release that ships the 3.x handler removes it.
+runtime cut-over that removes the 2.x classes removes it.
 
 .. code-block:: cpp
 
@@ -212,12 +216,12 @@ decoder with ``samplesPerBlock / 2048.f``).
 **What the 2.x runtime cannot do** is refused with ``ANIRA_ERROR_NOT_SUPPORTED`` and a message
 saying what to change: an Async contract; a ``MEASURED`` budget or ``UNTIL_STABLE`` warmup
 (the defaults of ``anira::Hard{}``: set an explicit budget and a fixed warmup, as every bundled
-fixture does); a miss policy other than ``BYPASS``; a dtype other than float32, on a spec or as
-a ring dtype; a layout that moves an axis of extent above 1 (a transpose; a view over unit
-axes is fine); a dynamic Time extent on a Buffer tensor; an engine this build does not carry
-(see the candidates below); a custom engine other than ``anira.v2.custom``. Every other rule
-of section 1.1 that a configuration breaks is ``ANIRA_ERROR_CONFIG`` with the tensor's or the
-entry's name in the message.
+fixture does); a spec dtype other than float32; a layout that moves an axis of extent above 1
+(a transpose; a view over unit axes is fine); a dynamic Time extent on a Buffer tensor; an
+engine this build does not carry (see the candidates below); a custom engine other than
+``anira.v2.custom``. Every other rule of section 1.1 that a configuration breaks is
+``ANIRA_ERROR_CONFIG`` with the tensor's or the entry's name in the message. A ring dtype that
+differs from its spec's dtype, or that names no Streamed tensor, is ``ANIRA_ERROR_CONFIG``.
 
 **Candidates.** The candidate list narrows which entries reach the ``InferenceConfig``. With
 none (the default), every entry is one, and an entry naming an engine this build does not
@@ -326,7 +330,8 @@ entry is ``ANIRA_ERROR_JSON`` with the key path in ``anira_error::message``.
        that ``anira_model_config_take_legacy_contract`` hands out once;
        ``anira_contract_from_json`` on the same document yields it directly. A ``warm_up``
        the file leaves out is ``warmup {"fixed": 0}``, the 2.x default, so the contract
-       bridges as the file ran.
+       bridges as the file ran. The contract carries ``on_miss`` ``zeros``, what the 2.x
+       runtime delivered on a miss.
    * - any other key
      - Stored as an extension of its host and refused by name at prepare.
 
