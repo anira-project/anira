@@ -191,9 +191,30 @@ public:
      * host calls this periodically (e.g. from a UI timer); under ANIRA_LOG_DRAIN_THREAD
      * the core's own thread does it and this call is just an extra flush. Returns the number of
      * records delivered. Not real-time safe: the sinks (platform log, file, the host's
-     * callback) run on the calling thread.
+     * callback) run on the calling thread. Runs the real-time latch summary
+     * (report_rt_latches()) after the drain, so a host that pumps the queue itself
+     * (ANIRA_LOG_DRAIN_MANUAL, WebAssembly) gets the summary from its pump.
      */
     static size_t drain_log();
+
+    /**
+     * @brief The summary of the real-time latches: reports every condition that kept
+     * occurring since it was last reported
+     *
+     * The real-time sites of the scheduler (anira::RtSite) and the handlers' latches
+     * (SessionElement::m_rt) log a failure once per re-arm and count the later occurrences.
+     * This pass, run after every drain (the drain thread's post-pass, and drain_log()), logs
+     * one synchronous Warning per site and per session whose suppressed count grew past
+     * what the previous pass reported, with the delta — growth only, never a re-arm: a site
+     * is re-armed by prepare_session(), a handler's latch by anira_handler_prepare /
+     * anira_handler_reset, and a re-arm zeroes both counters. At most one pass per
+     * anira::detail::rt_summary_interval_ms() (10 s by default; the tests lower it);
+     * two callers never interleave (the second one leaves). The session half takes the
+     * lifecycle lock with try_to_lock and is skipped while the lock is contended (this
+     * also runs from the failure-path drain of a control entry). Not real-time safe: the
+     * sinks run on the calling thread.
+     */
+    static void report_rt_latches();
 
     /**
      * @brief Frees the core if nothing uses it
@@ -295,7 +316,9 @@ public:
      * Configures the specified session with new audio host settings and optional
      * custom latency values. This method handles buffer allocation, latency
      * calculation, and session state updates, and starts the inference thread pool if it is
-     * not running yet.
+     * not running yet. Every prepare of every session also re-arms the process-wide latches
+     * of the scheduler's real-time sites (anira::RtSite; the only place they are re-armed),
+     * logging one Warning per site with the count it suppressed since the last prepare.
      *
      * @param session Shared pointer to the session to prepare
      * @param new_config New host configuration with audio settings
@@ -569,8 +592,9 @@ private:
      *
      * Called with the lifecycle lock held, after ensure_log_queue_locked(). The thread is
      * anira's own (a low-priority thl::core::Thread named "anira-log" running
-     * Queue::drain() every drain interval) and lives exactly while a session or a context
-     * does; the last user's release stops it and flushes the queue.
+     * Queue::drain() and then report_rt_latches() every drain interval) and lives exactly
+     * while a session or a context does; the last user's release stops it and flushes the
+     * queue.
      */
     static void start_log_drain_locked(State& state);
 

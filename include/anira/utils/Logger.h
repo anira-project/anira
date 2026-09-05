@@ -10,6 +10,7 @@
 
 #include "anira/CoreConfig.h"
 #include "anira/system/Exports.h"
+#include "anira/utils/RtLatch.h"
 
 /**
  * @file Logger.h
@@ -40,6 +41,14 @@
  * Both take printf-style arguments: `ANIRA_LOG_ERROR(group, "fmt %d", value)` and are
  * aliases of tanh-lib's THL_LOG_* / THL_LOG_RT_*. With ANIRA_WITH_LOGGING=OFF every
  * macro expands to nothing.
+ *
+ * Three gated forms of the real-time family (see anira/utils/RtLatch.h):
+ * - ANIRA_LOG_RT_VIOLATION: an Error record flagged ANIRA_LOG_RECORD_CONTRACT_VIOLATION at
+ *   the sinks, for a refused real-time entry; the caller gates it with an RtLatch.
+ * - ANIRA_LOG_RT_{WARNING,ERROR}_ONCE(site, ...): the record of an operational site of the
+ *   scheduler (anira::RtSite), logged on the site's first occurrence since the last
+ *   prepare and counted afterwards for the drain's summary (Core::report_rt_latches).
+ *   The count is kept even with ANIRA_WITH_LOGGING=OFF.
  */
 
 namespace anira {
@@ -199,6 +208,34 @@ ANIRA_API void set_platform_sink_enabled(bool enabled);
 #define ANIRA_LOG_RT_INFO(group, ...) ANIRA_LOG_RT_IMPL(Info, group, __VA_ARGS__)
 #define ANIRA_LOG_RT_WARNING(group, ...) ANIRA_LOG_RT_IMPL(Warning, group, __VA_ARGS__)
 #define ANIRA_LOG_RT_ERROR(group, ...) ANIRA_LOG_RT_IMPL(Error, group, __VA_ARGS__)
+
+/// A contract-violation record through the real-time queue: an Error record flagged
+/// ANIRA_LOG_RECORD_CONTRACT_VIOLATION at the sinks (beside the REALTIME flag every record
+/// of the queue carries). Gate it with an RtLatch: ANIRA_LOG_RT_VIOLATION(group, fmt, ...).
+#define ANIRA_LOG_RT_VIOLATION(group, ...)                                                    \
+    do {                                                                                      \
+        if (auto* anira_rt_queue_ =                                                           \
+                ::anira::detail::rt_log_queue_slot().load(std::memory_order_relaxed)) {       \
+            static_cast<void>(anira_rt_queue_->logf(::thl::Logger::LogLevel::Error,           \
+                                                    ::thl::Logger::k_flag_contract_violation, \
+                                                    group,                                    \
+                                                    __VA_ARGS__));                            \
+        }                                                                                     \
+    } while (false)
+
+/// The per-site latched forms of the real-time macros: the first occurrence since the
+/// site's re-arm (every Core::prepare_session) logs, later ones are counted for the
+/// drain's summary. `site` is an anira::RtSite.
+#define ANIRA_LOG_RT_ONCE_IMPL(level, site, group, ...)   \
+    do {                                                  \
+        if (::anira::detail::rt_site(site).first()) {     \
+            ANIRA_LOG_RT_IMPL(level, group, __VA_ARGS__); \
+        }                                                 \
+    } while (false)
+#define ANIRA_LOG_RT_WARNING_ONCE(site, group, ...) \
+    ANIRA_LOG_RT_ONCE_IMPL(Warning, site, group, __VA_ARGS__)
+#define ANIRA_LOG_RT_ERROR_ONCE(site, group, ...) \
+    ANIRA_LOG_RT_ONCE_IMPL(Error, site, group, __VA_ARGS__)
 #else
 // ANIRA_WITH_LOGGING=OFF: anira's own calls compile out (arguments unevaluated) without
 // touching tanh-lib's THL_LOGGING_DISABLED, which a host may use independently.
@@ -210,6 +247,12 @@ ANIRA_API void set_platform_sink_enabled(bool enabled);
 #define ANIRA_LOG_RT_INFO(group, ...) static_cast<void>(0)
 #define ANIRA_LOG_RT_WARNING(group, ...) static_cast<void>(0)
 #define ANIRA_LOG_RT_ERROR(group, ...) static_cast<void>(0)
+#define ANIRA_LOG_RT_VIOLATION(group, ...) static_cast<void>(0)
+// The site latch still counts without logging, so the re-arm and summary counts stay right.
+#define ANIRA_LOG_RT_WARNING_ONCE(site, group, ...) \
+    static_cast<void>(::anira::detail::rt_site(site).first())
+#define ANIRA_LOG_RT_ERROR_ONCE(site, group, ...) \
+    static_cast<void>(::anira::detail::rt_site(site).first())
 #endif
 
 #endif  // ANIRA_LOGGER_H

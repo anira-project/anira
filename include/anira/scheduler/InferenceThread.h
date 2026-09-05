@@ -95,6 +95,10 @@ public:
      * wait on the queue's semaphore. Under Emscripten, JS Workers call this
      * directly and the loop always polls (blocking is not possible there).
      * Returns when should_exit() becomes true.
+     *
+     * Nothing the loop body calls may throw; as a last resort an exception that reaches
+     * the loop is logged once per prepare (anira::RtSite::InferenceThreadBodyThrew) and the
+     * loop continues, so no exception ever ends a pool thread.
      */
     void run_loop();
 
@@ -160,11 +164,20 @@ private:
      * session and thread-safe data structures. This method coordinates the
      * inference execution while maintaining thread safety and real-time constraints.
      *
+     * A backend, a custom processor or a before/after hook that throws does not unwind the
+     * thread: the failed inference delivers zeros, the done signal is published exactly as
+     * on success, and the failure is recorded as ANIRA_ERROR_ENGINE on the session's latch
+     * (SessionElement::m_rt), logged on the first occurrence since the latch's re-arm.
+     *
      * @param session Shared pointer to the SessionElement containing inference configuration
      * @param thread_safe_struct Shared pointer to thread-safe data structures for the session
+     * @param signalled Set to true right after the struct's done signal is published (on
+     * success and on a failed inference alike), so the caller's last-resort handler never
+     * signals a struct twice
      */
     void do_inference(const std::shared_ptr<SessionElement>& session,
-                      const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct);
+                      const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
+                      bool& signalled);
 
     /**
      * @brief Executes the inference operation itself with input/output buffers
@@ -201,7 +214,9 @@ private:
      *
      * Blocks on the queue's semaphore until work is enqueued, waking
      * periodically (a few ms) to check should_exit(). The wakeup on enqueue is
-     * immediate — the timeout only bounds shutdown latency.
+     * immediate — the timeout only bounds shutdown latency. The same last resort as
+     * run_loop(): an exception that reaches the loop body is logged once per prepare
+     * (anira::RtSite::InferenceThreadBodyThrew) and the loop continues.
      */
     void run_loop_blocking();
 #endif
@@ -214,7 +229,10 @@ private:
      * reset) or its session is momentarily uninitialized (a prepare/release drain
      * is in progress), otherwise runs do_inference(). Skip paths still publish
      * the completion signal, and for session-exclusive tasks end the task's turn
-     * on the dispatch chain.
+     * on the dispatch chain. The session's active-inference count is released on
+     * every exit path, and a last-resort handler completes a struct that was not
+     * signalled yet with zeros (never signalling one twice), ends its turn on the
+     * chain and records ANIRA_ERROR_ENGINE on the session's latch.
      */
     void process_dequeued_inference();
 

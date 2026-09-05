@@ -28,15 +28,14 @@ using anira::capi::translate_exception;
 
 namespace {
 
-// A real-time refusal: last-wins into rt_error, logged on the kind's first occurrence since
-// the latch was last re-armed, counted afterwards. The record becomes a contract-violation
-// record (ANIRA_LOG_RT_VIOLATION) with the site adoption of the next slice; until then it is
-// a plain real-time Error record.
+// A real-time refusal: last-wins into rt_error, logged as a contract-violation record
+// (ANIRA_LOG_RECORD_CONTRACT_VIOLATION at the sinks) on the kind's first occurrence since
+// the latch was last re-armed, counted afterwards.
 void rt_refuse(anira_handler& handler,
                anira_status status,
                const char* entry) noexcept ANIRA_NONBLOCKING {
     if (!handler.m_rt.record(status)) { return; }
-    ANIRA_LOG_RT_ERROR(anira::log_group::k_capi, "%s: %s", entry, anira_status_string(status));
+    ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi, "%s: %s", entry, anira_status_string(status));
 }
 
 // The nonblocking stubs of this slice: an unprepared handler refuses NOT_PREPARED through the

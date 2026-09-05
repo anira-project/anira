@@ -109,10 +109,12 @@ void InferenceManager::push_data(const float* const* const* input_data, size_t* 
     // that never pops a streamed output is told so instead of having unread output
     // overwritten.
     if (!Core::collect_completed(m_session)) {
-        ANIRA_LOG_RT_WARNING(log_group::k_scheduler,
-                             "Output stream not consumed in session: %d! A receive buffer is "
-                             "full; call pop_data() or process() to pop the output stream.",
-                             m_session->m_session_id);
+        ANIRA_LOG_RT_WARNING_ONCE(RtSite::OutputNotConsumed,
+                                  log_group::k_scheduler,
+                                  "Output stream not consumed in session: %d! A receive buffer "
+                                  "is full; call pop_data() or process() to pop the output "
+                                  "stream.",
+                                  m_session->m_session_id);
     }
     Core::new_data_submitted(m_session);
 }
@@ -148,9 +150,10 @@ size_t* InferenceManager::pop_data(float* const* const* output_data,
     if (m_inference_config.m_blocking_ratio > 0.f) {
         Core::new_data_request(m_session, wait_until);
     } else {
-        ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
-                           "InferenceConfig does not use blocking_ratio and does not use "
-                           "semaphores for data acquisition, cannot wait for data!");
+        ANIRA_LOG_RT_ERROR_ONCE(RtSite::WaitWithoutSemaphore,
+                                log_group::k_scheduler,
+                                "InferenceConfig does not use blocking_ratio and does not use "
+                                "semaphores for data acquisition, cannot wait for data!");
     }
 
     return process_output(output_data, num_output_samples);
@@ -200,12 +203,13 @@ size_t* InferenceManager::process_output(float* const* const* output_data, size_
                 }
             }
             if (missing_samples_before - m_missing_samples[i] > 0) {
-                ANIRA_LOG_RT_WARNING(log_group::k_scheduler,
-                                     "Catch up missing samples: %zu in session: %d for tensor "
-                                     "index: %zu!",
-                                     missing_samples_before - m_missing_samples[i],
-                                     m_session->m_session_id,
-                                     i);
+                ANIRA_LOG_RT_WARNING_ONCE(RtSite::CatchUpMissingSamples,
+                                          log_group::k_scheduler,
+                                          "Catch up missing samples: %zu in session: %d for "
+                                          "tensor index: %zu!",
+                                          missing_samples_before - m_missing_samples[i],
+                                          m_session->m_session_id,
+                                          i);
             }
         }
     }
@@ -249,11 +253,13 @@ size_t* InferenceManager::process_output(float* const* const* output_data, size_
         for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
             if (m_inference_config.get_postprocess_output_size()[i] > 0) {
                 m_missing_samples[i] += num_samples[i];
-                ANIRA_LOG_RT_WARNING(log_group::k_scheduler,
-                                     "Missing samples: %zu in session: %d for tensor index: %zu!",
-                                     m_missing_samples[i],
-                                     m_session->m_session_id,
-                                     i);
+                ANIRA_LOG_RT_WARNING_ONCE(RtSite::MissingSamples,
+                                          log_group::k_scheduler,
+                                          "Missing samples: %zu in session: %d for tensor "
+                                          "index: %zu!",
+                                          m_missing_samples[i],
+                                          m_session->m_session_id,
+                                          i);
             }
             num_samples[i] = 0;  // Set num_samples to 0 if not enough samples are available
         }

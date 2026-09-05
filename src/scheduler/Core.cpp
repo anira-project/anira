@@ -25,6 +25,7 @@
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+#include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
 #include <tanh/core/Logger.h>
 
@@ -410,8 +411,11 @@ void Core::start_log_drain_locked(State& state) {
 #ifndef __EMSCRIPTEN__
     if (state.m_core_config.m_log_drain == ANIRA_LOG_DRAIN_THREAD && !state.m_log_drain) {
         assert(state.m_log_queue && "drain thread before the queue");
+        // The latch summary runs on the drain thread after every pass (the loop's catch
+        // covers a throwing sink).
         state.m_log_drain = std::make_unique<LogDrainLoop>(*state.m_log_queue,
-                                                           state.m_core_config.m_drain_interval_ms);
+                                                           state.m_core_config.m_drain_interval_ms,
+                                                           &Core::report_rt_latches);
     }
 #else
     static_cast<void>(state);
@@ -821,7 +825,77 @@ size_t Core::drain_log() {
     State& state = *static_cast<State*>(existing);
     // The queue lives as long as the core; no lock, so a host's log callback that calls
     // back into the core cannot deadlock here.
-    return state.m_log_queue ? state.m_log_queue->drain() : 0;
+    const size_t delivered = state.m_log_queue ? state.m_log_queue->drain() : 0;
+    // The summary after the drain, as the drain thread's pass does: a host pumping the
+    // queue itself (ANIRA_LOG_DRAIN_MANUAL, WebAssembly) gets it from here.
+    report_rt_latches();
+    return delivered;
+}
+
+void Core::report_rt_latches() {
+    // Two callers (the drain thread, a drain_log() caller) never interleave: the second
+    // one leaves. Cleared on every exit, a throwing sink included.
+    static std::atomic<bool> s_in_summary{false};
+    if (s_in_summary.exchange(true, std::memory_order_acq_rel)) { return; }
+    struct Clear {
+        ~Clear() { s_in_summary.store(false, std::memory_order_release); }
+    } const clear;
+
+    // Serialized by s_in_summary. Constant-initialized, trivially destructible: nothing is
+    // registered for static teardown (see the note on s_state).
+    static std::chrono::steady_clock::time_point s_last{};
+    const auto now = std::chrono::steady_clock::now();
+    if (s_last != std::chrono::steady_clock::time_point{} &&
+        now - s_last < std::chrono::milliseconds(detail::rt_summary_interval_ms())) {
+        return;
+    }
+    s_last = now;
+
+    // Growth only: a count that did not move since the last report is not reported, and a
+    // re-arm (which zeroes both counters) is never performed here. A re-arm that raced the
+    // previous report leaves m_reported above m_suppressed; the fresh occurrences since
+    // that re-arm are growth from zero.
+    const auto report = [](RtLatch& latch, uint32_t& delta) {
+        const uint32_t suppressed = latch.m_suppressed.load(std::memory_order_relaxed);
+        const uint32_t reported = latch.m_reported.load(std::memory_order_relaxed);
+        const uint32_t base = reported > suppressed ? 0 : reported;
+        if (suppressed <= base) { return false; }
+        latch.m_reported.store(suppressed, std::memory_order_relaxed);
+        delta = suppressed - base;
+        return true;
+    };
+
+    for (size_t i = 0; i < static_cast<size_t>(RtSite::Count); ++i) {
+        uint32_t delta = 0;
+        if (report(detail::rt_site(static_cast<RtSite>(i)), delta)) {
+            ANIRA_LOG_WARNING(log_group::k_scheduler,
+                              "real-time condition '%s' is still failing: %u more occurrences "
+                              "suppressed since the last report",
+                              k_rt_site_names[i],
+                              delta);
+        }
+    }
+
+    // The sessions' latches (a 3.x handler's word, or the session's own). Never block: this
+    // also runs from the failure-path drain of a control entry, possibly while another
+    // thread holds the lifecycle lock; a contended lock skips this half.
+    void* existing = s_state.load(std::memory_order_acquire);
+    if (existing == nullptr) { return; }
+    State& state = *static_cast<State*>(existing);
+    const std::unique_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex, std::try_to_lock);
+    if (!lifecycle_lock.owns_lock()) { return; }
+    for (const auto& session : state.m_sessions) {
+        uint32_t delta = 0;
+        RtLatch& latch = *session->m_rt;
+        if (report(latch, delta)) {
+            ANIRA_LOG_WARNING(log_group::k_scheduler,
+                              "handler of session %d: real-time failures still occurring, %u "
+                              "more suppressed since the last report (last status %s)",
+                              session->m_session_id,
+                              delta,
+                              anira_status_string(latch.rt_error()));
+        }
+    }
 }
 
 bool Core::release_core_if_idle() {
@@ -856,6 +930,21 @@ void Core::prepare_session(const std::shared_ptr<SessionElement>& session,
                            HostConfig new_config,
                            const CustomLatencies& custom_latencies,
                            const RingDtypes& ring_dtypes) {
+    // Every prepare re-arms the scheduler's site latches, and nothing else does: a
+    // condition that persisted since the last prepare is logged once more on its next
+    // occurrence, and a fresh prepare never inherits a latch an earlier session armed (one
+    // test binary prepares many). Synchronous logging: control thread.
+    for (size_t i = 0; i < static_cast<size_t>(RtSite::Count); ++i) {
+        const uint32_t suppressed = detail::rt_site(static_cast<RtSite>(i)).rearm();
+        if (suppressed > 0) {
+            ANIRA_LOG_WARNING(log_group::k_scheduler,
+                              "real-time condition '%s': %u occurrences suppressed since the "
+                              "last prepare",
+                              k_rt_site_names[i],
+                              suppressed);
+        }
+    }
+
     // seq_cst: pairs with the worker's register-before-check in
     // InferenceThread::process_dequeued_inference().
     session->m_initialized.store(false, std::memory_order::seq_cst);
@@ -952,9 +1041,10 @@ void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session) {
                         session->m_inference_config.get_postprocess_output_size()[tensor_index]);
                 }
             }
-            ANIRA_LOG_RT_WARNING(log_group::k_core,
-                                 "No free inference queue found in session: %d!",
-                                 session->m_session_id);
+            ANIRA_LOG_RT_WARNING_ONCE(RtSite::NoFreeInferenceQueue,
+                                      log_group::k_core,
+                                      "No free inference queue found in session: %d!",
+                                      session->m_session_id);
             return;
         }
     }
@@ -1145,9 +1235,10 @@ bool Core::enqueue_inference_or_drop(
         // The task keeps its struct and timestamp and completes as zeros at its
         // stream position, so the output stays time-aligned: exactly one chunk
         // was consumed and exactly one (silent) chunk will be produced.
-        ANIRA_LOG_RT_ERROR(log_group::k_core,
-                           "Could not enqueue next inference to global core job queue! "
-                           "Dropping the inference and zero-filling its output.");
+        ANIRA_LOG_RT_ERROR_ONCE(RtSite::EnqueueDropped,
+                                log_group::k_core,
+                                "Could not enqueue next inference to global core job queue! "
+                                "Dropping the inference and zero-filling its output.");
         session->complete_with_zeros(thread_safe_struct);
     }
     return enqueued;
@@ -1219,9 +1310,10 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                 // Requeue failed: complete the other session's task as silence so
                 // its stream stays time-aligned (previously it was silently lost),
                 // and unwedge its dispatch chain.
-                ANIRA_LOG_RT_ERROR(log_group::k_core,
-                                   "Could not requeue inference data! Dropping the inference and "
-                                   "zero-filling its output.");
+                ANIRA_LOG_RT_ERROR_ONCE(RtSite::RequeueDropped,
+                                        log_group::k_core,
+                                        "Could not requeue inference data! Dropping the "
+                                        "inference and zero-filling its output.");
                 other.m_session->complete_with_zeros(other.m_thread_safe_struct);
                 if (other.m_session->m_inference_config.m_session_exclusive_processor) {
                     other.m_session->release_dispatch(other.m_thread_safe_struct->m_dispatch_epoch);
