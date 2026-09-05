@@ -710,7 +710,10 @@ private:
     /**
      * @brief Starts every pool thread that is not running yet
      *
-     * Called with the lifecycle lock held, from prepare_session().
+     * Called with the lifecycle lock held, from prepare_session(). Natively it returns only
+     * once every pool thread is inside its run_loop() (InferenceThread::is_in_loop()), so a
+     * wait on the session's completion primitive finds a thread able to signal it from the
+     * first call after prepare on; on WebAssembly the Worker enters its loop asynchronously.
      *
      * @param state The core's state
      */

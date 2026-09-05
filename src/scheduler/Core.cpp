@@ -1297,6 +1297,14 @@ void Core::start_thread_pool_locked(State& state) {
                 "inference thread of the pool");
         }
         while (!i->is_running()) { std::this_thread::sleep_for(std::chrono::microseconds(50)); }
+#ifndef __EMSCRIPTEN__
+        // is_running() is set by the start itself, before the thread's body runs. Wait until
+        // the thread is inside run_loop(): the _wait twins and the bounded waits of
+        // new_data_request() read the loop count, and a session that prepare hands back must
+        // find its pool able to signal a completion from the first call on. On WebAssembly the
+        // Worker enters its loop asynchronously, after the main instance returns.
+        while (!i->is_in_loop()) { std::this_thread::sleep_for(std::chrono::microseconds(50)); }
+#endif
     }
 }
 

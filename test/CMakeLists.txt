@@ -121,6 +121,10 @@ anira_add_test_binary(test_abi
 	abi/test_ExtrasFixtures.cpp
 	abi/test_Context.cpp
 	abi/test_Thread.cpp
+	abi/test_Handler.cpp
+	abi/test_HandlerWait.cpp
+	abi/test_Prepare.cpp
+	abi/test_RtError.cpp
 )
 # capi_internal.h (the firewall probe) and the generated tables under src/capi/.
 target_include_directories(test_abi PRIVATE "${anira_SOURCE_DIR}/src")
