@@ -348,6 +348,13 @@ target_compile_definitions(${PROJECT_NAME}
     ${ANIRA_COMPILE_DEFINITIONS}
 )
 
+# The internal chain behind the ANIRA_NONBLOCKING entries is annotated post-3.0; until
+# then clang's function-effects analysis is silenced for the library alone (consumer-shaped
+# targets carry -Werror=function-effects from the tensor PR on).
+target_compile_options(${PROJECT_NAME} PRIVATE
+    $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-Wno-function-effects>
+)
+
 if(ANIRA_WITH_RTSAN OR ANIRA_WITH_ASAN OR ANIRA_WITH_UBSAN OR ANIRA_WITH_TSAN OR ANIRA_WITH_LSAN)
     include(cmake/tanh/sanitizers.cmake)
 endif()

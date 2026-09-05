@@ -31,7 +31,7 @@
  *   conversions) and pushed into the core's own bounded lock-free queue
  *   (thl::Logger::rt::Queue, sized by LogConfig::m_queue_capacity), which a
  *   core-owned low-priority thread or the host (LogDrain) forwards to the sinks.
- *   Use these anywhere reachable from an ANIRA_REALTIME entry point or from an
+ *   Use these anywhere reachable from an ANIRA_NONBLOCKING entry point or from an
  *   inference thread. A full queue drops and counts; no queue (no core yet)
  *   drops silently — no real-time path exists then anyway.
  *

@@ -220,8 +220,9 @@ Three sanitizer presets gate the merge queue, and each reproduces locally with
 ``cmake --preset <name> && cmake --build --preset <name> && ctest --preset <name>``:
 
 ``desktop-tests-rtsan``
-   RealtimeSanitizer over the full backend set. Gates the ``ANIRA_REALTIME``
-   (``[[clang::nonblocking]]``) hot path — ``process``/``push_data``/``pop_data``/
+   RealtimeSanitizer over the full backend set. Gates the ``ANIRA_NONBLOCKING``
+   (clang's ``nonblocking`` attribute) hot path — the C entries of
+   ``anira/abi/handler.h`` and the 2.x ``process``/``push_data``/``pop_data``/
    ``reset`` — with no suppressions, so any allocation, lock, sleep, semaphore or
    stream syscall reached from a real-time context fails. Requires clang ≥ 20.
 
