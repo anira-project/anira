@@ -67,6 +67,10 @@ struct anira_pipeline {
     /// Clones the variants (anira_model_config is move-only); anira_handler_create's copy.
     anira_pipeline(const anira_pipeline& other);
     anira_pipeline& operator=(const anira_pipeline&) = delete;
+    /// Moves; anira_handler_create assigns its cloning copy through these.
+    anira_pipeline(anira_pipeline&&) = default;
+    anira_pipeline& operator=(anira_pipeline&&) = default;
+    ~anira_pipeline() = default;
 };
 
 struct anira_plan_report {

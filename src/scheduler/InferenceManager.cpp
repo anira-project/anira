@@ -230,6 +230,9 @@ size_t* InferenceManager::pop_data(float* const* const* output_data,
 void InferenceManager::process_input(const float* const* const* input_data, size_t* num_samples) {
     for (size_t tensor_index = 0; tensor_index < m_inference_config.get_tensor_input_shape().size();
          ++tensor_index) {
+        // An input whose count is 0 is not read: the single-tensor forms of the C handler
+        // leave the other slots' pointers unset, and pushing nothing needs no pointer.
+        if (num_samples[tensor_index] == 0) { continue; }
         if (m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
             for (size_t channel = 0;
                  channel < m_inference_config.get_preprocess_input_channels()[tensor_index];

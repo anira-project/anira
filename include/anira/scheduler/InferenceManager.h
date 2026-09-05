@@ -424,7 +424,8 @@ private:
      * @brief Processes input data through the preprocessing pipeline
      *
      * Handles the input data preprocessing for all tensors, preparing data
-     * for inference execution by the backend.
+     * for inference execution by the backend. An input whose count is 0 is not touched
+     * (the single-tensor forms leave the other slots unset).
      *
      * @param input_data Input data organized as data[tensor_index][channel][sample]
      * @param num_samples Array of input sample counts for each tensor
