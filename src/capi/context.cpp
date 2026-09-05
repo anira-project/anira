@@ -174,13 +174,15 @@ anira_status ANIRA_CALL anira_context_create(const anira_context_config* config,
                        "supported in this pre-release; the context is Host-only");
     auto context = std::make_unique<anira_context>();
     context->m_config = *config;
-    // The 2.x spelling of the config, and the consumed-or-fail walk over its extensions.
-    context->m_core_config = anira::capi::make_core_config(*config);
+    // The 2.x spelling of the config, what the core reconciles, and the consumed-or-fail walk
+    // over its extensions on the way. The core keeps its own reconciled copy; the handle keeps
+    // none (a later handler re-translates at session creation, a handful of field copies).
+    const anira::CoreConfig core_config = anira::capi::make_core_config(*config);
     // The sink first, so that it sees the reconciliation's own records.
     context->m_sink =
         anira::detail::add_log_sink(config->m_sink, config->m_sink_user_data, config->m_log_level);
     try {
-        anira::Core::register_context(context->m_core_config);
+        anira::Core::register_context(core_config);
         context->m_registered = true;
         apply_log_flags(*context, true);
         probe_host_only(context->m_capabilities);

@@ -4,7 +4,6 @@
  * The bodies of the opaque runtime handles of anira/abi/context.h. Private to src/capi
  * (and the tests through the src/ include directory): the layouts never enter the ABI.
  */
-#include <anira/CoreConfig.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/utils/Logger.h>
@@ -33,8 +32,8 @@ struct anira_capabilities {
 /// memory outlives the user's destroy while a handler needs it.
 struct anira_context {
     std::atomic<uint32_t> m_refcount{1};
-    anira_context_config m_config;        ///< the caller's config, copied
-    anira::CoreConfig m_core_config;      ///< its 2.x spelling, what the core reconciles
+    anira_context_config m_config;        ///< the caller's config, copied; its log flags are
+                                          ///< what destroy releases
     anira::detail::LogSinkId m_sink = 0;  ///< the config's sink in the sink registry, or 0
     bool m_flags_applied = false;         ///< the config's ANIRA_LOG_FLAG_* switches are held
     bool m_registered = false;            ///< counted among the core's users
