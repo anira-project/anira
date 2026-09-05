@@ -291,6 +291,7 @@ target_sources(${PROJECT_NAME}
         src/utils/JsonConfigLoader.cpp
         src/utils/Logger.cpp
         src/utils/LogSinks.cpp
+        src/utils/RtLatch.cpp
 
         # Interface
         src/InferenceHandler.cpp
@@ -326,6 +327,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/translate.cpp
     src/capi/v3_to_v2.cpp
     src/capi/version.cpp
+    src/capi/handler.cpp
 )
 
 # Shared between the anira target and the isolated ExecuTorch object target below —

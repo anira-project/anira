@@ -1,5 +1,5 @@
 /*
- * Gate 4 (docs/anira-v3-architecture.md, section 6a): every M1 header in one C11
+ * Gate 4 (docs/anira-v3-architecture.md, section 6a): every C header in one C11
  * translation unit under -std=c11 -Wall -Wextra -Werror -pedantic (or /std:c11 /W4 /WX),
  * with no anira define at all, exercising each _INIT initializer and the macros a C host
  * uses. The per-file wrappers test/abi/CMakeLists.txt generates cover self-containment.
@@ -9,6 +9,7 @@
 #include <anira/abi/core.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
+#include <anira/abi/handler.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/abi/thread.h>
@@ -80,16 +81,24 @@ int anira_header_c_probe(void) {
            referenced so that the declarations compile; the object is never linked. */
         anira_backend_id backend = ANIRA_BACKEND_ID_INIT;
         anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
+        anira_plan_slot slot = ANIRA_PLAN_SLOT_INIT;
+        anira_plan_ext ext = ANIRA_PLAN_EXT_INIT;
+        anira_plan_info info = ANIRA_PLAN_INFO_INIT;
         uint32_t count = 0;
         checks +=
             backend.struct_size == sizeof(anira_backend_id) && backend.engine_id == NULL ? 1 : 0;
         checks += edge.struct_size == sizeof(anira_edge_info) && edge.available == 0u ? 1 : 0;
+        checks += slot.struct_size == sizeof(anira_plan_slot) && slot.recipe == NULL ? 1 : 0;
+        checks += ext.struct_size == sizeof(anira_plan_ext) && ext.host == NULL ? 1 : 0;
+        checks += info.struct_size == sizeof(anira_plan_info) && info.budget_ms == 0.0 ? 1 : 0;
         if (checks < 0) { /* never true: keeps the calls out of the probe's own result */
             const double now = anira_now_ms();
             const anira_status status =
                 anira_enabled_backends((uint32_t)sizeof(anira_backend_id), &count, NULL);
             checks += now > 0.0 && ANIRA_SUCCEEDED(status) && count > 0u ? 1 : 0;
             checks += anira_num_inference_threads() == 0u ? 1 : 0;
+            checks += anira_handler_rt_error(NULL) == ANIRA_OK ? 1 : 0;
+            checks += anira_plan_report_num_plans(NULL) == 0u ? 1 : 0;
         }
     }
     return checks;
