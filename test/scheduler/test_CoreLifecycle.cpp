@@ -215,34 +215,3 @@ TEST(CoreLifecycleTest, ReleaseCoreIfIdleKeepsCoreWhileUserThreadRuns) {
     EXPECT_TRUE(Core::release_core_if_idle());
     EXPECT_FALSE(Core::has_core());
 }
-
-// The deprecated two-step API keeps working for one minor release: the staged
-// configuration is the one the session is created with.
-TEST(CoreLifecycleTest, DeprecatedGetInstanceStagesConfigForCreateSession) {
-    ASSERT_EQ(Core::get_num_sessions(), 0);
-    InferenceConfig inference_config = make_inference_config();
-    PrePostProcessor pp_processor(inference_config);
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#elif defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-    auto core = Core::get_instance(CoreConfig(3));
-    ASSERT_NE(core, nullptr);
-    auto session = core->create_session(pp_processor, inference_config, nullptr);
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#elif defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    ASSERT_NE(session, nullptr);
-    EXPECT_EQ(Core::get_num_sessions(), 1);
-    core->prepare_session(session, HostConfig(512, 48000));
-    EXPECT_TRUE(wait_for_num_inference_threads(3));
-
-    Core::release_session(session);
-    EXPECT_EQ(Core::get_num_sessions(), 0);
-    EXPECT_EQ(Core::get_num_inference_threads(), 0u);
-}

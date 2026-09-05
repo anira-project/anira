@@ -33,7 +33,8 @@
 
 namespace anira {
 
-/// The core-owned real-time log drain thread (src/scheduler/LogDrainLoop.h); anira's own, not tanh-lib's.
+/// The core-owned real-time log drain thread (src/scheduler/LogDrainLoop.h); anira's own, not
+/// tanh-lib's.
 class LogDrainLoop;
 
 /**
@@ -86,39 +87,13 @@ class LogDrainLoop;
  */
 class ANIRA_API Core {
 public:
+    // Never instantiated: every member is static over the one State of this copy of anira.
+    Core() = delete;
     Core(const Core&) = delete;
     Core& operator=(const Core&) = delete;
     Core(Core&&) = delete;
     Core& operator=(Core&&) = delete;
-    ~Core() = default;
-
-    /**
-     * @brief Returns the process-wide core
-     *
-     * The core is immortal and always valid to call (see the class description), so
-     * the returned reference never dangles.
-     *
-     * @return Reference to the core
-     */
-    static Core& get_instance();
-
-    /**
-     * @brief Deprecated: returns the core and stages a configuration for the
-     * deprecated three-argument create_session()
-     *
-     * Kept for one minor release so existing code compiles unchanged. The returned
-     * shared_ptr is non-owning (the core is never destroyed). The configuration is
-     * applied when the next session is created via the three-argument
-     * create_session() — pass it to the four-argument create_session() directly instead.
-     *
-     * @param core_config Configuration to apply with the next session
-     * @return Non-owning shared pointer to the core
-     *
-     * @deprecated Use get_instance() and create_session(PrePostProcessor&,
-     *             InferenceConfig&, BackendBase*, const CoreConfig&).
-     */
-    [[deprecated("Use get_instance() and pass the CoreConfig to create_session().")]]
-    static std::shared_ptr<Core> get_instance(const CoreConfig& core_config);
+    ~Core() = delete;
 
     /**
      * @brief Creates and registers a new inference session
@@ -147,17 +122,6 @@ public:
                                                           InferenceConfig& inference_config,
                                                           BackendBase* custom_processor,
                                                           const CoreConfig& core_config);
-
-    /**
-     * @brief Deprecated: creates a session with the configuration staged by the deprecated
-     * get_instance(const CoreConfig&) (or the one in effect, or a default one)
-     *
-     * @deprecated Pass the CoreConfig to create_session() directly.
-     */
-    [[deprecated("Pass the CoreConfig to create_session() directly.")]]
-    static std::shared_ptr<SessionElement> create_session(PrePostProcessor& pp_processor,
-                                                          InferenceConfig& inference_config,
-                                                          BackendBase* custom_processor);
 
     /**
      * @brief Releases an inference session and its resources
@@ -284,10 +248,10 @@ public:
      *       safe against concurrent processing calls on the *same* session —
      *       the host must not process a session it is currently preparing.
      */
-    void prepare_session(const std::shared_ptr<SessionElement>& session,
-                         HostConfig new_config,
-                         const CustomLatencies& custom_latencies = {},
-                         const RingDtypes& ring_dtypes = {});
+    static void prepare_session(const std::shared_ptr<SessionElement>& session,
+                                HostConfig new_config,
+                                const CustomLatencies& custom_latencies = {},
+                                const RingDtypes& ring_dtypes = {});
 
     /**
      * @brief Gets the number of registered inference sessions
@@ -308,7 +272,7 @@ public:
      *
      * @param session Shared pointer to the session that has new data available
      */
-    void new_data_submitted(const std::shared_ptr<SessionElement>& session);
+    static void new_data_submitted(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Collects completed inferences on the push side, as far as they fit
@@ -327,7 +291,7 @@ public:
      * @return False if a completed result could not be placed because a receive ring is
      *         full, true otherwise
      */
-    bool collect_completed(const std::shared_ptr<SessionElement>& session);
+    static bool collect_completed(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Requests new data processing for a session
@@ -344,7 +308,7 @@ public:
      *       InferenceManager::set_non_realtime()), this blocks until the pending
      *       inference completes instead of returning immediately.
      */
-    void new_data_request(const std::shared_ptr<SessionElement>& session);
+    static void new_data_request(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Requests new data processing for a session at a specific time
@@ -361,8 +325,8 @@ public:
      *       InferenceManager::set_non_realtime()), this blocks until the pending
      *       inference completes instead of honoring wait_until.
      */
-    void new_data_request(const std::shared_ptr<SessionElement>& session,
-                          std::chrono::steady_clock::time_point wait_until);
+    static void new_data_request(const std::shared_ptr<SessionElement>& session,
+                                 std::chrono::steady_clock::time_point wait_until);
 
     /**
      * @brief Gets a snapshot of all registered sessions
@@ -398,7 +362,7 @@ public:
      *
      * @param session Shared pointer to the session to reset
      */
-    void reset_session(const std::shared_ptr<SessionElement>& session);
+    static void reset_session(const std::shared_ptr<SessionElement>& session);
 
     /**
      * @brief Get a reference to the global inference queue
@@ -468,8 +432,6 @@ public:
     static bool has_inference_threads();
 
 private:
-    Core() = default;
-
     /**
      * @brief The core's state: registry, thread pool, queue, processor pools
      *

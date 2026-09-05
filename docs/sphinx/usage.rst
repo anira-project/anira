@@ -20,7 +20,7 @@ of section 1.5 are their file form.
        state, the instance ceiling and the anchor tensor the host geometry refers to. Travels
        with the model; its file form is the model file.
    * - ``anira::TensorSpec``
-     - One tensor of the model: data type, role, tagged axes, the window and context a
+     - One tensor of the model: data type, role, tagged axes, the window and overlap a
        streamed tensor is consumed with, the output latency.
    * - ``anira::ContractHandle`` (``anira::Hard`` / ``anira::Async``)
      - How the model runs: **Hard** for a real-time stream (block range and rate, budget,
@@ -93,10 +93,10 @@ a tag and an extent; NCHW against NHWC is just a different order of tags. Tags a
 of the Time axis of a streamed spec may be ``ANIRA_DYNAMIC`` when the model accepts any
 length; a streamed spec has exactly one Time axis and at most one Channel axis.
 
-A streamed spec also carries its **window**, ``window(window_min, window_max, context)``: how
+A streamed spec also carries its **window**, ``window(window_min, window_max, overlap)``: how
 many elements along the Time axis one inference consumes (``window_min`` and ``window_max``,
 equal for a fixed window, ``window_max = ANIRA_UNBOUNDED`` for an open one) and how many of
-them are **context** (the left context), the elements kept from the previous window. The advance per inference,
+them are **overlap**, the elements kept from the previous window. The advance per inference,
 the hop, is the window minus the context. A receptive-field model whose export takes 15380
 samples and yields 2048 fresh ones is a window of 15380 with a context of 13332.
 
@@ -326,12 +326,12 @@ document), so a typo never turns into a default.
       "inputs": [
         { "name": "audio_in", "dtype": "float32", "role": "streamed",
           "axes": [ ["batch", 1], ["channel", 2], ["time", "dynamic"] ],
-          "window": { "min": 2048, "max": 8192 }, "context": 1024 }
+          "window": { "min": 2048, "max": 8192 }, "overlap": 1024 }
       ],
       "outputs": [
         { "name": "mask_out", "role": "streamed",
           "axes": [ ["batch", 1], ["channel", 2], ["time", "dynamic"] ],
-          "window": { "min": 2048, "max": 8192 }, "context": 1024, "latency": 512 }
+          "window": { "min": 2048, "max": 8192 }, "overlap": 1024, "latency": 512 }
       ]
     }
 
@@ -346,7 +346,7 @@ document), so a typo never turns into a default.
   entry point (section 1.2).
 - ``inputs[]`` / ``outputs[]``: the tensor specs of section 1.1 — ``dtype``, ``role``
   (``streamed``, ``buffer``, ``static``), tagged ``axes`` (an extent or ``"dynamic"``),
-  ``window`` (``min`` and ``max`` or ``"unbounded"``), ``context``, ``latency`` (outputs) and
+  ``window`` (``min`` and ``max`` or ``"unbounded"``), ``overlap``, ``latency`` (outputs) and
   ``time_ratio``.
 - ``anchor`` is the canonical name of the streamed tensor that is the model's clock (section
   1.2); absent means the first streamed input, or the first streamed output of a generator.
@@ -492,9 +492,9 @@ The context configuration of section 1.4 (an ``anira::ContextConfig``, or the co
     const anira::Capabilities caps = context.capabilities();
     for (const anira::BackendId& backend : caps.backends()) { /* engine, provider */ }
     for (const anira_edge_info& edge : caps.edges()) { /* from_domain -> (to_engine, to_provider) */ }
-    context.num_inference_threads();                 // the pool size: 0 before the first handler
+    anira::num_inference_threads();                  // the core's pool size: 0 before the first handler
 
-The same in C: ``anira_context_create(config, &context, &err)``, ``anira_context_capabilities`` with the enumerators ``anira_capabilities_backends`` / ``domains`` / ``ext_kinds`` / ``edges`` / ``edge`` (``out == NULL`` asks for the count, a short buffer returns ``ANIRA_INCOMPLETE``, records are written at the caller's ``element_size``), ``anira_context_probe``, ``anira_context_drain_log``, ``anira_context_num_inference_threads`` and ``anira_context_destroy``. ``anira_enabled_backends`` (``anira::enabled_backends()``) says what this build compiled in without a context; ``anira_capabilities_backends`` what is usable here. In this pre-release every context is Host-only: the report is the compiled-in engines on ``ANIRA_PROVIDER_DEFAULT``, the host domain and one zero-copy edge per engine, and a device block on the config is refused with ``ANIRA_ERROR_NOT_SUPPORTED``. ``anira_now_ms`` / ``anira_now_ns`` are the steady clock deadlines will be spelled in; ``anira_shutdown`` (called by a plugin's module-exit entry point, see the CLAP example) stops the core's threads only when no context and no handler exist, ``anira_has_core`` and ``anira_release_core_if_idle`` are the unload hook's questions.
+The same in C: ``anira_context_create(config, &context, &err)``, ``anira_context_capabilities`` with the enumerators ``anira_capabilities_backends`` / ``domains`` / ``ext_kinds`` / ``edges`` / ``edge`` (``out == NULL`` asks for the count, a short buffer returns ``ANIRA_INCOMPLETE``, records are written at the caller's ``element_size``), ``anira_context_probe``, and, taking no context since the queue and the pool are the core's, ``anira_drain_log`` and ``anira_num_inference_threads`` and ``anira_context_destroy``. ``anira_enabled_backends`` (``anira::enabled_backends()``) says what this build compiled in without a context; ``anira_capabilities_backends`` what is usable here. In this pre-release every context is Host-only: the report is the compiled-in engines on ``ANIRA_PROVIDER_DEFAULT``, the host domain and one zero-copy edge per engine, and a device block on the config is refused with ``ANIRA_ERROR_NOT_SUPPORTED``. ``anira_now_ms`` / ``anira_now_ns`` are the steady clock deadlines will be spelled in; ``anira_shutdown`` (called by a plugin's module-exit entry point, see the CLAP example) stops the core's threads only when no context and no handler exist, ``anira_has_core`` and ``anira_release_core_if_idle`` are the unload hook's questions.
 
 **The bridge.** The inference handler of this pre-release does not take a context yet: it takes the :cpp:struct:`anira::CoreConfig` the bridge builds from the same config, and reconciles it into the core the same way (a context and a handler's core config in one process are reconciled against each other by the rules below):
 
@@ -531,7 +531,7 @@ anira logs through `tanh-lib <https://github.com/tanh-lab/tanh-lib>`_'s ``thl::L
 Messages from the audio thread and the inference threads are real-time safe: they are formatted on the caller's stack and pushed into a lock-free queue the core owns (a ``thl::Logger::rt::Queue``), and reach the same sinks a little later with ``source = "rt"``. The context configuration (``context.log_drain(...)`` and ``context.log_queue_capacity(...)``, section 1.4; the ``log`` block of the context file) says how that queue is drained:
 
 - ``ANIRA_LOG_DRAIN_THREAD`` (the default natively): a low-priority thread of anira's own (``anira-log``, ``thl::core::ThreadPriority::Low``, i.e. below UI work — under heavy CPU contention, e.g. more spinning inference threads than cores, delivery is delayed rather than competing with the audio path) owned by the core — started with the first context or :cpp:class:`anira::InferenceHandler`, stopped and joined when the last of them is destroyed (and by ``anira_shutdown``), which flushes the queue through the sinks on the destroying thread. Nothing of it survives the last user, so a plugin host may unload the library right after.
-- ``ANIRA_LOG_DRAIN_MANUAL``: no thread. The host calls ``anira_context_drain_log`` (``anira::Context::drain_log``, or :cpp:func:`anira::InferenceHandler::drain_log` / ``anira_drain_log``) periodically, e.g. from a UI timer; the queue is shared by every context and handler in the process, so pumping any one of them drains everything. The only mode on WebAssembly, where the web wrapper exposes it as ``drainAniraLog(wasmInstance)`` (``_anira_drain_log()``). Records logged before the last context or handler is destroyed are flushed on its release either way.
+- ``ANIRA_LOG_DRAIN_MANUAL``: no thread. The host calls ``anira_drain_log`` (``anira::drain_log()`` in ``anira/anira.hpp``, or :cpp:func:`anira::InferenceHandler::drain_log`) periodically, e.g. from a UI timer; the queue is shared by every context and handler in the process, so pumping any one of them drains everything. The only mode on WebAssembly, where the web wrapper exposes it as ``drainAniraLog(wasmInstance)`` (``_anira_drain_log()``). Records logged before the last context or handler is destroyed are flushed on its release either way.
 
 ``log_queue_capacity`` sizes the queue (rounded up to a power of two, clamped to [64, 65536]; a full queue drops and counts further records until the next drain, which then reports how many were lost) and the interval of ``log_drain`` the thread's pass interval; the rule of thumb is capacity ≥ burst rate × interval. The queue is created once per process by the first session and keeps its size — a later first session asking for more is told with a warning.
 

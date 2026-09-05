@@ -18,7 +18,7 @@ using namespace anira;
 // Reproduces the unsynchronized session-lifecycle defect: the core
 // singleton's static state (m_sessions vector, shared inference thread pool,
 // the m_core shared_ptr, and the "last session releases the pool" teardown
-// in release_session) is mutated by get_instance / create_session /
+// in release_session) is mutated by create_session /
 // release_session / prepare_session without any serialization. Two handler
 // lifecycles overlapping on different threads therefore corrupt that state:
 // under ThreadSanitizer this manifests as races on m_sessions and the

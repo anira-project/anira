@@ -193,13 +193,13 @@ anira_status ANIRA_CALL anira_tensor_spec_set_axis(anira_tensor_spec* spec,
 anira_status ANIRA_CALL anira_tensor_spec_set_window(anira_tensor_spec* spec,
                                                      int64_t window_min,
                                                      int64_t window_max,
-                                                     int64_t context) ANIRA_NOEXCEPT try {
+                                                     int64_t overlap) ANIRA_NOEXCEPT try {
     if (spec == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if (window_min < 0 || context < 0) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (window_min < 0 || overlap < 0) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (window_max < 0 && window_max != ANIRA_UNBOUNDED) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     spec->m_window_min = window_min;
     spec->m_window_max = window_max;
-    spec->m_context = context;
+    spec->m_overlap = overlap;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 

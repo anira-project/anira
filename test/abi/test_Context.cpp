@@ -6,6 +6,7 @@
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
+#include <anira/abi/core.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
@@ -174,7 +175,7 @@ TEST(AbiContext, TheConfigIsCopied) {
         context = create(config);
     }
     ASSERT_NE(context, nullptr);
-    EXPECT_EQ(anira_context_drain_log(context), 0U);
+    EXPECT_EQ(anira_drain_log(), 0U);
     uint32_t count = 0;
     EXPECT_EQ(anira_capabilities_domains(anira_context_capabilities(context), &count, nullptr),
               ANIRA_OK);
@@ -279,7 +280,7 @@ TEST(AbiContext, TheRecordProjectionOfARealTimeRecord) {
 #ifdef ENABLE_LOGGING
     anira_log_rt(ANIRA_LOG_ERROR, "anira.test", "rt projection", 3, 4);
     EXPECT_FALSE(sink.has("rt projection")) << "still in the queue";
-    EXPECT_GE(anira_context_drain_log(context), 1U);
+    EXPECT_GE(anira_drain_log(), 1U);
     const std::vector<RecordCollector::Record> records = sink.find("rt projection");
     ASSERT_EQ(records.size(), 1U);
     EXPECT_EQ(records[0].m_message, "rt projection [3 4]");
@@ -292,7 +293,7 @@ TEST(AbiContext, TheRecordProjectionOfARealTimeRecord) {
     for (int i = 0; i < k_more_than_any_queue; ++i) {
         anira_log_rt(ANIRA_LOG_ERROR, "anira.test", "flood", i, 0);
     }
-    const size_t delivered = anira_context_drain_log(context);
+    const size_t delivered = anira_drain_log();
     EXPECT_GT(delivered, 0U);
     EXPECT_LT(delivered, static_cast<size_t>(k_more_than_any_queue));
     uint64_t dropped = 0;
@@ -432,8 +433,6 @@ TEST(AbiContext, LaterContextsReconcilePerField) {
         // own four cannot grow it.
         const Instance instance{CoreConfig(4, WaitStrategy::SpinBackoff, LogLevel::Error)};
         EXPECT_EQ(anira_num_inference_threads(), 1U);
-        EXPECT_EQ(anira_context_num_inference_threads(a), 1U);
-        EXPECT_EQ(anira_context_num_inference_threads(b), 1U);
     }
     EXPECT_EQ(anira_num_inference_threads(), 0U) << "the pool goes with the last session";
     anira_context_destroy(b);

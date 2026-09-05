@@ -34,7 +34,7 @@
       "role": "streamed",
       "axes": [["any", 256], ["channel", 1], ["time", 150]],
       "window": { "min": 405, "max": 405 },
-      "context": 149
+      "overlap": 149
     }
   ],
   "outputs": [

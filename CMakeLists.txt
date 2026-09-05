@@ -321,6 +321,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/layout.cpp
     src/capi/log.cpp
     src/capi/context.cpp
+    src/capi/core.cpp
     src/capi/thread.cpp
     src/capi/translate.cpp
     src/capi/v3_to_v2.cpp

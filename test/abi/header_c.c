@@ -6,6 +6,7 @@
  */
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
+#include <anira/abi/core.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/log.h>

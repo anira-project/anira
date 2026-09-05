@@ -36,7 +36,7 @@
       "role": "streamed",
       "axes": [["batch", 1], ["channel", 1], ["time", 15380]],
       "window": { "min": 15380, "max": 15380 },
-      "context": 13332
+      "overlap": 13332
     }
   ],
   "outputs": [

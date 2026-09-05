@@ -7,19 +7,20 @@
 
 /**
  * @file context.h
- * @brief The context handle over the core, its capabilities and the probe, the steady clock, and the shutdown family.
+ * @brief The context handle over the core, its capabilities and the probe.
  *
  * anira_context is a refcounted handle over the immortal core, one core per copy of anira (a
  * shared library has one, every static embedding its own). anira_context_create reconciles the
  * context config into the core (the first context's config takes effect whole; later contexts
  * reconcile per field: wait strategy first wins, log level most verbose wins, the thread pool
  * only shrinks and never to zero, drain mode, queue capacity and drain interval first win with
- * a warning), registers the config's log sink and probes the capabilities. Two contexts in one
- * copy are two views of one core with two log sinks. Thread pool and inference queue are
- * core-owned and exist exactly while any handler in this copy exists; anira_shutdown is refused
- * while a context or a handler lives. In this pre-release every context is Host-only: the probe
- * reports the compiled-in engines on ANIRA_PROVIDER_DEFAULT, the host domain and one zero-copy
- * edge per engine; a device block on the config is ANIRA_ERROR_NOT_SUPPORTED at create.
+ * a warning), registers the config's log sink and probes the capabilities. The clock and the
+ * shutdown family of the core are abi/core.h. Two contexts in one copy are two views of one
+ * core with two log sinks. Thread pool and inference queue are core-owned and exist exactly
+ * while any handler in this copy exists; anira_shutdown is refused while a context or a handler
+ * lives. In this pre-release every context is Host-only: the probe reports the compiled-in
+ * engines on ANIRA_PROVIDER_DEFAULT, the host domain and one zero-copy edge per engine; a
+ * device block on the config is ANIRA_ERROR_NOT_SUPPORTED at create.
  */
 
 #include <stddef.h>
@@ -265,85 +266,6 @@ ANIRA_API anira_status ANIRA_CALL anira_enabled_backends(uint32_t element_size,
 ANIRA_API uint64_t ANIRA_CALL anira_context_byte_image_bytes(const anira_context* context,
                                                              uint64_t num_elements,
                                                              anira_dtype dtype) ANIRA_NOEXCEPT;
-
-/**
- * @brief Delivers the queued real-time records of the core behind this context to the sinks:
- * the host's pump under ANIRA_LOG_DRAIN_MANUAL. The queue is shared by every context of
- * the copy, so pumping any one of them drains everything.
- * @param context The handle.
- * @return The number of records delivered; 0 for a NULL context.
- * @par Thread contract
- * [thread-safe, !audio-thread]
- * @since ABI 0.2
- */
-ANIRA_API size_t ANIRA_CALL anira_context_drain_log(anira_context* context) ANIRA_NOEXCEPT;
-
-/**
- * @brief The size of the inference thread pool serving this context: the default pool of the
- * copy, which exists while a handler does, so 0 before the first handler and for a
- * context that brought its own threads.
- * @param context The handle.
- * @return The pool size; 0 for a NULL context.
- * @par Thread contract
- * [thread-safe]
- * @since ABI 0.2
- */
-ANIRA_API uint32_t ANIRA_CALL anira_context_num_inference_threads(const anira_context* context)
-                                                                  ANIRA_NOEXCEPT;
-
-/**
- * @brief The steady clock in milliseconds, for deadlines and submit timestamps; the same clock
- * as anira_now_ns.
- * @return Milliseconds since an unspecified steady epoch.
- * @par Thread contract
- * [thread-safe] [callback-safe] ANIRA_NONBLOCKING
- * @since ABI 0.2
- */
-ANIRA_API double ANIRA_CALL anira_now_ms(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
-
-/**
- * @brief The steady clock in nanoseconds; the one allowlisted 64-bit return on an
- * ANIRA_NONBLOCKING declaration.
- * @return Nanoseconds since an unspecified steady epoch.
- * @par Thread contract
- * [thread-safe] [callback-safe] ANIRA_NONBLOCKING
- * @since ABI 0.2
- */
-ANIRA_API uint64_t ANIRA_CALL anira_now_ns(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
-
-/**
- * @brief Stops and joins the core's inference threads and its log drain thread and flushes the
- * queue, for a static embedding that is about to be unloaded (called from clap_deinit or
- * ExitDll). Idempotent, never creates the core, and effective only when no context and
- * no handler exist in this copy: otherwise nothing happens, so one client of a shared
- * library cannot silence another's sessions.
- * @return ANIRA_OK (also without a core); ANIRA_ERROR_INVALID_STATE while a context or a
- *         handler lives.
- * @par Thread contract
- * [main-thread & !loader-lock]
- * @since ABI 0.2
- */
-ANIRA_API anira_status ANIRA_CALL anira_shutdown(void) ANIRA_NOEXCEPT;
-
-/**
- * @brief Frees the core when nothing uses it: no context, no handler, no pool thread, no
- * user-driven inference thread and, on WebAssembly, no inference loop still running.
- * Never blocks; the unload hook's call.
- * @return Nonzero when the core was freed.
- * @par Thread contract
- * [main-thread]
- * @since ABI 0.2
- */
-ANIRA_API anira_bool ANIRA_CALL anira_release_core_if_idle(void) ANIRA_NOEXCEPT;
-
-/**
- * @brief Whether this copy of anira holds a core.
- * @return Nonzero while the core exists.
- * @par Thread contract
- * [thread-safe]
- * @since ABI 0.2
- */
-ANIRA_API anira_bool ANIRA_CALL anira_has_core(void) ANIRA_NOEXCEPT;
 
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 

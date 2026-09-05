@@ -221,16 +221,6 @@ public:
     size_t get_available_samples(size_t tensor_index, size_t channel) const;
 
     /**
-     * @brief Gets a const reference to the inference core (for unit testing)
-     *
-     * Provides access to the internal inference core for testing and debugging.
-     * This method should primarily be used for unit testing purposes.
-     *
-     * @return Const reference to the internal Core object
-     */
-    const Core& get_core() const;
-
-    /**
      * @brief Gets the current session ID
      *
      * Returns the unique identifier for the current inference session.
@@ -347,9 +337,6 @@ private:
                     const std::vector<size_t>& num_channels);
 
 private:
-    Core& m_core;  ///< The process-wide inference core managing threads and
-                   ///< sessions (immortal, see Core)
-
     InferenceConfig& m_inference_config;  ///< Reference to the inference configuration containing
                                           ///< model settings
     PrePostProcessor& m_pp_processor;  ///< Reference to the preprocessing/postprocessing pipeline

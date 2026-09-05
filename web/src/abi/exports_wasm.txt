@@ -30,8 +30,6 @@ _anira_context_config_set_webgpu
 _anira_context_config_to_json
 _anira_context_create
 _anira_context_destroy
-_anira_context_drain_log
-_anira_context_num_inference_threads
 _anira_context_probe
 _anira_contract_async_set_deadline
 _anira_contract_async_set_policy

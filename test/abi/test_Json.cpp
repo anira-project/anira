@@ -102,7 +102,7 @@ TEST(AbiJsonModel, LoadsTheDocumentExample) {
     EXPECT_EQ(in.m_axes[2].m_extent, ANIRA_DYNAMIC);
     EXPECT_EQ(in.m_window_min, 2048);
     EXPECT_EQ(in.m_window_max, 8192);
-    EXPECT_EQ(in.m_context, 1024);
+    EXPECT_EQ(in.m_overlap, 1024);
     EXPECT_EQ(cfg.m_inputs[1].m_role, ANIRA_ROLE_STATIC);
     EXPECT_EQ(cfg.m_inputs[1].m_dtype, ANIRA_DTYPE_F32) << "dtype defaults to float32";
     ASSERT_EQ(cfg.m_outputs.size(), 1u);

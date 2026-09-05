@@ -215,8 +215,8 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_axis(anira_tensor_spec* 
  * @param spec The spec.
  * @param window_min The model's smallest legal Time extent, in elements.
  * @param window_max The largest, or ANIRA_UNBOUNDED.
- * @param context Left context retained across inferences; consumed per inference = window_used
- *        - context.
+ * @param overlap Overlap of consecutive windows: the elements kept from the previous window.
+ *        The advance per inference, the hop, is window_used - overlap.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value other than
  *         ANIRA_UNBOUNDED as window_max.
  * @par Thread contract
@@ -226,7 +226,7 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_axis(anira_tensor_spec* 
 ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_window(anira_tensor_spec* spec,
                                                                int64_t window_min,
                                                                int64_t window_max,
-                                                               int64_t context) ANIRA_NOEXCEPT;
+                                                               int64_t overlap) ANIRA_NOEXCEPT;
 
 /**
  * @brief The tensor's Time advance relative to the anchor tensor.

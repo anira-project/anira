@@ -983,7 +983,7 @@ headers:
           - {type: anira_tensor_spec*, name: spec, doc: "The spec."}
           - {type: int64_t, name: window_min, doc: "The model's smallest legal Time extent, in elements."}
           - {type: int64_t, name: window_max, doc: "The largest, or ANIRA_UNBOUNDED."}
-          - {type: int64_t, name: context, doc: "Left context retained across inferences; consumed per inference = window_used - context."}
+          - {type: int64_t, name: overlap, doc: "Overlap of consecutive windows: the elements kept from the previous window. The advance per inference, the hop, is window_used - overlap."}
         thread: main-thread
         status: promised
         since: "0.1"
@@ -1916,7 +1916,7 @@ headers:
   # ----------------------------------------------------------------------------
   - file: context.h
     guard: ANIRA_ABI_CONTEXT_H
-    brief: "The context handle over the core, its capabilities and the probe, the steady clock, and the shutdown family."
+    brief: "The context handle over the core, its capabilities and the probe."
     doc: >-
       anira_context is a refcounted handle over the immortal core, one core per copy of
       anira (a shared library has one, every static embedding its own). anira_context_create
@@ -1924,7 +1924,7 @@ headers:
       whole; later contexts reconcile per field: wait strategy first wins, log level most
       verbose wins, the thread pool only shrinks and never to zero, drain mode, queue capacity
       and drain interval first win with a warning), registers the config's log sink and
-      probes the capabilities. Two contexts in one copy are two views of one core with two
+      probes the capabilities. The clock and the shutdown family of the core are abi/core.h. Two contexts in one copy are two views of one core with two
       log sinks. Thread pool and inference queue are core-owned and exist exactly while any
       handler in this copy exists; anira_shutdown is refused while a context or a handler
       lives. In this pre-release every context is Host-only: the probe reports the compiled-in
@@ -2092,26 +2092,21 @@ headers:
         since: "0.2"
         doc: "The size in bytes of a tensor's byte image under the edges this context probed (section 7): the dense encoding, num_elements times the element size, in this pre-release."
         return_doc: "The byte count, 0 for a NULL context or a dtype without a size."
-      - kind: function
-        name: anira_context_drain_log
-        returns: size_t
-        params:
-          - {type: anira_context*, name: context, doc: "The handle."}
-        thread: thread-safe, !audio-thread
-        status: promised
-        since: "0.2"
-        doc: "Delivers the queued real-time records of the core behind this context to the sinks: the host's pump under ANIRA_LOG_DRAIN_MANUAL. The queue is shared by every context of the copy, so pumping any one of them drains everything."
-        return_doc: "The number of records delivered; 0 for a NULL context."
-      - kind: function
-        name: anira_context_num_inference_threads
-        returns: uint32_t
-        params:
-          - {type: const anira_context*, name: context, doc: "The handle."}
-        thread: thread-safe
-        status: promised
-        since: "0.2"
-        doc: "The size of the inference thread pool serving this context: the default pool of the copy, which exists while a handler does, so 0 before the first handler and for a context that brought its own threads."
-        return_doc: "The pool size; 0 for a NULL context."
+
+  # ----------------------------------------------------------------------------
+  - file: core.h
+    guard: ANIRA_ABI_CORE_H
+    brief: "The core of this copy of anira: its steady clock and the shutdown family."
+    doc: >-
+      One core per copy of anira (a shared library has one, every static embedding its own)
+      holds what every context and handler shares: the inference thread pool and queue, the
+      backend processor pools, the real-time log queue and its drain. It is created by the
+      first call that needs it and lives until the copy is unloaded; a host never creates or
+      destroys it, it only asks it to shut its threads down (anira_shutdown) or to free itself
+      once nothing uses it (anira_release_core_if_idle), both for a static embedding about to
+      be unloaded. anira_now_ms / anira_now_ns are the steady clock deadlines are spelled in.
+    includes: ["<stdint.h>", "export.h", "status.h", "enums.h"]
+    entities:
       - kind: function
         name: anira_now_ms
         returns: double
@@ -2163,6 +2158,7 @@ headers:
         return_doc: "Nonzero while the core exists."
 
   # ----------------------------------------------------------------------------
+
   - file: thread.h
     guard: ANIRA_ABI_THREAD_H
     brief: "User-driven inference threads, the WebAssembly Worker's primitive."

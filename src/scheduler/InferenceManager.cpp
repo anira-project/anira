@@ -22,8 +22,7 @@ InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
                                    InferenceConfig& inference_config,
                                    BackendBase* custom_processor,
                                    const CoreConfig& core_config)
-    : m_core(Core::get_instance())
-    , m_inference_config(inference_config)
+    : m_inference_config(inference_config)
     , m_pp_processor(pp_processor)
     , m_session(
           Core::create_session(pp_processor, inference_config, custom_processor, core_config)) {}
@@ -49,7 +48,7 @@ void InferenceManager::prepare(HostConfig new_config,
                                const RingDtypes& ring_dtypes) {
     m_host_config = new_config;
 
-    m_core.prepare_session(m_session, m_host_config, custom_latencies, ring_dtypes);
+    Core::prepare_session(m_session, m_host_config, custom_latencies, ring_dtypes);
 
     m_missing_samples.clear();
     m_missing_samples.resize(m_inference_config.get_tensor_output_shape().size(), 0);
@@ -62,7 +61,7 @@ size_t* InferenceManager::process(const float* const* const* input_data,
     process_input(input_data, num_input_samples);
     request_output(num_output_samples);
 
-    m_core.new_data_submitted(m_session);
+    Core::new_data_submitted(m_session);
     if (m_inference_config.m_blocking_ratio > 0.f) {
         std::chrono::steady_clock::time_point wait_until = std::chrono::steady_clock::now();
         // The host block is measured in samples of the reference stream (input or output).
@@ -74,9 +73,9 @@ size_t* InferenceManager::process(const float* const* const* input_data,
         auto time_to_process = std::chrono::microseconds(
             static_cast<long>(buffer_size_in_sec * 1e6 * m_inference_config.m_blocking_ratio));
         wait_until += time_to_process;
-        m_core.new_data_request(m_session, wait_until);
+        Core::new_data_request(m_session, wait_until);
     } else {
-        m_core.new_data_request(m_session);
+        Core::new_data_request(m_session);
     }
 
     return process_output(output_data, num_output_samples);
@@ -90,13 +89,13 @@ void InferenceManager::push_data(const float* const* const* input_data, size_t* 
     // on the pop side. Results are placed only while the receive rings have room; a host
     // that never pops a streamed output is told so instead of having unread output
     // overwritten.
-    if (!m_core.collect_completed(m_session)) {
+    if (!Core::collect_completed(m_session)) {
         ANIRA_LOG_RT_WARNING(log_group::k_scheduler,
                              "Output stream not consumed in session: %d! A receive buffer is "
                              "full; call pop_data() or process() to pop the output stream.",
                              m_session->m_session_id);
     }
-    m_core.new_data_submitted(m_session);
+    Core::new_data_submitted(m_session);
 }
 
 void InferenceManager::request_output(const size_t* num_output_samples) {
@@ -111,12 +110,12 @@ void InferenceManager::request_output(const size_t* num_output_samples) {
 void InferenceManager::collect_nonblocking() {
     // Collects with the completion signal this session actually uses (atomic flag or
     // semaphore try_acquire), never waiting.
-    m_core.collect_completed(m_session);
+    Core::collect_completed(m_session);
 }
 
 size_t* InferenceManager::pop_data(float* const* const* output_data, size_t* num_output_samples) {
     request_output(num_output_samples);
-    if (!m_session->m_input_driven) { m_core.new_data_submitted(m_session); }
+    if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
     collect_nonblocking();
 
     return process_output(output_data, num_output_samples);
@@ -126,9 +125,9 @@ size_t* InferenceManager::pop_data(float* const* const* output_data,
                                    size_t* num_output_samples,
                                    std::chrono::steady_clock::time_point wait_until) {
     request_output(num_output_samples);
-    if (!m_session->m_input_driven) { m_core.new_data_submitted(m_session); }
+    if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
     if (m_inference_config.m_blocking_ratio > 0.f) {
-        m_core.new_data_request(m_session, wait_until);
+        Core::new_data_request(m_session, wait_until);
     } else {
         ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
                            "InferenceConfig does not use blocking_ratio and does not use "
@@ -265,14 +264,10 @@ std::vector<unsigned int> InferenceManager::get_latency() const {
     return m_session->m_latency;
 }
 
-const Core& InferenceManager::get_core() const {
-    return m_core;
-}
-
 size_t InferenceManager::get_available_samples(size_t tensor_index, size_t channel) const {
     // Collect with the completion signal this session actually uses: before, the realtime
     // overload polled m_done_atomic, which a blocking_ratio > 0 session never sets.
-    m_core.collect_completed(m_session);
+    Core::collect_completed(m_session);
     if (m_inference_config.get_postprocess_output_size()[tensor_index] > 0) {
         return m_session->m_receive_buffer[tensor_index].get_available_samples(channel);
     } else {
@@ -308,7 +303,7 @@ void InferenceManager::set_non_realtime(bool is_non_realtime) const {
 }
 
 void InferenceManager::reset() {
-    m_core.reset_session(m_session);
+    Core::reset_session(m_session);
     for (size_t& missing_samples : m_missing_samples) {
         missing_samples = 0;  // Reset missing samples to zero
     }

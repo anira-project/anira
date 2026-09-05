@@ -18,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <ios>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -344,9 +345,9 @@ void load_spec_v3(const Json& node,
                     fail_json(wpath, "unknown window key");
                 }
             }
-        } else if (key == "context") {
-            spec.m_context = require_i64(value, key_path);
-            if (spec.m_context < 0) { fail_json(key_path, "must not be negative"); }
+        } else if (key == "overlap") {
+            spec.m_overlap = require_i64(value, key_path);
+            if (spec.m_overlap < 0) { fail_json(key_path, "must not be negative"); }
         } else if (key == "latency") {
             if (!is_output) { fail_json(key_path, "latency is an output key"); }
             spec.m_latency = require_i64(value, key_path);
@@ -824,6 +825,19 @@ bool is_v2(const Json& root) {
     return root.contains("inference_config") || root.contains("context_config");
 }
 
+// A version 2 document carries its two roots and nothing of 3.x beside them: a 3.x root key
+// next to inference_config or context_config is a mixed document, refused by name rather
+// than read as 2.x with the 3.x keys ignored.
+void refuse_mixed_roots(const Json& root, std::initializer_list<const char*> v3_keys) {
+    for (const char* key : v3_keys) {
+        if (root.contains(key)) {
+            fail_json(key,
+                      "a version 2 document (an inference_config or context_config root) cannot "
+                      "also carry this 3.x root key; write one document or the other");
+        }
+    }
+}
+
 void warn_upgraded_once(const char* what) {
     static std::atomic_flag warned = ATOMIC_FLAG_INIT;
     if (!warned.test_and_set()) {
@@ -944,7 +958,7 @@ void upgrade_spec(const std::vector<int64_t>& dims,
     }
     spec.m_window_min = per_channel;
     spec.m_window_max = per_channel;
-    spec.m_context = per_channel - hop;
+    spec.m_overlap = per_channel - hop;
     spec.m_latency = latency;
 }
 
@@ -1271,7 +1285,7 @@ Json spec_to_json(const anira_tensor_spec& spec, bool is_output) {
             window["max"] = spec.m_window_max;
         }
         object["window"] = window;
-        object["context"] = spec.m_context;
+        object["overlap"] = spec.m_overlap;
     }
     if (is_output && spec.m_latency != 0) { object["latency"] = spec.m_latency; }
     if (spec.m_ratio_num != 0 || spec.m_ratio_den != 0) {
@@ -1386,6 +1400,9 @@ anira_status ANIRA_CALL anira_model_config_from_json(const char* utf8,
     auto cfg = std::make_unique<anira_model_config>();
     anira_status status = ANIRA_OK;
     if (is_v2(root)) {
+        refuse_mixed_roots(
+            root,
+            {"models", "inputs", "outputs", "default_engine", "state", "max_instances", "anchor"});
         upgrade_model_v2(root, base_dir, *cfg);
         warn_upgraded_once("model document");
         status = ANIRA_SUCCESS_UPGRADED;
@@ -1452,6 +1469,16 @@ anira_status ANIRA_CALL anira_context_config_from_json(const char* utf8,
     auto context_config = std::make_unique<anira_context_config>();
     anira_status status = ANIRA_OK;
     if (is_v2(root)) {
+        refuse_mixed_roots(root,
+                           {"num_threads",
+                            "wait_strategy",
+                            "log",
+                            "cuda",
+                            "gl",
+                            "vulkan",
+                            "metal",
+                            "d3d12",
+                            "webgpu"});
         upgrade_context_v2(root, *context_config);
         warn_upgraded_once("context document");
         status = ANIRA_SUCCESS_UPGRADED;
@@ -1481,6 +1508,7 @@ anira_status ANIRA_CALL anira_contract_from_json(const char* utf8,
                        "contract: NULL JSON text");
     const Json root = parse_text(utf8, len);
     if (is_v2(root)) {
+        refuse_mixed_roots(root, {"hard", "async", "edge_cost"});
         anira_model_config cfg;
         upgrade_model_v2(root, nullptr, cfg);
         warn_upgraded_once("contract document");

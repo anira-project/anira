@@ -34,7 +34,6 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -79,11 +78,6 @@ struct Core::State {
     CoreConfig m_core_config;  ///< Configuration in effect: that of the first session of
                                ///< the current generation, reconciled with the later
                                ///< ones. Meaningful while the registry is non-empty.
-
-    std::optional<CoreConfig> m_staged_config;  ///< Configuration staged by the deprecated
-                                                ///< get_instance(const CoreConfig&) for
-                                                ///< the deprecated 3-argument
-                                                ///< create_session()
 
     std::atomic<int> m_next_id{-1};  ///< Counter for generating unique session IDs
 
@@ -185,24 +179,6 @@ Core::State& Core::existing_state() {
     void* existing = s_state.load(std::memory_order_acquire);
     assert(existing != nullptr && "real-time path reached without a registered session");
     return *static_cast<State*>(existing);
-}
-
-Core& Core::get_instance() {
-    // Trivially destructible and constant-initialized: no guard, no destructor.
-    static Core instance;
-    return instance;
-}
-
-std::shared_ptr<Core> Core::get_instance(const CoreConfig& core_config) {
-    State& state = get_state();
-    const CoreConfig config = sanitize_config(core_config);
-    {
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
-        apply_log_level_locked(state, config);
-        state.m_staged_config = config;
-    }
-    // Non-owning: the core is never destroyed.
-    return {&get_instance(), [](Core*) {}};
 }
 
 bool Core::has_core() {
@@ -707,23 +683,6 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     }
 
     return session;
-}
-
-std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_processor,
-                                                     InferenceConfig& inference_config,
-                                                     BackendBase* custom_processor) {
-    State& state = get_state();
-    CoreConfig config;
-    {
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
-        if (state.m_staged_config.has_value()) {
-            config = *state.m_staged_config;
-            state.m_staged_config.reset();
-        } else if (!state.m_sessions.empty()) {
-            config = state.m_core_config;
-        }
-    }
-    return create_session(pp_processor, inference_config, custom_processor, config);
 }
 
 void Core::release_session(const std::shared_ptr<SessionElement>& session) {

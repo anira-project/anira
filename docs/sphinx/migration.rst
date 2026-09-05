@@ -42,7 +42,8 @@ Where the 2.x API stands in this pre-release
   the root of the model tree at run time, is the one definition left.
 - **Schedule.** The 2.x configuration classes become deprecated constructor shims
   (``anira/compat/v2.hpp``, ``namespace anira::v2``) once the 3.x handler lands, and are removed
-  one minor release after 3.0.0. The 2.x JSON document is read by the 3.x loaders for as long as
+  one minor release after 3.0.0; the 2.x ``ContextConfig`` returns there as ``anira::v2::ContextConfig``
+  (``anira::CoreConfig`` is this pre-release's spelling). The 2.x JSON document is read by the 3.x loaders for as long as
   the 3.x line lives (:ref:`migration-json`).
 
 .. _migration-config:
@@ -95,7 +96,7 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
    * - ``anira::ProcessingSpec::preprocess_input_channels`` / ``postprocess_output_channels``
      - The extent of the tensor's ``ANIRA_AXIS_CHANNEL`` axis.
    * - ``anira::ProcessingSpec::preprocess_input_size`` / ``postprocess_output_size`` (the hop)
-     - ``spec.window(window_min, window_max, context)`` (``anira_tensor_spec_set_window``):
+     - ``spec.window(window_min, window_max, overlap)`` (``anira_tensor_spec_set_window``):
        the window is the per-channel element count of the tensor, the context is the window
        minus the 2.x size (the samples kept from the previous window). A size of ``0``
        (non-streamable) is ``ANIRA_ROLE_STATIC``.
@@ -190,7 +191,7 @@ decoder with ``samplesPerBlock / 2048.f``).
        resolved to the window), plus one backend-qualified ``TensorShape`` per entry whose
        ``tensors`` record holds a layout (``engine_dims`` of the spec). A name in the record is
        accepted and ignored: the 2.x adapters bind positionally.
-   * - ``ANIRA_AXIS_CHANNEL`` extent; window minus context; output ``latency``
+   * - ``ANIRA_AXIS_CHANNEL`` extent; window minus overlap; output ``latency``
      - ``preprocess_input_channels`` / ``postprocess_output_channels``;
        ``preprocess_input_size`` / ``postprocess_output_size`` (``0`` for a Static or Buffer
        tensor); ``internal_model_latency``.
@@ -312,7 +313,7 @@ entry is ``ANIRA_ERROR_JSON`` with the key path in ``anira_error::message``.
      - The extent of the ``channel`` axis.
    * - ``processing_spec.preprocess_input_size``, ``postprocess_output_size``
      - ``window.min = window.max =`` the per-channel element count of the tensor,
-       ``context =`` the window minus the 2.x size; a size of ``0`` is ``"role": "static"``.
+       ``overlap =`` the window minus the 2.x size; a size of ``0`` is ``"role": "static"``.
    * - ``processing_spec.internal_model_latency``
      - ``outputs[].latency``.
    * - ``num_parallel_processors``

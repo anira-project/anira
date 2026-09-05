@@ -184,12 +184,12 @@ void check_spec(const anira_tensor_spec& spec,
             config_error(where + "window_max " + std::to_string(spec.m_window_max) +
                          " is below window_min " + std::to_string(spec.m_window_min));
         }
-        if (spec.m_context >= spec.m_window_min) {
-            config_error(where + "context " + std::to_string(spec.m_context) +
+        if (spec.m_overlap >= spec.m_window_min) {
+            config_error(where + "overlap " + std::to_string(spec.m_overlap) +
                          " must be below window_min " + std::to_string(spec.m_window_min));
         }
     } else {
-        if (spec.m_window_min != 0 || spec.m_window_max != 0 || spec.m_context != 0) {
+        if (spec.m_window_min != 0 || spec.m_window_max != 0 || spec.m_overlap != 0) {
             config_error(where + std::string("a ") + role + " tensor has no window");
         }
         if (spec.m_ratio_num != 0 || spec.m_ratio_den != 0) {
@@ -229,12 +229,12 @@ void check_spec(const anira_tensor_spec& spec,
                              std::to_string(den) + " gives a fractional hop for block_max " +
                              std::to_string(block));
             }
-            used = block * num / den + spec.m_context;
+            used = block * num / den + spec.m_overlap;
             used = std::max(used, spec.m_window_min);
             if (spec.m_window_max != ANIRA_UNBOUNDED) { used = std::min(used, spec.m_window_max); }
         }
         out.m_window_used = used;
-        out.m_hop = used - spec.m_context;
+        out.m_hop = used - spec.m_overlap;
         if (out.m_dims[*time_axis] == ANIRA_DYNAMIC) { out.m_dims[*time_axis] = used; }
     }
 }

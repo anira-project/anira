@@ -51,10 +51,12 @@
 
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
+#include <anira/abi/core.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>  // IWYU pragma: keep - the umbrella of the C headers
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
+#include <anira/abi/thread.h>
 #include <anira/abi/version.h>
 
 #include <algorithm>
@@ -255,7 +257,7 @@ struct KeptExt {
 
 /**
  * @brief One input or output of the model: your canonical name, the data type, the role, the
- * tagged axes in the model's memory order, and, for a streamed tensor, the window and left context
+ * tagged axes in the model's memory order, and, for a streamed tensor, the window and overlap
  * it is consumed with. Move-only; copied into a ModelConfig by input()/output().
  */
 class TensorSpec {
@@ -288,8 +290,8 @@ public:
         return *this;
     }
     /// Streamed only: elements along the Time axis per inference and the context kept.
-    TensorSpec& window(int64_t window_min, int64_t window_max, int64_t context) {
-        detail::check(anira_tensor_spec_set_window(m_spec, window_min, window_max, context),
+    TensorSpec& window(int64_t window_min, int64_t window_max, int64_t overlap) {
+        detail::check(anira_tensor_spec_set_window(m_spec, window_min, window_max, overlap),
                       "anira_tensor_spec_set_window");
         return *this;
     }
@@ -1182,12 +1184,6 @@ public:
         anira_error err{};
         detail::check(anira_context_probe(m_context, force ? 1U : 0U, &err), err);
     }
-    /// Delivers the queued real-time records to the sinks (ANIRA_LOG_DRAIN_MANUAL).
-    std::size_t drain_log() { return anira_context_drain_log(m_context); }
-    /// The size of the inference thread pool serving this context.
-    uint32_t num_inference_threads() const {
-        return anira_context_num_inference_threads(m_context);
-    }
     /// The size of a tensor's byte image under the edges this context probed.
     uint64_t byte_image_bytes(uint64_t num_elements, DType dtype) const {
         return anira_context_byte_image_bytes(m_context, num_elements, dtype);
@@ -1215,6 +1211,16 @@ inline double now_ms() noexcept {
 }
 inline uint64_t now_ns() noexcept {
     return anira_now_ns();
+}
+
+/// anira_drain_log: delivers the queued real-time records of the core to the sinks, the
+/// host's pump under ANIRA_LOG_DRAIN_MANUAL.
+inline std::size_t drain_log() noexcept {
+    return anira_drain_log();
+}
+/// anira_num_inference_threads: the size of the core's inference thread pool.
+inline uint32_t num_inference_threads() noexcept {
+    return anira_num_inference_threads();
 }
 
 /// anira_shutdown: effective only when no Context and no handler exist in this copy.

@@ -166,7 +166,7 @@ TEST(AbiTranslate, WarmupNoneIsZeroWarmUpInferences) {
     EXPECT_EQ(outcome.m_config.m_warm_up, 0U);
 }
 
-// The CNN shape: window 15380 with context 13332 is a hop of 2048 over a {1, 1, 15380} tensor.
+// The CNN shape: window 15380 with overlap 13332 is a hop of 2048 over a {1, 1, 15380} tensor.
 TEST(AbiTranslate, WindowMinusContextIsThePreprocessSize) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
@@ -185,7 +185,7 @@ TEST(AbiTranslate, WindowMinusContextIsThePreprocessSize) {
     EXPECT_EQ(cfg.get_tensor_input_size(), (std::vector<size_t>{15380}));
 }
 
-// The upgraded HybridNN literal: {256, 1, 150} with size 256 is window 38400 / context 38144.
+// The upgraded HybridNN literal: {256, 1, 150} with size 256 is window 38400 / overlap 38144.
 // The fixture names one ONNX Runtime row, so the case needs that engine in the build.
 TEST(AbiTranslate, UpgradedHybridNnLiteralKeepsTheV2ProcessingSize) {
 #ifndef USE_ONNXRUNTIME
@@ -598,7 +598,7 @@ TEST(AbiTranslate, WindowRules) {
     expect_contains(outcome.m_message, "tensor 'in': window_max 256 is below window_min 512");
     outcome = with_window(512, 512, 512);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
-    expect_contains(outcome.m_message, "tensor 'in': context 512 must be below window_min 512");
+    expect_contains(outcome.m_message, "tensor 'in': overlap 512 must be below window_min 512");
     EXPECT_EQ(with_window(512, ANIRA_UNBOUNDED, 511).m_status, ANIRA_OK);
 }
 

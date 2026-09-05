@@ -94,8 +94,8 @@ int anira_header_cxx20_probe() {
         running.probe(true);
         const std::size_t rows = capabilities.domains().size() + capabilities.ext_kinds().size() +
                                  capabilities.edges().size() + anira::enabled_backends().size() +
-                                 running.drain_log();
-        const uint64_t numbers = running.num_inference_threads() + edge.available +
+                                 anira::drain_log();
+        const uint64_t numbers = anira::num_inference_threads() + edge.available +
                                  running.byte_image_bytes(1, ANIRA_DTYPE_F32) + anira::now_ns();
         checks += rows > 0 ? 1 : 0;
         checks += numbers > 0 ? 1 : 0;

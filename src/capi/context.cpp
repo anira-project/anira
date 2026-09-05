@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -308,63 +307,4 @@ uint64_t ANIRA_CALL anira_context_byte_image_bytes(const anira_context* context,
     const uint64_t bits = static_cast<uint64_t>(ANIRA_DTYPE_BITS(dtype)) * ANIRA_DTYPE_LANES(dtype);
     if (bits == 0) { return 0; }
     return num_elements * ((bits + 7) / 8);  // the dense host encoding
-}
-
-size_t ANIRA_CALL anira_context_drain_log(anira_context* context) ANIRA_NOEXCEPT try {
-    if (context == nullptr) { return 0; }
-    return anira::Core::drain_log();
-} catch (...) {
-    // A sink that throws while draining must not recurse into the logger.
-    anira::capi::report_void_failure_quiet(__func__);
-    return 0;
-}
-
-uint32_t ANIRA_CALL anira_context_num_inference_threads(const anira_context* context) ANIRA_NOEXCEPT
-    try {
-    if (context == nullptr) { return 0; }
-    return static_cast<uint32_t>(anira::Core::get_thread_pool_size());
-} catch (...) {
-    anira::capi::report_void_failure(__func__);
-    return 0;
-}
-
-// ==== the clock =============================================================================
-
-uint64_t ANIRA_CALL anira_now_ns(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    const auto since_epoch = std::chrono::steady_clock::now().time_since_epoch();
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(since_epoch).count());
-}
-
-double ANIRA_CALL anira_now_ms(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    constexpr double k_ns_per_ms = 1.0e6;
-    return static_cast<double>(anira_now_ns()) / k_ns_per_ms;
-}
-
-// ==== the shutdown family ===================================================================
-
-anira_status ANIRA_CALL anira_shutdown(void) ANIRA_NOEXCEPT try {
-    // Never construct the core: a binary that never used anira has nothing to shut down.
-    if (!anira::Core::has_core()) { return ANIRA_OK; }
-    if (anira::Core::get_num_contexts() > 0 || anira::Core::get_num_sessions() > 0) {
-        anira::capi::fail(nullptr,
-                          ANIRA_ERROR_INVALID_STATE,
-                          __func__,
-                          "a context or a handler still exists in this copy of anira; nothing "
-                          "was shut down");
-        return ANIRA_ERROR_INVALID_STATE;
-    }
-    anira::Core::shutdown();
-    return ANIRA_OK;
-} catch (...) { return translate_exception(nullptr, __func__); }
-
-anira_bool ANIRA_CALL anira_release_core_if_idle(void) ANIRA_NOEXCEPT try {
-    return anira::Core::release_core_if_idle() ? 1U : 0U;
-} catch (...) {
-    anira::capi::report_void_failure(__func__);
-    return 0U;
-}
-
-anira_bool ANIRA_CALL anira_has_core(void) ANIRA_NOEXCEPT {
-    return anira::Core::has_core() ? 1U : 0U;
 }

@@ -143,7 +143,6 @@ TEST(AbiInferenceThread, ServesASessionWithoutAPool) {
     inference_handler.prepare(HostConfig{k_buffer_size, k_sample_rate});
     inference_handler.set_inference_backend(InferenceBackend::CUSTOM);
     EXPECT_EQ(anira_num_inference_threads(), 0U) << "no pool: the user's thread serves";
-    EXPECT_EQ(anira_context_num_inference_threads(context.m_context), 0U);
 
     BufferF test_buffer(1, k_buffer_size);
     for (size_t i = 0; i < k_buffer_size; ++i) {
