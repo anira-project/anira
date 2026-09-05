@@ -244,17 +244,36 @@ an ``anira::ContractHandle``.
   exceeds the budget produces a dropout.
 - **Warmup.** ``ANIRA_WARMUP_FIXED`` with ``warmup_iterations``, ``ANIRA_WARMUP_UNTIL_STABLE``
   (the default) or ``ANIRA_WARMUP_NONE``, which is legal only with an explicit budget.
-- **Miss policy.** ``ANIRA_MISS_BYPASS`` (the default) passes the input through,
-  ``ANIRA_MISS_HOLD_LAST`` repeats the last output, ``ANIRA_MISS_ZEROS`` delivers silence.
-- **Wait ratio.** ``wait_ratio`` is the fraction of the block period the real-time thread may
-  spend waiting for a result in the ``_wait`` entry points; ``0`` (the default) never waits.
+- **Miss policy.** What a Hard entry delivers for a block whose inference has not completed
+  when the block is popped (the entry returns ``0`` samples for that block under every
+  policy, so the miss is visible; the policy decides what the buffers hold, and the stream
+  stays time-aligned). ``ANIRA_MISS_BYPASS`` (the default) copies the block the same call
+  pushed into the anchored input into the output (``process`` and its ``_separate`` /
+  ``_multi`` forms with the anchored input's slot; a call on another slot, and a pop, which has
+  no input block, deliver zeros), which needs an anchored input ring with the output's channel
+  count: when the anchor is an output (a generator, or a named output anchor) or when the
+  channel counts differ, ``prepare`` refuses it with ``ANIRA_ERROR_CONFIG`` naming ``on_miss``.
+  ``ANIRA_MISS_HOLD_LAST`` repeats the last block the output delivered (one block-sized buffer
+  per output channel, allocated at prepare) and the latest value of a Static output.
+  ``ANIRA_MISS_ZEROS`` delivers silence, what the 2.x runtime did: the contract a 2.x document
+  upgrades to carries it, and so do the bundled RAVE encoder and decoder files (one audio
+  channel against four latents). Every other bundled contract file keeps the default.
+- **Wait ratio.** ``wait_ratio`` is the fraction of the block period a ``_wait`` entry
+  (``anira_handler_process_wait`` and its twins, section 3.2) may spend waiting for the
+  block's inference when called with ``ANIRA_WAIT_CONTRACT``; ``0`` (the default) never
+  waits, and the ``ANIRA_NONBLOCKING`` entries never wait at any ratio. It is the 2.x
+  ``blocking_ratio`` one-to-one, and it selects at prepare the completion primitive the
+  handler waits on (the semaphore above ``0``, a 1 ms poll otherwise), so the latency figure
+  (:doc:`latency`) includes the wait credit whether or not the host calls the ``_wait`` entry.
 - **Ring dtype.** ``contract.hard_ring_dtype("audio_in", ANIRA_DTYPE_I16)``
   (``anira_contract_hard_set_ring_dtype``) names the element type of the host's samples for
-  one tensor, by the tensor's canonical name: the ring holds exactly that type, the Hard
-  entries copy without conversion, and the pre- and post-processor convert between the ring
-  dtype and the spec's dtype (the model's) on the inference thread. Per tensor, so an input
-  and an output may differ; every tensor never set uses ``ANIRA_DTYPE_F32``. In this
-  pre-release the value is stored only: the bridge to the 2.x runtime accepts float32 alone.
+  one tensor, by the tensor's canonical name: the ring holds exactly that type, the typed
+  Hard entries (``anira_handler_process_typed`` and its twins) carry it across the ABI as
+  is, and the float entries are legal on ``ANIRA_DTYPE_F32`` rings alone. Per tensor, so an
+  input and an output may differ; every tensor never set uses ``ANIRA_DTYPE_F32``. Nothing
+  in anira converts: a name that is not a Streamed tensor, and a ring dtype that differs
+  from the spec's dtype (the model's), are ``ANIRA_ERROR_CONFIG`` at prepare (a stage that
+  consumes the difference arrives with a later pre-release).
 
 An **Async** contract (the ``anira::Async`` aggregate: an optional ``deadline``, ``on_late``,
 ``priority``, ``lanes``, ``max_in_flight``, ``delivery``) describes jobs without a real-time
@@ -357,7 +376,8 @@ threads), ``wait_strategy``, the ``log`` block (``level``, ``drain``, ``queue_ca
 ``d3d12`` and ``webgpu``, which imply that anira owns the device; borrowed handles are
 code-only and patched with the device setters afterwards. The contract file has exactly one
 root, ``{"hard": {...}}`` or ``{"async": {...}}``, with ``budget`` as ``"measured"`` or
-``{"ms": 1.8}``, ``warmup`` as ``"until_stable"``, ``"none"`` or ``{"fixed": 200}``, the
+``{"ms": 1.8}``, ``warmup`` as ``"until_stable"``, ``"none"`` or ``{"fixed": 200}``,
+``on_miss`` as ``"bypass"``, ``"hold_last"`` or ``"zeros"``, ``wait_ratio`` as a number, the
 geometry keys ``block_min`` / ``block_max`` / ``rate`` (optional; a plugin patches them from
 the host with ``hard_geometry``), ``ring_dtypes`` as ``{"audio_in": "int16"}`` (optional,
 by canonical name), and an optional top-level ``edge_cost``.
@@ -444,9 +464,10 @@ its Hard contract.
         anira::HostConfig host_config = anira::v3compat::to_host_config(hard, cfg);
 
     Each call throws ``anira::Error`` for a configuration the 2.x runtime cannot run (an
-    Async contract, a ``MEASURED`` budget or ``UNTIL_STABLE`` warmup, a dtype other than
-    float32) or that breaks a rule of section 1.1, naming the tensor. :ref:`migration-bridge`
-    lists what becomes what, the lifetime rules and the candidate filter.
+    Async contract, a ``MEASURED`` budget or ``UNTIL_STABLE`` warmup, a spec dtype other than
+    float32) or ``ANIRA_ERROR_CONFIG`` for a ring dtype that differs from its spec's or that
+    breaks a rule of section 1.1, naming the tensor. :ref:`migration-bridge` lists what
+    becomes what, the lifetime rules and the candidate filter.
 
 2. Pre and Post Processing
 --------------------------
@@ -496,7 +517,7 @@ The context configuration of section 1.4 (an ``anira::ContextConfig``, or the co
 
 The same in C: ``anira_context_create(config, &context, &err)``, ``anira_context_capabilities`` with the enumerators ``anira_capabilities_backends`` / ``domains`` / ``ext_kinds`` / ``edges`` / ``edge`` (``out == NULL`` asks for the count, a short buffer returns ``ANIRA_INCOMPLETE``, records are written at the caller's ``element_size``), ``anira_context_probe``, and, taking no context since the queue and the pool are the core's, ``anira_drain_log`` and ``anira_num_inference_threads`` and ``anira_context_destroy``. ``anira_enabled_backends`` (``anira::enabled_backends()``) says what this build compiled in without a context; ``anira_capabilities_backends`` what is usable here. In this pre-release every context is Host-only: the report is the compiled-in engines on ``ANIRA_PROVIDER_DEFAULT``, the host domain and one zero-copy edge per engine, and a device block on the config is refused with ``ANIRA_ERROR_NOT_SUPPORTED``. ``anira_now_ms`` / ``anira_now_ns`` are the steady clock deadlines will be spelled in; ``anira_shutdown`` (called by a plugin's module-exit entry point, see the CLAP example) stops the core's threads only when no context and no handler exist, ``anira_has_core`` and ``anira_release_core_if_idle`` are the unload hook's questions.
 
-**The bridge.** The inference handler of this pre-release does not take a context yet: it takes the :cpp:struct:`anira::CoreConfig` the bridge builds from the same config, and reconciles it into the core the same way (a context and a handler's core config in one process are reconciled against each other by the rules below):
+**The bridge.** The 2.x inference handler (sections 2 to 5) does not take a context: it takes the :cpp:struct:`anira::CoreConfig` the bridge builds from the same config, and the core reconciles it exactly as it reconciles a context (the C handler of section 3.2 takes the context itself; a context and a handler's core config in one process are reconciled against each other by the rules below):
 
 .. code-block:: cpp
 
@@ -558,10 +579,126 @@ You can also opt out of the auto-managed thread pool entirely and supply your ow
     // ... process audio ...
     thread->stop(); // or just let `thread` go out of scope
 
+3.2. The C handler
+~~~~~~~~~~~~~~~~~~
+
+The 3.x handler is reachable from C11 through ``anira/abi/handler.h``, the second half of
+the binary promise the configuration entries of 1.6 belong to. Two objects: ``anira_pipeline``
+is a config object, ``anira_pipeline_create`` / ``anira_pipeline_add_inference`` (the model
+configuration and, optionally, the candidate backends as ``anira_backend_id`` rows; ``NULL``
+means every engine this build carries plus the custom entries, an entry for an absent engine
+being skipped) / ``anira_pipeline_destroy``, copied by the handler that takes it and
+destroyable right after. ``anira_handler`` is the runtime object over a context:
+``anira_handler_create(context, pipeline, &h, &err)`` adds a reference to the context (which
+may then be destroyed by its creator; the handler keeps what it needs) and copies everything;
+``anira_handler_prepare(h, contract, &err)`` is the blocking quiescence point, never from the
+driver thread and never overlapped by another handler entry: it validates the configuration
+against the Hard contract (the rules of section 1.1 and the contract's own: geometry, an
+explicit budget, a fixed or no warmup, the miss policy against the anchor, the ring dtypes by
+canonical name), loads the model of every candidate that has an entry, sizes the rings for the
+block range and the latency, selects the plan of the variant's default engine (else plan 0)
+and builds the plan report; a second prepare replaces the session whole, a failed one leaves
+the handler unprepared. ``anira_handler_destroy`` releases the session and, with the last
+handler in this copy of anira, joins the inference thread pool; a handler counts as a user of
+the core, so ``anira_shutdown`` is refused while one lives. What this pre-release refuses at
+prepare, with ``ANIRA_ERROR_NOT_SUPPORTED``: an Async contract, ``ANIRA_BUDGET_MEASURED`` and
+``ANIRA_WARMUP_UNTIL_STABLE`` (the defaults of a fresh contract: set an explicit budget and a
+fixed warmup, as every bundled contract file does).
+
+.. code-block:: c
+
+    #include <anira/abi/config.h>
+    #include <anira/abi/context.h>
+    #include <anira/abi/handler.h>
+
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_context* context; anira_pipeline* pipe; anira_handler* h; anira_contract* c;
+    /* cfg: an anira_model_config of section 1.6; mc: an anira_context_config of 1.4 */
+    if (ANIRA_FAILED(anira_context_create(mc, &context, &err))) { return fail(&err); }
+    anira_pipeline_create(&pipe, &err);
+    const anira_model_config* variants[] = { cfg };
+    anira_backend_id candidates[] = {
+        { sizeof(anira_backend_id), ANIRA_ENGINE_ONNXRUNTIME, ANIRA_PROVIDER_DEFAULT, NULL },
+        { sizeof(anira_backend_id), ANIRA_ENGINE_LITERT,      ANIRA_PROVIDER_DEFAULT, NULL },
+    };
+    anira_pipeline_add_inference(pipe, variants, 1, candidates, 2, &err);
+    anira_status st = anira_handler_create(context, pipe, &h, &err);   /* copies everything */
+    anira_pipeline_destroy(pipe); anira_model_config_destroy(cfg); anira_context_config_destroy(mc);
+    if (ANIRA_FAILED(st)) { return fail(&err); }
+    anira_contract_create_hard(block_size, block_size, sample_rate, &c, &err);
+    anira_contract_hard_set_budget(c, ANIRA_BUDGET_EXPLICIT, 5.0);       /* ms per inference */
+    anira_contract_hard_set_warmup(c, ANIRA_WARMUP_FIXED, 1);
+    st = anira_handler_prepare(h, c, &err);                              /* err names the tensor or field */
+    anira_contract_destroy(c);
+    if (ANIRA_FAILED(st)) { return fail(&err); }
+    host_set_latency(anira_handler_get_latency(h, 0));                   /* constant until the next prepare */
+    /* the process callback: */
+    anira_handler_process(h, channels, num_samples, 0);                  /* in place; 0 = a missed block */
+    /* off the driver thread: */
+    if (anira_handler_rt_error(h) != ANIRA_OK) { /* why a block came back as zeros */ }
+    anira_handler_destroy(h);
+    anira_context_destroy(context);
+
+**The plan report.** ``anira_handler_plan_report(h)`` is the handler-owned report of the
+last prepare, valid until the next prepare or destroy, walked by
+``anira_plan_report_num_plans`` / ``plans`` / ``slots`` / ``exts`` with the enumeration
+convention of 3.1 (``out == NULL`` asks for the count, a short buffer returns
+``ANIRA_INCOMPLETE``, rows are written at the caller's ``element_size``): one
+``anira_plan_info`` per candidate that has a model entry in the configuration (the engine, the
+provider, the custom engine's id, the budget of that plan), and per plan the
+``anira_plan_slot`` rows of its inputs and outputs (host rows in this pre-release: host to
+host, zero-copy, recipe ``"host"``, the wait strategy the core runs) and the
+``anira_plan_ext`` rows of the extensions it consumes. A plan is a dense index
+``0..num_plans-1``, and ``anira_handler_set_plan(h, plan)`` / ``anira_handler_get_plan(h)`` are
+the whole runtime selection: one relaxed store, effective at the next block, callable from
+any thread but not while ``prepare`` runs; an index out of range is a no-op recorded as
+``ANIRA_ERROR_CONFIG`` in ``anira_handler_rt_error``. In C++, ``anira::Pipeline``,
+``anira::stage::Inference`` and ``anira::PlanReport`` of ``anira/anira.hpp`` are the same
+objects (``anira::Pipeline pipe{anira::stage::Inference(cfg, {{ANIRA_ENGINE_ONNXRUNTIME}})};``,
+``anira::PlanReport(anira_handler_plan_report(h)).plans()``); the ``anira::InferenceHandler``
+class arrives with the runtime cut-over.
+
+**The Hard entries.** ``anira_handler_process(h, data, num_samples, tensor_index)`` (in
+place), ``anira_handler_process_separate(h, in, num_in, out, num_out, tensor_index)``,
+``anira_handler_process_multi(h, in, num_in, out, num_out)`` (every tensor at once, the
+arrays indexed by slot; ``num_out`` is written back with the samples delivered, ``0`` for a
+missed streamed output; an output requested with ``0`` is left untouched),
+``anira_handler_push_data`` / ``push_data_multi`` and ``anira_handler_pop_data`` /
+``pop_data_multi`` are the 2.x methods of sections 5.1 to 5.4 as C entries,
+``[driver-thread]`` and ``ANIRA_NONBLOCKING``: none of them waits, a block whose inference has
+not completed is an on_miss event (section 1.3), and a refusal carries no ``anira_error``:
+the entry returns ``0`` or a status, records it in ``anira_handler_rt_error`` and logs once
+through the real-time queue (:doc:`logging`). ``tensor_index`` is the slot in the input and
+the output list; a Static tensor carries its values in channel 0 of the multi forms. The
+float entries are legal on ``ANIRA_DTYPE_F32`` rings; the ``_typed`` twins
+(``anira_handler_process_typed`` and the other six, ``void* const*`` buffers) carry the slot's
+ring dtype as the contract declares it and check nothing.
+``anira_handler_get_latency(h, i)`` and ``anira_handler_get_latencies(h, &count, out)``
+(index-aligned with the output list, ``0`` for a Static output) are valid from prepare on;
+``anira_handler_get_available_samples(h, i, channel)`` collects the completed inferences
+and reports what waits in the output ring (right after prepare, the latency);
+``anira_handler_reset(h)`` is the wait-free stream reset of 5.5; ``anira_handler_rt_error(h)``
+the last real-time failure, readable from any thread and any callback.
+
+**The _wait twins.** ``anira_handler_process_wait(h, data, num_samples, timeout_ms,
+tensor_index)``, ``process_separate_wait``, ``process_multi_wait``, ``pop_data_wait``,
+``pop_data_multi_wait`` and their ``_wait_typed`` forms wait for the block's inference:
+``timeout_ms >= 0`` explicitly, ``ANIRA_WAIT_CONTRACT`` for ``wait_ratio`` times the block
+duration (the call's block on the process forms — the 2.x ``blocking_ratio`` wait inside
+``process`` — and the contract's ``block_max`` on the pop forms), ``ANIRA_WAIT_FOREVER``
+without limit (the 2.x ``set_non_realtime``); on the completion semaphore when the contract's
+``wait_ratio`` is above ``0``, else by polling every millisecond. They are ``[any-thread,
+blocking]``, legal from the driver thread only where the host accepts a wait there (on
+WebAssembly every wait spins); a block not completed at the timeout is a miss as in the
+nonblocking entry, and without an inference thread inside its loop (the core's pool or
+``anira_inference_thread_run_loop``; a host pumping ``anira_inference_thread_execute`` itself is
+not counted) they do what the nonblocking entry does and return ``0`` /
+``ANIRA_ERROR_INVALID_STATE`` at once. A push never waits.
+
 4. Get ready for Processing
 ---------------------------
 
-Before processing audio data, the :cpp:func:`anira::InferenceHandler::prepare` method of the :cpp:class:`anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The :cpp:func:`anira::InferenceHandler::prepare` method needs an instance of :cpp:struct:`anira::HostConfig`, which the bridge builds from the Hard contract's geometry and the model config's anchor (4.1). The active inference backend defaults to the first model entry whose engine is in the build (or to ``CUSTOM`` when a custom processor was passed to the constructor); to run a different backend, select it with the :cpp:func:`anira::InferenceHandler::set_inference_backend` method.
+Before processing audio data, the :cpp:func:`anira::InferenceHandler::prepare` method of the :cpp:class:`anira::InferenceHandler` instance must be called. This allocates all necessary memory in advance. The :cpp:func:`anira::InferenceHandler::prepare` method needs an instance of :cpp:struct:`anira::HostConfig`, which the bridge builds from the Hard contract's geometry and the model config's anchor (4.1). The active inference backend defaults to the first model entry whose engine is in the build (or to ``CUSTOM`` when a custom processor was passed to the constructor); to run a different backend, select it with the :cpp:func:`anira::InferenceHandler::set_inference_backend` method. The same in C: the handler starts on the plan of the model config's default engine (``anira_model_config_set_default_engine``) when that engine has a plan, else on plan 0, and ``anira_handler_set_plan`` switches among the plans of the report (section 3.2).
 
 4.1. The host geometry
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -641,7 +778,7 @@ The first model entry's engine is selected automatically; to run another one, se
 5. Real-time Processing
 -----------------------
 
-Now we are ready to process audio in the process callback of our real-time audio application. For streamable as well as non-streamable tensors, the :cpp:func:`anira::InferenceHandler::process` or the :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::InferenceHandler::pop_data` methods can be used to process audio data. All methods can be used in the real-time thread. Each function is overloaded so it can be used with a single tensor or with a vector of tensors.
+Now we are ready to process audio in the process callback of our real-time audio application. For streamable as well as non-streamable tensors, the :cpp:func:`anira::InferenceHandler::process` or the :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::InferenceHandler::pop_data` methods can be used to process audio data. All methods can be used in the real-time thread. Each function is overloaded so it can be used with a single tensor or with a vector of tensors. The same in C: ``anira_handler_process`` / ``process_separate`` / ``process_multi``, ``anira_handler_push_data`` / ``push_data_multi``, ``anira_handler_pop_data`` / ``pop_data_multi`` and their ``_typed`` twins (section 3.2).
 
 5.1. Process Method
 ~~~~~~~~~~~~~~~~~~~
@@ -780,7 +917,12 @@ The :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::Inferen
     delete[] output_data;
 
 .. note::
-    The :cpp:func:`anira::InferenceHandler::pop_data` method supports a wait_until parameter for blocking until data is available or timeout occurs. Use with the contract's ``wait_ratio`` (section 1.3) for proper latency compensation. Note that this blocks the real-time thread and is not fully lock-free, but this enables you to further reduce latency by waiting for the next available data.
+    The 2.x :cpp:func:`anira::InferenceHandler::pop_data` has a ``wait_until`` overload; the C
+    entries keep the waits apart from the nonblocking path: ``anira_handler_pop_data_wait``
+    and the other ``_wait`` twins (section 3.2) wait for the block's inference for an explicit
+    ``timeout_ms``, for ``ANIRA_WAIT_CONTRACT`` (the contract's ``wait_ratio`` times the block
+    duration, section 1.3) or ``ANIRA_WAIT_FOREVER``. A wait on the real-time thread is the
+    host's decision: it trades real-time safety for a smaller latency figure.
 
 .. note::
     :cpp:func:`anira::InferenceHandler::push_data` also collects finished inferences, as long as the receive buffers have room for them. Push-only usage is therefore fully supported for models whose results leave through non-streamable outputs (see section 5.4) — no periodic ``pop_data()`` or ``get_available_samples()`` call is needed. A *streamable* output must still be popped: if it never is, anira keeps the unread samples intact, stops collecting into the full buffer and logs a warning ("Output stream not consumed").
@@ -871,7 +1013,7 @@ Streamable tensors may sit on one side only. A *generator* has no streamable inp
     // Safe on the audio thread, e.g. to realign the inference grid mid-stream
     inference_handler.reset();
 
-The call is wait-free and real-time safe for all session configurations, including stateful (``session_exclusive_processor``) ones — it never sleeps, locks, allocates, or performs a syscall, and is annotated ``[[clang::nonblocking]]`` in RealtimeSanitizer builds. Call it from the thread that drives :cpp:func:`anira::InferenceHandler::process` (or :cpp:func:`anira::InferenceHandler::push_data` / :cpp:func:`anira::InferenceHandler::pop_data`), or ensure no such call is concurrent — and never concurrently with :cpp:func:`anira::InferenceHandler::prepare` or destruction.
+The call is wait-free and real-time safe for all session configurations, including stateful (``session_exclusive_processor``) ones — it never sleeps, locks, allocates, or performs a syscall, and carries ``ANIRA_NONBLOCKING`` (clang's ``nonblocking`` attribute wherever clang has it, which RealtimeSanitizer builds enforce). The same in C: ``anira_handler_reset``, which also clears ``anira_handler_rt_error`` and re-arms its latches (:doc:`logging`). Call it from the thread that drives :cpp:func:`anira::InferenceHandler::process` (or :cpp:func:`anira::InferenceHandler::push_data` / :cpp:func:`anira::InferenceHandler::pop_data`), or ensure no such call is concurrent — and never concurrently with :cpp:func:`anira::InferenceHandler::prepare` or destruction.
 
 ..  note::
     :cpp:func:`anira::InferenceHandler::reset` does not wait for in-flight inferences to finish: an inference thread may still be executing a — discarded — inference after the call returns, including user code in a custom backend or the :cpp:func:`anira::PrePostProcessor::before_inference` / :cpp:func:`anira::PrePostProcessor::after_inference` hooks. If you need the guarantee that no inference thread touches shared state anymore (e.g. before mutating parameters such code reads), call :cpp:func:`anira::InferenceHandler::prepare` — which drains all in-flight work — or synchronize within your own backend.

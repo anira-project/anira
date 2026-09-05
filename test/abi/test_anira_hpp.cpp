@@ -4,6 +4,7 @@
 
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <gtest/gtest.h>
 
@@ -15,6 +16,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <ios>
 #include <optional>
 #include <stdexcept>
@@ -25,9 +27,11 @@
 #include <utility>
 #include <vector>
 
+#include "../../extras/models/model_files.h"
 #include "capi/ext_registry.h"
 #include "capi/handles.h"
 #include "fixtures.h"
+#include "handler_support.h"
 
 namespace {
 
@@ -736,4 +740,95 @@ TEST(AbiCxx, ReadingADirectoryIsNoSuchFile) {
         thrown_by([] { ContextConfig::from_file(std::filesystem::temp_directory_path()); });
     EXPECT_TRUE(directory.m_thrown);
     EXPECT_EQ(directory.m_status, ANIRA_ERROR_NO_SUCH_FILE);
+}
+
+// ---- pipeline and plan report ----------------------------------------------------------------
+
+TEST(AbiCxx, PipelineIsMoveOnlyAndHoldsOneInferenceStage) {
+    expect_move_semantics(anira::Pipeline(), anira::Pipeline());
+
+    anira::ModelConfig model = anira_test::gain_with_custom();
+    anira::Pipeline pipe{anira::stage::Inference(model)};
+    EXPECT_NE(pipe.native(), nullptr);
+    const Thrown second = thrown_by([&] { pipe.inference(model); });
+    EXPECT_TRUE(second.m_thrown);
+    EXPECT_EQ(second.m_status, ANIRA_ERROR_CONFIG);
+    EXPECT_NE(second.m_what.find("a second inference stage"), std::string::npos) << second.m_what;
+
+    const Thrown variants = thrown_by([&] {
+        anira::Pipeline two{anira::stage::Inference({std::cref(model), std::cref(model)}, {})};
+    });
+    EXPECT_TRUE(variants.m_thrown);
+    EXPECT_EQ(variants.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+    EXPECT_NE(variants.m_what.find("one variant per inference stage"), std::string::npos)
+        << variants.m_what;
+
+    const Thrown provider = thrown_by([&] {
+        anira::Pipeline gpu{anira::stage::Inference(model,
+                                                    {anira::BackendId{sizeof(anira::BackendId),
+                                                                      ANIRA_ENGINE_ONNXRUNTIME,
+                                                                      ANIRA_PROVIDER_CUDA,
+                                                                      nullptr}})};
+    });
+    EXPECT_TRUE(provider.m_thrown);
+    EXPECT_EQ(provider.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+    EXPECT_NE(provider.m_what.find("Host-only"), std::string::npos) << provider.m_what;
+
+    EXPECT_EQ(anira::stage::Inference(model).variants().size(), 1u);
+    EXPECT_TRUE(anira::stage::Inference(model).candidates().empty());
+}
+
+TEST(AbiCxx, PlanReportRoundTripsOverAPreparedHandler) {
+    static_assert(std::is_copy_constructible_v<anira::PlanReport>);
+    anira_test::Context context;
+    const anira::ModelConfig model = anira_test::gain_with_custom();
+    // The custom row alone: one plan on every leg, the engine-less ones included.
+    anira::Pipeline pipe{anira::stage::Inference(model,
+                                                 {anira::BackendId{sizeof(anira::BackendId),
+                                                                   ANIRA_ENGINE_NONE,
+                                                                   ANIRA_PROVIDER_DEFAULT,
+                                                                   nullptr}})};
+    anira_handler* h = nullptr;
+    anira_error err{};
+    ASSERT_EQ(anira_handler_create(context.m_context, pipe.native(), &h, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(anira_handler_prepare(h, anira_test::explicit_contract().native(), &err), ANIRA_OK)
+        << err.message;
+
+    const anira::PlanReport report(anira_handler_plan_report(h));
+    EXPECT_EQ(report.num_plans(), 1u);
+    const std::vector<anira_plan_info> plans = report.plans();
+    ASSERT_EQ(plans.size(), 1u);
+    EXPECT_EQ(plans[0].engine, static_cast<uint32_t>(ANIRA_ENGINE_NONE));
+    ASSERT_NE(plans[0].engine_id, nullptr);
+    EXPECT_EQ(std::string_view(plans[0].engine_id), "anira.v2.custom");
+    EXPECT_DOUBLE_EQ(plans[0].budget_ms, 5.0);
+    EXPECT_EQ(plans[0].variant, 0u);
+    EXPECT_EQ(plans[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
+
+    const std::vector<anira_plan_slot> inputs = report.slots(0, true);
+    ASSERT_EQ(inputs.size(), 2u);
+    EXPECT_EQ(inputs[0].slot, 0u);
+    EXPECT_EQ(inputs[1].slot, 1u);
+    for (const anira_plan_slot& slot : inputs) {
+        EXPECT_EQ(slot.is_input, 1u);
+        ASSERT_NE(slot.recipe, nullptr);
+        EXPECT_EQ(std::string_view(slot.recipe), "host");
+    }
+    EXPECT_EQ(report.slots(0, false).size(), 2u);
+    EXPECT_TRUE(report.extensions(0).empty());
+
+    const Thrown range = thrown_by([&] { report.slots(report.num_plans(), true); });
+    EXPECT_TRUE(range.m_thrown);
+    EXPECT_EQ(range.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(range.m_what.find("anira_plan_report_slots"), std::string::npos) << range.m_what;
+
+    EXPECT_EQ(anira::PlanReport(nullptr).num_plans(), 0u);
+    const Thrown null_report = thrown_by([] { anira::PlanReport(nullptr).plans(); });
+    EXPECT_TRUE(null_report.m_thrown);
+    EXPECT_EQ(null_report.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(null_report.m_what.find("anira_plan_report_plans"), std::string::npos)
+        << null_report.m_what;
+
+    anira_handler_destroy(h);
 }

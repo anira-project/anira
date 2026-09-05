@@ -11,7 +11,7 @@ The model behind the formulas is the scheduler's actual worst case:
 * every inference takes exactly ``max_inference_time``,
 * at most ``num_parallel_processors`` inferences run at once, in submission order,
 * an inference is submitted by the host callback that completes its hop of input,
-* results are collected once per callback, after the blocking wait (``blocking_ratio``),
+* results are collected once per callback; a ``_wait`` entry collects after its wait of ``wait_ratio`` block periods (``ANIRA_WAIT_CONTRACT``), the ``ANIRA_NONBLOCKING`` entries collect what has completed,
 * the host pushes and pops a sample only once a whole one has accumulated in its block, so that a block may be a fractional number of samples on a stream (see the note below).
 
 Quantities
@@ -36,8 +36,8 @@ For a session with reference stream size :math:`R` (see the usage guide, section
      - :math:`\kappa / \rho`
      - the inference time measured in host blocks
    * - :math:`\beta`
-     - ``blocking_ratio``
-     - the fraction of a host block the driving thread waits for results
+     - ``wait_ratio`` (the 2.x ``blocking_ratio``)
+     - the fraction of a host block a ``_wait`` entry waits for results; the credit applies to the latency whether or not the host calls one
    * - :math:`n`
      - ``num_parallel_processors``
      - the parallelism of the session
@@ -96,7 +96,7 @@ The same recursion bounds the number of inferences that are submitted but not ye
 
    S \;=\; \max_{m \ge 0} \left[ \lceil (d_m + 1)\rho \rceil - m n \right].
 
-With a blocking ratio that covers the inference time this is 1: the result is collected in the callback that submitted it.
+With a wait ratio that covers the inference time this is 1: a ``_wait`` entry collects the result in the callback that submitted it.
 
 The session allocates twice this many structures. :cpp:func:`anira::InferenceHandler::reset` is wait-free: it does not wait for in-flight inferences but marks them stale, and each keeps its structure until its worker publishes completion. Meanwhile the fresh schedule needs :math:`S` structures of its own, so one pool drains while the other serves and a reset never drops a hop.
 
@@ -117,7 +117,7 @@ Latency synchronization
 
 When several output tensors are present, the integer latencies are raised to a common whole number of hops, :math:`\lceil \max_i L_i / P_i \rceil \cdot P_i`, so that the outputs stay coherent.
 
-The latency vector returned by :cpp:func:`anira::InferenceHandler::get_latency_vector` is index-aligned with the output tensor list. Non-streamable outputs (``postprocess_output_size == 0``) carry no stream latency and always report ``0``.
+The latency vector returned by :cpp:func:`anira::InferenceHandler::get_latency_vector` is index-aligned with the output tensor list. Non-streamable outputs (``postprocess_output_size == 0``) carry no stream latency and always report ``0``. ``anira_handler_get_latencies`` is the same vector as a C array indexed by slot, and ``anira_handler_get_latency(h, i)`` one entry of it.
 
 Ring buffer sizes
 -----------------
