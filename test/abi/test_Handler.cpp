@@ -409,7 +409,7 @@ TEST(AbiHandler, UnpreparedEntriesRecordNotPrepared) {
     RecordCollector collector;
     const anira::ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
-    Handler handler(context, model, candidates);
+    const Handler handler(context, model, candidates);
     anira_handler* h = handler.m_handler;
     ASSERT_NE(h, nullptr);
 

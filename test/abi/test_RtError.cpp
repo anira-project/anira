@@ -451,7 +451,7 @@ TEST(AbiRtError, AViolationRecordCarriesTheFlagsAndTheDrainDeliversIt) {
     RecordCollector collector;
     const anira::ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
-    Handler handler(context, model, candidates);
+    const Handler handler(context, model, candidates);
     anira_handler* h = handler.m_handler;
     std::vector<float> block(k_block, 0.0F);
     const std::array<float*, 1> ptrs{block.data()};
