@@ -33,7 +33,7 @@
 
 namespace anira {
 
-/// The core-owned real-time log drain thread (Core.cpp); anira's own, not tanh-lib's.
+/// The core-owned real-time log drain thread (src/scheduler/LogDrainLoop.h); anira's own, not tanh-lib's.
 class LogDrainLoop;
 
 /**
