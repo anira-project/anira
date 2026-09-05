@@ -1105,40 +1105,74 @@ bool Core::collect_completed(const std::shared_ptr<SessionElement>& session) {
     return true;
 }
 
-// With blocking ratio > 0, the semaphore is used to wait for data. This is not 100% realtime safe.
-void Core::new_data_request(const std::shared_ptr<SessionElement>& session,
-                            std::chrono::steady_clock::time_point wait_until) {
+// The bounded collect: waits for each pending result on the primitive the session runs on
+// (the semaphore when blocking_ratio > 0, the atomic flag polled otherwise), up to the
+// deadline. Not real-time safe for as long as it waits; the InferenceManager callers pass
+// the budget the host chose.
+Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& session,
+                                         std::chrono::steady_clock::time_point wait_until) {
     // See the stalled-chain kick rationale in collect_completed().
     try_dispatch_stateful(session);
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
-    while (session->m_time_stamps.size() > 0) {
+    // InferenceThread::do_inference() releases the semaphore when blocking_ratio > 0 and
+    // stores the atomic otherwise, for the whole life of the session.
+    const bool use_semaphore = session->m_inference_config.m_blocking_ratio > 0.f;
+    const bool forever = wait_until == std::chrono::steady_clock::time_point::max();
+    const bool try_once = wait_until.time_since_epoch().count() == 0;
+    // The unbounded semaphore wait is cut into slices so the thread count is re-checked.
+    constexpr auto k_forever_slice = std::chrono::milliseconds(10);
+    // The atomic path's cadence, as in wait_for_completion().
+    constexpr auto k_poll = std::chrono::milliseconds(1);
+    while (!session->m_time_stamps.empty()) {
+        bool collected = false;
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
+            SessionElement::ThreadSafeStruct& next = *session->m_inference_queue[i];
             // See the generation-guard rationale in collect_completed().
-            if (session->m_inference_queue[i]->m_time_stamp == session->m_time_stamps.back() &&
-                session->m_inference_queue[i]->m_dispatch_generation == generation) {
-                // Same gate as collect_completed(): a result is only placed while the
-                // receive rings can take it; unread output is never overwritten.
-                if (!session->receive_rings_have_room()) { return; }
-                if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
-                    wait_for_completion(session, i);
-                } else if (wait_until.time_since_epoch().count() == 0) {
-                    if (session->m_inference_queue[i]->m_done_semaphore.try_acquire()) {
-                    } else {
-                        return;
+            if (next.m_time_stamp != session->m_time_stamps.back() ||
+                next.m_dispatch_generation != generation) {
+                continue;
+            }
+            // Same gate as collect_completed(): a result is only placed while the
+            // receive rings can take it; unread output is never overwritten.
+            if (!session->receive_rings_have_room()) { return WaitOutcome::Done; }
+            bool done = false;
+            if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
+                wait_for_completion(session, i);  // unbounded, as set_non_realtime() promises
+                done = true;
+            } else if (use_semaphore) {
+                if (try_once) {
+                    done = next.m_done_semaphore.try_acquire();
+                } else if (forever) {
+                    while (!done) {
+                        done = next.m_done_semaphore.try_acquire_until(
+                            std::chrono::steady_clock::now() + k_forever_slice);
+                        if (!done && !InferenceThread::any_loop_active()) {
+                            return WaitOutcome::NoThread;
+                        }
                     }
                 } else {
-                    if (session->m_inference_queue[i]->m_done_semaphore.try_acquire_until(
-                            wait_until)) {
-                    } else {
-                        return;
-                    }
+                    // The 2.x wait: one try_acquire_until, no thread check.
+                    done = next.m_done_semaphore.try_acquire_until(wait_until);
                 }
-                session->m_time_stamps.pop_back();
-                post_process(session, session->m_inference_queue[i]);
-                break;
+            } else {
+                done = next.m_done_atomic.exchange(false, std::memory_order::acquire);
+                while (!done && !try_once) {
+                    if (!InferenceThread::any_loop_active()) { return WaitOutcome::NoThread; }
+                    if (!forever && std::chrono::steady_clock::now() >= wait_until) { break; }
+                    std::this_thread::sleep_for(k_poll);
+                    done = next.m_done_atomic.exchange(false, std::memory_order::acquire);
+                }
             }
+            if (!done) { return WaitOutcome::Deadline; }
+            session->m_time_stamps.pop_back();
+            post_process(session, session->m_inference_queue[i]);
+            collected = true;
+            break;
         }
+        // No struct carries the oldest timestamp (stale), as in collect_completed().
+        if (!collected) { return WaitOutcome::Done; }
     }
+    return WaitOutcome::Done;
 }
 
 // Mirrors the completion signal InferenceThread::do_inference() uses for this

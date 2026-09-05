@@ -394,22 +394,43 @@ public:
     static void new_data_request(const std::shared_ptr<SessionElement>& session);
 
     /**
-     * @brief Requests new data processing for a session at a specific time
+     * @brief How a bounded collect ended (new_data_request() with a deadline)
+     */
+    enum class WaitOutcome {
+        Done,      ///< every pending result was collected, or nothing was pending
+        Deadline,  ///< the deadline passed with a result still outstanding
+        NoThread   ///< no inference thread runs its loop, so no result could ever arrive
+    };
+
+    /**
+     * @brief Requests new data processing for a session, waiting up to a deadline
      *
-     * Requests that the inference system process data for the specified session,
-     * but waits for the data until the given time point before processing.
-     * Completed results are placed only while the streamable receive rings have
-     * room for them (see collect_completed()).
+     * Collects the session's pending results in submission order, waiting for each on the
+     * completion primitive the session runs on: the semaphore when
+     * InferenceConfig::m_blocking_ratio > 0 (InferenceThread::do_inference() signals it
+     * then), else the atomic flag polled every millisecond. Completed results are placed
+     * only while the streamable receive rings have room for them (see
+     * collect_completed()).
+     *
+     * The deadline forms: a time point with a zero epoch count tries each result once
+     * without waiting; std::chrono::steady_clock::time_point::max() waits without limit,
+     * re-checking InferenceThread::any_loop_active() every 10 ms on the semaphore path and
+     * every poll on the atomic path, and returns WaitOutcome::NoThread when no thread
+     * could signal the result; any other deadline waits until it passes — on the
+     * semaphore path in one try_acquire_until (the 2.x wait, unchanged: a thread leaving
+     * mid-wait is bounded by the deadline, not detected), on the atomic path with the
+     * thread check per poll.
      *
      * @param session Shared pointer to the session requesting data processing
-     * @param wait_until Time point at which to begin processing the data request
+     * @param wait_until The deadline (see above)
+     * @return How the collect ended
      *
      * @note If the session is in non-real-time mode (see
      *       InferenceManager::set_non_realtime()), this blocks until the pending
      *       inference completes instead of honoring wait_until.
      */
-    static void new_data_request(const std::shared_ptr<SessionElement>& session,
-                                 std::chrono::steady_clock::time_point wait_until);
+    static WaitOutcome new_data_request(const std::shared_ptr<SessionElement>& session,
+                                        std::chrono::steady_clock::time_point wait_until);
 
     /**
      * @brief Gets a snapshot of all registered sessions

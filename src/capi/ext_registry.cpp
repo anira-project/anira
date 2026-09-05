@@ -331,10 +331,22 @@ anira_status ExtBag::set_json(const char* kind, std::string_view utf8, anira_err
 
 namespace {
 
-bool candidate(anira_engine engine, const anira_engine* candidates, uint32_t num_candidates) {
+// The same rule as the translator's candidate filter (translate.cpp): NULL = every row; an
+// entry with an engine_id keeps the custom rows of that name; a built-in engine keeps its
+// rows; {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps every custom row (a custom row carries
+// ANIRA_ENGINE_NONE). The provider is not read.
+bool candidate(anira_engine engine,
+               const std::string& engine_id,
+               const anira_backend_id* candidates,
+               uint32_t num_candidates) {
     if (candidates == nullptr) { return true; }
     for (uint32_t i = 0; i < num_candidates; ++i) {
-        if (candidates[i] == engine) { return true; }
+        const anira_backend_id& id = candidates[i];
+        if (id.engine_id != nullptr) {
+            if (!engine_id.empty() && engine_id == id.engine_id) { return true; }
+            continue;
+        }
+        if (id.engine == static_cast<uint32_t>(engine)) { return true; }
     }
     return false;
 }
@@ -342,12 +354,12 @@ bool candidate(anira_engine engine, const anira_engine* candidates, uint32_t num
 const char* consumer_of(std::string_view host,
                         std::string_view kind,
                         anira_engine entry_engine,
-                        const anira_engine* candidates,
+                        const anira_backend_id* candidates,
                         uint32_t num_candidates) {
     const std::string wanted = std::string(host) + ":" + std::string(kind);
     for (const ExtConsumer& consumer : ext_consumers()) {
         if (consumer.m_engine != ANIRA_ENGINE_NONE) {
-            if (!candidate(consumer.m_engine, candidates, num_candidates)) { continue; }
+            if (!candidate(consumer.m_engine, "", candidates, num_candidates)) { continue; }
             // An adapter reads the entries of its own engine only.
             if (host == "model" && entry_engine != consumer.m_engine) { continue; }
         }
@@ -358,13 +370,16 @@ const char* consumer_of(std::string_view host,
     return nullptr;
 }
 
+// One host's bag: every slot known and consumed, else the failure names it. With rows, each
+// consumed slot is recorded as one plan row.
 anira_status check_bag(const ExtBag& bag,
                        std::string_view host,
                        const std::string& where,
                        anira_engine entry_engine,
-                       const anira_engine* candidates,
+                       const anira_backend_id* candidates,
                        uint32_t num_candidates,
-                       anira_error* err) {
+                       anira_error* err,
+                       std::vector<ExtPlanRow>* rows) {
     for (const ExtSlot& slot : bag.slots()) {
         if (!slot.known()) {
             fail(err,
@@ -376,7 +391,9 @@ anira_status check_bag(const ExtBag& bag,
                  where.c_str());
             return ANIRA_ERROR_EXTENSION_UNKNOWN;
         }
-        if (consumer_of(host, slot.kind(), entry_engine, candidates, num_candidates) == nullptr) {
+        const char* consumer =
+            consumer_of(host, slot.kind(), entry_engine, candidates, num_candidates);
+        if (consumer == nullptr) {
             fail(err,
                  ANIRA_ERROR_EXTENSION_UNCONSUMED,
                  nullptr,
@@ -386,18 +403,24 @@ anira_status check_bag(const ExtBag& bag,
                  where.c_str());
             return ANIRA_ERROR_EXTENSION_UNCONSUMED;
         }
+        if (rows != nullptr) {
+            std::string at = host_name(host);
+            if (!where.empty()) { at += " " + where; }
+            rows->push_back(ExtPlanRow{std::move(at), slot.kind(), consumer});
+        }
     }
     return ANIRA_OK;
 }
 
-}  // namespace
-
-anira_status ext_check_consumed(const anira_model_config& model,
-                                const anira_context_config* config,
-                                const anira_contract* contract,
-                                const anira_engine* candidates,
-                                uint32_t num_candidates,
-                                anira_error* err) {
+// The walk both public entries share: the specs, the candidate entries, the model config,
+// then the context config and the contract when given.
+anira_status walk_bags(const anira_model_config& model,
+                       const anira_context_config* config,
+                       const anira_contract* contract,
+                       const anira_backend_id* candidates,
+                       uint32_t num_candidates,
+                       anira_error* err,
+                       std::vector<ExtPlanRow>* rows) {
     for (const anira_tensor_spec& spec : model.m_inputs) {
         const anira_status status = check_bag(spec.m_ext,
                                               "tensor_spec",
@@ -405,7 +428,8 @@ anira_status ext_check_consumed(const anira_model_config& model,
                                               ANIRA_ENGINE_NONE,
                                               candidates,
                                               num_candidates,
-                                              err);
+                                              err,
+                                              rows);
         if (ANIRA_FAILED(status)) { return status; }
     }
     for (const anira_tensor_spec& spec : model.m_outputs) {
@@ -415,19 +439,23 @@ anira_status ext_check_consumed(const anira_model_config& model,
                                               ANIRA_ENGINE_NONE,
                                               candidates,
                                               num_candidates,
-                                              err);
+                                              err,
+                                              rows);
         if (ANIRA_FAILED(status)) { return status; }
     }
     for (size_t i = 0; i < model.m_models.size(); ++i) {
         const ModelEntry& entry = model.m_models[i];
-        if (!candidate(entry.m_engine, candidates, num_candidates)) { continue; }  // filtered out
+        if (!candidate(entry.m_engine, entry.m_engine_id, candidates, num_candidates)) {
+            continue;  // filtered out
+        }
         const anira_status status = check_bag(entry.m_ext,
                                               "model",
                                               std::to_string(i),
                                               entry.m_engine,
                                               candidates,
                                               num_candidates,
-                                              err);
+                                              err,
+                                              rows);
         if (ANIRA_FAILED(status)) { return status; }
     }
     const anira_status status = check_bag(model.m_ext,
@@ -436,7 +464,8 @@ anira_status ext_check_consumed(const anira_model_config& model,
                                           ANIRA_ENGINE_NONE,
                                           candidates,
                                           num_candidates,
-                                          err);
+                                          err,
+                                          rows);
     if (ANIRA_FAILED(status)) { return status; }
     if (config != nullptr) {
         const anira_status context_status = check_bag(config->m_ext,
@@ -445,7 +474,8 @@ anira_status ext_check_consumed(const anira_model_config& model,
                                                       ANIRA_ENGINE_NONE,
                                                       candidates,
                                                       num_candidates,
-                                                      err);
+                                                      err,
+                                                      rows);
         if (ANIRA_FAILED(context_status)) { return context_status; }
     }
     if (contract != nullptr) {
@@ -455,10 +485,33 @@ anira_status ext_check_consumed(const anira_model_config& model,
                                                        ANIRA_ENGINE_NONE,
                                                        candidates,
                                                        num_candidates,
-                                                       err);
+                                                       err,
+                                                       rows);
         if (ANIRA_FAILED(contract_status)) { return contract_status; }
     }
     return ANIRA_OK;
+}
+
+}  // namespace
+
+anira_status ext_check_consumed(const anira_model_config& model,
+                                const anira_context_config* config,
+                                const anira_contract* contract,
+                                const anira_backend_id* candidates,
+                                uint32_t num_candidates,
+                                anira_error* err) {
+    return walk_bags(model, config, contract, candidates, num_candidates, err, nullptr);
+}
+
+std::vector<ExtPlanRow> ext_consumed_rows(const anira_model_config& model,
+                                          const anira_contract* contract,
+                                          const anira_backend_id* candidates,
+                                          uint32_t num_candidates) {
+    std::vector<ExtPlanRow> rows;
+    anira_error ignored = ANIRA_ERROR_INIT;
+    static_cast<void>(
+        walk_bags(model, nullptr, contract, candidates, num_candidates, &ignored, &rows));
+    return rows;
 }
 
 // ---- BytesCarrier (handles.h) ------------------------------------------------------------

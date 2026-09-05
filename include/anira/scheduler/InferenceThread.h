@@ -156,6 +156,17 @@ public:
      */
     static unsigned int get_num_loop_active();
 
+    /**
+     * @brief True while at least one thread is inside run_loop(), on every platform.
+     *
+     * The relaxed read of the same count get_num_loop_active() reports (the auto-managed
+     * pool plus every user-created thread that runs the loop), for the bounded waits of
+     * Core::new_data_request(): a wait whose completion no thread could ever signal ends
+     * with Core::WaitOutcome::NoThread instead of running to its deadline. A host that
+     * drives execute() itself without run_loop() is not counted. Wait-free.
+     */
+    static bool any_loop_active() noexcept;
+
 private:
     /**
      * @brief Performs inference processing for a specific session

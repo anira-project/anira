@@ -13,6 +13,7 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/system/Exports.h>
 #include <anira/utils/HostConfig.h>
@@ -25,6 +26,11 @@
 #include <vector>
 
 #include "handles.h"
+
+namespace anira {
+/// The ring dtype of every slot (include/anira/scheduler/SessionElement.h).
+struct RingDtypes;
+}  // namespace anira
 
 namespace anira::capi {
 
@@ -60,19 +66,30 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 
 /// Runs every section-2 rule the 2.x runtime can honour, in order, and derives the
 /// per-tensor quantities; contract may be NULL (no contract rule runs, flexible windows
-/// pin to window_min). Throws StatusError with ANIRA_ERROR_CONFIG for a rule the
-/// configuration breaks and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do.
+/// pin to window_min). The candidates narrow the model entries: NULL keeps every row (the
+/// bridge's rule; the handler always names its set), a built-in engine keeps its rows,
+/// {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps the custom rows, a non-NULL engine_id keeps
+/// the custom rows of that name; the provider is not read. Throws StatusError with
+/// ANIRA_ERROR_CONFIG for a rule the configuration breaks (no surviving row among them)
+/// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do.
 ANIRA_API void validate(const anira_model_config& model,
                         const anira_contract* contract,
-                        const anira_engine* candidates,
+                        const anira_backend_id* candidates,
                         uint32_t num_candidates,
                         Derived& out);
 
 /// The 2.x InferenceConfig of a model config under a Hard contract (validate, then map).
 ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                                        const anira_contract& contract,
-                                                       const anira_engine* candidates,
+                                                       const anira_backend_id* candidates,
                                                        uint32_t num_candidates);
+
+/// The ring dtype of every slot: two vectors sized to the model's input and output lists,
+/// ANIRA_DTYPE_F32 everywhere, then each entry of the Hard contract's ring dtypes resolved
+/// by tensor name into its slot. Run validate first: it refuses a name that matches no
+/// tensor, a non-Streamed tensor, and a dtype other than the spec's (nothing converts).
+ANIRA_API anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
+                                             const anira_model_config& model);
 
 /// The 2.x CoreConfig of a context config: threads, wait strategy and the log scalars, after
 /// check_context_extensions. Kept for the bridge (anira::v3compat::to_core_config); the core

@@ -117,6 +117,12 @@ unsigned int InferenceThread::get_num_loop_active() {
     return s_num_loop_active.load(std::memory_order::acquire);
 }
 
+bool InferenceThread::any_loop_active() noexcept {
+    // A relaxed read: the waits re-check between poll iterations, so a thread leaving the
+    // loop is seen at the next check.
+    return s_num_loop_active.load(std::memory_order::relaxed) > 0;
+}
+
 bool InferenceThread::has_exited() const {
     return m_has_exited.load(std::memory_order::acquire);
 }
