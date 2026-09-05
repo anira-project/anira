@@ -74,8 +74,22 @@ ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config&
                                                        const anira_engine* candidates,
                                                        uint32_t num_candidates);
 
-/// The 2.x CoreConfig of a context config: threads, wait strategy and the log scalars.
+/// The 2.x CoreConfig of a context config: threads, wait strategy and the log scalars, after
+/// check_context_extensions. Kept for the bridge (anira::v3compat::to_core_config); the core
+/// itself reads the context config.
 ANIRA_API anira::CoreConfig make_core_config(const anira_context_config& config);
+
+/// The context config of a 2.x CoreConfig, field by field: threads, wait strategy, log
+/// level, drain, interval and queue capacity; no sink, no flags, no device block, no
+/// extensions. The log level is copied explicitly (CoreConfig defaults to Info/Error,
+/// anira_context_config to WARNING). The 2.x InferenceManager constructor is the only
+/// caller; it leaves with the 2.x classes at the cut-over.
+ANIRA_API anira_context_config make_context_config(const anira::CoreConfig& core_config);
+
+/// The consumed-or-fail walk over a context config's extension bag alone (the model,
+/// contract and spec bags are walked at anira_handler_create and prepare). Throws
+/// StatusError with ANIRA_ERROR_EXTENSION_UNKNOWN / _UNCONSUMED naming the kind.
+ANIRA_API void check_context_extensions(const anira_context_config& config);
 
 /// The 2.x HostConfig of a Hard contract's geometry and the model config's anchor.
 ANIRA_API anira::HostConfig make_host_config(const anira_contract& contract,

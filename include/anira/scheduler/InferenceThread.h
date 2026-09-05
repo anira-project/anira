@@ -1,6 +1,8 @@
 #ifndef ANIRA_INFERENCETHREAD_H
 #define ANIRA_INFERENCETHREAD_H
 
+#include <anira/abi/enums.h>
+
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -9,7 +11,6 @@
 #include <tanh/core/threading/Thread.h>
 #endif
 
-#include "../CoreConfig.h"
 #include "../utils/Buffer.h"
 #include "SessionElement.h"
 #ifdef __x86_64__
@@ -53,11 +54,12 @@ public:
      * @param next_inference Reference to a thread-safe concurrent queue containing
      *                      inference data structures to process
      * @param wait_strategy How run_loop() waits for new work when the queue is
-     *                      empty (see WaitStrategy). Ignored on WebAssembly builds,
+     *                      empty (anira_wait_strategy: spin with backoff, or block on
+     *                      the queue's semaphore). Ignored on WebAssembly builds,
      *                      where JS Workers drive the loop cooperatively.
      */
     InferenceThread(InferenceQueue& next_inference,
-                    WaitStrategy wait_strategy = WaitStrategy::SpinBackoff);
+                    anira_wait_strategy wait_strategy = ANIRA_WAIT_SPIN_BACKOFF);
 
     ~InferenceThread();
 
@@ -89,7 +91,7 @@ public:
      *
      * Natively, this is invoked by the inherited HighPriorityThread via the
      * run() override, and waits for work according to the configured
-     * WaitStrategy: either the exponential-backoff polling loop or a blocking
+     * wait strategy: either the exponential-backoff polling loop or a blocking
      * wait on the queue's semaphore. Under Emscripten, JS Workers call this
      * directly and the loop always polls (blocking is not possible there).
      * Returns when should_exit() becomes true.
@@ -195,7 +197,7 @@ private:
 
 #ifndef __EMSCRIPTEN__
     /**
-     * @brief Processing loop for WaitStrategy::Blocking
+     * @brief Processing loop for ANIRA_WAIT_BLOCKING
      *
      * Blocks on the queue's semaphore until work is enqueued, waking
      * periodically (a few ms) to check should_exit(). The wakeup on enqueue is
@@ -231,11 +233,12 @@ private:
     void dispatch_next_pending(const std::shared_ptr<SessionElement>& session);
 
 private:
-    InferenceQueue& m_next_inference;  ///< Reference to the thread-safe
-                                       ///< queue containing inference
-                                       ///< requests
-    InferenceData m_inference_data;    ///< Current inference data being processed by this thread
-    WaitStrategy m_wait_strategy;  ///< How run_loop() waits for new work when the queue is empty
+    InferenceQueue& m_next_inference;     ///< Reference to the thread-safe
+                                          ///< queue containing inference
+                                          ///< requests
+    InferenceData m_inference_data;       ///< Current inference data being processed by this thread
+    anira_wait_strategy m_wait_strategy;  ///< How run_loop() waits for new work when the queue
+                                          ///< is empty
 
     // The thread counters (see get_num_active_threads()) are defined in
     // InferenceThread.cpp rather than as inline static members: an exported inline

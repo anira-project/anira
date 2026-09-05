@@ -42,7 +42,8 @@ namespace anira {
 SessionElement::SessionElement(int new_session_id,
                                PrePostProcessor& pp_processor,
                                InferenceConfig& inference_config,
-                               moodycamel::ProducerToken&& producer_token)
+                               moodycamel::ProducerToken&& producer_token,
+                               anira::RtLatch* rt_latch)
     : m_session_id(new_session_id)
     , m_producer_token(std::move(producer_token))
     // One slot per ThreadSafeStruct plus this queue's single explicit producer,
@@ -54,7 +55,8 @@ SessionElement::SessionElement(int new_session_id,
     , m_pp_processor(pp_processor)
     , m_inference_config(inference_config)
     , m_default_processor(m_inference_config)
-    , m_custom_processor(&m_default_processor) {}
+    , m_custom_processor(&m_default_processor)
+    , m_rt(rt_latch) {}
 
 SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<size_t>& tensor_input_size,
                                                    const std::vector<size_t>& tensor_output_size) {

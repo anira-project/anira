@@ -26,10 +26,15 @@ namespace anira {
 // and stopping it joins the thread and flushes whatever arrived after its last pass on
 // the stopping thread (the final flush a host sees on the last release, or in
 // anira_context_destroy / anira_shutdown).
+//
+// post_pass, when given, runs on the drain thread after every drain pass (the core's
+// real-time latch summary); it may throw (the same catch covers it) and must not block.
 class LogDrainLoop {
 public:
-    LogDrainLoop(thl::Logger::rt::Queue& queue, unsigned int interval_ms)
-        : m_queue(queue), m_interval(interval_ms == 0 ? 1 : interval_ms) {
+    LogDrainLoop(thl::Logger::rt::Queue& queue,
+                 unsigned int interval_ms,
+                 void (*post_pass)() = nullptr)
+        : m_queue(queue), m_interval(interval_ms == 0 ? 1 : interval_ms), m_post_pass(post_pass) {
         thl::core::ThreadOptions options;
         options.m_priority = thl::core::ThreadPriority::Low;
         options.m_name = "anira-log";
@@ -63,6 +68,7 @@ private:
         while (!self.should_stop()) {
             try {
                 m_queue.drain();
+                if (m_post_pass != nullptr) { m_post_pass(); }
             } catch (...) {  // NOLINT(bugprone-empty-catch) the sinks fell back to stderr
             }
             std::unique_lock<std::mutex> lock(m_mutex);
@@ -72,13 +78,15 @@ private:
 
     thl::Logger::rt::Queue& m_queue;
     std::chrono::milliseconds m_interval;
+    void (*m_post_pass)();  ///< Runs after every drain pass on the drain thread; may be null
     std::mutex m_mutex;
     std::condition_variable m_cv;
     bool m_stop = false;
     thl::core::Thread m_thread;  ///< Last: started by the constructor once the rest exists
 };
 #else
-// No thread can drain the queue on WebAssembly (LogDrain::Manual is coerced); never built.
+// No thread can drain the queue on WebAssembly (ANIRA_LOG_DRAIN_MANUAL is coerced); never
+// built.
 class LogDrainLoop {};
 #endif
 

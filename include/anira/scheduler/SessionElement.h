@@ -29,6 +29,9 @@ namespace anira {
  * require a complete type). This breaks the otherwise circular include dependency.
  */
 class BackendBase;
+/// The real-time latch the session records its failures into (include/anira/utils/RtLatch.h);
+/// held by pointer, so the body is not needed here.
+struct RtLatch;
 #ifdef USE_LIBTORCH
 class LibtorchProcessor;
 #endif
@@ -110,11 +113,14 @@ public:
      * @param inference_config Reference to the inference configuration containing model settings
      * @param producer_token Producer token bound to the global inference queue, moved into the
      * session (see m_producer_token)
+     * @param rt_latch The real-time latch this session records its failures into (see m_rt):
+     * a 3.x handler's own, nullptr for a 2.x session
      */
     SessionElement(int new_session_id,
                    PrePostProcessor& pp_processor,
                    InferenceConfig& inference_config,
-                   moodycamel::ProducerToken&& producer_token);
+                   moodycamel::ProducerToken&& producer_token,
+                   anira::RtLatch* rt_latch = nullptr);
 
     /**
      * @brief Wait-free clear of the session's audio-thread-owned state.
@@ -373,6 +379,10 @@ public:
 
     BackendBase m_default_processor;  ///< Default backend processor instance
     BackendBase* m_custom_processor;  ///< Pointer to custom backend processor (if provided)
+    RtLatch* m_rt;  ///< The real-time latch the session's failures are recorded into: the
+                    ///< 3.x handler's own (anira_handler_rt_error reads it), set by the
+                    ///< constructor and published by the lifecycle lock that registers the
+                    ///< session; nullptr for a 2.x session until the session owns its own
 
     // Written by InferenceManager::set_non_realtime() -- typically from a control/UI
     // thread, e.g. a host toggling offline bounce/render mode -- and read on the

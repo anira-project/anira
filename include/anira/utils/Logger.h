@@ -29,8 +29,10 @@
  *   or makes a system call: the message is formatted on the caller's stack with a
  *   locale-free printf subset (see tanh/core/RtFormat.h for the supported
  *   conversions) and pushed into the core's own bounded lock-free queue
- *   (thl::Logger::rt::Queue, sized by LogConfig::m_queue_capacity), which a
- *   core-owned low-priority thread or the host (LogDrain) forwards to the sinks.
+ *   (thl::Logger::rt::Queue, sized by the queue capacity of the context config in
+ *   effect: anira_context_config_set_log_queue_capacity, LogConfig::m_queue_capacity on
+ *   the 2.x path), which a core-owned low-priority thread or the host (the drain mode)
+ *   forwards to the sinks.
  *   Use these anywhere reachable from an ANIRA_NONBLOCKING entry point or from an
  *   inference thread. A full queue drops and counts; no queue (no core yet)
  *   drops silently — no real-time path exists then anyway.
@@ -77,9 +79,29 @@ inline constexpr thl::Logger::LogLevel to_thl_log_level(LogLevel log_level) {
     return thl::Logger::LogLevel::Error;
 }
 
+// The backends cast anira::LogLevel to their numeric scales and the core stores the C
+// level; the two enums agree number for number, and to_log_level below keeps them in step.
+static_assert(static_cast<int>(LogLevel::Debug) == ANIRA_LOG_DEBUG);
+static_assert(static_cast<int>(LogLevel::Info) == ANIRA_LOG_INFO);
+static_assert(static_cast<int>(LogLevel::Warning) == ANIRA_LOG_WARNING);
+static_assert(static_cast<int>(LogLevel::Error) == ANIRA_LOG_ERROR);
+
+/// The C level of a context config (anira_log_level, anira/abi/enums.h) to anira::LogLevel;
+/// anything outside the four values is Error.
+inline constexpr LogLevel to_log_level(anira_log_level level) noexcept {
+    switch (level) {
+        case ANIRA_LOG_DEBUG: return LogLevel::Debug;
+        case ANIRA_LOG_INFO: return LogLevel::Info;
+        case ANIRA_LOG_WARNING: return LogLevel::Warning;
+        case ANIRA_LOG_ERROR:
+        default: return LogLevel::Error;
+    }
+}
+
 /**
- * @brief Process-global minimum log severity, applied from CoreConfig::m_log.m_level
- * whenever a core is created. Defaults to the build-type dependent
+ * @brief Process-global minimum log severity, applied from the log level of the context
+ * config in effect (anira_context_config_set_log_level; CoreConfig::m_log.m_level on the
+ * 2.x path) whenever a core is created. Defaults to the build-type dependent
  * default_log_level() until then.
  *
  * Kept as anira's own atomic (in anira's enum) because the backend processors

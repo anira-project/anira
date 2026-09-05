@@ -1,4 +1,3 @@
-#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/scheduler/Core.h>
@@ -7,6 +6,7 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/extras_fixtures.h"
+#include "capi/handles.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
@@ -55,7 +55,8 @@ using namespace anira;
 // reference's referent), so it equals the released storage. With the fix, the
 // processor owns its config in its own storage, so the addresses differ.
 TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
-    CoreConfig const core_config;
+    // The defaults: AUTO threads (resolved by the core), SPIN_BACKOFF, WARNING.
+    const anira_context_config core_config;
 
     // Two hosts, each owning an equal-valued InferenceConfig. Session A's config is
     // heap-allocated so its storage can be freed deterministically mid-test.

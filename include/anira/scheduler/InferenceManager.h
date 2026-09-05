@@ -9,7 +9,13 @@
 #include "Core.h"
 #include "InferenceThread.h"
 
+/// The context config the 3.x constructor takes (its body is src/capi/handles.h).
+struct anira_context_config;
+
 namespace anira {
+
+/// The real-time latch the 3.x constructor hands the session (include/anira/utils/RtLatch.h).
+struct RtLatch;
 
 /**
  * @brief Central manager class for coordinating neural network inference operations
@@ -47,11 +53,13 @@ public:
     InferenceManager() = delete;
 
     /**
-     * @brief Constructor that initializes the inference manager with all required components
+     * @brief The 2.x constructor: initializes the inference manager with all required
+     * components
      *
      * Creates an inference manager with the specified preprocessing/postprocessing pipeline,
-     * inference configuration, and optional custom backend. Initializes the core and
-     * prepares for session management.
+     * inference configuration, and optional custom backend. Maps the CoreConfig onto a
+     * context config (anira::capi::make_context_config) and delegates to the 3.x
+     * constructor, so the core reads one configuration type. Leaves with the 2.x classes.
      *
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration containing model settings
@@ -63,6 +71,27 @@ public:
                      InferenceConfig& inference_config,
                      BackendBase* custom_processor,
                      const CoreConfig& core_config);
+
+    /**
+     * @brief The 3.x constructor: the context's config passed through unchanged
+     *
+     * Creates the session through Core::create_session() with the context config as the
+     * handler's context holds it (the core reads its six scalars and reconciles them
+     * against the configuration in effect) and the handler's real-time latch.
+     *
+     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
+     * @param inference_config Reference to the inference configuration containing model settings
+     * @param custom_processor Pointer to a custom backend processor (can be nullptr for default
+     * backends)
+     * @param context_config The context's configuration (anira_context_config_*)
+     * @param rt_latch The handler's latch the session records its failures into; nullptr
+     * gives the session its own
+     */
+    InferenceManager(PrePostProcessor& pp_processor,
+                     InferenceConfig& inference_config,
+                     BackendBase* custom_processor,
+                     const anira_context_config& context_config,
+                     anira::RtLatch* rt_latch = nullptr);
 
     /**
      * @brief Destructor that properly cleans up inference resources

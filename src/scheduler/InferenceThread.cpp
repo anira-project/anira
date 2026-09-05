@@ -1,4 +1,4 @@
-#include <anira/CoreConfig.h>
+#include <anira/abi/enums.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
@@ -47,7 +47,7 @@ std::atomic<unsigned int> s_num_active_threads{0};
 #endif
 }  // namespace
 
-InferenceThread::InferenceThread(InferenceQueue& next_inference, WaitStrategy wait_strategy)
+InferenceThread::InferenceThread(InferenceQueue& next_inference, anira_wait_strategy wait_strategy)
     : m_next_inference(next_inference), m_wait_strategy(wait_strategy) {}
 
 InferenceThread::~InferenceThread() {
@@ -144,7 +144,7 @@ void InferenceThread::run_loop() {
         std::atomic<bool>& m_in_loop;
     } const loop_guard(m_has_exited, m_in_loop);
 #ifndef __EMSCRIPTEN__
-    if (m_wait_strategy == WaitStrategy::Blocking) {
+    if (m_wait_strategy == ANIRA_WAIT_BLOCKING) {
         run_loop_blocking();
         return;
     }

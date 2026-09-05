@@ -1,6 +1,8 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/status.h>
 #include <anira/backends/BackendBase.h>
 #ifdef USE_EXECUTORCH
 #include <anira/backends/ExecuTorchProcessor.h>
@@ -40,6 +42,7 @@
 #include <utility>
 #include <vector>
 
+#include "../capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
 #include "LogDrainLoop.h"
 
 namespace anira {
@@ -62,22 +65,28 @@ struct Core::State {
 
     std::unique_ptr<thl::Logger::rt::Queue> m_log_queue;  ///< Real-time log queue (created
                                                           ///< once per core, capacity from the
-                                                          ///< first session's LogConfig)
+                                                          ///< first user's config)
     std::unique_ptr<LogDrainLoop> m_log_drain;  ///< Drains m_log_queue at low priority while
-                                                ///< a session or a context exists
-                                                ///< (LogDrain::Thread)
+                                                ///< a session, a context or a handler exists
+                                                ///< (ANIRA_LOG_DRAIN_THREAD)
 
     unsigned int m_num_contexts = 0;  ///< Registered 3.x contexts (register_context()): users
                                       ///< of the core beside the sessions
+    unsigned int m_num_handlers = 0;  ///< Registered 3.x handlers (register_handler()): users
+                                      ///< of the core from create to destroy, prepared or not
 
     std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;  ///< Inference thread pool;
                                                                   ///< non-empty exactly while
                                                                   ///< the registry is non-empty
                                                                   ///< (or until shutdown())
 
-    CoreConfig m_core_config;  ///< Configuration in effect: that of the first session of
-                               ///< the current generation, reconciled with the later
-                               ///< ones. Meaningful while the registry is non-empty.
+    anira_context_config m_core_config;  ///< Configuration in effect: the sanitized copy of
+                                         ///< the first user's config of the current
+                                         ///< generation, reconciled with the later ones.
+                                         ///< Only the six scalars (threads, wait, log level,
+                                         ///< drain, interval, queue capacity) are read; the
+                                         ///< sink, flags, device and extension members ride
+                                         ///< along unused. Meaningful while a user exists.
 
     std::atomic<int> m_next_id{-1};  ///< Counter for generating unique session IDs
 
@@ -156,6 +165,26 @@ struct UnloadGuard {
 [[maybe_unused]] UnloadGuard s_unload_guard;
 #endif
 
+// The words of the mismatch warnings: the JSON vocabulary (json.cpp's k_waits / k_levels /
+// k_drains), the same words CoreConfig.h's to_string spells.
+const char* wait_word(anira_wait_strategy wait) {
+    return wait == ANIRA_WAIT_BLOCKING ? "blocking" : "spin_backoff";
+}
+
+const char* level_word(anira_log_level level) {
+    switch (level) {
+        case ANIRA_LOG_DEBUG: return "debug";
+        case ANIRA_LOG_INFO: return "info";
+        case ANIRA_LOG_WARNING: return "warning";
+        case ANIRA_LOG_ERROR:
+        default: return "error";
+    }
+}
+
+const char* drain_word(anira_log_drain drain) {
+    return drain == ANIRA_LOG_DRAIN_MANUAL ? "manual" : "thread";
+}
+
 }  // namespace
 
 Core::State& Core::get_state() {
@@ -185,9 +214,9 @@ bool Core::has_core() {
     return s_state.load(std::memory_order_acquire) != nullptr;
 }
 
-void Core::register_context(const CoreConfig& core_config) {
+void Core::register_context(const anira_context_config& context_config) {
     State& state = get_state();
-    const CoreConfig config = sanitize_config(core_config);
+    const anira_context_config config = sanitize_config(context_config);
     const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
     // Apply the log level before anything (including this function) logs.
     apply_log_level_locked(state, config);
@@ -199,12 +228,48 @@ void Core::unregister_context() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return; }
     State& state = *static_cast<State*>(existing);
+    unregister_user(state, state.m_num_contexts);
+}
+
+unsigned int Core::get_num_contexts() {
+    void* existing = s_state.load(std::memory_order_acquire);
+    if (existing == nullptr) { return 0; }
+    State& state = *static_cast<State*>(existing);
+    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    return state.m_num_contexts;
+}
+
+void Core::register_handler() {
+    // Nothing but the count: no pool, no drain. A context exists whenever a handler is
+    // created, so the queue and the drain already exist; the handler's session brings the
+    // configuration when it is prepared.
+    State& state = get_state();
+    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    ++state.m_num_handlers;
+}
+
+void Core::unregister_handler() {
+    void* existing = s_state.load(std::memory_order_acquire);
+    if (existing == nullptr) { return; }
+    State& state = *static_cast<State*>(existing);
+    unregister_user(state, state.m_num_handlers);
+}
+
+unsigned int Core::get_num_handlers() {
+    void* existing = s_state.load(std::memory_order_acquire);
+    if (existing == nullptr) { return 0; }
+    State& state = *static_cast<State*>(existing);
+    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    return state.m_num_handlers;
+}
+
+void Core::unregister_user(State& state, unsigned int& counter) {
     std::unique_ptr<LogDrainLoop> log_drain_to_stop;
     bool was_last_user = false;
     {
         const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
-        if (state.m_num_contexts == 0) { return; }
-        --state.m_num_contexts;
+        if (counter == 0) { return; }
+        --counter;
         was_last_user = !has_users_locked(state);
         if (was_last_user) { log_drain_to_stop = take_log_drain_locked(state); }
     }
@@ -217,12 +282,12 @@ void Core::unregister_context() {
     }
 }
 
-unsigned int Core::get_num_contexts() {
+anira_wait_strategy Core::get_wait_strategy() {
     void* existing = s_state.load(std::memory_order_acquire);
-    if (existing == nullptr) { return 0; }
+    if (existing == nullptr) { return ANIRA_WAIT_SPIN_BACKOFF; }
     State& state = *static_cast<State*>(existing);
     const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
-    return state.m_num_contexts;
+    return has_users_locked(state) ? state.m_core_config.m_wait : ANIRA_WAIT_SPIN_BACKOFF;
 }
 
 size_t Core::get_thread_pool_size() {
@@ -233,63 +298,67 @@ size_t Core::get_thread_pool_size() {
     return state.m_thread_pool.size();
 }
 
-CoreConfig Core::sanitize_config(const CoreConfig& core_config) {
+anira_context_config Core::sanitize_config(anira_context_config context_config) {
 #ifdef __EMSCRIPTEN__
     // Blocking waits are impossible on WebAssembly: inference loops are driven
     // cooperatively by JS Workers, and there is no pthreads runtime to block on.
     // Coerce before the config is stored or compared, so the strategy that takes
     // effect and the mismatch check stay meaningful.
-    CoreConfig sanitized_config = core_config;
-    if (sanitized_config.m_wait_strategy == WaitStrategy::Blocking) {
+    if (context_config.m_wait == ANIRA_WAIT_BLOCKING) {
         ANIRA_LOG_WARNING(log_group::k_core,
-                          "WaitStrategy::Blocking is not supported on WebAssembly builds. "
-                          "Using WaitStrategy::SpinBackoff.");
-        sanitized_config.m_wait_strategy = WaitStrategy::SpinBackoff;
+                          "ANIRA_WAIT_BLOCKING is not supported on WebAssembly builds. Using "
+                          "ANIRA_WAIT_SPIN_BACKOFF.");
+        context_config.m_wait = ANIRA_WAIT_SPIN_BACKOFF;
     }
     // The auto-managed thread pool cannot exist on WebAssembly either: an
     // InferenceThread owns no OS thread here, so pool entries would be inert
     // objects that never run, and the parallel-processor clamp in
     // create_session() would measure phantom capacity. Threads are always
     // supplied externally (JS Workers via AniraWeb.spinUpInferenceWorker(),
-    // backed by Core::make_inference_thread()).
-    if (sanitized_config.m_num_threads > 0) {
+    // backed by Core::make_inference_thread()). AUTO is 0 here as well
+    // (default_num_threads()), silently: it is the platform default.
+    if (context_config.m_num_threads != 0 && context_config.m_num_threads != ANIRA_THREADS_AUTO) {
         ANIRA_LOG_WARNING(log_group::k_core,
-                          "CoreConfig::m_num_threads = %u is not supported on WebAssembly "
-                          "builds: the core cannot run inference threads; they must be "
-                          "supplied externally (e.g. AniraWeb.spinUpInferenceWorker()). Using "
-                          "num_threads = 0.",
-                          sanitized_config.m_num_threads);
-        sanitized_config.m_num_threads = 0;
+                          "num_threads = %u is not supported on WebAssembly builds: the core "
+                          "cannot run inference threads; they must be supplied externally "
+                          "(e.g. AniraWeb.spinUpInferenceWorker()). Using num_threads = 0.",
+                          context_config.m_num_threads);
     }
-    if (sanitized_config.m_log.m_drain != LogDrain::Manual) {
+    context_config.m_num_threads = 0;
+    if (context_config.m_log_drain != ANIRA_LOG_DRAIN_MANUAL) {
         ANIRA_LOG_WARNING(log_group::k_core,
-                          "LogDrain::Thread is not supported on WebAssembly builds: no thread "
-                          "can drain the log queue there. Using LogDrain::Manual — pump "
-                          "drain_log() from the host.");
-        sanitized_config.m_log.m_drain = LogDrain::Manual;
+                          "ANIRA_LOG_DRAIN_THREAD is not supported on WebAssembly builds: no "
+                          "thread can drain the log queue there. Using ANIRA_LOG_DRAIN_MANUAL - "
+                          "pump anira_drain_log() from the host.");
+        context_config.m_log_drain = ANIRA_LOG_DRAIN_MANUAL;
     }
-    return sanitized_config;
-#else
-    return core_config;
 #endif
+    // ANIRA_THREADS_AUTO is the library default: half the cores, at least one (0 on
+    // WebAssembly, resolved above). Resolved here, once, so that the stored config and
+    // every comparison against it hold a real count.
+    if (context_config.m_num_threads == ANIRA_THREADS_AUTO) {
+        context_config.m_num_threads = default_num_threads();
+    }
+    return context_config;
 }
 
-void Core::apply_log_level_locked(State& state, const CoreConfig& core_config) {
-    // The level is process-global, like the thread pool; while sessions exist, the
+void Core::apply_log_level_locked(State& state, const anira_context_config& context_config) {
+    // The level is process-global, like the thread pool; while users exist, the
     // lowest (most verbose) of the level in effect and the requested one wins, so no
-    // session can silence the diagnostics another session asked for. Backend
+    // user can silence the diagnostics another one asked for. Backend
     // processors pick the level up when their instances are created.
-    const LogLevel log_level = has_users_locked(state) ? std::min(state.m_core_config.m_log.m_level,
-                                                                  core_config.m_log.m_level)
-                                                       : core_config.m_log.m_level;
-    set_log_level(log_level);
+    const anira_log_level level =
+        has_users_locked(state)
+            ? std::min<anira_log_level>(state.m_core_config.m_log_level, context_config.m_log_level)
+            : context_config.m_log_level;
+    set_log_level(to_log_level(level));
 }
 
 bool Core::has_users_locked(const State& state) {
-    return !state.m_sessions.empty() || state.m_num_contexts > 0;
+    return !state.m_sessions.empty() || state.m_num_contexts > 0 || state.m_num_handlers > 0;
 }
 
-void Core::ensure_log_queue_locked(State& state, const LogConfig& log_config) {
+void Core::ensure_log_queue_locked(State& state, uint32_t queue_capacity) {
     if (!state.m_log_queue) {
         // Once per core, before its first record: anira's private logger files records
         // under anira's own name, so a device filter finds them (adb logcat -s anira,
@@ -303,7 +372,8 @@ void Core::ensure_log_queue_locked(State& state, const LogConfig& log_config) {
             // set_config() also starts tanh-lib's own drain thread over its default
             // real-time queue when m_rt_enabled is set, and the default config has it
             // set. anira never uses that queue: the core owns its records (state.m_log_queue)
-            // and drains them itself (state.m_log_drain, or the host under LogDrain::Manual).
+            // and drains them itself (state.m_log_drain, or the host under
+            // ANIRA_LOG_DRAIN_MANUAL).
             // A thread the core does not own would outlive every session, and inside a
             // plugin it would still be alive when the host unloads the module (the
             // LibraryUnload tests on the Windows static legs: the module stays mapped).
@@ -313,37 +383,35 @@ void Core::ensure_log_queue_locked(State& state, const LogConfig& log_config) {
         // Once per core: the queue is what the real-time sites hold a pointer to, so it
         // is never replaced while the core lives (a later user that asks for another
         // capacity is told below).
-        constexpr size_t k_min_capacity = 64;
-        constexpr size_t k_max_capacity = 65536;
-        const size_t capacity =
-            std::clamp(log_config.m_queue_capacity, k_min_capacity, k_max_capacity);
-        if (capacity != log_config.m_queue_capacity) {
+        constexpr uint32_t k_min_capacity = 64;
+        constexpr uint32_t k_max_capacity = 65536;
+        const uint32_t capacity = std::clamp(queue_capacity, k_min_capacity, k_max_capacity);
+        if (capacity != queue_capacity) {
             ANIRA_LOG_WARNING(log_group::k_core,
-                              "LogConfig::m_queue_capacity = %zu is outside [%zu, %zu]; using %zu.",
-                              log_config.m_queue_capacity,
+                              "log queue capacity %u is outside [%u, %u]; using %u.",
+                              queue_capacity,
                               k_min_capacity,
                               k_max_capacity,
                               capacity);
         }
         state.m_log_queue = std::make_unique<thl::Logger::rt::Queue>(capacity);
         detail::rt_log_queue_slot().store(state.m_log_queue.get(), std::memory_order_release);
-    } else if (state.m_log_queue->capacity() < log_config.m_queue_capacity) {
+    } else if (state.m_log_queue->capacity() < queue_capacity) {
         ANIRA_LOG_WARNING(log_group::k_core,
-                          "LogConfig::m_queue_capacity = %zu requested, but the core's log "
-                          "queue was created with %zu records by an earlier session and keeps "
+                          "log queue capacity %u requested, but the core's log queue was "
+                          "created with %u records by an earlier context or session and keeps "
                           "that size for the lifetime of the process.",
-                          log_config.m_queue_capacity,
-                          state.m_log_queue->capacity());
+                          queue_capacity,
+                          static_cast<unsigned int>(state.m_log_queue->capacity()));
     }
 }
 
 void Core::start_log_drain_locked(State& state) {
 #ifndef __EMSCRIPTEN__
-    if (state.m_core_config.m_log.m_drain == LogDrain::Thread && !state.m_log_drain) {
+    if (state.m_core_config.m_log_drain == ANIRA_LOG_DRAIN_THREAD && !state.m_log_drain) {
         assert(state.m_log_queue && "drain thread before the queue");
-        state.m_log_drain =
-            std::make_unique<LogDrainLoop>(*state.m_log_queue,
-                                           state.m_core_config.m_log.m_drain_interval_ms);
+        state.m_log_drain = std::make_unique<LogDrainLoop>(*state.m_log_queue,
+                                                           state.m_core_config.m_drain_interval_ms);
     }
 #else
     static_cast<void>(state);
@@ -355,7 +423,7 @@ std::unique_ptr<LogDrainLoop> Core::take_log_drain_locked(State& state) {
 }
 
 void Core::apply_or_compare_config_locked(State& state,
-                                          const CoreConfig& core_config,
+                                          const anira_context_config& context_config,
                                           bool builds_pool) {
     if (!has_users_locked(state)) {
         // First user of a generation (a session or a context): its configuration is the
@@ -363,70 +431,70 @@ void Core::apply_or_compare_config_locked(State& state,
         // the same critical section that empties the registry, and shutdown() clears it
         // outright).
         assert(state.m_thread_pool.empty() && "pool alive without registered sessions");
-        state.m_core_config = core_config;
+        state.m_core_config = context_config;
     } else {
-        const LogLevel log_level =
-            std::min(state.m_core_config.m_log.m_level, core_config.m_log.m_level);
-        if (state.m_core_config.m_log.m_level != core_config.m_log.m_level) {
+        const anira_log_level log_level =
+            std::min<anira_log_level>(state.m_core_config.m_log_level, context_config.m_log_level);
+        if (state.m_core_config.m_log_level != context_config.m_log_level) {
             ANIRA_LOG_WARNING(log_group::k_core,
-                              "CoreConfig log level mismatch: the core is at log level "
-                              "'%s' but a new session requested '%s'. The log level is "
+                              "log level mismatch: the core is at log level '%s' but a new "
+                              "context or session requested '%s'. The log level is "
                               "process-global and the lowest (most verbose) requested level "
                               "wins, so '%s' is now in effect. Note that the inference backends "
-                              "were already initialized with the first core's log level and "
-                              "keep it. Align the CoreConfig of all sessions to silence this "
-                              "warning.",
-                              to_string(state.m_core_config.m_log.m_level),
-                              to_string(core_config.m_log.m_level),
-                              to_string(log_level));
+                              "were already initialized with the first user's log level and "
+                              "keep it. Align the log level of every context and session to "
+                              "silence this warning.",
+                              level_word(state.m_core_config.m_log_level),
+                              level_word(context_config.m_log_level),
+                              level_word(log_level));
         }
         // Keep the stored config in sync with the level actually in effect (the
         // lowest requested one, applied by apply_log_level_locked).
-        state.m_core_config.m_log.m_level = log_level;
-        if (state.m_core_config.m_log.m_drain != core_config.m_log.m_drain ||
-            state.m_core_config.m_log.m_queue_capacity != core_config.m_log.m_queue_capacity ||
-            state.m_core_config.m_log.m_drain_interval_ms !=
-                core_config.m_log.m_drain_interval_ms) {
+        state.m_core_config.m_log_level = log_level;
+        if (state.m_core_config.m_log_drain != context_config.m_log_drain ||
+            state.m_core_config.m_queue_capacity != context_config.m_queue_capacity ||
+            state.m_core_config.m_drain_interval_ms != context_config.m_drain_interval_ms) {
             ANIRA_LOG_WARNING(log_group::k_core,
-                              "CoreConfig log drain mismatch: the core runs drain '%s' "
-                              "with a %zu-record queue and a %u ms interval, but a new session "
-                              "requested '%s', %zu records, %u ms. The log queue and its drain "
-                              "are process-global and keep the first session's settings; align "
-                              "the CoreConfig of all sessions to silence this warning.",
-                              to_string(state.m_core_config.m_log.m_drain),
-                              state.m_core_config.m_log.m_queue_capacity,
-                              state.m_core_config.m_log.m_drain_interval_ms,
-                              to_string(core_config.m_log.m_drain),
-                              core_config.m_log.m_queue_capacity,
-                              core_config.m_log.m_drain_interval_ms);
+                              "log drain mismatch: the core runs drain '%s' with a %u-record "
+                              "queue and a %u ms interval, but a new context or session "
+                              "requested '%s', %u records, %u ms. The log queue and its drain "
+                              "are process-global and keep the first user's settings; align the "
+                              "log configuration of every context and session to silence this "
+                              "warning.",
+                              drain_word(state.m_core_config.m_log_drain),
+                              state.m_core_config.m_queue_capacity,
+                              state.m_core_config.m_drain_interval_ms,
+                              drain_word(context_config.m_log_drain),
+                              context_config.m_queue_capacity,
+                              context_config.m_drain_interval_ms);
         }
-        if (state.m_core_config.m_wait_strategy != core_config.m_wait_strategy) {
+        if (state.m_core_config.m_wait != context_config.m_wait) {
             ANIRA_LOG_WARNING(log_group::k_core,
-                              "CoreConfig wait strategy mismatch: the core was created "
-                              "with wait_strategy '%s' but a new session requested '%s'. All "
-                              "sessions in this process share one inference thread pool, so "
-                              "only one strategy can be in effect and the originally configured "
-                              "one stays active. Align the CoreConfig of all sessions to "
-                              "silence this warning.",
-                              to_string(state.m_core_config.m_wait_strategy),
-                              to_string(core_config.m_wait_strategy));
+                              "wait strategy mismatch: the core was created with wait strategy "
+                              "'%s' but a new context or session requested '%s'. All sessions "
+                              "in this process share one inference thread pool, so only one "
+                              "strategy can be in effect and the originally configured one "
+                              "stays active. Align the wait strategy of every context and "
+                              "session to silence this warning.",
+                              wait_word(state.m_core_config.m_wait),
+                              wait_word(context_config.m_wait));
         }
         // num_threads == 0 means "I'm opting out of the auto-pool and bringing my own
         // threads via Core::make_inference_thread()" — not "shrink any existing pool to
         // zero." Skip the resize so a manual-threading caller doesn't tear down threads
         // another caller is relying on. A smaller nonzero request shrinks the pool (or,
         // before the first session built it, the size it will be built with).
-        if (core_config.m_num_threads > 0 &&
-            core_config.m_num_threads < state.m_core_config.m_num_threads) {
+        if (context_config.m_num_threads > 0 &&
+            context_config.m_num_threads < state.m_core_config.m_num_threads) {
             if (!state.m_thread_pool.empty()) {
-                resize_pool_locked(state, core_config.m_num_threads);
+                resize_pool_locked(state, context_config.m_num_threads);
             }
-            state.m_core_config.m_num_threads = core_config.m_num_threads;
+            state.m_core_config.m_num_threads = context_config.m_num_threads;
         }
     }
     // The queue and the drain thread exist while any user does; the pool while sessions
     // do, built from the configuration in effect by the first session of a generation.
-    ensure_log_queue_locked(state, core_config.m_log);
+    ensure_log_queue_locked(state, context_config.m_queue_capacity);
     try {
         start_log_drain_locked(state);
         if (builds_pool && state.m_sessions.empty()) {
@@ -439,12 +507,13 @@ void Core::apply_or_compare_config_locked(State& state,
     }
 }
 
-size_t Core::prospective_pool_size_locked(const State& state, const CoreConfig& core_config) {
-    if (!has_users_locked(state)) { return core_config.m_num_threads; }
+size_t Core::prospective_pool_size_locked(const State& state,
+                                          const anira_context_config& context_config) {
+    if (!has_users_locked(state)) { return context_config.m_num_threads; }
     size_t size =
         state.m_sessions.empty() ? state.m_core_config.m_num_threads : state.m_thread_pool.size();
-    if (core_config.m_num_threads > 0 && core_config.m_num_threads < size) {
-        size = core_config.m_num_threads;
+    if (context_config.m_num_threads > 0 && context_config.m_num_threads < size) {
+        size = context_config.m_num_threads;
     }
     return size;
 }
@@ -456,7 +525,7 @@ void Core::resize_pool_locked(State& state, unsigned int new_num_threads) {
         for (unsigned int i = current_num_threads; i < new_num_threads; ++i) {
             state.m_thread_pool.emplace_back(
                 std::make_unique<InferenceThread>(state.m_next_inference,
-                                                  state.m_core_config.m_wait_strategy));
+                                                  state.m_core_config.m_wait));
         }
     } else if (new_num_threads < current_num_threads) {
         for (unsigned int i = current_num_threads - 1; i >= new_num_threads; --i) {
@@ -525,13 +594,14 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
 std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_processor,
                                                      InferenceConfig& inference_config,
                                                      BackendBase* custom_processor,
-                                                     const CoreConfig& core_config) {
+                                                     const anira_context_config& context_config,
+                                                     RtLatch* rt_latch) {
     State& state = get_state();
     // Whole function locked: applies or reconciles the configuration, hands out shared
     // backend processors from the pools, builds the thread pool for a first session and
     // registers the session — one decision, one critical section.
     const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
-    const CoreConfig config = sanitize_config(core_config);
+    const anira_context_config config = sanitize_config(context_config);
     // Apply the log level before anything (including this function) logs.
     apply_log_level_locked(state, config);
 
@@ -551,12 +621,14 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
 
     // Each session owns one explicit producer token for the global inference
     // queue (created here, off the audio thread; destroyed with the session,
-    // which recycles the underlying producer slot).
+    // which recycles the underlying producer slot). The latch pointer is set here,
+    // before register_session_locked() publishes the session under this lock.
     std::shared_ptr<SessionElement> const session =
         std::make_shared<SessionElement>(session_id,
                                          pp_processor,
                                          inference_config,
-                                         moodycamel::ProducerToken(state.m_next_inference));
+                                         moodycamel::ProducerToken(state.m_next_inference),
+                                         rt_latch);
 
     // Everything that can fail — a backend that cannot load its model, a custom
     // processor's prepare(), the pool build — happens before the session is registered.
@@ -761,10 +833,10 @@ bool Core::release_core_if_idle() {
     std::unique_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex, std::try_to_lock);
     if (!lifecycle_lock.owns_lock()) { return false; }
     // User-managed threads (make_inference_thread) reference the queue inside the core; a
-    // registered context is a user; on WebAssembly a Worker may still be inside its loop
-    // after the main instance stopped it.
-    if (!state.m_sessions.empty() || state.m_num_contexts > 0 || !state.m_thread_pool.empty() ||
-        InferenceThread::get_num_active_threads() > 0 ||
+    // registered context or handler is a user; on WebAssembly a Worker may still be inside
+    // its loop after the main instance stopped it.
+    if (!state.m_sessions.empty() || state.m_num_contexts > 0 || state.m_num_handlers > 0 ||
+        !state.m_thread_pool.empty() || InferenceThread::get_num_active_threads() > 0 ||
         InferenceThread::get_num_loop_active() > 0) {
         return false;
     }
@@ -1276,12 +1348,12 @@ InferenceQueue& Core::get_static_inference_queue() {
 
 std::unique_ptr<InferenceThread> Core::make_inference_thread() {
     State& state = get_state();
-    WaitStrategy wait_strategy = WaitStrategy::SpinBackoff;
+    anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF;
     {
         const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
-        wait_strategy = state.m_core_config.m_wait_strategy;
+        wait = state.m_core_config.m_wait;
     }
-    return std::make_unique<InferenceThread>(state.m_next_inference, wait_strategy);
+    return std::make_unique<InferenceThread>(state.m_next_inference, wait);
 }
 
 unsigned int Core::get_num_inference_threads() {

@@ -1,6 +1,7 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/status.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
@@ -16,16 +17,34 @@
 #include <utility>
 #include <vector>
 
+#include "../capi/translate.h"
+
 namespace anira {
 
 InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
                                    InferenceConfig& inference_config,
                                    BackendBase* custom_processor,
                                    const CoreConfig& core_config)
+    // The temporary context config lives through the delegated constructor; the core
+    // keeps its own sanitized copy.
+    : InferenceManager(pp_processor,
+                       inference_config,
+                       custom_processor,
+                       anira::capi::make_context_config(core_config),
+                       nullptr) {}
+
+InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
+                                   InferenceConfig& inference_config,
+                                   BackendBase* custom_processor,
+                                   const anira_context_config& context_config,
+                                   anira::RtLatch* rt_latch)
     : m_inference_config(inference_config)
     , m_pp_processor(pp_processor)
-    , m_session(
-          Core::create_session(pp_processor, inference_config, custom_processor, core_config)) {}
+    , m_session(Core::create_session(pp_processor,
+                                     inference_config,
+                                     custom_processor,
+                                     context_config,
+                                     rt_latch)) {}
 
 InferenceManager::~InferenceManager() {
     Core::release_session(m_session);

@@ -655,9 +655,13 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
             model.m_max_instances};
 }
 
-anira::CoreConfig make_core_config(const anira_context_config& config) {
+void check_context_extensions(const anira_context_config& config) {
     const anira_model_config no_model;
     check_extensions(no_model, &config, nullptr, nullptr, 0);
+}
+
+anira::CoreConfig make_core_config(const anira_context_config& config) {
+    check_context_extensions(config);
     const unsigned int threads = config.m_num_threads == ANIRA_THREADS_AUTO
                                      ? anira::default_num_threads()
                                      : config.m_num_threads;
@@ -670,6 +674,34 @@ anira::CoreConfig make_core_config(const anira_context_config& config) {
     core.m_log.m_drain_interval_ms = config.m_drain_interval_ms;
     core.m_log.m_queue_capacity = config.m_queue_capacity;
     return core;
+}
+
+anira_context_config make_context_config(const anira::CoreConfig& core_config) {
+    anira_context_config config;
+    // 0 stays "bring your own threads"; a CoreConfig never says AUTO (its default is
+    // default_num_threads(), resolved at construction).
+    config.m_num_threads = static_cast<uint32_t>(core_config.m_num_threads);
+    config.m_wait = core_config.m_wait_strategy == anira::WaitStrategy::Blocking
+                        ? ANIRA_WAIT_BLOCKING
+                        : ANIRA_WAIT_SPIN_BACKOFF;
+    // Explicit, not a cast: the two enums agree numerically today, the switch survives a
+    // reorder.
+    switch (core_config.m_log.m_level) {
+        case anira::LogLevel::Debug: config.m_log_level = ANIRA_LOG_DEBUG; break;
+        case anira::LogLevel::Info: config.m_log_level = ANIRA_LOG_INFO; break;
+        case anira::LogLevel::Warning: config.m_log_level = ANIRA_LOG_WARNING; break;
+        case anira::LogLevel::Error: config.m_log_level = ANIRA_LOG_ERROR; break;
+    }
+    config.m_log_drain = core_config.m_log.m_drain == anira::LogDrain::Manual
+                             ? ANIRA_LOG_DRAIN_MANUAL
+                             : ANIRA_LOG_DRAIN_THREAD;
+    config.m_drain_interval_ms = core_config.m_log.m_drain_interval_ms;
+    // Core::ensure_log_queue_locked clamps to [64, 65536] and warns, as today.
+    config.m_queue_capacity =
+        static_cast<uint32_t>(std::min<size_t>(core_config.m_log.m_queue_capacity, UINT32_MAX));
+    // m_log_flags 0, m_sink nullptr, m_sink_user_data nullptr, no device block, m_ext
+    // empty, m_upgraded false: the struct's defaults.
+    return config;
 }
 
 anira::HostConfig make_host_config(const anira_contract& contract,
