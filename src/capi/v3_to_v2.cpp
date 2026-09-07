@@ -3,6 +3,7 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/compat/v3_to_v2.h>
@@ -35,7 +36,22 @@ anira_status to_inference_config(const anira_model_config* model,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "candidates is NULL with num_candidates %u",
                        static_cast<unsigned>(num_candidates));
-    out = anira::capi::make_inference_config(*model, *contract, candidates, num_candidates);
+    // The bridge keeps its engine list: every engine maps to the default provider (a
+    // custom engine, ANIRA_ENGINE_NONE, keeps the custom rows as before); NULL stays NULL.
+    std::vector<anira_backend_id> ids;
+    if (candidates != nullptr) {
+        ids.reserve(num_candidates);
+        for (uint32_t i = 0; i < num_candidates; ++i) {
+            ids.push_back(anira_backend_id{.struct_size = sizeof(anira_backend_id),
+                                           .engine = static_cast<uint32_t>(candidates[i]),
+                                           .provider = ANIRA_PROVIDER_DEFAULT,
+                                           .engine_id = nullptr});
+        }
+    }
+    out = anira::capi::make_inference_config(*model,
+                                             *contract,
+                                             candidates != nullptr ? ids.data() : nullptr,
+                                             num_candidates);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 

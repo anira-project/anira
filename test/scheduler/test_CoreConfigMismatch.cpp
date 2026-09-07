@@ -129,7 +129,7 @@ TEST_F(CoreConfigMismatchTest, TheMostVerboseLogLevelWins) {
     const CoreConfig quieter(1, WaitStrategy::Blocking, LogLevel::Error);
     const Instance later(quieter);
 
-    expect_diagnostic(collector, "CoreConfig log level mismatch", thl::Logger::LogLevel::Warning);
+    expect_diagnostic(collector, "log level mismatch", thl::Logger::LogLevel::Warning);
     // Debug was requested first and is the lower level, so it stays in effect —
     // the quieter second session does not raise the floor.
     expect_diagnostic(collector, "is now in effect", thl::Logger::LogLevel::Warning);
@@ -146,7 +146,7 @@ TEST_F(CoreConfigMismatchTest, MismatchedLogDrainIsReported) {
     second.m_log.m_drain_interval_ms = 250;
     const Instance later(second);
 
-    expect_diagnostic(collector, "CoreConfig log drain mismatch", thl::Logger::LogLevel::Warning);
+    expect_diagnostic(collector, "log drain mismatch", thl::Logger::LogLevel::Warning);
 }
 
 // One thread pool per process means one wait strategy; the first one stays.
@@ -157,7 +157,5 @@ TEST_F(CoreConfigMismatchTest, MismatchedWaitStrategyIsReported) {
     const CoreConfig second(1, WaitStrategy::SpinBackoff, LogLevel::Debug);
     const Instance later(second);
 
-    expect_diagnostic(collector,
-                      "CoreConfig wait strategy mismatch",
-                      thl::Logger::LogLevel::Warning);
+    expect_diagnostic(collector, "wait strategy mismatch", thl::Logger::LogLevel::Warning);
 }

@@ -746,7 +746,7 @@ TEST(AbiTranslate, RowRules) {
     const ContractHandle contract(explicit_hard());
     const ModelConfig custom_only = minimal();
     outcome = bridge(custom_only, contract, &only_onnx);
-    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "none of the 1 model entries names a candidate engine");
 }
 
@@ -821,11 +821,16 @@ TEST(AbiTranslate, ContractRules) {
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "contract: UNTIL_STABLE warmup");
 
+    // Every miss policy passes the bridge: the policy is the scheduler's, not a 2.x limit.
     Hard zeros = explicit_hard();
     zeros.on_miss = ANIRA_MISS_ZEROS;
     outcome = bridge(model, zeros);
-    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(outcome.m_message, "contract: on_miss");
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+
+    Hard hold_last = explicit_hard();
+    hold_last.on_miss = ANIRA_MISS_HOLD_LAST;
+    outcome = bridge(model, hold_last);
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
 
     const ContractHandle async_contract{anira::Async{}};
     outcome = bridge(model, async_contract);
@@ -835,8 +840,9 @@ TEST(AbiTranslate, ContractRules) {
     ContractHandle dtype(explicit_hard());
     dtype.hard_ring_dtype("in", ANIRA_DTYPE_I16);
     outcome = bridge(model, dtype);
-    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "contract: the ring dtype of 'in'");
+    expect_contains(outcome.m_message, "nothing converts");
 
     ContractHandle ghost(explicit_hard());
     ghost.hard_ring_dtype("ghost", ANIRA_DTYPE_F32);

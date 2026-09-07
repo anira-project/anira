@@ -110,7 +110,7 @@ typedef enum anira_status {
 
 /**
  * @brief The opaque handle types. Config handles are value-like (copied at the create that
- * takes them, anira_context_create today and anira_handler_create with the 3.x handler,
+ * takes them, anira_context_create, anira_handler_create and anira_handler_prepare,
  * destroyable right after); the runtime handles are refcounted internally. Every
  * anira_<x>_destroy is NULL-safe.
  */

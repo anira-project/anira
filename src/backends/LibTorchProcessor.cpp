@@ -17,6 +17,7 @@
 
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
+#include "ProcessingGuard.h"
 
 // Avoid min/max macro conflicts on Windows for LibTorch compatibility
 #ifdef _WIN32
@@ -53,22 +54,6 @@
 #endif
 
 namespace anira {
-
-namespace {
-
-/// Clears an instance's busy flag on every exit path of process().
-class ProcessingGuard {
-public:
-    explicit ProcessingGuard(std::atomic<bool>& flag) noexcept : m_flag(flag) {}
-    ~ProcessingGuard() { m_flag.store(false); }
-    ProcessingGuard(const ProcessingGuard&) = delete;
-    ProcessingGuard& operator=(const ProcessingGuard&) = delete;
-
-private:
-    std::atomic<bool>& m_flag;
-};
-
-}  // namespace
 
 // Defined here, not in the header: it owns LibTorch objects, and the engine headers
 // stay out of anira's public headers (see the note on BackendBase).
@@ -122,7 +107,7 @@ void LibtorchProcessor::process(std::vector<BufferF>& input,
             if (!(instance->m_processing.exchange(true))) {
                 // The flag is released on every path, including a throw from the engine,
                 // so a failing inference can never leave the instance busy forever.
-                const ProcessingGuard guard(instance->m_processing);
+                const detail::ProcessingGuard guard(instance->m_processing);
                 instance->process(input, output, session);
                 return;
             }
@@ -203,7 +188,7 @@ void LibtorchProcessor::Instance::prepare() {
 
 void LibtorchProcessor::Instance::process(std::vector<BufferF>& input,
                                           std::vector<BufferF>& output,
-                                          const std::shared_ptr<SessionElement>&) {
+                                          const std::shared_ptr<SessionElement>& session) {
     // No gradient calculation for inference
     torch::NoGradGuard const no_grad;
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
@@ -217,8 +202,10 @@ void LibtorchProcessor::Instance::process(std::vector<BufferF>& input,
             m_tensor_options);
     }
 
-    // Run inference. No caller waits for this task: a failing engine is logged once and
-    // delivers zeros, never the previous job's output.
+    // Run inference. No caller waits for this task: a failing engine delivers zeros, never
+    // the previous job's output, and is ENGINE on the session's latch (a 3.x handler's
+    // word), logged on the first failure since the latch's re-arm and counted afterwards.
+    // The direct processor tests pass no session and get every record.
     try {
         if (!m_inference_config.get_model_function(InferenceBackend::LIBTORCH).empty()) {
             auto method = m_module.get_method(
@@ -228,7 +215,9 @@ void LibtorchProcessor::Instance::process(std::vector<BufferF>& input,
             m_outputs = m_module.forward(m_inputs);
         }
     } catch (const c10::Error& e) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what_without_backtrace());
+        if (session == nullptr || session->m_rt->record(ANIRA_ERROR_ENGINE)) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what_without_backtrace());
+        }
         for (auto& buffer : output) { buffer.clear(); }
         return;
     }

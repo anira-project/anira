@@ -17,6 +17,7 @@
 #include "../utils/InferenceBackend.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "../utils/RingBuffer.h"
+#include "../utils/RtLatch.h"
 #include "../utils/Semaphore.h"
 
 namespace anira {
@@ -110,11 +111,15 @@ public:
      * @param inference_config Reference to the inference configuration containing model settings
      * @param producer_token Producer token bound to the global inference queue, moved into the
      * session (see m_producer_token)
+     * @param rt_latch The real-time latch this session records its failures into (see m_rt):
+     * a 3.x handler's own, so anira_handler_rt_error reads one word; nullptr (a 2.x session)
+     * gives the session its own latch (m_rt_own)
      */
     SessionElement(int new_session_id,
                    PrePostProcessor& pp_processor,
                    InferenceConfig& inference_config,
-                   moodycamel::ProducerToken&& producer_token);
+                   moodycamel::ProducerToken&& producer_token,
+                   anira::RtLatch* rt_latch = nullptr);
 
     /**
      * @brief Wait-free clear of the session's audio-thread-owned state.
@@ -373,6 +378,14 @@ public:
 
     BackendBase m_default_processor;  ///< Default backend processor instance
     BackendBase* m_custom_processor;  ///< Pointer to custom backend processor (if provided)
+    RtLatch m_rt_own;  ///< The session's own real-time latch: what m_rt points at when the
+                       ///< constructor received no latch (a 2.x session); nothing reads its
+                       ///< word, but a failed inference records ENGINE into it all the same
+    RtLatch* m_rt;     ///< The real-time latch the session's failures are recorded into (a
+                       ///< failed inference records ANIRA_ERROR_ENGINE on the inference
+                       ///< thread): the 3.x handler's own (anira_handler_rt_error reads it),
+                       ///< else &m_rt_own. Set by the constructor and published by the
+                       ///< lifecycle lock that registers the session; never null
 
     // Written by InferenceManager::set_non_realtime() -- typically from a control/UI
     // thread, e.g. a host toggling offline bounce/render mode -- and read on the

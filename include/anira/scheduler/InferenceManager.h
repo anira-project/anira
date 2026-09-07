@@ -1,6 +1,8 @@
 #ifndef ANIRA_INFERENCEMANAGER_H
 #define ANIRA_INFERENCEMANAGER_H
 
+#include <anira/abi/enums.h>
+
 #include "../CoreConfig.h"
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
@@ -9,7 +11,13 @@
 #include "Core.h"
 #include "InferenceThread.h"
 
+/// The context config the 3.x constructor takes (its body is src/capi/handles.h).
+struct anira_context_config;
+
 namespace anira {
+
+/// The real-time latch the 3.x constructor hands the session (include/anira/utils/RtLatch.h).
+struct RtLatch;
 
 /**
  * @brief Central manager class for coordinating neural network inference operations
@@ -47,11 +55,13 @@ public:
     InferenceManager() = delete;
 
     /**
-     * @brief Constructor that initializes the inference manager with all required components
+     * @brief The 2.x constructor: initializes the inference manager with all required
+     * components
      *
      * Creates an inference manager with the specified preprocessing/postprocessing pipeline,
-     * inference configuration, and optional custom backend. Initializes the core and
-     * prepares for session management.
+     * inference configuration, and optional custom backend. Maps the CoreConfig onto a
+     * context config (anira::capi::make_context_config) and delegates to the 3.x
+     * constructor, so the core reads one configuration type. Leaves with the 2.x classes.
      *
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration containing model settings
@@ -63,6 +73,27 @@ public:
                      InferenceConfig& inference_config,
                      BackendBase* custom_processor,
                      const CoreConfig& core_config);
+
+    /**
+     * @brief The 3.x constructor: the context's config passed through unchanged
+     *
+     * Creates the session through Core::create_session() with the context config as the
+     * handler's context holds it (the core reads its six scalars and reconciles them
+     * against the configuration in effect) and the handler's real-time latch.
+     *
+     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
+     * @param inference_config Reference to the inference configuration containing model settings
+     * @param custom_processor Pointer to a custom backend processor (can be nullptr for default
+     * backends)
+     * @param context_config The context's configuration (anira_context_config_*)
+     * @param rt_latch The handler's latch the session records its failures into; nullptr
+     * gives the session its own
+     */
+    InferenceManager(PrePostProcessor& pp_processor,
+                     InferenceConfig& inference_config,
+                     BackendBase* custom_processor,
+                     const anira_context_config& context_config,
+                     anira::RtLatch* rt_latch = nullptr);
 
     /**
      * @brief Destructor that properly cleans up inference resources
@@ -178,6 +209,92 @@ public:
                      std::chrono::steady_clock::time_point wait_until);
 
     /**
+     * @brief The wait-free body of process(): push, submit, collect what completed, pop
+     *
+     * Pushes the input, registers the output demand, submits the block and collects the
+     * results that have completed (Core::new_data_request() without a deadline) before
+     * popping; a block that has not completed is delivered through the miss policy
+     * (set_miss_policy()) and counted as missing. The 3.x path's process form; the 2.x
+     * process() is this when InferenceConfig::m_blocking_ratio is 0.
+     *
+     * @param input_data Input data organized as data[tensor_index][channel][sample]
+     * @param num_input_samples Array of input sample counts for each tensor
+     * @param output_data Output data buffers organized as data[tensor_index][channel][sample]
+     * @param num_output_samples Array of maximum output sample counts for each tensor
+     * @return Array of actual output sample counts for each tensor (0 on a miss)
+     *
+     * @note Real-time safe: allocates nothing, never waits.
+     */
+    size_t* process_nowait(const float* const* const* input_data,
+                           size_t* num_input_samples,
+                           float* const* const* output_data,
+                           size_t* num_output_samples);
+
+    /**
+     * @brief process() that waits up to a budget for the block's result
+     *
+     * Like process_nowait(), but waits for the submitted block's result on the session's
+     * completion primitive (Core::new_data_request() with a deadline): the semaphore when
+     * InferenceConfig::m_blocking_ratio > 0, else the atomic flag polled every
+     * millisecond. The deadline is read from the clock after the submit, exactly where the
+     * 2.x process() read it. A budget of std::chrono::steady_clock::duration::max() waits
+     * without limit, re-checking that an inference thread runs (Core::WaitOutcome::NoThread
+     * otherwise).
+     *
+     * @param input_data Input data organized as data[tensor_index][channel][sample]
+     * @param num_input_samples Array of input sample counts for each tensor
+     * @param output_data Output data buffers organized as data[tensor_index][channel][sample]
+     * @param num_output_samples Array of maximum output sample counts for each tensor
+     * @param budget How long to wait at most (duration::max() = without limit)
+     * @param outcome How the wait ended
+     * @return Array of actual output sample counts for each tensor (0 on a miss)
+     *
+     * @note Not real-time safe for as long as it waits.
+     */
+    size_t* process_wait(const float* const* const* input_data,
+                         size_t* num_input_samples,
+                         float* const* const* output_data,
+                         size_t* num_output_samples,
+                         std::chrono::steady_clock::duration budget,
+                         Core::WaitOutcome& outcome);
+
+    /**
+     * @brief pop_data() that waits up to a budget for the next result
+     *
+     * Registers the output demand (a generator is submitted here), then waits as
+     * process_wait() does and pops. There is no input in a pop, so a BYPASS miss delivers
+     * zeros.
+     *
+     * @param output_data Output buffers organized as data[tensor_index][channel][sample]
+     * @param num_output_samples Array of maximum output sample counts for each tensor
+     * @param budget How long to wait at most (duration::max() = without limit)
+     * @param outcome How the wait ended
+     * @return Array of actual output sample counts for each tensor (0 on a miss)
+     *
+     * @note Not real-time safe for as long as it waits.
+     */
+    size_t* pop_data_wait(float* const* const* output_data,
+                          size_t* num_output_samples,
+                          std::chrono::steady_clock::duration budget,
+                          Core::WaitOutcome& outcome);
+
+    /**
+     * @brief The 2.x blocking_ratio wait of one process() call
+     *
+     * InferenceConfig::m_blocking_ratio times the reference block's duration (the anchored
+     * tensor's sample count over the host sample rate), in the arithmetic of the 2.x
+     * process(), so the deadline the 2.x path waits for is unchanged. The process forms
+     * only: a pop has no input counts to measure the block by.
+     *
+     * @param num_input_samples Array of input sample counts for each tensor
+     * @param num_output_samples Array of requested output sample counts for each tensor
+     * @return The wait budget
+     */
+    std::chrono::steady_clock::duration contract_wait_budget(
+        const size_t* num_input_samples,
+        const size_t* num_output_samples) const noexcept;
+
+    /**
      * @brief Sets the inference backend to use for neural network processing
      *
      * Changes the active inference backend, which may trigger session reinitialization
@@ -206,6 +323,29 @@ public:
      * @return Vector containing latency values in samples for each output tensor index
      */
     std::vector<unsigned int> get_latency() const;
+
+    /**
+     * @brief The session's latency vector by reference
+     *
+     * Index-aligned with the output list, 0 for a non-streamable output; valid from
+     * prepare() on. No copy: the ANIRA_NONBLOCKING accessors read it.
+     *
+     * @return The latency in samples per output tensor index
+     */
+    const std::vector<unsigned int>& latencies() const noexcept { return m_session->m_latency; }
+
+    /**
+     * @brief What a missed block delivers (anira_miss_policy)
+     *
+     * ANIRA_MISS_ZEROS is the 2.x behaviour and the default; ANIRA_MISS_HOLD_LAST repeats
+     * the last delivered block of each output (the buffers are allocated at prepare());
+     * ANIRA_MISS_BYPASS passes the anchored input's block through to the streamed outputs
+     * of a process call, zeros elsewhere. Under every policy a missed block returns 0 and
+     * counts as missing. Set before prepare(); never on the driver thread.
+     *
+     * @param policy The miss policy
+     */
+    void set_miss_policy(anira_miss_policy policy) noexcept { m_on_miss = policy; }
 
     /**
      * @brief Gets the number of samples received for a specific tensor and channel (for unit
@@ -284,7 +424,8 @@ private:
      * @brief Processes input data through the preprocessing pipeline
      *
      * Handles the input data preprocessing for all tensors, preparing data
-     * for inference execution by the backend.
+     * for inference execution by the backend. An input whose count is 0 is not touched
+     * (the single-tensor forms leave the other slots unset).
      *
      * @param input_data Input data organized as data[tensor_index][channel][sample]
      * @param num_samples Array of input sample counts for each tensor
@@ -294,14 +435,67 @@ private:
     /**
      * @brief Processes output data through the postprocessing pipeline
      *
-     * Handles the output data postprocessing for all tensors, transforming
-     * inference results into the final output format.
+     * Pops every requested output when the whole block has completed; otherwise delivers
+     * the block through the miss policy (zeros, the held block, or the anchored input's
+     * block), counts the request as missing and returns 0 for every output. An output
+     * whose count is 0 is not touched on either path (the single-tensor forms leave the
+     * other slots unset).
      *
      * @param output_data Output data buffers organized as data[tensor_index][channel][sample]
      * @param num_samples Array of output sample counts for each tensor
+     * @param bypass_input The input of a process call (the BYPASS source), or nullptr in a pop
+     * @param bypass_num_input Its sample counts, or nullptr in a pop
      * @return Array of actual output sample counts for each tensor
      */
-    size_t* process_output(float* const* const* output_data, size_t* num_samples);
+    size_t* process_output(float* const* const* output_data,
+                           size_t* num_samples,
+                           const float* const* const* bypass_input,
+                           const size_t* bypass_num_input);
+
+    /**
+     * @brief Delivers the held block of one streamed output (ANIRA_MISS_HOLD_LAST)
+     *
+     * Copies what the last delivered block left in the hold buffer, zero-filled beyond it
+     * (nothing held since prepare() or reset(): zeros).
+     *
+     * @param output_data Output data buffers organized as data[tensor_index][channel][sample]
+     * @param num_samples Array of output sample counts for each tensor
+     * @param tensor_index The streamed output to fill
+     */
+    void hold_output(float* const* const* output_data,
+                     const size_t* num_samples,
+                     size_t tensor_index);
+
+    /**
+     * @brief Passes the anchored input's block through to one streamed output
+     * (ANIRA_MISS_BYPASS)
+     *
+     * Channel by channel up to the input's channel count, min(input, output) samples then
+     * zeros; output channels beyond the input's are zeros. An in-place call (the same
+     * buffer as input and output) leaves the samples where they are.
+     *
+     * @param output_data Output data buffers organized as data[tensor_index][channel][sample]
+     * @param num_samples Array of output sample counts for each tensor
+     * @param tensor_index The streamed output to fill
+     * @param bypass_input The input of the process call
+     * @param bypass_num_input Its sample counts
+     */
+    void bypass_output(float* const* const* output_data,
+                       const size_t* num_samples,
+                       size_t tensor_index,
+                       const float* const* const* bypass_input,
+                       const size_t* bypass_num_input);
+
+    /**
+     * @brief Zeros the requested samples of one output (the 2.x clear rule for one tensor)
+     *
+     * @param output_data Output data buffers organized as data[tensor_index][channel][sample]
+     * @param num_samples Array of output sample counts for each tensor
+     * @param tensor_index The output to clear
+     */
+    void clear_output(float* const* const* output_data,
+                      const size_t* num_samples,
+                      size_t tensor_index);
 
     /**
      * @brief Registers the host's output demand on a generator session
@@ -322,20 +516,6 @@ private:
      */
     void collect_nonblocking();
 
-    /**
-     * @brief Clears audio data buffers
-     *
-     * Efficiently zeros out audio data buffers for the specified tensors and channels.
-     * This is used for cleanup and initialization purposes.
-     *
-     * @param data Data buffers to clear organized as data[tensor_index][channel][sample]
-     * @param input_samples Array of sample counts for each tensor
-     * @param num_channels Vector containing the number of channels for each tensor
-     */
-    void clear_data(float* const* const* data,
-                    size_t* input_samples,
-                    const std::vector<size_t>& num_channels);
-
 private:
     InferenceConfig& m_inference_config;  ///< Reference to the inference configuration containing
                                           ///< model settings
@@ -345,6 +525,13 @@ private:
 
     std::vector<size_t> m_missing_samples;  ///< Track missing samples for latency compensation and
                                             ///< buffering
+
+    anira_miss_policy m_on_miss = ANIRA_MISS_ZEROS;  ///< What a missed block delivers
+    std::vector<std::vector<float>> m_hold;          ///< HOLD_LAST: per streamed output, channels x
+                                             ///< capacity, flat [channel * capacity + sample]
+    std::vector<size_t> m_hold_capacity;  ///< Per output: the largest block a call may request
+    std::vector<size_t> m_hold_len;       ///< Per output: samples held (0 = nothing delivered
+                                          ///< since prepare() or reset())
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr

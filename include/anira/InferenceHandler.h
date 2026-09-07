@@ -3,8 +3,8 @@
 
 #include "InferenceConfig.h"
 #include "PrePostProcessor.h"
+#include "anira/abi/export.h"
 #include "anira/system/Exports.h"
-#include "anira/utils/RealtimeSanitizer.h"
 #include "scheduler/InferenceManager.h"
 
 namespace anira {
@@ -174,7 +174,9 @@ public:
      * blocking operation to wait for processed data (semaphore.try_acquire_until()) in order to
      * further reduce latency.
      */
-    size_t process(float* const* data, size_t num_samples, size_t tensor_index = 0) ANIRA_REALTIME;
+    size_t process(float* const* data,
+                   size_t num_samples,
+                   size_t tensor_index = 0) ANIRA_NONBLOCKING;
 
     /**
      * @brief Processes audio data with separate input and output buffers
@@ -198,7 +200,7 @@ public:
                    size_t num_input_samples,
                    float* const* output_data,
                    size_t num_output_samples,
-                   size_t tensor_index = 0) ANIRA_REALTIME;
+                   size_t tensor_index = 0) ANIRA_NONBLOCKING;
 
     /**
      * @brief Processes multiple tensors simultaneously
@@ -232,7 +234,7 @@ public:
     size_t* process(const float* const* const* input_data,
                     size_t* num_input_samples,
                     float* const* const* output_data,
-                    size_t* num_output_samples) ANIRA_REALTIME;
+                    size_t* num_output_samples) ANIRA_NONBLOCKING;
 
     /**
      * @brief Pushes input data to the processing pipeline for a specific tensor
@@ -254,7 +256,7 @@ public:
      */
     void push_data(const float* const* input_data,
                    size_t num_input_samples,
-                   size_t tensor_index = 0) ANIRA_REALTIME;
+                   size_t tensor_index = 0) ANIRA_NONBLOCKING;
 
     /**
      * @brief Pushes input data for multiple tensors simultaneously
@@ -264,7 +266,8 @@ public:
      *
      * @note This method is real-time safe and does not allocate memory.
      */
-    void push_data(const float* const* const* input_data, size_t* num_input_samples) ANIRA_REALTIME;
+    void push_data(const float* const* const* input_data,
+                   size_t* num_input_samples) ANIRA_NONBLOCKING;
 
     /**
      * @brief Pops processed output data from the pipeline for a specific tensor (non-blocking)
@@ -285,7 +288,7 @@ public:
      */
     size_t pop_data(float* const* output_data,
                     size_t num_output_samples,
-                    size_t tensor_index = 0) ANIRA_REALTIME;
+                    size_t tensor_index = 0) ANIRA_NONBLOCKING;
 
     /**
      * @brief Pops processed output data from the pipeline for a specific tensor (blocking with
@@ -322,7 +325,8 @@ public:
      *
      * @note This method is real-time safe and does not allocate memory.
      */
-    size_t* pop_data(float* const* const* output_data, size_t* num_output_samples) ANIRA_REALTIME;
+    size_t* pop_data(float* const* const* output_data,
+                     size_t* num_output_samples) ANIRA_NONBLOCKING;
 
     /**
      * @brief Pops processed output data for multiple tensors simultaneously (blocking with timeout)
@@ -434,8 +438,8 @@ public:
      * is ready for new data immediately — intended for stream re-anchoring (e.g.
      * transport jumps or onset/transient re-sync), for stateless and stateful
      * (session-exclusive) configurations alike. Never waits, sleeps, locks,
-     * allocates, or performs any syscall, and is annotated
-     * `[[clang::nonblocking]]` under RealtimeSanitizer builds.
+     * allocates, or performs any syscall, and carries `ANIRA_NONBLOCKING`
+     * (clang's `nonblocking` attribute wherever clang has it).
      *
      * @note Call from the thread that drives process()/push_data()/pop_data()
      *       (or ensure no such call is concurrent), and never concurrently with
@@ -456,7 +460,7 @@ public:
      *       backend) is not touched — no reset variant has ever reset it; splice
      *       such state via the before_inference()/after_inference() hooks.
      */
-    void reset() ANIRA_REALTIME;
+    void reset() ANIRA_NONBLOCKING;
 
 private:
     InferenceConfig& m_inference_config;   ///< Reference to the inference configuration
