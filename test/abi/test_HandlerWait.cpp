@@ -46,7 +46,7 @@ std::vector<anira_backend_id> none_only() {
              .engine_id = nullptr}};
 }
 
-/// One pull through anira_handler_process_multi_wait: the parameter travels with the multi
+/// One pull through anira_handler_process_f32_multi_wait: the parameter travels with the multi
 /// form, the stream comes back in `out`.
 struct Pull {
     anira_status m_status = ANIRA_OK;
@@ -66,12 +66,12 @@ Pull pull(anira_handler* handler, float param, std::vector<float>& out, double t
     std::array<size_t, 1> num_out{n};
     Pull result;
     const auto start = std::chrono::steady_clock::now();
-    result.m_status = anira_handler_process_multi_wait(handler,
-                                                       in.data(),
-                                                       num_in.data(),
-                                                       outs.data(),
-                                                       num_out.data(),
-                                                       timeout_ms);
+    result.m_status = anira_handler_process_f32_multi_wait(handler,
+                                                           in.data(),
+                                                           num_in.data(),
+                                                           outs.data(),
+                                                           num_out.data(),
+                                                           timeout_ms);
     result.m_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start);
     result.m_received = num_out[0];
@@ -256,9 +256,9 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
         // then the stalled one.
         anira_handler_reset(h);
         const std::array<float*, 1> out_ch{out.data()};
-        EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch.data(), k_hop, 20.0, 0), k_hop);
+        EXPECT_EQ(anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, 20.0, 0), k_hop);
         const auto start = std::chrono::steady_clock::now();
-        EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch.data(), k_hop, 20.0, 0), 0U);
+        EXPECT_EQ(anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, 20.0, 0), 0U);
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start);
         EXPECT_GE(elapsed, std::chrono::milliseconds(20));
@@ -286,12 +286,14 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
         const DestroyFirst destroy_first(handler);
         const std::array<float*, 1> out_ch{out.data()};
         if (anira_handler_get_latency(h, 0) > 0) {
-            EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0),
-                      k_hop)
+            EXPECT_EQ(
+                anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0),
+                k_hop)
                 << "the priming block";
         }
         const auto start = std::chrono::steady_clock::now();
-        EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0), 0U);
+        EXPECT_EQ(anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0),
+                  0U);
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start);
         EXPECT_GE(elapsed, std::chrono::milliseconds(21)) << "2048 / 48000 s";
@@ -329,12 +331,14 @@ TEST_P(AbiHandlerWaitRatio, InvalidStateWithoutAnActiveThread) {
     EXPECT_EQ(second.m_status, ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(second.m_received, 0U) << "a miss: nothing runs the queued inference";
     const std::array<float*, 1> out_ch{out.data()};
-    EXPECT_EQ(anira_handler_process_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_FOREVER, 0), 0U);
-    EXPECT_EQ(anira_handler_pop_data_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0), 0U);
+    EXPECT_EQ(
+        anira_handler_process_f32_inplace_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_FOREVER, 0),
+        0U);
+    EXPECT_EQ(anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0), 0U);
     anira_drain_log();
 #ifdef ENABLE_LOGGING
     EXPECT_EQ(anira_test::count_records(collector,
-                                        "anira_handler_process_multi_wait: invalid state",
+                                        "anira_handler_process_f32_multi_wait: invalid state",
                                         "rt"),
               1U);
     EXPECT_EQ(anira_test::count_records(collector, "invalid state", "rt"), 1U)

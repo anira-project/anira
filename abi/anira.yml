@@ -324,7 +324,7 @@ headers:
         value: "((d) >> 16)"
         ts: "(d: number): number => d >>> 16"
         doc: "The lane count of a packed dtype."
-      - {kind: define, name: ANIRA_DTYPE_F32, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)", ts: "0x00012002", doc: "32-bit float, one lane: the type of every 2.x stream, the ring dtype of every tensor never set on a Hard contract and the only one the float Hard entries carry."}
+      - {kind: define, name: ANIRA_DTYPE_F32, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)", ts: "0x00012002", doc: "32-bit float, one lane: the type of every 2.x stream, the ring dtype of every tensor never set on a Hard contract and the only one the _f32 Hard entries carry."}
       - {kind: define, name: ANIRA_DTYPE_F64, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 64, 1)", ts: "0x00014002", doc: "64-bit float, one lane."}
       - {kind: define, name: ANIRA_DTYPE_F16, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 16, 1)", ts: "0x00011002", doc: "16-bit float."}
       - {kind: define, name: ANIRA_DTYPE_BF16, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_BFLOAT, 16, 1)", ts: "0x00011004", doc: "bfloat16."}
@@ -1142,7 +1142,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "The ring dtype of one tensor under a Hard contract: the element type the typed Hard entries carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in anira converts: the Hard entries copy between the host and the ring, a ring dtype that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare. Set per tensor by canonical name, so an input and an output may differ; ANIRA_DTYPE_F32 for every tensor never set, which is what the float entries are legal on. A name that matches no Streamed tensor is checked at prepare, not here."
+        doc: "The ring dtype of one tensor under a Hard contract: the element type the tensor forms of the Hard entries carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in anira converts: the Hard entries copy between the host and the ring, a ring dtype that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare. Set per tensor by canonical name, so an input and an output may differ; ANIRA_DTYPE_F32 for every tensor never set, which is what the _f32 entries are legal on. A name that matches no Streamed tensor is checked at prepare, not here."
         return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of 0."
       - kind: function
         name: anira_contract_async_set_deadline
@@ -2286,7 +2286,11 @@ headers:
       validates the configuration against it, loads the models of the surviving candidates, sizes
       the rings and builds the plan report; from then on the driver thread pumps samples through
       the Hard entries, which are ANIRA_NONBLOCKING and never wait, and a thread that may wait
-      calls their _wait twins. Real-time refusals carry no anira_error: the entry returns 0 or a
+      calls their _wait twins. The _f32 entries are the float32 face over planar channel buffers (float* const*,
+      what an audio host hands out); anira_handler_process_f32 takes separate input and output
+      buffers, _inplace is the 2.x shape over one buffer set, _multi covers every tensor at
+      once. The bare names anira_handler_process / push_data / pop_data are reserved for the
+      tensor forms of abi/tensor.h, which carry their dtype on the tensor. Real-time refusals carry no anira_error: the entry returns 0 or a
       status, records it in anira_handler_rt_error and logs once through the real-time queue.
       A handler counts as a user of the core: anira_shutdown is refused while one lives. In this
       pre-release every handler is Host-only, one plan per candidate engine of one variant, an
@@ -2522,22 +2526,7 @@ headers:
       # ---- the Hard entries, float32 ----------------------------------------------
 
       - kind: function
-        name: anira_handler_process
-        returns: size_t
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: float* const*, name: data, doc: "One float buffer per channel of the tensor, read as the input and overwritten with the output (in place)."}
-          - {type: size_t, name: num_samples, doc: "The samples per channel, in the block range of the contract."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in both the input and the output list; the tensor's ring must hold ANIRA_DTYPE_F32."}
-        thread: driver-thread
-        nonblocking: true
-        status: promised
-        since: "0.2"
-        doc: "Pushes one block into the input ring, submits whatever inferences are due, collects the completed ones without waiting and pops one block from the output ring into the same buffers. A block whose inference has not completed is an on_miss event: the contract's policy fills the buffers (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last delivered block, ANIRA_MISS_BYPASS the block this call pushed into the anchored input when tensor_index is that slot, zeros otherwise) and the call returns 0. Legal on a float32 ring only: any other ring dtype is 0 with ANIRA_ERROR_CONFIG in anira_handler_rt_error (use anira_handler_process_typed)."
-        return_doc: "The samples delivered per channel: num_samples, or 0 for a missed block, an unprepared handler (ANIRA_ERROR_NOT_PREPARED in rt_error), a NULL buffer or an index out of range of either list (ANIRA_ERROR_INVALID_ARGUMENT) or a non-float32 ring (ANIRA_ERROR_CONFIG)."
-
-      - kind: function
-        name: anira_handler_process_separate
+        name: anira_handler_process_f32
         returns: size_t
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
@@ -2550,11 +2539,26 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "anira_handler_process with separate input and output buffers; the two counts may differ under a time ratio. On a miss ANIRA_MISS_BYPASS copies min(num_in, num_out) samples per channel of the input block when tensor_index is the anchored input's slot and zero-fills the rest; any other slot delivers zeros."
-        return_doc: "The output samples delivered per channel, or 0 as anira_handler_process says."
+        doc: "Pushes one block into the input ring, submits whatever inferences are due, collects the completed ones without waiting and pops one block from the output ring into out; the two counts may differ under a time ratio. A block whose inference has not completed is an on_miss event: the contract's policy fills out (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last delivered block, ANIRA_MISS_BYPASS min(num_in, num_out) samples per channel of the input block when tensor_index is the anchored input's slot and zeros past it; any other slot zeros) and the call returns 0. Legal on float32 rings only: any other ring dtype is 0 with ANIRA_ERROR_CONFIG in anira_handler_rt_error. The float32 face of the Hard entries; the tensor form under the bare name arrives with abi/tensor.h."
+        return_doc: "The output samples delivered per channel: num_out, or 0 for a missed block, an unprepared handler (ANIRA_ERROR_NOT_PREPARED in rt_error), a NULL buffer or an index out of range of either list (ANIRA_ERROR_INVALID_ARGUMENT) or a non-float32 ring (ANIRA_ERROR_CONFIG)."
 
       - kind: function
-        name: anira_handler_process_multi
+        name: anira_handler_process_f32_inplace
+        returns: size_t
+        params:
+          - {type: anira_handler*, name: handler, doc: "The handler."}
+          - {type: float* const*, name: data, doc: "One float buffer per channel of the tensor, read as the input and overwritten with the output (in place)."}
+          - {type: size_t, name: num_samples, doc: "The samples per channel, in the block range of the contract."}
+          - {type: uint32_t, name: tensor_index, doc: "The slot in both the input and the output list; the tensor's ring must hold ANIRA_DTYPE_F32."}
+        thread: driver-thread
+        nonblocking: true
+        status: promised
+        since: "0.2"
+        doc: "anira_handler_process_f32 over one buffer set per channel, read as the input and overwritten with the output: the 2.x process shape. On a miss ANIRA_MISS_BYPASS leaves the input in place when tensor_index is the anchored input's slot, zeros otherwise."
+        return_doc: "The samples delivered per channel, or 0 as anira_handler_process_f32 says."
+
+      - kind: function
+        name: anira_handler_process_f32_multi
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
@@ -2566,11 +2570,11 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "anira_handler_process over every tensor at once, the caller's arrays indexed by slot; an output whose request is 0 is left untouched. On a miss ANIRA_MISS_BYPASS copies the anchored input's block of this call into every requested streamed output. Every input and output ring must hold ANIRA_DTYPE_F32."
+        doc: "anira_handler_process_f32_inplace over every tensor at once, the caller's arrays indexed by slot; an output whose request is 0 is left untouched. On a miss ANIRA_MISS_BYPASS copies the anchored input's block of this call into every requested streamed output. Every input and output ring must hold ANIRA_DTYPE_F32."
         return_doc: "ANIRA_OK (a miss is visible in num_out); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array; ANIRA_ERROR_NOT_PREPARED before a successful prepare; ANIRA_ERROR_CONFIG for a non-float32 ring. Every failure but the NULL handler is recorded in anira_handler_rt_error."
 
       - kind: function
-        name: anira_handler_push_data
+        name: anira_handler_push_data_f32
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
@@ -2581,11 +2585,11 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "Pushes one block into the input ring and submits the inferences that are due; nothing is popped (anira_handler_pop_data). A generator (no streamed input) has nothing to push and the call is a no-op."
+        doc: "Pushes one block into the input ring and submits the inferences that are due; nothing is popped (anira_handler_pop_data_f32). A generator (no streamed input) has nothing to push and the call is a no-op."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or buffer, or an index out of range; ANIRA_ERROR_NOT_PREPARED before a successful prepare; ANIRA_ERROR_CONFIG for a non-float32 ring. Every failure but the NULL handler is recorded in anira_handler_rt_error."
 
       - kind: function
-        name: anira_handler_push_data_multi
+        name: anira_handler_push_data_f32_multi
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
@@ -2595,11 +2599,11 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "anira_handler_push_data over every input tensor at once. Every input ring must hold ANIRA_DTYPE_F32."
+        doc: "anira_handler_push_data_f32 over every input tensor at once. Every input ring must hold ANIRA_DTYPE_F32."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array; ANIRA_ERROR_NOT_PREPARED; ANIRA_ERROR_CONFIG for a non-float32 ring."
 
       - kind: function
-        name: anira_handler_pop_data
+        name: anira_handler_pop_data_f32
         returns: size_t
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
@@ -2611,10 +2615,10 @@ headers:
         status: promised
         since: "0.2"
         doc: "Collects the completed inferences without waiting and pops one block from the output ring; on a generator the request also pulls the next inference. A missed block follows the miss policy, where ANIRA_MISS_BYPASS delivers zeros (a pop has no input block to pass through)."
-        return_doc: "The samples delivered per channel, or 0 as anira_handler_process says."
+        return_doc: "The samples delivered per channel, or 0 as anira_handler_process_f32 says."
 
       - kind: function
-        name: anira_handler_pop_data_multi
+        name: anira_handler_pop_data_f32_multi
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
@@ -2624,118 +2628,10 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "anira_handler_pop_data over every output tensor at once; an output whose request is 0 is left untouched. Every output ring must hold ANIRA_DTYPE_F32."
+        doc: "anira_handler_pop_data_f32 over every output tensor at once; an output whose request is 0 is left untouched. Every output ring must hold ANIRA_DTYPE_F32."
         return_doc: "ANIRA_OK (a miss is visible in num_out); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array; ANIRA_ERROR_NOT_PREPARED; ANIRA_ERROR_CONFIG for a non-float32 ring."
 
       # ---- the Hard entries, any ring dtype (unchecked by construction) ---------
-
-      - kind: function
-        name: anira_handler_process_typed
-        returns: size_t
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: void* const*, name: data, doc: "One buffer per channel, holding the slot's ring dtype."}
-          - {type: size_t, name: num_samples, doc: "The samples per channel."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in both lists."}
-        thread: driver-thread
-        nonblocking: true
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_process for a ring of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one."
-        return_doc: "The samples delivered per channel, or 0 for a missed block, an unprepared handler (ANIRA_ERROR_NOT_PREPARED in rt_error), a NULL buffer or an index out of range (ANIRA_ERROR_INVALID_ARGUMENT)."
-
-      - kind: function
-        name: anira_handler_process_separate_typed
-        returns: size_t
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: const void* const*, name: in, doc: "One buffer per channel of the input tensor, holding the slot's ring dtype."}
-          - {type: size_t, name: num_in, doc: "Input samples per channel."}
-          - {type: void* const*, name: out, doc: "One buffer per channel of the output tensor, holding the slot's ring dtype."}
-          - {type: size_t, name: num_out, doc: "Output samples per channel requested."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in both lists."}
-        thread: driver-thread
-        nonblocking: true
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_process_separate for a ring of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one."
-        return_doc: "The output samples delivered per channel, or 0 as anira_handler_process_typed says."
-
-      - kind: function
-        name: anira_handler_process_multi_typed
-        returns: anira_status
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: const void* const* const*, name: in, doc: "Per input tensor, one buffer per channel holding the slot's ring dtype; a non-streamed tensor carries its values in channel 0."}
-          - {type: const size_t*, name: num_in, doc: "Per input tensor, the samples per channel (values for a non-streamed tensor)."}
-          - {type: void* const* const*, name: out, doc: "Per output tensor, one buffer per channel holding the slot's ring dtype."}
-          - {type: size_t*, name: num_out, doc: "Per output tensor: in, the samples requested; out, the samples delivered, the request or 0 for a streamed output whose block was missed (a caller that retries sets the requests again)."}
-        thread: driver-thread
-        nonblocking: true
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_process_multi for rings of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one."
-        return_doc: "ANIRA_OK (a miss is visible in num_out); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array; ANIRA_ERROR_NOT_PREPARED before a successful prepare. Every failure but the NULL handler is recorded in anira_handler_rt_error."
-
-      - kind: function
-        name: anira_handler_push_data_typed
-        returns: anira_status
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: const void* const*, name: in, doc: "One buffer per channel of the input tensor, holding the slot's ring dtype."}
-          - {type: size_t, name: num_in, doc: "Samples per channel."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in the input list."}
-        thread: driver-thread
-        nonblocking: true
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_push_data for a ring of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or buffer, or an index out of range; ANIRA_ERROR_NOT_PREPARED before a successful prepare. Every failure but the NULL handler is recorded in anira_handler_rt_error."
-
-      - kind: function
-        name: anira_handler_push_data_multi_typed
-        returns: anira_status
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: const void* const* const*, name: in, doc: "Per input tensor, one buffer per channel holding the slot's ring dtype."}
-          - {type: const size_t*, name: num_in, doc: "Per input tensor, the samples per channel."}
-        thread: driver-thread
-        nonblocking: true
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_push_data_multi for rings of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array; ANIRA_ERROR_NOT_PREPARED."
-
-      - kind: function
-        name: anira_handler_pop_data_typed
-        returns: size_t
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: void* const*, name: out, doc: "One buffer per channel of the output tensor, holding the slot's ring dtype."}
-          - {type: size_t, name: num_out, doc: "Samples per channel requested."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in the output list."}
-        thread: driver-thread
-        nonblocking: true
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_pop_data for a ring of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one."
-        return_doc: "The samples delivered per channel, or 0 as anira_handler_process_typed says."
-
-      - kind: function
-        name: anira_handler_pop_data_multi_typed
-        returns: anira_status
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: void* const* const*, name: out, doc: "Per output tensor, one buffer per channel holding the slot's ring dtype."}
-          - {type: size_t*, name: num_out, doc: "Per output tensor: in, the samples requested; out, the samples delivered or 0 for a missed block."}
-        thread: driver-thread
-        nonblocking: true
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_pop_data_multi for rings of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one."
-        return_doc: "ANIRA_OK (a miss is visible in num_out); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array; ANIRA_ERROR_NOT_PREPARED."
-
-      # ---- latencies, the ring state, reset, rt_error -----------------------------
 
       - kind: function
         name: anira_handler_get_latency
@@ -2805,22 +2701,7 @@ headers:
       # ---- the _wait twins: a thread that may wait ----------------------------------
 
       - kind: function
-        name: anira_handler_process_wait
-        returns: size_t
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: float* const*, name: data, doc: "One float buffer per channel, in place."}
-          - {type: size_t, name: num_samples, doc: "The samples per channel."}
-          - {type: double, name: timeout_ms, doc: "How long to wait for the block's inference: 0 or more milliseconds (a value at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio times the duration of this call's block on the anchor (the 2.x blocking_ratio); ANIRA_WAIT_FOREVER, or any other negative value, without limit."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in both lists; the ring must hold ANIRA_DTYPE_F32."}
-        thread: any-thread, blocking
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_process that waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry. Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns 0 at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
-        return_doc: "The samples delivered per channel, or 0 as anira_handler_process says, or 0 with ANIRA_ERROR_INVALID_STATE without an active inference thread."
-
-      - kind: function
-        name: anira_handler_process_separate_wait
+        name: anira_handler_process_f32_wait
         returns: size_t
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
@@ -2833,11 +2714,26 @@ headers:
         thread: any-thread, blocking
         status: promised
         since: "0.2"
-        doc: "anira_handler_process_separate that waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry (ANIRA_MISS_BYPASS copies min(num_in, num_out) samples per channel of the input block when tensor_index is the anchored input's slot and zero-fills the rest; any other slot delivers zeros). Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns 0 at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
-        return_doc: "The output samples delivered per channel, or 0 as anira_handler_process says, or 0 with ANIRA_ERROR_INVALID_STATE without an active inference thread."
+        doc: "anira_handler_process_f32 that waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry (ANIRA_MISS_BYPASS copies min(num_in, num_out) samples per channel of the input block when tensor_index is the anchored input's slot and zero-fills the rest; any other slot delivers zeros). Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns 0 at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
+        return_doc: "The output samples delivered per channel, or 0 as anira_handler_process_f32 says, or 0 with ANIRA_ERROR_INVALID_STATE without an active inference thread."
 
       - kind: function
-        name: anira_handler_process_multi_wait
+        name: anira_handler_process_f32_inplace_wait
+        returns: size_t
+        params:
+          - {type: anira_handler*, name: handler, doc: "The handler."}
+          - {type: float* const*, name: data, doc: "One float buffer per channel, in place."}
+          - {type: size_t, name: num_samples, doc: "The samples per channel."}
+          - {type: double, name: timeout_ms, doc: "How long to wait for the block's inference: 0 or more milliseconds (a value at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio times the duration of this call's block on the anchor (the 2.x blocking_ratio); ANIRA_WAIT_FOREVER, or any other negative value, without limit."}
+          - {type: uint32_t, name: tensor_index, doc: "The slot in both lists; the ring must hold ANIRA_DTYPE_F32."}
+        thread: any-thread, blocking
+        status: promised
+        since: "0.2"
+        doc: "anira_handler_process_f32_inplace that waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry. Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns 0 at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
+        return_doc: "The samples delivered per channel, or 0 as anira_handler_process_f32 says, or 0 with ANIRA_ERROR_INVALID_STATE without an active inference thread."
+
+      - kind: function
+        name: anira_handler_process_f32_multi_wait
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
@@ -2849,11 +2745,11 @@ headers:
         thread: any-thread, blocking
         status: promised
         since: "0.2"
-        doc: "anira_handler_process_multi that waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry (ANIRA_MISS_BYPASS copies the anchored input's block of this call into every requested streamed output). Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns ANIRA_ERROR_INVALID_STATE at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Every input and output ring must hold ANIRA_DTYPE_F32. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
+        doc: "anira_handler_process_f32_multi that waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry (ANIRA_MISS_BYPASS copies the anchored input's block of this call into every requested streamed output). Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns ANIRA_ERROR_INVALID_STATE at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Every input and output ring must hold ANIRA_DTYPE_F32. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
         return_doc: "ANIRA_OK (a miss is visible in num_out); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array; ANIRA_ERROR_NOT_PREPARED before a successful prepare; ANIRA_ERROR_CONFIG for a non-float32 ring; ANIRA_ERROR_INVALID_STATE without an active inference thread, where num_out holds what the nonblocking form wrote. Every failure but the NULL handler is recorded in anira_handler_rt_error."
 
       - kind: function
-        name: anira_handler_pop_data_wait
+        name: anira_handler_pop_data_f32_wait
         returns: size_t
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
@@ -2864,11 +2760,11 @@ headers:
         thread: any-thread, blocking
         status: promised
         since: "0.2"
-        doc: "anira_handler_pop_data that waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry (ANIRA_MISS_BYPASS delivers zeros, a pop has no input block to pass through). Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns 0 at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
-        return_doc: "The samples delivered per channel, or 0 as anira_handler_process says, or 0 with ANIRA_ERROR_INVALID_STATE without an active inference thread."
+        doc: "anira_handler_pop_data_f32 that waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry (ANIRA_MISS_BYPASS delivers zeros, a pop has no input block to pass through). Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns 0 at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
+        return_doc: "The samples delivered per channel, or 0 as anira_handler_process_f32 says, or 0 with ANIRA_ERROR_INVALID_STATE without an active inference thread."
 
       - kind: function
-        name: anira_handler_pop_data_multi_wait
+        name: anira_handler_pop_data_f32_multi_wait
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
@@ -2878,84 +2774,8 @@ headers:
         thread: any-thread, blocking
         status: promised
         since: "0.2"
-        doc: "anira_handler_pop_data_multi that waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry (ANIRA_MISS_BYPASS delivers zeros, a pop has no input block to pass through). Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns ANIRA_ERROR_INVALID_STATE at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Every output ring must hold ANIRA_DTYPE_F32. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
+        doc: "anira_handler_pop_data_f32_multi that waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry (ANIRA_MISS_BYPASS delivers zeros, a pop has no input block to pass through). Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns ANIRA_ERROR_INVALID_STATE at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Every output ring must hold ANIRA_DTYPE_F32. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
         return_doc: "ANIRA_OK (a miss is visible in num_out); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array; ANIRA_ERROR_NOT_PREPARED; ANIRA_ERROR_CONFIG for a non-float32 ring; ANIRA_ERROR_INVALID_STATE without an active inference thread, where num_out holds what the nonblocking form wrote."
 
       # ---- the _wait twins, any ring dtype -------------------------------------------
 
-      - kind: function
-        name: anira_handler_process_wait_typed
-        returns: size_t
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: void* const*, name: data, doc: "One buffer per channel, in place, holding the slot's ring dtype."}
-          - {type: size_t, name: num_samples, doc: "The samples per channel."}
-          - {type: double, name: timeout_ms, doc: "How long to wait for the block's inference: 0 or more milliseconds (a value at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio times the duration of this call's block on the anchor (the 2.x blocking_ratio); ANIRA_WAIT_FOREVER, or any other negative value, without limit."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in both lists."}
-        thread: any-thread, blocking
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_process_wait for a ring of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one. Waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry. Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns 0 at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
-        return_doc: "The samples delivered per channel, or 0 as anira_handler_process_typed says, or 0 with ANIRA_ERROR_INVALID_STATE without an active inference thread."
-
-      - kind: function
-        name: anira_handler_process_separate_wait_typed
-        returns: size_t
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: const void* const*, name: in, doc: "One buffer per channel of the input tensor, holding the slot's ring dtype."}
-          - {type: size_t, name: num_in, doc: "Input samples per channel."}
-          - {type: void* const*, name: out, doc: "One buffer per channel of the output tensor, holding the slot's ring dtype."}
-          - {type: size_t, name: num_out, doc: "Output samples per channel requested."}
-          - {type: double, name: timeout_ms, doc: "How long to wait for the block's inference: 0 or more milliseconds (a value at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio times the duration of this call's block on the anchor (the 2.x blocking_ratio); ANIRA_WAIT_FOREVER, or any other negative value, without limit."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in both lists."}
-        thread: any-thread, blocking
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_process_separate_wait for a ring of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one. Waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry. Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns 0 at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
-        return_doc: "The output samples delivered per channel, or 0 as anira_handler_process_typed says, or 0 with ANIRA_ERROR_INVALID_STATE without an active inference thread."
-
-      - kind: function
-        name: anira_handler_process_multi_wait_typed
-        returns: anira_status
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: const void* const* const*, name: in, doc: "Per input tensor, one buffer per channel holding the slot's ring dtype; a non-streamed tensor carries its values in channel 0."}
-          - {type: const size_t*, name: num_in, doc: "Per input tensor, the samples per channel (values for a non-streamed tensor)."}
-          - {type: void* const* const*, name: out, doc: "Per output tensor, one buffer per channel holding the slot's ring dtype."}
-          - {type: size_t*, name: num_out, doc: "Per output tensor: in, the samples requested; out, the samples delivered, the request or 0 for a streamed output whose block was missed."}
-          - {type: double, name: timeout_ms, doc: "How long to wait for the block's inference: 0 or more milliseconds (a value at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio times the duration of this call's block on the anchor (the 2.x blocking_ratio); ANIRA_WAIT_FOREVER, or any other negative value, without limit."}
-        thread: any-thread, blocking
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_process_multi_wait for rings of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one. Waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry. Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns ANIRA_ERROR_INVALID_STATE at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
-        return_doc: "ANIRA_OK (a miss is visible in num_out); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array; ANIRA_ERROR_NOT_PREPARED before a successful prepare; ANIRA_ERROR_INVALID_STATE without an active inference thread, where num_out holds what the nonblocking form wrote. Every failure but the NULL handler is recorded in anira_handler_rt_error."
-
-      - kind: function
-        name: anira_handler_pop_data_wait_typed
-        returns: size_t
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: void* const*, name: out, doc: "One buffer per channel of the output tensor, holding the slot's ring dtype."}
-          - {type: size_t, name: num_out, doc: "Samples per channel requested."}
-          - {type: double, name: timeout_ms, doc: "How long to wait for the block's inference: 0 or more milliseconds (a value at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio times the contract's block_max duration (a pop has no input block to measure); ANIRA_WAIT_FOREVER, or any other negative value, without limit."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in the output list."}
-        thread: any-thread, blocking
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_pop_data_wait for a ring of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one. Waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry. Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns 0 at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
-        return_doc: "The samples delivered per channel, or 0 as anira_handler_process_typed says, or 0 with ANIRA_ERROR_INVALID_STATE without an active inference thread."
-
-      - kind: function
-        name: anira_handler_pop_data_multi_wait_typed
-        returns: anira_status
-        params:
-          - {type: anira_handler*, name: handler, doc: "The handler."}
-          - {type: void* const* const*, name: out, doc: "Per output tensor, one buffer per channel holding the slot's ring dtype."}
-          - {type: size_t*, name: num_out, doc: "Per output tensor: in, the samples requested; out, the samples delivered or 0 for a missed block."}
-          - {type: double, name: timeout_ms, doc: "How long to wait for the block's inference: 0 or more milliseconds (a value at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio times the contract's block_max duration (a pop has no input block to measure); ANIRA_WAIT_FOREVER, or any other negative value, without limit."}
-        thread: any-thread, blocking
-        status: promised
-        since: "0.2"
-        doc: "anira_handler_pop_data_multi_wait for rings of any dtype, unchecked by construction: the entry carries no dtype and verifies nothing about the caller's element type. The caller's buffers hold each slot's ring dtype as declared on the Hard contract (anira_contract_hard_set_ring_dtype, ANIRA_DTYPE_F32 when unset), read back through anira_contract_hard_ring_dtype and, inside a stage, anira_ring_dtype; nothing converts. The float entry is the checked call for float32 rings; the per-call dtype check lives on the anira_ring_* accessors of a stage, which take one. Waits for the block's inference: on the completion semaphore when the contract's wait_ratio is above 0, else by polling the done flag every millisecond. A block not completed at the timeout is an on_miss event as in the ANIRA_NONBLOCKING entry. Without an inference thread inside its loop (anira_inference_thread_run_loop, or the core's pool) the call does what the ANIRA_NONBLOCKING entry does, records ANIRA_ERROR_INVALID_STATE in anira_handler_rt_error and returns ANIRA_ERROR_INVALID_STATE at once; a thread leaving during a poll is noticed at the next poll, one leaving during a semaphore wait at the timeout. A host that pumps anira_inference_thread_execute itself is not counted and uses the ANIRA_NONBLOCKING entries. Legal from the driver thread only if the host accepts a wait there; on WebAssembly every wait spins."
-        return_doc: "ANIRA_OK (a miss is visible in num_out); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array; ANIRA_ERROR_NOT_PREPARED; ANIRA_ERROR_INVALID_STATE without an active inference thread, where num_out holds what the nonblocking form wrote."

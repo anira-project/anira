@@ -61,7 +61,7 @@ struct DebugContext : Context {
 size_t bad_process(anira_handler* handler) {
     float sample = 0.0F;
     const std::array<float*, 1> ptrs{&sample};
-    return anira_handler_process(handler, ptrs.data(), 1, 99);
+    return anira_handler_process_f32_inplace(handler, ptrs.data(), 1, 99);
 }
 
 /// One in-place gain block, waited, returned for the assertions.
@@ -69,7 +69,7 @@ std::vector<float> waited_block(anira_handler* handler, size_t block_index) {
     std::vector<float> block = ramp(block_index);
     const std::array<float*, 1> ptrs{block.data()};
     const size_t prev = anira_handler_get_available_samples(handler, 0, 0);
-    EXPECT_EQ(anira_handler_process(handler, ptrs.data(), k_block, 0), k_block)
+    EXPECT_EQ(anira_handler_process_f32_inplace(handler, ptrs.data(), k_block, 0), k_block)
         << "block " << block_index;
     wait_for_block(handler, prev);
     return block;
@@ -93,10 +93,10 @@ TEST(AbiRtError, TheFirstOccurrenceRecordsOnceAndLaterOnesAreCounted) {
     std::vector<float> block(k_block, 0.0F);
     const std::array<float*, 1> ptrs{block.data()};
     for (int i = 0; i < 5; ++i) {
-        EXPECT_EQ(anira_handler_process(h, ptrs.data(), k_block, 0), 0U);
+        EXPECT_EQ(anira_handler_process_f32_inplace(h, ptrs.data(), k_block, 0), 0U);
     }
     for (int i = 0; i < 3; ++i) {
-        EXPECT_EQ(anira_handler_pop_data(h, ptrs.data(), k_block, 0), 0U);
+        EXPECT_EQ(anira_handler_pop_data_f32(h, ptrs.data(), k_block, 0), 0U);
     }
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_PREPARED);
     anira_drain_log();
@@ -106,7 +106,7 @@ TEST(AbiRtError, TheFirstOccurrenceRecordsOnceAndLaterOnesAreCounted) {
     EXPECT_EQ(record.m_flags, ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);
     EXPECT_EQ(record.m_level, static_cast<uint32_t>(ANIRA_LOG_ERROR));
     EXPECT_EQ(record.m_group, "anira.capi");
-    EXPECT_EQ(record.m_message, "anira_handler_process: handler not prepared")
+    EXPECT_EQ(record.m_message, "anira_handler_process_f32_inplace: handler not prepared")
         << "the first refusing entry names the record";
 #endif
 
@@ -137,14 +137,16 @@ TEST(AbiRtError, EachKindLatchesSeparatelyAndRtErrorIsLastWins) {
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_CONFIG);
     anira_drain_log();
 #ifdef ENABLE_LOGGING
-    EXPECT_EQ(count_records(collector, "anira_handler_process: invalid argument", "rt"), 1U);
+    EXPECT_EQ(count_records(collector, "anira_handler_process_f32_inplace: invalid argument", "rt"),
+              1U);
     EXPECT_EQ(count_records(collector, "anira_handler_set_plan: configuration error", "rt"), 1U);
 #endif
     EXPECT_EQ(bad_process(h), 0U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT) << "last-wins";
     anira_drain_log();
 #ifdef ENABLE_LOGGING
-    EXPECT_EQ(count_records(collector, "anira_handler_process: invalid argument", "rt"), 1U);
+    EXPECT_EQ(count_records(collector, "anira_handler_process_f32_inplace: invalid argument", "rt"),
+              1U);
     EXPECT_EQ(count_records(collector, "anira_handler_set_plan: configuration error", "rt"), 1U);
 #endif
 }
@@ -178,7 +180,8 @@ TEST(AbiRtError, ResetReArmsAndLogsTheSuppressedCount) {
     EXPECT_EQ(bad_process(h), 0U);
     anira_drain_log();
 #ifdef ENABLE_LOGGING
-    EXPECT_EQ(count_records(collector, "anira_handler_process: invalid argument", "rt"), 2U)
+    EXPECT_EQ(count_records(collector, "anira_handler_process_f32_inplace: invalid argument", "rt"),
+              2U)
         << "the kind was re-armed";
 #endif
     // A reset with nothing suppressed logs nothing.
@@ -283,7 +286,7 @@ TEST(AbiRtError, SiteLatchesLogOncePerPrepareAndSummarise) {
     std::vector<float> block(k_block, 0.25F);
     const std::array<float*, 1> ptrs{block.data()};
     const auto starved_call = [&] {
-        anira_handler_process(h, ptrs.data(), k_block, 0);
+        anira_handler_process_f32_inplace(h, ptrs.data(), k_block, 0);
         anira_drain_log();
     };
     // The first call delivers the priming block, the rest starve: the S7 site latches once.
@@ -352,7 +355,7 @@ TEST(AbiRtError, EngineAfterAThrowingInferenceZeroFillsAndKeepsTheThread) {
         std::vector<float> block = ramp(1);
         const std::array<float*, 1> ptrs{block.data()};
         const size_t prev = anira_handler_get_available_samples(h, 0, 0);
-        EXPECT_EQ(anira_handler_process(h, ptrs.data(), k_block, 0), k_block);
+        EXPECT_EQ(anira_handler_process_f32_inplace(h, ptrs.data(), k_block, 0), k_block);
         expect_all(block, 0.0F, "block 1: the priming zeros");
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (anira_handler_rt_error(h) != ANIRA_ERROR_ENGINE &&
@@ -455,7 +458,7 @@ TEST(AbiRtError, AViolationRecordCarriesTheFlagsAndTheDrainDeliversIt) {
     anira_handler* h = handler.m_handler;
     std::vector<float> block(k_block, 0.0F);
     const std::array<float*, 1> ptrs{block.data()};
-    EXPECT_EQ(anira_handler_process(h, ptrs.data(), k_block, 0), 0U);
+    EXPECT_EQ(anira_handler_process_f32_inplace(h, ptrs.data(), k_block, 0), 0U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_PREPARED);
 #ifdef ENABLE_LOGGING
     EXPECT_TRUE(collector.wait_for("handler not prepared", "rt")) << "the drain thread delivers";

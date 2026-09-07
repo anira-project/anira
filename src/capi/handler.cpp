@@ -89,7 +89,8 @@ bool has_arguments(anira_handler& handler, bool ok, const char* entry) noexcept 
     return false;
 }
 
-// The float entries are legal on a float32 ring only; the typed twins carry no dtype. Always
+// The _f32 entries are legal on a float32 ring only (the tensor forms of abi/tensor.h carry
+// their dtype on the tensor). Always
 // satisfied in this pre-release (every ring the C path prepares is float32), checked per call.
 bool ring_is_f32(anira_handler& handler,
                  bool input,
@@ -100,9 +101,8 @@ bool ring_is_f32(anira_handler& handler,
     if (dtype == ANIRA_DTYPE_F32) { return true; }
     if (handler.m_rt.record(ANIRA_ERROR_CONFIG)) {
         ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                               "%s: the ring of %s slot %u is not float32 (dtype %u); the float "
-                               "entries are legal on ANIRA_DTYPE_F32 rings only, use the _typed "
-                               "twin",
+                               "%s: the ring of %s slot %u is not float32 (dtype %u); the _f32 "
+                               "entries are legal on ANIRA_DTYPE_F32 rings only",
                                entry,
                                input ? "input" : "output",
                                slot,
@@ -126,7 +126,7 @@ bool outputs_are_f32(anira_handler& handler, const char* entry) noexcept ANIRA_N
 }
 
 // The argument predicates of the forms (the pointers are checked for NULL only; templates,
-// so the typed channel arrays need no cast down to void).
+// so the channel arrays need no cast).
 template <typename In, typename Out>
 bool both_slots(const anira_handler& handler, In* in, Out* out, uint32_t slot) noexcept {
     return in != nullptr && out != nullptr && slot < handler.m_num_inputs &&
@@ -196,7 +196,7 @@ std::chrono::steady_clock::duration wait_budget(const anira_handler& handler,
 }
 
 // ==== the bodies of the Hard entries ==========================================================
-// Shared by the float entry (after its float32 check) and its _typed twin (which casts once).
+// Called by the _f32 entry after its float32 check.
 
 size_t process_separate_body(anira_handler& handler,
                              const float* const* in,
@@ -926,10 +926,11 @@ uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handler)
 
 // ==== the Hard entries, float32 ===============================================================
 
-size_t ANIRA_CALL anira_handler_process(anira_handler* handler,
-                                        float* const* data,
-                                        size_t num_samples,
-                                        uint32_t tensor_index) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+size_t ANIRA_CALL anira_handler_process_f32_inplace(anira_handler* handler,
+                                                    float* const* data,
+                                                    size_t num_samples,
+                                                    uint32_t tensor_index)
+    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return 0; }
     if (!is_prepared(*handler, __func__)) { return 0; }
     if (!has_arguments(*handler, both_slots(*handler, data, data, tensor_index), __func__)) {
@@ -942,12 +943,12 @@ size_t ANIRA_CALL anira_handler_process(anira_handler* handler,
     return process_separate_body(*handler, data, num_samples, data, num_samples, tensor_index);
 }
 
-size_t ANIRA_CALL anira_handler_process_separate(anira_handler* handler,
-                                                 const float* const* in,
-                                                 size_t num_in,
-                                                 float* const* out,
-                                                 size_t num_out,
-                                                 uint32_t tensor_index)
+size_t ANIRA_CALL anira_handler_process_f32(anira_handler* handler,
+                                            const float* const* in,
+                                            size_t num_in,
+                                            float* const* out,
+                                            size_t num_out,
+                                            uint32_t tensor_index)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return 0; }
     if (!is_prepared(*handler, __func__)) { return 0; }
@@ -961,11 +962,11 @@ size_t ANIRA_CALL anira_handler_process_separate(anira_handler* handler,
     return process_separate_body(*handler, in, num_in, out, num_out, tensor_index);
 }
 
-anira_status ANIRA_CALL anira_handler_process_multi(anira_handler* handler,
-                                                    const float* const* const* in,
-                                                    const size_t* num_in,
-                                                    float* const* const* out,
-                                                    size_t* num_out)
+anira_status ANIRA_CALL anira_handler_process_f32_multi(anira_handler* handler,
+                                                        const float* const* const* in,
+                                                        const size_t* num_in,
+                                                        float* const* const* out,
+                                                        size_t* num_out)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
@@ -980,10 +981,10 @@ anira_status ANIRA_CALL anira_handler_process_multi(anira_handler* handler,
     return process_multi_body(*handler, in, num_in, out, num_out);
 }
 
-anira_status ANIRA_CALL anira_handler_push_data(anira_handler* handler,
-                                                const float* const* in,
-                                                size_t num_in,
-                                                uint32_t tensor_index)
+anira_status ANIRA_CALL anira_handler_push_data_f32(anira_handler* handler,
+                                                    const float* const* in,
+                                                    size_t num_in,
+                                                    uint32_t tensor_index)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
@@ -994,9 +995,9 @@ anira_status ANIRA_CALL anira_handler_push_data(anira_handler* handler,
     return push_data_body(*handler, in, num_in, tensor_index);
 }
 
-anira_status ANIRA_CALL anira_handler_push_data_multi(anira_handler* handler,
-                                                      const float* const* const* in,
-                                                      const size_t* num_in)
+anira_status ANIRA_CALL anira_handler_push_data_f32_multi(anira_handler* handler,
+                                                          const float* const* const* in,
+                                                          const size_t* num_in)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
@@ -1007,10 +1008,11 @@ anira_status ANIRA_CALL anira_handler_push_data_multi(anira_handler* handler,
     return push_data_multi_body(*handler, in, num_in);
 }
 
-size_t ANIRA_CALL anira_handler_pop_data(anira_handler* handler,
-                                         float* const* out,
-                                         size_t num_out,
-                                         uint32_t tensor_index) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+size_t ANIRA_CALL anira_handler_pop_data_f32(anira_handler* handler,
+                                             float* const* out,
+                                             size_t num_out,
+                                             uint32_t tensor_index)
+    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return 0; }
     if (!is_prepared(*handler, __func__)) { return 0; }
     if (!has_arguments(*handler, output_slot(*handler, out, tensor_index), __func__)) { return 0; }
@@ -1018,9 +1020,9 @@ size_t ANIRA_CALL anira_handler_pop_data(anira_handler* handler,
     return pop_data_body(*handler, out, num_out, tensor_index);
 }
 
-anira_status ANIRA_CALL anira_handler_pop_data_multi(anira_handler* handler,
-                                                     float* const* const* out,
-                                                     size_t* num_out)
+anira_status ANIRA_CALL anira_handler_pop_data_f32_multi(anira_handler* handler,
+                                                         float* const* const* out,
+                                                         size_t* num_out)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
@@ -1034,115 +1036,6 @@ anira_status ANIRA_CALL anira_handler_pop_data_multi(anira_handler* handler,
 // ==== the Hard entries, any ring dtype ========================================================
 // Unchecked by construction: the entry carries no dtype; the caller's buffers hold each
 // slot's ring dtype (float32 for every ring this pre-release prepares), cast once here.
-
-size_t ANIRA_CALL anira_handler_process_typed(anira_handler* handler,
-                                              void* const* data,
-                                              size_t num_samples,
-                                              uint32_t tensor_index)
-    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
-    if (!has_arguments(*handler, both_slots(*handler, data, data, tensor_index), __func__)) {
-        return 0;
-    }
-    return process_separate_body(*handler,
-                                 reinterpret_cast<const float* const*>(data),
-                                 num_samples,
-                                 reinterpret_cast<float* const*>(data),
-                                 num_samples,
-                                 tensor_index);
-}
-
-size_t ANIRA_CALL anira_handler_process_separate_typed(anira_handler* handler,
-                                                       const void* const* in,
-                                                       size_t num_in,
-                                                       void* const* out,
-                                                       size_t num_out,
-                                                       uint32_t tensor_index)
-    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
-    if (!has_arguments(*handler, both_slots(*handler, in, out, tensor_index), __func__)) {
-        return 0;
-    }
-    return process_separate_body(*handler,
-                                 reinterpret_cast<const float* const*>(in),
-                                 num_in,
-                                 reinterpret_cast<float* const*>(out),
-                                 num_out,
-                                 tensor_index);
-}
-
-anira_status ANIRA_CALL anira_handler_process_multi_typed(anira_handler* handler,
-                                                          const void* const* const* in,
-                                                          const size_t* num_in,
-                                                          void* const* const* out,
-                                                          size_t* num_out)
-    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
-    if (!has_arguments(*handler,
-                       in != nullptr && num_in != nullptr && out != nullptr && num_out != nullptr,
-                       __func__)) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
-    return process_multi_body(*handler,
-                              reinterpret_cast<const float* const* const*>(in),
-                              num_in,
-                              reinterpret_cast<float* const* const*>(out),
-                              num_out);
-}
-
-anira_status ANIRA_CALL anira_handler_push_data_typed(anira_handler* handler,
-                                                      const void* const* in,
-                                                      size_t num_in,
-                                                      uint32_t tensor_index)
-    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
-    if (!has_arguments(*handler, input_slot(*handler, in, tensor_index), __func__)) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
-    return push_data_body(*handler,
-                          reinterpret_cast<const float* const*>(in),
-                          num_in,
-                          tensor_index);
-}
-
-anira_status ANIRA_CALL anira_handler_push_data_multi_typed(anira_handler* handler,
-                                                            const void* const* const* in,
-                                                            const size_t* num_in)
-    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
-    if (!has_arguments(*handler, in != nullptr && num_in != nullptr, __func__)) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
-    return push_data_multi_body(*handler, reinterpret_cast<const float* const* const*>(in), num_in);
-}
-
-size_t ANIRA_CALL anira_handler_pop_data_typed(anira_handler* handler,
-                                               void* const* out,
-                                               size_t num_out,
-                                               uint32_t tensor_index)
-    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
-    if (!has_arguments(*handler, output_slot(*handler, out, tensor_index), __func__)) { return 0; }
-    return pop_data_body(*handler, reinterpret_cast<float* const*>(out), num_out, tensor_index);
-}
-
-anira_status ANIRA_CALL anira_handler_pop_data_multi_typed(anira_handler* handler,
-                                                           void* const* const* out,
-                                                           size_t* num_out)
-    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
-    if (!has_arguments(*handler, out != nullptr && num_out != nullptr, __func__)) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
-    return pop_data_multi_body(*handler, reinterpret_cast<float* const* const*>(out), num_out);
-}
 
 // ==== latencies, the ring state, reset, rt_error =============================================
 // The latency accessors are not Hard entries: nothing is recorded. They read the session's
@@ -1214,11 +1107,11 @@ anira_status ANIRA_CALL anira_handler_rt_error(const anira_handler* handler)
 // The same checks as the nonblocking stems (the prepared check before the thread count),
 // then the wait; not ANIRA_NONBLOCKING.
 
-size_t ANIRA_CALL anira_handler_process_wait(anira_handler* handler,
-                                             float* const* data,
-                                             size_t num_samples,
-                                             double timeout_ms,
-                                             uint32_t tensor_index) ANIRA_NOEXCEPT {
+size_t ANIRA_CALL anira_handler_process_f32_inplace_wait(anira_handler* handler,
+                                                         float* const* data,
+                                                         size_t num_samples,
+                                                         double timeout_ms,
+                                                         uint32_t tensor_index) ANIRA_NOEXCEPT {
     if (handler == nullptr) { return 0; }
     if (!is_prepared(*handler, __func__)) { return 0; }
     if (!has_arguments(*handler, both_slots(*handler, data, data, tensor_index), __func__)) {
@@ -1238,13 +1131,13 @@ size_t ANIRA_CALL anira_handler_process_wait(anira_handler* handler,
                                       __func__);
 }
 
-size_t ANIRA_CALL anira_handler_process_separate_wait(anira_handler* handler,
-                                                      const float* const* in,
-                                                      size_t num_in,
-                                                      float* const* out,
-                                                      size_t num_out,
-                                                      double timeout_ms,
-                                                      uint32_t tensor_index) ANIRA_NOEXCEPT {
+size_t ANIRA_CALL anira_handler_process_f32_wait(anira_handler* handler,
+                                                 const float* const* in,
+                                                 size_t num_in,
+                                                 float* const* out,
+                                                 size_t num_out,
+                                                 double timeout_ms,
+                                                 uint32_t tensor_index) ANIRA_NOEXCEPT {
     if (handler == nullptr) { return 0; }
     if (!is_prepared(*handler, __func__)) { return 0; }
     if (!has_arguments(*handler, both_slots(*handler, in, out, tensor_index), __func__)) {
@@ -1264,12 +1157,12 @@ size_t ANIRA_CALL anira_handler_process_separate_wait(anira_handler* handler,
                                       __func__);
 }
 
-anira_status ANIRA_CALL anira_handler_process_multi_wait(anira_handler* handler,
-                                                         const float* const* const* in,
-                                                         const size_t* num_in,
-                                                         float* const* const* out,
-                                                         size_t* num_out,
-                                                         double timeout_ms) ANIRA_NOEXCEPT {
+anira_status ANIRA_CALL anira_handler_process_f32_multi_wait(anira_handler* handler,
+                                                             const float* const* const* in,
+                                                             const size_t* num_in,
+                                                             float* const* const* out,
+                                                             size_t* num_out,
+                                                             double timeout_ms) ANIRA_NOEXCEPT {
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
     if (!has_arguments(*handler,
@@ -1283,11 +1176,11 @@ anira_status ANIRA_CALL anira_handler_process_multi_wait(anira_handler* handler,
     return process_multi_wait_body(*handler, in, num_in, out, num_out, timeout_ms, __func__);
 }
 
-size_t ANIRA_CALL anira_handler_pop_data_wait(anira_handler* handler,
-                                              float* const* out,
-                                              size_t num_out,
-                                              double timeout_ms,
-                                              uint32_t tensor_index) ANIRA_NOEXCEPT {
+size_t ANIRA_CALL anira_handler_pop_data_f32_wait(anira_handler* handler,
+                                                  float* const* out,
+                                                  size_t num_out,
+                                                  double timeout_ms,
+                                                  uint32_t tensor_index) ANIRA_NOEXCEPT {
     if (handler == nullptr) { return 0; }
     if (!is_prepared(*handler, __func__)) { return 0; }
     if (!has_arguments(*handler, output_slot(*handler, out, tensor_index), __func__)) { return 0; }
@@ -1295,10 +1188,10 @@ size_t ANIRA_CALL anira_handler_pop_data_wait(anira_handler* handler,
     return pop_data_wait_body(*handler, out, num_out, tensor_index, timeout_ms, __func__);
 }
 
-anira_status ANIRA_CALL anira_handler_pop_data_multi_wait(anira_handler* handler,
-                                                          float* const* const* out,
-                                                          size_t* num_out,
-                                                          double timeout_ms) ANIRA_NOEXCEPT {
+anira_status ANIRA_CALL anira_handler_pop_data_f32_multi_wait(anira_handler* handler,
+                                                              float* const* const* out,
+                                                              size_t* num_out,
+                                                              double timeout_ms) ANIRA_NOEXCEPT {
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
     if (!has_arguments(*handler, out != nullptr && num_out != nullptr, __func__)) {
@@ -1309,99 +1202,3 @@ anira_status ANIRA_CALL anira_handler_pop_data_multi_wait(anira_handler* handler
 }
 
 // ==== the _wait twins, any ring dtype =========================================================
-
-size_t ANIRA_CALL anira_handler_process_wait_typed(anira_handler* handler,
-                                                   void* const* data,
-                                                   size_t num_samples,
-                                                   double timeout_ms,
-                                                   uint32_t tensor_index) ANIRA_NOEXCEPT {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
-    if (!has_arguments(*handler, both_slots(*handler, data, data, tensor_index), __func__)) {
-        return 0;
-    }
-    return process_separate_wait_body(*handler,
-                                      reinterpret_cast<const float* const*>(data),
-                                      num_samples,
-                                      reinterpret_cast<float* const*>(data),
-                                      num_samples,
-                                      tensor_index,
-                                      timeout_ms,
-                                      __func__);
-}
-
-size_t ANIRA_CALL anira_handler_process_separate_wait_typed(anira_handler* handler,
-                                                            const void* const* in,
-                                                            size_t num_in,
-                                                            void* const* out,
-                                                            size_t num_out,
-                                                            double timeout_ms,
-                                                            uint32_t tensor_index) ANIRA_NOEXCEPT {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
-    if (!has_arguments(*handler, both_slots(*handler, in, out, tensor_index), __func__)) {
-        return 0;
-    }
-    return process_separate_wait_body(*handler,
-                                      reinterpret_cast<const float* const*>(in),
-                                      num_in,
-                                      reinterpret_cast<float* const*>(out),
-                                      num_out,
-                                      tensor_index,
-                                      timeout_ms,
-                                      __func__);
-}
-
-anira_status ANIRA_CALL anira_handler_process_multi_wait_typed(anira_handler* handler,
-                                                               const void* const* const* in,
-                                                               const size_t* num_in,
-                                                               void* const* const* out,
-                                                               size_t* num_out,
-                                                               double timeout_ms) ANIRA_NOEXCEPT {
-    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
-    if (!has_arguments(*handler,
-                       in != nullptr && num_in != nullptr && out != nullptr && num_out != nullptr,
-                       __func__)) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
-    return process_multi_wait_body(*handler,
-                                   reinterpret_cast<const float* const* const*>(in),
-                                   num_in,
-                                   reinterpret_cast<float* const* const*>(out),
-                                   num_out,
-                                   timeout_ms,
-                                   __func__);
-}
-
-size_t ANIRA_CALL anira_handler_pop_data_wait_typed(anira_handler* handler,
-                                                    void* const* out,
-                                                    size_t num_out,
-                                                    double timeout_ms,
-                                                    uint32_t tensor_index) ANIRA_NOEXCEPT {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
-    if (!has_arguments(*handler, output_slot(*handler, out, tensor_index), __func__)) { return 0; }
-    return pop_data_wait_body(*handler,
-                              reinterpret_cast<float* const*>(out),
-                              num_out,
-                              tensor_index,
-                              timeout_ms,
-                              __func__);
-}
-
-anira_status ANIRA_CALL anira_handler_pop_data_multi_wait_typed(anira_handler* handler,
-                                                                void* const* const* out,
-                                                                size_t* num_out,
-                                                                double timeout_ms) ANIRA_NOEXCEPT {
-    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
-    if (!has_arguments(*handler, out != nullptr && num_out != nullptr, __func__)) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
-    return pop_data_multi_wait_body(*handler,
-                                    reinterpret_cast<float* const* const*>(out),
-                                    num_out,
-                                    timeout_ms,
-                                    __func__);
-}

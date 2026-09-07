@@ -19,7 +19,7 @@ extern "C" {
 ANIRA_TEST_EXPORT void* unloadtest_create(void);
 /// anira_handler_prepare with a 512-sample / 48 kHz Hard contract — starts the pool threads.
 ANIRA_TEST_EXPORT void unloadtest_prepare(void* instance);
-/// Runs num_blocks blocks through anira_handler_process().
+/// Runs num_blocks blocks through anira_handler_process_f32_inplace().
 ANIRA_TEST_EXPORT void unloadtest_process(void* instance, int num_blocks);
 /// Destroys the instance (the handler releases its session, then the context goes).
 ANIRA_TEST_EXPORT void unloadtest_destroy(void* instance);
