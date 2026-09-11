@@ -20,7 +20,7 @@ As part of our work funded by the [Prototype Fund](https://prototypefund.de/), w
 
 To find out which models would be most useful, we'd love to hear from you, whether you already use anira or are just interested in real-time AI.
 
-[Take the survey](#) (open until the end of October 2026)
+[Take the survey](https://app.formbricks.com/s/vearyl4ap5iwihwcx4osk315) (open until the end of October 2026)
 
 Already using anira? We'd love a short interview about your experience. Just reach out at [contact@tanh-lab.com](mailto:contact@tanh-lab.com).
 
