@@ -12,6 +12,19 @@
 
 **Anira** is a high-performance library designed to enable easy real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing. In the [paper](https://doi.org/10.1109/IS262782.2024.10704099) you can find more information about the architecture and the design decisions of **anira**, as well as extensive performance evaluations with the built-in benchmarking capabilities.
 
+## News
+
+**anira user research: September to October 2026**
+
+As part of our work funded by the [Prototype Fund](https://prototypefund.de/), we want to provide example implementations with ready-made, plug-and-play models that the open-source community actually needs, e.g. for real-time audio or video processing.
+
+To find out which models would be most useful, we'd love to hear from you, whether you already use anira or are just interested in real-time AI.
+
+[Take the survey](#) (open until the end of October 2026)
+
+Already using anira? We'd love a short interview about your experience. Just reach out at [contact@tanh-lab.com](mailto:contact@tanh-lab.com).
+
+
 ## Documentation
 
 An extensive documentation of anira can be found at [https://anira-project.github.io/anira/](https://anira-project.github.io/anira/).
