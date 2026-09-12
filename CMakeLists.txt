@@ -38,7 +38,12 @@ option(ANIRA_WITH_LITERT      "Build with the LiteRT backend (LiteRt* C API; run
 option(ANIRA_WITH_TFLITE      "Build with the legacy TensorFlow Lite backend (TfLite* C API); mutually exclusive with ANIRA_WITH_LITERT" OFF)
 option(ANIRA_WITH_EXECUTORCH  "Build with the ExecuTorch backend (runs .pte models; static-only)" ON)
 
-set(ANIRA_BACKENDS_VERSION "" CACHE STRING "anira-project/backends release tag to download (default: built-in)")
+set(ANIRA_BACKENDS_VERSION "" CACHE STRING "Legacy umbrella anira-project/backends release tag (<= v2.4.0) for every engine; default: the per-engine tags built into cmake/backends.cmake (override one with ANIRA_<ENGINE>_TAG)")
+foreach(_anira_eng ONNXRUNTIME LIBTORCH TFLITE LITERT EXECUTORCH)
+    set(ANIRA_${_anira_eng}_TAG "" CACHE STRING "anira-project/backends release tag for this engine (<engine>-v<version>[-n]); default: built-in")
+    set(ANIRA_${_anira_eng}_VARIANT "" CACHE STRING "backends archive variant: '' (CPU-only) | gpu | cuda")
+endforeach()
+unset(_anira_eng)
 option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for backend integrity at configure" OFF)
 # Linkage follows BUILD_SHARED_LIBS (cmake/validate-options.cmake). Bring your own
 # engine via -DANIRA_<ENGINE>_ROOTDIR / _URL [+ _SHA256].

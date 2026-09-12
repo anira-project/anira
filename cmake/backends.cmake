@@ -6,10 +6,18 @@
 # against. Replaces the per-engine SetupOnnxRuntime / SetupLibTorch /
 # SetupTensorflowLite scripts.
 #
-# Binaries come from the anira-project/backends GitHub release whose tag is
-# ANIRA_BACKENDS_VERSION. Every archive is named
-#   <libname>-<version>-<OS>-<arch>[-<extra>]-<linkage>[-debug].zip
+# Binaries come from anira-project/backends GitHub releases. Since backends
+# switched to ONE RELEASE PER BACKEND, each engine has its own tag,
+# `<engine>-v<upstream version>[-<n>]` (onnxruntime-v1.30.0, litert-v2.2.0, ...):
+# the default per engine is the table in _anira_engine_tag(), overridable per engine
+# with ANIRA_<ENGINE>_TAG; the legacy umbrella releases (<= v2.4.0, every backend under
+# one anira-version tag) stay reachable through ANIRA_BACKENDS_VERSION, which — when set
+# — is the tag for every engine. Every archive is named
+#   <libname>-<version>-<OS>-<arch>[-<variant>]-<linkage>[-debug].zip
 # and unpacks to a uniform tree (include/ + lib/, plus share/ + bin/ for libtorch).
+# <variant> selects a GPU package: the default archives are CPU-only, "-gpu" carries the
+# platform's GPU execution providers / delegates (and, for ONNX Runtime, the WebGPU EP with
+# its Dawn), "-cuda" the NVIDIA CUDA build (CUDA + cuDNN are user-provided at runtime).
 #
 # Integrity is checked live: at configure time anira asks the GitHub release for
 # each asset's published sha256 (when reachable) and re-downloads any backend whose
@@ -28,7 +36,11 @@
 # package defines the same targets from the install prefix (install.cmake).
 #
 # Configurable cache variables (see CMakeLists.txt for the user-facing options):
-#   ANIRA_BACKENDS_VERSION          release tag to download from (default v2.4.0)
+#   ANIRA_<ENGINE>_TAG              backends release tag for this engine (default: the
+#                                   per-engine table in _anira_engine_tag)
+#   ANIRA_<ENGINE>_VARIANT          "" (CPU, default) | gpu | cuda — the archive variant
+#   ANIRA_BACKENDS_VERSION          legacy umbrella release tag (<= v2.4.0); when set it
+#                                   overrides every engine's tag
 #   ANIRA_BACKENDS_SKIP_REMOTE_CHECK  skip the live integrity check (offline/reproducible)
 #   ANIRA_<ENGINE>_ROOTDIR          bring-your-own: use this prebuilt tree, skip download
 #   ANIRA_<ENGINE>_URL              override the download URL (custom mirror/build)
@@ -51,14 +63,43 @@ foreach(_ab_engine onnxruntime tflite litert libtorch executorch)
 endforeach()
 unset(_ab_engine)
 
-# Default backends release tag. Bump this (and the per-engine versions in
-# _anira_engine_version) when pointing anira at a new anira-project/backends release.
-# v2.3.0 ships the static desktop LiteRT archives pre-isolated to their LiteRt* C
+# ------------------------------------------------------------------------------
+# _anira_engine_tag(<id> <version> <out>) — the backends release tag an engine's
+# archives are downloaded from. Precedence: ANIRA_<ID>_TAG, then the legacy umbrella
+# ANIRA_BACKENDS_VERSION (every backend under one anira-version tag, releases
+# <= v2.4.0), then the per-engine default below. backends publishes one release per
+# backend, tagged `<engine>-v<upstream version>[-<n>]`; the default for an engine is
+# the umbrella v2.4.0 until that engine's first per-engine release is cut, then its
+# per-engine tag — bump this table together with _anira_engine_version.
+# v2.3.0+ ships the static desktop LiteRT archives pre-isolated to their LiteRt* C
 # API (vendored XNNPACK/cpuinfo/pthreadpool internals localized/renamed at
 # packaging), which is what allows static LiteRT + ExecuTorch in one image.
-if(NOT DEFINED ANIRA_BACKENDS_VERSION OR ANIRA_BACKENDS_VERSION STREQUAL "")
-    set(ANIRA_BACKENDS_VERSION "v2.4.0")
-endif()
+# ------------------------------------------------------------------------------
+function(_anira_engine_tag id version out)
+    string(TOUPPER "${id}" _ID)
+    if(DEFINED ANIRA_${_ID}_TAG AND NOT ANIRA_${_ID}_TAG STREQUAL "")
+        set(${out} "${ANIRA_${_ID}_TAG}" PARENT_SCOPE)
+    elseif(DEFINED ANIRA_BACKENDS_VERSION AND NOT ANIRA_BACKENDS_VERSION STREQUAL "")
+        set(${out} "${ANIRA_BACKENDS_VERSION}" PARENT_SCOPE)
+    else()
+        # Per-engine defaults. "umbrella" = still served by the last umbrella release
+        # (v2.4.0); replace with "${id}-v${version}" once the per-engine release exists.
+        set(_umbrella "v2.4.0")
+        if(id STREQUAL "onnxruntime")
+            set(${out} "${_umbrella}" PARENT_SCOPE)
+        elseif(id STREQUAL "libtorch")
+            set(${out} "${_umbrella}" PARENT_SCOPE)
+        elseif(id STREQUAL "tflite")
+            set(${out} "${_umbrella}" PARENT_SCOPE)
+        elseif(id STREQUAL "litert")
+            set(${out} "${_umbrella}" PARENT_SCOPE)
+        elseif(id STREQUAL "executorch")
+            set(${out} "${_umbrella}" PARENT_SCOPE)
+        else()
+            set(${out} "${id}-v${version}" PARENT_SCOPE)
+        endif()
+    endif()
+endfunction()
 
 # ------------------------------------------------------------------------------
 # _anira_backend_libname(<id> <out>) — archive/lib prefix for an engine id.
@@ -120,32 +161,35 @@ function(_anira_download url dest out_status)
 endfunction()
 
 # ------------------------------------------------------------------------------
-# _anira_release_json(<out>) — download the backends release metadata once per
-# configure and cache the path (empty if the check is disabled / unreachable /
-# CMake too old for string(JSON)). Honors $GITHUB_TOKEN to dodge API rate limits.
+# _anira_release_json(<tag> <out>) — download the metadata of the backends release
+# <tag> once per configure and cache the path (empty if the check is disabled /
+# unreachable / CMake too old for string(JSON)). One fetch per distinct tag: with
+# per-engine releases every engine may sit on its own. Honors $GITHUB_TOKEN to dodge
+# API rate limits.
 # ------------------------------------------------------------------------------
-function(_anira_release_json out)
-    get_property(_done GLOBAL PROPERTY _ANIRA_RELEASE_JSON_DONE)
+function(_anira_release_json tag out)
+    string(MAKE_C_IDENTIFIER "${tag}" _key)
+    get_property(_done GLOBAL PROPERTY _ANIRA_RELEASE_JSON_DONE_${_key})
     if(_done)
-        get_property(_p GLOBAL PROPERTY _ANIRA_RELEASE_JSON_PATH)
+        get_property(_p GLOBAL PROPERTY _ANIRA_RELEASE_JSON_PATH_${_key})
         set(${out} "${_p}" PARENT_SCOPE)
         return()
     endif()
-    set_property(GLOBAL PROPERTY _ANIRA_RELEASE_JSON_DONE TRUE)
-    set_property(GLOBAL PROPERTY _ANIRA_RELEASE_JSON_PATH "")
+    set_property(GLOBAL PROPERTY _ANIRA_RELEASE_JSON_DONE_${_key} TRUE)
+    set_property(GLOBAL PROPERTY _ANIRA_RELEASE_JSON_PATH_${_key} "")
     set(${out} "" PARENT_SCOPE)
 
     if(ANIRA_BACKENDS_SKIP_REMOTE_CHECK OR CMAKE_VERSION VERSION_LESS "3.19")
         return()
     endif()
 
-    set(_json "${CMAKE_BINARY_DIR}/anira-backends-release.json")
+    set(_json "${CMAKE_BINARY_DIR}/anira-backends-release-${_key}.json")
     set(_hdrs HTTPHEADER "Accept: application/vnd.github+json")
     if(DEFINED ENV{GITHUB_TOKEN} AND NOT "$ENV{GITHUB_TOKEN}" STREQUAL "")
         list(APPEND _hdrs HTTPHEADER "Authorization: Bearer $ENV{GITHUB_TOKEN}")
     endif()
     _anira_download(
-        "https://api.github.com/repos/anira-project/backends/releases/tags/${ANIRA_BACKENDS_VERSION}"
+        "https://api.github.com/repos/anira-project/backends/releases/tags/${tag}"
         "${_json}" _st TIMEOUT 20 ${_hdrs})
     list(GET _st 0 _code)
     if(NOT _code EQUAL 0)
@@ -154,17 +198,17 @@ function(_anira_release_json out)
         file(REMOVE "${_json}")
         return()
     endif()
-    set_property(GLOBAL PROPERTY _ANIRA_RELEASE_JSON_PATH "${_json}")
+    set_property(GLOBAL PROPERTY _ANIRA_RELEASE_JSON_PATH_${_key} "${_json}")
     set(${out} "${_json}" PARENT_SCOPE)
 endfunction()
 
 # ------------------------------------------------------------------------------
-# _anira_asset_digest(<asset-basename> <out>) — the sha256 GitHub publishes for
-# <asset-basename>.zip in the release, or "" if unavailable.
+# _anira_asset_digest(<tag> <asset-basename> <out>) — the sha256 GitHub publishes
+# for <asset-basename>.zip in the release <tag>, or "" if unavailable.
 # ------------------------------------------------------------------------------
-function(_anira_asset_digest asset out)
+function(_anira_asset_digest tag asset out)
     set(${out} "" PARENT_SCOPE)
-    _anira_release_json(_json)
+    _anira_release_json("${tag}" _json)
     if(_json STREQUAL "" OR NOT EXISTS "${_json}")
         return()
     endif()
@@ -341,11 +385,11 @@ endfunction()
 #     download fails, extract, then write the stamp LAST so a half-extracted tree
 #     is never taken for complete. The stamp doubles as the re-download trigger.
 # ------------------------------------------------------------------------------
-function(_anira_acquire_backend url asset dest)
+function(_anira_acquire_backend tag url asset dest)
     set(_stamp "${dest}.sha256")
     set(_zip "${CMAKE_BINARY_DIR}/import/${asset}.zip")
 
-    _anira_asset_digest("${asset}" _digest)
+    _anira_asset_digest("${tag}" "${asset}" _digest)
 
     set(_reuse FALSE)
     if(EXISTS "${dest}/" AND EXISTS "${_stamp}")
@@ -554,6 +598,25 @@ macro(anira_setup_backend id)
             message(FATAL_ERROR "anira: no known version for ${_ab_libname}. Set ANIRA_${_ab_ID}_VERSION or ANIRA_${_ab_ID}_ROOTDIR.")
         endif()
         set(ANIRA_${_ab_ID}_VERSION "${_ab_version}") # expose the resolved version (e.g. for BuildWasm license bundling)
+        _anira_engine_tag("${_ab_id}" "${_ab_version}" _ab_tag)
+
+        # Variant: "" (CPU-only default) | gpu | cuda — the archive-name token between the
+        # platform and the linkage. GPU is always a separate archive on the backends side.
+        set(_ab_variant "")
+        if(DEFINED ANIRA_${_ab_ID}_VARIANT AND NOT ANIRA_${_ab_ID}_VARIANT STREQUAL "")
+            set(_ab_variant "${ANIRA_${_ab_ID}_VARIANT}")
+            if(NOT _ab_variant MATCHES "^(gpu|cuda)$")
+                message(FATAL_ERROR "anira: ANIRA_${_ab_ID}_VARIANT must be '', 'gpu' or 'cuda' (got '${_ab_variant}')")
+            endif()
+            if(_ab_os STREQUAL "WASM")
+                message(FATAL_ERROR "anira: no ${_ab_variant} variant of ${_ab_id} on WebAssembly")
+            endif()
+        endif()
+        set(ANIRA_${_ab_ID}_VARIANT "${_ab_variant}")
+        set(_ab_vtoken "")
+        if(NOT _ab_variant STREQUAL "")
+            set(_ab_vtoken "-${_ab_variant}")
+        endif()
 
         # Windows static additionally ships a Debug variant (except executorch,
         # which publishes a single static archive per platform).
@@ -563,18 +626,18 @@ macro(anira_setup_backend id)
             set(_ab_linktoken "static-debug")
         endif()
 
-        # Asset name: <libname>-<version>-<OS>[-<arch>]-<linktoken>. The mobile OSes
-        # bundle their architectures inside one archive: Android has no arch token
+        # Asset name: <libname>-<version>-<OS>[-<arch>][-<variant>]-<linktoken>. The mobile
+        # OSes bundle their architectures inside one archive: Android has no arch token
         # (every ABI lives under lib/<abi>/) and iOS is a single -xcframework asset
         # (device + simulator slices, always static), so neither carries an arch.
         if(_ab_os STREQUAL "WASM")
             set(_ab_asset "${_ab_libname}-${_ab_version}-WASM-${_ab_linktoken}")
         elseif(_ab_os STREQUAL "Android")
-            set(_ab_asset "${_ab_libname}-${_ab_version}-Android-${_ab_linktoken}")
+            set(_ab_asset "${_ab_libname}-${_ab_version}-Android${_ab_vtoken}-${_ab_linktoken}")
         elseif(_ab_os STREQUAL "iOS")
-            set(_ab_asset "${_ab_libname}-${_ab_version}-iOS-xcframework")
+            set(_ab_asset "${_ab_libname}-${_ab_version}-iOS${_ab_vtoken}-xcframework")
         else()
-            set(_ab_asset "${_ab_libname}-${_ab_version}-${_ab_os}-${_ab_arch}-${_ab_linktoken}")
+            set(_ab_asset "${_ab_libname}-${_ab_version}-${_ab_os}-${_ab_arch}${_ab_vtoken}-${_ab_linktoken}")
         endif()
 
         set(_ab_rootdir "${ANIRA_BACKENDS_MODULES_DIR}/${_ab_asset}")
@@ -587,8 +650,8 @@ macro(anira_setup_backend id)
             _anira_download_extract("${ANIRA_${_ab_ID}_URL}" "${_ab_sha}" "${_ab_rootdir}" "${_ab_asset}.zip" FALSE)
         else()
             # backends release: live integrity check + self-healing re-download.
-            set(_ab_url "https://github.com/anira-project/backends/releases/download/${ANIRA_BACKENDS_VERSION}/${_ab_asset}.zip")
-            _anira_acquire_backend("${_ab_url}" "${_ab_asset}" "${_ab_rootdir}")
+            set(_ab_url "https://github.com/anira-project/backends/releases/download/${_ab_tag}/${_ab_asset}.zip")
+            _anira_acquire_backend("${_ab_tag}" "${_ab_url}" "${_ab_asset}" "${_ab_rootdir}")
         endif()
     endif()
 
@@ -722,7 +785,11 @@ endmacro()
         unset(_ab_extra_link_opts)
     endif()
 
-    message(STATUS "anira: ${id} ready (${_ab_linkage}) at ${_ab_rootdir}")
+    if(DEFINED _ab_variant AND NOT _ab_variant STREQUAL "")
+        message(STATUS "anira: ${id} ready (${_ab_linkage}, ${_ab_variant} variant) at ${_ab_rootdir}")
+    else()
+        message(STATUS "anira: ${id} ready (${_ab_linkage}) at ${_ab_rootdir}")
+    endif()
 endmacro()
 
 
