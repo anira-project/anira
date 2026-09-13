@@ -217,7 +217,23 @@ configurable (the linkage is not: it follows ``BUILD_SHARED_LIBS``, see above):
   the legacy umbrella releases (`v2.4.0` and older, every backend under one tag) via ``-DANIRA_BACKENDS_VERSION=v2.4.0``.
 - GPU variant archive: ``-DANIRA_<ENGINE>_VARIANT=gpu`` (the platform's GPU execution providers / delegates; for
   ONNX Runtime also the WebGPU EP with its Dawn, exposed as `anira::webgpu_dawn`) or ``=cuda`` (NVIDIA; CUDA +
-  cuDNN are user-provided at runtime). The default archives are CPU-only.
+  cuDNN are user-provided at runtime). The default archives are CPU-only. What each variant contains:
+
+| Target                  | ONNX Runtime `gpu`                     | ONNX Runtime / LibTorch `cuda` | LibTorch `gpu` | ExecuTorch `gpu`             | LiteRT `gpu`               | TFLite `gpu`             |
+| ----------------------- | -------------------------------------- | ------------------------------ | -------------- | ---------------------------- | -------------------------- | ------------------------ |
+| macOS `x86_64` / `arm64`| CoreML EP + WebGPU EP (Metal) ¹        | —                              | MPS (`arm64`)  | CoreML + MPS (+ MLX `arm64` ²) | Metal accelerator (`arm64`) | Metal delegate           |
+| Windows `x86_64`        | DirectML EP + WebGPU EP (D3D12)        | CUDA EP / CUDA 13              | —              | —                            | WebGPU accelerator (D3D12) | —                        |
+| Windows `arm64`         | DirectML EP + WebGPU EP (D3D12)        | —                              | —              | —                            | —                          | —                        |
+| Linux `x86_64`          | WebGPU EP (Vulkan)                     | CUDA EP / CUDA 13              | —              | Vulkan delegate              | WebGPU accelerator (Vulkan)| —                        |
+| Linux `aarch64`         | —                                      | —                              | —              | —                            | WebGPU accelerator (Vulkan)| —                        |
+| Android                 | —                                      | —                              | —              | Vulkan delegate              | OpenCL/GL + WebGPU accelerators | OpenCL delegate     |
+| iOS                     | CoreML EP                              | —                              | —              | CoreML + MPS                 | —                          | Metal + CoreML delegates |
+
+  ¹ requires macOS 13.3+ (WebGPU EP floor). ² requires macOS 14+ (MLX). Every ONNX Runtime `gpu`
+  archive ships its own Dawn (`anira::webgpu_dawn`, `ANIRA_ONNXRUNTIME_DAWN_VERSION`); anira's
+  `Machine` owns that Dawn and hands ORT its proc table. Selecting a variant only changes which
+  archive is downloaded — the provider is picked per model through `anira::InferenceConfig`.
+  Full matrix, smoke policy and the open legs: [backends `docs/gpu-support.md`](https://github.com/anira-project/backends/blob/main/docs/gpu-support.md).
 - Offline / reproducible builds: ``-DANIRA_BACKENDS_SKIP_REMOTE_CHECK=ON`` skips the GitHub query and reuses whatever is already in `modules/`.
 - Bring your own backend (no fork): ``-DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt`` (a tree with `include/` + `lib/`), or a custom source via ``-DANIRA_<ENGINE>_URL=... -DANIRA_<ENGINE>_SHA256=...``.
 
