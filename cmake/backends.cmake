@@ -82,15 +82,10 @@ function(_anira_engine_tag id version out)
     elseif(DEFINED ANIRA_BACKENDS_VERSION AND NOT ANIRA_BACKENDS_VERSION STREQUAL "")
         set(${out} "${ANIRA_BACKENDS_VERSION}" PARENT_SCOPE)
     else()
-        # Per-engine defaults: the engine's per-engine release, `<id>-v<version>` (tagged
-        # 2026-09-13 for executorch/libtorch/tflite/litert). "umbrella" = still served by the
-        # last umbrella release (v2.4.0) until that engine's first per-engine release is cut.
-        set(_umbrella "v2.4.0")
-        if(id STREQUAL "onnxruntime")
-            set(${out} "${_umbrella}" PARENT_SCOPE)   # onnxruntime-v1.30.0 follows (WebGPU/Dawn PR)
-        else()
-            set(${out} "${id}-v${version}" PARENT_SCOPE)
-        endif()
+        # Per-engine defaults: the engine's per-engine release, `<id>-v<version>`.
+        # (every engine has one as of 2026-09-13; the umbrella v2.4.0 stays reachable through
+        # ANIRA_BACKENDS_VERSION)
+        set(${out} "${id}-v${version}" PARENT_SCOPE)
     endif()
 endfunction()
 
@@ -121,7 +116,7 @@ function(_anira_engine_version libname out)
     if(libname STREQUAL "libtorch")
         set(${out} "2.12.0" PARENT_SCOPE)
     elseif(libname STREQUAL "onnxruntime")
-        set(${out} "1.26.0" PARENT_SCOPE)
+        set(${out} "1.30.0" PARENT_SCOPE)
     elseif(libname STREQUAL "tensorflowlite_c")
         set(${out} "2.17.0" PARENT_SCOPE)
     elseif(libname STREQUAL "LiteRt")
