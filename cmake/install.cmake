@@ -285,6 +285,34 @@ unset(_location)
 unset(_location_dir)
 unset(_implib)
 
+# The onnxruntime -gpu package's Dawn (anira::webgpu_dawn): its library is copied with
+# lib/ by _anira_install_engine_libs and its headers with include/ (the same tree
+# anira::onnxruntime already points at), so the twin definition only needs the paths.
+if(ANIRA_WITH_ONNXRUNTIME AND ANIRA_ONNXRUNTIME_HAS_WEBGPU)
+    if(TANH_BINARY_FORMAT STREQUAL "PE")
+        set(_location_dir "\${_anira_bindir}")
+    else()
+        set(_location_dir "\${_anira_libdir}")
+    endif()
+    set(_location "")
+    if(ANIRA_WEBGPU_DAWN_SHARED_LIB_SUBPATH)
+        set(_location "\n    LOCATION \"${_location_dir}/${ANIRA_WEBGPU_DAWN_SHARED_LIB_SUBPATH}\"")
+    endif()
+    set(_implib "")
+    if(ANIRA_WEBGPU_DAWN_IMPLIB_SUBPATH)
+        set(_implib "\n    IMPLIB \"\${_anira_libdir}/${ANIRA_WEBGPU_DAWN_IMPLIB_SUBPATH}\"")
+    endif()
+    string(APPEND _anira_installed_targets
+        "anira_define_backend_target(webgpu_dawn SHARED${_location}${_implib}\n"
+        "    INCLUDE_DIRS \"\${_anira_incdir}/onnxruntime\"\n"
+        "    DEFINITIONS DAWN_NATIVE_SHARED_LIBRARY WGPU_SHARED_LIBRARY)\n"
+        "set(ANIRA_ONNXRUNTIME_HAS_WEBGPU TRUE)\n"
+        "set(ANIRA_ONNXRUNTIME_DAWN_VERSION \"${ANIRA_ONNXRUNTIME_DAWN_VERSION}\")\n")
+    unset(_location)
+    unset(_location_dir)
+    unset(_implib)
+endif()
+
 if(ANIRA_WITH_LIBTORCH)
     string(APPEND _anira_installed_targets [=[
 # LibTorch: its own CMake package, installed into lib/cmake/{Torch,Caffe2}. Its
