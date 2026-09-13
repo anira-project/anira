@@ -82,10 +82,15 @@ function(_anira_engine_tag id version out)
     elseif(DEFINED ANIRA_BACKENDS_VERSION AND NOT ANIRA_BACKENDS_VERSION STREQUAL "")
         set(${out} "${ANIRA_BACKENDS_VERSION}" PARENT_SCOPE)
     else()
-        # Per-engine defaults: the engine's per-engine release, `<id>-v<version>`.
-        # (every engine has one as of 2026-09-13; the umbrella v2.4.0 stays reachable through
-        # ANIRA_BACKENDS_VERSION)
-        set(${out} "${id}-v${version}" PARENT_SCOPE)
+        # Per-engine defaults: the engine's per-engine release, `<id>-v<version>[-<n>]`. A
+        # re-cut of the same upstream version (a packaging change) carries the ordinal `-<n>`;
+        # pin it here per engine. (Every engine has a per-engine release as of 2026-09-13;
+        # the umbrella v2.4.0 stays reachable through ANIRA_BACKENDS_VERSION.)
+        set(_recut "")
+        if(id STREQUAL "onnxruntime")
+            set(_recut "-2")   # -2: WebGPU EP + Dawn in the macOS/Windows -gpu archives as well
+        endif()
+        set(${out} "${id}-v${version}${_recut}" PARENT_SCOPE)
     endif()
 endfunction()
 
