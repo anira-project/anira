@@ -226,7 +226,7 @@ configurable (the linkage is not: it follows ``BUILD_SHARED_LIBS``, see above):
 | Windows `arm64`         | DirectML EP + WebGPU EP (D3D12)        | —                              | —              | —                            | —                          | —                        |
 | Linux `x86_64`          | WebGPU EP (Vulkan)                     | CUDA EP / CUDA 13              | —              | Vulkan delegate              | WebGPU accelerator (Vulkan)| —                        |
 | Linux `aarch64`         | —                                      | —                              | —              | —                            | WebGPU accelerator (Vulkan)| —                        |
-| Android                 | —                                      | —                              | —              | Vulkan delegate              | OpenCL/GL + WebGPU accelerators | OpenCL delegate     |
+| Android                 | WebGPU EP (Vulkan)                     | —                              | —              | Vulkan delegate              | OpenCL/GL + WebGPU accelerators | OpenCL delegate     |
 | iOS                     | CoreML EP                              | —                              | —              | CoreML + MPS                 | Metal accelerator (dynamic) | Metal + CoreML delegates |
 
   ¹ requires macOS 13.3+ (WebGPU EP floor). ² requires macOS 14+ (MLX). Every ONNX Runtime `gpu`
