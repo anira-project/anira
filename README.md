@@ -225,7 +225,7 @@ configurable (the linkage is not: it follows ``BUILD_SHARED_LIBS``, see above):
 | Windows `x86_64`        | DirectML EP + WebGPU EP (D3D12)        | CUDA EP / CUDA 13              | —              | —                            | WebGPU accelerator (D3D12) | —                        |
 | Windows `arm64`         | DirectML EP + WebGPU EP (D3D12)        | —                              | —              | —                            | —                          | —                        |
 | Linux `x86_64`          | WebGPU EP (Vulkan)                     | CUDA EP / CUDA 13              | —              | Vulkan delegate              | WebGPU accelerator (Vulkan)| —                        |
-| Linux `aarch64`         | —                                      | —                              | —              | —                            | WebGPU accelerator (Vulkan)| —                        |
+| Linux `aarch64`         | WebGPU EP (Vulkan)                     | —                              | —              | —                            | WebGPU accelerator (Vulkan)| —                        |
 | Android                 | WebGPU EP (Vulkan)                     | —                              | —              | Vulkan delegate              | OpenCL/GL + WebGPU accelerators | OpenCL delegate     |
 | iOS                     | CoreML EP                              | —                              | —              | CoreML + MPS                 | Metal accelerator (dynamic) | Metal + CoreML delegates |
 

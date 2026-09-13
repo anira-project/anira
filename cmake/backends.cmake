@@ -88,7 +88,7 @@ function(_anira_engine_tag id version out)
         # the umbrella v2.4.0 stays reachable through ANIRA_BACKENDS_VERSION.)
         set(_recut "")
         if(id STREQUAL "onnxruntime")
-            set(_recut "-3")   # -2: WebGPU EP + Dawn in the macOS/Windows -gpu archives; -3: DAWN_VERSION packed, Android -gpu
+            set(_recut "-4")   # -2: WebGPU EP + Dawn on macOS/Windows; -3: DAWN_VERSION packed, Android -gpu; -4: Linux aarch64 -gpu
         elseif(id STREQUAL "litert")
             set(_recut "-3")   # -2: Android -gpu bundle; -3: iOS -gpu + iOS slices at the 2.2.0 pin
         elseif(id STREQUAL "executorch" OR id STREQUAL "tflite")
