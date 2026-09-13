@@ -89,8 +89,10 @@ function(_anira_engine_tag id version out)
         set(_recut "")
         if(id STREQUAL "onnxruntime")
             set(_recut "-2")   # -2: WebGPU EP + Dawn in the macOS/Windows -gpu archives as well
-        elseif(id STREQUAL "executorch" OR id STREQUAL "litert" OR id STREQUAL "tflite")
-            set(_recut "-2")   # -2: Android -gpu bundles (Vulkan / LiteRT accelerators / OpenCL delegate)
+        elseif(id STREQUAL "litert")
+            set(_recut "-3")   # -2: Android -gpu bundle; -3: iOS -gpu + iOS slices at the 2.2.0 pin
+        elseif(id STREQUAL "executorch" OR id STREQUAL "tflite")
+            set(_recut "-2")   # -2: Android -gpu bundles (Vulkan / OpenCL delegate)
         endif()
         set(${out} "${id}-v${version}${_recut}" PARENT_SCOPE)
     endif()
