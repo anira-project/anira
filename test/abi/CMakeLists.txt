@@ -15,6 +15,9 @@
 #   anira_header_coexist  the v2 C++ umbrella and the C headers in one TU, both orders
 #   anira_header_cxx20_with_v2
 #                         the v2 C++ umbrella and anira.hpp in one TU, both orders
+#   anira_abi_rt_contract gate 6 (seed): test_rt_contract.c, one ANIRA_NONBLOCKING function
+#                         calling every [callback-safe] tensor entry, under
+#                         -Werror=function-effects on clang 20 or later
 #   anira_abi_link        presence: generated/link_probe.c takes the address of every
 #                         promised and draft entry point and links anira::anira the way a
 #                         consumer does; an entry without a body fails this link (on a
@@ -148,6 +151,27 @@ else()
     anira_abi_build_test(anira_header_cxx20)
 endif()
 anira_abi_consumer_target(anira_header_cxx20 CXX 20)
+
+# ---- gate 6 (seed): the real-time contract in a consumer's compiler -------------------------
+# test_rt_contract.c is one ANIRA_NONBLOCKING function calling every [callback-safe] entry of
+# the tensor headers. Consumer-shaped like the header gates (C11, the strict flags, no anira
+# define), plus -Werror=function-effects where the compiler has the analysis: upstream clang
+# 20 or later behind the GNU front end. gcc rejects the flag outright; an older clang (an NDK)
+# and AppleClang, whose version numbers are its own, may not know the warning group, which
+# the strict -Werror would turn fatal; clang-cl is left out until a leg proves it. There the
+# file is plain C11. Nothing links it: a regression is a compiler error.
+if(_abi_on_device)
+    add_library(anira_abi_rt_contract OBJECT test_rt_contract.c)
+else()
+    add_library(anira_abi_rt_contract OBJECT EXCLUDE_FROM_ALL test_rt_contract.c)
+    anira_abi_build_test(anira_abi_rt_contract)
+endif()
+anira_abi_consumer_target(anira_abi_rt_contract C)
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang"
+        AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 20
+        AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(anira_abi_rt_contract PRIVATE -Werror=function-effects)
+endif()
 
 # ---- the umbrellas in one TU -------------------------------------------------------------
 # header_coexist.inc includes <anira/anira.h> and the C headers in the order its two
