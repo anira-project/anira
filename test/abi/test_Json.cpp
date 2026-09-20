@@ -293,6 +293,27 @@ TEST(AbiJsonContext, LoadsTheDocumentExampleAndRoundTrips) {
     anira_context_config_destroy(context_config);
 }
 
+TEST(AbiJsonContext, AVulkanDeviceIndexSetFromCSurvivesToJson) {
+    anira_context_config* context_config = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_context_config_create(&context_config, &err), ANIRA_OK) << err.message;
+    anira_vulkan_desc vulkan = ANIRA_VULKAN_DESC_INIT;
+    vulkan.queue_family = 3;
+    vulkan.device_index = 2;
+    ASSERT_EQ(anira_context_config_set_vulkan(context_config, &vulkan), ANIRA_OK);
+    const std::string text = context_text(context_config);
+    EXPECT_NE(text.find("\"device\""), std::string::npos) << "the JSON key stays vulkan.device";
+    anira_context_config* again = nullptr;
+    ASSERT_EQ(anira_context_config_from_json(text.c_str(), text.size(), &again, &err), ANIRA_OK)
+        << err.message;
+    const anira_vulkan_desc loaded = again->m_vulkan.value_or(anira_vulkan_desc{});
+    EXPECT_EQ(loaded.device_index, 2) << "the slot the C setter filled, through to_json and back";
+    EXPECT_EQ(loaded.queue_family, 3u);
+    EXPECT_EQ(context_text(again), text);
+    anira_context_config_destroy(again);
+    anira_context_config_destroy(context_config);
+}
+
 TEST(AbiJsonContext, Rejections) {
     const char* npu = R"({"npu": {"plugins": "/opt"}})";
     const std::vector<std::pair<const char*, const char*>> cases = {

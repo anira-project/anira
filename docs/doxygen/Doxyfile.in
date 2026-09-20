@@ -2494,6 +2494,7 @@ PREDEFINED             = ANIRA_API= \
                          ANIRA_NONBLOCKING= \
                          ANIRA_NOEXCEPT= \
                          ANIRA_BLOCKING= \
+                         "ANIRA_PTR(T,name)=T* name" \
                          USE_LIBTORCH=1 \
                          USE_TFLITE=1 \
                          USE_LITERT=1 \

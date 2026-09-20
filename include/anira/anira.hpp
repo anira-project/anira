@@ -507,7 +507,9 @@ struct Tensor : anira_tensor {
 
     /// anira_tensor_data: the first element of a host tensor whose dtype equals the argument,
     /// nullptr otherwise; never converts.
-    void* data(DType dtype) const noexcept { return anira_tensor_data(this, dtype); }
+    void* data(DType element_dtype) const noexcept {
+        return anira_tensor_data(this, element_dtype);
+    }
 
     /// anira_tensor_plane: the first element of one plane of a planar host tensor whose dtype is
     /// T's, nullptr otherwise (a one-block tensor, a plane out of range, another dtype).

@@ -269,8 +269,9 @@ an ``anira::ContractHandle``.
 - **Ring dtype.** ``contract.hard_ring_dtype("audio_in", ANIRA_DTYPE_I16)``
   (``anira_contract_hard_set_ring_dtype``) names the element type of the host's samples for
   one tensor, by the tensor's canonical name: the ring holds exactly that type, the tensor
-  forms of the Hard entries (``abi/tensor.h``) carry it across the ABI as is, and the
-  ``_f32`` entries are legal on ``ANIRA_DTYPE_F32`` rings alone. Per tensor, so an
+  forms of the Hard entries (a later pre-release; they take the ``anira_tensor`` of
+  section 3.3) carry it across the ABI as is, and the ``_f32`` entries are legal on
+  ``ANIRA_DTYPE_F32`` rings alone. Per tensor, so an
   input and an output may differ; every tensor never set uses ``ANIRA_DTYPE_F32``. Nothing
   in anira converts: a name that is not a Streamed tensor, and a ring dtype that differs
   from the spec's dtype (the model's), are ``ANIRA_ERROR_CONFIG`` at prepare (a stage that
@@ -714,8 +715,8 @@ the output list; a Static tensor carries its values in channel 0 of the multi fo
 audio host hands out) and are legal on ``ANIRA_DTYPE_F32`` rings; ``anira_handler_process_f32``
 takes separate input and output buffers, ``_inplace`` is the 2.x shape over one buffer set,
 ``_multi`` covers every tensor at once. The bare names ``anira_handler_process`` / ``push_data``
-/ ``pop_data`` are reserved for the tensor forms of ``abi/tensor.h``, which carry their dtype
-on the tensor.
+/ ``pop_data`` are reserved for the tensor forms, which take the ``anira_tensor`` of
+section 3.3, carry their dtype on the tensor and arrive with a later pre-release.
 ``anira_handler_get_latency(h, i)`` and ``anira_handler_get_latencies(h, &count, out)``
 (index-aligned with the output list, ``0`` for a Static output) are valid from prepare on;
 ``anira_handler_get_available_samples(h, i, channel, &count)`` collects the completed
@@ -738,6 +739,221 @@ core's pool or ``anira_inference_thread_run_loop``; a host pumping
 ``anira_inference_thread_execute`` itself is not counted) they do what the nonblocking entry
 does and return ``ANIRA_ERROR_INVALID_STATE`` at once, the count holding what that delivered.
 A push never waits.
+
+3.3. Runtime tensors
+~~~~~~~~~~~~~~~~~~~~
+
+The unit of data between a host and anira at run time is the ``anira_tensor`` of
+``anira/abi/tensor.h``: a descriptor of memory, never the memory itself, 216 bytes, trivially
+copyable (it travels through lock-free FIFOs as it is) and identical on wasm32, LP64 and LLP64.
+Where the tensor spec of 1.1 describes a tensor at configuration time, this is the tensor at
+run time: ``domain`` (an ``anira_domain``: where the bytes live), ``dtype``, ``ndim``,
+``flags``, ``shape`` and ``strides`` (eight ``int64_t`` each; strides count elements, all-zero
+means packed row-major), ``byte_offset``, the memory ``handle``, the producer's ``manager_ctx``
+and ``release``, and ``acquire``, the fence after which the data is valid. ``handle`` is an
+``anira_memory_handle``, a 24-byte union with one arm per domain (``host`` for
+``ANIRA_DOMAIN_HOST`` and ``ANIRA_DOMAIN_HOST_PINNED``, ``cuda``, ``gl``, ``vk``, ``opaque``,
+``mtl``, ``iosurface``, ``wgpu``, ``dmabuf``, ``ahb``, ``d3d12``, ``planes`` for planar host
+memory (below), and ``raw[3]``, the handle as words); every arm is typeless memory and every
+vendor handle is carried at its wire width, so the descriptor is the only type and a pixel
+format never appears on a tensor. ``acquire`` is an ``anira_sync_token`` (24 bytes: ``kind``,
+``flags`` and the payload union ``u``); kind ``ANIRA_SYNC_NONE`` means the data is already
+visible. The three records are Tier 1: no ``struct_size`` and no version field, the ABI major
+is their version, their layout is committed in ``abi/layout-<major>.txt`` and mirrored for
+JavaScript in the generated ``web/src/abi/layout.ts``, and
+``anira_sizeof(ANIRA_STRUCT_TENSOR)`` answers an allocator that cannot see the header (``0``
+for an id this build does not know; in this pre-release that includes
+``ANIRA_STRUCT_STAGE_CTX``). No entry point takes an ``anira_tensor`` yet: the header freezes
+the records and ships their factories and accessors, only host memory is read, and the tensor
+forms of the Hard entries (3.2) and the Static tensor entries follow.
+
+**The factories.** ``anira_tensor_init_host(&t, data, dtype, ndim, shape)`` and
+``anira_tensor_init_pinned`` describe host memory; ``anira_tensor_init_cuda(&t, ptr, device,
+cuda_event, ...)``, ``anira_tensor_init_gl_buffer(&t, id, target, gl_sync, ...)``,
+``anira_tensor_init_vulkan(&t, buffer, memory, offset, timeline_semaphore, value, ...)``,
+``anira_tensor_init_opaque_fd(&t, fd, size, ...)``, ``anira_tensor_init_wgpu_buffer(&t,
+wgpu_buffer, offset, fence, ...)`` and ``anira_tensor_init_dmabuf(&t, fd, size, offset,
+sync_fd, ...)`` describe device memory, each ending in ``dtype, ndim, shape``. Every one fills
+the caller's record: it zeroes all 216 bytes and then writes the domain, the dtype, the rank,
+the first ``ndim`` extents, its arm of the handle and the fence, so strides, byte offset,
+flags, ``manager_ctx`` and ``release`` are zero (a borrowed, packed tensor) until the producer
+sets them. They are ``[thread-safe]`` ``[callback-safe]`` and ``ANIRA_NONBLOCKING``: field
+fills, legal from a render thread and from inside a stage callback, and they consume nothing.
+They return nothing either: a dtype of ``0``, a rank above ``ANIRA_MAX_RANK``, a ``NULL`` shape
+with a rank above ``0`` or a negative extent (a run-time extent is a count, never
+``ANIRA_DYNAMIC``) leave the record all-zero, which reads as dtype ``0`` and makes both data
+accessors return ``NULL``; no filled record has dtype ``0``. Every argument is read before the
+record is zeroed, so ``shape`` (and a token handed by pointer) may point into the record being
+filled: ``anira_tensor_init_host(&t, p, t.dtype, t.ndim, t.shape)`` re-points a tensor at new
+memory. The previous content is overwritten, never released: end an owning ``acquire`` token
+with ``anira_sync_token_reset`` and call a non-``NULL`` ``release`` before re-initialising a
+record. A ``NULL`` data pointer is accepted (a field fill never looks at the memory). A
+``NULL`` event, sync or fence, a timeline semaphore of ``0`` and a negative ``sync_fd`` leave
+``ANIRA_SYNC_NONE``: anira never fabricates a fence, and a WebGPU producer whose work is still
+on its queue passes a token of kind ``ANIRA_SYNC_QUEUE_ORDERED``. A token passed by pointer is
+copied into ``acquire`` and that copy is the hand-off; the caller does not reset its source,
+unless the call was refused: then the token was not copied and stays the caller's. The six
+device factories are field fills only in this pre-release: no adapter consumes their arms, and
+nothing validates a handle. ``anira_tensor_init_dlpack(&t, dl_managed_tensor_versioned, &err)``
+is the one factory that can fail with a message and therefore the one ``[main-thread]`` entry:
+it takes a DLPack 1.x ``DLManagedTensorVersioned*`` as ``void*`` (the header never includes
+``dlpack.h``), maps ``kDLCPU`` to ``ANIRA_DOMAIN_HOST`` and ``kDLCUDAHost`` to
+``ANIRA_DOMAIN_HOST_PINNED``, takes the ``DLDataType`` as the ``anira_dtype`` it already is
+(codes 0 to 6), copies shape, strides (``NULL`` strides, a producer older than DLPack 1.2, mean
+packed row-major), data pointer and byte offset, and maps ``DLPACK_FLAG_BITMASK_READ_ONLY`` to
+``ANIRA_TENSOR_READ_ONLY``. Another device, a dtype code above 6, a major version other than 1
+and strides that are present and all zero over more than one element (a fully broadcast view:
+all-zero strides are this record's spelling of packed row-major) are
+``ANIRA_ERROR_NOT_SUPPORTED``; a rank outside 0 to 8, a ``NULL`` shape, a negative extent and a
+dtype of 0 bits or 0 lanes are ``ANIRA_ERROR_INVALID_ARGUMENT``. A refused call leaves
+``*tensor`` untouched and consumes nothing: anira never calls the deleter of a tensor it
+refused, the caller keeps it.
+
+.. code-block:: c
+
+    #include <anira/abi/tensor.h>
+
+    float samples[2 * 512];
+    const int64_t shape[2] = { 2, 512 };                     /* [channels, samples] */
+    anira_tensor t;                                          /* caller memory: the stack is fine */
+    anira_tensor_init_host(&t, samples, ANIRA_DTYPE_F32, 2, shape);
+    float* first = anira_tensor_data_f32(&t);                /* samples; NULL for a device or a non-float tensor */
+    size_t count = anira_tensor_num_elements(&t);            /* 1024 */
+    size_t frames = anira_tensor_extent(&t, 1);              /* 512; 0 for an axis at or above ndim */
+
+    float left[512], right[512];
+    float* channels[2] = { left, right };                    /* an audio host's channel pointers */
+    anira_tensor planar;
+    anira_tensor_init_host_planar(&planar, channels, 2, ANIRA_DTYPE_F32, 2, shape);   /* no cast */
+    float* second = anira_tensor_plane(&planar, 1, ANIRA_DTYPE_F32);                  /* right */
+
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_tensor from_numpy;                                 /* managed: a DLManagedTensorVersioned* */
+    if (ANIRA_FAILED(anira_tensor_init_dlpack(&from_numpy, managed, &err))) { return fail(&err); }
+    /* ... off the driver thread, once the tensor is no longer needed: */
+    if (from_numpy.release != NULL) { from_numpy.release(&from_numpy); }   /* calls the producer's deleter, once */
+
+**The accessors.** ``anira_tensor_data_f32(&t)`` returns the first element, ``handle.host.ptr``
+plus ``byte_offset``, for a host or pinned tensor whose dtype is ``ANIRA_DTYPE_F32``, and
+``NULL`` for every other domain, every other dtype and a ``NULL`` base pointer: a stage that is
+handed a device tensor or a ``uint8`` tensor learns so from the ``NULL``, not from a crash.
+``anira_tensor_data(&t, dtype)`` is the same read for any element type and returns ``NULL``
+unless ``dtype`` is the tensor's own; nothing converts. Neither looks at the strides: they are
+returned as the producer declared them and the caller reads by them.
+``anira_tensor_num_elements(&t)`` is the product of the extents whatever the domain, ``1`` at
+rank 0, ``0`` with a zero extent and ``0`` for the all-zero record of a refused factory (dtype
+``0`` is never a filled record); ``anira_tensor_extent(&t, axis)`` is one extent and ``0`` for
+an axis at or above ``ndim``. Both are ``size_t``, a plain number on WebAssembly, and answer
+``0`` for what is not a count (a rank above 8, a negative extent, a product beyond ``size_t``).
+With ``anira_sizeof`` these are ``[thread-safe]`` ``[callback-safe]`` ``ANIRA_NONBLOCKING`` and
+the whole read surface.
+
+**Planar host memory.** An audio host holds a block as one pointer per channel, not as one
+block. ``anira_tensor_init_host_planar(&t, planes, count, dtype, ndim, shape)`` describes that
+memory without copying it: axis 0 is the plane axis, ``planes[i]`` is plane ``i``, ``count``
+must equal ``shape[0]`` (and the rank be 1 or more; otherwise the record stays all-zero), the
+flag ``ANIRA_TENSOR_PLANAR`` is set and ``handle.planes`` holds the pointer array, which is
+borrowed like the memory it names. ``strides[0]`` is ignored; the strides from axis 1 on and
+``byte_offset`` apply inside each plane. The array travels as ``const void*``, so a ``float**``
+and a ``const float* const*`` both convert without a cast, in C and in C++ (a C++ host that
+runs clang-tidy's ``bugprone-multi-level-implicit-pointer-conversion`` writes
+``static_cast<const void*>(channels)``, or uses the typed C++ spelling below). The factory has
+no flags and no domain parameter: over read-only planes OR ``ANIRA_TENSOR_READ_ONLY`` into
+``flags`` afterwards, over page-locked planes assign ``ANIRA_DOMAIN_HOST_PINNED``.
+``anira_tensor_plane(&t, plane, dtype)`` returns the first element of one plane and ``NULL``
+for a one-block tensor, a plane at or above ``handle.planes.count``, another domain or another
+dtype; ``anira_tensor_data`` and ``anira_tensor_data_f32`` return ``NULL`` for a planar tensor.
+Planar is a boundary representation of the two host domains: an entry accepts a planar tensor
+only where its own documentation says so, which is where it copies a host block; every other
+consumer, and every other domain, refuses the flag with ``ANIRA_ERROR_NOT_SUPPORTED``, and
+anira never hands a planar tensor to a stage, a backend or JavaScript. One block with strides
+covers the other two host layouts: contiguous is all-zero strides (or ``{N, 1}``), interleaved
+is strides ``{1, C}`` assigned on the record after ``anira_tensor_init_host``.
+
+**Ownership and release.** ``release == NULL`` means borrowed: the memory is the caller's and
+stays valid until the ticket is terminal (Async) or the call returns (Hard), and nothing is
+called back. A non-``NULL`` ``release`` (an ``anira_tensor_release_proc``, a function type in a
+pointer slot) unmaps, unregisters, recycles or frees what the producer attached through
+``manager_ctx``, which is the producer's bookkeeping and nothing else's: ``release`` reads it,
+anira never does, and it never holds edge state. anira calls ``release`` exactly once per
+submitted copy, one submit, one release: on an inference thread when the job reaches a terminal
+state, on the caller of the poll and wait entries under polled delivery, or on the caller of
+``anira_handler_prepare`` / ``anira_handler_destroy`` for a job still outstanding then. It
+never runs on the driver thread, which is why it may block and free (``[thread-safe,
+!audio-thread]``, not real-time). In this pre-release no entry point takes ownership of a
+tensor, so anira never calls it and the holder of a record with a non-``NULL`` ``release``
+calls it once itself. For a DLPack tensor ``manager_ctx`` is the managed tensor and ``release``
+a trampoline that first disarms the record (``release`` and ``manager_ctx`` become ``NULL``, so
+a second call on the same record does nothing) and then calls the producer's deleter; a
+``NULL`` deleter gives a borrowed tensor.
+
+.. warning::
+    A DLPack deleter is not real-time safe: it belongs to the producer and typically frees
+    memory, and a Python producer's takes the interpreter lock. ``release`` of a DLPack
+    tensor is exactly as blocking as that deleter; never call it from the driver thread. The
+    trampoline guards one record, not its bitwise copies: release one copy only.
+
+**Sync tokens.** Two kinds own an operating-system object: ``ANIRA_SYNC_SYNC_FILE_FD`` and
+``ANIRA_SYNC_OPAQUE_FD_SEMAPHORE`` own their file descriptor (``u.fd``, ``0`` or more; a
+negative one owns nothing). Every hand-off of such a token is a transfer: a producer must not
+close an fd it handed to a tensor (``anira_tensor_init_dmabuf``'s ``sync_fd`` is owned by the
+record's ``acquire`` from the call on, and stays the caller's when the call is refused), and
+the holder of the record ends it with ``anira_sync_token_reset(&token)``, which closes an owned
+fd and zeroes the token (kind ``ANIRA_SYNC_NONE``; a second reset closes nothing).
+``anira_sync_token_dup(&token, &out)`` makes a token that outlives its source: a new
+close-on-exec descriptor of the same open file for the two owning kinds, a plain copy for every
+other; ``ANIRA_ERROR_INVALID_ARGUMENT`` for a ``NULL`` or aliasing argument or an fd that is
+not open, ``ANIRA_ERROR_OUT_OF_MEMORY`` when the process is out of descriptors, ``*out``
+untouched on failure. Both are ``[thread-safe, !audio-thread]``, because closing and
+duplicating are system calls. After a reset test ``kind``, never the payload: under
+``ANIRA_SYNC_NONE`` it is never read. Every other kind (a CUDA event, a Vulkan timeline
+semaphore and its value, a ``GLsync``, a Metal shared event, a D3D12 fence) is a non-owning
+handle. On Windows ``u.fd`` of an owning kind is an NT handle (32 significant bits, above
+``0``), closed with ``CloseHandle`` and duplicated with ``DuplicateHandle``. On WebAssembly no
+sync kind owns an operating-system object: reset closes nothing, and ``dup`` of an owning kind
+with an fd of ``0`` or more is ``ANIRA_ERROR_NOT_SUPPORTED``.
+
+**The draft folder.** ``anira/abi/draft/`` holds what is declared but not yet promised. Its
+first header, ``anira/abi/draft/tensor_platform.h``, declares the factories of the platform
+arms that have no measured edge yet: ``anira_tensor_init_metal(&t, buffer, shared_event,
+...)``, ``anira_tensor_init_iosurface(&t, surface, size, shared_event, ...)``,
+``anira_tensor_init_ahardwarebuffer(&t, buffer, fence_fd, ...)`` and
+``anira_tensor_init_d3d12(&t, resource, shared_handle, fence, ...)`` (``shared_event`` and
+``fence`` are tokens, copied like the WebGPU fence; ``fence_fd`` follows the ``sync_fd`` rule).
+The arms they fill are frozen with ``anira_memory_handle``, because a Tier-1 layout cannot grow
+later; the factories are outside the ABI promise, their names are listed in
+``abi/symbols-draft.txt`` instead of ``abi/symbols-<major>.txt``, and a signature may change
+until the platform's column is measured. Promotion then moves the name into the promised list
+and the declaration into ``anira/abi/tensor.h``, and never renames it, so a host that calls a
+draft factory today recompiles and changes nothing. No umbrella header includes the draft
+folder: include the header by its own path. The four are field fills like the device factories,
+present on every platform.
+
+**Compiling the headers.** Every pointer of the three records sits in an ``ANIRA_PTR(T, name)``
+slot, an anonymous union of the pointer with a ``uint64_t name_bits``, 8 bytes on 32-bit and
+64-bit targets alike, which is what makes the layout identical everywhere. Two consequences for
+a host. Zero a record before filling it by hand (the factories do): on a 32-bit target the high
+half of a slot is otherwise undefined. And MSVC at ``/W4`` reports C4201 (nameless
+struct/union) for every slot, although an anonymous union is standard C11 and standard C++:
+compile with ``/wd4201``, as anira's own header gates do. The arms of ``anira_memory_handle``
+and of the token's ``u`` are unnamed struct types *with* a member name
+(``t.handle.cuda.device``, ``t.acquire.u.vk.value``), so the headers stay valid ISO C++17 under
+``-pedantic``. The layout is the natural alignment of every ABI anira builds for (wasm32, LP64,
+LLP64, 32-bit ARM, 32-bit MSVC); it does not hold on the i386 System V ABI, where 8-byte
+integers align to 4, which anira does not target.
+
+In C++, ``anira::Tensor`` and ``anira::SyncToken`` of ``anira/anira.hpp`` are these structs
+with names on them, not classes over them (a ``Tensor*`` is an ``anira_tensor*``):
+``anira::Tensor::from_host(samples, ANIRA_DTYPE_F32, shape)`` over a ``std::span<const
+int64_t>`` and its siblings ``from_pinned``, ``from_cuda``, ``from_gl_buffer``,
+``from_vulkan``, ``from_opaque_fd``, ``from_wgpu_buffer`` and ``from_dmabuf`` are the
+``noexcept`` field fills, ``anira::Tensor::from_host_planar<float>(channels, shape)`` over a
+``std::span<T* const>`` and ``plane<T>(i)`` are the typed spellings of the planar entries (the
+element type names the dtype, a const element type sets ``ANIRA_TENSOR_READ_ONLY``),
+``from_dlpack`` throws ``anira::Error`` with the entry's status and message, ``data_f32()``,
+``data(dtype)``, ``num_elements()`` and ``extent(axis)`` are the reads, ``SyncToken::reset()``
+and ``dup()`` the two token calls. The draft factories have no C++ spelling while they are
+unmeasured: call ``anira_tensor_init_metal(&tensor, ...)`` on a ``Tensor``.
 
 4. Get ready for Processing
 ---------------------------
