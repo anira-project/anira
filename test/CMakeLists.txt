@@ -75,6 +75,7 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_BackendSwitch.cpp
 	scheduler/test_ConcurrentLifecycle.cpp
 	scheduler/test_CoreConfigMismatch.cpp
+	scheduler/test_CopyPathOracle.cpp
 	scheduler/test_CoreLifecycle.cpp
 	scheduler/test_CreateSessionFailure.cpp
 	scheduler/test_FallbackPaths.cpp
@@ -123,6 +124,7 @@ anira_add_test_binary(test_abi
 	abi/test_Context.cpp
 	abi/test_Thread.cpp
 	abi/test_Handler.cpp
+	abi/test_HandlerCopyOracle.cpp
 	abi/test_HandlerWait.cpp
 	abi/test_Prepare.cpp
 	abi/test_RtError.cpp
