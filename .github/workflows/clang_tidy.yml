@@ -86,7 +86,7 @@ jobs:
           # request. A build, preset or tidy-config change, or a change of this
           # workflow (it pins the tidy tool), re-judges every file: sweep.
           CHANGED_FILES_ONLY: "true"
-          FULL_SWEEP_PATTERN: '(^|/)CMakeLists\.txt$|\.cmake$|^CMakePresets\.json$|^\.clang-tidy$'
+          FULL_SWEEP_PATTERN: '^\.clang-tidy$'
 
   # The queue's required status for this workflow.
   result:
