@@ -39,7 +39,6 @@ concurrency:
 
 jobs:
   sanitize:
-    if: github.event_name != 'pull_request'
     uses: tanh-lab/ci-actions/.github/workflows/build-sanitizer.yml@v0.3.14
     with:
       matrix_file: .github/sanitizer_matrix.json
