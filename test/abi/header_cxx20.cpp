@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <stdexcept>
 #include <type_traits>
 #include <variant>
@@ -43,6 +44,12 @@ static_assert(k_move_only<anira::ContextConfig>);
 static_assert(k_move_only<anira::ContractHandle>);
 static_assert(k_move_only<anira::JobOptionsHandle>);
 static_assert(k_move_only<anira::Context>);
+static_assert(k_move_only<anira::Pipeline>);
+
+// The plan report is a view, copied freely; the inference stage takes one model config.
+static_assert(std::is_copy_constructible_v<anira::PlanReport>);
+static_assert(std::is_constructible_v<anira::stage::Inference, const anira::ModelConfig&>);
+static_assert(std::is_same_v<anira::Pipeline::Stage, std::variant<anira::stage::Inference>>);
 
 // The contract and job-option values are aggregates, spelled with designated initializers.
 static_assert(std::is_aggregate_v<anira::Hard>);
@@ -90,6 +97,14 @@ int anira_header_cxx20_probe() {
         const anira::Capabilities capabilities = running.capabilities();
         const std::vector<anira::BackendId> backends = capabilities.backends();
         const anira::BackendId first = backends.empty() ? anira::BackendId{} : backends.front();
+        anira::Pipeline pipe{anira::stage::Inference(model)};
+        pipe.inference(model, {first});
+        const anira::stage::Inference two({std::cref(model), std::cref(model)}, {first});
+        pipe.add(two);
+        const anira::PlanReport report(nullptr);
+        const std::size_t report_rows = report.num_plans() + report.plans().size() +
+                                        report.slots(0, true).size() + report.extensions(0).size();
+        checks += report_rows > 0 ? 1 : 0;
         const anira_edge_info edge = capabilities.edge(ANIRA_DOMAIN_HOST, first);
         running.probe(true);
         const std::size_t rows = capabilities.domains().size() + capabilities.ext_kinds().size() +

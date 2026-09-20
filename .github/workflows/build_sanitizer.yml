@@ -7,7 +7,7 @@ name: build_sanitizer
 # schema).
 #
 # The legs, and why they are scoped the way they are:
-#   RTSan       gates the ANIRA_REALTIME ([[clang::nonblocking]]) hot path —
+#   RTSan       gates the ANIRA_NONBLOCKING ([[clang::nonblocking]]) hot path —
 #               process/push_data/pop_data/reset — at runtime, with no
 #               suppressions: logging from real-time paths goes through
 #               thl::Logger::rt (lock-free, no syscalls), so any allocation,

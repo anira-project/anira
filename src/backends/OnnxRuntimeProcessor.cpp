@@ -21,6 +21,7 @@
 
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
+#include "ProcessingGuard.h"
 
 namespace anira {
 
@@ -115,8 +116,11 @@ void OnnxRuntimeProcessor::process(std::vector<BufferF>& input,
     while (true) {
         for (auto& instance : m_instances) {
             if (!(instance->m_processing.exchange(true))) {
+                // The flag is released on every path, a throw of a type the instance's
+                // catch does not name included, so a failing inference can never leave the
+                // instance busy forever.
+                const detail::ProcessingGuard guard(instance->m_processing);
                 instance->process(input, output, session);
-                instance->m_processing.exchange(false);
                 return;
             }
         }
@@ -238,7 +242,7 @@ void OnnxRuntimeProcessor::Instance::prepare() {
 
 void OnnxRuntimeProcessor::Instance::process(std::vector<BufferF>& input,
                                              std::vector<BufferF>& output,
-                                             const std::shared_ptr<SessionElement>&) {
+                                             const std::shared_ptr<SessionElement>& session) {
     for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
         m_inputs[i] = Ort::Value::CreateTensor<float>(
             m_memory_info,
@@ -256,9 +260,14 @@ void OnnxRuntimeProcessor::Instance::process(std::vector<BufferF>& input,
                                    m_output_names.data(),
                                    m_output_names.size());
     } catch (const Ort::Exception& e) {
-        // No caller waits for this task: log once, and deliver zeros, never the previous
-        // job's output (docs/anira-v3-error-and-log-strategy.md, section 3).
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what());
+        // No caller waits for this task: deliver zeros, never the previous job's output
+        // (docs/anira-v3-error-and-log-strategy.md, section 3). The failure is ENGINE on
+        // the session's latch (a 3.x handler's word), logged on the first failure since the
+        // latch's re-arm and counted afterwards; the direct processor tests pass no session
+        // and get every record.
+        if (session == nullptr || session->m_rt->record(ANIRA_ERROR_ENGINE)) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what());
+        }
         for (auto& buffer : output) { buffer.clear(); }
         return;
     }

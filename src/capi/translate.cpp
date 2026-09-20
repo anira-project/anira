@@ -2,8 +2,10 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
+#include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 
@@ -80,13 +82,37 @@ std::string engines_list(const std::vector<anira_engine>& engines) {
     return text.empty() ? "none" : text;
 }
 
-// The same rule as the extension walk (ext_registry.cpp): NULL = every row is a candidate;
-// a custom row carries ANIRA_ENGINE_NONE, so ANIRA_ENGINE_NONE in the list keeps the
-// custom-engine rows (the anira_backend_id list of a later pre-release names them by id).
-bool is_candidate(const ModelEntry& row, const anira_engine* candidates, uint32_t num_candidates) {
+// The candidate list as a message names it: the built-in engines by word, a custom engine
+// by its id.
+std::string candidates_list(const anira_backend_id* candidates, uint32_t num_candidates) {
+    std::string text;
+    if (candidates == nullptr) { return "every engine"; }
+    for (uint32_t i = 0; i < num_candidates; ++i) {
+        if (!text.empty()) { text += ", "; }
+        const anira_backend_id& id = candidates[i];
+        text += id.engine_id != nullptr ? id.engine_id
+                                        : engine_word(static_cast<anira_engine>(id.engine));
+    }
+    return text.empty() ? "none" : text;
+}
+
+// The same rule as the extension walk (ext_registry.cpp): NULL = every row is a candidate
+// (the bridge's rule; the handler never passes NULL); an entry with an engine_id keeps the
+// custom rows of that name; a built-in engine keeps its rows; {ANIRA_ENGINE_NONE, DEFAULT,
+// NULL} keeps every custom row (a custom row carries ANIRA_ENGINE_NONE), as the
+// anira_engine list did. The provider is not read: add_inference refused a non-default one.
+bool is_candidate(anira_engine engine,
+                  const std::string& engine_id,
+                  const anira_backend_id* candidates,
+                  uint32_t num_candidates) {
     if (candidates == nullptr) { return true; }
     for (uint32_t i = 0; i < num_candidates; ++i) {
-        if (candidates[i] == row.m_engine) { return true; }
+        const anira_backend_id& id = candidates[i];
+        if (id.engine_id != nullptr) {
+            if (!engine_id.empty() && engine_id == id.engine_id) { return true; }
+            continue;
+        }
+        if (id.engine == static_cast<uint32_t>(engine)) { return true; }
     }
     return false;
 }
@@ -265,22 +291,26 @@ void check_contract(const anira_contract& contract, const anira_model_config& mo
             "contract: UNTIL_STABLE warmup needs the 3.x runtime; set "
             "ANIRA_WARMUP_FIXED (the 2.x warm_up) or ANIRA_WARMUP_NONE");
     }
-    if (hard->m_on_miss != ANIRA_MISS_BYPASS) {
-        not_supported(
-            "contract: on_miss HOLD_LAST and ZEROS need the 3.x runtime; the 2.x "
-            "runtime bypasses on a miss");
-    }
     if (hard->m_wait_ratio < 0.0) {
         config_error("contract: wait_ratio must not be negative (got " +
                      std::to_string(hard->m_wait_ratio) + ")");
     }
+    // The ring dtype rules: a ring exists on a Streamed tensor only, and it holds the
+    // spec's dtype as is (nothing in anira converts).
     for (const auto& [name, dtype] : hard->m_ring_dtypes) {
-        if (find_spec(model, name, nullptr, nullptr) == nullptr) {
+        const anira_tensor_spec* spec = find_spec(model, name, nullptr, nullptr);
+        if (spec == nullptr) {
             config_error("contract: the ring dtype of '" + name + "' names no tensor");
         }
-        if (dtype != ANIRA_DTYPE_F32) {
-            not_supported("contract: the ring dtype of '" + name + "' is " + hex_dtype(dtype) +
-                          "; the 2.x runtime streams float32 only");
+        if (spec->m_role != ANIRA_ROLE_STREAMED) {
+            config_error("contract: the ring dtype of '" + name + "' is set on a " +
+                         role_word(spec->m_role) + " tensor; only a Streamed tensor has a ring");
+        }
+        if (dtype != spec->m_dtype) {
+            config_error("contract: the ring dtype of '" + name + "' is " + hex_dtype(dtype) +
+                         " but its spec's dtype is " + hex_dtype(spec->m_dtype) +
+                         "; nothing converts (a stage that consumes the difference arrives "
+                         "with a later pre-release)");
         }
     }
 }
@@ -355,7 +385,7 @@ void check_ratios(const anira_model_config& model, const Derived& derived) {
 }
 
 void check_rows(const anira_model_config& model,
-                const anira_engine* candidates,
+                const anira_backend_id* candidates,
                 uint32_t num_candidates,
                 Derived& out) {
     if (model.m_models.empty()) {
@@ -364,7 +394,7 @@ void check_rows(const anira_model_config& model,
     std::vector<std::pair<anira::InferenceBackend, size_t>> taken;
     for (size_t i = 0; i < model.m_models.size(); ++i) {
         const ModelEntry& row = model.m_models[i];
-        if (!is_candidate(row, candidates, num_candidates)) { continue; }
+        if (!is_candidate(row.m_engine, row.m_engine_id, candidates, num_candidates)) { continue; }
         const std::optional<anira::InferenceBackend> backend = backend_of(row);
         if (!backend.has_value()) {
             if (row.is_custom()) {
@@ -391,10 +421,10 @@ void check_rows(const anira_model_config& model,
         out.m_rows.push_back(i);
     }
     if (out.m_rows.empty()) {
-        const std::vector<anira_engine> named(candidates, candidates + num_candidates);
-        not_supported(
-            "none of the " + std::to_string(model.m_models.size()) +
-            " model entries names a candidate engine (candidates: " + engines_list(named) + ")");
+        // Zero plans is a configuration the caller can fix, not a limit of this build.
+        config_error("none of the " + std::to_string(model.m_models.size()) +
+                     " model entries names a candidate engine (candidates: " +
+                     candidates_list(candidates, num_candidates) + ")");
     }
     if (model.m_default_engine != ANIRA_ENGINE_NONE || !model.m_default_engine_id.empty()) {
         bool found = false;
@@ -452,7 +482,7 @@ void check_layouts(const anira_model_config& model, const Derived& derived) {
 void check_extensions(const anira_model_config& model,
                       const anira_context_config* config,
                       const anira_contract* contract,
-                      const anira_engine* candidates,
+                      const anira_backend_id* candidates,
                       uint32_t num_candidates) {
     anira_error local = ANIRA_ERROR_INIT;
     const anira_status status =
@@ -534,7 +564,7 @@ std::vector<anira_engine> enabled_engines() {
 
 void validate(const anira_model_config& model,
               const anira_contract* contract,
-              const anira_engine* candidates,
+              const anira_backend_id* candidates,
               uint32_t num_candidates,
               Derived& out) {
     out = Derived{};
@@ -557,9 +587,29 @@ void validate(const anira_model_config& model,
     check_extensions(model, nullptr, contract, candidates, num_candidates);
 }
 
+anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
+                                   const anira_model_config& model) {
+    anira::RingDtypes dtypes;
+    dtypes.m_inputs.assign(model.m_inputs.size(), ANIRA_DTYPE_F32);
+    dtypes.m_outputs.assign(model.m_outputs.size(), ANIRA_DTYPE_F32);
+    const HardContract* hard = contract.hard();
+    if (hard == nullptr) { return dtypes; }
+    for (const auto& [name, dtype] : hard->m_ring_dtypes) {
+        bool is_input = true;
+        size_t index = 0;
+        if (find_spec(model, name, &is_input, &index) == nullptr) { continue; }  // validate ran
+        if (is_input) {
+            dtypes.m_inputs[index] = dtype;
+        } else {
+            dtypes.m_outputs[index] = dtype;
+        }
+    }
+    return dtypes;
+}
+
 anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                              const anira_contract& contract,
-                                             const anira_engine* candidates,
+                                             const anira_backend_id* candidates,
                                              uint32_t num_candidates) {
     Derived derived;
     validate(model, &contract, candidates, num_candidates, derived);
@@ -655,9 +705,13 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
             model.m_max_instances};
 }
 
-anira::CoreConfig make_core_config(const anira_context_config& config) {
+void check_context_extensions(const anira_context_config& config) {
     const anira_model_config no_model;
     check_extensions(no_model, &config, nullptr, nullptr, 0);
+}
+
+anira::CoreConfig make_core_config(const anira_context_config& config) {
+    check_context_extensions(config);
     const unsigned int threads = config.m_num_threads == ANIRA_THREADS_AUTO
                                      ? anira::default_num_threads()
                                      : config.m_num_threads;
@@ -670,6 +724,34 @@ anira::CoreConfig make_core_config(const anira_context_config& config) {
     core.m_log.m_drain_interval_ms = config.m_drain_interval_ms;
     core.m_log.m_queue_capacity = config.m_queue_capacity;
     return core;
+}
+
+anira_context_config make_context_config(const anira::CoreConfig& core_config) {
+    anira_context_config config;
+    // 0 stays "bring your own threads"; a CoreConfig never says AUTO (its default is
+    // default_num_threads(), resolved at construction).
+    config.m_num_threads = static_cast<uint32_t>(core_config.m_num_threads);
+    config.m_wait = core_config.m_wait_strategy == anira::WaitStrategy::Blocking
+                        ? ANIRA_WAIT_BLOCKING
+                        : ANIRA_WAIT_SPIN_BACKOFF;
+    // Explicit, not a cast: the two enums agree numerically today, the switch survives a
+    // reorder.
+    switch (core_config.m_log.m_level) {
+        case anira::LogLevel::Debug: config.m_log_level = ANIRA_LOG_DEBUG; break;
+        case anira::LogLevel::Info: config.m_log_level = ANIRA_LOG_INFO; break;
+        case anira::LogLevel::Warning: config.m_log_level = ANIRA_LOG_WARNING; break;
+        case anira::LogLevel::Error: config.m_log_level = ANIRA_LOG_ERROR; break;
+    }
+    config.m_log_drain = core_config.m_log.m_drain == anira::LogDrain::Manual
+                             ? ANIRA_LOG_DRAIN_MANUAL
+                             : ANIRA_LOG_DRAIN_THREAD;
+    config.m_drain_interval_ms = core_config.m_log.m_drain_interval_ms;
+    // Core::ensure_log_queue_locked clamps to [64, 65536] and warns, as today.
+    config.m_queue_capacity =
+        static_cast<uint32_t>(std::min<size_t>(core_config.m_log.m_queue_capacity, UINT32_MAX));
+    // m_log_flags 0, m_sink nullptr, m_sink_user_data nullptr, no device block, m_ext
+    // empty, m_upgraded false: the struct's defaults.
+    return config;
 }
 
 anira::HostConfig make_host_config(const anira_contract& contract,

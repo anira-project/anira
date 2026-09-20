@@ -75,8 +75,8 @@ typedef enum anira_dtype_code {
 #define ANIRA_DTYPE_LANES(d) ((d) >> 16)
 
 /**
- * @brief 32-bit float, one lane: the type of every v2 stream and the only one the Hard entries
- * carry.
+ * @brief 32-bit float, one lane: the type of every 2.x stream, the ring dtype of every tensor
+ * never set on a Hard contract and the only one the _f32 Hard entries carry.
  */
 #define ANIRA_DTYPE_F32 ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)
 
@@ -604,15 +604,23 @@ typedef enum anira_provider {
 } anira_provider;
 
 /**
- * @brief The phase a stage callback runs in (abi/stage.h, M2); pinned now.
+ * @brief The phase a stage callback runs in, and the engine call between two of them
+ * (abi/stage.h, M2); pinned now. The three inference-thread phases are numbered in the
+ * order they run.
  */
 typedef enum anira_stage_phase {
     ANIRA_PHASE_PRE_PROCESS = 0,  /**< Before the model inputs are formed. */
     ANIRA_PHASE_POST_PROCESS = 1,  /**< After the model outputs arrive. */
     ANIRA_PHASE_BEFORE_INFERENCE = 2,  /**< On the inference thread, before the engine call. */
-    ANIRA_PHASE_AFTER_INFERENCE = 3,  /**< On the inference thread, after the engine call. */
-    ANIRA_PHASE_PREPARE = 4,  /**< At anira_handler_prepare. */
-    ANIRA_PHASE_RELEASE = 5,  /**< When the last carrier dies. */
+    /**
+     * On the inference thread, the engine call itself: the built-in engine of the running plan,
+     * or a registered custom engine's process. No stage callback runs in this phase; it is the
+     * word a failure, a log record or a report row uses for the engine call.
+     */
+    ANIRA_PHASE_INFERENCE = 3,
+    ANIRA_PHASE_AFTER_INFERENCE = 4,  /**< On the inference thread, after the engine call. */
+    ANIRA_PHASE_PREPARE = 5,  /**< At anira_handler_prepare. */
+    ANIRA_PHASE_RELEASE = 6,  /**< When the last carrier dies. */
     ANIRA_STAGE_PHASE_FORCE32 = 0x7fffffff
 } anira_stage_phase;
 

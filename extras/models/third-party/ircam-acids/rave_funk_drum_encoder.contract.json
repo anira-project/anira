@@ -1,6 +1,7 @@
 {
   "hard": {
     "budget": { "ms": 42.66 },
-    "warmup": { "fixed": 5 }
+    "warmup": { "fixed": 5 },
+    "on_miss": "zeros"
   }
 }

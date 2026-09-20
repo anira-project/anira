@@ -1227,6 +1227,7 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
     if (!instances_given) {
         cfg.m_max_instances = anira::InferenceConfig::Defaults::m_num_parallel_processors;
     }
+    hard.m_on_miss = ANIRA_MISS_ZEROS;  // the 2.x runtime delivered zeros on a miss
     legacy->m_kind = hard;
     legacy->m_legacy = true;
     cfg.m_legacy_contract = std::move(legacy);

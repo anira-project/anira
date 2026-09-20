@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <optional>
 
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
@@ -17,6 +18,7 @@
 #include "../utils/InferenceBackend.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "../utils/RingBuffer.h"
+#include "../utils/RtLatch.h"
 #include "../utils/Semaphore.h"
 
 namespace anira {
@@ -110,11 +112,15 @@ public:
      * @param inference_config Reference to the inference configuration containing model settings
      * @param producer_token Producer token bound to the global inference queue, moved into the
      * session (see m_producer_token)
+     * @param rt_latch The real-time latch this session records its failures into (see m_rt):
+     * a 3.x handler's own, so anira_handler_rt_error reads one word; nullptr (a 2.x session)
+     * gives the session its own latch (m_rt_own)
      */
     SessionElement(int new_session_id,
                    PrePostProcessor& pp_processor,
                    InferenceConfig& inference_config,
-                   moodycamel::ProducerToken&& producer_token);
+                   moodycamel::ProducerToken&& producer_token,
+                   anira::RtLatch* rt_latch = nullptr);
 
     /**
      * @brief Wait-free clear of the session's audio-thread-owned state.
@@ -242,6 +248,16 @@ public:
         // stomping a newer era's in-flight dispatch. Plain field: stable for the
         // dispatch's lifetime, synced by the gate/queue handoffs.
         uint64_t m_dispatch_epoch{0};
+        // The plan this chunk runs on: the dense index into SessionElement::m_plan_backends,
+        // stamped in Core::pre_process from SessionElement::m_current_plan with one load.
+        // The hooks, the engine call and post_process all resolve this stamp and never read
+        // the session's atomic again, so a plan switch that lands while the chunk is queued
+        // or in flight cannot split it across two plans (or run two engines, or none, for
+        // it). The index and not the backend: two plans may run on one backend (two variants
+        // of a model, two providers of an engine), and only the index tells them apart.
+        // Plain field: written on the driving thread at dispatch, stable for the dispatch's
+        // lifetime, synced by the queue handoffs like the two stamps above.
+        uint32_t m_plan{0};
         std::vector<BufferF> m_tensor_input_data;   ///< Input tensor data buffers
         std::vector<BufferF> m_tensor_output_data;  ///< Output tensor data buffers
     };
@@ -250,14 +266,46 @@ public:
                                                                        ///< structures for
                                                                        ///< concurrent processing
 
-    std::atomic<InferenceBackend> m_current_backend{CUSTOM};  ///< Currently active inference
-                                                              ///< backend for this session.
-                                                              ///< Initialized by
-                                                              ///< Core::create_session to the
-                                                              ///< first configured model's
-                                                              ///< available backend (CUSTOM when a
-                                                              ///< custom processor was provided or
-                                                              ///< nothing matches).
+    /**
+     * @brief The plan table: dense plan index -> the backend that plan runs on.
+     *
+     * Core::create_session builds the 2.x table (one row per configured model, in
+     * m_model_data order, then every other backend of this build, so that every backend a
+     * 2.x caller can name has a row); a 3.x handler replaces it with exactly its plans before
+     * it prepares the session (set_plan_backends). Several rows may name one backend. Never
+     * empty. Replaced only while no chunk of the session exists (before prepare), so the
+     * driving thread and the inference threads read it without synchronization.
+     */
+    std::vector<InferenceBackend> m_plan_backends{CUSTOM};
+
+    /**
+     * @brief The selected plan: the one the next submitted chunk is stamped with.
+     *
+     * The whole runtime selection is this one atomic (select_plan stores it, a chunk takes
+     * it with one load in Core::pre_process), so concurrent callers have no pair to tear.
+     * Always below m_plan_backends.size(). Initialized by Core::create_session to the first
+     * configured model whose processor is available (the CUSTOM row when a custom processor
+     * was provided or nothing matches).
+     */
+    std::atomic<uint32_t> m_current_plan{0};
+
+    /**
+     * @brief Replaces the plan table and selects plan 0.
+     * @param backends One backend per plan, in dense-index order.
+     * @throws std::invalid_argument for an empty table.
+     * @note Only while no chunk of the session exists: before the session is prepared.
+     */
+    void set_plan_backends(std::vector<InferenceBackend> backends);
+
+    /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
+    bool select_plan(uint32_t plan) noexcept;
+
+    /// The backend a plan runs on. CUSTOM for an index out of range, which a stamp never is.
+    InferenceBackend plan_backend(uint32_t plan) const noexcept;
+
+    /// The first plan that runs on a backend (the 2.x selection by backend), if any does.
+    std::optional<uint32_t> plan_of_backend(InferenceBackend backend) const noexcept;
+
     unsigned long m_current_queue = 0;         ///< Current position in the inference queue
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
     size_t m_pending_pull_samples = 0;  ///< Generator sessions only (!m_input_driven): samples of
@@ -373,6 +421,14 @@ public:
 
     BackendBase m_default_processor;  ///< Default backend processor instance
     BackendBase* m_custom_processor;  ///< Pointer to custom backend processor (if provided)
+    RtLatch m_rt_own;  ///< The session's own real-time latch: what m_rt points at when the
+                       ///< constructor received no latch (a 2.x session); nothing reads its
+                       ///< word, but a failed inference records ENGINE into it all the same
+    RtLatch* m_rt;     ///< The real-time latch the session's failures are recorded into (a
+                       ///< failed inference records ANIRA_ERROR_ENGINE on the inference
+                       ///< thread): the 3.x handler's own (anira_handler_rt_error reads it),
+                       ///< else &m_rt_own. Set by the constructor and published by the
+                       ///< lifecycle lock that registers the session; never null
 
     // Written by InferenceManager::set_non_realtime() -- typically from a control/UI
     // thread, e.g. a host toggling offline bounce/render mode -- and read on the
