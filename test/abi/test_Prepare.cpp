@@ -743,8 +743,10 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
             "spin_backoff, recipe host";
         for (const char* slot :
              {"input 0 'audio_in", "input 1 'gain", "output 0 'audio_out", "output 1 'gain_out"}) {
-            EXPECT_EQ(count_records(collector, (plan + slot + row).c_str(), "native"), 1U)
-                << plan << slot;
+            std::string line = plan;
+            line += slot;
+            line += row;
+            EXPECT_EQ(count_records(collector, line.c_str(), "native"), 1U) << plan << slot;
         }
     }
     // The custom row is the selected plan of gain_with_custom(), under the contract's budget.
