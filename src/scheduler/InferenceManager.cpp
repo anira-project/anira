@@ -261,6 +261,7 @@ size_t* InferenceManager::process_output(float* const* const* output_data,
                                          const float* const* const* bypass_input,
                                          const size_t* bypass_num_input) {
     const size_t num_outputs = m_inference_config.get_tensor_output_shape().size();
+    m_last_missed = false;
     for (size_t i = 0; i < num_outputs; ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0) {
             int const missing_samples_before = static_cast<int>(m_missing_samples[i]);
@@ -341,6 +342,7 @@ size_t* InferenceManager::process_output(float* const* const* output_data,
     // not popped; the request counts as missing so the catch-up realigns the stream when
     // the late block arrives (HOLD_LAST and BYPASS substitute a block, they do not shift
     // time); the returned count is 0 under every policy.
+    m_last_missed = true;
     const bool have_bypass = m_on_miss == ANIRA_MISS_BYPASS && bypass_input != nullptr &&
                              bypass_num_input != nullptr && m_session->m_reference.m_is_input;
     const size_t reference = m_session->m_reference.m_index;
@@ -491,6 +493,7 @@ void InferenceManager::reset() {
     for (size_t& hold_len : m_hold_len) {
         hold_len = 0;  // HOLD_LAST holds nothing until the next delivered block
     }
+    m_last_missed = false;
 }
 
 }  // namespace anira

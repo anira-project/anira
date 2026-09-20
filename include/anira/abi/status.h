@@ -37,6 +37,12 @@ typedef enum anira_status {
     ANIRA_INCOMPLETE = 2,  /**< Success; the enumeration buffer was too short and holds what fit. */
     ANIRA_TIMEOUT = 3,  /**< A wait ran out of time. */
     ANIRA_PENDING = 4,  /**< Not yet complete. */
+    /**
+     * Success; a Hard entry found the block's inference incomplete and delivered what the
+     * contract's miss policy says (section 3): the output buffers are valid and the stream
+     * stays time-aligned. Not recorded in anira_handler_rt_error.
+     */
+    ANIRA_MISSED = 5,
     ANIRA_ERROR_UNKNOWN = -1,  /**< Unclassified failure. */
     /**
      * A single argument is out of range or NULL where a value is required.

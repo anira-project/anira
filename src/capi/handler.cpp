@@ -2,10 +2,12 @@
 //
 // The control entries (the pipeline, create, prepare, destroy, the report enumerators) sit
 // behind the exception firewall of capi_internal.h. The Hard entries are ANIRA_NONBLOCKING:
-// no handler, no lock, no allocation; a refusal records into the handler's latch (rt_refuse)
-// and returns 0 or a status, and a NULL handler has no word to record on. The _wait twins
-// run the same checks, then wait on the manager; without an inference thread inside its loop
-// they run the nonblocking stem and refuse ANIRA_ERROR_INVALID_STATE.
+// no handler, no lock, no allocation; every one returns an anira_status (ANIRA_OK,
+// ANIRA_MISSED for a block the miss policy filled, or a failure) and hands the delivered count
+// back through a nullable size_t*; a refusal records into the handler's latch (rt_refuse), and
+// a NULL handler has no word to record on. The _wait twins run the same checks, then wait on
+// the manager; without an inference thread inside its loop they run the nonblocking stem and
+// refuse ANIRA_ERROR_INVALID_STATE.
 #include "handler.h"
 
 #include <anira/InferenceConfig.h>
@@ -172,6 +174,21 @@ void stage_input_counts(anira_handler& handler, const size_t* num_in) noexcept A
     for (size_t i = 0; i < handler.m_num_inputs; ++i) { handler.m_input_num[i] = num_in[i]; }
 }
 
+// ==== the status and the count ================================================================
+
+// The delivered count of a single-tensor form, written when the caller asked for it (the
+// multi forms write theirs into the caller's num_out array).
+void set_delivered(size_t* delivered, size_t count) noexcept ANIRA_NONBLOCKING {
+    if (delivered != nullptr) { *delivered = count; }
+}
+
+// The status of a process or pop form after the manager ran: ANIRA_MISSED when the block went
+// through the starvation path (the miss policy filled the requested buffers, the counts are
+// 0), else ANIRA_OK. A miss is a success and is not recorded.
+anira_status block_status(const anira_handler& handler) noexcept ANIRA_NONBLOCKING {
+    return handler.m_manager->last_block_missed() ? ANIRA_MISSED : ANIRA_OK;
+}
+
 // ==== the wait budget =========================================================================
 
 // timeout_ms -> the budget a _wait twin hands the manager: ANIRA_WAIT_CONTRACT is wait_ratio
@@ -198,19 +215,21 @@ std::chrono::steady_clock::duration wait_budget(const anira_handler& handler,
 // ==== the bodies of the Hard entries ==========================================================
 // Called by the _f32 entry after its float32 check.
 
-size_t process_separate_body(anira_handler& handler,
-                             const float* const* in,
-                             size_t num_in,
-                             float* const* out,
-                             size_t num_out,
-                             uint32_t slot) noexcept ANIRA_NONBLOCKING {
+anira_status process_separate_body(anira_handler& handler,
+                                   const float* const* in,
+                                   size_t num_in,
+                                   float* const* out,
+                                   size_t num_out,
+                                   uint32_t slot,
+                                   size_t* delivered) noexcept ANIRA_NONBLOCKING {
     stage_input(handler, in, num_in, slot);
     stage_output(handler, out, num_out, slot);
     handler.m_manager->process_nowait(handler.m_input_ptrs.data(),
                                       handler.m_input_num.data(),
                                       handler.m_output_ptrs.data(),
                                       handler.m_output_num.data());
-    return handler.m_output_num[slot];
+    set_delivered(delivered, handler.m_output_num[slot]);
+    return block_status(handler);
 }
 
 anira_status process_multi_body(anira_handler& handler,
@@ -220,7 +239,7 @@ anira_status process_multi_body(anira_handler& handler,
                                 size_t* num_out) noexcept ANIRA_NONBLOCKING {
     stage_input_counts(handler, num_in);
     handler.m_manager->process_nowait(in, handler.m_input_num.data(), out, num_out);
-    return ANIRA_OK;
+    return block_status(handler);
 }
 
 anira_status push_data_body(anira_handler& handler,
@@ -240,36 +259,40 @@ anira_status push_data_multi_body(anira_handler& handler,
     return ANIRA_OK;
 }
 
-size_t pop_data_body(anira_handler& handler,
-                     float* const* out,
-                     size_t num_out,
-                     uint32_t slot) noexcept ANIRA_NONBLOCKING {
+anira_status pop_data_body(anira_handler& handler,
+                           float* const* out,
+                           size_t num_out,
+                           uint32_t slot,
+                           size_t* delivered) noexcept ANIRA_NONBLOCKING {
     stage_output(handler, out, num_out, slot);
     handler.m_manager->pop_data(handler.m_output_ptrs.data(), handler.m_output_num.data());
-    return handler.m_output_num[slot];
+    set_delivered(delivered, handler.m_output_num[slot]);
+    return block_status(handler);
 }
 
 anira_status pop_data_multi_body(anira_handler& handler,
                                  float* const* const* out,
                                  size_t* num_out) noexcept ANIRA_NONBLOCKING {
     handler.m_manager->pop_data(out, num_out);
-    return ANIRA_OK;
+    return block_status(handler);
 }
 
 // The _wait bodies: without an inference thread inside its loop the twin runs the
 // nonblocking stem (so the stream accounting stays consistent and an in-place buffer never
 // leaves the call holding pass-through input the policy did not choose), then refuses
-// INVALID_STATE; a NoThread outcome of the wait is the same refusal after process_output has
-// completed the block as a miss. A Deadline is a miss, not a refusal.
+// INVALID_STATE with the count the stem delivered; a NoThread outcome of the wait is the same
+// refusal after process_output has completed the block as a miss. A Deadline is a miss,
+// ANIRA_MISSED, not a refusal.
 
-size_t process_separate_wait_body(anira_handler& handler,
-                                  const float* const* in,
-                                  size_t num_in,
-                                  float* const* out,
-                                  size_t num_out,
-                                  uint32_t slot,
-                                  double timeout_ms,
-                                  const char* entry) noexcept {
+anira_status process_separate_wait_body(anira_handler& handler,
+                                        const float* const* in,
+                                        size_t num_in,
+                                        float* const* out,
+                                        size_t num_out,
+                                        uint32_t slot,
+                                        double timeout_ms,
+                                        const char* entry,
+                                        size_t* delivered) noexcept {
     stage_input(handler, in, num_in, slot);
     stage_output(handler, out, num_out, slot);
     if (!anira::InferenceThread::any_loop_active()) {
@@ -277,8 +300,9 @@ size_t process_separate_wait_body(anira_handler& handler,
                                           handler.m_input_num.data(),
                                           handler.m_output_ptrs.data(),
                                           handler.m_output_num.data());
+        set_delivered(delivered, handler.m_output_num[slot]);
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
-        return 0;
+        return ANIRA_ERROR_INVALID_STATE;
     }
     anira::Core::WaitOutcome outcome = anira::Core::WaitOutcome::Done;
     handler.m_manager->process_wait(handler.m_input_ptrs.data(),
@@ -291,11 +315,12 @@ size_t process_separate_wait_body(anira_handler& handler,
                                                 handler.m_output_num.data(),
                                                 /*pop=*/false),
                                     outcome);
+    set_delivered(delivered, handler.m_output_num[slot]);
     if (outcome == anira::Core::WaitOutcome::NoThread) {
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
-        return 0;
+        return ANIRA_ERROR_INVALID_STATE;
     }
-    return handler.m_output_num[slot];
+    return block_status(handler);
 }
 
 anira_status process_multi_wait_body(anira_handler& handler,
@@ -323,20 +348,22 @@ anira_status process_multi_wait_body(anira_handler& handler,
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
         return ANIRA_ERROR_INVALID_STATE;
     }
-    return ANIRA_OK;
+    return block_status(handler);
 }
 
-size_t pop_data_wait_body(anira_handler& handler,
-                          float* const* out,
-                          size_t num_out,
-                          uint32_t slot,
-                          double timeout_ms,
-                          const char* entry) noexcept {
+anira_status pop_data_wait_body(anira_handler& handler,
+                                float* const* out,
+                                size_t num_out,
+                                uint32_t slot,
+                                double timeout_ms,
+                                const char* entry,
+                                size_t* delivered) noexcept {
     stage_output(handler, out, num_out, slot);
     if (!anira::InferenceThread::any_loop_active()) {
         handler.m_manager->pop_data(handler.m_output_ptrs.data(), handler.m_output_num.data());
+        set_delivered(delivered, handler.m_output_num[slot]);
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
-        return 0;
+        return ANIRA_ERROR_INVALID_STATE;
     }
     anira::Core::WaitOutcome outcome = anira::Core::WaitOutcome::Done;
     handler.m_manager->pop_data_wait(
@@ -344,11 +371,12 @@ size_t pop_data_wait_body(anira_handler& handler,
         handler.m_output_num.data(),
         wait_budget(handler, timeout_ms, nullptr, handler.m_output_num.data(), /*pop=*/true),
         outcome);
+    set_delivered(delivered, handler.m_output_num[slot]);
     if (outcome == anira::Core::WaitOutcome::NoThread) {
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
-        return 0;
+        return ANIRA_ERROR_INVALID_STATE;
     }
-    return handler.m_output_num[slot];
+    return block_status(handler);
 }
 
 anira_status pop_data_multi_wait_body(anira_handler& handler,
@@ -371,7 +399,7 @@ anira_status pop_data_multi_wait_body(anira_handler& handler,
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
         return ANIRA_ERROR_INVALID_STATE;
     }
-    return ANIRA_OK;
+    return block_status(handler);
 }
 
 // ==== prepare's pieces ========================================================================
@@ -926,40 +954,52 @@ uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handler)
 
 // ==== the Hard entries, float32 ===============================================================
 
-size_t ANIRA_CALL anira_handler_process_f32_inplace(anira_handler* handler,
-                                                    float* const* data,
-                                                    size_t num_samples,
-                                                    uint32_t tensor_index)
+// Every refusal below writes 0 to the caller's count before returning its status.
+
+anira_status ANIRA_CALL anira_handler_process_f32_inplace(anira_handler* handler,
+                                                          float* const* data,
+                                                          size_t num_samples,
+                                                          uint32_t tensor_index,
+                                                          size_t* delivered)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
+    set_delivered(delivered, 0);
+    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
     if (!has_arguments(*handler, both_slots(*handler, data, data, tensor_index), __func__)) {
-        return 0;
+        return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     if (!ring_is_f32(*handler, true, tensor_index, __func__) ||
         !ring_is_f32(*handler, false, tensor_index, __func__)) {
-        return 0;
+        return ANIRA_ERROR_CONFIG;
     }
-    return process_separate_body(*handler, data, num_samples, data, num_samples, tensor_index);
+    return process_separate_body(*handler,
+                                 data,
+                                 num_samples,
+                                 data,
+                                 num_samples,
+                                 tensor_index,
+                                 delivered);
 }
 
-size_t ANIRA_CALL anira_handler_process_f32(anira_handler* handler,
-                                            const float* const* in,
-                                            size_t num_in,
-                                            float* const* out,
-                                            size_t num_out,
-                                            uint32_t tensor_index)
+anira_status ANIRA_CALL anira_handler_process_f32(anira_handler* handler,
+                                                  const float* const* in,
+                                                  size_t num_in,
+                                                  float* const* out,
+                                                  size_t num_out,
+                                                  uint32_t tensor_index,
+                                                  size_t* delivered)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
+    set_delivered(delivered, 0);
+    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
     if (!has_arguments(*handler, both_slots(*handler, in, out, tensor_index), __func__)) {
-        return 0;
+        return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     if (!ring_is_f32(*handler, true, tensor_index, __func__) ||
         !ring_is_f32(*handler, false, tensor_index, __func__)) {
-        return 0;
+        return ANIRA_ERROR_CONFIG;
     }
-    return process_separate_body(*handler, in, num_in, out, num_out, tensor_index);
+    return process_separate_body(*handler, in, num_in, out, num_out, tensor_index, delivered);
 }
 
 anira_status ANIRA_CALL anira_handler_process_f32_multi(anira_handler* handler,
@@ -1008,16 +1048,20 @@ anira_status ANIRA_CALL anira_handler_push_data_f32_multi(anira_handler* handler
     return push_data_multi_body(*handler, in, num_in);
 }
 
-size_t ANIRA_CALL anira_handler_pop_data_f32(anira_handler* handler,
-                                             float* const* out,
-                                             size_t num_out,
-                                             uint32_t tensor_index)
+anira_status ANIRA_CALL anira_handler_pop_data_f32(anira_handler* handler,
+                                                   float* const* out,
+                                                   size_t num_out,
+                                                   uint32_t tensor_index,
+                                                   size_t* delivered)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
-    if (!has_arguments(*handler, output_slot(*handler, out, tensor_index), __func__)) { return 0; }
-    if (!ring_is_f32(*handler, false, tensor_index, __func__)) { return 0; }
-    return pop_data_body(*handler, out, num_out, tensor_index);
+    set_delivered(delivered, 0);
+    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
+    if (!has_arguments(*handler, output_slot(*handler, out, tensor_index), __func__)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    if (!ring_is_f32(*handler, false, tensor_index, __func__)) { return ANIRA_ERROR_CONFIG; }
+    return pop_data_body(*handler, out, num_out, tensor_index, delivered);
 }
 
 anira_status ANIRA_CALL anira_handler_pop_data_f32_multi(anira_handler* handler,
@@ -1032,10 +1076,6 @@ anira_status ANIRA_CALL anira_handler_pop_data_f32_multi(anira_handler* handler,
     if (!outputs_are_f32(*handler, __func__)) { return ANIRA_ERROR_CONFIG; }
     return pop_data_multi_body(*handler, out, num_out);
 }
-
-// ==== the Hard entries, any ring dtype ========================================================
-// Unchecked by construction: the entry carries no dtype; the caller's buffers hold each
-// slot's ring dtype (float32 for every ring this pre-release prepares), cast once here.
 
 // ==== latencies, the ring state, reset, rt_error =============================================
 // The latency accessors are not Hard entries: nothing is recorded. They read the session's
@@ -1067,23 +1107,30 @@ anira_status ANIRA_CALL anira_handler_get_latencies(const anira_handler* handler
     return capacity < total ? ANIRA_INCOMPLETE : ANIRA_OK;
 }
 
-size_t ANIRA_CALL anira_handler_get_available_samples(anira_handler* handler,
-                                                      uint32_t tensor_index,
-                                                      uint32_t channel)
+anira_status ANIRA_CALL anira_handler_get_available_samples(anira_handler* handler,
+                                                            uint32_t tensor_index,
+                                                            uint32_t channel,
+                                                            size_t* out)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
-    if (!has_arguments(*handler, tensor_index < handler->m_num_outputs, __func__)) { return 0; }
+    set_delivered(out, 0);
+    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
+    if (!has_arguments(*handler,
+                       out != nullptr && tensor_index < handler->m_num_outputs,
+                       __func__)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
     const anira::InferenceConfig& config = handler->m_inference_config;
     // A Static output has no ring: 0, nothing recorded.
-    if (config.get_postprocess_output_size()[tensor_index] == 0) { return 0; }
+    if (config.get_postprocess_output_size()[tensor_index] == 0) { return ANIRA_OK; }
     // The ring's own accessor is unbounded on the channel.
     if (!has_arguments(*handler,
                        channel < config.get_postprocess_output_channels()[tensor_index],
                        __func__)) {
-        return 0;
+        return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    return handler->m_manager->get_available_samples(tensor_index, channel);
+    *out = handler->m_manager->get_available_samples(tensor_index, channel);
+    return ANIRA_OK;
 }
 
 void ANIRA_CALL anira_handler_reset(anira_handler* handler) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
@@ -1107,19 +1154,21 @@ anira_status ANIRA_CALL anira_handler_rt_error(const anira_handler* handler)
 // The same checks as the nonblocking stems (the prepared check before the thread count),
 // then the wait; not ANIRA_NONBLOCKING.
 
-size_t ANIRA_CALL anira_handler_process_f32_inplace_wait(anira_handler* handler,
-                                                         float* const* data,
-                                                         size_t num_samples,
-                                                         double timeout_ms,
-                                                         uint32_t tensor_index) ANIRA_NOEXCEPT {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
+anira_status ANIRA_CALL anira_handler_process_f32_inplace_wait(anira_handler* handler,
+                                                               float* const* data,
+                                                               size_t num_samples,
+                                                               double timeout_ms,
+                                                               uint32_t tensor_index,
+                                                               size_t* delivered) ANIRA_NOEXCEPT {
+    set_delivered(delivered, 0);
+    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
     if (!has_arguments(*handler, both_slots(*handler, data, data, tensor_index), __func__)) {
-        return 0;
+        return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     if (!ring_is_f32(*handler, true, tensor_index, __func__) ||
         !ring_is_f32(*handler, false, tensor_index, __func__)) {
-        return 0;
+        return ANIRA_ERROR_CONFIG;
     }
     return process_separate_wait_body(*handler,
                                       data,
@@ -1128,24 +1177,27 @@ size_t ANIRA_CALL anira_handler_process_f32_inplace_wait(anira_handler* handler,
                                       num_samples,
                                       tensor_index,
                                       timeout_ms,
-                                      __func__);
+                                      __func__,
+                                      delivered);
 }
 
-size_t ANIRA_CALL anira_handler_process_f32_wait(anira_handler* handler,
-                                                 const float* const* in,
-                                                 size_t num_in,
-                                                 float* const* out,
-                                                 size_t num_out,
-                                                 double timeout_ms,
-                                                 uint32_t tensor_index) ANIRA_NOEXCEPT {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
+anira_status ANIRA_CALL anira_handler_process_f32_wait(anira_handler* handler,
+                                                       const float* const* in,
+                                                       size_t num_in,
+                                                       float* const* out,
+                                                       size_t num_out,
+                                                       double timeout_ms,
+                                                       uint32_t tensor_index,
+                                                       size_t* delivered) ANIRA_NOEXCEPT {
+    set_delivered(delivered, 0);
+    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
     if (!has_arguments(*handler, both_slots(*handler, in, out, tensor_index), __func__)) {
-        return 0;
+        return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     if (!ring_is_f32(*handler, true, tensor_index, __func__) ||
         !ring_is_f32(*handler, false, tensor_index, __func__)) {
-        return 0;
+        return ANIRA_ERROR_CONFIG;
     }
     return process_separate_wait_body(*handler,
                                       in,
@@ -1154,7 +1206,8 @@ size_t ANIRA_CALL anira_handler_process_f32_wait(anira_handler* handler,
                                       num_out,
                                       tensor_index,
                                       timeout_ms,
-                                      __func__);
+                                      __func__,
+                                      delivered);
 }
 
 anira_status ANIRA_CALL anira_handler_process_f32_multi_wait(anira_handler* handler,
@@ -1176,16 +1229,26 @@ anira_status ANIRA_CALL anira_handler_process_f32_multi_wait(anira_handler* hand
     return process_multi_wait_body(*handler, in, num_in, out, num_out, timeout_ms, __func__);
 }
 
-size_t ANIRA_CALL anira_handler_pop_data_f32_wait(anira_handler* handler,
-                                                  float* const* out,
-                                                  size_t num_out,
-                                                  double timeout_ms,
-                                                  uint32_t tensor_index) ANIRA_NOEXCEPT {
-    if (handler == nullptr) { return 0; }
-    if (!is_prepared(*handler, __func__)) { return 0; }
-    if (!has_arguments(*handler, output_slot(*handler, out, tensor_index), __func__)) { return 0; }
-    if (!ring_is_f32(*handler, false, tensor_index, __func__)) { return 0; }
-    return pop_data_wait_body(*handler, out, num_out, tensor_index, timeout_ms, __func__);
+anira_status ANIRA_CALL anira_handler_pop_data_f32_wait(anira_handler* handler,
+                                                        float* const* out,
+                                                        size_t num_out,
+                                                        double timeout_ms,
+                                                        uint32_t tensor_index,
+                                                        size_t* delivered) ANIRA_NOEXCEPT {
+    set_delivered(delivered, 0);
+    if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
+    if (!has_arguments(*handler, output_slot(*handler, out, tensor_index), __func__)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    if (!ring_is_f32(*handler, false, tensor_index, __func__)) { return ANIRA_ERROR_CONFIG; }
+    return pop_data_wait_body(*handler,
+                              out,
+                              num_out,
+                              tensor_index,
+                              timeout_ms,
+                              __func__,
+                              delivered);
 }
 
 anira_status ANIRA_CALL anira_handler_pop_data_f32_multi_wait(anira_handler* handler,
@@ -1200,5 +1263,3 @@ anira_status ANIRA_CALL anira_handler_pop_data_f32_multi_wait(anira_handler* han
     if (!outputs_are_f32(*handler, __func__)) { return ANIRA_ERROR_CONFIG; }
     return pop_data_multi_wait_body(*handler, out, num_out, timeout_ms, __func__);
 }
-
-// ==== the _wait twins, any ring dtype =========================================================

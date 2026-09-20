@@ -127,16 +127,19 @@ CreateOutcome try_create(const Context& context,
 void run_waited_block(anira_handler* handler, size_t block_index, size_t n = k_block) {
     std::vector<float> block = ramp(block_index, n);
     const std::array<float*, 1> ptrs{block.data()};
-    const size_t prev = anira_handler_get_available_samples(handler, 0, 0);
-    EXPECT_EQ(anira_handler_process_f32_inplace(handler, ptrs.data(), n, 0), n)
+    const size_t prev = anira_test::available(handler);
+    size_t delivered = 0;
+    EXPECT_EQ(anira_handler_process_f32_inplace(handler, ptrs.data(), n, 0, &delivered), ANIRA_OK)
         << "block " << block_index;
+    EXPECT_EQ(delivered, n) << "block " << block_index;
     wait_for_block(handler, prev);
 }
 
 void expect_unprepared(anira_handler* handler) {
     std::vector<float> block(k_block, 0.5F);
     const std::array<float*, 1> ptrs{block.data()};
-    EXPECT_EQ(anira_handler_process_f32_inplace(handler, ptrs.data(), k_block, 0), 0U);
+    EXPECT_EQ(anira_handler_process_f32_inplace(handler, ptrs.data(), k_block, 0, nullptr),
+              ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_rt_error(handler), ANIRA_ERROR_NOT_PREPARED);
 }
 
@@ -292,25 +295,44 @@ namespace {
 
 enum class Form { InPlace, Separate, Multi };
 
+/// What one call delivered: the entry's status and the streamed output's count.
+struct Delivered {
+    anira_status m_status = ANIRA_OK;
+    size_t m_count = 0;
+};
+
 /// One block through the form. `static_out` asks for the Static output (gain_out) through the
 /// multi form; without it the Static output's pointer is NULL and its request 0.
-size_t call(anira_handler* handler,
-            Form form,
-            const std::vector<float>& in,
-            std::vector<float>& out,
-            bool static_out,
-            float& gain_out) {
+Delivered call(anira_handler* handler,
+               Form form,
+               const std::vector<float>& in,
+               std::vector<float>& out,
+               bool static_out,
+               float& gain_out) {
+    Delivered delivered;
     switch (form) {
         case Form::InPlace: {
             out = in;
             const std::array<float*, 1> ch{out.data()};
-            return anira_handler_process_f32_inplace(handler, ch.data(), k_block, 0);
+            delivered.m_status = anira_handler_process_f32_inplace(handler,
+                                                                   ch.data(),
+                                                                   k_block,
+                                                                   0,
+                                                                   &delivered.m_count);
+            return delivered;
         }
         case Form::Separate: {
             out.assign(k_block, -1.0F);
             const std::array<const float*, 1> i{in.data()};
             const std::array<float*, 1> o{out.data()};
-            return anira_handler_process_f32(handler, i.data(), k_block, o.data(), k_block, 0);
+            delivered.m_status = anira_handler_process_f32(handler,
+                                                           i.data(),
+                                                           k_block,
+                                                           o.data(),
+                                                           k_block,
+                                                           0,
+                                                           &delivered.m_count);
+            return delivered;
         }
         case Form::Multi: {
             out.assign(k_block, -1.0F);
@@ -324,16 +346,29 @@ size_t call(anira_handler* handler,
             const std::array<float* const*, 2> outs{out_ch.data(),
                                                     static_out ? gain_out_ch.data() : nullptr};
             std::array<size_t, 2> num_out{k_block, static_out ? 1U : 0U};
-            EXPECT_EQ(anira_handler_process_f32_multi(handler,
-                                                      ins.data(),
-                                                      num_in.data(),
-                                                      outs.data(),
-                                                      num_out.data()),
-                      ANIRA_OK);
-            return num_out[0];
+            delivered.m_status = anira_handler_process_f32_multi(handler,
+                                                                 ins.data(),
+                                                                 num_in.data(),
+                                                                 outs.data(),
+                                                                 num_out.data());
+            delivered.m_count = num_out[0];
+            return delivered;
         }
     }
-    return 0;
+    return delivered;
+}
+
+/// The block was delivered in full: ANIRA_OK and the whole request.
+void expect_full(const Delivered& delivered, const char* what) {
+    EXPECT_EQ(delivered.m_status, ANIRA_OK) << what;
+    EXPECT_EQ(delivered.m_count, k_block) << what;
+}
+
+/// The block was missed: ANIRA_MISSED, a success under ANIRA_FAILED, and a count of 0.
+void expect_missed(const Delivered& delivered, const char* what) {
+    EXPECT_EQ(delivered.m_status, ANIRA_MISSED) << what;
+    EXPECT_TRUE(ANIRA_SUCCEEDED(delivered.m_status)) << what;
+    EXPECT_EQ(delivered.m_count, 0U) << what;
 }
 
 /// Block b (1-based) carries ramp(b) and, once aligned, delivers ramp(b - 1); block 1 the
@@ -359,20 +394,21 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
     float gain_out = -1.0F;
 
     // Block 1: the priming zeros.
-    size_t prev = anira_handler_get_available_samples(h, 0, 0);
-    EXPECT_EQ(call(h, form, ramp(1), out, static_out, gain_out), k_block);
+    size_t prev = anira_test::available(h);
+    expect_full(call(h, form, ramp(1), out, static_out, gain_out), "block 1");
     expect_all(out, 0.0F, "block 1");
     wait_for_block(h, prev);
 
     // Block 2: inference 1's pass-through; inference 2 is now stuck on an inference thread.
     gate.m_open.store(false);
-    EXPECT_EQ(call(h, form, ramp(2), out, static_out, gain_out), k_block);
+    expect_full(call(h, form, ramp(2), out, static_out, gain_out), "block 2");
     expect_same_block(out, ramp(1), 2);
     if (static_out) { EXPECT_EQ(gain_out, 1.0F) << "block 2: the gain passed through"; }
 
-    // Block 3: a miss under every policy; the buffer content is the policy's.
+    // Block 3: a miss under every policy; the status says so, the buffer content is the
+    // policy's.
     gain_out = -1.0F;
-    EXPECT_EQ(call(h, form, ramp(3), out, static_out, gain_out), 0U) << "the count says miss";
+    expect_missed(call(h, form, ramp(3), out, static_out, gain_out), "block 3");
     switch (policy) {
         case ANIRA_MISS_BYPASS: expect_same_block(out, ramp(3), 3); break;
         case ANIRA_MISS_HOLD_LAST:
@@ -391,11 +427,11 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
     // The gate opens: inferences 2 and 3 are collected, the catch-up discards ramp(2).
     gate.m_open.store(true);
     wait_for_available(h, 2 * k_block);
-    EXPECT_EQ(call(h, form, ramp(4), out, static_out, gain_out), k_block);
+    expect_full(call(h, form, ramp(4), out, static_out, gain_out), "block 4");
     expect_same_block(out, ramp(3), 4);
     wait_for_available(h, k_block);
-    prev = anira_handler_get_available_samples(h, 0, 0);
-    EXPECT_EQ(call(h, form, ramp(5), out, static_out, gain_out), k_block);
+    prev = anira_test::available(h);
+    expect_full(call(h, form, ramp(5), out, static_out, gain_out), "block 5");
     expect_same_block(out, ramp(4), 5);
     wait_for_block(h, prev);
 
@@ -407,10 +443,15 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
         EXPECT_EQ(anira_handler_push_data_f32(h, in_ch.data(), k_block, 0), ANIRA_OK);
         std::vector<float> popped(k_block, -1.0F);
         const std::array<float*, 1> popped_ch{popped.data()};
-        EXPECT_EQ(anira_handler_pop_data_f32(h, popped_ch.data(), k_block, 0), k_block);
+        size_t popped_count = 0;
+        EXPECT_EQ(anira_handler_pop_data_f32(h, popped_ch.data(), k_block, 0, &popped_count),
+                  ANIRA_OK);
+        EXPECT_EQ(popped_count, k_block);
         expect_same_block(popped, ramp(5), 6);
         popped.assign(k_block, -1.0F);
-        EXPECT_EQ(anira_handler_pop_data_f32(h, popped_ch.data(), k_block, 0), 0U);
+        EXPECT_EQ(anira_handler_pop_data_f32(h, popped_ch.data(), k_block, 0, &popped_count),
+                  ANIRA_MISSED);
+        EXPECT_EQ(popped_count, 0U);
         expect_all(popped, 0.0F, "the starved pop");
     }
     gate.m_open.store(true);  // before the handler is destroyed: the release waits for the
@@ -659,13 +700,15 @@ TEST(AbiPrepare, ASecondPrepareReplacesTheSessionWhole) {
     ASSERT_EQ(handler.prepare(explicit_contract(256)), ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(anira::Core::get_num_sessions(), 1);
     const size_t latency = anira_handler_get_latency(h, 0);
-    EXPECT_EQ(anira_handler_get_available_samples(h, 0, 0), latency) << "a fresh stream";
+    EXPECT_EQ(anira_test::available(h), latency) << "a fresh stream";
     EXPECT_NE(anira_handler_plan_report(h), nullptr);
     // Two 256-sample blocks: one 512-sample hop, one inference.
     for (size_t k = 1; k <= 2; ++k) {
         std::vector<float> block = ramp(k, 256);
         const std::array<float*, 1> ptrs{block.data()};
-        EXPECT_EQ(anira_handler_process_f32_inplace(h, ptrs.data(), 256, 0), 256U);
+        size_t delivered = 0;
+        EXPECT_EQ(anira_handler_process_f32_inplace(h, ptrs.data(), 256, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(delivered, 256U);
     }
     wait_for_available(h, latency);
 }

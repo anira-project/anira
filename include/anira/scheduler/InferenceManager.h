@@ -348,6 +348,15 @@ public:
     void set_miss_policy(anira_miss_policy policy) noexcept { m_on_miss = policy; }
 
     /**
+     * @brief Whether the last process or pop form delivered a missed block
+     *
+     * True when the last process_output() took the starvation path: the miss policy filled
+     * every requested output and their counts came back 0. The 3.x Hard entries turn it into
+     * ANIRA_MISSED. Driver thread only; false after prepare() and reset().
+     */
+    bool last_block_missed() const noexcept { return m_last_missed; }
+
+    /**
      * @brief Gets the number of samples received for a specific tensor and channel (for unit
      * testing)
      *
@@ -532,6 +541,8 @@ private:
     std::vector<size_t> m_hold_capacity;  ///< Per output: the largest block a call may request
     std::vector<size_t> m_hold_len;       ///< Per output: samples held (0 = nothing delivered
                                           ///< since prepare() or reset())
+    bool m_last_missed = false;           ///< The last process_output() took the starvation path
+                                          ///< (last_block_missed()); driver thread only
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr

@@ -265,14 +265,22 @@ inline std::vector<float> ramp(size_t block_index, size_t n = k_block) {
     return out;
 }
 
+/// anira_handler_get_available_samples as a value: the samples waiting in channel 0 of the
+/// output ring, 0 on a failure (a test that cares about the status calls the entry itself).
+inline size_t available(anira_handler* handler, uint32_t tensor_index = 0) {
+    size_t count = 0;
+    anira_handler_get_available_samples(handler, tensor_index, 0, &count);
+    return count;
+}
+
 /// Waits until the output ring of tensor_index holds `expected` samples again (the loop of
 /// test_InferenceHandler.cpp); fails after k_wait_s.
 inline void wait_for_available(anira_handler* handler, size_t expected, uint32_t tensor_index = 0) {
     const auto start = std::chrono::steady_clock::now();
-    while (anira_handler_get_available_samples(handler, tensor_index, 0) != expected) {
+    while (available(handler, tensor_index) != expected) {
         if (std::chrono::steady_clock::now() > start + std::chrono::seconds(k_wait_s)) {
             FAIL() << "timeout while waiting for " << expected << " available samples (have "
-                   << anira_handler_get_available_samples(handler, tensor_index, 0) << ")";
+                   << available(handler, tensor_index) << ")";
         }
         std::this_thread::sleep_for(std::chrono::microseconds(10));
     }

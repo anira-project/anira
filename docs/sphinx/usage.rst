@@ -245,14 +245,15 @@ an ``anira::ContractHandle``.
 - **Warmup.** ``ANIRA_WARMUP_FIXED`` with ``warmup_iterations``, ``ANIRA_WARMUP_UNTIL_STABLE``
   (the default) or ``ANIRA_WARMUP_NONE``, which is legal only with an explicit budget.
 - **Miss policy.** What a Hard entry delivers for a block whose inference has not completed
-  when the block is popped (the entry returns ``0`` samples for that block under every
-  policy, so the miss is visible; the policy decides what the buffers hold, and the stream
-  stays time-aligned). ``ANIRA_MISS_BYPASS`` (the default) copies the block the same call
-  pushed into the anchored input into the output (``process`` and its ``_separate`` /
-  ``_multi`` forms with the anchored input's slot; a call on another slot, and a pop, which has
-  no input block, deliver zeros), which needs an anchored input ring with the output's channel
-  count: when the anchor is an output (a generator, or a named output anchor) or when the
-  channel counts differ, ``prepare`` refuses it with ``ANIRA_ERROR_CONFIG`` naming ``on_miss``.
+  when the block is popped (the entry returns ``ANIRA_MISSED``, a success, with a delivered
+  count of ``0`` under every policy, so the miss is visible; the policy decides what the
+  buffers hold, and the stream stays time-aligned). ``ANIRA_MISS_BYPASS`` (the default) copies
+  the block the same call pushed into the anchored input into the output (``process_f32`` and
+  its ``_inplace`` / ``_multi`` forms with the anchored input's slot; a call on another slot,
+  and a pop, which has no input block, deliver zeros), which needs an anchored input ring with
+  the output's channel count: when the anchor is an output (a generator, or a named output
+  anchor) or when the channel counts differ, ``prepare`` refuses it with
+  ``ANIRA_ERROR_CONFIG`` naming ``on_miss``.
   ``ANIRA_MISS_HOLD_LAST`` repeats the last block the output delivered (one block-sized buffer
   per output channel, allocated at prepare) and the latest value of a Static output.
   ``ANIRA_MISS_ZEROS`` delivers silence, what the 2.x runtime did: the contract a 2.x document
@@ -633,9 +634,11 @@ fixed warmup, as every bundled contract file does).
     if (ANIRA_FAILED(st)) { return fail(&err); }
     host_set_latency(anira_handler_get_latency(h, 0));                   /* constant until the next prepare */
     /* the process callback: */
-    anira_handler_process_f32_inplace(h, channels, num_samples, 0);                  /* in place; 0 = a missed block */
+    st = anira_handler_process_f32_inplace(h, channels, num_samples, 0, NULL);      /* in place */
+    if (st == ANIRA_MISSED) { /* the buffers hold what the miss policy chose */ }
+    if (ANIRA_FAILED(st)) { /* a refusal, recorded in anira_handler_rt_error */ }
     /* off the driver thread: */
-    if (anira_handler_rt_error(h) != ANIRA_OK) { /* why a block came back as zeros */ }
+    if (anira_handler_rt_error(h) != ANIRA_OK) { /* the last refusal, or ANIRA_ERROR_ENGINE */ }
     anira_handler_destroy(h);
     anira_context_destroy(context);
 
@@ -658,18 +661,22 @@ objects (``anira::Pipeline pipe{anira::stage::Inference(cfg, {{ANIRA_ENGINE_ONNX
 ``anira::PlanReport(anira_handler_plan_report(h)).plans()``); the ``anira::InferenceHandler``
 class arrives with the runtime cut-over.
 
-**The Hard entries.** ``anira_handler_process_f32(h, in, num_in, out, num_out, tensor_index)``,
-``anira_handler_process_f32_inplace(h, data, num_samples, tensor_index)`` (one buffer set, read
-and overwritten), ``anira_handler_process_f32_multi(h, in, num_in, out, num_out)`` (every
-tensor at once, the arrays indexed by slot; ``num_out`` is written back with the samples
-delivered, ``0`` for a missed streamed output; an output requested with ``0`` is left
-untouched), ``anira_handler_push_data_f32`` / ``push_data_f32_multi`` and
-``anira_handler_pop_data_f32`` / ``pop_data_f32_multi`` are the 2.x methods of sections 5.1
-to 5.4 as C entries,
-``[driver-thread]`` and ``ANIRA_NONBLOCKING``: none of them waits, a block whose inference has
-not completed is an on_miss event (section 1.3), and a refusal carries no ``anira_error``:
-the entry returns ``0`` or a status, records it in ``anira_handler_rt_error`` and logs once
-through the real-time queue (:doc:`logging`). ``tensor_index`` is the slot in the input and
+**The Hard entries.** ``anira_handler_process_f32(h, in, num_in, out, num_out, tensor_index,
+&delivered)``, ``anira_handler_process_f32_inplace(h, data, num_samples, tensor_index,
+&delivered)`` (one buffer set, read and overwritten),
+``anira_handler_process_f32_multi(h, in, num_in, out, num_out)`` (every tensor at once, the
+arrays indexed by slot; ``num_out`` is written back with the samples delivered; an output
+requested with ``0`` is left untouched), ``anira_handler_push_data_f32`` /
+``push_data_f32_multi`` and ``anira_handler_pop_data_f32`` / ``pop_data_f32_multi`` are the
+2.x methods of sections 5.1 to 5.4 as C entries, ``[driver-thread]`` and
+``ANIRA_NONBLOCKING``. Every one returns an ``anira_status`` and hands the delivered count back
+through a nullable ``size_t*`` (the multi forms through ``num_out``): ``ANIRA_OK`` when the
+block was delivered in full, ``ANIRA_MISSED`` when its inference had not completed, a success
+under ``ANIRA_FAILED`` that says the buffers hold what the miss policy chose and the count is
+``0`` (section 1.3), or a failure. None of them waits, and a refusal carries no
+``anira_error``: the entry returns the failure status, records it in
+``anira_handler_rt_error`` and logs once through the real-time queue (:doc:`logging`); a
+miss is not recorded. ``tensor_index`` is the slot in the input and
 the output list; a Static tensor carries its values in channel 0 of the multi forms. The
 ``_f32`` entries are the float32 face over planar channel buffers (``float* const*``, what an
 audio host hands out) and are legal on ``ANIRA_DTYPE_F32`` rings; ``anira_handler_process_f32``
@@ -679,14 +686,14 @@ takes separate input and output buffers, ``_inplace`` is the 2.x shape over one 
 on the tensor.
 ``anira_handler_get_latency(h, i)`` and ``anira_handler_get_latencies(h, &count, out)``
 (index-aligned with the output list, ``0`` for a Static output) are valid from prepare on;
-``anira_handler_get_available_samples(h, i, channel)`` collects the completed inferences
-and reports what waits in the output ring (right after prepare, the latency);
+``anira_handler_get_available_samples(h, i, channel, &count)`` collects the completed
+inferences and reports what waits in the output ring (right after prepare, the latency);
 ``anira_handler_reset(h)`` is the wait-free stream reset of 5.5; ``anira_handler_rt_error(h)``
 the last real-time failure, readable from any thread and any callback.
 
 **The _wait twins.** ``anira_handler_process_f32_inplace_wait(h, data, num_samples, timeout_ms,
-tensor_index)``, ``process_f32_wait``, ``process_f32_multi_wait``, ``pop_data_f32_wait`` and
-``pop_data_f32_multi_wait`` wait for the block's inference:
+tensor_index, &delivered)``, ``process_f32_wait``, ``process_f32_multi_wait``,
+``pop_data_f32_wait`` and ``pop_data_f32_multi_wait`` wait for the block's inference:
 ``timeout_ms >= 0`` explicitly, ``ANIRA_WAIT_CONTRACT`` for ``wait_ratio`` times the block
 duration (the call's block on the process forms — the 2.x ``blocking_ratio`` wait inside
 ``process`` — and the contract's ``block_max`` on the pop forms), ``ANIRA_WAIT_FOREVER``
@@ -694,10 +701,11 @@ without limit (the 2.x ``set_non_realtime``); on the completion semaphore when t
 ``wait_ratio`` is above ``0``, else by polling every millisecond. They are ``[any-thread,
 blocking]``, legal from the driver thread only where the host accepts a wait there (on
 WebAssembly every wait spins); a block not completed at the timeout is a miss as in the
-nonblocking entry, and without an inference thread inside its loop (the core's pool or
-``anira_inference_thread_run_loop``; a host pumping ``anira_inference_thread_execute`` itself is
-not counted) they do what the nonblocking entry does and return ``0`` /
-``ANIRA_ERROR_INVALID_STATE`` at once. A push never waits.
+nonblocking entry, ``ANIRA_MISSED``, and without an inference thread inside its loop (the
+core's pool or ``anira_inference_thread_run_loop``; a host pumping
+``anira_inference_thread_execute`` itself is not counted) they do what the nonblocking entry
+does and return ``ANIRA_ERROR_INVALID_STATE`` at once, the count holding what that delivered.
+A push never waits.
 
 4. Get ready for Processing
 ---------------------------
@@ -782,7 +790,7 @@ The first model entry's engine is selected automatically; to run another one, se
 5. Real-time Processing
 -----------------------
 
-Now we are ready to process audio in the process callback of our real-time audio application. For streamable as well as non-streamable tensors, the :cpp:func:`anira::InferenceHandler::process` or the :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::InferenceHandler::pop_data` methods can be used to process audio data. All methods can be used in the real-time thread. Each function is overloaded so it can be used with a single tensor or with a vector of tensors. The same in C: ``anira_handler_process_f32_inplace`` / ``process_separate`` / ``process_multi``, ``anira_handler_push_data_f32`` / ``push_data_multi``, ``anira_handler_pop_data_f32`` / ``pop_data_multi`` and their ``_typed`` twins (section 3.2).
+Now we are ready to process audio in the process callback of our real-time audio application. For streamable as well as non-streamable tensors, the :cpp:func:`anira::InferenceHandler::process` or the :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::InferenceHandler::pop_data` methods can be used to process audio data. All methods can be used in the real-time thread. Each function is overloaded so it can be used with a single tensor or with a vector of tensors. The same in C: ``anira_handler_process_f32`` / ``process_f32_inplace`` / ``process_f32_multi``, ``anira_handler_push_data_f32`` / ``push_data_f32_multi`` and ``anira_handler_pop_data_f32`` / ``pop_data_f32_multi`` (section 3.2).
 
 5.1. Process Method
 ~~~~~~~~~~~~~~~~~~~

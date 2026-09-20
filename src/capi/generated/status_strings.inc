@@ -5,6 +5,7 @@ ANIRA_STATUS_TEXT(ANIRA_SUCCESS_UPGRADED, "success (version 2 document auto-upgr
 ANIRA_STATUS_TEXT(ANIRA_INCOMPLETE, "success (enumeration buffer too short)")
 ANIRA_STATUS_TEXT(ANIRA_TIMEOUT, "timed out")
 ANIRA_STATUS_TEXT(ANIRA_PENDING, "pending")
+ANIRA_STATUS_TEXT(ANIRA_MISSED, "block missed (the miss policy filled the output)")
 ANIRA_STATUS_TEXT(ANIRA_ERROR_UNKNOWN, "unknown error")
 ANIRA_STATUS_TEXT(ANIRA_ERROR_INVALID_ARGUMENT, "invalid argument")
 ANIRA_STATUS_TEXT(ANIRA_ERROR_INVALID_STATE, "invalid state")

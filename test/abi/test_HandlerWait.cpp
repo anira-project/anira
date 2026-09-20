@@ -128,9 +128,12 @@ void drive_contract_wait(int first_sleep_us,
             // samples, capturing the parameter current at that pull.
             while ((submitted.size() + 1) * k_hop <= demand + n) { submitted.push_back(param); }
             const Pull result = pull(h, param, out, ANIRA_WAIT_CONTRACT);
-            ASSERT_EQ(result.m_status, ANIRA_OK) << "block " << block;
             received = result.m_received;
-            if (received == n) { break; }
+            if (received == n) {
+                ASSERT_EQ(result.m_status, ANIRA_OK) << "block " << block;
+                break;
+            }
+            ASSERT_EQ(result.m_status, ANIRA_MISSED) << "block " << block << ": a starved pull";
             ASSERT_EQ(received, 0U) << "block " << block << ": a pop is all-or-nothing";
             const long long elapsed_us =
                 std::chrono::duration_cast<std::chrono::microseconds>(result.m_elapsed).count();
@@ -242,7 +245,8 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
         EXPECT_EQ(first.m_status, ANIRA_OK);
         EXPECT_EQ(first.m_received, k_hop);
         const Pull second = pull(h, 2.0F, out, 20.0);
-        EXPECT_EQ(second.m_status, ANIRA_OK) << "a miss, not a refusal";
+        EXPECT_EQ(second.m_status, ANIRA_MISSED) << "a miss, not a refusal";
+        EXPECT_TRUE(ANIRA_SUCCEEDED(second.m_status));
         EXPECT_EQ(second.m_received, 0U);
         EXPECT_GE(second.m_elapsed, std::chrono::milliseconds(20));
         EXPECT_LT(second.m_elapsed, std::chrono::milliseconds(500))
@@ -256,9 +260,14 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
         // then the stalled one.
         anira_handler_reset(h);
         const std::array<float*, 1> out_ch{out.data()};
-        EXPECT_EQ(anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, 20.0, 0), k_hop);
+        size_t delivered = 0;
+        EXPECT_EQ(anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, 20.0, 0, &delivered),
+                  ANIRA_OK);
+        EXPECT_EQ(delivered, k_hop);
         const auto start = std::chrono::steady_clock::now();
-        EXPECT_EQ(anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, 20.0, 0), 0U);
+        EXPECT_EQ(anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, 20.0, 0, &delivered),
+                  ANIRA_MISSED);
+        EXPECT_EQ(delivered, 0U);
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start);
         EXPECT_GE(elapsed, std::chrono::milliseconds(20));
@@ -285,15 +294,27 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
         ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
         const DestroyFirst destroy_first(handler);
         const std::array<float*, 1> out_ch{out.data()};
+        size_t delivered = 0;
         if (anira_handler_get_latency(h, 0) > 0) {
-            EXPECT_EQ(
-                anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0),
-                k_hop)
+            EXPECT_EQ(anira_handler_pop_data_f32_wait(h,
+                                                      out_ch.data(),
+                                                      k_hop,
+                                                      ANIRA_WAIT_CONTRACT,
+                                                      0,
+                                                      &delivered),
+                      ANIRA_OK)
                 << "the priming block";
+            EXPECT_EQ(delivered, k_hop) << "the priming block";
         }
         const auto start = std::chrono::steady_clock::now();
-        EXPECT_EQ(anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0),
-                  0U);
+        EXPECT_EQ(anira_handler_pop_data_f32_wait(h,
+                                                  out_ch.data(),
+                                                  k_hop,
+                                                  ANIRA_WAIT_CONTRACT,
+                                                  0,
+                                                  &delivered),
+                  ANIRA_MISSED);
+        EXPECT_EQ(delivered, 0U);
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start);
         EXPECT_GE(elapsed, std::chrono::milliseconds(21)) << "2048 / 48000 s";
@@ -330,11 +351,33 @@ TEST_P(AbiHandlerWaitRatio, InvalidStateWithoutAnActiveThread) {
     const Pull second = pull(h, 2.0F, out, ANIRA_WAIT_FOREVER);
     EXPECT_EQ(second.m_status, ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(second.m_received, 0U) << "a miss: nothing runs the queued inference";
+    // The single-tensor twins refuse the same way, and their count is the stem's: a miss, or,
+    // once the pulls above have claimed every inference struct the session has, the hop of
+    // zeros an exhausted pool delivers (Core::new_data_submitted); which of the two depends on
+    // the struct count wait_ratio selects.
+    const auto expect_stem_count = [&](size_t delivered, const char* what) {
+        EXPECT_TRUE(delivered == 0 || delivered == k_hop) << what << ": " << delivered;
+        if (delivered == k_hop) { anira_test::expect_all(out, 0.0F, what); }
+    };
     const std::array<float*, 1> out_ch{out.data()};
-    EXPECT_EQ(
-        anira_handler_process_f32_inplace_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_FOREVER, 0),
-        0U);
-    EXPECT_EQ(anira_handler_pop_data_f32_wait(h, out_ch.data(), k_hop, ANIRA_WAIT_CONTRACT, 0), 0U);
+    size_t delivered = 7;
+    EXPECT_EQ(anira_handler_process_f32_inplace_wait(h,
+                                                     out_ch.data(),
+                                                     k_hop,
+                                                     ANIRA_WAIT_FOREVER,
+                                                     0,
+                                                     &delivered),
+              ANIRA_ERROR_INVALID_STATE);
+    expect_stem_count(delivered, "the in-place twin's stem");
+    delivered = 7;
+    EXPECT_EQ(anira_handler_pop_data_f32_wait(h,
+                                              out_ch.data(),
+                                              k_hop,
+                                              ANIRA_WAIT_CONTRACT,
+                                              0,
+                                              &delivered),
+              ANIRA_ERROR_INVALID_STATE);
+    expect_stem_count(delivered, "the pop twin's stem");
     anira_drain_log();
 #ifdef ENABLE_LOGGING
     EXPECT_EQ(anira_test::count_records(collector,
