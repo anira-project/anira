@@ -192,6 +192,15 @@ anira_abi_consumer_target(anira_abi_layout C)
 add_executable(anira_abi_link generated/link_probe.c)
 target_link_libraries(anira_abi_link PRIVATE anira::anira)
 anira_abi_consumer_target(anira_abi_link C)
+if(ANIRA_WITH_UBSAN)
+    # The probe is C, so the C driver links it, and that driver leaves out the C++ half of
+    # the UBSan runtime. libanira's -fsanitize=vptr checks live there
+    # (__ubsan_handle_dynamic_type_cache_miss, __ubsan_vptr_type_cache), and with a static
+    # sanitizer runtime the executable has to supply them: the link fails on clang 20 /
+    # Ubuntu. The source still compiles as C; only this instrumented build links it through
+    # the C++ driver.
+    set_target_properties(anira_abi_link PROPERTIES LINKER_LANGUAGE CXX)
+endif()
 if(NOT _abi_on_device)
     add_test(NAME anira_abi_link COMMAND anira_abi_link)
     if(MSVC AND ANIRA_SHARED_LIBS_WIN)
