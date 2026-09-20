@@ -7,24 +7,15 @@ on:
     branches:
       - main
       - v3
-    # Diff-based early warning: only when C++/build/config sources change does
-    # the job even spawn, and a pull request run checks only the .cpp files it
-    # changes; the merge queue always runs the full sweep and is the
-    # enforcement point (this workflow's result is deliberately NOT a required
-    # check — a path-skipped required check would block queue entry forever).
-    # A full sweep of a branch before the queue: run this workflow by hand
-    # (workflow_dispatch).
-    paths:
-      - "**.cpp"
-      - "**.c"
-      - "**.h"
-      - "**.hpp"
-      - "**.cmake"
-      - "**/CMakeLists.txt"
-      - "CMakeLists.txt"
-      - "CMakePresets.json"
-      - ".clang-tidy"
-      - ".github/workflows/clang_tidy.yml"
+    # No path filter: "clang_tidy result" reports on every pull request head, so
+    # it can be a REQUIRED check (a required check that never reports blocks
+    # queue entry forever, which is why the path-filtered version could not be
+    # one, and why its sweep in the merge queue did not gate a merge). A pull
+    # request checks only the .cpp files it changes, and one that changes none
+    # skips the restore, the tool setup and the build: the job is a checkout
+    # and one script. The merge queue always sweeps every source and, with the
+    # result required, is the enforcement point. A full sweep of a branch before
+    # the queue: run this workflow by hand (workflow_dispatch).
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,6 +27,11 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
+      # What changes tidy's own verdicts sweeps: the rule set and this workflow
+      # (it pins the tidy tool). Build files are not listed: the pattern meets
+      # the pull request's whole diff on every push, so a CMakeLists.txt in it
+      # would sweep every pull request that adds a source file, on every push.
+      TIDY_SWEEP_PATTERN: '^\.clang-tidy$|^\.github/workflows/clang_tidy\.yml$'
     strategy:
       matrix:
         include:
@@ -47,9 +43,27 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
+      # The same selection clang-tidy-check makes below, run first so that a pull
+      # request with nothing to check skips everything that costs time. `work` is
+      # true on a sweep (the queue, a dispatch, the pattern) and when the list
+      # holds a .cpp path; a false positive only builds for nothing.
+      - uses: tanh-lab/ci-actions/changed-files@v0.3.14
+        id: changed
+        with:
+          FULL_SWEEP_PATTERN: ${{ env.TIDY_SWEEP_PATTERN }}
+      - name: anything to check?
+        id: plan
+        env:
+          # Through the environment: the reason can carry a path of the pull request.
+          WORK: ${{ steps.changed.outputs.sweep == 'true' || contains(steps.changed.outputs.files, '.cpp') }}
+          REASON: ${{ steps.changed.outputs.reason }}
+        run: |
+          echo "work=$WORK" >> "$GITHUB_OUTPUT"
+          echo "work=$WORK ($REASON)"
       # The clang-tidy preset enables tests, so the configure fetches the model
       # fixtures — restore them from the shared cache like the build workflows.
       - name: restore the model fixtures
+        if: steps.plan.outputs.work == 'true'
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -61,10 +75,12 @@ jobs:
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
       - uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.14
+        if: steps.plan.outputs.work == 'true'
       # clang-tidy needs a compile_commands.json, so the library is configured
       # and built first. The clang-tidy preset enables tests, the benchmark
       # fixture and all backends so every analysed translation unit compiles.
       - uses: tanh-lab/ci-actions/cmake-build@v0.3.14
+        if: steps.plan.outputs.work == 'true'
         with:
           PRESET: clang-tidy
       # SOURCES excludes src/emscripten-wrappers/ because those translation
@@ -75,19 +91,15 @@ jobs:
       # test file, which lacks the engine include directory its engine consumer
       # needs (build_install is what checks it).
       - uses: tanh-lab/ci-actions/clang-tidy-check@v0.3.14
+        if: steps.plan.outputs.work == 'true'
         with:
           PRESET: clang-tidy
           SOURCES: "src/backends/ src/benchmark/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/backends/ test/scheduler/ test/utils/ test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp test/contracts/test_BackendLinkage.cpp test/*.cpp"
           # Pull requests check the .cpp files they change; the queue and a
           # dispatch sweep SOURCES. A header or build change does not widen the
-          # set: what it breaks in an untouched file fails in the queue, not on
-          # the pull request. Only what changes tidy's own verdicts sweeps: the
-          # rule set (.clang-tidy) and this workflow (it pins the tidy tool).
-          # The pattern meets the pull request's whole diff on every push, so a
-          # CMakeLists.txt in it would sweep every pull request that adds a
-          # source file, on every push.
+          # set: what it breaks in an untouched file fails in the queue.
           CHANGED_FILES_ONLY: "true"
-          FULL_SWEEP_PATTERN: '^\.clang-tidy$|^\.github/workflows/clang_tidy\.yml$'
+          FULL_SWEEP_PATTERN: ${{ env.TIDY_SWEEP_PATTERN }}
 
   # The queue's required status for this workflow.
   result:
