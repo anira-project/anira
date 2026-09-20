@@ -1,4 +1,5 @@
 name: coverage (Codecov metric, not a gate)
+# scratch: a comment so that the pull_request path filter runs this workflow on plain v3
 
 # Full-suite coverage — the pipeline is tanh-lab/ci-actions' reusable coverage
 # workflow; this file keeps anira's facts.
