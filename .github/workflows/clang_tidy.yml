@@ -31,7 +31,7 @@ jobs:
       # (it pins the tidy tool). Build files are not listed: the pattern meets
       # the pull request's whole diff on every push, so a CMakeLists.txt in it
       # would sweep every pull request that adds a source file, on every push.
-      TIDY_SWEEP_PATTERN: '^\.clang-tidy$|^\.github/workflows/clang_tidy\.yml$'
+      TIDY_SWEEP_PATTERN: '^\.clang-tidy$'
     strategy:
       matrix:
         include:
