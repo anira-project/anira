@@ -81,7 +81,16 @@ std::optional<InferenceBackend> first_engine_backend() {
 // before_inference while the gate is closed: between its stamp and its engine call.
 class RecordingProcessor : public PrePostProcessor {
 public:
-    using PrePostProcessor::PrePostProcessor;
+    // pre_process and post_process run inside the handler's real-time process call, so the
+    // records must not allocate there (RTSan): the room is reserved here, and a record past
+    // it is dropped, which the size checks of the tests would show.
+    static constexpr size_t k_record_capacity = 64;
+
+    explicit RecordingProcessor(InferenceConfig& inference_config)
+        : PrePostProcessor(inference_config) {
+        m_pre.reserve(k_record_capacity);
+        m_post.reserve(k_record_capacity);
+    }
     ~RecordingProcessor() override { m_gate_open.store(true); }
     RecordingProcessor(const RecordingProcessor&) = delete;
     RecordingProcessor& operator=(const RecordingProcessor&) = delete;
@@ -91,14 +100,16 @@ public:
     void pre_process(std::vector<RingBuffer>& input,
                      std::vector<BufferF>& output,
                      InferenceBackend backend) override {
-        m_pre.push_back(backend);  // driving thread only; within the reserved capacity
+        if (m_pre.size() < k_record_capacity) { m_pre.push_back(backend); }  // driving thread only
         PrePostProcessor::pre_process(input, output, backend);
     }
 
     void post_process(std::vector<BufferF>& input,
                       std::vector<RingBuffer>& output,
                       InferenceBackend backend) override {
-        m_post.push_back(backend);  // driving thread only; within the reserved capacity
+        if (m_post.size() < k_record_capacity) {
+            m_post.push_back(backend);
+        }  // driving thread only
         PrePostProcessor::post_process(input, output, backend);
     }
 
@@ -112,17 +123,8 @@ public:
         m_after.store(backend);
     }
 
-    /// pre_process and post_process run inside the ANIRA_NONBLOCKING process call, so the
-    /// records are appended into capacity reserved here: a push_back that allocated there is
-    /// what RealtimeSanitizer aborts on. No test drives more than a handful of chunks.
-    static std::vector<InferenceBackend> reserved() {
-        std::vector<InferenceBackend> records;
-        records.reserve(k_record_capacity);
-        return records;
-    }
-    static constexpr size_t k_record_capacity = 256;
-    std::vector<InferenceBackend> m_pre = reserved();
-    std::vector<InferenceBackend> m_post = reserved();
+    std::vector<InferenceBackend> m_pre;
+    std::vector<InferenceBackend> m_post;
     std::atomic<InferenceBackend> m_before{InferenceBackend::CUSTOM};
     std::atomic<InferenceBackend> m_after{InferenceBackend::CUSTOM};
     std::atomic<bool> m_in_hook{false};
