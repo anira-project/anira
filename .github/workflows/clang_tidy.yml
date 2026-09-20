@@ -8,9 +8,12 @@ on:
       - main
       - v3
     # Diff-based early warning: only when C++/build/config sources change does
-    # the job even spawn; the merge queue always runs the full sweep and is the
+    # the job even spawn, and a pull request run checks only the .cpp files it
+    # changes; the merge queue always runs the full sweep and is the
     # enforcement point (this workflow's result is deliberately NOT a required
     # check — a path-skipped required check would block queue entry forever).
+    # A full sweep of a branch before the queue: run this workflow by hand
+    # (workflow_dispatch).
     paths:
       - "**.cpp"
       - "**.c"
@@ -39,7 +42,11 @@ jobs:
           - name: Linux-x86_64
             os: ubuntu-24.04
     steps:
+      # Depth 2: the pull request's merge commit with both parents, which is what
+      # the changed-files selection of clang-tidy-check diffs (no token, no API).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       # The clang-tidy preset enables tests, so the configure fetches the model
       # fixtures — restore them from the shared cache like the build workflows.
       - name: restore the model fixtures
@@ -60,26 +67,6 @@ jobs:
       - uses: tanh-lab/ci-actions/cmake-build@v0.3.10
         with:
           PRESET: clang-tidy
-      # PRs analyse only their changed files; a header, CMake/tidy-config, or
-      # this-workflow change (which pins the tidy tool) falls back to the full
-      # sweep, and queue runs always sweep everything.
-      - name: collect the PR's changed files
-        id: diff
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate -q '.[].filename')
-          if echo "$FILES" | grep -qE '\.(h|hpp)$|CMakeLists\.txt$|\.cmake$|CMakePresets\.json$|\.clang-tidy$|\.github/workflows/clang_tidy\.yml$'; then
-            echo "A header, build/config file, or this workflow changed — full sweep."
-            echo "files=" >> "$GITHUB_OUTPUT"
-          else
-            {
-              echo 'files<<ANIRA_EOF'
-              echo "$FILES"
-              echo 'ANIRA_EOF'
-            } >> "$GITHUB_OUTPUT"
-          fi
       # SOURCES excludes src/emscripten-wrappers/ because those translation
       # units are only built by the wasm presets (Emscripten toolchain) and are
       # therefore absent from this build's compilation database — and test/contracts/install/ (an external consumer project that only compiles against an installed prefix),
@@ -87,12 +74,20 @@ jobs:
       # compile command here either, and clang-tidy would guess one from a nearby
       # test file, which lacks the engine include directory its engine consumer
       # needs (build_install is what checks it).
-      - uses: tanh-lab/ci-actions/clang-tidy-check@v0.3.10
+      - uses: tanh-lab/ci-actions/clang-tidy-check@v0.3.13
         with:
           PRESET: clang-tidy
           SOURCES: "src/backends/ src/benchmark/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/backends/ test/scheduler/ test/utils/ test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp test/contracts/test_BackendLinkage.cpp test/*.cpp"
-          # Empty on queue runs -> the action sweeps SOURCES.
-          FILES: ${{ steps.diff.outputs.files }}
+          # Pull requests check the .cpp files they change; the queue and a
+          # dispatch sweep SOURCES. A header or build change does not widen the
+          # set: what it breaks in an untouched file fails in the queue, not on
+          # the pull request. Only what changes tidy's own verdicts sweeps: the
+          # rule set (.clang-tidy) and this workflow (it pins the tidy tool).
+          # The pattern meets the pull request's whole diff on every push, so a
+          # CMakeLists.txt in it would sweep every pull request that adds a
+          # source file, on every push.
+          CHANGED_FILES_ONLY: "true"
+          FULL_SWEEP_PATTERN: '^\.clang-tidy$|^\.github/workflows/clang_tidy\.yml$'
 
   # The queue's required status for this workflow.
   result:
