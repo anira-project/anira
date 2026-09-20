@@ -316,9 +316,10 @@ public:
      * tensor, an output's included; it writes the memory the output names. In place is the
      * same tensor on both sides (or two tensors that describe the same memory the same way).
      *
-     * Trust. The descriptors are validated by the caller. The manager takes on trust the
-     * rank (2), the domain (host memory), `shape[0]` (the slot's channel count, 1 for a
-     * non-streamable slot), the pointers, `byte_offset` and the strides (1 or more on the
+     * Trust. The descriptors are validated by the caller (the library's own check is
+     * anira::tensor_run::check_host_tensor, src/scheduler/TensorRun.h). The manager takes on
+     * trust the rank (2), the domain (host memory), `shape[0]` (the slot's channel count, 1 for
+     * a non-streamable slot), the pointers, `byte_offset` and the strides (1 or more on the
      * sample axis, or all zero), and does not check them again: a malformed tensor is
      * undefined behaviour here. The one thing it checks is the dtype, because the float
      * adapters reach it without a validator: the tensor's dtype must be the slot's (the ring

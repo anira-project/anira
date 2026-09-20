@@ -161,7 +161,9 @@ suppressed", with the handler or the condition), without re-arming anything, and
 (``prepare`` and ``reset`` for a handler, ``prepare`` for the operational sites) logs the final
 count. The same latch, per site, covers the operational real-time conditions that would
 otherwise fire on every block: missing samples, an output stream nobody pops, an engine
-without a model, an inference dropped because a queue was full, a failed inference. A failed
+without a model, an inference dropped because a queue was full, a host tensor whose dtype is
+not its slot's (nothing converts: the input is not pushed, the output is zero-filled and
+reports 0 samples), a failed inference. A failed
 inference — an engine exception, a throwing custom processor or hook — zero-fills its output
 (never the previous job's data), sets ``rt_error`` to ``ANIRA_ERROR_ENGINE`` and is one
 latched record; the inference thread survives it. The summary runs on the drain thread and,

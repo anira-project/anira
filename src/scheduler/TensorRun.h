@@ -18,11 +18,12 @@
  *
  * channel_run() and the two moves trust the descriptor: nothing here checks the rank, the
  * domain, the extents, the pointers or the strides; the caller of InferenceManager's tensor
- * stems validates its descriptors first. Nothing in this header allocates, locks or calls the
- * system, so all of it is legal on the driver thread.
+ * stems validates its descriptors first, and check_host_tensor() is that check. Nothing in this
+ * header allocates, locks or calls the system, so all of it is legal on the driver thread.
  */
 
 #include <anira/abi/enums.h>
+#include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 
 #include <cstddef>
@@ -188,6 +189,86 @@ inline float load_f32(const Run& run, size_t index) noexcept {
 /// Stores value `index` of a float32 run.
 inline void store_f32(const Run& run, size_t index, float value) noexcept {
     std::memcpy(sample_of(run, index, sizeof(float)), &value, sizeof(float));
+}
+
+/**
+ * @brief Whether `tensor` is a well-formed host block of one slot: what channel_run() and
+ * InferenceManager's tensor stems take on trust.
+ *
+ * A status only: no allocation, no log. The checks run in a fixed order (the rank, the domain,
+ * the flags, the shape, the dtype, then the memory and the strides), so a tensor that is wrong
+ * in two ways reports the earlier one. An empty tensor (shape[1] == 0) is well formed whatever
+ * its memory arm holds: that arm is not read. A zeroed record (what a refused factory leaves)
+ * has rank 0 and is refused.
+ *
+ * @param tensor The tensor of the slot
+ * @param expected The slot's dtype: the ring dtype of a Streamed slot, float32 for a Static one
+ * @param channels The slot's channel count, 1 for a Static slot
+ * @param output Whether anira writes the memory (ANIRA_TENSOR_READ_ONLY is refused then)
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a rank other than 2, a domain other than
+ * ANIRA_DOMAIN_HOST and ANIRA_DOMAIN_HOST_PINNED, a read-only output, shape[0] other than
+ * `channels`, a negative shape[1], and with shape[1] above 0: NULL memory, a plane count other
+ * than shape[0], a NULL plane, a byte_offset beyond size_t, a negative stride, a stride of 0
+ * on an axis longer than 1 (all-zero strides are packed), a run that does not start on a
+ * multiple of the element size; ANIRA_ERROR_NOT_SUPPORTED for a flag bit this library does not
+ * know; ANIRA_ERROR_CONFIG for a dtype other than `expected` (nothing converts)
+ */
+inline anira_status check_host_tensor(const anira_tensor& tensor,
+                                      anira_dtype expected,
+                                      uint32_t channels,
+                                      bool output) noexcept {
+    if (tensor.ndim != 2) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (tensor.domain != static_cast<uint32_t>(ANIRA_DOMAIN_HOST) &&
+        tensor.domain != static_cast<uint32_t>(ANIRA_DOMAIN_HOST_PINNED)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    constexpr uint32_t k_known_flags = static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY) |
+                                       static_cast<uint32_t>(ANIRA_TENSOR_DISCARD_CONTENTS) |
+                                       static_cast<uint32_t>(ANIRA_TENSOR_HOST_COHERENT) |
+                                       static_cast<uint32_t>(ANIRA_TENSOR_PLANAR);
+    if ((tensor.flags & ~k_known_flags) != 0U) { return ANIRA_ERROR_NOT_SUPPORTED; }
+    if (output && (tensor.flags & static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY)) != 0U) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const auto slot_channels = static_cast<int64_t>(channels);
+    if (tensor.shape[0] != slot_channels || tensor.shape[1] < 0) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    if (tensor.dtype != expected) { return ANIRA_ERROR_CONFIG; }
+    if (tensor.shape[1] == 0) { return ANIRA_OK; }  // the empty tensor: its memory is not read
+
+    const auto offset = static_cast<size_t>(tensor.byte_offset);
+    if (static_cast<uint64_t>(offset) != tensor.byte_offset) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const size_t element_size = dtype_size(expected);
+    const auto misaligned = [&](const void* base) {
+        return element_size > 1 && (reinterpret_cast<uintptr_t>(base) + offset) % element_size != 0;
+    };
+    const bool planar = is_planar(tensor);
+    const bool packed = tensor.strides[1] == 0 && (planar || tensor.strides[0] == 0);
+    if (!packed) {
+        if (tensor.strides[1] < 0 || (tensor.strides[1] == 0 && tensor.shape[1] > 1)) {
+            return ANIRA_ERROR_INVALID_ARGUMENT;
+        }
+        if (!planar && (tensor.strides[0] < 0 || (tensor.strides[0] == 0 && tensor.shape[0] > 1))) {
+            return ANIRA_ERROR_INVALID_ARGUMENT;
+        }
+    }
+    if (!planar) {
+        if (tensor.handle.host.ptr == nullptr || misaligned(tensor.handle.host.ptr)) {
+            return ANIRA_ERROR_INVALID_ARGUMENT;
+        }
+        return ANIRA_OK;
+    }
+    if (tensor.handle.planes.ptrs == nullptr || tensor.handle.planes.count != channels) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    for (uint32_t plane = 0; plane < channels; ++plane) {
+        const void* base = tensor.handle.planes.ptrs[plane];
+        if (base == nullptr || misaligned(base)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    }
+    return ANIRA_OK;
 }
 
 }  // namespace anira::tensor_run

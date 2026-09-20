@@ -85,6 +85,7 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp
 	scheduler/test_StatefulOrdering.cpp
+	scheduler/test_TensorStems.cpp
 )
 # handles.h (anira_context_config, what Core::create_session takes) for test_ProcessorPooling.
 target_include_directories(test_scheduler PRIVATE "${anira_SOURCE_DIR}/src")
