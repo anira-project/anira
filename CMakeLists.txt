@@ -196,15 +196,12 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
     # anira and the fetched tanh-lib must pin the same tanh-tooling tag
     # (modules-version.cmake warns otherwise).
-    # TEMPORARY PIN: the head of tanh-lab/tanh-lib#50 (branch feat/ring-strided-block-ops, main
-    # after v0.3.0 plus one commit), not a release. It carries the strided RingBuffer calls
-    # (push_block / pop_block / peek_past_block with a stride) that anira_ring forwards to.
-    # To be re-pinned to the commit of the release tag that carries #50, with the tag named
-    # here, before the pull request that introduced this pin merges.
+    # v0.4.0. Needed since v0.4.0: the strided RingBuffer calls (tanh-lab/tanh-lib#50:
+    # push_block / pop_block / peek_past_block with a stride) that anira_ring forwards to.
     # Needed since v0.3.0: the logger carriers (tanh-lab/tanh-lib#37: platform identity,
     # per-record flags, the drop count on the record) and the TANH_LOG_COMPILED_MAX_LEVEL
     # option (#38). tanh-tooling v0.2.8, the same tooling tag this tree pins.
-    GIT_TAG 84c11f5cbe521058fb29c669417e219137debe47
+    GIT_TAG f703f2d16eb591a6f669737cbc1fcbf861ca7702
 )
 FetchContent_MakeAvailable(tanh-lib)
 
