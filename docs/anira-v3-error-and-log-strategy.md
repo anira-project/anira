@@ -74,8 +74,10 @@ the trace flag covers the C caller who ignores statuses.
 
 ## 3. Real-time path: status, `rt_error`, one latched record
 
-An `ANIRA_NONBLOCKING` entry does at most three things on failure: returns a count or a
-status; stores the status into the handler's relaxed atomic `rt_error` when it is a contract
+An `ANIRA_NONBLOCKING` entry does at most three things on failure: returns its failure
+status (every Hard entry returns an `anira_status`; the count is an out-parameter, 0 on a
+failure; `ANIRA_MISSED`, a block the miss policy filled, is a success and none of this
+applies to it); stores the status into the handler's relaxed atomic `rt_error` when it is a contract
 violation (`WRONG_CONTRACT`, `NOT_PREPARED`, `CONFIG` for a dtype or axis mismatch,
 `INVALID_STATE`); pushes one fixed-size record into the core's lock-free queue. `CAPACITY`
 (no free ticket, a full ring) is back-pressure, not a violation: return value only, never

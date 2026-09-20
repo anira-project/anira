@@ -303,6 +303,8 @@ public:
      * Core::create_session built.
      *
      * @throws std::invalid_argument for an empty table
+     * @throws std::logic_error after prepare(): the table is read without synchronization
+     * and is replaced before prepare only; a refused call changes nothing
      */
     void set_plan_backends(std::vector<InferenceBackend> backends);
 

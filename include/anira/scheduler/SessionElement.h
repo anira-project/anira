@@ -293,7 +293,9 @@ public:
      * @brief Replaces the plan table and selects plan 0.
      * @param backends One backend per plan, in dense-index order.
      * @throws std::invalid_argument for an empty table.
-     * @note Only while no chunk of the session exists: before the session is prepared.
+     * @throws std::logic_error on a prepared session: the table is read without
+     * synchronization, so it is replaced only while no chunk of the session exists, before
+     * the session is prepared. Nothing is changed by a refused call.
      */
     void set_plan_backends(std::vector<InferenceBackend> backends);
 

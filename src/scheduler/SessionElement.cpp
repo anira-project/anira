@@ -67,6 +67,13 @@ void SessionElement::set_plan_backends(std::vector<InferenceBackend> backends) {
     if (backends.empty()) {
         throw std::invalid_argument("SessionElement::set_plan_backends: an empty plan table");
     }
+    // The table is read without synchronization by the driving thread and the inference
+    // threads, so it may only be replaced while no chunk of the session can exist.
+    if (m_initialized.load(std::memory_order::seq_cst)) {
+        throw std::logic_error(
+            "SessionElement::set_plan_backends: the session is prepared; the plan table is "
+            "replaced before prepare only");
+    }
     m_plan_backends = std::move(backends);
     m_current_plan.store(0, std::memory_order_relaxed);
 }

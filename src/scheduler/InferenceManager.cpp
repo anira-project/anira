@@ -95,6 +95,7 @@ void InferenceManager::prepare(HostConfig new_config,
                                const CustomLatencies& custom_latencies,
                                const RingDtypes& ring_dtypes) {
     m_host_config = new_config;
+    m_last_missed = false;  // no block of the new stream has been processed
 
     Core::prepare_session(m_session, m_host_config, custom_latencies, ring_dtypes);
 

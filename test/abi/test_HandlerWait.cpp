@@ -50,7 +50,8 @@ std::vector<anira_backend_id> none_only() {
 /// form, the stream comes back in `out`.
 struct Pull {
     anira_status m_status = ANIRA_OK;
-    size_t m_received = 0;
+    size_t m_received = 0;  ///< the samples of a delivered block (ANIRA_OK), else 0
+    size_t m_num_out = 0;   ///< the caller's request array after the call, as the entry left it
     std::chrono::milliseconds m_elapsed{0};
 };
 
@@ -74,7 +75,11 @@ Pull pull(anira_handler* handler, float param, std::vector<float>& out, double t
                                                            timeout_ms);
     result.m_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start);
-    result.m_received = num_out[0];
+    result.m_num_out = num_out[0];
+    // The request array is written for a delivered block only: a miss and a refusal leave
+    // it as the caller set it, so one array serves every call.
+    if (result.m_status == ANIRA_MISSED) { EXPECT_EQ(num_out[0], n) << "a miss keeps the request"; }
+    result.m_received = result.m_status == ANIRA_OK ? num_out[0] : 0;
     return result;
 }
 
@@ -347,10 +352,12 @@ TEST_P(AbiHandlerWaitRatio, InvalidStateWithoutAnActiveThread) {
     EXPECT_EQ(first.m_status, ANIRA_ERROR_INVALID_STATE);
     EXPECT_LT(first.m_elapsed, std::chrono::milliseconds(500)) << "refused, not waited for";
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_STATE);
-    EXPECT_EQ(first.m_received, priming) << "what the nonblocking stem wrote";
+    // The multi form's request array is written for a delivered block (ANIRA_OK) only: a
+    // refusal leaves it as the caller set it, whatever the stem did.
+    EXPECT_EQ(first.m_num_out, k_hop) << "priming " << priming;
     const Pull second = pull(h, 2.0F, out, ANIRA_WAIT_FOREVER);
     EXPECT_EQ(second.m_status, ANIRA_ERROR_INVALID_STATE);
-    EXPECT_EQ(second.m_received, 0U) << "a miss: nothing runs the queued inference";
+    EXPECT_EQ(second.m_num_out, k_hop) << "a miss in the stem: the request is left in place";
     // The single-tensor twins refuse the same way, and their count is the stem's: a miss, or,
     // once the pulls above have claimed every inference struct the session has, the hop of
     // zeros an exhausted pool delivers (Core::new_data_submitted); which of the two depends on

@@ -168,23 +168,40 @@ void stage_output(anira_handler& handler,
     handler.m_output_num[slot] = num_out;
 }
 
-// The multi forms hand the manager the caller's arrays; the input counts go through the
-// scratch array because the manager's parameter is not const (it never writes it).
+// The multi forms hand the manager the caller's buffer arrays; the counts go through the
+// scratch arrays. The input counts because the manager's parameter is not const (it never
+// writes it); the output counts because the manager zeroes them on a miss, and the caller's
+// num_out is its request array: it must survive a missed block, or a host that reuses one
+// array would request 0 samples from then on and be told ANIRA_OK with nothing popped.
 void stage_input_counts(anira_handler& handler, const size_t* num_in) noexcept ANIRA_NONBLOCKING {
     for (size_t i = 0; i < handler.m_num_inputs; ++i) { handler.m_input_num[i] = num_in[i]; }
+}
+
+void stage_output_counts(anira_handler& handler, const size_t* num_out) noexcept ANIRA_NONBLOCKING {
+    for (size_t i = 0; i < handler.m_num_outputs; ++i) { handler.m_output_num[i] = num_out[i]; }
+}
+
+// After the manager ran a multi form: a delivered block writes its counts back (the request,
+// clamped to the tensor's size for a Static output); a missed block leaves num_out as the
+// caller set it.
+void deliver_output_counts(const anira_handler& handler,
+                           size_t* num_out) noexcept ANIRA_NONBLOCKING {
+    if (handler.m_manager->last_block_missed()) { return; }
+    for (size_t i = 0; i < handler.m_num_outputs; ++i) { num_out[i] = handler.m_output_num[i]; }
 }
 
 // ==== the status and the count ================================================================
 
 // The delivered count of a single-tensor form, written when the caller asked for it (the
-// multi forms write theirs into the caller's num_out array).
+// multi forms write theirs into the caller's num_out array, deliver_output_counts).
 void set_delivered(size_t* delivered, size_t count) noexcept ANIRA_NONBLOCKING {
     if (delivered != nullptr) { *delivered = count; }
 }
 
 // The status of a process or pop form after the manager ran: ANIRA_MISSED when the block went
-// through the starvation path (the miss policy filled the requested buffers, the counts are
-// 0), else ANIRA_OK. A miss is a success and is not recorded.
+// through the starvation path (the miss policy filled the requested buffers; a single form's
+// delivered count is 0, a multi form's num_out is left at the request), else ANIRA_OK. A miss
+// is a success and is not recorded.
 anira_status block_status(const anira_handler& handler) noexcept ANIRA_NONBLOCKING {
     return handler.m_manager->last_block_missed() ? ANIRA_MISSED : ANIRA_OK;
 }
@@ -238,7 +255,12 @@ anira_status process_multi_body(anira_handler& handler,
                                 float* const* const* out,
                                 size_t* num_out) noexcept ANIRA_NONBLOCKING {
     stage_input_counts(handler, num_in);
-    handler.m_manager->process_nowait(in, handler.m_input_num.data(), out, num_out);
+    stage_output_counts(handler, num_out);
+    handler.m_manager->process_nowait(in,
+                                      handler.m_input_num.data(),
+                                      out,
+                                      handler.m_output_num.data());
+    deliver_output_counts(handler, num_out);
     return block_status(handler);
 }
 
@@ -273,7 +295,9 @@ anira_status pop_data_body(anira_handler& handler,
 anira_status pop_data_multi_body(anira_handler& handler,
                                  float* const* const* out,
                                  size_t* num_out) noexcept ANIRA_NONBLOCKING {
-    handler.m_manager->pop_data(out, num_out);
+    stage_output_counts(handler, num_out);
+    handler.m_manager->pop_data(out, handler.m_output_num.data());
+    deliver_output_counts(handler, num_out);
     return block_status(handler);
 }
 
@@ -331,23 +355,31 @@ anira_status process_multi_wait_body(anira_handler& handler,
                                      double timeout_ms,
                                      const char* entry) noexcept {
     stage_input_counts(handler, num_in);
+    stage_output_counts(handler, num_out);
     if (!anira::InferenceThread::any_loop_active()) {
-        handler.m_manager->process_nowait(in, handler.m_input_num.data(), out, num_out);
+        handler.m_manager->process_nowait(in,
+                                          handler.m_input_num.data(),
+                                          out,
+                                          handler.m_output_num.data());
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
-        return ANIRA_ERROR_INVALID_STATE;
+        return ANIRA_ERROR_INVALID_STATE;  // a failure: num_out stays as the caller set it
     }
     anira::Core::WaitOutcome outcome = anira::Core::WaitOutcome::Done;
-    handler.m_manager->process_wait(
-        in,
-        handler.m_input_num.data(),
-        out,
-        num_out,
-        wait_budget(handler, timeout_ms, handler.m_input_num.data(), num_out, /*pop=*/false),
-        outcome);
+    handler.m_manager->process_wait(in,
+                                    handler.m_input_num.data(),
+                                    out,
+                                    handler.m_output_num.data(),
+                                    wait_budget(handler,
+                                                timeout_ms,
+                                                handler.m_input_num.data(),
+                                                handler.m_output_num.data(),
+                                                /*pop=*/false),
+                                    outcome);
     if (outcome == anira::Core::WaitOutcome::NoThread) {
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
-        return ANIRA_ERROR_INVALID_STATE;
+        return ANIRA_ERROR_INVALID_STATE;  // a failure: num_out stays as the caller set it
     }
+    deliver_output_counts(handler, num_out);
     return block_status(handler);
 }
 
@@ -384,21 +416,23 @@ anira_status pop_data_multi_wait_body(anira_handler& handler,
                                       size_t* num_out,
                                       double timeout_ms,
                                       const char* entry) noexcept {
+    stage_output_counts(handler, num_out);
     if (!anira::InferenceThread::any_loop_active()) {
-        handler.m_manager->pop_data(out, num_out);
+        handler.m_manager->pop_data(out, handler.m_output_num.data());
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
-        return ANIRA_ERROR_INVALID_STATE;
+        return ANIRA_ERROR_INVALID_STATE;  // a failure: num_out stays as the caller set it
     }
     anira::Core::WaitOutcome outcome = anira::Core::WaitOutcome::Done;
     handler.m_manager->pop_data_wait(
         out,
-        num_out,
-        wait_budget(handler, timeout_ms, nullptr, num_out, /*pop=*/true),
+        handler.m_output_num.data(),
+        wait_budget(handler, timeout_ms, nullptr, handler.m_output_num.data(), /*pop=*/true),
         outcome);
     if (outcome == anira::Core::WaitOutcome::NoThread) {
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
-        return ANIRA_ERROR_INVALID_STATE;
+        return ANIRA_ERROR_INVALID_STATE;  // a failure: num_out stays as the caller set it
     }
+    deliver_output_counts(handler, num_out);
     return block_status(handler);
 }
 
@@ -651,9 +685,10 @@ void log_slots(uint32_t plan,
 
 // The plan report as Info records of the group anira.capi, on the control thread at the end
 // of a successful prepare: a head line (the counts and the selected plan), then per plan its
-// row, its slot rows and the extensions it consumes. One record per row, since a record
-// holds 255 characters. Nothing is logged under a runtime level above Info, and nothing is
-// compiled under ANIRA_WITH_LOGGING=OFF.
+// row, its slot rows and the extensions it consumes. One record per row: a line stays
+// readable and well inside the synchronous logger's 1023 characters (these records do not go
+// through the real-time queue, whose records hold 255). Nothing is logged under a runtime level
+// above Info, and nothing is compiled under ANIRA_WITH_LOGGING=OFF.
 void log_report(const anira_handler& handler, const anira_model_config& model) {
 #ifdef ENABLE_LOGGING
     const anira_plan_report& report = handler.m_report;

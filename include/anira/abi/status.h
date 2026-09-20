@@ -35,12 +35,17 @@ typedef enum anira_status {
      */
     ANIRA_SUCCESS_UPGRADED = 1,
     ANIRA_INCOMPLETE = 2,  /**< Success; the enumeration buffer was too short and holds what fit. */
-    ANIRA_TIMEOUT = 3,  /**< A wait ran out of time. */
+    /**
+     * A wait ran out of time. Not what a Hard _wait entry returns at its timeout: a block not
+     * completed by then is a missed block, ANIRA_MISSED.
+     */
+    ANIRA_TIMEOUT = 3,
     ANIRA_PENDING = 4,  /**< Not yet complete. */
     /**
      * Success; a Hard entry found the block's inference incomplete and delivered what the
      * contract's miss policy says (section 3): the output buffers are valid and the stream
-     * stays time-aligned. Not recorded in anira_handler_rt_error.
+     * stays time-aligned. Also what a _wait entry returns when its timeout ran out (not
+     * ANIRA_TIMEOUT). Not recorded in anira_handler_rt_error.
      */
     ANIRA_MISSED = 5,
     ANIRA_ERROR_UNKNOWN = -1,  /**< Unclassified failure. */

@@ -304,6 +304,42 @@ TEST(BackendSwitch, AnIndexOutOfRangeLeavesTheSelection) {
     EXPECT_EQ(manager.get_plan(), 1U) << "a refused table changes nothing";
 }
 
+// The table is read without synchronization once chunks exist, so it is replaced before
+// prepare only; a late call is refused, not a race.
+TEST(BackendSwitch, ThePlanTableIsReplacedBeforePrepareOnly) {
+    InferenceConfig config = make_config();
+    PrePostProcessor pp(config);
+    CountingBackend custom(config);
+    InferenceManager manager(pp, config, &custom, CoreConfig(2));
+    manager.set_plan_backends({InferenceBackend::CUSTOM, InferenceBackend::CUSTOM});
+    ASSERT_TRUE(manager.set_plan(1));
+    manager.prepare(HostConfig(k_block, k_sample_rate));
+    EXPECT_THROW(manager.set_plan_backends({InferenceBackend::CUSTOM}), std::logic_error);
+    EXPECT_EQ(manager.get_plan(), 1U) << "a refused table changes nothing";
+    const std::shared_ptr<SessionElement> session = session_of(manager);
+    ASSERT_NE(session, nullptr);
+    EXPECT_EQ(session->m_plan_backends.size(), 2U);
+}
+
+// The 2.x selection by backend on a table that names no plan for it (a 3.x handler's table
+// holds exactly its plans): the selection stays, nothing else happens.
+TEST(BackendSwitch, ABackendWithoutAPlanLeavesTheSelection) {
+    const std::optional<InferenceBackend> engine = first_engine_backend();
+    if (!engine.has_value()) {
+        GTEST_SKIP() << "needs an engine in the build: CUSTOM is the only backend here";
+    }
+    InferenceConfig config = make_config();
+    PrePostProcessor pp(config);
+    InferenceManager manager(pp, config, nullptr, CoreConfig(2));
+    manager.set_plan_backends({*engine, *engine});  // no row runs on CUSTOM
+    ASSERT_TRUE(manager.set_plan(1));
+    manager.set_backend(InferenceBackend::CUSTOM);
+    EXPECT_EQ(manager.get_plan(), 1U) << "no plan runs on CUSTOM: the selection is unchanged";
+    EXPECT_EQ(manager.get_backend(), *engine);
+    manager.set_backend(*engine);
+    EXPECT_EQ(manager.get_plan(), 0U) << "the first plan on that backend";
+}
+
 // A 2.x session: one row per configured model, in order, then every other backend of the
 // build, so set_backend() finds a row for whatever a 2.x caller names.
 TEST(BackendSwitch, TheDefaultTableNamesEveryBackendOfTheBuild) {

@@ -456,6 +456,7 @@ TEST(AbiHandler, UnpreparedEntriesRecordNotPrepared) {
               ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_pop_data_f32_multi(h, out_multi.data(), num_out.data()),
               ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(num_out[0], k_block) << "a refused multi form leaves the request array untouched";
     EXPECT_EQ(anira_handler_process_f32_inplace_wait(h,
                                                      ptrs.data(),
                                                      k_block,

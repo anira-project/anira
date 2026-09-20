@@ -694,15 +694,18 @@ class arrives with the runtime cut-over.
 &delivered)``, ``anira_handler_process_f32_inplace(h, data, num_samples, tensor_index,
 &delivered)`` (one buffer set, read and overwritten),
 ``anira_handler_process_f32_multi(h, in, num_in, out, num_out)`` (every tensor at once, the
-arrays indexed by slot; ``num_out`` is written back with the samples delivered; an output
-requested with ``0`` is left untouched), ``anira_handler_push_data_f32`` /
+arrays indexed by slot; ``num_out`` is the caller's request array: a delivered block writes
+each count back, the request, clamped to the tensor's size for a Static output, and a missed
+block or a failure leaves the array as the caller set it, so one array serves every call; an
+output requested with ``0`` is left untouched), ``anira_handler_push_data_f32`` /
 ``push_data_f32_multi`` and ``anira_handler_pop_data_f32`` / ``pop_data_f32_multi`` are the
 2.x methods of sections 5.1 to 5.4 as C entries, ``[driver-thread]`` and
 ``ANIRA_NONBLOCKING``. Every one returns an ``anira_status`` and hands the delivered count back
 through a nullable ``size_t*`` (the multi forms through ``num_out``): ``ANIRA_OK`` when the
-block was delivered in full, ``ANIRA_MISSED`` when its inference had not completed, a success
-under ``ANIRA_FAILED`` that says the buffers hold what the miss policy chose and the count is
-``0`` (section 1.3), or a failure. None of them waits, and a refusal carries no
+block was delivered in full; ``ANIRA_MISSED`` when its inference had not completed, which is
+a success (``ANIRA_FAILED(status)`` is false): the buffers hold what the miss policy chose
+(section 1.3), a single form's count is ``0`` and a multi form's ``num_out`` stays at the
+requests; or a failure, where a single form's count is ``0`` and ``num_out`` is untouched. None of them waits, and a refusal carries no
 ``anira_error``: the entry returns the failure status, records it in
 ``anira_handler_rt_error`` and logs once through the real-time queue (:doc:`logging`); a
 miss is not recorded. ``tensor_index`` is the slot in the input and

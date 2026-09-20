@@ -34,8 +34,10 @@ it. The C++ builders of ``anira/anira.hpp`` turn that into an ``anira::Error``. 
    ``ANIRA_ERROR_INTERNAL`` (below).
 3. **Both, on the real-time path.** An ``ANIRA_NONBLOCKING`` entry (``process``, ``push_data``,
    ``pop_data``, ``submit``) has no ``anira_error`` and its return value is checked by nobody
-   on every block, so a refusal there returns a count or a status, records the status on the
-   handler, and pushes one record into the real-time log queue. Section
+   on every block, so a refusal there returns its failure status (with a delivered count of
+   ``0``), records the status on the handler, and pushes one record into the real-time log
+   queue. A missed block is not a refusal: ``ANIRA_MISSED`` is a success, the buffers hold
+   what the miss policy chose, and nothing is recorded or logged for the handler. Section
    :ref:`logging-realtime` has the details.
 
 The C++ face: ``anira::Error`` derives from ``std::runtime_error``, ``.status`` is the
@@ -129,7 +131,9 @@ The real-time path
 
 An ``ANIRA_NONBLOCKING`` entry does at most three things when it refuses:
 
-1. It returns a count (``0`` samples) or an ``anira_status``.
+1. It returns the failure ``anira_status``; a form with a count out-parameter writes ``0``
+   (the multi forms leave ``num_out`` untouched). ``ANIRA_MISSED`` is not a refusal and does
+   none of the three.
 2. It stores the status into the handler's ``rt_error``, a relaxed atomic readable through
    ``anira_handler_rt_error(h)`` from any thread and from inside any callback, when the refusal
    is a contract violation: ``ANIRA_ERROR_WRONG_CONTRACT`` (a Hard entry on an Async handler or
