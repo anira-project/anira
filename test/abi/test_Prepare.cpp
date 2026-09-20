@@ -353,7 +353,13 @@ Delivered call(anira_handler* handler,
                                                                  num_in.data(),
                                                                  outs.data(),
                                                                  num_out.data());
-            delivered.m_count = num_out[0];
+            // The multi form writes its request array for a delivered block only; a miss
+            // leaves the requests in place (the status says what the buffers hold).
+            if (delivered.m_status == ANIRA_MISSED) {
+                EXPECT_EQ(num_out[0], k_block) << "a miss keeps the request";
+                EXPECT_EQ(num_out[1], static_out ? 1U : 0U) << "a miss keeps the request";
+            }
+            delivered.m_count = delivered.m_status == ANIRA_OK ? num_out[0] : 0;
             return delivered;
         }
     }
@@ -366,7 +372,8 @@ void expect_full(const Delivered& delivered, const char* what) {
     EXPECT_EQ(delivered.m_count, k_block) << what;
 }
 
-/// The block was missed: ANIRA_MISSED, a success under ANIRA_FAILED, and a count of 0.
+/// The block was missed: ANIRA_MISSED, which is a success (ANIRA_FAILED is false), and a
+/// delivered count of 0 (the multi form's request array is checked where it is called).
 void expect_missed(const Delivered& delivered, const char* what) {
     EXPECT_EQ(delivered.m_status, ANIRA_MISSED) << what;
     EXPECT_TRUE(ANIRA_SUCCEEDED(delivered.m_status)) << what;
@@ -475,6 +482,60 @@ TEST(AbiPrepare, HoldLastRepeatsTheLastDeliveredBlock) {
 
 TEST(AbiPrepare, ZerosZeroFillsAStarvedBlock) {
     run_miss_sequence(ANIRA_MISS_ZEROS, Form::InPlace, false);
+}
+
+// The multi forms' num_out is the caller's request array. A host that keeps one array
+// across callbacks must still be asking for a block after a miss: a miss that zeroed the
+// requests would make every later call a request for nothing, answered ANIRA_OK.
+TEST(AbiPrepare, AReusedRequestArraySurvivesAMiss) {
+    const Context context;
+    const ModelConfig model = gain_with_custom();
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    Handler handler(context, model, candidates);
+    ASSERT_EQ(handler.prepare(explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS)), ANIRA_OK)
+        << handler.m_err.message;
+    anira_handler* h = handler.m_handler;
+    GateBackend gate(h->m_inference_config);
+    ASSERT_NO_FATAL_FAILURE(attach_processor(h, gate));
+    const DestroyFirst destroy_first(handler, &gate);
+
+    std::vector<float> in;
+    std::vector<float> out(k_block, -1.0F);
+    const float gain = 1.0F;
+    const std::array<const float*, 1> gain_ch{&gain};
+    const std::array<float*, 1> out_ch{out.data()};
+    const std::array<float* const*, 2> outs{out_ch.data(), nullptr};
+    const std::array<size_t, 2> num_in{k_block, 1};
+    std::array<size_t, 2> num_out{k_block, 0};  // set once, reused by every call below
+    const auto call_multi = [&](size_t block_index) {
+        in = ramp(block_index);
+        const std::array<const float*, 1> in_ch{in.data()};
+        const std::array<const float* const*, 2> ins{in_ch.data(), gain_ch.data()};
+        return anira_handler_process_f32_multi(h,
+                                               ins.data(),
+                                               num_in.data(),
+                                               outs.data(),
+                                               num_out.data());
+    };
+
+    const size_t prev = anira_test::available(h);
+    EXPECT_EQ(call_multi(1), ANIRA_OK) << "the priming zeros";
+    EXPECT_EQ(num_out[0], k_block);
+    wait_for_block(h, prev);
+    gate.m_open.store(false);
+    EXPECT_EQ(call_multi(2), ANIRA_OK);
+    expect_same_block(out, ramp(1), 2);
+    EXPECT_EQ(call_multi(3), ANIRA_MISSED) << "inference 2 is held at the gate";
+    EXPECT_EQ(num_out[0], k_block) << "the request survives the miss";
+    EXPECT_EQ(num_out[1], 0U);
+    expect_all(out, 0.0F, "block 3");
+
+    // The same array, untouched by the test: the next call asks for a whole block again.
+    gate.m_open.store(true);
+    wait_for_available(h, 2 * k_block);
+    EXPECT_EQ(call_multi(4), ANIRA_OK);
+    EXPECT_EQ(num_out[0], k_block);
+    expect_same_block(out, ramp(3), 4);
 }
 
 // ============================================================================================
@@ -728,6 +789,9 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
     const uint32_t num_plans = anira_plan_report_num_plans(anira_handler_plan_report(h));
     ASSERT_GE(num_plans, 1U);
 
+    // The records exist only in a build with logging; the prepares above and below run either
+    // way (log_report() compiles to nothing under ANIRA_WITH_LOGGING=OFF).
+#ifdef ENABLE_LOGGING
     const std::string head = "plan report: plans " + std::to_string(num_plans) +
                              ", input slots 2, output slots 2, selected plan " +
                              std::to_string(anira_handler_get_plan(h));
@@ -754,10 +818,13 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
                                ": variant 0, engine " + k_custom +
                                ", provider default, budget 5.000 ms";
     EXPECT_EQ(count_records(collector, custom.c_str(), "native"), 1U);
+#endif
 
     // A second prepare logs the new report again.
     ASSERT_EQ(handler.prepare(explicit_contract(256)), ANIRA_OK) << handler.m_err.message;
+#ifdef ENABLE_LOGGING
     EXPECT_EQ(count_records(collector, "anira_handler_prepare: plan report: ", "native"), 2U);
+#endif
 }
 
 TEST(AbiPrepare, ThePlanReportIsNotLoggedUnderAnErrorLevel) {

@@ -20,14 +20,16 @@
  * output buffers, _inplace is the 2.x shape over one buffer set, _multi covers every tensor at
  * once. The bare names anira_handler_process / push_data / pop_data are reserved for the tensor
  * forms of abi/tensor.h, which carry their dtype on the tensor. Every Hard entry returns an
- * anira_status and hands the delivered count back through a nullable size_t*: ANIRA_OK,
- * ANIRA_MISSED for a block the miss policy filled (a success; the count is 0), or a failure.
- * Real-time refusals carry no anira_error: the entry returns the failure status, records it in
- * anira_handler_rt_error and logs once through the real-time queue. A handler counts as a user
- * of the core: anira_shutdown is refused while one lives. In this pre-release every handler is
- * Host-only, one plan per candidate engine of one variant, an Async contract is refused at
- * prepare, and every ring the handler prepares holds ANIRA_DTYPE_F32 (a ring dtype that differs
- * from its spec's dtype is refused at prepare).
+ * anira_status and hands the delivered count back through a nullable size_t* (the multi forms
+ * through their request array num_out, written for a delivered block only): ANIRA_OK,
+ * ANIRA_MISSED for a block the miss policy filled (a success; a single form's count is 0, a
+ * multi form's num_out is left at the requests), or a failure. Real-time refusals carry no
+ * anira_error: the entry returns the failure status, records it in anira_handler_rt_error and
+ * logs once through the real-time queue. A handler counts as a user of the core: anira_shutdown
+ * is refused while one lives. In this pre-release every handler is Host-only, one plan per
+ * candidate engine of one variant, an Async contract is refused at prepare, and every ring the
+ * handler prepares holds ANIRA_DTYPE_F32 (a ring dtype that differs from its spec's dtype is
+ * refused at prepare).
  */
 
 #include <stddef.h>
@@ -473,18 +475,20 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_process_f32_inplace(anira_handle
 /**
  * @brief anira_handler_process_f32_inplace over every tensor at once, the caller's arrays
  * indexed by slot; an output whose request is 0 is left untouched. On a miss the call
- * returns ANIRA_MISSED, every requested output holds what the policy says and its
- * num_out is 0 (ANIRA_MISS_BYPASS copies the anchored input's block of this call into
- * every requested streamed output). Every input and output ring must hold
+ * returns ANIRA_MISSED, every requested output holds what the policy says and num_out is
+ * left at the requests (ANIRA_MISS_BYPASS copies the anchored input's block of this call
+ * into every requested streamed output). Every input and output ring must hold
  * ANIRA_DTYPE_F32.
  * @param handler The handler.
  * @param in Per input tensor, one float buffer per channel; a non-streamed tensor carries its
  *        values in channel 0.
  * @param num_in Per input tensor, the samples per channel (values for a non-streamed tensor).
  * @param out Per output tensor, one float buffer per channel.
- * @param num_out Per output tensor: in, the samples requested; out, the samples delivered, the
- *        request or 0 for a streamed output whose block was missed (a caller that
- *        retries sets the requests again).
+ * @param num_out Per output tensor, the caller's request array: in, the samples requested; out,
+ *        written only when the block was delivered (ANIRA_OK), each count the samples
+ *        written, which is the request (clamped to the tensor's size for a Static
+ *        output). On ANIRA_MISSED and on every failure it is left as the caller set it,
+ *        so one array serves every call; the status says what the buffers hold.
  * @return ANIRA_OK; ANIRA_MISSED for a missed block; ANIRA_ERROR_INVALID_ARGUMENT for a NULL
  *         handler or array; ANIRA_ERROR_NOT_PREPARED before a successful prepare;
  *         ANIRA_ERROR_CONFIG for a non-float32 ring. Every failure but the NULL handler is
@@ -565,12 +569,16 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_pop_data_f32(anira_handler* hand
 
 /**
  * @brief anira_handler_pop_data_f32 over every output tensor at once; an output whose request
- * is 0 is left untouched. On a miss the call returns ANIRA_MISSED and every requested
- * output's num_out is 0. Every output ring must hold ANIRA_DTYPE_F32.
+ * is 0 is left untouched. On a miss the call returns ANIRA_MISSED, every requested
+ * output holds what the policy says and num_out is left at the requests. Every output
+ * ring must hold ANIRA_DTYPE_F32.
  * @param handler The handler.
  * @param out Per output tensor, one float buffer per channel.
- * @param num_out Per output tensor: in, the samples requested; out, the samples delivered or 0
- *        for a missed block.
+ * @param num_out Per output tensor, the caller's request array: in, the samples requested; out,
+ *        written only when the block was delivered (ANIRA_OK), each count the samples
+ *        written, which is the request (clamped to the tensor's size for a Static
+ *        output). On ANIRA_MISSED and on every failure it is left as the caller set it,
+ *        so one array serves every call; the status says what the buffers hold.
  * @return ANIRA_OK; ANIRA_MISSED for a missed block; ANIRA_ERROR_INVALID_ARGUMENT for a NULL
  *         handler or array; ANIRA_ERROR_NOT_PREPARED; ANIRA_ERROR_CONFIG for a non-float32
  *         ring. Every failure but the NULL handler is recorded in anira_handler_rt_error.
@@ -774,19 +782,22 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_process_f32_inplace_wait(anira_h
  *        values in channel 0.
  * @param num_in Per input tensor, the samples per channel (values for a non-streamed tensor).
  * @param out Per output tensor, one float buffer per channel.
- * @param num_out Per output tensor: in, the samples requested; out, the samples delivered, the
- *        request or 0 for a streamed output whose block was missed.
+ * @param num_out Per output tensor, the caller's request array: in, the samples requested; out,
+ *        written only when the block was delivered (ANIRA_OK), each count the samples
+ *        written, which is the request (clamped to the tensor's size for a Static
+ *        output). On ANIRA_MISSED and on every failure it is left as the caller set it,
+ *        so one array serves every call; the status says what the buffers hold.
  * @param timeout_ms How long to wait for the block's inference: 0 or more milliseconds (a value
  *        at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio
  *        times the duration of this call's block on the anchor (the 2.x
  *        blocking_ratio); ANIRA_WAIT_FOREVER, or any other negative value, without
  *        limit.
- * @return ANIRA_OK; ANIRA_MISSED for a block not completed at the timeout (every requested
- *         output's num_out is 0); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array;
+ * @return ANIRA_OK; ANIRA_MISSED for a block not completed at the timeout (num_out is left at
+ *         the requests); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array;
  *         ANIRA_ERROR_NOT_PREPARED before a successful prepare; ANIRA_ERROR_CONFIG for a
- *         non-float32 ring; ANIRA_ERROR_INVALID_STATE without an active inference thread, where
- *         num_out holds what the nonblocking form wrote. Every failure but the NULL handler is
- *         recorded in anira_handler_rt_error.
+ *         non-float32 ring; ANIRA_ERROR_INVALID_STATE without an active inference thread (the
+ *         buffers hold what the nonblocking form wrote; num_out is untouched, as on every
+ *         failure). Every failure but the NULL handler is recorded in anira_handler_rt_error.
  * @par Thread contract
  * [any-thread, blocking]
  * @since ABI 0.2
@@ -850,18 +861,21 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_pop_data_f32_wait(anira_handler*
  * driver thread only if the host accepts a wait there; on WebAssembly every wait spins.
  * @param handler The handler.
  * @param out Per output tensor, one float buffer per channel.
- * @param num_out Per output tensor: in, the samples requested; out, the samples delivered or 0
- *        for a missed block.
+ * @param num_out Per output tensor, the caller's request array: in, the samples requested; out,
+ *        written only when the block was delivered (ANIRA_OK), each count the samples
+ *        written, which is the request (clamped to the tensor's size for a Static
+ *        output). On ANIRA_MISSED and on every failure it is left as the caller set it,
+ *        so one array serves every call; the status says what the buffers hold.
  * @param timeout_ms How long to wait for the block's inference: 0 or more milliseconds (a value
  *        at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio
  *        times the contract's block_max duration (a pop has no input block to
  *        measure); ANIRA_WAIT_FOREVER, or any other negative value, without limit.
- * @return ANIRA_OK; ANIRA_MISSED for a block not completed at the timeout (every requested
- *         output's num_out is 0); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array;
+ * @return ANIRA_OK; ANIRA_MISSED for a block not completed at the timeout (num_out is left at
+ *         the requests); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or array;
  *         ANIRA_ERROR_NOT_PREPARED; ANIRA_ERROR_CONFIG for a non-float32 ring;
- *         ANIRA_ERROR_INVALID_STATE without an active inference thread, where num_out holds
- *         what the nonblocking form wrote. Every failure but the NULL handler is recorded in
- *         anira_handler_rt_error.
+ *         ANIRA_ERROR_INVALID_STATE without an active inference thread (the buffers hold what
+ *         the nonblocking form wrote; num_out is untouched, as on every failure). Every failure
+ *         but the NULL handler is recorded in anira_handler_rt_error.
  * @par Thread contract
  * [any-thread, blocking]
  * @since ABI 0.2

@@ -139,7 +139,8 @@ CI tiers
 ~~~~~~~~
 
 Which tests run when is defined in exactly four places, each the file CI itself
-consumes — read them there rather than in prose that could go stale:
+consumes (or, for the last, GitHub itself) — read them there rather than in prose that
+could go stale:
 
 - **Which legs run on a pull request vs the merge queue**: the ``"pr"`` flags in
   ``.github/*_matrix.json`` (one file per workflow; a row without ``"pr": true``
@@ -149,9 +150,16 @@ consumes — read them there rather than in prose that could go stale:
 - **Which workflows are PR stubs**: the ``if: github.event_name != 'pull_request'``
   guards — those workflows report their required status on a PR without running;
   the merge queue is their real gate.
-- **What the queue requires**: the ten ``<name> result`` contexts in the
-  repository ruleset, produced by the ``result`` job at the bottom of each
-  workflow.
+- **What clang-tidy analyses**: ``.github/workflows/clang_tidy.yml``. A pull request
+  run checks only the ``.cpp`` files the pull request changes (``CHANGED_FILES_ONLY``);
+  the merge queue always sweeps every source, so a header or build change whose
+  finding sits in an unchanged translation unit fails there, not on the pull request.
+  A full sweep of a branch before the queue: run the workflow by hand
+  (``workflow_dispatch``).
+- **What the queue requires**: the ``<name> result`` contexts of the branch's ruleset
+  (repository settings, one ruleset per protected branch), each produced by the
+  ``result`` job at the bottom of its workflow. The ruleset is authoritative and the
+  branches' rulesets need not be identical.
 
 Branches
 ~~~~~~~~
@@ -159,8 +167,8 @@ Branches
 ``main`` carries the 2.x line. ``v3`` is the integration branch of the 3.x line (the
 versioned C ABI of ``docs/anira-v3-architecture.md``): every v3 change is a
 ``feat/v3-<topic>`` branch with a pull request against ``v3``, gated by the same
-workflows and the same ten required contexts as ``main`` (the ``pull_request`` filters
-name both branches), and ``main`` is merged into ``v3`` regularly. On ``v3`` the project
+workflows and its own ruleset's required contexts (the ``pull_request`` filters name
+both branches), and ``main`` is merged into ``v3`` regularly. On ``v3`` the project
 version comes from the ``v3*`` tags only (``tanh_git_version(... MATCH "v3*")`` in the
 top-level ``CMakeLists.txt``), so a checkout without a reachable v3 tag configures as
 ``0.0.0`` with ABI ``0.0``; ``cmake/build-info.cmake`` documents how the tag becomes

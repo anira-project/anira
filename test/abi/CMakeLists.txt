@@ -192,6 +192,13 @@ anira_abi_consumer_target(anira_abi_layout C)
 add_executable(anira_abi_link generated/link_probe.c)
 target_link_libraries(anira_abi_link PRIVATE anira::anira)
 anira_abi_consumer_target(anira_abi_link C)
+if(ANIRA_WITH_UBSAN)
+    # An instrumented libanira references UBSan's C++ runtime (__ubsan_vptr_type_cache, the
+    # vptr check), which a C link driver does not add, so the probe would fail to link for a
+    # reason that has nothing to do with presence. The C++ driver links it; the probe's
+    # source and its compile stay C.
+    set_target_properties(anira_abi_link PROPERTIES LINKER_LANGUAGE CXX)
+endif()
 if(NOT _abi_on_device)
     add_test(NAME anira_abi_link COMMAND anira_abi_link)
     if(MSVC AND ANIRA_SHARED_LIBS_WIN)
