@@ -7,8 +7,8 @@
 #   anira_abi_layout      gate 3: generated/test_layout.c pins every enum's width and
 #                         terminator and every Tier-1 sizeof/offsetof with _Static_assert;
 #                         its printed table is diffed against abi/layout-<major>.txt
-#   anira_header_c11      gate 4: every M1 header, alone and together, as C11 under the
-#                         strict flags with no anira define at all
+#   anira_header_c11      gate 4: every header of _abi_headers, alone and together, as C11
+#                         under the strict flags with no anira define at all
 #   anira_header_cxx17    gate 4: the same as C++17
 #   anira_header_cxx20    gate 4: anira.hpp alone as C++20 under the strict flags, the
 #                         wrapper's API exercised at compile time (nothing runs)
@@ -31,7 +31,7 @@ if(TANH_OPERATING_SYSTEM STREQUAL "Emscripten")
     return()
 endif()
 
-set(_abi_headers export status version enums log config context core thread handler)
+set(_abi_headers export status version enums log tensor config context core thread handler draft/tensor_platform)
 set(_abi_include_dirs "${anira_SOURCE_DIR}/include" "${ANIRA_GENERATED_INCLUDE_DIR}")
 if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     set(_abi_on_device TRUE)
@@ -115,12 +115,15 @@ set(_gate4_dir "${CMAKE_CURRENT_BINARY_DIR}/gate4")
 set(_gate4_c "")
 set(_gate4_cxx "")
 foreach(_h IN LISTS _abi_headers)
-    anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.c"
-        "#include <anira/abi/${_h}.h>\nint anira_gate4_${_h}_c(void);\nint anira_gate4_${_h}_c(void) { return 0; }\n")
-    anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.cpp"
-        "#include <anira/abi/${_h}.h>\nint anira_gate4_${_h}_cxx();\nint anira_gate4_${_h}_cxx() { return 0; }\n")
-    list(APPEND _gate4_c "${_gate4_dir}/only_${_h}.c")
-    list(APPEND _gate4_cxx "${_gate4_dir}/only_${_h}.cpp")
+    # draft/tensor_platform: the include path keeps its slash, the wrapper's symbol and file
+    # name take the C identifier (draft_tensor_platform).
+    string(MAKE_C_IDENTIFIER "${_h}" _id)
+    anira_abi_write_if_changed("${_gate4_dir}/only_${_id}.c"
+        "#include <anira/abi/${_h}.h>\nint anira_gate4_${_id}_c(void);\nint anira_gate4_${_id}_c(void) { return 0; }\n")
+    anira_abi_write_if_changed("${_gate4_dir}/only_${_id}.cpp"
+        "#include <anira/abi/${_h}.h>\nint anira_gate4_${_id}_cxx();\nint anira_gate4_${_id}_cxx() { return 0; }\n")
+    list(APPEND _gate4_c "${_gate4_dir}/only_${_id}.c")
+    list(APPEND _gate4_cxx "${_gate4_dir}/only_${_id}.cpp")
 endforeach()
 if(_abi_on_device)
     add_library(anira_header_c11 OBJECT header_c.c ${_gate4_c})

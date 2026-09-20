@@ -276,7 +276,7 @@ TEST(AbiJsonContext, LoadsTheDocumentExampleAndRoundTrips) {
     EXPECT_EQ(cuda.ownership, static_cast<uint32_t>(ANIRA_OWNERSHIP_OWNED))
         << "JSON blocks are owned";
     ASSERT_TRUE(context_config->m_vulkan.has_value());
-    EXPECT_EQ(context_config->m_vulkan_device, 2);
+    EXPECT_EQ(context_config->m_vulkan.value_or(anira_vulkan_desc{}).device_index, 2);
     EXPECT_EQ(context_config->m_vulkan.value_or(anira_vulkan_desc{}).queue_family, 3u);
     EXPECT_TRUE(context_config->m_metal.has_value());
     ASSERT_TRUE(context_config->m_gl.has_value());

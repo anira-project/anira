@@ -1,0 +1,4 @@
+anira_tensor_init_ahardwarebuffer
+anira_tensor_init_d3d12
+anira_tensor_init_iosurface
+anira_tensor_init_metal

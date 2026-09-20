@@ -328,6 +328,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/v3_to_v2.cpp
     src/capi/version.cpp
     src/capi/handler.cpp
+    src/capi/tensor.cpp
 )
 
 # Shared between the anira target and the isolated ExecuTorch object target below —

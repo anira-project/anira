@@ -11,18 +11,20 @@
 #include <anira/abi/version.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
+#include <anira/abi/tensor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
 #include <anira/abi/thread.h>
 #include <anira/abi/handler.h>
+#include <anira/abi/draft/tensor_platform.h>
 
 struct anira_link_entry {
     const char* name;
     uintptr_t address;
 };
 
-#define ANIRA_LINK_PROBE_COUNT 144
+#define ANIRA_LINK_PROBE_COUNT 166
 
 /* The addresses are taken by assignment at run time, never in a static initializer:
    MSVC refuses the address of a dllimport there (C4232, identity not guaranteed). */
@@ -296,28 +298,72 @@ int main(void) {
     entries[131].address = (uintptr_t)&anira_release_core_if_idle;
     entries[132].name = "anira_shutdown";
     entries[132].address = (uintptr_t)&anira_shutdown;
-    entries[133].name = "anira_status_string";
-    entries[133].address = (uintptr_t)&anira_status_string;
-    entries[134].name = "anira_tensor_spec_create";
-    entries[134].address = (uintptr_t)&anira_tensor_spec_create;
-    entries[135].name = "anira_tensor_spec_destroy";
-    entries[135].address = (uintptr_t)&anira_tensor_spec_destroy;
-    entries[136].name = "anira_tensor_spec_set_axis";
-    entries[136].address = (uintptr_t)&anira_tensor_spec_set_axis;
-    entries[137].name = "anira_tensor_spec_set_ext";
-    entries[137].address = (uintptr_t)&anira_tensor_spec_set_ext;
-    entries[138].name = "anira_tensor_spec_set_ext_json";
-    entries[138].address = (uintptr_t)&anira_tensor_spec_set_ext_json;
-    entries[139].name = "anira_tensor_spec_set_latency";
-    entries[139].address = (uintptr_t)&anira_tensor_spec_set_latency;
-    entries[140].name = "anira_tensor_spec_set_time_ratio";
-    entries[140].address = (uintptr_t)&anira_tensor_spec_set_time_ratio;
-    entries[141].name = "anira_tensor_spec_set_window";
-    entries[141].address = (uintptr_t)&anira_tensor_spec_set_window;
-    entries[142].name = "anira_version";
-    entries[142].address = (uintptr_t)&anira_version;
-    entries[143].name = "anira_version_string";
-    entries[143].address = (uintptr_t)&anira_version_string;
+    entries[133].name = "anira_sizeof";
+    entries[133].address = (uintptr_t)&anira_sizeof;
+    entries[134].name = "anira_status_string";
+    entries[134].address = (uintptr_t)&anira_status_string;
+    entries[135].name = "anira_sync_token_dup";
+    entries[135].address = (uintptr_t)&anira_sync_token_dup;
+    entries[136].name = "anira_sync_token_reset";
+    entries[136].address = (uintptr_t)&anira_sync_token_reset;
+    entries[137].name = "anira_tensor_data";
+    entries[137].address = (uintptr_t)&anira_tensor_data;
+    entries[138].name = "anira_tensor_data_f32";
+    entries[138].address = (uintptr_t)&anira_tensor_data_f32;
+    entries[139].name = "anira_tensor_extent";
+    entries[139].address = (uintptr_t)&anira_tensor_extent;
+    entries[140].name = "anira_tensor_init_cuda";
+    entries[140].address = (uintptr_t)&anira_tensor_init_cuda;
+    entries[141].name = "anira_tensor_init_dlpack";
+    entries[141].address = (uintptr_t)&anira_tensor_init_dlpack;
+    entries[142].name = "anira_tensor_init_dmabuf";
+    entries[142].address = (uintptr_t)&anira_tensor_init_dmabuf;
+    entries[143].name = "anira_tensor_init_gl_buffer";
+    entries[143].address = (uintptr_t)&anira_tensor_init_gl_buffer;
+    entries[144].name = "anira_tensor_init_host";
+    entries[144].address = (uintptr_t)&anira_tensor_init_host;
+    entries[145].name = "anira_tensor_init_host_planar";
+    entries[145].address = (uintptr_t)&anira_tensor_init_host_planar;
+    entries[146].name = "anira_tensor_init_opaque_fd";
+    entries[146].address = (uintptr_t)&anira_tensor_init_opaque_fd;
+    entries[147].name = "anira_tensor_init_pinned";
+    entries[147].address = (uintptr_t)&anira_tensor_init_pinned;
+    entries[148].name = "anira_tensor_init_vulkan";
+    entries[148].address = (uintptr_t)&anira_tensor_init_vulkan;
+    entries[149].name = "anira_tensor_init_wgpu_buffer";
+    entries[149].address = (uintptr_t)&anira_tensor_init_wgpu_buffer;
+    entries[150].name = "anira_tensor_num_elements";
+    entries[150].address = (uintptr_t)&anira_tensor_num_elements;
+    entries[151].name = "anira_tensor_plane";
+    entries[151].address = (uintptr_t)&anira_tensor_plane;
+    entries[152].name = "anira_tensor_spec_create";
+    entries[152].address = (uintptr_t)&anira_tensor_spec_create;
+    entries[153].name = "anira_tensor_spec_destroy";
+    entries[153].address = (uintptr_t)&anira_tensor_spec_destroy;
+    entries[154].name = "anira_tensor_spec_set_axis";
+    entries[154].address = (uintptr_t)&anira_tensor_spec_set_axis;
+    entries[155].name = "anira_tensor_spec_set_ext";
+    entries[155].address = (uintptr_t)&anira_tensor_spec_set_ext;
+    entries[156].name = "anira_tensor_spec_set_ext_json";
+    entries[156].address = (uintptr_t)&anira_tensor_spec_set_ext_json;
+    entries[157].name = "anira_tensor_spec_set_latency";
+    entries[157].address = (uintptr_t)&anira_tensor_spec_set_latency;
+    entries[158].name = "anira_tensor_spec_set_time_ratio";
+    entries[158].address = (uintptr_t)&anira_tensor_spec_set_time_ratio;
+    entries[159].name = "anira_tensor_spec_set_window";
+    entries[159].address = (uintptr_t)&anira_tensor_spec_set_window;
+    entries[160].name = "anira_version";
+    entries[160].address = (uintptr_t)&anira_version;
+    entries[161].name = "anira_version_string";
+    entries[161].address = (uintptr_t)&anira_version_string;
+    entries[162].name = "anira_tensor_init_ahardwarebuffer";
+    entries[162].address = (uintptr_t)&anira_tensor_init_ahardwarebuffer;
+    entries[163].name = "anira_tensor_init_d3d12";
+    entries[163].address = (uintptr_t)&anira_tensor_init_d3d12;
+    entries[164].name = "anira_tensor_init_iosurface";
+    entries[164].address = (uintptr_t)&anira_tensor_init_iosurface;
+    entries[165].name = "anira_tensor_init_metal";
+    entries[165].address = (uintptr_t)&anira_tensor_init_metal;
     for (i = 0; i < ANIRA_LINK_PROBE_COUNT; ++i) {
         if (entries[i].address == 0) {
             printf("missing: %s\n", entries[i].name);

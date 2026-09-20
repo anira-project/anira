@@ -79,6 +79,7 @@ export const anira_tensor_flags = {
   ANIRA_TENSOR_READ_ONLY: 1,
   ANIRA_TENSOR_DISCARD_CONTENTS: 2,
   ANIRA_TENSOR_HOST_COHERENT: 4,
+  ANIRA_TENSOR_PLANAR: 8,
 } as const
 export type anira_tensor_flags = (typeof anira_tensor_flags)[keyof typeof anira_tensor_flags]
 

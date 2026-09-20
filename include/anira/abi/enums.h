@@ -76,7 +76,8 @@ typedef enum anira_dtype_code {
 
 /**
  * @brief 32-bit float, one lane: the type of every 2.x stream, the ring dtype of every tensor
- * never set on a Hard contract and the only one the _f32 Hard entries carry.
+ * never set on a Hard contract, the only one the _f32 Hard entries carry and the only
+ * one anira_tensor_data_f32 returns.
  */
 #define ANIRA_DTYPE_F32 ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)
 
@@ -199,6 +200,14 @@ typedef enum anira_tensor_flags {
     ANIRA_TENSOR_READ_ONLY = 1,  /**< The producer will not write; anira must not either. */
     ANIRA_TENSOR_DISCARD_CONTENTS = 2,  /**< The previous contents need not be preserved. */
     ANIRA_TENSOR_HOST_COHERENT = 4,  /**< Host writes are visible without an explicit flush. */
+    /**
+     * The memory is handle.planes: one pointer per plane of axis 0 (shape[0] planes) instead of
+     * one block. strides[0] is ignored; the strides from axis 1 on and byte_offset apply inside
+     * each plane. A boundary representation of host memory (ANIRA_DOMAIN_HOST,
+     * ANIRA_DOMAIN_HOST_PINNED): only an entry whose own documentation says so accepts it,
+     * every other consumer and every other domain refuses it with ANIRA_ERROR_NOT_SUPPORTED.
+     */
+    ANIRA_TENSOR_PLANAR = 8,
     ANIRA_TENSOR_FLAGS_FORCE32 = 0x7fffffff
 } anira_tensor_flags;
 
