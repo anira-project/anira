@@ -1280,8 +1280,11 @@ private:
 
 /**
  * @brief An anira_pipeline with its lifetime: the stages a handler runs, exactly one
- * stage::Inference in this pre-release (stage::Custom and stage::CustomBackend widen the
- * variant in later pre-releases). Move-only; copied by the handler that takes it.
+ * stage::Inference in this pre-release (stage::Custom widens the variant in a later
+ * pre-release). A custom engine is no stage: it is part of the inference stage, one more
+ * implementation its candidates resolve to, and arrives as stage::Inference::engine and
+ * Pipeline::register_engine over anira_pipeline_register_engine. Move-only; copied by the
+ * handler that takes it.
  */
 class Pipeline {
 public:

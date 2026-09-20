@@ -709,14 +709,15 @@ headers:
       - kind: enum
         name: anira_stage_phase
         terminator: ANIRA_STAGE_PHASE_FORCE32
-        doc: "The phase a stage callback runs in (abi/stage.h, M2); pinned now."
+        doc: "The phase a stage callback runs in, and the engine call between two of them (abi/stage.h, M2); pinned now. The three inference-thread phases are numbered in the order they run."
         values:
           - {name: ANIRA_PHASE_PRE_PROCESS, value: 0, doc: "Before the model inputs are formed."}
           - {name: ANIRA_PHASE_POST_PROCESS, value: 1, doc: "After the model outputs arrive."}
           - {name: ANIRA_PHASE_BEFORE_INFERENCE, value: 2, doc: "On the inference thread, before the engine call."}
-          - {name: ANIRA_PHASE_AFTER_INFERENCE, value: 3, doc: "On the inference thread, after the engine call."}
-          - {name: ANIRA_PHASE_PREPARE, value: 4, doc: "At anira_handler_prepare."}
-          - {name: ANIRA_PHASE_RELEASE, value: 5, doc: "When the last carrier dies."}
+          - {name: ANIRA_PHASE_INFERENCE, value: 3, doc: "On the inference thread, the engine call itself: the built-in engine of the running plan, or a registered custom engine's process. No stage callback runs in this phase; it is the word a failure, a log record or a report row uses for the engine call."}
+          - {name: ANIRA_PHASE_AFTER_INFERENCE, value: 4, doc: "On the inference thread, after the engine call."}
+          - {name: ANIRA_PHASE_PREPARE, value: 5, doc: "At anira_handler_prepare."}
+          - {name: ANIRA_PHASE_RELEASE, value: 6, doc: "When the last carrier dies."}
           - {name: ANIRA_STAGE_PHASE_FORCE32, value: "0x7fffffff"}
 
   # ----------------------------------------------------------------------------
@@ -2381,7 +2382,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Adds the inference stage: the variants and the candidate backends. One plan is compiled per candidate that has a model entry in the variant (anira_handler_prepare); a candidate without an entry is not a plan and not an error; a pipeline whose candidates match no entry is ANIRA_ERROR_CONFIG at anira_handler_create. The structure of the variant (axes, roles, windows, layouts, the engines of the named candidates against this build, the extensions on the model and its specs) is checked at anira_handler_create; the contract rules at prepare."
+        doc: "Adds the inference stage: the variants and the candidate backends. One plan is compiled per candidate that has a model entry in the variant (anira_handler_prepare); a candidate without an entry is not a plan and not an error; a pipeline whose candidates match no entry is ANIRA_ERROR_CONFIG at anira_handler_create. The structure of the variant (axes, roles, windows, layouts, the engines of the named candidates against this build, the extensions on the model and its specs) is checked at anira_handler_create; the contract rules at prepare. A custom engine is part of this stage and never a stage of its own: it is one more implementation a candidate's engine_id resolves to, and its call runs in ANIRA_PHASE_INFERENCE like a built-in engine's; anira_pipeline_register_engine arrives with a later pre-release, and until then the one custom id that maps is anira.v2.custom, the 2.x CUSTOM backend."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, a NULL or empty variant list, a NULL entry in it, a NULL candidates with num_candidates above 0 or a candidate whose struct_size is too small; ANIRA_ERROR_CONFIG for a second inference stage; ANIRA_ERROR_NOT_SUPPORTED for more than one variant or a provider other than ANIRA_PROVIDER_DEFAULT in this pre-release."
 
       - kind: function
@@ -2512,7 +2513,7 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "Selects the plan the next chunk runs on: one relaxed store, never planning. An index out of range is a no-op recorded as ANIRA_ERROR_CONFIG in anira_handler_rt_error; a call on an unprepared handler is a no-op recorded as ANIRA_ERROR_NOT_PREPARED. Not while anira_handler_prepare runs (prepare is the quiescence point)."
+        doc: "Selects the plan the next submitted chunk runs on: one relaxed store, never planning. The selection is a single atomic value, the dense index itself, so callers on several threads cannot leave anira_handler_get_plan and the running engine in disagreement, and two plans on one engine (two variants, two providers) stay distinct. A chunk keeps the plan it was submitted under from its pre-processing to its post-processing: one that is queued or in flight when the call lands finishes on the old plan, and exactly one engine runs for it. An index out of range is a no-op recorded as ANIRA_ERROR_CONFIG in anira_handler_rt_error; a call on an unprepared handler is a no-op recorded as ANIRA_ERROR_NOT_PREPARED. Not while anira_handler_prepare runs (prepare is the quiescence point)."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler; ANIRA_ERROR_NOT_PREPARED before a successful prepare; ANIRA_ERROR_CONFIG for an index out of range."
 
       - kind: function
@@ -2524,7 +2525,7 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "The plan selected last (one relaxed load). Not while anira_handler_prepare runs."
+        doc: "The plan selected last: the one the next submitted chunk runs on (one relaxed load of the value anira_handler_set_plan stores). Not while anira_handler_prepare runs."
         return_doc: "The dense plan index; 0 for a NULL or unprepared handler."
 
       # ---- the Hard entries, float32 ----------------------------------------------

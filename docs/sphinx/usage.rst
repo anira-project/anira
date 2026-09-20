@@ -589,7 +589,15 @@ is a config object, ``anira_pipeline_create`` / ``anira_pipeline_add_inference``
 configuration and, optionally, the candidate backends as ``anira_backend_id`` rows; ``NULL``
 means every engine this build carries plus the custom entries, an entry for an absent engine
 being skipped) / ``anira_pipeline_destroy``, copied by the handler that takes it and
-destroyable right after. ``anira_handler`` is the runtime object over a context:
+destroyable right after. A pipeline holds exactly one inference stage; the pre- and
+post-processing stages around it arrive with a later pre-release. A custom engine is part of
+the inference stage and never a stage of its own: it is one more implementation a
+candidate's ``engine_id`` resolves to, and its call runs in ``ANIRA_PHASE_INFERENCE`` (the
+phase of ``anira_stage_phase`` between ``ANIRA_PHASE_BEFORE_INFERENCE`` and
+``ANIRA_PHASE_AFTER_INFERENCE``) exactly as a built-in engine's does. Registering one by name
+(``anira_pipeline_register_engine``) arrives with a later pre-release; until then the one
+custom id that maps is ``anira.v2.custom``, the 2.x ``CUSTOM`` backend.
+``anira_handler`` is the runtime object over a context:
 ``anira_handler_create(context, pipeline, &h, &err)`` adds a reference to the context (which
 may then be destroyed by its creator; the handler keeps what it needs) and copies everything;
 ``anira_handler_prepare(h, contract, &err)`` is the blocking quiescence point, never from the
@@ -667,9 +675,16 @@ selected plan, then one record per plan, per slot and per consumed extension:
 
 A plan is a dense index
 ``0..num_plans-1``, and ``anira_handler_set_plan(h, plan)`` / ``anira_handler_get_plan(h)`` are
-the whole runtime selection: one relaxed store, effective at the next block, callable from
-any thread but not while ``prepare`` runs; an index out of range is a no-op recorded as
-``ANIRA_ERROR_CONFIG`` in ``anira_handler_rt_error``. In C++, ``anira::Pipeline``,
+the whole runtime selection: one relaxed store of one atomic value, the dense index itself,
+callable from any thread (several at once: ``get_plan`` loads the same value back, so it never
+disagrees with the engine that runs) but not while ``prepare`` runs. Because the index is what
+is stored, two plans on one engine (two variants of a model, two providers) stay distinct. The switch applies from the next submitted
+chunk on: a chunk is stamped with the selection when it is submitted and keeps it from its
+pre-processing to its post-processing, so a chunk that is queued or in flight when the call
+lands finishes on the old plan, and exactly one engine runs for every chunk. The same holds
+for ``set_inference_backend`` of the 2.x handler, which selects the first plan on that backend
+in the same table. An index out of range is a no-op recorded
+as ``ANIRA_ERROR_CONFIG`` in ``anira_handler_rt_error``. In C++, ``anira::Pipeline``,
 ``anira::stage::Inference`` and ``anira::PlanReport`` of ``anira/anira.hpp`` are the same
 objects (``anira::Pipeline pipe{anira::stage::Inference(cfg, {{ANIRA_ENGINE_ONNXRUNTIME}})};``,
 ``anira::PlanReport(anira_handler_plan_report(h)).plans()``); the ``anira::InferenceHandler``

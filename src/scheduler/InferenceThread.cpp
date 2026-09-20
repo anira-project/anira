@@ -366,7 +366,11 @@ void InferenceThread::do_inference(
     const std::shared_ptr<SessionElement>& session,
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
     bool& signalled) {
-    InferenceBackend const backend = session->m_current_backend.load(std::memory_order_relaxed);
+    // The backend of the plan the chunk was submitted under (the index stamped in
+    // Core::pre_process), never the session's atomic: the hooks and the engine call below
+    // agree with each other and with the chunk's pre_process and post_process, whatever
+    // select_plan() does meanwhile.
+    InferenceBackend const backend = session->plan_backend(thread_safe_struct->m_plan);
     // A backend, a custom processor or a before/after hook that throws must not unwind the
     // pool thread: the failed inference delivers zeros, the done signal is published below
     // exactly as on success, and the failure is ENGINE on the session's latch (a 3.x
@@ -374,6 +378,7 @@ void InferenceThread::do_inference(
     try {
         session->m_pp_processor.before_inference(thread_safe_struct->m_tensor_input_data, backend);
         inference(session,
+                  backend,
                   thread_safe_struct->m_tensor_input_data,
                   thread_safe_struct->m_tensor_output_data);
         session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data, backend);
@@ -412,75 +417,79 @@ void InferenceThread::do_inference(
 }
 
 void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
+                                InferenceBackend backend,
                                 std::vector<BufferF>& input,
                                 std::vector<BufferF>& output) {
+    // One value, one case: exactly one processor runs per call. The session's atomic is not
+    // read here (it used to be re-read per engine block, so a switch landing between two
+    // reads ran two engines for one chunk, or none).
+    switch (backend) {
 #ifdef USE_LIBTORCH
-    if (session->m_current_backend.load(std::memory_order_relaxed) == LIBTORCH) {
-        if (session->m_libtorch_processor != nullptr) {
-            session->m_libtorch_processor->process(input, output, session);
-        } else {
-            session->m_default_processor.process(input, output, session);
-            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoLibTorchModel,
-                                    log_group::k_scheduler,
-                                    "LibTorch model has not been provided. Using default "
-                                    "processor.");
-        }
-    }
+        case LIBTORCH:
+            if (session->m_libtorch_processor != nullptr) {
+                session->m_libtorch_processor->process(input, output, session);
+            } else {
+                session->m_default_processor.process(input, output, session);
+                ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoLibTorchModel,
+                                        log_group::k_scheduler,
+                                        "LibTorch model has not been provided. Using default "
+                                        "processor.");
+            }
+            break;
 #endif
 #ifdef USE_ONNXRUNTIME
-    if (session->m_current_backend.load(std::memory_order_relaxed) == ONNX) {
-        if (session->m_onnx_processor != nullptr) {
-            session->m_onnx_processor->process(input, output, session);
-        } else {
-            session->m_default_processor.process(input, output, session);
-            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoOnnxRuntimeModel,
-                                    log_group::k_scheduler,
-                                    "OnnxRuntime model has not been provided. Using default "
-                                    "processor.");
-        }
-    }
+        case ONNX:
+            if (session->m_onnx_processor != nullptr) {
+                session->m_onnx_processor->process(input, output, session);
+            } else {
+                session->m_default_processor.process(input, output, session);
+                ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoOnnxRuntimeModel,
+                                        log_group::k_scheduler,
+                                        "OnnxRuntime model has not been provided. Using default "
+                                        "processor.");
+            }
+            break;
 #endif
 #ifdef USE_TFLITE
-    if (session->m_current_backend.load(std::memory_order_relaxed) == TFLITE) {
-        if (session->m_tflite_processor != nullptr) {
-            session->m_tflite_processor->process(input, output, session);
-        } else {
-            session->m_default_processor.process(input, output, session);
-            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoTFLiteModel,
-                                    log_group::k_scheduler,
-                                    "TFLite model has not been provided. Using default "
-                                    "processor.");
-        }
-    }
+        case TFLITE:
+            if (session->m_tflite_processor != nullptr) {
+                session->m_tflite_processor->process(input, output, session);
+            } else {
+                session->m_default_processor.process(input, output, session);
+                ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoTFLiteModel,
+                                        log_group::k_scheduler,
+                                        "TFLite model has not been provided. Using default "
+                                        "processor.");
+            }
+            break;
 #endif
 #ifdef USE_LITERT
-    if (session->m_current_backend.load(std::memory_order_relaxed) == LITERT) {
-        if (session->m_litert_processor != nullptr) {
-            session->m_litert_processor->process(input, output, session);
-        } else {
-            session->m_default_processor.process(input, output, session);
-            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoLiteRtModel,
-                                    log_group::k_scheduler,
-                                    "LiteRT model has not been provided. Using default "
-                                    "processor.");
-        }
-    }
+        case LITERT:
+            if (session->m_litert_processor != nullptr) {
+                session->m_litert_processor->process(input, output, session);
+            } else {
+                session->m_default_processor.process(input, output, session);
+                ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoLiteRtModel,
+                                        log_group::k_scheduler,
+                                        "LiteRT model has not been provided. Using default "
+                                        "processor.");
+            }
+            break;
 #endif
 #ifdef USE_EXECUTORCH
-    if (session->m_current_backend.load(std::memory_order_relaxed) == EXECUTORCH) {
-        if (session->m_executorch_processor != nullptr) {
-            session->m_executorch_processor->process(input, output, session);
-        } else {
-            session->m_default_processor.process(input, output, session);
-            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoExecuTorchModel,
-                                    log_group::k_scheduler,
-                                    "ExecuTorch model has not been provided. Using default "
-                                    "processor.");
-        }
-    }
+        case EXECUTORCH:
+            if (session->m_executorch_processor != nullptr) {
+                session->m_executorch_processor->process(input, output, session);
+            } else {
+                session->m_default_processor.process(input, output, session);
+                ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoExecuTorchModel,
+                                        log_group::k_scheduler,
+                                        "ExecuTorch model has not been provided. Using default "
+                                        "processor.");
+            }
+            break;
 #endif
-    if (session->m_current_backend.load(std::memory_order_relaxed) == CUSTOM) {
-        session->m_custom_processor->process(input, output, session);
+        case CUSTOM: session->m_custom_processor->process(input, output, session); break;
     }
 }
 

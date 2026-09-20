@@ -72,6 +72,7 @@ anira_add_test_binary(test_utils
 )
 
 anira_add_test_binary(test_scheduler
+	scheduler/test_BackendSwitch.cpp
 	scheduler/test_ConcurrentLifecycle.cpp
 	scheduler/test_CoreConfigMismatch.cpp
 	scheduler/test_CoreLifecycle.cpp

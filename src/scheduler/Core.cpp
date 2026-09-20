@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -184,6 +185,40 @@ const char* level_word(anira_log_level level) {
 
 const char* drain_word(anira_log_drain drain) {
     return drain == ANIRA_LOG_DRAIN_MANUAL ? "manual" : "thread";
+}
+
+// The plan table of a 2.x session: one row per configured model, in m_model_data order (the
+// order a 3.x handler numbers its plans in), then every other backend of this build, CUSTOM
+// last. The tail gives every backend a 2.x caller can name a row: selecting one without a
+// model runs the default processor, as it always did.
+std::vector<InferenceBackend> default_plan_backends(const InferenceConfig& inference_config) {
+    const std::vector<InferenceBackend> every_backend = {
+#ifdef USE_LIBTORCH
+        InferenceBackend::LIBTORCH,
+#endif
+#ifdef USE_ONNXRUNTIME
+        InferenceBackend::ONNX,
+#endif
+#ifdef USE_TFLITE
+        InferenceBackend::TFLITE,
+#endif
+#ifdef USE_LITERT
+        InferenceBackend::LITERT,
+#endif
+#ifdef USE_EXECUTORCH
+        InferenceBackend::EXECUTORCH,
+#endif
+        InferenceBackend::CUSTOM,
+    };
+    std::vector<InferenceBackend> backends;
+    backends.reserve(inference_config.m_model_data.size() + every_backend.size());
+    for (const auto& model_data : inference_config.m_model_data) {
+        backends.push_back(model_data.m_backend);
+    }
+    for (const InferenceBackend backend : every_backend) {
+        if (std::ranges::find(backends, backend) == backends.end()) { backends.push_back(backend); }
+    }
+    return backends;
 }
 
 }  // namespace
@@ -673,7 +708,15 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
                       InferenceBackend::EXECUTORCH);
 #endif
 
-        // Default the active backend to the first configured model whose processor
+        // The 2.x plan table; a 3.x handler replaces it with its own plans before it
+        // prepares the session. CUSTOM always has a row, so the lookup below finds one.
+        session->set_plan_backends(default_plan_backends(inference_config));
+        if (const std::optional<uint32_t> custom =
+                session->plan_of_backend(InferenceBackend::CUSTOM)) {
+            session->select_plan(*custom);
+        }
+
+        // Default the active plan to the first configured model whose processor
         // is available, instead of the CUSTOM roundtrip. Sessions used to start on
         // CUSTOM until set_inference_backend() — forgetting that call silently
         // passed audio through. A caller-provided custom processor keeps CUSTOM
@@ -682,7 +725,9 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
         // config can list backends the build does not provide without selecting an
         // unrunnable one; when nothing matches, CUSTOM remains, as before.
         if (custom_processor == nullptr) {
-            for (const auto& model_data : inference_config.m_model_data) {
+            // Row i of the table is m_model_data[i] (default_plan_backends).
+            for (uint32_t plan = 0; plan < inference_config.m_model_data.size(); ++plan) {
+                const auto& model_data = inference_config.m_model_data[plan];
                 bool processor_available = false;
                 switch (model_data.m_backend) {
 #ifdef USE_LIBTORCH
@@ -713,8 +758,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
                     default: break;
                 }
                 if (processor_available) {
-                    session->m_current_backend.store(model_data.m_backend,
-                                                     std::memory_order_relaxed);
+                    session->select_plan(plan);
                     break;
                 }
             }
@@ -1208,10 +1252,15 @@ std::vector<std::shared_ptr<SessionElement>> Core::get_sessions() {
 bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
     for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
         if (session->m_inference_queue[i]->m_free.exchange(false)) {
-            session->m_pp_processor.pre_process(
-                session->m_send_buffer,
-                session->m_inference_queue[i]->m_tensor_input_data,
-                session->m_current_backend.load(std::memory_order_relaxed));
+            // The one load of the session's selection for this chunk: the plan index is
+            // stamped on the struct and resolved from there by the hooks, the engine call
+            // and post_process, so a select_plan() that lands later applies from the next
+            // chunk on and never inside this one.
+            const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
+            session->m_inference_queue[i]->m_plan = plan;
+            session->m_pp_processor.pre_process(session->m_send_buffer,
+                                                session->m_inference_queue[i]->m_tensor_input_data,
+                                                session->plan_backend(plan));
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
             // Stamp the generation this dispatch belongs to, so a wait-free reset that
@@ -1281,10 +1330,11 @@ bool Core::enqueue_inference_or_drop(
 void Core::post_process(
     const std::shared_ptr<SessionElement>& session,
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct) {
-    session->m_pp_processor.post_process(
-        thread_safe_struct->m_tensor_output_data,
-        session->m_receive_buffer,
-        session->m_current_backend.load(std::memory_order_relaxed));
+    // The plan the chunk was submitted under (Core::pre_process), not the session's
+    // current one: the chunk's pre_process, hooks, engine and post_process agree.
+    session->m_pp_processor.post_process(thread_safe_struct->m_tensor_output_data,
+                                         session->m_receive_buffer,
+                                         session->plan_backend(thread_safe_struct->m_plan));
     thread_safe_struct->m_free.store(true, std::memory_order::release);
 }
 

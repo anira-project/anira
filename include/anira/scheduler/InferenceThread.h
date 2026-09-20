@@ -197,11 +197,19 @@ private:
      * and the provided input/output buffer arrays. This is the lowest-level
      * inference method that directly interfaces with the ML backends.
      *
+     * Exactly one processor runs per call: the one of @p backend, or the session's default
+     * processor when that backend has no processor behind it. The session's
+     * m_current_plan is not read here.
+     *
      * @param session Shared pointer to the SessionElement containing the inference backend
+     * @param backend The backend of the plan the chunk was submitted under
+     *        (ThreadSafeStruct::m_plan, stamped in Core::pre_process, resolved through
+     *        SessionElement::plan_backend), the same value the hooks around this call get
      * @param input Vector of input buffers containing the audio data to process
      * @param output Vector of output buffers to receive the processed results
      */
     void inference(const std::shared_ptr<SessionElement>& session,
+                   InferenceBackend backend,
                    std::vector<BufferF>& input,
                    std::vector<BufferF>& output);
 

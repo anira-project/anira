@@ -587,6 +587,45 @@ TEST(AbiHandler, SetPlanSwitchesLikeSetInferenceBackend) {
     }
 }
 
+// The selection is one atomic value (the dense plan index, held by the session), so callers
+// on several threads cannot leave get_plan and the running engine in disagreement: with an
+// index beside a backend, two interleaved calls could store the index of one plan and the
+// backend of the other.
+TEST(AbiHandler, ConcurrentSetPlanLeavesOneSelection) {
+    const Context context;
+    const anira::ModelConfig model = gain_with_custom();
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    Handler handler(context, model, candidates);
+    ASSERT_EQ(handler.prepare(file_contract(k_gain_contract_json, k_block)), ANIRA_OK)
+        << handler.m_err.message;
+    anira_handler* h = handler.m_handler;
+    const std::vector<anira_plan_info> info = plans_of(h);
+    if (info.size() < 2) { GTEST_SKIP() << "one plan: no engine in this build"; }
+
+    // No audio runs: only the selection is exercised.
+    const auto hammer = [h](uint32_t plan) {
+        for (int i = 0; i < 20000; ++i) { EXPECT_EQ(anira_handler_set_plan(h, plan), ANIRA_OK); }
+    };
+    for (int round = 0; round < 20; ++round) {
+        std::thread first(hammer, 0U);
+        std::thread second(hammer, 1U);
+        first.join();
+        second.join();
+        const uint32_t selected = anira_handler_get_plan(h);
+        ASSERT_LT(selected, 2U) << "round " << round;
+        EXPECT_EQ(h->m_manager->get_plan(), selected) << "round " << round;
+        EXPECT_EQ(h->m_plans[selected].m_backend, h->m_manager->get_backend())
+            << "round " << round << ": get_plan names a plan whose engine is not the one running";
+    }
+
+    // Every plan reads back as itself.
+    for (uint32_t i = 0; i < info.size(); ++i) {
+        EXPECT_EQ(anira_handler_set_plan(h, i), ANIRA_OK);
+        EXPECT_EQ(anira_handler_get_plan(h), i);
+        EXPECT_EQ(h->m_plans[i].m_backend, h->m_manager->get_backend());
+    }
+}
+
 #if defined(USE_LIBTORCH) || defined(USE_ONNXRUNTIME)
 TEST(AbiHandler, CnnMatchesTheTwoPointXHandler) {
     constexpr size_t k_cnn_block = 2048;

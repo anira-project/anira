@@ -4,6 +4,7 @@
 #include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
+#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
@@ -32,6 +33,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -60,6 +62,31 @@ SessionElement::SessionElement(int new_session_id,
     // A 2.x session records into its own latch; a 3.x session into its handler's, which
     // outlives the session (the handler destroys its manager first).
     , m_rt(rt_latch != nullptr ? rt_latch : &m_rt_own) {}
+
+void SessionElement::set_plan_backends(std::vector<InferenceBackend> backends) {
+    if (backends.empty()) {
+        throw std::invalid_argument("SessionElement::set_plan_backends: an empty plan table");
+    }
+    m_plan_backends = std::move(backends);
+    m_current_plan.store(0, std::memory_order_relaxed);
+}
+
+bool SessionElement::select_plan(uint32_t plan) noexcept {
+    if (plan >= m_plan_backends.size()) { return false; }
+    m_current_plan.store(plan, std::memory_order_relaxed);
+    return true;
+}
+
+InferenceBackend SessionElement::plan_backend(uint32_t plan) const noexcept {
+    return plan < m_plan_backends.size() ? m_plan_backends[plan] : InferenceBackend::CUSTOM;
+}
+
+std::optional<uint32_t> SessionElement::plan_of_backend(InferenceBackend backend) const noexcept {
+    for (uint32_t i = 0; i < m_plan_backends.size(); ++i) {
+        if (m_plan_backends[i] == backend) { return i; }
+    }
+    return std::nullopt;
+}
 
 SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<size_t>& tensor_input_size,
                                                    const std::vector<size_t>& tensor_output_size) {

@@ -163,7 +163,11 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_create(anira_pipeline** out,
  * candidates match no entry is ANIRA_ERROR_CONFIG at anira_handler_create. The structure
  * of the variant (axes, roles, windows, layouts, the engines of the named candidates
  * against this build, the extensions on the model and its specs) is checked at
- * anira_handler_create; the contract rules at prepare.
+ * anira_handler_create; the contract rules at prepare. A custom engine is part of this
+ * stage and never a stage of its own: it is one more implementation a candidate's
+ * engine_id resolves to, and its call runs in ANIRA_PHASE_INFERENCE like a built-in
+ * engine's; anira_pipeline_register_engine arrives with a later pre-release, and until
+ * then the one custom id that maps is anira.v2.custom, the 2.x CUSTOM backend.
  * @param pipeline The pipeline.
  * @param variants The model configurations the stage may run, copied; exactly one in this
  *        pre-release.
@@ -371,10 +375,16 @@ ANIRA_API anira_status ANIRA_CALL anira_plan_report_exts(const anira_plan_report
                                                          anira_plan_ext* out) ANIRA_NOEXCEPT;
 
 /**
- * @brief Selects the plan the next chunk runs on: one relaxed store, never planning. An index
- * out of range is a no-op recorded as ANIRA_ERROR_CONFIG in anira_handler_rt_error; a
- * call on an unprepared handler is a no-op recorded as ANIRA_ERROR_NOT_PREPARED. Not
- * while anira_handler_prepare runs (prepare is the quiescence point).
+ * @brief Selects the plan the next submitted chunk runs on: one relaxed store, never planning.
+ * The selection is a single atomic value, the dense index itself, so callers on several
+ * threads cannot leave anira_handler_get_plan and the running engine in disagreement,
+ * and two plans on one engine (two variants, two providers) stay distinct. A chunk keeps
+ * the plan it was submitted under from its pre-processing to its post-processing: one
+ * that is queued or in flight when the call lands finishes on the old plan, and exactly
+ * one engine runs for it. An index out of range is a no-op recorded as
+ * ANIRA_ERROR_CONFIG in anira_handler_rt_error; a call on an unprepared handler is a
+ * no-op recorded as ANIRA_ERROR_NOT_PREPARED. Not while anira_handler_prepare runs
+ * (prepare is the quiescence point).
  * @param handler The handler.
  * @param plan A dense plan index the report handed out.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler; ANIRA_ERROR_NOT_PREPARED
@@ -387,7 +397,8 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_set_plan(anira_handler* handler,
                                                          uint32_t plan) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
- * @brief The plan selected last (one relaxed load). Not while anira_handler_prepare runs.
+ * @brief The plan selected last: the one the next submitted chunk runs on (one relaxed load of
+ * the value anira_handler_set_plan stores). Not while anira_handler_prepare runs.
  * @param handler The handler.
  * @return The dense plan index; 0 for a NULL or unprepared handler.
  * @par Thread contract

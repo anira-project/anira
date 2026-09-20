@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <optional>
 
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
@@ -247,6 +248,16 @@ public:
         // stomping a newer era's in-flight dispatch. Plain field: stable for the
         // dispatch's lifetime, synced by the gate/queue handoffs.
         uint64_t m_dispatch_epoch{0};
+        // The plan this chunk runs on: the dense index into SessionElement::m_plan_backends,
+        // stamped in Core::pre_process from SessionElement::m_current_plan with one load.
+        // The hooks, the engine call and post_process all resolve this stamp and never read
+        // the session's atomic again, so a plan switch that lands while the chunk is queued
+        // or in flight cannot split it across two plans (or run two engines, or none, for
+        // it). The index and not the backend: two plans may run on one backend (two variants
+        // of a model, two providers of an engine), and only the index tells them apart.
+        // Plain field: written on the driving thread at dispatch, stable for the dispatch's
+        // lifetime, synced by the queue handoffs like the two stamps above.
+        uint32_t m_plan{0};
         std::vector<BufferF> m_tensor_input_data;   ///< Input tensor data buffers
         std::vector<BufferF> m_tensor_output_data;  ///< Output tensor data buffers
     };
@@ -255,14 +266,46 @@ public:
                                                                        ///< structures for
                                                                        ///< concurrent processing
 
-    std::atomic<InferenceBackend> m_current_backend{CUSTOM};  ///< Currently active inference
-                                                              ///< backend for this session.
-                                                              ///< Initialized by
-                                                              ///< Core::create_session to the
-                                                              ///< first configured model's
-                                                              ///< available backend (CUSTOM when a
-                                                              ///< custom processor was provided or
-                                                              ///< nothing matches).
+    /**
+     * @brief The plan table: dense plan index -> the backend that plan runs on.
+     *
+     * Core::create_session builds the 2.x table (one row per configured model, in
+     * m_model_data order, then every other backend of this build, so that every backend a
+     * 2.x caller can name has a row); a 3.x handler replaces it with exactly its plans before
+     * it prepares the session (set_plan_backends). Several rows may name one backend. Never
+     * empty. Replaced only while no chunk of the session exists (before prepare), so the
+     * driving thread and the inference threads read it without synchronization.
+     */
+    std::vector<InferenceBackend> m_plan_backends{CUSTOM};
+
+    /**
+     * @brief The selected plan: the one the next submitted chunk is stamped with.
+     *
+     * The whole runtime selection is this one atomic (select_plan stores it, a chunk takes
+     * it with one load in Core::pre_process), so concurrent callers have no pair to tear.
+     * Always below m_plan_backends.size(). Initialized by Core::create_session to the first
+     * configured model whose processor is available (the CUSTOM row when a custom processor
+     * was provided or nothing matches).
+     */
+    std::atomic<uint32_t> m_current_plan{0};
+
+    /**
+     * @brief Replaces the plan table and selects plan 0.
+     * @param backends One backend per plan, in dense-index order.
+     * @throws std::invalid_argument for an empty table.
+     * @note Only while no chunk of the session exists: before the session is prepared.
+     */
+    void set_plan_backends(std::vector<InferenceBackend> backends);
+
+    /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
+    bool select_plan(uint32_t plan) noexcept;
+
+    /// The backend a plan runs on. CUSTOM for an index out of range, which a stamp never is.
+    InferenceBackend plan_backend(uint32_t plan) const noexcept;
+
+    /// The first plan that runs on a backend (the 2.x selection by backend), if any does.
+    std::optional<uint32_t> plan_of_backend(InferenceBackend backend) const noexcept;
+
     unsigned long m_current_queue = 0;         ///< Current position in the inference queue
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
     size_t m_pending_pull_samples = 0;  ///< Generator sessions only (!m_input_driven): samples of

@@ -19,6 +19,12 @@ static_assert(sizeof(anira_error) == 520, "anira_error is frozen at 520 bytes");
 static_assert(sizeof(anira_log_record) == 56, "anira_log_record is frozen at 56 bytes");
 static_assert(sizeof(anira_status) == 4, "enums are 32-bit");
 static_assert(ANIRA_DTYPE_F32 == 0x00012002u, "DLPack float32");
+// The three inference-thread phases are numbered in the order they run: the engine call sits
+// between the two hooks named after it.
+static_assert(ANIRA_PHASE_BEFORE_INFERENCE == 2 && ANIRA_PHASE_INFERENCE == 3 &&
+                  ANIRA_PHASE_AFTER_INFERENCE == 4,
+              "before < inference < after");
+static_assert(ANIRA_PHASE_PREPARE == 5 && ANIRA_PHASE_RELEASE == 6, "the lifecycle phases");
 
 [[maybe_unused]] int anira_header_cxx17_probe() {
     const anira_error err = ANIRA_ERROR_INIT;

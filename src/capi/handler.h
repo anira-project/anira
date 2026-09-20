@@ -97,9 +97,12 @@ struct anira_handler {
     std::chrono::steady_clock::duration m_contract_wait{0};  ///< ANIRA_WAIT_CONTRACT of the pop
                                                              ///< twins: wait_ratio x block_max
                                                              ///< / rate
-    std::vector<anira::capi::Plan> m_plans;  ///< dense index -> row/backend; rebuilt at
-                                             ///< prepare only
-    std::atomic<uint32_t> m_plan{0};         ///< the selected dense index (set_plan / get_plan)
+    /// dense index -> row/backend; rebuilt at prepare only, and handed to the session as its
+    /// plan table (InferenceManager::set_plan_backends). The selected plan has no storage
+    /// here: it is the session's one atomic, the dense index itself (SessionElement::
+    /// m_current_plan), so set_plan has no pair to tear and two plans on one backend stay
+    /// distinct.
+    std::vector<anira::capi::Plan> m_plans;
     anira_plan_report m_report;
     std::atomic<bool> m_prepared{false};  ///< release at the end of a successful prepare;
                                           ///< acquire in every nonblocking entry

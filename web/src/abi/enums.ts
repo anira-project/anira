@@ -308,9 +308,10 @@ export const anira_stage_phase = {
   ANIRA_PHASE_PRE_PROCESS: 0,
   ANIRA_PHASE_POST_PROCESS: 1,
   ANIRA_PHASE_BEFORE_INFERENCE: 2,
-  ANIRA_PHASE_AFTER_INFERENCE: 3,
-  ANIRA_PHASE_PREPARE: 4,
-  ANIRA_PHASE_RELEASE: 5,
+  ANIRA_PHASE_INFERENCE: 3,
+  ANIRA_PHASE_AFTER_INFERENCE: 4,
+  ANIRA_PHASE_PREPARE: 5,
+  ANIRA_PHASE_RELEASE: 6,
 } as const
 export type anira_stage_phase = (typeof anira_stage_phase)[keyof typeof anira_stage_phase]
 

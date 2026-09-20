@@ -133,6 +133,7 @@ enum class RtSite : uint8_t {
     NoTFLiteModel,             // S12 InferenceThread: no TFLite model
     NoLiteRtModel,             // S13 InferenceThread: no LiteRT model
     NoExecuTorchModel,         // S14 InferenceThread: no ExecuTorch model
+    BackendWithoutPlan,        // S15 InferenceManager: set_backend named a backend no plan runs
     InferenceThreadBodyThrew,  // the catch-all of the inference thread's loop body
     Count
 };
@@ -153,6 +154,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(RtSite::Count)> k_r
     "tflite model not provided",
     "litert model not provided",
     "executorch model not provided",
+    "backend without a plan",
     "inference thread body threw",
 };
 

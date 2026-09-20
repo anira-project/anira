@@ -90,6 +90,13 @@ public:
      * CUSTOM when a custom processor was passed to the constructor (or when no
      * configured backend is available).
      *
+     * Wait-free and callable from any thread while audio runs. The session's selection is
+     * one atomic plan index, and this call selects the first plan that runs on the backend
+     * (every backend of the build has one). The switch applies from the
+     * next submitted chunk on: a chunk keeps the backend it was submitted under for its
+     * pre_process, before_inference, engine call, after_inference and post_process, so a
+     * chunk that is queued or in flight when the switch lands finishes on the old backend.
+     *
      * @param inference_backend The backend type to use (e.g., ONNX, LibTorch, TensorFlow Lite or
      * custom)
      */

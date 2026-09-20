@@ -465,6 +465,8 @@ bool names_default_engine(const anira_model_config& model, const anira::capi::Mo
 
 // The plan table: one plan per surviving row, in entry order (the InferenceConfig's
 // m_model_data order); the initial plan is the default engine's when it has one, else 0.
+// The session takes the table and the selection as dense indices, so this runs on the fresh
+// session before it is prepared: no chunk exists that could be stamped from the old table.
 void build_plans(anira_handler& handler,
                  const anira_model_config& model,
                  const anira::capi::Derived& derived,
@@ -500,8 +502,15 @@ void build_plans(anira_handler& handler,
             break;
         }
     }
-    handler.m_plan.store(initial, std::memory_order_relaxed);
-    handler.m_manager->set_backend(handler.m_plans[initial].m_backend);
+    std::vector<anira::InferenceBackend> backends;
+    backends.reserve(handler.m_plans.size());
+    for (const anira::capi::Plan& plan : handler.m_plans) { backends.push_back(plan.m_backend); }
+    handler.m_manager->set_plan_backends(std::move(backends));
+    if (!handler.m_manager->set_plan(initial)) {
+        throw StatusError(
+            ANIRA_ERROR_INTERNAL,
+            "handler: the session refused the initial plan " + std::to_string(initial));
+    }
 }
 
 // A host slot of the report: host memory on both sides, zero-copy, the wait strategy the
@@ -655,7 +664,7 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
                    num_plans,
                    handler.m_num_inputs,
                    handler.m_num_outputs,
-                   handler.m_plan.load(std::memory_order_relaxed));
+                   handler.m_manager->get_plan());
     for (uint32_t i = 0; i < num_plans; ++i) {
         const anira_plan_info& info = report.m_plans[i];
         const std::string engine =
@@ -721,6 +730,8 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                                                                   handler.m_context->m_config,
                                                                   &handler.m_rt);
     handler.m_manager->set_miss_policy(hard.m_on_miss);
+    // The plan table and the initial selection, on the session before it is prepared.
+    build_plans(handler, model, derived, hard);
     handler.m_manager->prepare(host, anira::CustomLatencies{}, ring_dtypes);
 
     // The scratch arrays and the resolved ring dtypes of the driver thread.
@@ -741,7 +752,6 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_contract_wait = std::chrono::microseconds(static_cast<std::chrono::microseconds::rep>(
         static_cast<double>(hard.m_block_max) / hard.m_rate * 1e6 * hard.m_wait_ratio));
 
-    build_plans(handler, model, derived, hard);
     build_report(handler, model, snapshot);
     log_report(handler, model);
 
@@ -1063,16 +1073,18 @@ anira_status ANIRA_CALL anira_handler_set_plan(anira_handler* handler,
         rt_refuse(*handler, ANIRA_ERROR_CONFIG, __func__);
         return ANIRA_ERROR_CONFIG;
     }
-    // Two relaxed stores; m_plans is rebuilt by prepare only, which no other entry overlaps.
-    handler->m_plan.store(plan, std::memory_order_relaxed);
-    handler->m_manager->set_backend(handler->m_plans[plan].m_backend);
+    // One relaxed store of the dense index, so concurrent callers cannot tear a pair:
+    // get_plan loads the same atomic back. The session's table is m_plans, so the range check
+    // above is the session's too. The chunk that is already submitted keeps the plan it was
+    // stamped with.
+    static_cast<void>(handler->m_manager->set_plan(plan));
     return ANIRA_OK;
 }
 
 uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handler)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr || !handler->m_prepared.load(std::memory_order_acquire)) { return 0U; }
-    return handler->m_plan.load(std::memory_order_relaxed);
+    return handler->m_manager->get_plan();
 }
 
 // ==== the Hard entries, float32 ===============================================================

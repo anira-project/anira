@@ -295,10 +295,44 @@ public:
         const size_t* num_output_samples) const noexcept;
 
     /**
+     * @brief Replaces the session's plan table (SessionElement::m_plan_backends) and selects
+     * plan 0: one backend per plan, in dense-index order.
+     *
+     * What a 3.x handler calls with exactly its plans, after construction and before
+     * prepare(): only while no chunk of the session exists. A 2.x session keeps the table
+     * Core::create_session built.
+     *
+     * @throws std::invalid_argument for an empty table
+     */
+    void set_plan_backends(std::vector<InferenceBackend> backends);
+
+    /**
+     * @brief Selects the plan the next submitted chunk runs on
+     *
+     * The whole runtime selection: one relaxed store of one atomic (the dense plan index),
+     * wait-free and callable from any thread; nothing is reinitialized, every plan was
+     * loaded when the session was created. The index and not the backend is what is stored,
+     * so two plans on one backend stay distinct. The switch applies from the next submitted
+     * chunk on: a chunk is stamped with the index at submission (Core::pre_process) and its
+     * pre_process, before_inference, engine call, after_inference and post_process all run
+     * under that stamp, so a chunk that is queued or in flight when the switch lands
+     * finishes on the plan it started on.
+     *
+     * @param plan A dense index into the plan table
+     * @return False, and the selection unchanged, for an index out of range
+     */
+    bool set_plan(uint32_t plan) noexcept;
+
+    /// The plan selected last: one relaxed load of the value set_plan() stores.
+    uint32_t get_plan() const noexcept;
+
+    /**
      * @brief Sets the inference backend to use for neural network processing
      *
-     * Changes the active inference backend, which may trigger session reinitialization
-     * if the new backend differs from the current one.
+     * The 2.x selection by backend, over the plan table: set_plan() of the first plan that
+     * runs on the backend, with everything set_plan() says. A backend no plan of the session
+     * runs on leaves the selection unchanged and is logged once through the real-time queue
+     * (RtSite::BackendWithoutPlan); a 2.x session has a plan for every backend of the build.
      *
      * @param new_inference_backend The backend type to use (ONNX, LibTorch, TensorFlow Lite, or
      * Custom)
@@ -308,7 +342,7 @@ public:
     /**
      * @brief Gets the currently active inference backend
      *
-     * @return The currently configured inference backend type
+     * @return The backend the selected plan runs on
      */
     InferenceBackend get_backend() const;
 
