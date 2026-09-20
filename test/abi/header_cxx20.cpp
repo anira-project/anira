@@ -7,13 +7,16 @@
 // it, so the include-cleaner check is off for the file.
 // NOLINTBEGIN(misc-include-cleaner)
 #include <anira/anira.hpp>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -56,6 +59,31 @@ static_assert(std::is_aggregate_v<anira::Hard>);
 static_assert(std::is_aggregate_v<anira::Async>);
 static_assert(std::is_aggregate_v<anira::JobOptions>);
 static_assert(std::is_same_v<anira::Contract, std::variant<anira::Hard, anira::Async>>);
+
+// The runtime tensor and its token are the C structs with names on them: same size, no member
+// added, trivially copyable, so a Tensor* is an anira_tensor*. The field fills and the reads
+// are noexcept; only from_dlpack and SyncToken::dup can fail, and they throw.
+static_assert(std::is_base_of_v<anira_tensor, anira::Tensor>);
+static_assert(sizeof(anira::Tensor) == sizeof(anira_tensor) &&
+              std::is_trivially_copyable_v<anira::Tensor> &&
+              std::is_standard_layout_v<anira::Tensor>);
+static_assert(std::is_base_of_v<anira_sync_token, anira::SyncToken>);
+static_assert(sizeof(anira::SyncToken) == sizeof(anira_sync_token) &&
+              std::is_trivially_copyable_v<anira::SyncToken>);
+static_assert(
+    noexcept(anira::Tensor::from_host(nullptr, ANIRA_DTYPE_F32, std::span<const int64_t>{})));
+static_assert(noexcept(anira::Tensor::from_host_planar<float>(std::span<float* const>{},
+                                                              std::span<const int64_t>{})));
+static_assert(!noexcept(anira::Tensor::from_dlpack(nullptr)));
+static_assert(noexcept(std::declval<const anira::Tensor&>().plane<const float>(0)));
+static_assert(anira::detail::dtype_of<const int16_t>() == ANIRA_DTYPE_I16 &&
+              anira::detail::dtype_of<bool>() == ANIRA_DTYPE_BOOL8);
+static_assert(noexcept(std::declval<const anira::Tensor&>().data_f32()) &&
+              noexcept(std::declval<const anira::Tensor&>().data(ANIRA_DTYPE_F32)) &&
+              noexcept(std::declval<const anira::Tensor&>().num_elements()) &&
+              noexcept(std::declval<const anira::Tensor&>().extent(0)));
+static_assert(noexcept(std::declval<anira::SyncToken&>().reset()) &&
+              !noexcept(std::declval<const anira::SyncToken&>().dup()));
 
 // Every failure is an anira::Error, which a host catches as a std::exception.
 static_assert(std::is_base_of_v<std::runtime_error, anira::Error>);
@@ -117,6 +145,29 @@ int anira_header_cxx20_probe() {
         checks += anira::now_ms() > 0.0 ? 1 : 0;
         checks += anira::shutdown() == ANIRA_OK ? 1 : 0;
         checks += anira::has_core() || anira::release_core_if_idle() ? 1 : 0;
+        // The runtime tensor: every factory of anira/abi/tensor.h, the reads, the token.
+        std::array<float, 4> samples{};
+        const std::array<int64_t, 1> shape{4};
+        anira::SyncToken fence{};
+        anira::Tensor tensor = anira::Tensor::from_host(samples.data(), ANIRA_DTYPE_F32, shape);
+        const anira_tensor* const record = &tensor;
+        const std::size_t elements = tensor.num_elements() + tensor.extent(0) + record->ndim;
+        checks += elements > 0 && tensor.data_f32() != nullptr ? 1 : 0;
+        checks += tensor.data(ANIRA_DTYPE_I16) == nullptr ? 1 : 0;
+        const std::array<float*, 1> planes{samples.data()};
+        const std::array<int64_t, 2> block{1, 4};
+        tensor = anira::Tensor::from_host_planar<float>(planes, block);
+        checks += tensor.plane<float>(0) == samples.data() ? 1 : 0;
+        tensor = anira::Tensor::from_pinned(samples.data(), ANIRA_DTYPE_F32, shape);
+        tensor = anira::Tensor::from_cuda(nullptr, 0, nullptr, ANIRA_DTYPE_F32, shape);
+        tensor = anira::Tensor::from_gl_buffer(0, 0, nullptr, ANIRA_DTYPE_F32, shape);
+        tensor = anira::Tensor::from_vulkan(0, 0, 0, 0, 0, ANIRA_DTYPE_F32, shape);
+        tensor = anira::Tensor::from_opaque_fd(-1, 0, ANIRA_DTYPE_F32, shape);
+        tensor = anira::Tensor::from_wgpu_buffer(nullptr, 0, &fence, ANIRA_DTYPE_F32, shape);
+        tensor = anira::Tensor::from_dmabuf(-1, 0, 0, -1, ANIRA_DTYPE_F32, shape);
+        tensor = anira::Tensor::from_dlpack(nullptr);
+        fence = fence.dup();
+        fence.reset();
     }
     return checks;
 }

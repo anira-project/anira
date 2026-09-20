@@ -6,6 +6,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -18,7 +19,9 @@
 #include <fstream>
 #include <functional>
 #include <ios>
+#include <limits>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -29,6 +32,7 @@
 
 #include "capi/ext_registry.h"
 #include "capi/handles.h"
+#include "dlpack_producer.h"
 #include "fixtures.h"
 #include "handler_support.h"
 
@@ -38,6 +42,8 @@ using anira::ContextConfig;
 using anira::ContractHandle;
 using anira::JobOptionsHandle;
 using anira::ModelConfig;
+using anira::SyncToken;
+using anira::Tensor;
 using anira::TensorSpec;
 
 /// What a body threw: the status and the text of the anira::Error, or m_thrown == false.
@@ -833,4 +839,162 @@ TEST(AbiCxx, PlanReportRoundTripsOverAPreparedHandler) {
         << null_report.m_what;
 
     anira_handler_destroy(h);
+}
+
+// ---- runtime tensors -------------------------------------------------------------------------
+
+TEST(AbiCxx, TensorIsTheCStructWithFactoriesOnIt) {
+    std::array<float, 6> data{};
+    const std::array<int64_t, 2> shape{2, 3};
+    const Tensor tensor = Tensor::from_host(data.data(), ANIRA_DTYPE_F32, shape);
+    const anira_tensor* const record = &tensor;  // a Tensor* is an anira_tensor*
+    EXPECT_EQ(static_cast<const void*>(record), static_cast<const void*>(&tensor));
+    EXPECT_EQ(record->domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+    EXPECT_EQ(record->dtype, ANIRA_DTYPE_F32);
+    EXPECT_EQ(record->ndim, 2U);
+    EXPECT_EQ(record->shape[1], 3);
+    EXPECT_EQ(record->release, nullptr);
+    EXPECT_EQ(tensor.data_f32(), data.data());
+    EXPECT_EQ(tensor.data(ANIRA_DTYPE_F32), data.data());
+    EXPECT_EQ(tensor.data(ANIRA_DTYPE_I16), nullptr);
+    EXPECT_EQ(tensor.num_elements(), 6U);
+    EXPECT_EQ(tensor.extent(1), 3U);
+    EXPECT_EQ(tensor.extent(2), 0U);
+    EXPECT_EQ(anira_tensor_num_elements(&tensor), 6U) << "and the C entries take it as it is";
+
+    const Tensor scalar = Tensor::from_host(data.data(), ANIRA_DTYPE_F32, {});
+    EXPECT_EQ(scalar.ndim, 0U);
+    EXPECT_EQ(scalar.num_elements(), 1U);
+
+    // More extents than ANIRA_MAX_RANK: refused like the C entry (the all-zero record), never
+    // truncated into a legal rank.
+    const std::array<int64_t, 9> nine{1, 1, 1, 1, 1, 1, 1, 1, 1};
+    const Tensor refused = Tensor::from_host(data.data(), ANIRA_DTYPE_F32, nine);
+    EXPECT_EQ(refused.dtype, 0U);
+    EXPECT_EQ(refused.ndim, 0U);
+    EXPECT_EQ(refused.data_f32(), nullptr);
+}
+
+TEST(AbiCxx, TensorFactoriesNameTheirDomainAndFence) {
+    std::array<float, 6> data{};
+    const std::array<int64_t, 2> shape{2, 3};
+    int event = 0;
+    const auto domain_of = [](const Tensor& tensor) { return tensor.domain; };
+    const auto domain = [](anira_domain value) { return static_cast<uint32_t>(value); };
+    const auto kind = [](anira_sync_kind value) { return static_cast<uint32_t>(value); };
+    EXPECT_EQ(domain_of(Tensor::from_pinned(data.data(), ANIRA_DTYPE_F32, shape)),
+              domain(ANIRA_DOMAIN_HOST_PINNED));
+    const Tensor cuda = Tensor::from_cuda(data.data(), 1, &event, ANIRA_DTYPE_F32, shape);
+    EXPECT_EQ(cuda.domain, domain(ANIRA_DOMAIN_CUDA));
+    EXPECT_EQ(cuda.handle.cuda.device, 1);
+    EXPECT_EQ(cuda.acquire.kind, kind(ANIRA_SYNC_CUDA_EVENT));
+    EXPECT_EQ(cuda.data_f32(), nullptr) << "a device tensor has no host pointer";
+    EXPECT_EQ(cuda.num_elements(), 6U);
+    const Tensor gl = Tensor::from_gl_buffer(7, 0x90D2, nullptr, ANIRA_DTYPE_F32, shape);
+    EXPECT_EQ(gl.domain, domain(ANIRA_DOMAIN_GL_BUFFER));
+    EXPECT_EQ(gl.handle.gl.id, 7U);
+    EXPECT_EQ(gl.acquire.kind, kind(ANIRA_SYNC_NONE));
+    const Tensor vulkan = Tensor::from_vulkan(1, 2, 3, 4, 5, ANIRA_DTYPE_F32, shape);
+    EXPECT_EQ(vulkan.domain, domain(ANIRA_DOMAIN_VULKAN_BUFFER));
+    EXPECT_EQ(vulkan.handle.vk.offset, 3U);
+    EXPECT_EQ(vulkan.acquire.kind, kind(ANIRA_SYNC_VK_TIMELINE));
+    EXPECT_EQ(vulkan.acquire.u.vk.value, 5U);
+    const Tensor opaque = Tensor::from_opaque_fd(5, 4096, ANIRA_DTYPE_F32, shape);
+    EXPECT_EQ(opaque.domain, domain(ANIRA_DOMAIN_OPAQUE_FD));
+    EXPECT_EQ(opaque.handle.opaque.size, 4096U);
+    SyncToken fence{};
+    fence.kind = kind(ANIRA_SYNC_QUEUE_ORDERED);
+    const Tensor wgpu = Tensor::from_wgpu_buffer(&event, 64, &fence, ANIRA_DTYPE_F32, shape);
+    EXPECT_EQ(wgpu.domain, domain(ANIRA_DOMAIN_WGPU_BUFFER));
+    EXPECT_EQ(wgpu.handle.wgpu.offset, 64U);
+    EXPECT_EQ(wgpu.acquire.kind, kind(ANIRA_SYNC_QUEUE_ORDERED));
+    const Tensor dmabuf = Tensor::from_dmabuf(5, 4096, 512, -1, ANIRA_DTYPE_F32, shape);
+    EXPECT_EQ(dmabuf.domain, domain(ANIRA_DOMAIN_DMABUF));
+    EXPECT_EQ(dmabuf.handle.dmabuf.offset, 512U);
+    EXPECT_EQ(dmabuf.acquire.kind, kind(ANIRA_SYNC_NONE));
+}
+
+TEST(AbiCxx, TensorFromHostPlanarIsTypedByItsElement) {
+    std::array<float, 3> left{};
+    std::array<float, 3> right{};
+    const std::array<int64_t, 2> shape{2, 3};
+    std::array<float*, 2> channels{left.data(), right.data()};
+    const Tensor planar = Tensor::from_host_planar<float>(channels, shape);
+    EXPECT_EQ(planar.dtype, ANIRA_DTYPE_F32) << "the element type names the dtype";
+    EXPECT_EQ(planar.flags, static_cast<uint32_t>(ANIRA_TENSOR_PLANAR));
+    EXPECT_EQ(planar.handle.planes.count, 2U);
+    EXPECT_EQ(planar.plane<float>(0), left.data());
+    EXPECT_EQ(planar.plane<float>(1), right.data());
+    EXPECT_EQ(planar.plane<float>(2), nullptr);
+    EXPECT_EQ(planar.plane<int16_t>(0), nullptr) << "another dtype";
+    EXPECT_EQ(planar.data_f32(), nullptr) << "a planar tensor is never one block";
+    EXPECT_EQ(planar.num_elements(), 6U);
+
+    // Read-only planes: a const element type sets ANIRA_TENSOR_READ_ONLY.
+    const std::array<const float*, 2> read{left.data(), right.data()};
+    const Tensor readable = Tensor::from_host_planar<const float>(read, shape);
+    EXPECT_EQ(
+        readable.flags,
+        static_cast<uint32_t>(ANIRA_TENSOR_PLANAR) | static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY));
+    EXPECT_EQ(readable.plane<const float>(1), right.data());
+
+    // One pointer per plane: a span of another size than shape[0] is refused like the C entry.
+    const std::array<int64_t, 2> three{3, 3};
+    const Tensor refused = Tensor::from_host_planar<float>(channels, three);
+    EXPECT_EQ(refused.dtype, 0U);
+    EXPECT_EQ(refused.flags, 0U);
+    EXPECT_EQ(refused.num_elements(), 0U);
+}
+
+TEST(AbiCxx, TensorFromDlpackThrowsErrorWithTheStatus) {
+    anira_test::DlpackProducer producer;
+    producer.m_managed.dl_tensor.device.device_type = anira_test::kDLCUDA;
+    const Thrown device =
+        thrown_by([&] { static_cast<void>(Tensor::from_dlpack(&producer.m_managed)); });
+    EXPECT_TRUE(device.m_thrown);
+    EXPECT_EQ(device.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+    EXPECT_NE(device.m_what.find("dlpack: device type 2"), std::string::npos) << device.m_what;
+    EXPECT_EQ(producer.m_deleted, 0) << "the caller keeps a managed tensor anira refused";
+
+    const Thrown null = thrown_by([] { static_cast<void>(Tensor::from_dlpack(nullptr)); });
+    EXPECT_TRUE(null.m_thrown);
+    EXPECT_EQ(null.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(null.m_what.find("dlpack: NULL managed tensor"), std::string::npos) << null.m_what;
+
+    producer.m_managed.dl_tensor.device.device_type = anira_test::kDLCPU;
+    Tensor tensor = Tensor::from_dlpack(&producer.m_managed);
+    EXPECT_EQ(tensor.data_f32(), producer.m_data.data());
+    EXPECT_EQ(tensor.num_elements(), 6U);
+    EXPECT_EQ(tensor.strides[0], 3);
+    ASSERT_NE(tensor.release, nullptr);
+    EXPECT_EQ(producer.m_deleted, 0);
+    tensor.release(&tensor);  // the holder of the record releases it: once
+    EXPECT_EQ(producer.m_deleted, 1);
+    EXPECT_EQ(tensor.release, nullptr);
+}
+
+TEST(AbiCxx, SyncTokenResetsAndDups) {
+    int event = 0;
+    SyncToken token{};
+    EXPECT_EQ(token.kind, static_cast<uint32_t>(ANIRA_SYNC_NONE)) << "value-initialised: zero";
+    token.kind = static_cast<uint32_t>(ANIRA_SYNC_CUDA_EVENT);
+    token.u.cuda_event = &event;
+    const SyncToken copy = token.dup();  // a non-owning kind: a plain copy
+    EXPECT_EQ(copy.kind, static_cast<uint32_t>(ANIRA_SYNC_CUDA_EVENT));
+    EXPECT_EQ(copy.u.cuda_event, &event);
+    const anira_sync_token* const record = &token;  // a SyncToken* is an anira_sync_token*
+    EXPECT_EQ(record->u.cuda_event, &event);
+    token.reset();
+    EXPECT_EQ(token.kind, static_cast<uint32_t>(ANIRA_SYNC_NONE));
+    EXPECT_EQ(token.u.cuda_event, nullptr);
+
+    // An owning kind whose fd cannot be duplicated: dup() throws with the entry's status. The
+    // token is left alone afterwards (a reset would close a descriptor it never owned).
+    SyncToken broken{};
+    broken.kind = static_cast<uint32_t>(ANIRA_SYNC_SYNC_FILE_FD);
+    broken.u.fd = std::numeric_limits<int32_t>::max();
+    const Thrown refused = thrown_by([&] { static_cast<void>(broken.dup()); });
+    EXPECT_TRUE(refused.m_thrown);
+    EXPECT_EQ(refused.m_status, ANIRA_ERROR_INVALID_ARGUMENT) << "not an open descriptor";
+    EXPECT_NE(refused.m_what.find("anira_sync_token_dup"), std::string::npos) << refused.m_what;
 }
