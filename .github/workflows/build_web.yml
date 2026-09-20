@@ -42,7 +42,7 @@ jobs:
           tsc --version
 
       - name: build wasm
-        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.10
+        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.14
         with:
           PRESET: wasm-release
 
