@@ -651,7 +651,21 @@ convention of 3.1 (``out == NULL`` asks for the count, a short buffer returns
 provider, the custom engine's id, the budget of that plan), and per plan the
 ``anira_plan_slot`` rows of its inputs and outputs (host rows in this pre-release: host to
 host, zero-copy, recipe ``"host"``, the wait strategy the core runs) and the
-``anira_plan_ext`` rows of the extensions it consumes. A plan is a dense index
+``anira_plan_ext`` rows of the extensions it consumes. Every successful prepare also logs the
+report as Info records of the group ``anira.capi`` (set the context's log level to
+``ANIRA_LOG_INFO`` or ``ANIRA_LOG_DEBUG`` to see them): a head line with the counts and the
+selected plan, then one record per plan, per slot and per consumed extension:
+
+.. code-block:: text
+
+    anira_handler_prepare: plan report: plans 2, input slots 1, output slots 1, selected plan 0
+    anira_handler_prepare: plan 0: variant 0, engine libtorch, provider default, budget 5.000 ms
+    anira_handler_prepare: plan 0: input 0 'audio_in': host -> host, edge zero_copy (allocate zero_copy), wait spin_backoff, recipe host
+    anira_handler_prepare: plan 0: output 0 'audio_out': host -> host, edge zero_copy (allocate zero_copy), wait spin_backoff, recipe host
+    anira_handler_prepare: plan 1: variant 0, engine onnxruntime, provider default, budget 5.000 ms
+    ...
+
+A plan is a dense index
 ``0..num_plans-1``, and ``anira_handler_set_plan(h, plan)`` / ``anira_handler_get_plan(h)`` are
 the whole runtime selection: one relaxed store, effective at the next block, callable from
 any thread but not while ``prepare`` runs; an index out of range is a no-op recorded as

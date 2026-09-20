@@ -564,6 +564,128 @@ void build_report(anira_handler& handler,
     }
 }
 
+#ifdef ENABLE_LOGGING
+// The words of the plan report's log lines: the JSON vocabulary where one exists (the
+// provider suffixes of anira_provider, json.cpp's k_waits), the enumerator's own word else.
+const char* provider_word(uint32_t provider) {
+    switch (provider) {
+        case ANIRA_PROVIDER_DEFAULT: return "default";
+        case ANIRA_PROVIDER_CUDA: return "cuda";
+        case ANIRA_PROVIDER_WEBGPU: return "webgpu";
+        case ANIRA_PROVIDER_DIRECTML: return "directml";
+        case ANIRA_PROVIDER_COREML: return "coreml";
+        case ANIRA_PROVIDER_XNNPACK: return "xnnpack";
+        case ANIRA_PROVIDER_VULKAN: return "vulkan";
+        default: return "unknown";
+    }
+}
+
+const char* domain_word(uint32_t domain) {
+    switch (domain) {
+        case ANIRA_DOMAIN_HOST: return "host";
+        case ANIRA_DOMAIN_HOST_PINNED: return "host_pinned";
+        case ANIRA_DOMAIN_CUDA: return "cuda";
+        case ANIRA_DOMAIN_GL_BUFFER: return "gl_buffer";
+        case ANIRA_DOMAIN_VULKAN_BUFFER: return "vulkan_buffer";
+        case ANIRA_DOMAIN_OPAQUE_FD: return "opaque_fd";
+        case ANIRA_DOMAIN_METAL_BUFFER: return "metal_buffer";
+        case ANIRA_DOMAIN_WGPU_BUFFER: return "wgpu_buffer";
+        case ANIRA_DOMAIN_DMABUF: return "dmabuf";
+        case ANIRA_DOMAIN_IOSURFACE: return "iosurface";
+        case ANIRA_DOMAIN_AHARDWAREBUFFER: return "ahardwarebuffer";
+        case ANIRA_DOMAIN_D3D12: return "d3d12";
+        case ANIRA_DOMAIN_FRAME: return "frame";
+        default: return "unknown";
+    }
+}
+
+const char* edge_class_word(uint32_t edge_class) {
+    switch (edge_class) {
+        case ANIRA_EDGE_ZERO_COPY: return "zero_copy";
+        case ANIRA_EDGE_DEVICE_COPY: return "device_copy";
+        case ANIRA_EDGE_HOST_COPY: return "host_copy";
+        case ANIRA_EDGE_UNAVAILABLE: return "unavailable";
+        default: return "unknown";
+    }
+}
+
+const char* wait_strategy_word(uint32_t wait) {
+    return wait == ANIRA_WAIT_BLOCKING ? "blocking" : "spin_backoff";
+}
+
+// One Info record per slot row: the tensor's canonical name beside its index, the edge and
+// how a completion on it is waited for; the reason only when the row carries one.
+void log_slots(uint32_t plan,
+               const std::vector<anira_plan_slot>& slots,
+               const std::vector<anira_tensor_spec>& specs,
+               const char* side) {
+    for (const anira_plan_slot& slot : slots) {
+        const char* name = slot.slot < specs.size() ? specs[slot.slot].m_name.c_str() : "";
+        ANIRA_LOG_INFO(anira::log_group::k_capi,
+                       "anira_handler_prepare: plan %u: %s %u '%s': %s -> %s, edge %s (allocate "
+                       "%s), wait %s, recipe %s%s%s",
+                       plan,
+                       side,
+                       slot.slot,
+                       name,
+                       domain_word(slot.domain_in),
+                       domain_word(slot.domain_out),
+                       edge_class_word(slot.edge_class),
+                       edge_class_word(slot.allocate_class),
+                       wait_strategy_word(slot.wait_strategy),
+                       slot.recipe != nullptr ? slot.recipe : "none",
+                       slot.reason != nullptr ? ", reason: " : "",
+                       slot.reason != nullptr ? slot.reason : "");
+    }
+}
+#endif
+
+// The plan report as Info records of the group anira.capi, on the control thread at the end
+// of a successful prepare: a head line (the counts and the selected plan), then per plan its
+// row, its slot rows and the extensions it consumes. One record per row, since a record
+// holds 255 characters. Nothing is logged under a runtime level above Info, and nothing is
+// compiled under ANIRA_WITH_LOGGING=OFF.
+void log_report(const anira_handler& handler, const anira_model_config& model) {
+#ifdef ENABLE_LOGGING
+    const anira_plan_report& report = handler.m_report;
+    const auto num_plans = static_cast<uint32_t>(report.m_plans.size());
+    ANIRA_LOG_INFO(anira::log_group::k_capi,
+                   "anira_handler_prepare: plan report: plans %u, input slots %u, output slots %u, "
+                   "selected plan %u",
+                   num_plans,
+                   handler.m_num_inputs,
+                   handler.m_num_outputs,
+                   handler.m_plan.load(std::memory_order_relaxed));
+    for (uint32_t i = 0; i < num_plans; ++i) {
+        const anira_plan_info& info = report.m_plans[i];
+        const std::string engine =
+            anira::capi::engine_label(model.m_models[handler.m_plans[i].m_row]);
+        ANIRA_LOG_INFO(anira::log_group::k_capi,
+                       "anira_handler_prepare: plan %u: variant %u, engine %s, provider %s, "
+                       "budget %.3f ms",
+                       i,
+                       info.variant,
+                       engine.c_str(),
+                       provider_word(info.provider),
+                       info.budget_ms);
+        log_slots(i, report.m_inputs[i], model.m_inputs, "input");
+        log_slots(i, report.m_outputs[i], model.m_outputs, "output");
+        for (const anira_plan_ext& ext : report.m_exts[i]) {
+            ANIRA_LOG_INFO(anira::log_group::k_capi,
+                           "anira_handler_prepare: plan %u: ext %u: %s, kind %s, consumer %s",
+                           i,
+                           ext.index,
+                           ext.host,
+                           ext.kind,
+                           ext.consumer);
+        }
+    }
+#else
+    static_cast<void>(handler);
+    static_cast<void>(model);
+#endif
+}
+
 // anira_handler_prepare's body, step by step; any throw leaves through the caller, which
 // unprepares the handler.
 void prepare_handler(anira_handler& handler, const anira_contract& contract) {
@@ -621,6 +743,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
 
     build_plans(handler, model, derived, hard);
     build_report(handler, model, snapshot);
+    log_report(handler, model);
 
     handler.m_contract = std::move(snapshot);
     handler.m_host_config = host;

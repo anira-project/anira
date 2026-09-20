@@ -42,11 +42,13 @@ using anira::ModelConfig;
 using anira::TensorSpec;
 using anira_test::attach_processor;
 using anira_test::Context;
+using anira_test::count_records;
 using anira_test::custom_candidates;
 using anira_test::DestroyFirst;
 using anira_test::expect_all;
 using anira_test::expect_same_block;
 using anira_test::explicit_contract;
+using anira_test::find_record;
 using anira_test::gain_with_custom;
 using anira_test::GateBackend;
 using anira_test::generator_model;
@@ -711,6 +713,59 @@ TEST(AbiPrepare, ASecondPrepareReplacesTheSessionWhole) {
         EXPECT_EQ(delivered, 256U);
     }
     wait_for_available(h, latency);
+}
+
+TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
+    // Info passes the process-global level; the records are synchronous ("native"), one per
+    // row of the report.
+    const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_INFO);
+    RecordCollector collector;
+    const ModelConfig model = gain_with_custom();
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    Handler handler(context, model, candidates);
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    const anira_handler* h = handler.m_handler;
+    const uint32_t num_plans = anira_plan_report_num_plans(anira_handler_plan_report(h));
+    ASSERT_GE(num_plans, 1U);
+
+    const std::string head = "plan report: plans " + std::to_string(num_plans) +
+                             ", input slots 2, output slots 2, selected plan " +
+                             std::to_string(anira_handler_get_plan(h));
+    EXPECT_EQ(count_records(collector, head.c_str(), "native"), 1U);
+    EXPECT_EQ(find_record(collector, head.c_str(), "native").m_level,
+              static_cast<uint32_t>(ANIRA_LOG_INFO));
+    EXPECT_EQ(find_record(collector, head.c_str(), "native").m_group, "anira.capi");
+    for (uint32_t i = 0; i < num_plans; ++i) {
+        const std::string plan = "plan " + std::to_string(i) + ": ";
+        EXPECT_EQ(count_records(collector, (plan + "variant 0, engine ").c_str(), "native"), 1U);
+        const std::string row =
+            "': host -> host, edge zero_copy (allocate zero_copy), wait "
+            "spin_backoff, recipe host";
+        for (const char* slot :
+             {"input 0 'audio_in", "input 1 'gain", "output 0 'audio_out", "output 1 'gain_out"}) {
+            EXPECT_EQ(count_records(collector, (plan + slot + row).c_str(), "native"), 1U)
+                << plan << slot;
+        }
+    }
+    // The custom row is the selected plan of gain_with_custom(), under the contract's budget.
+    const std::string custom = "plan " + std::to_string(anira_handler_get_plan(h)) +
+                               ": variant 0, engine " + k_custom +
+                               ", provider default, budget 5.000 ms";
+    EXPECT_EQ(count_records(collector, custom.c_str(), "native"), 1U);
+
+    // A second prepare logs the new report again.
+    ASSERT_EQ(handler.prepare(explicit_contract(256)), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(count_records(collector, "anira_handler_prepare: plan report: ", "native"), 2U);
+}
+
+TEST(AbiPrepare, ThePlanReportIsNotLoggedUnderAnErrorLevel) {
+    const Context context;  // ANIRA_LOG_ERROR
+    RecordCollector collector;
+    const ModelConfig model = gain_with_custom();
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    Handler handler(context, model, candidates);
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(count_records(collector, "anira_handler_prepare: plan", "native"), 0U);
 }
 
 TEST(AbiPrepare, AFailedPrepareLeavesTheHandlerUnprepared) {

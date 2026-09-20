@@ -252,8 +252,10 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * contract's extensions), loads the model of every candidate with an entry, warms up as
  * the contract says, sizes the rings for the contract's block range and the latency,
  * builds the plan report, selects the plan of the variant's default engine when that
- * engine has a plan (else plan 0) and re-arms the real-time latches, logging the count
- * of failures suppressed since the last prepare or reset. A second prepare replaces the
+ * engine has a plan (else plan 0), logs the report (Info records of the group
+ * anira.capi: the counts and the selected plan, then one record per plan, per slot and
+ * per consumed extension) and re-arms the real-time latches, logging the count of
+ * failures suppressed since the last prepare or reset. A second prepare replaces the
  * previous session whole. A failed prepare leaves the handler unprepared. Refused in
  * this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
  * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED
