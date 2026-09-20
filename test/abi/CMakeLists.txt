@@ -151,6 +151,12 @@ else()
     anira_abi_build_test(anira_header_cxx20)
 endif()
 anira_abi_consumer_target(anira_header_cxx20 CXX 20)
+if(NOT _abi_strict_flags MATCHES "/W4")
+    # MSVC's /W4 refuses a parameter that hides a member (C4458), inherited ones included:
+    # Tensor and SyncToken derive from the C records. -Wshadow is the same check in gcc and
+    # clang, so the wrapper cannot pass here and fail on the Windows leg.
+    target_compile_options(anira_header_cxx20 PRIVATE -Wshadow)
+endif()
 
 # ---- gate 6 (seed): the real-time contract in a consumer's compiler -------------------------
 # test_rt_contract.c is one ANIRA_NONBLOCKING function calling every [callback-safe] entry of
