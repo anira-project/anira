@@ -7,9 +7,20 @@
 #
 # Shape: `headers` is an ordered list; each header lists its `entities` in the order
 # they appear in the file. Entity kinds: verbatim, typedef, define, enum, handles,
-# struct, callback, function. Every enum value is an explicit integer (hex strings
+# struct, union, callback, function. Every enum value is an explicit integer (hex strings
 # keep their spelling), every function carries a thread tag from the vocabulary and
 # a `status` (promised | draft) plus the ABI pair it appeared in (`since`).
+#
+# A struct field or a union arm has exactly one shape: `type` (a C type; in a Tier-1 record
+# a fixed-width scalar or an earlier Tier-1 record; with an optional `array`), `ptr` (an
+# ANIRA_PTR slot), `fields` (a named member of an unnamed struct type; arms only) or `arms`
+# (a named member of an unnamed union type; fields of a Tier-1 struct only). `struct_id`
+# links a record to its anira_struct_id constant (anira_sizeof), `forward: true` pre-declares
+# a struct ahead of the first entity that names it, `function_type: true` makes a callback a
+# function type (for ANIRA_PTR slots), `padding_free: true` on a Tier-2 struct asserts in
+# test_layout.c that the record has no implicit padding on any target (a descriptor a setter
+# copies within struct_size), and a header with `draft: true` lives under draft/ and holds
+# status: draft functions only.
 #
 # Content transcribed from the architecture document's C blocks; where the document
 # left a value implicit (the Tier-1 struct ids 4..6) the choice is stated in the doc
@@ -168,6 +179,7 @@ headers:
       - kind: struct
         name: anira_error
         tier: 1
+        struct_id: ANIRA_STRUCT_ERROR
         size: 520
         align: 4
         doc: "Caller-owned error record, filled by the callee on failure: the status and a NUL-terminated message. Tier 1: 520 bytes, frozen; identical on every target, so anira::Result<T> value-initialises it and TypeScript allocates it with anira_sizeof(ANIRA_STRUCT_ERROR)."
@@ -743,6 +755,7 @@ headers:
       - kind: struct
         name: anira_log_record
         tier: 1
+        struct_id: ANIRA_STRUCT_LOG_RECORD
         size: 56
         align: 8
         doc: "One delivered log record, valid for the duration of the callback. Tier 1: 56 bytes, frozen; a projection of the private logger's record."
@@ -1937,6 +1950,7 @@ headers:
       - kind: struct
         name: anira_backend_id
         tier: 2
+        struct_id: ANIRA_STRUCT_BACKEND_ID
         doc: "A backend, where the pair must travel as one item: an engine on a provider. Tier 2, struct_size first; enumerated at the caller's stride. engine_id is NULL for a built-in engine and the registered name for a custom one (a later pre-release)."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_backend_id) of the caller's header."}
@@ -1950,6 +1964,7 @@ headers:
       - kind: struct
         name: anira_edge_info
         tier: 2
+        struct_id: ANIRA_STRUCT_EDGE_INFO
         doc: "One row of the edge registry: whether a tensor in domain from_domain can reach the backend (to_engine, to_provider), how (edge_class), how sure the probe is (rung), and why not (reason). Valid for the duration of the enumerating call."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_edge_info) of the caller's header."}
@@ -2309,6 +2324,7 @@ headers:
       - kind: struct
         name: anira_plan_slot
         tier: 2
+        struct_id: ANIRA_STRUCT_PLAN_SLOT
         doc: "One tensor slot of one plan: the edge the plan takes for it, its cost class, the class an allocate_* handle would have gotten, how a completion on that edge is waited for, and why. Tier 2, struct_size first; enumerated by anira_plan_report_slots at the caller's stride. In this pre-release every slot is a host slot: ANIRA_DOMAIN_HOST on both sides, ANIRA_EDGE_ZERO_COPY, recipe \"host\", no reason."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_plan_slot) of the caller's header."}
@@ -2329,6 +2345,7 @@ headers:
       - kind: struct
         name: anira_plan_ext
         tier: 2
+        struct_id: ANIRA_STRUCT_PLAN_EXT
         doc: "One extension a plan consumes: where it sits (the host and the tensor or entry it is attached to), its kind and the stage or adapter that takes it (\"entry -> LibTorchAdapter\"). Tier 2, struct_size first; enumerated by anira_plan_report_exts at the caller's stride. The strings are valid while the report is."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_plan_ext) of the caller's header."}
@@ -2344,6 +2361,7 @@ headers:
       - kind: struct
         name: anira_plan_info
         tier: 2
+        struct_id: ANIRA_STRUCT_PLAN_INFO
         doc: "One plan of the report, addressed by its dense index: the variant it runs, the backend it runs on and its budget. Tier 2, struct_size first; enumerated by anira_plan_report_plans at the caller's stride. budget_ms is the budget of this one plan (in this pre-release the contract's explicit figure); the Hard promise is the worst case across every plan."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_plan_info) of the caller's header."}
