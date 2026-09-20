@@ -9,18 +9,12 @@ write, what a message contains, where the records go on each platform, and what 
 promises about exceptions.
 
 .. note::
-    The 3.x runtime (the :cpp:class:`anira::InferenceHandler` over the context config) is not
-    part of this pre-release, so parts of this page describe the contract before the code that
-    honours it is in the tree. What exists today: the statuses and ``anira_error`` of
-    ``anira/abi/status.h``, ``anira::Error`` of ``anira/anira.hpp``, the exception firewall of
-    the C entries, the log block of the context config (``anira/abi/log.h``), the real-time log
-    queue with its drain thread and ``anira_drain_log``, and the platform sink. Marked below as
-    arriving with the 3.x runtime: ``anira_handler_rt_error``, the per-handler latch and the
-    drain-thread summary. The ``anira_log_fn`` sink, the ``ANIRA_LOG_FLAG_*`` switches and
-    the ``anira_log_record`` projection are in effect from the context
-    (``anira_context_create``, :doc:`usage` section 3.1) on. The 2.x runtime of :doc:`usage`,
-    sections 2 to 5, logs its real-time failures through the same queue without ``rt_error``
-    and without latching.
+    The runtime half of this page is the C handler of ``anira/abi/handler.h`` (:doc:`usage`,
+    section 3.2): ``anira_handler_rt_error``, the per-handler latch and the drain summary
+    are in effect there. The 2.x :cpp:class:`anira::InferenceHandler` of :doc:`usage`,
+    sections 2 to 5, runs on the same scheduler: its operational real-time conditions are
+    latched per site the same way and a failed inference delivers zeros, but it has no
+    ``rt_error`` word to read.
 
 The rule
 --------
@@ -140,10 +134,13 @@ An ``ANIRA_NONBLOCKING`` entry does at most three things when it refuses:
    ``anira_handler_rt_error(h)`` from any thread and from inside any callback, when the refusal
    is a contract violation: ``ANIRA_ERROR_WRONG_CONTRACT`` (a Hard entry on an Async handler or
    the reverse), ``ANIRA_ERROR_NOT_PREPARED``, ``ANIRA_ERROR_CONFIG`` (a submitted tensor's
-   dtype or axis tags, a ring accessor's dtype), ``ANIRA_ERROR_INVALID_STATE``. ``rt_error`` is
-   last-wins and is cleared by ``prepare`` and ``reset``; it is a plain word in the handler,
-   readable from a crash handler and from a core dump, which is why it exists beside the
-   best-effort record.
+   dtype or axis tags, a ring accessor's dtype, a float entry on a non-float32 ring, a plan
+   index out of range), ``ANIRA_ERROR_INVALID_STATE`` (a ``_wait`` entry without an inference
+   thread inside its loop), ``ANIRA_ERROR_INVALID_ARGUMENT`` (a NULL buffer, a slot or channel
+   out of range) — and, from the inference thread, ``ANIRA_ERROR_ENGINE`` after a failed
+   inference, whose output is zeros. ``rt_error`` is last-wins and is cleared by ``prepare``
+   and ``reset``; it is a plain word in the handler, readable from a crash handler and from a
+   core dump, which is why it exists beside the best-effort record.
 3. It pushes one fixed-size record into the core's lock-free log queue, at Error, flagged
    ``ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION`` in the
    ``anira_log_record`` a sink receives.
@@ -155,18 +152,16 @@ The record is **latched** per handler and per kind of status: the first occurren
 ``prepare`` or ``reset`` is logged, later ones increment a suppressed counter with one relaxed
 add and nothing else. No clock is read on the real-time thread. Two things keep the latch
 honest about a condition that persists: the drain thread, which is not real-time, reports
-counters that changed since its last summary at most every 10 seconds ("still failing, N
-suppressed", with the handler and the kind), and the re-arm logs the final count when the
-condition clears. The same latch, per site, covers the operational real-time conditions that
-would otherwise fire on every block: missing samples, an output stream nobody pops, an engine
-that fails per inference, an inference dropped because a queue was full. Output after a failed
-inference is zeros, never the previous job's data.
-
-.. note::
-    ``rt_error``, the latch and the summary arrive with the 3.x runtime. The 2.x runtime of
-    :doc:`usage` logs each of these conditions through the real-time queue as it happens, at
-    Warning or Error and unlatched, with no ``rt_error`` to read; ``anira_log_record::flags``
-    is the 3.x projection, and the flag bits have no carrier in the 2.x path.
+counters that grew since its last summary at most every 10 seconds ("still failing, N more
+suppressed", with the handler or the condition), without re-arming anything, and the re-arm
+(``prepare`` and ``reset`` for a handler, ``prepare`` for the operational sites) logs the final
+count. The same latch, per site, covers the operational real-time conditions that would
+otherwise fire on every block: missing samples, an output stream nobody pops, an engine
+without a model, an inference dropped because a queue was full, a failed inference. A failed
+inference — an engine exception, a throwing custom processor or hook — zero-fills its output
+(never the previous job's data), sets ``rt_error`` to ``ANIRA_ERROR_ENGINE`` and is one
+latched record; the inference thread survives it. The summary runs on the drain thread and,
+under ``ANIRA_LOG_DRAIN_MANUAL`` and on WebAssembly, in ``anira_drain_log``.
 
 Levels
 ------

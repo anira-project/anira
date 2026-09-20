@@ -1,9 +1,11 @@
-#include <anira/CoreConfig.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/status.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
+#include <anira/utils/RtLatch.h>
 #include <tanh/core/threading/Thread.h>
 
 // IWYU pragma: keep - processor methods are called through SessionElement's shared_ptr members
@@ -27,6 +29,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -47,7 +50,7 @@ std::atomic<unsigned int> s_num_active_threads{0};
 #endif
 }  // namespace
 
-InferenceThread::InferenceThread(InferenceQueue& next_inference, WaitStrategy wait_strategy)
+InferenceThread::InferenceThread(InferenceQueue& next_inference, anira_wait_strategy wait_strategy)
     : m_next_inference(next_inference), m_wait_strategy(wait_strategy) {}
 
 InferenceThread::~InferenceThread() {
@@ -114,6 +117,12 @@ unsigned int InferenceThread::get_num_loop_active() {
     return s_num_loop_active.load(std::memory_order::acquire);
 }
 
+bool InferenceThread::any_loop_active() noexcept {
+    // A relaxed read: the waits re-check between poll iterations, so a thread leaving the
+    // loop is seen at the next check.
+    return s_num_loop_active.load(std::memory_order::relaxed) > 0;
+}
+
 bool InferenceThread::has_exited() const {
     return m_has_exited.load(std::memory_order::acquire);
 }
@@ -144,7 +153,7 @@ void InferenceThread::run_loop() {
         std::atomic<bool>& m_in_loop;
     } const loop_guard(m_has_exited, m_in_loop);
 #ifndef __EMSCRIPTEN__
-    if (m_wait_strategy == WaitStrategy::Blocking) {
+    if (m_wait_strategy == ANIRA_WAIT_BLOCKING) {
         run_loop_blocking();
         return;
     }
@@ -154,7 +163,23 @@ void InferenceThread::run_loop() {
         // The times for the exponential backoff. The first loop is insteadly trying to acquire the
         // atomic counter. The second loop is waiting for approximately 100ns. Beyond that, the
         // thread will yield and sleep for 100us.
-        exponential_backoff(k_iterations);
+        //
+        // Last resort: nothing below may throw (a failed inference is handled inside
+        // process_dequeued_inference), but an exception that still reaches the loop must not
+        // end the thread through tanh-lib's thread-body handler. Logged once per prepare.
+        try {
+            exponential_backoff(k_iterations);
+        } catch (const std::exception& e) {
+            ANIRA_LOG_RT_ERROR_ONCE(RtSite::InferenceThreadBodyThrew,
+                                    log_group::k_scheduler,
+                                    "inference thread body threw: %s; the loop continues",
+                                    e.what());
+        } catch (...) {
+            ANIRA_LOG_RT_ERROR_ONCE(RtSite::InferenceThreadBodyThrew,
+                                    log_group::k_scheduler,
+                                    "inference thread body threw a non-std exception; the loop "
+                                    "continues");
+        }
     }
 }
 
@@ -164,8 +189,21 @@ void InferenceThread::run_loop_blocking() {
     // the queue's semaphore, so the timeout is never on the work pickup path.
     constexpr std::int64_t k_exit_check_interval_us = 5000;
     while (!should_exit()) {
-        if (m_next_inference.wait_dequeue_timed(m_inference_data, k_exit_check_interval_us)) {
-            process_dequeued_inference();
+        // The same last resort as run_loop()'s polling loop.
+        try {
+            if (m_next_inference.wait_dequeue_timed(m_inference_data, k_exit_check_interval_us)) {
+                process_dequeued_inference();
+            }
+        } catch (const std::exception& e) {
+            ANIRA_LOG_RT_ERROR_ONCE(RtSite::InferenceThreadBodyThrew,
+                                    log_group::k_scheduler,
+                                    "inference thread body threw: %s; the loop continues",
+                                    e.what());
+        } catch (...) {
+            ANIRA_LOG_RT_ERROR_ONCE(RtSite::InferenceThreadBodyThrew,
+                                    log_group::k_scheduler,
+                                    "inference thread body threw a non-std exception; the loop "
+                                    "continues");
         }
     }
 }
@@ -234,43 +272,74 @@ void InferenceThread::process_dequeued_inference() {
     // with release/acquire alone the store-load reordering lets both sides read stale
     // values and a "ghost" inference could run concurrently with SessionElement::clear().
     session->m_active_inferences.fetch_add(1, std::memory_order::seq_cst);
+    // Released on every exit path, a throw included: Core::drain_inference_queue() waits
+    // for the count to reach zero.
+    struct ActiveInferenceGuard {
+        explicit ActiveInferenceGuard(std::atomic<int>& counter) : m_counter(counter) {}
+        ~ActiveInferenceGuard() { m_counter.fetch_sub(1, std::memory_order::release); }
+        ActiveInferenceGuard(const ActiveInferenceGuard&) = delete;
+        ActiveInferenceGuard& operator=(const ActiveInferenceGuard&) = delete;
+        std::atomic<int>& m_counter;
+    } const active_guard(session->m_active_inferences);
 
-    // A wait-free reset (Core::reset_session) bumps the session generation. A
-    // dispatch whose stamp is now stale would have its output discarded anyway, so
-    // skip the model — but still publish the completion signal do_inference() would
-    // have set, so the audio thread's Core::reclaim_stale_structs() can return
-    // this struct to the free pool. For a session-exclusive task the skipped
-    // dispatch still ends its turn on the chain (release + dispatch-next), exactly
-    // like a completed one — a skip path that missed the continuation would leave
-    // the gate wedged forever.
-    const bool stale = thread_safe_struct->m_dispatch_generation !=
-                       session->m_generation.load(std::memory_order::seq_cst);
+    // Whether the struct's done signal was published: a struct is signalled exactly once,
+    // whatever path it takes (a second signal would let a later try_acquire succeed for a
+    // struct nobody dispatched).
+    bool signalled = false;
+    try {
+        // A wait-free reset (Core::reset_session) bumps the session generation. A
+        // dispatch whose stamp is now stale would have its output discarded anyway, so
+        // skip the model — but still publish the completion signal do_inference() would
+        // have set, so the audio thread's Core::reclaim_stale_structs() can return
+        // this struct to the free pool. For a session-exclusive task the skipped
+        // dispatch still ends its turn on the chain (release + dispatch-next), exactly
+        // like a completed one — a skip path that missed the continuation would leave
+        // the gate wedged forever.
+        const bool stale = thread_safe_struct->m_dispatch_generation !=
+                           session->m_generation.load(std::memory_order::seq_cst);
 
-    if (stale) {
-        if (session->m_inference_config.m_blocking_ratio > 0.f) {
-            thread_safe_struct->m_done_semaphore.release();
+        if (stale) {
+            if (session->m_inference_config.m_blocking_ratio > 0.f) {
+                thread_safe_struct->m_done_semaphore.release();
+            } else {
+                thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
+            }
+            signalled = true;
+            if (session->m_inference_config.m_session_exclusive_processor) {
+                session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+                dispatch_next_pending(session);
+            }
+        } else if (session->m_initialized.load(std::memory_order::seq_cst)) {
+            do_inference(session, thread_safe_struct, signalled);
         } else {
-            thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
+            // Session momentarily uninitialized (prepare/release drain in progress).
+            // Complete as silence so the struct is not stranded without a completion
+            // signal, and end the exclusive task's turn on the chain — but NEVER
+            // dispatch a successor here: new work injected into the drain's window
+            // would let drain_inference_queue() return before quiescence. Pending
+            // entries are the drainer's job (force_reset_dispatch_chain in prepare).
+            session->complete_with_zeros(thread_safe_struct);
+            signalled = true;
+            if (session->m_inference_config.m_session_exclusive_processor) {
+                session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+            }
         }
-        if (session->m_inference_config.m_session_exclusive_processor) {
-            session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
-            dispatch_next_pending(session);
-        }
-    } else if (session->m_initialized.load(std::memory_order::seq_cst)) {
-        do_inference(session, thread_safe_struct);
-    } else {
-        // Session momentarily uninitialized (prepare/release drain in progress).
-        // Complete as silence so the struct is not stranded without a completion
-        // signal, and end the exclusive task's turn on the chain — but NEVER
-        // dispatch a successor here: new work injected into the drain's window
-        // would let drain_inference_queue() return before quiescence. Pending
-        // entries are the drainer's job (force_reset_dispatch_chain in prepare).
-        session->complete_with_zeros(thread_safe_struct);
-        if (session->m_inference_config.m_session_exclusive_processor) {
-            session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+    } catch (...) {
+        // Last resort (do_inference() catches what the model throws): a struct is never
+        // stranded without its done signal, and never signalled twice.
+        if (!signalled) {
+            session->complete_with_zeros(thread_safe_struct);
+            if (session->m_inference_config.m_session_exclusive_processor) {
+                session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
+            }
+            if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
+                ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                                   "inference failed in session %d: an exception escaped the "
+                                   "dispatch; delivering zeros",
+                                   session->m_session_id);
+            }
         }
     }
-    session->m_active_inferences.fetch_sub(1, std::memory_order::release);
 }
 
 void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement>& session) {
@@ -283,9 +352,10 @@ void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement
                 InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
             // The task completes as zeros at its stream position, keeping
             // the output time-aligned instead of stalling the session.
-            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
-                               "Could not enqueue next inference! "
-                               "Dropping the inference and zero-filling its output.");
+            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NextDispatchDropped,
+                                    log_group::k_scheduler,
+                                    "Could not enqueue next inference! "
+                                    "Dropping the inference and zero-filling its output.");
             session->complete_with_zeros(next);
             session->release_dispatch(next->m_dispatch_epoch);
         }
@@ -294,18 +364,42 @@ void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement
 
 void InferenceThread::do_inference(
     const std::shared_ptr<SessionElement>& session,
-    const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct) {
+    const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
+    bool& signalled) {
     InferenceBackend const backend = session->m_current_backend.load(std::memory_order_relaxed);
-    session->m_pp_processor.before_inference(thread_safe_struct->m_tensor_input_data, backend);
-    inference(session,
-              thread_safe_struct->m_tensor_input_data,
-              thread_safe_struct->m_tensor_output_data);
-    session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data, backend);
+    // A backend, a custom processor or a before/after hook that throws must not unwind the
+    // pool thread: the failed inference delivers zeros, the done signal is published below
+    // exactly as on success, and the failure is ENGINE on the session's latch (a 3.x
+    // handler's word), logged on its first occurrence since the latch's re-arm.
+    try {
+        session->m_pp_processor.before_inference(thread_safe_struct->m_tensor_input_data, backend);
+        inference(session,
+                  thread_safe_struct->m_tensor_input_data,
+                  thread_safe_struct->m_tensor_output_data);
+        session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data, backend);
+    } catch (const std::exception& e) {
+        for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
+            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                               "inference failed in session %d: %s; delivering zeros",
+                               session->m_session_id,
+                               e.what());
+        }
+    } catch (...) {
+        for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
+            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                               "inference failed in session %d: non-std exception; delivering "
+                               "zeros",
+                               session->m_session_id);
+        }
+    }
     if (session->m_inference_config.m_blocking_ratio > 0.f) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
         thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
     }
+    signalled = true;
 
     // Session-exclusive processors: this task is fully done (its state write has
     // completed), so release the dispatch slot and hand the next pending task to
@@ -326,8 +420,10 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
             session->m_libtorch_processor->process(input, output, session);
         } else {
             session->m_default_processor.process(input, output, session);
-            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
-                               "LibTorch model has not been provided. Using default processor.");
+            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoLibTorchModel,
+                                    log_group::k_scheduler,
+                                    "LibTorch model has not been provided. Using default "
+                                    "processor.");
         }
     }
 #endif
@@ -337,8 +433,10 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
             session->m_onnx_processor->process(input, output, session);
         } else {
             session->m_default_processor.process(input, output, session);
-            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
-                               "OnnxRuntime model has not been provided. Using default processor.");
+            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoOnnxRuntimeModel,
+                                    log_group::k_scheduler,
+                                    "OnnxRuntime model has not been provided. Using default "
+                                    "processor.");
         }
     }
 #endif
@@ -348,8 +446,10 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
             session->m_tflite_processor->process(input, output, session);
         } else {
             session->m_default_processor.process(input, output, session);
-            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
-                               "TFLite model has not been provided. Using default processor.");
+            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoTFLiteModel,
+                                    log_group::k_scheduler,
+                                    "TFLite model has not been provided. Using default "
+                                    "processor.");
         }
     }
 #endif
@@ -359,8 +459,10 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
             session->m_litert_processor->process(input, output, session);
         } else {
             session->m_default_processor.process(input, output, session);
-            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
-                               "LiteRT model has not been provided. Using default processor.");
+            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoLiteRtModel,
+                                    log_group::k_scheduler,
+                                    "LiteRT model has not been provided. Using default "
+                                    "processor.");
         }
     }
 #endif
@@ -370,8 +472,10 @@ void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
             session->m_executorch_processor->process(input, output, session);
         } else {
             session->m_default_processor.process(input, output, session);
-            ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
-                               "ExecuTorch model has not been provided. Using default processor.");
+            ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoExecuTorchModel,
+                                    log_group::k_scheduler,
+                                    "ExecuTorch model has not been provided. Using default "
+                                    "processor.");
         }
     }
 #endif

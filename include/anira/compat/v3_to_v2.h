@@ -7,8 +7,9 @@
  * contract, a context config) into them: anira::InferenceConfig, anira::CoreConfig and
  * anira::HostConfig. It validates the section-2 rules the 2.x runtime can honour and refuses,
  * with ANIRA_ERROR_NOT_SUPPORTED, what the 2.x runtime cannot do (an Async contract, a
- * MEASURED budget, UNTIL_STABLE warmup, a miss policy other than BYPASS, a dtype other than
- * float32, a layout that transposes a material axis, an engine this build does not carry).
+ * MEASURED budget, UNTIL_STABLE warmup, a spec dtype other than float32, a layout that
+ * transposes a material axis, an engine this build does not carry); a ring dtype that differs
+ * from its spec's dtype is ANIRA_ERROR_CONFIG.
  *
  * @warning Transitional: v3.0.0-alpha.1 only. The 3.x handler of the next pre-release takes the
  * handles directly, and this header is removed with it. Nothing here is part of the C ABI.
