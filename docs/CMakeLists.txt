@@ -57,7 +57,7 @@ set(SPHINX_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/sphinx)
 add_custom_target(breathe-apidocs
     COMMAND ${DOCS_VENV_DIR}/bin/breathe-apidoc -o ${SPHINX_SOURCE_DIR}/api
     ${CMAKE_CURRENT_BINARY_DIR}/doxygen/xml
-    -g class,struct -f
+    -g class,struct,union -f
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1InferenceConfig_1_1Defaults.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1SessionElement_1_1ThreadSafeStruct.rst
     # Add :allow-dot-graphs: directive to all class and struct files.
