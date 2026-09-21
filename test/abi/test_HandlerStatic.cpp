@@ -164,7 +164,7 @@ public:
         std::array<float, static_cast<size_t>(2) * k_hop> out{};
         const anira_tensor in_tensor = whole_f32(in.data(), {2, k_hop});
         const anira_tensor out_tensor = whole_f32(out.data(), {2, k_hop});
-        return anira_handler_process(get(), &in_tensor, &out_tensor, 0, nullptr);
+        return anira_handler_process(get(), &in_tensor, 0, &out_tensor, 0, nullptr);
     }
 
 private:
@@ -440,11 +440,17 @@ TEST(AbiHandlerStatic, ASingleFormOnAStaticSlotIsRefused) {
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT) << what;
         anira_handler_reset(h);
     };
-    expect_refused(anira_handler_process(h, &whole, &whole, 1, &delivered), "process");
+    expect_refused(anira_handler_process(h, &whole, 1, &whole, 1, &delivered), "process");
     EXPECT_EQ(delivered, 0U);
+    // Each side of the two-slot form is refused on its own: the Streamed slot 0 on the other
+    // side does not excuse a Static slot.
+    expect_refused(anira_handler_process(h, &whole, 1, &whole, 0, nullptr),
+                   "process, a Static in_slot beside a Streamed out_slot");
+    expect_refused(anira_handler_process(h, &whole, 0, &whole, 1, nullptr),
+                   "process, a Static out_slot beside a Streamed in_slot");
     expect_refused(anira_handler_push_data(h, &whole, 1), "push_data");
     expect_refused(anira_handler_pop_data(h, &whole, 1, &delivered), "pop_data");
-    expect_refused(anira_handler_process_wait(h, &whole, &whole, 0.0, 2, &delivered),
+    expect_refused(anira_handler_process_wait(h, &whole, 2, &whole, 2, 0.0, &delivered),
                    "process_wait on the Buffer slot");
     expect_refused(anira_handler_pop_data_wait(h, &whole, 0.0, 1, &delivered), "pop_data_wait");
     EXPECT_EQ(memory, values_of(80.0F));
@@ -511,7 +517,7 @@ TEST(AbiHandlerStatic, AMultiCallEqualsTheThreeCallSequence) {
         ASSERT_EQ(anira_handler_set_static_input(sequence.get(), 2, &b_in[2]), ANIRA_OK);
         size_t streamed_count = k_unset;
         const anira_status sequence_status =
-            anira_handler_process(sequence.get(), b_in.data(), b_out.data(), 0, &streamed_count);
+            anira_handler_process(sequence.get(), b_in.data(), 0, b_out.data(), 0, &streamed_count);
         ASSERT_EQ(anira_handler_get_static_output(sequence.get(), 1, &b_out[1]), ANIRA_OK);
         ASSERT_EQ(anira_handler_get_static_output(sequence.get(), 2, &b_out[2]), ANIRA_OK);
 
@@ -706,10 +712,8 @@ void typed_round_trip(anira_dtype dtype) {
     const std::vector<int64_t> shape{2, 3};
     handler->m_static.m_inputs.push_back(std::make_unique<anira::capi::StaticSlot>(shape, dtype));
     handler->m_static.m_outputs.push_back(std::make_unique<anira::capi::StaticSlot>(shape, dtype));
-    // What anira_handler_create builds beside the store: the host slot table (one host-visible
-    // tensor per side, so host slot 0 is tensor 0) and the host's slot counts.
-    handler->m_slots.m_inputs = {0U};
-    handler->m_slots.m_outputs = {0U};
+    // What anira_handler_create builds beside the store: the slot counts, the lengths of the
+    // model config's two lists (one tensor per side here, slot 0).
     handler->m_num_inputs = 1;
     handler->m_num_outputs = 1;
     const std::array<T, 6> values{T{-3}, T{2}, T{32767}, T{-32768}, T{5}, T{6}};

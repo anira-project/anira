@@ -14,9 +14,9 @@
 // first, and integer-valued ramps stay exact in float32. The engine-backed cases share the
 // oracle.
 //
-// Two numberings meet in these tests: the host names HOST SLOTS, which count the host-visible
-// specs of a side and skip State specs, a stage and the backend index by TENSOR index, the
-// position in the model's list.
+// One slot space: a slot is the tensor's position in the model config's list of its side, the
+// one number the host's entries, a stage, the backend, the latency vector and the plan report's
+// rows use. The role decides which entries take it: no Hard entry carries a State tensor.
 
 #include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
@@ -49,7 +49,6 @@
 #include <vector>
 
 #include "../support/log_record_collector.h"
-#include "capi/handler.h"
 #include "float_face.h"
 #include "handler_support.h"
 
@@ -69,7 +68,7 @@ constexpr size_t k_state_width = 2;  // [carry, counter] per channel
 // ---- the model
 // -----------------------------------------------------------------------------------
 
-/// Where the accumulator's four tensors stand in the model's lists (tensor indices), and the
+/// Where the accumulator's four tensors stand in the model's lists (their slots), and the
 /// Static pair of the wider model (absent: k_none).
 constexpr size_t k_none = SIZE_MAX;
 struct Positions {
@@ -110,7 +109,8 @@ TensorSpec static_values(std::string_view name) {
 }
 
 /// The example model's order: the state FIRST on the input side and LAST on the output side.
-/// Host input slot 0 is `data` (tensor 1), host output slot 0 is `processed_data` (tensor 0).
+/// `data` is input slot 1 and `processed_data` is output slot 0: the stream does not stand at
+/// the same position on both sides, which is what the two-slot process form is for.
 ModelConfig accumulator_model() {
     ModelConfig model;
     model.add_model_path(anira_test::k_custom, "custom-processor");
@@ -122,10 +122,10 @@ ModelConfig accumulator_model() {
 }
 constexpr Positions k_accumulator{};
 
-/// The state BETWEEN two host-visible specs on the input side and FIRST on the output side:
-///   inputs   values_in (Static, tensor 0, host 0)   state_in (tensor 1)   data (tensor 2, host 1)
-///   outputs  state_out (tensor 0)   processed_data (tensor 1, host 0)   values_out (tensor 2, host
-///   1)
+/// The state in the MIDDLE of the input side and FIRST on the output side:
+///   inputs   values_in (Static, slot 0)   state_in (State, slot 1)   data (Streamed, slot 2)
+///   outputs  state_out (State, slot 0)   processed_data (Streamed, slot 1)   values_out (Static,
+///   slot 2)
 ModelConfig wide_model() {
     ModelConfig model;
     model.add_model_path(anira_test::k_custom, "custom-processor");
@@ -238,8 +238,8 @@ std::vector<anira_backend_id> custom_candidates() {
 }
 
 /// A handler over the custom row, with an optional stage chain, prepared, the accumulator
-/// attached. Host input slot `m_data_slot` and host output slot `m_processed_slot` are the two
-/// streams.
+/// attached. Input slot `data_slot()` and output slot `processed_slot()` are the two streams:
+/// the tensors' positions in the model's lists.
 class Rig {
 public:
     explicit Rig(const ModelConfig& model,
@@ -299,59 +299,34 @@ public:
         m_session = anira_test::session_of(m_handler);
         ASSERT_NE(m_session, nullptr);
         m_session->m_custom_processor = m_backend.get();
-        // The host slots of the two streams: the tensors' positions among the host-visible
-        // specs, which the handler's table holds.
-        m_data_slot = host_slot_of(m_handler->m_slots.m_inputs, m_positions.m_data);
-        m_processed_slot = host_slot_of(m_handler->m_slots.m_outputs, m_positions.m_processed);
     }
 
     bool ready() const { return m_session != nullptr && m_backend != nullptr; }
     anira_handler* get() const { return m_handler; }
     AccumulatorBackend& backend() { return *m_backend; }
     anira::SessionElement& session() { return *m_session; }
-    uint32_t data_slot() const { return m_data_slot; }
-    uint32_t processed_slot() const { return m_processed_slot; }
+    uint32_t data_slot() const { return static_cast<uint32_t>(m_positions.m_data); }
+    uint32_t processed_slot() const { return static_cast<uint32_t>(m_positions.m_processed); }
 
-    /// One host block of `samples` per channel through the waiting single form: the call returns
-    /// with its own inferences collected, so the stream is a pure function of the calls.
+    /// One host block of `samples` per channel through the waiting two-slot single form, each
+    /// stream at its own position (`data` is input 1 and `processed_data` output 0 in the
+    /// accumulator): the call returns with its own inferences collected, so the stream is a
+    /// pure function of the calls.
     anira_status block(std::span<const float> in, std::span<float> out, size_t samples) {
         const anira_tensor in_tensor =
             whole_f32(in.data(), {k_channels, static_cast<int64_t>(samples)});
         const anira_tensor out_tensor =
             whole_f32(out.data(), {k_channels, static_cast<int64_t>(samples)});
-        if (m_handler->m_num_inputs == 1 && m_handler->m_num_outputs == 1) {
-            return anira_handler_process_wait(m_handler,
-                                              &in_tensor,
-                                              &out_tensor,
-                                              ANIRA_WAIT_FOREVER,
-                                              m_data_slot,
-                                              nullptr);
-        }
-        // The two streams stand in different host slots (a single process form names one slot
-        // of both lists): the multi form, every other slot left out by an empty element.
-        const anira_tensor empty = whole_f32(static_cast<float*>(nullptr), {1, 0});
-        std::vector<anira_tensor> inputs(m_handler->m_num_inputs, empty);
-        std::vector<anira_tensor> outputs(m_handler->m_num_outputs, empty);
-        inputs[m_data_slot] = in_tensor;
-        outputs[m_processed_slot] = out_tensor;
-        return anira_handler_process_multi_wait(m_handler,
-                                                inputs.data(),
-                                                m_handler->m_num_inputs,
-                                                outputs.data(),
-                                                m_handler->m_num_outputs,
-                                                nullptr,
-                                                ANIRA_WAIT_FOREVER);
+        return anira_handler_process_wait(m_handler,
+                                          &in_tensor,
+                                          data_slot(),
+                                          &out_tensor,
+                                          processed_slot(),
+                                          ANIRA_WAIT_FOREVER,
+                                          nullptr);
     }
 
 private:
-    static uint32_t host_slot_of(const std::vector<uint32_t>& table, size_t tensor) {
-        for (uint32_t slot = 0; slot < table.size(); ++slot) {
-            if (table[slot] == tensor) { return slot; }
-        }
-        ADD_FAILURE() << "tensor " << tensor << " has no host slot";
-        return 0;
-    }
-
     Context m_context;
     Positions m_positions;
     anira_miss_policy m_policy;
@@ -363,8 +338,6 @@ private:
     anira_error m_err = ANIRA_ERROR_INIT;
     std::unique_ptr<AccumulatorBackend> m_backend;
     std::shared_ptr<anira::SessionElement> m_session;
-    uint32_t m_data_slot = 0;
-    uint32_t m_processed_slot = 0;
 };
 
 // ---- the closed form
@@ -431,46 +404,94 @@ std::vector<size_t> hops(size_t count) {
     return std::vector<size_t>(count, k_hop);
 }
 
-// ---- the host slots
+// ---- one slot space
 // ------------------------------------------------------------------------------
 
-// A host slot number counts the host-visible specs of its side and skips State specs: the
-// table, the latency vector, the report's slot rows, and the bound of every entry.
-TEST(AbiState, HostSlotsSkipStateSpecs) {
+/// What the stage of OneSlotSpacePerSide saw in before_inference, per inference. Real-time code
+/// (the inference thread): a fixed array of atomics.
+struct SlotProbe {
+    static constexpr size_t k_capacity = 8;
+    std::array<std::atomic<float>, k_capacity> m_static_first{};  ///< model_inputs[0][0]
+    std::array<std::atomic<float>, k_capacity> m_data_first{};    ///< model_inputs[2][0]
+    std::atomic<size_t> m_calls{0};
+    std::atomic<uint32_t> m_other_counts{0};  ///< ctxs whose tensor counts were not 3 and 3
+};
+
+anira_status ANIRA_CALL probe_slots(const anira_stage_ctx* ctx, void* user_data) ANIRA_NONBLOCKING {
+    auto* probe = static_cast<SlotProbe*>(user_data);
+    const size_t index = probe->m_calls.fetch_add(1);
+    if (ctx->num_inputs != 3 || ctx->num_outputs != 3) {
+        probe->m_other_counts.fetch_add(1);
+        return ANIRA_OK;
+    }
+    if (index < SlotProbe::k_capacity) {
+        // The slots the host uses: the Static tensor it set at slot 0, the stream it pushed at
+        // slot 2.
+        probe->m_static_first.at(index).store(anira_tensor_data_f32(&ctx->model_inputs[0])[0]);
+        probe->m_data_first.at(index).store(anira_tensor_data_f32(&ctx->model_inputs[2])[0]);
+    }
+    return ANIRA_OK;
+}
+
+// A slot is the tensor's position in the model config's list of its side, State tensors
+// included, and that one number is the host entries', the Static entries', a stage's, the
+// latency vector's and the report rows'. The model has its State tensor in the MIDDLE of the
+// input list and FIRST in the output list, so a numbering that skipped it would show everywhere.
+TEST(AbiState, OneSlotSpacePerSide) {
     anira_drain_log();
     RecordCollector collector;
-    Rig rig(wide_model(), k_wide, {}, ANIRA_MISS_ZEROS, k_hop, nullptr, nullptr, ANIRA_LOG_DEBUG);
+    SlotProbe probe;
+    anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
+    stage.name = "slot-probe";
+    stage.user_data = &probe;
+    stage.before_inference = &probe_slots;
+    Rig rig(wide_model(),
+            k_wide,
+            {stage},
+            ANIRA_MISS_ZEROS,
+            k_hop,
+            nullptr,
+            nullptr,
+            ANIRA_LOG_DEBUG);
     ASSERT_TRUE(rig.ready());
     anira_handler* h = rig.get();
 
-    // Three tensors per side, two host slots per side.
-    EXPECT_FALSE(h->m_slots.m_identity);
-    EXPECT_EQ(h->m_slots.m_inputs, (std::vector<uint32_t>{0, 2}));
-    EXPECT_EQ(h->m_slots.m_outputs, (std::vector<uint32_t>{1, 2}));
-    EXPECT_EQ(h->m_num_inputs, 2U);
-    EXPECT_EQ(h->m_num_outputs, 2U);
-    EXPECT_EQ(rig.data_slot(), 1U);
-    EXPECT_EQ(rig.processed_slot(), 0U);
-    // The State tensors have no Static store: the host cannot reach them, and the chain's
-    // materialisation never touches them.
+    // Three tensors per side, three slots per side.
+    EXPECT_EQ(h->m_num_inputs, 3U);
+    EXPECT_EQ(h->m_num_outputs, 3U);
+    EXPECT_EQ(rig.data_slot(), 2U);
+    EXPECT_EQ(rig.processed_slot(), 1U);
+    // The State tensors have no Static store: no entry of the handler carries them, and the
+    // chain's materialisation never touches them.
     EXPECT_EQ(h->m_static.input(1), nullptr);
     EXPECT_EQ(h->m_static.output(0), nullptr);
     EXPECT_NE(h->m_static.input(0), nullptr);
     EXPECT_NE(h->m_static.output(2), nullptr);
 
-    // The latency vector: one entry per host output slot, in host order.
+    // The latency vector: one entry per output tensor, 0 for one that is not Streamed.
     uint32_t count = 0;
     ASSERT_EQ(anira_handler_get_latencies(h, &count, nullptr), ANIRA_OK);
-    ASSERT_EQ(count, 2U);
-    std::array<uint32_t, 2> latencies{77, 77};
+    ASSERT_EQ(count, 3U);
+    std::array<uint32_t, 3> latencies{77, 77, 77};
     ASSERT_EQ(anira_handler_get_latencies(h, &count, latencies.data()), ANIRA_OK);
-    EXPECT_EQ(latencies[0], static_cast<uint32_t>(rig.session().m_latency[1]))
-        << "host output 0 is tensor 1, the stream";
-    EXPECT_EQ(latencies[1], 0U) << "host output 1 is the Static tensor";
-    EXPECT_EQ(anira_handler_get_latency(h, 0), latencies[0]);
-    EXPECT_EQ(anira_handler_get_latency(h, 2), 0U) << "no host slot 2";
+    EXPECT_EQ(latencies[0], 0U) << "output 0 is the State tensor";
+    EXPECT_EQ(latencies[1], static_cast<uint32_t>(rig.session().m_latency[1]))
+        << "output 1 is the stream";
+    EXPECT_GT(latencies[1], 0U);
+    EXPECT_EQ(latencies[2], 0U) << "output 2 is the Static tensor";
+    EXPECT_EQ(anira_handler_get_latency(h, 0), 0U);
+    EXPECT_EQ(anira_handler_get_latency(h, 1), latencies[1]);
+    EXPECT_EQ(anira_handler_get_latency(h, 2), 0U);
+    EXPECT_EQ(anira_handler_get_latency(h, 3), 0U) << "out of range";
+    // The ring state likewise: a slot without a ring reads 0 and records nothing.
+    size_t available = 77;
+    EXPECT_EQ(anira_handler_get_available_samples(h, 0, 0, &available), ANIRA_OK);
+    EXPECT_EQ(available, 0U) << "the State output has no ring";
+    EXPECT_EQ(anira_handler_get_available_samples(h, 1, 0, &available), ANIRA_OK);
+    EXPECT_EQ(available, latencies[1]) << "right after prepare: the reported latency";
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
 
-    // The plan report: two slot rows per side, numbered by host slot.
+    // The plan report: one slot row per tensor of each side, numbered by position.
     const anira_plan_report* report = anira_handler_plan_report(h);
     ASSERT_NE(report, nullptr);
     for (const anira_bool inputs : {anira_bool{1}, anira_bool{0}}) {
@@ -478,8 +499,10 @@ TEST(AbiState, HostSlotsSkipStateSpecs) {
         ASSERT_EQ(
             anira_plan_report_slots(report, 0, inputs, sizeof(anira_plan_slot), &rows, nullptr),
             ANIRA_OK);
-        ASSERT_EQ(rows, 2U);
-        std::array<anira_plan_slot, 2> slots{ANIRA_PLAN_SLOT_INIT, ANIRA_PLAN_SLOT_INIT};
+        ASSERT_EQ(rows, 3U);
+        std::array<anira_plan_slot, 3> slots{ANIRA_PLAN_SLOT_INIT,
+                                             ANIRA_PLAN_SLOT_INIT,
+                                             ANIRA_PLAN_SLOT_INIT};
         ASSERT_EQ(anira_plan_report_slots(report,
                                           0,
                                           inputs,
@@ -487,34 +510,74 @@ TEST(AbiState, HostSlotsSkipStateSpecs) {
                                           &rows,
                                           slots.data()),
                   ANIRA_OK);
-        EXPECT_EQ(slots[0].slot, 0U);
-        EXPECT_EQ(slots[1].slot, 1U);
+        for (uint32_t slot = 0; slot < 3; ++slot) { EXPECT_EQ(slots.at(slot).slot, slot); }
     }
-    // The report's log line names the host slot and the canonical name of its tensor.
+    // The report's log lines name the slot and the canonical name of its tensor, State included.
 #ifdef ENABLE_LOGGING
-    EXPECT_EQ(anira_test::count_records(collector, "input 1 'data'", "native"), 1U);
-    EXPECT_EQ(anira_test::count_records(collector, "output 0 'processed_data'", "native"), 1U);
-    EXPECT_EQ(anira_test::count_records(collector, "'state_in'", "native"), 0U);
+    EXPECT_EQ(anira_test::count_records(collector, "input 0 'values_in'", "native"), 1U);
+    EXPECT_EQ(anira_test::count_records(collector, "input 1 'state_in'", "native"), 1U);
+    EXPECT_EQ(anira_test::count_records(collector, "input 2 'data'", "native"), 1U);
+    EXPECT_EQ(anira_test::count_records(collector, "output 0 'state_out'", "native"), 1U);
+    EXPECT_EQ(anira_test::count_records(collector, "output 1 'processed_data'", "native"), 1U);
+    EXPECT_EQ(anira_test::count_records(collector, "output 2 'values_out'", "native"), 1U);
 #endif
 
-    // Slot 2 does not exist for the host, on either side and in every form, although tensor 2
-    // does: INVALID_ARGUMENT, one record per kind.
+    // The host entries and a stage agree on the numbers: the Static value set at input slot 0
+    // and the stream pushed at input slot 2 are what the stage reads at model_inputs[0] and [2],
+    // and the stream is popped at output slot 1.
+    std::array<float, 3> values{9.0F, 2.0F, 3.0F};
+    const anira_tensor whole = whole_f32(values.data(), {1, 3});
+    ASSERT_EQ(anira_handler_set_static_input(h, 0, &whole), ANIRA_OK);
+    const std::vector<size_t> sizes = hops(4);
+    size_t position = 0;
+    Streams streams;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+    expect_closed_form(streams, latencies[1]);
+    ASSERT_EQ(probe.m_calls.load(), 4U);
+    EXPECT_EQ(probe.m_other_counts.load(), 0U) << "three tensors per side, State included";
+    for (size_t hop = 0; hop < 4; ++hop) {
+        EXPECT_EQ(probe.m_static_first.at(hop).load(), 9.0F) << "hop " << hop;
+        EXPECT_EQ(probe.m_data_first.at(hop).load(), input_sample(0, hop * k_hop)) << "hop " << hop;
+    }
+    std::array<float, 3> captured{};
+    const anira_tensor captured_tensor = whole_f32(captured.data(), {1, 3});
+    EXPECT_EQ(anira_handler_get_static_output(h, 2, &captured_tensor), ANIRA_OK);
+    EXPECT_EQ(captured, (std::array<float, 3>{9.5F, 2.5F, 3.5F}));
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+
+    // The role decides which entries take a slot. A single form takes a Streamed slot only: a
+    // Static and a State slot are refused like a number out of range. One record per kind.
     std::array<float, static_cast<size_t>(k_channels) * k_hop> samples{};
     const anira_tensor block = whole_f32(samples.data(), {k_channels, k_hop});
-    std::array<float, 3> values{};
-    const anira_tensor whole = whole_f32(values.data(), {1, 3});
-    EXPECT_EQ(anira_handler_push_data(h, &block, 2), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_handler_pop_data(h, &block, 2, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_handler_set_static_input(h, 2, &whole), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_handler_get_static_output(h, 2, &whole), ANIRA_ERROR_INVALID_ARGUMENT);
-    // Host slot 1 of the input side is the stream, not the Static tensor 1 positions would say.
-    EXPECT_EQ(anira_handler_set_static_input(h, 1, &whole), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_handler_set_static_input(h, 0, &whole), ANIRA_OK);
-    EXPECT_EQ(anira_handler_get_static_output(h, 1, &whole), ANIRA_OK);
-    // A multi form takes H tensors per side: the tensor count is refused.
-    std::vector<anira_tensor> three(3, block);
-    EXPECT_EQ(anira_handler_push_data_multi(h, three.data(), 3), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_handler_pop_data_multi(h, three.data(), 3, nullptr),
+    EXPECT_EQ(anira_handler_push_data(h, &block, 0), ANIRA_ERROR_INVALID_ARGUMENT) << "Static";
+    EXPECT_EQ(anira_handler_push_data(h, &block, 1), ANIRA_ERROR_INVALID_ARGUMENT) << "State";
+    EXPECT_EQ(anira_handler_push_data(h, &block, 3), ANIRA_ERROR_INVALID_ARGUMENT) << "range";
+    EXPECT_EQ(anira_handler_pop_data(h, &block, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "State";
+    EXPECT_EQ(anira_handler_pop_data(h, &block, 2, nullptr), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "Static";
+    EXPECT_EQ(anira_handler_pop_data(h, &block, 3, nullptr), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "range";
+    // The two-slot form refuses each side on its own.
+    EXPECT_EQ(anira_handler_process(h, &block, 1, &block, 1, nullptr), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "a State in_slot beside the good out_slot";
+    EXPECT_EQ(anira_handler_process(h, &block, 2, &block, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "a State out_slot beside the good in_slot";
+    // The Static entries take a Static slot only.
+    EXPECT_EQ(anira_handler_set_static_input(h, 1, &whole), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "State";
+    EXPECT_EQ(anira_handler_set_static_input(h, 2, &whole), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "Streamed";
+    EXPECT_EQ(anira_handler_set_static_input(h, 3, &whole), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "range";
+    EXPECT_EQ(anira_handler_get_static_output(h, 0, &whole), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "State";
+    EXPECT_EQ(anira_handler_get_static_output(h, 1, &whole), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "Streamed";
+    // A multi form takes one tensor per tensor of the side: another count is refused.
+    std::vector<anira_tensor> two(2, block);
+    EXPECT_EQ(anira_handler_push_data_multi(h, two.data(), 2), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_pop_data_multi(h, two.data(), 2, nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
     anira_drain_log();
@@ -523,10 +586,106 @@ TEST(AbiState, HostSlotsSkipStateSpecs) {
 #endif
 }
 
-// The multi forms under a State spec: H-long arrays on both sides (heap arrays of exactly that
-// length: ASan is the guard against a loop to the tensor count), the Static elements through
-// the store, the streams against the closed form, `delivered` in host numbering.
-TEST(AbiState, MultiFormsTakeHostArrays) {
+// The position of a State tensor in an array of a multi form must be the empty tensor (a rank
+// of 1 or more with an extent of 0): anything else refuses the whole call in the same
+// validate-everything-first walk as the Static elements, so nothing is set and nothing pushed.
+TEST(AbiState, AStatePositionInAMultiArrayMustBeEmpty) {
+    anira_drain_log();
+    RecordCollector collector;
+    Rig rig(wide_model(), k_wide, {}, ANIRA_MISS_ZEROS, k_hop, nullptr, nullptr, ANIRA_LOG_DEBUG);
+    ASSERT_TRUE(rig.ready());
+    anira_handler* h = rig.get();
+
+    std::vector<float> in(static_cast<size_t>(k_channels) * k_hop, 1.0F);
+    std::vector<float> out(in.size(), -1.0F);
+    std::array<float, 3> values_in{4.0F, 5.0F, 6.0F};
+    std::array<float, 3> values_out{-1.0F, -1.0F, -1.0F};
+    std::array<float, static_cast<size_t>(k_channels) * k_state_width> state{};
+    const anira_tensor empty = whole_f32(static_cast<float*>(nullptr), {1, 0});
+    const anira_tensor a_state =
+        whole_f32(state.data(), {1, k_channels, static_cast<int64_t>(k_state_width)});
+    // Slot order: inputs {values_in, state_in, data}, outputs {state_out, processed_data,
+    // values_out}.
+    std::vector<anira_tensor> inputs{whole_f32(values_in.data(), {1, 3}),
+                                     a_state,
+                                     whole_f32(in.data(), {k_channels, k_hop})};
+    std::vector<anira_tensor> outputs{empty,
+                                      whole_f32(out.data(), {k_channels, k_hop}),
+                                      whole_f32(values_out.data(), {1, 3})};
+    std::vector<size_t> delivered(3, 77);
+    const auto stored_input = [&] {
+        std::array<float, 3> stored{};
+        h->m_static.input(0)->read_packed(stored.data(), sizeof(stored));
+        return stored;
+    };
+
+    // A whole state tensor at the State position of the inputs: refused, and the Static element
+    // in front of it was not set, the stream behind it not pushed.
+    EXPECT_EQ(anira_handler_process_multi(h, inputs.data(), 3, outputs.data(), 3, delivered.data()),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(delivered, (std::vector<size_t>{0, 0, 0}));
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(stored_input(), (std::array<float, 3>{})) << "a refused call set nothing";
+    EXPECT_EQ(rig.session().m_send_buffer[2].get_available_samples(0), 0U)
+        << "a refused call pushed samples";
+    EXPECT_EQ(anira_handler_push_data_multi(h, inputs.data(), 3), ANIRA_ERROR_INVALID_ARGUMENT);
+    // A zeroed record is rank 0: not the empty tensor.
+    inputs[1] = anira_tensor{};
+    EXPECT_EQ(anira_handler_push_data_multi(h, inputs.data(), 3), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "a zeroed record has no axis with an extent of 0";
+    // The output side likewise, in every form that takes outputs.
+    inputs[1] = empty;
+    outputs[0] = a_state;
+    delivered.assign(3, 77);
+    EXPECT_EQ(anira_handler_process_multi(h, inputs.data(), 3, outputs.data(), 3, delivered.data()),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(delivered, (std::vector<size_t>{0, 0, 0}));
+    EXPECT_EQ(stored_input(), (std::array<float, 3>{}))
+        << "the inputs were good, the output refused the call: nothing set";
+    EXPECT_EQ(anira_handler_pop_data_multi(h, outputs.data(), 3, nullptr),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_process_multi_wait(h,
+                                               inputs.data(),
+                                               3,
+                                               outputs.data(),
+                                               3,
+                                               nullptr,
+                                               ANIRA_WAIT_FOREVER),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_pop_data_multi_wait(h, outputs.data(), 3, nullptr, 0.0),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(rig.session().m_send_buffer[2].get_available_samples(0), 0U);
+    EXPECT_EQ(state, (std::array<float, static_cast<size_t>(k_channels) * k_state_width>{}))
+        << "the memory a State element names is never touched";
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    // One latched record for the kind, naming the slot and the canonical name.
+    EXPECT_EQ(anira_test::count_records(collector, "input slot 1 'state_in'", "rt"), 1U);
+    EXPECT_EQ(anira_test::count_records(collector, "is not the empty tensor", "rt"), 1U);
+#endif
+
+    // Any empty tensor is accepted there, whatever its rank: nothing else of it is read.
+    anira_handler_reset(h);
+    outputs[0] = whole_f32(static_cast<float*>(nullptr), {0});
+    delivered.assign(3, 77);
+    EXPECT_EQ(anira_handler_process_multi_wait(h,
+                                               inputs.data(),
+                                               3,
+                                               outputs.data(),
+                                               3,
+                                               delivered.data(),
+                                               ANIRA_WAIT_FOREVER),
+              ANIRA_OK);
+    EXPECT_EQ(delivered, (std::vector<size_t>{0, k_hop, 3})) << "a State position delivers nothing";
+    EXPECT_EQ(stored_input(), values_in);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+}
+
+// The multi forms under a State spec: the caller's arrays, one tensor per tensor of the side
+// (heap arrays of exactly that length: ASan is the guard against a loop past it), the State
+// position an empty tensor, the Static elements through the store, the streams against the
+// closed form, `delivered` by slot with 0 at the State position.
+TEST(AbiState, MultiFormsTakeTheCallersArrays) {
     const Rig rig(wide_model(), k_wide);
     ASSERT_TRUE(rig.ready());
     anira_handler* h = rig.get();
@@ -544,22 +703,27 @@ TEST(AbiState, MultiFormsTakeHostArrays) {
         }
         const std::array<float, 3> values_in{static_cast<float>(k), 2.0F, 3.0F};
         std::array<float, 3> values_out{-1.0F, -1.0F, -1.0F};
-        // Host order: inputs {values_in, data}, outputs {processed_data, values_out}.
+        // Slot order: inputs {values_in, state_in, data}, outputs {state_out, processed_data,
+        // values_out}; the State positions hold the empty tensor.
+        const anira_tensor empty = whole_f32(static_cast<float*>(nullptr), {1, 0});
         const std::vector<anira_tensor> inputs{whole_f32(values_in.data(), {1, 3}),
+                                               empty,
                                                whole_f32(in.data(), {k_channels, k_hop})};
-        const std::vector<anira_tensor> outputs{whole_f32(out.data(), {k_channels, k_hop}),
+        const std::vector<anira_tensor> outputs{empty,
+                                                whole_f32(out.data(), {k_channels, k_hop}),
                                                 whole_f32(values_out.data(), {1, 3})};
-        std::vector<size_t> delivered(2, 77);
+        std::vector<size_t> delivered(3, 77);
         ASSERT_EQ(anira_handler_process_multi_wait(h,
                                                    inputs.data(),
-                                                   2,
+                                                   3,
                                                    outputs.data(),
-                                                   2,
+                                                   3,
                                                    delivered.data(),
                                                    ANIRA_WAIT_FOREVER),
                   ANIRA_OK);
-        EXPECT_EQ(delivered[0], k_hop);
-        EXPECT_EQ(delivered[1], 3U);
+        EXPECT_EQ(delivered[0], 0U) << "the State position";
+        EXPECT_EQ(delivered[1], k_hop);
+        EXPECT_EQ(delivered[2], 3U);
         for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
             for (size_t i = 0; i < k_hop; ++i) {
                 streams.m_in.at(channel).push_back(in[(channel * k_hop) + i]);
@@ -571,13 +735,13 @@ TEST(AbiState, MultiFormsTakeHostArrays) {
     expect_closed_form(streams, latency);
     EXPECT_EQ(last_values, (std::array<float, 3>{5.5F, 2.5F, 3.5F}))
         << "the Static pair beside the state: values_in + 0.5 of the last inference";
-    // The single forms of the same handler leave no request behind in the stems' arrays: a
-    // multi pop that carries no stream pops nothing.
-    std::vector<anira_tensor> none{whole_f32(static_cast<float*>(nullptr), {k_channels, 0}),
+    // A multi pop that carries no stream pops nothing.
+    std::vector<anira_tensor> none{whole_f32(static_cast<float*>(nullptr), {1, 0}),
+                                   whole_f32(static_cast<float*>(nullptr), {k_channels, 0}),
                                    whole_f32(static_cast<float*>(nullptr), {1, 0})};
-    std::vector<size_t> delivered(2, 77);
-    EXPECT_EQ(anira_handler_pop_data_multi(h, none.data(), 2, delivered.data()), ANIRA_OK);
-    EXPECT_EQ(delivered, (std::vector<size_t>{0, 0}));
+    std::vector<size_t> delivered(3, 77);
+    EXPECT_EQ(anira_handler_pop_data_multi(h, none.data(), 3, delivered.data()), ANIRA_OK);
+    EXPECT_EQ(delivered, (std::vector<size_t>{0, 0, 0}));
 }
 
 // ---- the feedback
@@ -613,22 +777,31 @@ TEST(AbiState, StateFeedsBack) {
 }
 
 // A State spec may stand anywhere in either list: first and last (the example model's order),
-// and between two host-visible specs. The same closed form either way.
+// and in the middle of a list. The same closed form either way, through the two-slot single
+// form with each stream at its own position.
 TEST(AbiState, StateSpecsMayStandAnywhere) {
     const std::vector<size_t> sizes = hops(8);
     {
+        // State FIRST in and LAST out: `data` is input slot 1, `processed_data` output slot 0.
+        // One index shared by both lists could not name this pair of streams.
         Rig rig(accumulator_model(), k_accumulator);
         ASSERT_TRUE(rig.ready());
-        EXPECT_EQ(rig.get()->m_slots.m_inputs, (std::vector<uint32_t>{1}));
-        EXPECT_EQ(rig.get()->m_slots.m_outputs, (std::vector<uint32_t>{0}));
+        EXPECT_EQ(rig.get()->m_num_inputs, 2U);
+        EXPECT_EQ(rig.get()->m_num_outputs, 2U);
+        EXPECT_EQ(rig.data_slot(), 1U);
+        EXPECT_EQ(rig.processed_slot(), 0U);
         size_t position = 0;
         Streams streams;
         ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
         expect_closed_form(streams, anira_handler_get_latency(rig.get(), 0));
     }
     {
+        // State in the MIDDLE of the inputs and FIRST of the outputs: `data` is input slot 2,
+        // `processed_data` output slot 1.
         Rig rig(wide_model(), k_wide);
         ASSERT_TRUE(rig.ready());
+        EXPECT_EQ(rig.data_slot(), 2U);
+        EXPECT_EQ(rig.processed_slot(), 1U);
         size_t position = 0;
         Streams streams;
         ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
@@ -799,7 +972,7 @@ constexpr float k_offset = 1000.0F;
 anira_status ANIRA_CALL alter_before(const anira_stage_ctx* ctx,
                                      void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<StageLog*>(user_data);
-    // Tensor index 0 of the input list is the State tensor; the host's slot 0 is `data`.
+    // Input slot 0 is the State tensor, for the stage as for the host (whose `data` is slot 1).
     float* state_in = anira_tensor_data_f32(&ctx->model_inputs[0]);
     const size_t index = log->m_num_fed.fetch_add(1);
     if (index < StageLog::k_capacity) { log->m_fed.at(index).store(state_in[0]); }
@@ -810,7 +983,7 @@ anira_status ANIRA_CALL alter_before(const anira_stage_ctx* ctx,
 
 anira_status ANIRA_CALL alter_after(const anira_stage_ctx* ctx, void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<StageLog*>(user_data);
-    // Tensor index 1 of the output list is the State tensor, not yet captured.
+    // Output slot 1 is the State tensor, not yet captured.
     float* state_out = anira_tensor_data_f32(&ctx->model_outputs[1]);
     const size_t index = log->m_num_produced.fetch_add(1);
     if (index < StageLog::k_capacity) { log->m_produced.at(index).store(state_out[0]); }
@@ -819,9 +992,9 @@ anira_status ANIRA_CALL alter_after(const anira_stage_ctx* ctx, void* user_data)
 }
 
 // The feed runs ahead of every before_inference stage and the capture behind every
-// after_inference stage: a stage reads the fed state at its TENSOR index, what it writes is
+// after_inference stage: a stage reads the fed state at the tensor's slot, what it writes is
 // what the engine gets, and what it leaves in the state output is what the next inference is
-// fed. The host meanwhile names `data` slot 0.
+// fed. The host names `data` input slot 1 in the same numbering.
 TEST(AbiState, StageSeesAndAltersState) {
     StageLog log;
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
@@ -863,9 +1036,11 @@ struct MissLog {
     uint32_t m_calls = 0;
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
-    std::vector<int64_t> m_input_requests;   ///< shape[1] of every input element
-    std::vector<int64_t> m_output_requests;  ///< shape[1] of every output element
-    std::vector<float> m_stored;             ///< the Static output element as the function found it
+    const anira_tensor* m_inputs = nullptr;   ///< the array itself
+    const anira_tensor* m_outputs = nullptr;  ///< the array itself
+    std::vector<int64_t> m_input_requests;    ///< shape[1] of every input element
+    std::vector<int64_t> m_output_requests;   ///< shape[1] of every output element
+    std::vector<float> m_stored;  ///< the Static output element as the function found it
 };
 
 anira_status ANIRA_CALL record_miss(anira_handler* /*handler*/,
@@ -878,34 +1053,39 @@ anira_status ANIRA_CALL record_miss(anira_handler* /*handler*/,
     ++log->m_calls;
     log->m_num_inputs = num_inputs;
     log->m_num_outputs = num_outputs;
+    log->m_inputs = inputs;
+    log->m_outputs = outputs;
     log->m_input_requests.clear();
     log->m_output_requests.clear();
-    // Every element the counts promise is read: under ASan a count of three over the caller's
-    // two-element heap array is a report.
+    // Every element the counts promise is read: under ASan a count past the caller's heap
+    // array is a report.
     for (uint32_t i = 0; i < num_inputs; ++i) {
         log->m_input_requests.push_back(inputs[i].shape[1]);
     }
     for (uint32_t i = 0; i < num_outputs; ++i) {
         log->m_output_requests.push_back(outputs[i].shape[1]);
     }
+    // The wide model's output slots: state_out 0, processed_data 1, values_out 2.
     log->m_stored.clear();
-    if (num_outputs == 2 && outputs[1].shape[1] == 3) {
-        const float* stored = anira_tensor_data_f32(&outputs[1]);
+    if (num_outputs == 3 && outputs[2].shape[1] == 3) {
+        const float* stored = anira_tensor_data_f32(&outputs[2]);
         log->m_stored.assign(stored, stored + 3);
     }
     // The stream: a recognisable fill.
-    if (outputs[0].shape[1] > 0) {
-        float* samples = anira_tensor_data_f32(&outputs[0]);
-        for (int64_t i = 0; i < outputs[0].shape[0] * outputs[0].shape[1]; ++i) {
+    if (num_outputs == 3 && outputs[1].shape[1] > 0) {
+        float* samples = anira_tensor_data_f32(&outputs[1]);
+        for (int64_t i = 0; i < outputs[1].shape[0] * outputs[1].shape[1]; ++i) {
             samples[i] = 9.0F;
         }
     }
     return ANIRA_OK;
 }
 
-// anira_miss_fn gets the host arrays of the running call, H long and in host numbering, from a
-// multi form, from a single form and from a pop; the stems' longer arrays never reach it.
-TEST(AbiState, MissFunctionReceivesHostArrays) {
+// anira_miss_fn gets the arrays the copy path was handed, one tensor per tensor of the side: the
+// caller's OWN arrays from a multi form (the same pointers, the State position the empty tensor
+// the caller put there), the handler's staged arrays from a two-slot single form, empty inputs
+// from a pop.
+TEST(AbiState, MissFunctionReceivesTheCallersArrays) {
     MissLog log;
     log.m_input_requests.reserve(8);
     log.m_output_requests.reserve(8);
@@ -915,48 +1095,70 @@ TEST(AbiState, MissFunctionReceivesHostArrays) {
     anira_handler* h = rig.get();
     rig.backend().m_open.store(false);  // every inference is held: the ring starves
 
-    // A multi form, until a block misses (the latency's zeros are delivered first).
+    // A multi form, until a block misses (the latency's zeros are delivered first). Slot order:
+    // inputs {values_in, state_in, data}, outputs {state_out, processed_data, values_out}.
     const std::array<float, 3> values_in{1.0F, 2.0F, 3.0F};
     anira_status status = ANIRA_OK;
+    const std::vector<float> in(static_cast<size_t>(k_channels) * k_hop, 1.0F);
     std::vector<float> out(static_cast<size_t>(k_channels) * k_hop);
     std::array<float, 3> values_out{};
+    const anira_tensor empty = whole_f32(static_cast<float*>(nullptr), {1, 0});
+    const std::vector<anira_tensor> inputs{whole_f32(values_in.data(), {1, 3}),
+                                           empty,
+                                           whole_f32(in.data(), {k_channels, k_hop})};
+    const std::vector<anira_tensor> outputs{empty,
+                                            whole_f32(out.data(), {k_channels, k_hop}),
+                                            whole_f32(values_out.data(), {1, 3})};
     for (int i = 0; i < 8 && status == ANIRA_OK; ++i) {
-        const std::vector<float> in(static_cast<size_t>(k_channels) * k_hop, 1.0F);
-        const std::vector<anira_tensor> inputs{whole_f32(values_in.data(), {1, 3}),
-                                               whole_f32(in.data(), {k_channels, k_hop})};
-        const std::vector<anira_tensor> outputs{whole_f32(out.data(), {k_channels, k_hop}),
-                                                whole_f32(values_out.data(), {1, 3})};
-        status = anira_handler_process_multi(h, inputs.data(), 2, outputs.data(), 2, nullptr);
+        status = anira_handler_process_multi(h, inputs.data(), 3, outputs.data(), 3, nullptr);
     }
     ASSERT_EQ(status, ANIRA_MISSED);
     ASSERT_EQ(log.m_calls, 1U);
-    EXPECT_EQ(log.m_num_inputs, 2U);
-    EXPECT_EQ(log.m_num_outputs, 2U);
-    EXPECT_EQ(log.m_input_requests, (std::vector<int64_t>{3, k_hop})) << "{values_in, data}";
-    EXPECT_EQ(log.m_output_requests, (std::vector<int64_t>{k_hop, 3}))
-        << "{processed_data, values_out}";
+    EXPECT_EQ(log.m_inputs, inputs.data()) << "the caller's own array, not a staged copy";
+    EXPECT_EQ(log.m_outputs, outputs.data()) << "the caller's own array, not a staged copy";
+    EXPECT_EQ(log.m_num_inputs, 3U);
+    EXPECT_EQ(log.m_num_outputs, 3U);
+    EXPECT_EQ(log.m_input_requests, (std::vector<int64_t>{3, 0, k_hop}))
+        << "{values_in, state_in, data}";
+    EXPECT_EQ(log.m_output_requests, (std::vector<int64_t>{0, k_hop, 3}))
+        << "{state_out, processed_data, values_out}";
     EXPECT_EQ(log.m_stored, (std::vector<float>{0.0F, 0.0F, 0.0F})) << "the stored value";
     EXPECT_EQ(out[0], 9.0F);
 
-    // A single form: the handler's own host arrays, the caller's descriptor in its host slot.
+    // The two-slot single form: the handler's own arrays, as long as the model's lists, the
+    // caller's descriptor in its slot of each side and empty tensors beside it.
     const anira_tensor in_tensor = whole_f32(out.data(), {k_channels, k_hop});
     const anira_tensor out_tensor = whole_f32(out.data(), {k_channels, k_hop});
-    ASSERT_EQ(anira_handler_process(h, &in_tensor, &out_tensor, rig.data_slot(), nullptr),
-              ANIRA_ERROR_INVALID_ARGUMENT)
-        << "host input slot 1 and host output slot 1 are not both streams";
-    ASSERT_EQ(anira_handler_pop_data(h, &out_tensor, rig.processed_slot(), nullptr), ANIRA_MISSED);
+    ASSERT_EQ(anira_handler_process(h,
+                                    &in_tensor,
+                                    rig.data_slot(),
+                                    &out_tensor,
+                                    rig.processed_slot(),
+                                    nullptr),
+              ANIRA_MISSED);
     ASSERT_EQ(log.m_calls, 2U);
-    EXPECT_EQ(log.m_num_inputs, 2U);
-    EXPECT_EQ(log.m_num_outputs, 2U);
-    EXPECT_EQ(log.m_input_requests, (std::vector<int64_t>{0, 0})) << "a pop passes empty inputs";
-    EXPECT_EQ(log.m_output_requests, (std::vector<int64_t>{k_hop, 0}));
+    EXPECT_EQ(log.m_inputs, h->m_input_tensors.data());
+    EXPECT_EQ(log.m_outputs, h->m_output_tensors.data());
+    EXPECT_EQ(log.m_num_inputs, 3U);
+    EXPECT_EQ(log.m_num_outputs, 3U);
+    EXPECT_EQ(log.m_input_requests, (std::vector<int64_t>{0, 0, k_hop}));
+    EXPECT_EQ(log.m_output_requests, (std::vector<int64_t>{0, k_hop, 0}));
 
-    // Between two calls the stems' arrays hold no request: a multi pop that carries no stream
-    // asks for nothing, so nothing misses.
-    std::vector<anira_tensor> none{whole_f32(static_cast<float*>(nullptr), {k_channels, 0}),
+    // A pop: empty inputs, the caller's descriptor in its output slot.
+    ASSERT_EQ(anira_handler_pop_data(h, &out_tensor, rig.processed_slot(), nullptr), ANIRA_MISSED);
+    ASSERT_EQ(log.m_calls, 3U);
+    EXPECT_EQ(log.m_num_inputs, 3U);
+    EXPECT_EQ(log.m_num_outputs, 3U);
+    EXPECT_EQ(log.m_input_requests, (std::vector<int64_t>{0, 0, 0})) << "a pop passes empty inputs";
+    EXPECT_EQ(log.m_output_requests, (std::vector<int64_t>{0, k_hop, 0}));
+
+    // Between two calls the handler's arrays hold no request: a multi pop that carries no
+    // stream asks for nothing, so nothing misses.
+    std::vector<anira_tensor> none{whole_f32(static_cast<float*>(nullptr), {1, 0}),
+                                   whole_f32(static_cast<float*>(nullptr), {k_channels, 0}),
                                    whole_f32(static_cast<float*>(nullptr), {1, 0})};
-    EXPECT_EQ(anira_handler_pop_data_multi(h, none.data(), 2, nullptr), ANIRA_OK);
-    EXPECT_EQ(log.m_calls, 2U);
+    EXPECT_EQ(anira_handler_pop_data_multi(h, none.data(), 3, nullptr), ANIRA_OK);
+    EXPECT_EQ(log.m_calls, 3U);
     rig.backend().m_open.store(true);
 }
 

@@ -302,7 +302,8 @@ Outcome call(Rig& rig, Form form, const anira_tensor& in, const anira_tensor& ou
     Outcome outcome;
     switch (form) {
         case Form::Process:
-            outcome.m_status = anira_handler_process(handler, &in, &out, 0, &outcome.m_delivered);
+            outcome.m_status =
+                anira_handler_process(handler, &in, 0, &out, 0, &outcome.m_delivered);
             break;
         case Form::ProcessMulti:
             outcome.m_status =
@@ -320,9 +321,10 @@ Outcome call(Rig& rig, Form form, const anira_tensor& in, const anira_tensor& ou
             rig.open_gate(true);
             outcome.m_status = anira_handler_process_wait(handler,
                                                           &in,
-                                                          &out,
-                                                          ANIRA_WAIT_FOREVER,
                                                           0,
+                                                          &out,
+                                                          0,
+                                                          ANIRA_WAIT_FOREVER,
                                                           &outcome.m_delivered);
             rig.open_gate(false);
             break;
@@ -445,9 +447,13 @@ TEST(AbiHandlerTensor, OneTensorOnBothSidesIsInPlace) {
             fill_input(block, position);
             const auto before = bytes_of(block.tensor());
             size_t delivered = k_unset;
-            ASSERT_EQ(
-                anira_handler_process(rig.get(), &block.tensor(), &block.tensor(), 0, &delivered),
-                ANIRA_OK);
+            ASSERT_EQ(anira_handler_process(rig.get(),
+                                            &block.tensor(),
+                                            0,
+                                            &block.tensor(),
+                                            0,
+                                            &delivered),
+                      ANIRA_OK);
             EXPECT_EQ(delivered, k_hop);
             EXPECT_EQ(bytes_of(block.tensor()), before);
             for (size_t channel = 0; channel < 2; ++channel) {
@@ -678,8 +684,12 @@ TEST(AbiHandlerTensor, ABypassMissLeavesAnInPlaceTensorWhereItIs) {
             Block block(layout, 2, k_hop);
             fill_input(block, position);
             size_t delivered = k_unset;
-            const anira_status status =
-                anira_handler_process(rig.get(), &block.tensor(), &block.tensor(), 0, &delivered);
+            const anira_status status = anira_handler_process(rig.get(),
+                                                              &block.tensor(),
+                                                              0,
+                                                              &block.tensor(),
+                                                              0,
+                                                              &delivered);
             if (k == 0) { rig.settle(); }
             if (k == 2) {
                 EXPECT_EQ(status, ANIRA_MISSED);
@@ -704,7 +714,7 @@ TEST(AbiHandlerTensor, ANullHandlerIsRefusedAndTheCountsAreZeroed) {
     const anira_tensor* tensor = &block.tensor();
     size_t delivered = k_unset;
     std::array<size_t, 2> counts{k_unset, k_unset};
-    EXPECT_EQ(anira_handler_process(nullptr, tensor, tensor, 0, &delivered),
+    EXPECT_EQ(anira_handler_process(nullptr, tensor, 0, tensor, 0, &delivered),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(delivered, 0U);
     EXPECT_EQ(anira_handler_process_multi(nullptr, tensor, 1, tensor, 2, counts.data()),
@@ -722,7 +732,7 @@ TEST(AbiHandlerTensor, ANullHandlerIsRefusedAndTheCountsAreZeroed) {
     EXPECT_EQ(counts[0], 0U);
     EXPECT_EQ(counts[1], k_unset) << "one count was announced";
     delivered = k_unset;
-    EXPECT_EQ(anira_handler_process_wait(nullptr, tensor, tensor, 0.0, 0, &delivered),
+    EXPECT_EQ(anira_handler_process_wait(nullptr, tensor, 0, tensor, 0, 0.0, &delivered),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(delivered, 0U);
     EXPECT_EQ(anira_handler_process_multi_wait(nullptr, tensor, 1, tensor, 1, nullptr, 0.0),
@@ -748,7 +758,7 @@ TEST(AbiHandlerTensor, UnpreparedEntriesRecordNotPrepared) {
     const Block block(Layout::Interleaved, 2, k_hop);
     const anira_tensor* tensor = &block.tensor();
     size_t delivered = k_unset;
-    EXPECT_EQ(anira_handler_process(h, tensor, tensor, 0, &delivered), ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_process(h, tensor, 0, tensor, 0, &delivered), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(delivered, 0U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_process_multi(h, tensor, 1, tensor, 1, nullptr),
@@ -757,7 +767,7 @@ TEST(AbiHandlerTensor, UnpreparedEntriesRecordNotPrepared) {
     EXPECT_EQ(anira_handler_push_data_multi(h, tensor, 1), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_pop_data(h, tensor, 0, nullptr), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_pop_data_multi(h, tensor, 1, nullptr), ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_process_wait(h, tensor, tensor, ANIRA_WAIT_FOREVER, 0, nullptr),
+    EXPECT_EQ(anira_handler_process_wait(h, tensor, 0, tensor, 0, ANIRA_WAIT_FOREVER, nullptr),
               ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(
         anira_handler_process_multi_wait(h, tensor, 1, tensor, 1, nullptr, ANIRA_WAIT_FOREVER),
@@ -844,7 +854,7 @@ TEST(AbiHandlerTensor, EveryMalformedTensorIsRefusedBeforeAnythingIsPushed) {
 
         if (!refusal.m_output_only) {
             anira_handler_reset(h);
-            EXPECT_EQ(anira_handler_process(h, &bad.tensor(), &good.tensor(), 0, &delivered),
+            EXPECT_EQ(anira_handler_process(h, &bad.tensor(), 0, &good.tensor(), 0, &delivered),
                       refusal.m_status);
             EXPECT_EQ(delivered, 0U);
             EXPECT_EQ(anira_handler_rt_error(h), refusal.m_status);
@@ -857,7 +867,7 @@ TEST(AbiHandlerTensor, EveryMalformedTensorIsRefusedBeforeAnythingIsPushed) {
         }
         anira_handler_reset(h);
         delivered = k_unset;
-        EXPECT_EQ(anira_handler_process(h, &good.tensor(), &bad.tensor(), 0, &delivered),
+        EXPECT_EQ(anira_handler_process(h, &good.tensor(), 0, &bad.tensor(), 0, &delivered),
                   refusal.m_status)
             << "the output is validated before the input is pushed";
         EXPECT_EQ(delivered, 0U);
@@ -869,7 +879,7 @@ TEST(AbiHandlerTensor, EveryMalformedTensorIsRefusedBeforeAnythingIsPushed) {
         EXPECT_EQ(anira_handler_pop_data_multi(h, &bad.tensor(), 1, counts.data()),
                   refusal.m_status);
         EXPECT_EQ(counts[0], 0U);
-        EXPECT_EQ(anira_handler_process_wait(h, &good.tensor(), &bad.tensor(), 0.0, 0, nullptr),
+        EXPECT_EQ(anira_handler_process_wait(h, &good.tensor(), 0, &bad.tensor(), 0, 0.0, nullptr),
                   refusal.m_status);
         EXPECT_EQ(anira_handler_pop_data_wait(h, &bad.tensor(), 0.0, 0, nullptr), refusal.m_status);
 
@@ -975,9 +985,9 @@ TEST(AbiHandlerTensor, TheCheckOrderIsPinnedByTensorsWrongInTwoWays) {
     const Block wrong_dtype(Layout::Interleaved, 2, k_hop, ANIRA_DTYPE_I16);
     Block wrong_rank(Layout::Interleaved, 2, k_hop);
     wrong_rank.descriptor().ndim = 1;
-    EXPECT_EQ(anira_handler_process(h, &wrong_dtype.tensor(), &wrong_rank.tensor(), 0, nullptr),
+    EXPECT_EQ(anira_handler_process(h, &wrong_dtype.tensor(), 0, &wrong_rank.tensor(), 0, nullptr),
               ANIRA_ERROR_CONFIG);
-    EXPECT_EQ(anira_handler_process(h, &wrong_rank.tensor(), &wrong_dtype.tensor(), 0, nullptr),
+    EXPECT_EQ(anira_handler_process(h, &wrong_rank.tensor(), 0, &wrong_dtype.tensor(), 0, nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
@@ -1021,14 +1031,21 @@ TEST(AbiHandlerTensor, TheArgumentsAreRefused) {
     size_t delivered = k_unset;
     std::array<size_t, 2> counts{k_unset, k_unset};
 
-    // A NULL tensor, an index out of range.
-    EXPECT_EQ(anira_handler_process(h, nullptr, tensors.data(), 0, &delivered),
+    // A NULL tensor, a slot out of range: each side of the two-slot form has its own range, so
+    // a good slot on one side never excuses a bad one on the other.
+    EXPECT_EQ(anira_handler_process(h, nullptr, 0, tensors.data(), 0, &delivered),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(delivered, 0U);
-    EXPECT_EQ(anira_handler_process(h, tensors.data(), nullptr, 0, nullptr),
+    EXPECT_EQ(anira_handler_process(h, tensors.data(), 0, nullptr, 0, nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_handler_process(h, tensors.data(), tensors.data(), 2, nullptr),
+    EXPECT_EQ(anira_handler_process(h, tensors.data(), 2, tensors.data(), 2, nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_process(h, tensors.data(), 2, tensors.data(), 0, nullptr),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "in_slot out of range beside a good out_slot";
+    EXPECT_EQ(anira_handler_process(h, tensors.data(), 0, tensors.data(), 2, nullptr),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "out_slot out of range beside a good in_slot";
     EXPECT_EQ(anira_handler_push_data(h, nullptr, 0), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_push_data(h, tensors.data(), 2), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_pop_data(h, nullptr, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
@@ -1136,9 +1153,10 @@ TEST(AbiHandlerTensor, AWaitTwinWithoutAThreadRunsTheStemAndRefuses) {
     size_t delivered = k_unset;
     EXPECT_EQ(anira_handler_process_wait(h,
                                          inputs.data(),
-                                         outputs.data(),
-                                         ANIRA_WAIT_FOREVER,
                                          0,
+                                         outputs.data(),
+                                         0,
+                                         ANIRA_WAIT_FOREVER,
                                          &delivered),
               ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(delivered, k_hop);
@@ -1267,7 +1285,7 @@ protected:
             Block in(Layout::Planar, channels, k_hop);
             const Block out(Layout::Planar, channels, k_hop);
             fill_input(in, k * k_samples);
-            ASSERT_EQ(anira_handler_process(rig.get(), &in.tensor(), &out.tensor(), 0, nullptr),
+            ASSERT_EQ(anira_handler_process(rig.get(), &in.tensor(), 0, &out.tensor(), 0, nullptr),
                       ANIRA_OK);
             if (k == 0) { rig.settle(); }
         }
@@ -1288,7 +1306,7 @@ TEST_F(AbiHandlerTensorMiss, TheBackupFunctionFillsTheWholeBlockOncePerMiss) {
         const auto in_before = bytes_of(in.tensor());
         const auto out_before = bytes_of(out.tensor());
         size_t delivered = k_unset;
-        EXPECT_EQ(anira_handler_process(rig.get(), &in.tensor(), &out.tensor(), 0, &delivered),
+        EXPECT_EQ(anira_handler_process(rig.get(), &in.tensor(), 0, &out.tensor(), 0, &delivered),
                   ANIRA_MISSED)
             << "the host filled the block, and it still counts as missed";
         EXPECT_EQ(delivered, 0U);
@@ -1316,7 +1334,7 @@ TEST_F(AbiHandlerTensorMiss, AnInPlaceBlockIsTheInputAndTheOutputOfTheFunction) 
     starve(rig, 2);
     Block block(Layout::Interleaved, 2, k_hop);
     fill_input(block, 2 * k_samples);
-    EXPECT_EQ(anira_handler_process(rig.get(), &block.tensor(), &block.tensor(), 0, nullptr),
+    EXPECT_EQ(anira_handler_process(rig.get(), &block.tensor(), 0, &block.tensor(), 0, nullptr),
               ANIRA_MISSED);
     EXPECT_EQ(m_state.m_calls, 1);
     EXPECT_EQ(m_state.m_inputs, m_state.m_outputs);
@@ -1334,7 +1352,7 @@ TEST_F(AbiHandlerTensorMiss, AFailingStatusZeroFills) {
     const Block out(Layout::Interleaved, 2, k_hop);
     fill_input(in, 2 * k_samples);
     size_t delivered = k_unset;
-    EXPECT_EQ(anira_handler_process(rig.get(), &in.tensor(), &out.tensor(), 0, &delivered),
+    EXPECT_EQ(anira_handler_process(rig.get(), &in.tensor(), 0, &out.tensor(), 0, &delivered),
               ANIRA_MISSED);
     EXPECT_EQ(delivered, 0U);
     EXPECT_EQ(m_state.m_calls, 1);
@@ -1374,7 +1392,7 @@ TEST_F(AbiHandlerTensorMiss, AMultiFormHandsOverTheCallersArrays) {
         Block in(Layout::Planar, 3, k_hop);
         const Block out(Layout::Planar, 3, k_hop);
         fill_input(in, k * k_samples);
-        ASSERT_EQ(anira_handler_process(rig.get(), &in.tensor(), &out.tensor(), 0, nullptr),
+        ASSERT_EQ(anira_handler_process(rig.get(), &in.tensor(), 0, &out.tensor(), 0, nullptr),
                   ANIRA_OK);
     }
     Block stream_in(Layout::Interleaved, 3, k_hop);
@@ -1408,7 +1426,7 @@ TEST_F(AbiHandlerTensorMiss, AMultiFormHandsOverTheCallersArrays) {
     // in its slot and an empty tensor beside it.
     const Block single_out(Layout::Interleaved, 3, k_hop);
     EXPECT_EQ(
-        anira_handler_process(rig.get(), &stream_in.tensor(), &single_out.tensor(), 0, nullptr),
+        anira_handler_process(rig.get(), &stream_in.tensor(), 0, &single_out.tensor(), 0, nullptr),
         ANIRA_MISSED);
     ASSERT_EQ(m_state.m_calls, 2);
     EXPECT_EQ(m_state.m_inputs, rig.get()->m_input_tensors.data());
@@ -1469,7 +1487,7 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
         Block in(Layout::Planar, 3, k_hop);
         const Block out(Layout::Planar, 3, k_hop);
         fill_input(in, k * k_samples);
-        ASSERT_EQ(anira_handler_process(handler, &in.tensor(), &out.tensor(), 0, nullptr),
+        ASSERT_EQ(anira_handler_process(handler, &in.tensor(), 0, &out.tensor(), 0, nullptr),
                   k < 2 ? ANIRA_OK : ANIRA_MISSED);
     }
     ASSERT_EQ(m_state.m_calls, 1);
@@ -1586,9 +1604,10 @@ TEST_F(AbiHandlerTensorMiss, AWaitTwinWithoutAThreadCallsItAndStillRefuses) {
         delivered = k_unset;
         EXPECT_EQ(anira_handler_process_wait(rig.get(),
                                              &in.tensor(),
-                                             &out.tensor(),
-                                             ANIRA_WAIT_FOREVER,
                                              0,
+                                             &out.tensor(),
+                                             0,
+                                             ANIRA_WAIT_FOREVER,
                                              &delivered),
                   ANIRA_ERROR_INVALID_STATE);
         if (k == 0) {
@@ -1684,7 +1703,7 @@ std::vector<FaceBlock> run_face(Layout layout, anira_miss_policy policy) {
         fill_input(in, k * k_hop);
         FaceBlock block;
         block.m_status =
-            anira_handler_process(rig.get(), &in.tensor(), &out.tensor(), 0, &block.m_delivered);
+            anira_handler_process(rig.get(), &in.tensor(), 0, &out.tensor(), 0, &block.m_delivered);
         for (size_t channel = 0; channel < 2; ++channel) {
             for (size_t i = 0; i < k_hop; ++i) { block.m_samples.push_back(out.at(channel, i)); }
         }

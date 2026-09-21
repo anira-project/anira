@@ -64,7 +64,7 @@ anira_status bad_process(anira_handler* handler) {
     float sample = 0.0F;
     const std::array<float*, 1> ptrs{&sample};
     const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, 1);
-    return anira_handler_process(handler, &io, &io, 99, nullptr);
+    return anira_handler_process(handler, &io, 99, &io, 99, nullptr);
 }
 
 /// One in-place gain block, waited, returned for the assertions.
@@ -74,7 +74,7 @@ std::vector<float> waited_block(anira_handler* handler, size_t block_index) {
     const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
     const size_t prev = anira_test::available(handler);
     size_t delivered = 0;
-    EXPECT_EQ(anira_handler_process(handler, &io, &io, 0, &delivered), ANIRA_OK)
+    EXPECT_EQ(anira_handler_process(handler, &io, 0, &io, 0, &delivered), ANIRA_OK)
         << "block " << block_index;
     EXPECT_EQ(delivered, k_block) << "block " << block_index;
     wait_for_block(handler, prev);
@@ -100,7 +100,7 @@ TEST(AbiRtError, TheFirstOccurrenceRecordsOnceAndLaterOnesAreCounted) {
     const std::array<float*, 1> ptrs{block.data()};
     const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
     for (int i = 0; i < 5; ++i) {
-        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, nullptr), ANIRA_ERROR_NOT_PREPARED);
+        EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, nullptr), ANIRA_ERROR_NOT_PREPARED);
     }
     for (int i = 0; i < 3; ++i) {
         EXPECT_EQ(anira_handler_pop_data(h, &io, 0, nullptr), ANIRA_ERROR_NOT_PREPARED);
@@ -291,7 +291,7 @@ TEST(AbiRtError, SiteLatchesLogOncePerPrepareAndSummarise) {
     const std::array<float*, 1> ptrs{block.data()};
     const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
     const auto starved_call = [&] {
-        static_cast<void>(anira_handler_process(h, &io, &io, 0, nullptr));
+        static_cast<void>(anira_handler_process(h, &io, 0, &io, 0, nullptr));
         anira_drain_log();
     };
     // The first call delivers the priming block, the rest starve: the S7 site latches once.
@@ -361,7 +361,7 @@ TEST(AbiRtError, EngineAfterAThrowingInferenceZeroFillsAndKeepsTheThread) {
         const std::array<float*, 1> ptrs{block.data()};
         const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
         const size_t prev = anira_test::available(h);
-        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, nullptr), ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, nullptr), ANIRA_OK);
         expect_all(block, 0.0F, "block 1: the priming zeros");
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (anira_handler_rt_error(h) != ANIRA_ERROR_ENGINE &&
@@ -466,7 +466,7 @@ TEST(AbiRtError, AViolationRecordCarriesTheFlagsAndTheDrainDeliversIt) {
     std::vector<float> block(k_block, 0.0F);
     const std::array<float*, 1> ptrs{block.data()};
     const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
-    EXPECT_EQ(anira_handler_process(h, &io, &io, 0, nullptr), ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, nullptr), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_PREPARED);
 #ifdef ENABLE_LOGGING
     EXPECT_TRUE(collector.wait_for("handler not prepared", "rt")) << "the drain thread delivers";

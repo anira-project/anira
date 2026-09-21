@@ -136,7 +136,7 @@ void run_waited_block(anira_handler* handler, size_t block_index, size_t n = k_b
     const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, n);
     const size_t prev = anira_test::available(handler);
     size_t delivered = 0;
-    EXPECT_EQ(anira_handler_process(handler, &io, &io, 0, &delivered), ANIRA_OK)
+    EXPECT_EQ(anira_handler_process(handler, &io, 0, &io, 0, &delivered), ANIRA_OK)
         << "block " << block_index;
     EXPECT_EQ(delivered, n) << "block " << block_index;
     wait_for_block(handler, prev);
@@ -146,7 +146,7 @@ void expect_unprepared(anira_handler* handler) {
     std::vector<float> block(k_block, 0.5F);
     const std::array<float*, 1> ptrs{block.data()};
     const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
-    EXPECT_EQ(anira_handler_process(handler, &io, &io, 0, nullptr), ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_process(handler, &io, 0, &io, 0, nullptr), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_rt_error(handler), ANIRA_ERROR_NOT_PREPARED);
 }
 
@@ -360,7 +360,7 @@ Delivered call(anira_handler* handler,
             out = in;
             const std::array<float*, 1> ch{out.data()};
             const anira_tensor io = anira_test::planar_f32(ch.data(), 1, k_block);
-            delivered.m_status = anira_handler_process(handler, &io, &io, 0, &delivered.m_count);
+            delivered.m_status = anira_handler_process(handler, &io, 0, &io, 0, &delivered.m_count);
             return delivered;
         }
         case Form::Separate: {
@@ -370,7 +370,7 @@ Delivered call(anira_handler* handler,
             const anira_tensor in_tensor = anira_test::planar_f32(i.data(), 1, k_block);
             const anira_tensor out_tensor = anira_test::planar_f32(o.data(), 1, k_block);
             delivered.m_status =
-                anira_handler_process(handler, &in_tensor, &out_tensor, 0, &delivered.m_count);
+                anira_handler_process(handler, &in_tensor, 0, &out_tensor, 0, &delivered.m_count);
             return delivered;
         }
         case Form::Multi: {
@@ -407,7 +407,7 @@ Delivered call(anira_handler* handler,
             anira_tensor_init_host(&out_tensor, out.data(), ANIRA_DTYPE_F32, 2, shape.data());
             delivered.m_count = 7;  // a pure out parameter: written on every return
             delivered.m_status =
-                anira_handler_process(handler, &in_tensor, &out_tensor, 0, &delivered.m_count);
+                anira_handler_process(handler, &in_tensor, 0, &out_tensor, 0, &delivered.m_count);
             return delivered;
         }
         case Form::TensorMulti: {
@@ -887,7 +887,7 @@ TEST(AbiPrepare, ASecondPrepareReplacesTheSessionWhole) {
         const std::array<float*, 1> ptrs{block.data()};
         const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, 256);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, 256U);
     }
     wait_for_available(h, latency);

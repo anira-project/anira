@@ -196,7 +196,7 @@ int anira_header_c_probe(void) {
                 anira_contract_hard_set_miss_fn(NULL, NULL, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
                     ? 1
                     : 0;
-            checks += anira_handler_process(NULL, &tensor, &tensor, 0u, NULL) ==
+            checks += anira_handler_process(NULL, &tensor, 0u, &tensor, 0u, NULL) ==
                               ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;

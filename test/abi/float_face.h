@@ -119,7 +119,9 @@ public:
     FloatFace& operator=(FloatFace&&) = delete;
     ~FloatFace() = default;
 
-    /// anira_handler_process over separate input and output channels of one slot.
+    /// anira_handler_process over separate input and output channels. The face names one
+    /// `slot` for both sides (the stream of these tests' models stands at the same position in
+    /// both lists); the entry itself takes one slot per side.
     anira_status process(const float* const* in,
                          size_t num_in,
                          float* const* out,
@@ -128,7 +130,12 @@ public:
                          size_t* delivered) {
         const anira_tensor* inputs = m_adapter.present_input(slot, in, num_in);
         const anira_tensor* outputs = m_adapter.present_output(slot, out, num_out);
-        return anira_handler_process(m_handler, &inputs[slot], &outputs[slot], slot, delivered);
+        return anira_handler_process(m_handler,
+                                     &inputs[slot],
+                                     slot,
+                                     &outputs[slot],
+                                     slot,
+                                     delivered);
     }
 
     /// anira_handler_process in place: one set of channels, read and then overwritten.
@@ -194,9 +201,10 @@ public:
         const anira_tensor* outputs = m_adapter.present_output(slot, out, num_out);
         return anira_handler_process_wait(m_handler,
                                           &inputs[slot],
-                                          &outputs[slot],
-                                          timeout_ms,
                                           slot,
+                                          &outputs[slot],
+                                          slot,
+                                          timeout_ms,
                                           delivered);
     }
 

@@ -179,7 +179,7 @@ void unloadtest_process(void* instance, int num_blocks) {
                                   2,
                                   shape.data());
     for (int block = 0; block < num_blocks; ++block) {
-        static_cast<void>(anira_handler_process(i->m_handler, &io, &io, 0, nullptr));
+        static_cast<void>(anira_handler_process(i->m_handler, &io, 0, &io, 0, nullptr));
     }
 }
 

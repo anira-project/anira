@@ -465,20 +465,21 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract
  * handler, and it is real-time code: no allocation, no lock, no system call. Under clang
  * a function converted to this type must itself be declared ANIRA_NONBLOCKING.
  * @param handler The handler whose block was missed.
- * @param inputs One tensor per host input slot, in host slot order and covering every host slot
- *        (a State spec has none): the arrays of the running call. A slot the call did
- *        not carry is an empty tensor (shape[1] == 0, its memory arm not to be read); a
- *        pop passes empty inputs. The block of a process form is already pushed and
- *        still intact in host memory, in place too.
- * @param num_inputs The handler's number of host input slots.
- * @param outputs One tensor per host output slot; shape[1] of a Streamed slot is the request,
- *        and the memory is the function's to fill. A slot whose tensor is empty (an
- *        extent of 0) was not requested. A non-empty Static element of a _multi form is
- *        the whole tensor in the spec's shape and already holds the stored value (the
- *        latest the model produced): leave it, or overwrite it. The descriptors are
- *        const: write through anira_tensor_data, anira_tensor_plane or the handle, by
- *        the tensor's strides.
- * @param num_outputs The handler's number of host output slots.
+ * @param inputs One tensor per input slot, in slot order and covering every slot (a slot is the
+ *        tensor's position in the model config's input list): the arrays of the running
+ *        call, the caller's own under a _multi form. A slot the call did not carry, and
+ *        the position of a State tensor always, is an empty tensor (shape[1] == 0, its
+ *        memory arm not to be read); a pop passes empty inputs. The block of a process
+ *        form is already pushed and still intact in host memory, in place too.
+ * @param num_inputs The number of tensors of the model config's input list.
+ * @param outputs One tensor per output slot (the tensor's position in the model config's output
+ *        list); shape[1] of a Streamed slot is the request, and the memory is the
+ *        function's to fill. A slot whose tensor is empty (an extent of 0) was not
+ *        requested. A non-empty Static element of a _multi form is the whole tensor in
+ *        the spec's shape and already holds the stored value (the latest the model
+ *        produced): leave it, or overwrite it. The descriptors are const: write through
+ *        anira_tensor_data, anira_tensor_plane or the handle, by the tensor's strides.
+ * @param num_outputs The number of tensors of the model config's output list.
  * @param user_data The user_data of anira_contract_hard_set_miss_fn.
  * @par Thread contract
  * [driver-thread] ANIRA_NONBLOCKING

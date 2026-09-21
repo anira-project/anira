@@ -382,10 +382,10 @@ TEST(AbiHandler, NullArgumentsAreRefused) {
     const anira_tensor in = anira_test::planar_f32(in_ptrs.data(), 1, k_block);
     uint32_t count = 0;
     size_t delivered = 7;
-    EXPECT_EQ(anira_handler_process(nullptr, &io, &io, 0, &delivered),
+    EXPECT_EQ(anira_handler_process(nullptr, &io, 0, &io, 0, &delivered),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(delivered, 0U) << "a refusal writes 0 to the caller's count";
-    EXPECT_EQ(anira_handler_process(nullptr, &io, &io, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT)
+    EXPECT_EQ(anira_handler_process(nullptr, &io, 0, &io, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT)
         << "the count is optional";
     EXPECT_EQ(anira_handler_push_data(nullptr, &in, 0), ANIRA_ERROR_INVALID_ARGUMENT);
     delivered = 7;
@@ -440,7 +440,7 @@ TEST(AbiHandler, UnpreparedEntriesRecordNotPrepared) {
     const anira_tensor in = anira_test::planar_f32(in_ptrs.data(), 1, k_block);
 
     size_t delivered = 7;
-    EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(delivered, 0U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_push_data(h, &in, 0), ANIRA_ERROR_NOT_PREPARED);
@@ -455,7 +455,7 @@ TEST(AbiHandler, UnpreparedEntriesRecordNotPrepared) {
               ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(multi_delivered[0], 0U) << "a refused multi form zeroes its counts";
     delivered = 7;
-    EXPECT_EQ(anira_handler_process_wait(h, &io, &io, ANIRA_WAIT_FOREVER, 0, &delivered),
+    EXPECT_EQ(anira_handler_process_wait(h, &io, 0, &io, 0, ANIRA_WAIT_FOREVER, &delivered),
               ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(delivered, 0U);
     delivered = 7;
@@ -691,7 +691,7 @@ TEST(AbiHandler, AvailableSamplesTracksTheOutputRing) {
         const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
         const size_t prev = anira_test::available(h);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_block);
         wait_for_block(h, prev);
     }
@@ -761,7 +761,7 @@ TEST(AbiHandler, ResetReSeedsTheStreamAndClearsRtError) {
     std::vector<float> block = ramp(99);
     const std::array<float*, 1> ptrs{block.data()};
     const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
-    EXPECT_EQ(anira_handler_process(h, &io, &io, 99, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_process(h, &io, 99, &io, 99, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
     oracle.reset();
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
@@ -823,7 +823,7 @@ TEST(AbiHandler, PlanReportRows) {
         const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
         const size_t prev = anira_test::available(h);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_block);
         wait_for_block(h, prev);
     }
@@ -851,7 +851,7 @@ TEST(AbiHandler, PlanReportRows) {
     EXPECT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), nullptr, rows.data()),
               ANIRA_ERROR_INVALID_ARGUMENT);
 
-    // Slots: two inputs, two outputs, every one a host slot.
+    // Slots: two inputs, two outputs, every one in host memory.
     std::array<anira_plan_slot, 2> slots{ANIRA_PLAN_SLOT_INIT, ANIRA_PLAN_SLOT_INIT};
     count = 2;
     EXPECT_EQ(anira_plan_report_slots(report, 0, 1, sizeof(anira_plan_slot), &count, slots.data()),
@@ -971,7 +971,7 @@ TEST(AbiHandler, ConfigsAreCopiedAndDestroyableRightAfterCreate) {
         const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
         const size_t prev = anira_test::available(h);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_block);
         wait_for_block(h, prev);
         if (k == 1) {

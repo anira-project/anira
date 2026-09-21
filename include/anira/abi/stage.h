@@ -274,13 +274,15 @@ typedef struct anira_stage_ctx {
     uint32_t variant;  /**< The variant of that plan; 0 in this pre-release. */
     /**
      * The tensors of the model's input list, State tensors included: the length of input_rings
-     * and model_inputs. A stage indexes by tensor index, the position in the model's list; the
-     * host's entries use host slot numbers, which skip State specs.
+     * and model_inputs. A stage indexes by slot, the tensor's position in the model config's
+     * input list: the number every entry of anira_handler and every row of the plan report
+     * uses.
      */
     uint32_t num_inputs;
     /**
      * The tensors of the model's output list, State tensors included: the length of
-     * model_outputs and output_rings.
+     * model_outputs and output_rings, indexed by slot, the tensor's position in the model
+     * config's output list.
      */
     uint32_t num_outputs;
     /**

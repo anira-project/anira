@@ -116,9 +116,10 @@ static_assert(
     noexcept(anira_tensor_init_metal(nullptr, nullptr, nullptr, ANIRA_DTYPE_F32, 0, nullptr)));
 // The Hard entries over host tensors: a nonblocking stem, a multi form and a _wait twin. The
 // host block is a const anira_tensor*, an output's included.
-static_assert(noexcept(anira_handler_process(nullptr, nullptr, nullptr, 0, nullptr)));
+// The two-slot forms: each side names its own slot, the tensor's position in its list.
+static_assert(noexcept(anira_handler_process(nullptr, nullptr, 0, nullptr, 0, nullptr)));
 static_assert(noexcept(anira_handler_pop_data_multi(nullptr, nullptr, 0, nullptr)));
-static_assert(noexcept(anira_handler_process_wait(nullptr, nullptr, nullptr, 0.0, 0, nullptr)));
+static_assert(noexcept(anira_handler_process_wait(nullptr, nullptr, 0, nullptr, 0, 0.0, nullptr)));
 // The Static entries: a slot and a whole tensor, const on both (anira writes the memory an
 // output names, never its descriptor); the handler of the getter is not const.
 static_assert(noexcept(anira_handler_set_static_input(nullptr, 0, nullptr)));

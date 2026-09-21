@@ -1268,7 +1268,7 @@ TEST(AbiStage, ARingOfAnotherDtypeNeedsAStageThatFillsThePhase) {
         anira_tensor_init_host(&out_tensor, out.data(), ANIRA_DTYPE_F32, 2, shape.data());
         const size_t prev = anira_test::available(h);
         size_t delivered = 0;
-        ASSERT_EQ(anira_handler_process(h, &in_tensor, &out_tensor, 0, &delivered), ANIRA_OK);
+        ASSERT_EQ(anira_handler_process(h, &in_tensor, 0, &out_tensor, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_hop);
         anira_test::wait_for_block(h, prev);
         ASSERT_FALSE(::testing::Test::HasFatalFailure());

@@ -50,25 +50,6 @@ struct Plan {
                                                     ///< string store
 };
 
-/// The host's numbering of a handler's tensors. A host slot number counts the host-visible
-/// specs of its side (Streamed, Buffer, Static), in list order, and skips State specs wherever
-/// they stand: what the host names with `tensor_index` and `slot`, the position in the arrays
-/// of the `_multi` forms and of anira_miss_fn, in the `delivered` counts, in the latency vector
-/// and in the plan report's slot rows. A tensor index is the position in the model config's
-/// list, State specs included: the order the engine binds and a stage indexes by. The table
-/// maps the first onto the second; it is built once, by anira_handler_create from the pipeline
-/// copy, and read without a lock ever after. Without a State spec the two numberings are
-/// equal and the table is the identity.
-struct HostSlots {
-    std::vector<uint32_t> m_inputs;   ///< host input slot -> index in the model's input list
-    std::vector<uint32_t> m_outputs;  ///< host output slot -> index in the model's output list
-    bool m_identity = true;           ///< no State spec: a host slot number is its tensor index
-
-    /// The tensor index of a host slot; `slot` is below the side's count.
-    uint32_t input(uint32_t slot) const noexcept { return m_inputs[slot]; }
-    uint32_t output(uint32_t slot) const noexcept { return m_outputs[slot]; }
-};
-
 }  // namespace anira::capi
 
 // The handle bodies carry the C tag names the header forward-declares.
@@ -118,13 +99,9 @@ struct anira_handler {
     /// spec's shape and dtype. Built and zeroed by anira_handler_create from the pipeline copy,
     /// never resized, untouched by prepare and by reset (m_pp and m_manager are rebuilt by
     /// every prepare, the values set before one survive it). Its vectors are as long as the
-    /// model's tensor lists and indexed by TENSOR index (the stage chain reads it that way);
-    /// an entry of the handler goes through m_slots first. Declared before m_pp, which reads
-    /// it: destroyed after.
+    /// model's tensor lists and indexed by slot, like everything else of the handler and the
+    /// stage chain. Declared before m_pp, which reads it: destroyed after.
     anira::capi::StaticStore m_static;
-    /// Host slot -> tensor index, built by anira_handler_create beside the store. Its lengths
-    /// are m_num_inputs and m_num_outputs.
-    anira::capi::HostSlots m_slots;
     std::unique_ptr<anira::PrePostProcessor> m_pp;       ///< the StageChainProcessor over
                                                          ///< m_pipeline.m_stages, rebuilt by every
                                                          ///< prepare (needs m_inference_config)
@@ -157,32 +134,17 @@ struct anira_handler {
     // host memory, no pointer). A single-tensor form on a side with several slots copies the
     // caller's descriptor into its slot of the array, hands the array to the manager, which
     // takes one tensor per slot, and sets that entry back to the empty tensor before it
-    // returns. The entry of a Static slot stays empty: a single form never names one.
-    // All of them, the two ring dtype vectors above included, are in HOST slot numbering.
+    // returns. The entry of a Static or a State slot stays empty: a single form never names
+    // one. All of them, the two ring dtype vectors above included, are indexed by slot: the
+    // tensor's position in the model config's list of its side.
     std::vector<uint32_t> m_input_channels;
     std::vector<uint32_t> m_output_channels;
     std::vector<anira_tensor> m_input_tensors;
     std::vector<anira_tensor> m_output_tensors;
-    /// The host's slot counts: the lengths of m_slots, set by anira_handler_create (the two
-    /// Static entries are legal on an unprepared handler and need their bound).
+    /// The lengths of the model config's two tensor lists, set by anira_handler_create (the
+    /// two Static entries are legal on an unprepared handler and need their bound).
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
-    // Only for a model with a State spec (m_slots.m_identity is false), filled at prepare. The
-    // stems take one tensor per TENSOR of the model's lists, the host hands one per HOST slot:
-    // these are the stems' arrays, empty tensors in tensor order (a State tensor's entry is
-    // never anything else). An entry copies the descriptors of the call's Streamed slots to
-    // their tensor indices and sets them back to the empty tensor before it returns, like a
-    // single form's entry above: a stem reads shape[1] of every Streamed tensor as its request.
-    // Without a State spec the two numberings are one, the host's arrays are the stems', and
-    // these stay empty.
-    std::vector<anira_tensor> m_stem_inputs;
-    std::vector<anira_tensor> m_stem_outputs;
-    /// Only with a State spec: the host arrays of the running call, in host numbering and as
-    /// long as the host's slot lists, which the miss trampoline hands anira_miss_fn in place
-    /// of the stems' arrays. Between calls, and on the input side of a pop, the handler's own
-    /// empty tensors (m_input_tensors, m_output_tensors). Driving thread only.
-    const anira_tensor* m_call_inputs = nullptr;
-    const anira_tensor* m_call_outputs = nullptr;
     /// ANIRA_MISS_CALLBACK: the contract's pair, cached at prepare so that the driver thread
     /// reads two plain members and not the contract's variant.
     anira_miss_fn m_miss_fn = nullptr;

@@ -83,7 +83,8 @@ size_t anira_rt_contract_hard(anira_handler* handler,
                               const anira_tensor* outputs,
                               size_t* delivered) ANIRA_NONBLOCKING {
     size_t total = 0;
-    total += anira_handler_process(handler, inputs, outputs, 0u, delivered) == ANIRA_OK ? 1u : 0u;
+    total +=
+        anira_handler_process(handler, inputs, 0u, outputs, 0u, delivered) == ANIRA_OK ? 1u : 0u;
     total += anira_handler_process_multi(handler, inputs, 1u, outputs, 1u, delivered) == ANIRA_OK
                  ? 1u
                  : 0u;

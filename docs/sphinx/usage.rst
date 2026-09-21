@@ -89,10 +89,12 @@ The roles are:
   with equal dtype and shape (an exported recurrent hidden state, a streaming-convolution
   cache). The input half names the output half it is fed from (``"state_source"`` in a model
   file, ``anira_tensor_spec_set_state_source`` in C), and anira feeds and captures the state
-  around every inference itself. The host never sees a State tensor: the slot numbers of the
-  handler's entries count the Streamed, Buffer and Static specs of their side and skip State
-  specs, wherever those stand in the list; a stage sees it at its tensor index. No Time axis,
-  window, time ratio or latency; float32 in this pre-release. A model with a pair runs as
+  around every inference itself. A State spec may stand anywhere in its list and has a slot
+  like every other tensor (its position in the list, the number a stage sees it at too), but
+  no Hard entry carries it: a single form that names its slot is
+  ``ANIRA_ERROR_INVALID_ARGUMENT``, and its position in an array of a ``_multi`` form must
+  hold the empty tensor. No Time axis, window, time ratio or latency; float32 in this
+  pre-release. A model with a pair runs as
   Stateful whatever its ``state`` says.
 
 The axes are set with ``axis(i, tag, extent)`` by index in the model's memory order, each with
@@ -278,11 +280,11 @@ an ``anira::ContractHandle``.
   ``anira_miss_fn``, set with ``anira_contract_hard_set_miss_fn(contract, fn, user_data)``
   (``Hard::miss_fn`` / ``miss_user_data``, ``ContractHandle::hard_miss_fn``). It is called once
   per missed block on the thread that called the entry, for the whole block: ``inputs`` and
-  ``outputs`` are one ``anira_tensor`` per host slot, in host slot order and covering every
-  host slot, the arrays the entry was handed (section 3.2; a host slot number counts the
-  Streamed, Buffer and Static specs of its side, a State spec has none). A slot the call did
-  not carry is an empty tensor
-  (``shape[1] == 0``), a pop passes empty inputs, and the input block of a process form is
+  ``outputs`` are one ``anira_tensor`` per slot, in slot order and covering every slot, the
+  arrays the entry was handed, the caller's own under a ``_multi`` form (section 3.2; a slot
+  is the tensor's position in the model config's list of its side, State tensors included).
+  A slot the call did not carry, and the position of a State tensor always, is an empty
+  tensor (``shape[1] == 0``), a pop passes empty inputs, and the input block of a process form is
   already pushed and still intact, in place too. The function fills the memory of every output
   whose ``shape[1]`` is above ``0`` and returns ``ANIRA_OK``; any other status makes anira
   zero-fill them. The entry still returns ``ANIRA_MISSED`` with a count of ``0``. The function
@@ -701,9 +703,10 @@ fixed warmup, as every bundled contract file does).
     const int64_t shape[2] = { num_channels, block_size };
     anira_tensor block;
     anira_tensor_init_host_planar(&block, channels, (uint32_t)num_channels, ANIRA_DTYPE_F32, 2, shape);
-    /* the process callback: the sample count is shape[1]; in place is the same tensor twice */
+    /* the process callback: the sample count is shape[1]; in place is the same tensor twice,
+       each side with its slot (the tensor's position in the model config's list) */
     block.shape[1] = (int64_t)num_samples;
-    st = anira_handler_process(h, &block, &block, 0, NULL);
+    st = anira_handler_process(h, &block, 0, &block, 0, NULL);
     if (st == ANIRA_MISSED) { /* the buffers hold what the miss policy chose */ }
     if (ANIRA_FAILED(st)) { /* a refusal, recorded in anira_handler_rt_error */ }
     /* off the driver thread: */
@@ -752,7 +755,7 @@ objects (``anira::Pipeline pipe{anira::stage::Inference(cfg, {{ANIRA_ENGINE_ONNX
 class arrives with the runtime cut-over.
 
 **The Hard entries.** The driver thread pumps its blocks through
-``anira_handler_process(h, in, out, tensor_index, &delivered)``,
+``anira_handler_process(h, in, in_slot, out, out_slot, &delivered)``,
 ``anira_handler_process_multi(h, inputs, num_inputs, outputs, num_outputs, delivered)``,
 ``anira_handler_push_data(h, in, tensor_index)`` / ``push_data_multi(h, inputs, num_inputs)``
 and ``anira_handler_pop_data(h, out, tensor_index, &delivered)`` /
@@ -778,7 +781,7 @@ dtype is ``ANIRA_ERROR_CONFIG``. The memory is host memory (``ANIRA_DOMAIN_HOST`
       anira_tensor block;
       anira_tensor_init_host_planar(&block, buffer.getArrayOfWritePointers(),
                                     (uint32_t)buffer.getNumChannels(), ANIRA_DTYPE_F32, 2, shape);
-      anira_handler_process(handler, &block, &block, 0, NULL);
+      anira_handler_process(handler, &block, 0, &block, 0, NULL);
 
 - *one block read by strides*, in elements: contiguous channels are ``{samples, 1}``, an
   interleaved block, which is what miniaudio and most device callbacks hand out, is
@@ -795,7 +798,7 @@ dtype is ``ANIRA_ERROR_CONFIG``. The memory is host memory (``ANIRA_DOMAIN_HOST`
       anira_tensor_init_host(&out, frames_out, ANIRA_DTYPE_F32, 2, shape);
       in.strides[0] = out.strides[0] = 1;
       in.strides[1] = out.strides[1] = 2; /* the channel count */
-      anira_handler_process(handler, &in, &out, 0, &delivered);
+      anira_handler_process(handler, &in, 0, &out, 0, &delivered);
 
 - *one packed block*, all-zero strides, which reads as ``{samples, 1}``.
 
@@ -804,8 +807,18 @@ description is copied straight between the host memory and the ring, and the two
 call may be described differently. In place is the same tensor as input and output; there is
 no ``_inplace`` name. An *empty tensor* (``shape[1] == 0``; its memory arm is not read, so
 NULL is legal) leaves a slot out: the multi forms take exactly one tensor per slot, Static
-slots included (the whole tensor or an empty one, see *Static tensors* below), and
-``num_inputs`` / ``num_outputs`` must be the handler's slot counts.
+slots included (the whole tensor or an empty one, see *Static tensors* below) and State slots
+too (always an empty one: anira feeds declared state itself, and anything else at that
+position is ``ANIRA_ERROR_INVALID_ARGUMENT``), and ``num_inputs`` / ``num_outputs`` must be
+the lengths of the model config's two lists. A *slot* is one number everywhere: the tensor's
+position in the model config's input list or output list, which is what ``tensor_index``,
+``slot``, ``in_slot`` and ``out_slot``, the ``_multi`` arrays and their ``delivered`` counts,
+the latency vector (``0`` for an output that is not Streamed), the plan report's rows and a
+stage's ``anira_stage_ctx`` all index by. The two lists are unrelated, so the single
+``process`` forms name one slot per side: a model with ``data`` at input 1 and
+``processed_data`` at output 0 calls ``anira_handler_process(h, &in, 1, &out, 0, &delivered)``.
+A host that does not want to hard-code a slot resolves it by the tensor's canonical name at
+setup.
 ``release``, ``manager_ctx`` and ``acquire`` are not read; the memory is borrowed until the
 call returns. Every tensor of a call is validated before anything is pushed, so a refusal
 writes no ring: a malformed descriptor is ``ANIRA_ERROR_INVALID_ARGUMENT`` (a rank other than
@@ -839,7 +852,7 @@ before each call; there is no float-only family of entries:
 
     /* the process callback: one store, then the call; in place is the same tensor twice */
     block.shape[1] = (int64_t)num_samples;
-    anira_status st = anira_handler_process(h, &block, &block, 0, &delivered);
+    anira_status st = anira_handler_process(h, &block, 0, &block, 0, &delivered);
 
 The tensor names the pointer array, not the channels, and borrows it: the array must live as
 long as the tensor is used, and what it holds is read at each call, so a host that rewrites the
@@ -914,9 +927,10 @@ inferences and reports what waits in the output ring (right after prepare, the l
 ``anira_handler_reset(h)`` is the wait-free stream reset of 5.5; ``anira_handler_rt_error(h)``
 the last real-time failure, readable from any thread and any callback.
 
-**The _wait twins.** ``anira_handler_process_wait(h, in, out, timeout_ms, tensor_index,
+**The _wait twins.** ``anira_handler_process_wait(h, in, in_slot, out, out_slot, timeout_ms,
 &delivered)``, ``process_multi_wait(h, inputs, num_inputs, outputs, num_outputs, delivered,
-timeout_ms)``, ``pop_data_wait`` and ``pop_data_multi_wait`` wait for the block's inference:
+timeout_ms)``, ``pop_data_wait(h, out, timeout_ms, tensor_index, &delivered)`` and
+``pop_data_multi_wait`` wait for the block's inference:
 ``timeout_ms >= 0`` explicitly, ``ANIRA_WAIT_CONTRACT`` for ``wait_ratio`` times the block
 duration (the call's block on the process forms — the 2.x ``blocking_ratio`` wait inside
 ``process`` — and the contract's ``block_max`` on the pop forms), ``ANIRA_WAIT_FOREVER``

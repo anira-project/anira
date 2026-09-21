@@ -1,8 +1,8 @@
 #ifndef ANIRA_CAPI_STATIC_STORE_H
 #define ANIRA_CAPI_STATIC_STORE_H
 /*
- * The Static store of a C-created handler: one typed buffer per host-visible slot that has no
- * ring (a Static or a Buffer tensor), in the spec's shape and dtype. Sized and zeroed once,
+ * The Static store of a C-created handler: one typed buffer per slot the handler stores (a
+ * Static or a Buffer tensor), in the spec's shape and dtype. Sized and zeroed once,
  * at anira_handler_create, never resized, untouched by prepare and by reset: what
  * anira_handler_set_static_input stores and the stage chain materialises into the model's
  * input tensors, and what the chain captures from the model's output tensors and
@@ -269,11 +269,11 @@ private:
     std::vector<std::atomic<uint64_t>> m_words;  ///< The values, eight bytes per word
 };
 
-/// The store of one handler: per side one entry per TENSOR of the model's list, in list order
-/// (the stage chain indexes it that way; the handler's entries map a host slot onto the tensor
-/// index first, anira::capi::HostSlots). NULL for a Streamed tensor (it has a ring, and the
-/// Hard entries move it) and for a State tensor (the session feeds and captures it on the
-/// inference thread, and the host never sees it). Built once, at anira_handler_create.
+/// The store of one handler: per side one entry per tensor of the model's list, in list order,
+/// so it is indexed by slot like the handler's entries and the stage chain. NULL for a Streamed
+/// tensor (it has a ring, and the Hard entries move it) and for a State tensor (the session
+/// feeds and captures it on the inference thread, and no entry of the handler carries it).
+/// Built once, at anira_handler_create.
 struct StaticStore {
     std::vector<std::unique_ptr<StaticSlot>> m_inputs;
     std::vector<std::unique_ptr<StaticSlot>> m_outputs;

@@ -320,11 +320,12 @@ typedef enum anira_role {
      * and shape, paired by anira_tensor_spec_set_state_source on the input. anira feeds the
      * input from the session's state buffer ahead of every before_inference stage and captures
      * the output into it behind every after_inference stage, on the inference thread; the
-     * buffer is zeroed at prepare and re-initialised by anira_handler_reset. The host never
-     * sees the tensor: it has no host slot number (a host slot number counts the Streamed,
-     * Buffer and Static specs of its side and skips State specs, wherever they stand in the
-     * list); a stage sees it at its tensor index. No Time axis, window, time ratio or latency;
-     * float32 in this pre-release.
+     * buffer is zeroed at prepare and re-initialised by anira_handler_reset. A State spec may
+     * stand anywhere in its list and has a slot like every other tensor, its position in the
+     * model config's list, but no Hard entry carries it: a single form that names its slot is
+     * ANIRA_ERROR_INVALID_ARGUMENT, and its position in an array of a _multi form must be the
+     * empty tensor (a rank of 1 or more with an extent of 0). A stage sees it at the same slot.
+     * No Time axis, window, time ratio or latency; float32 in this pre-release.
      */
     ANIRA_ROLE_STATE = 3,
     ANIRA_ROLE_FORCE32 = 0x7fffffff

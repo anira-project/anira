@@ -88,8 +88,8 @@ public:
     };
 
     /// `config`, `chain` and `store` must outlive the processor (the handler owns all four).
-    /// The store is indexed by host slot, the model's tensors by tensor index: the two are
-    /// equal while no spec is hidden from the host.
+    /// The store and the model's tensors are indexed by slot, the tensor's position in the
+    /// model config's list of its side: the one numbering of the handler's entries too.
     StageChainProcessor(anira::InferenceConfig& config,
                         const StageChain& chain,
                         const StaticStore& store);
