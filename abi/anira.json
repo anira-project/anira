@@ -6921,7 +6921,7 @@
           "name": "anira_plan_slot",
           "tier": 2,
           "struct_id": "ANIRA_STRUCT_PLAN_SLOT",
-          "doc": "One tensor slot of one plan: the edge the plan takes for it, its cost class, the class an allocate_* handle would have gotten, how a completion on that edge is waited for, and why. Tier 2, struct_size first; enumerated by anira_plan_report_slots at the caller's stride. In this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST on both sides, ANIRA_EDGE_ZERO_COPY, recipe \"host\", no reason.",
+          "doc": "One tensor slot of one plan: the edge the plan takes for it, its cost class, the class an allocate_* handle would have gotten, how a completion on that edge is waited for, and why, and the role of the tensor, which decides the entries that take the slot. Tier 2, struct_size first; enumerated by anira_plan_report_slots at the caller's stride (a caller whose header ends before a tail field gets its rows without it). In this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST on both sides, ANIRA_EDGE_ZERO_COPY, recipe \"host\", no reason.",
           "fields": [
             {
               "name": "struct_size",
@@ -6972,11 +6972,16 @@
               "name": "reason",
               "type": "const char*",
               "doc": "Why the edge is what it is, or NULL when there is nothing to say; valid while the report is."
+            },
+            {
+              "name": "role",
+              "type": "uint32_t",
+              "doc": "anira_role of the slot's spec: what the tensor is to the handler and which entries take the slot. ANIRA_ROLE_STREAMED: the block calls (process, push_data, pop_data, their _multi and _wait forms); ANIRA_ROLE_STATIC: anira_handler_set_static_input / anira_handler_get_static_output or an element of a _multi form; ANIRA_ROLE_STATE: no Hard entry (its position in a _multi array is the empty tensor); ANIRA_ROLE_BUFFER never appears under a Hard contract, which refuses the spec at prepare. The same in every plan of the report: the role is the model config's, not the plan's."
             }
           ],
           "init": {
             "name": "ANIRA_PLAN_SLOT_INIT",
-            "value": "sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_UNAVAILABLE, ANIRA_EDGE_UNAVAILABLE, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL",
+            "value": "sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_UNAVAILABLE, ANIRA_EDGE_UNAVAILABLE, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED",
             "doc": "No edge."
           }
         },

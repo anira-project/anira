@@ -767,7 +767,10 @@ void build_plans(anira_handler& handler,
 
 // A slot row of the report: host memory on both sides, zero-copy, the wait strategy the
 // core runs.
-anira_plan_slot host_slot(uint32_t slot, bool is_input, anira_wait_strategy wait) noexcept {
+anira_plan_slot host_slot(uint32_t slot,
+                          bool is_input,
+                          anira_wait_strategy wait,
+                          anira_role role) noexcept {
     anira_plan_slot row = ANIRA_PLAN_SLOT_INIT;
     row.slot = slot;
     row.is_input = is_input ? 1U : 0U;
@@ -778,6 +781,7 @@ anira_plan_slot host_slot(uint32_t slot, bool is_input, anira_wait_strategy wait
     row.wait_strategy = static_cast<uint32_t>(wait);
     row.recipe = k_host_recipe;
     row.reason = nullptr;
+    row.role = static_cast<uint32_t>(role);
     return row;
 }
 
@@ -795,12 +799,14 @@ void build_report(anira_handler& handler,
         std::vector<anira_plan_slot> inputs;
         inputs.reserve(handler.m_num_inputs);
         for (uint32_t i = 0; i < handler.m_num_inputs; ++i) {
-            inputs.push_back(host_slot(i, true, wait));
+            inputs.push_back(
+                host_slot(i, true, wait, anira::capi::port_role(handler.m_input_ports[i])));
         }
         std::vector<anira_plan_slot> outputs;
         outputs.reserve(handler.m_num_outputs);
         for (uint32_t i = 0; i < handler.m_num_outputs; ++i) {
-            outputs.push_back(host_slot(i, false, wait));
+            outputs.push_back(
+                host_slot(i, false, wait, anira::capi::port_role(handler.m_output_ports[i])));
         }
         report.m_inputs.push_back(std::move(inputs));
         report.m_outputs.push_back(std::move(outputs));

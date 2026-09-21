@@ -79,9 +79,11 @@ extern "C" {
 /**
  * @brief One tensor slot of one plan: the edge the plan takes for it, its cost class, the class
  * an allocate_* handle would have gotten, how a completion on that edge is waited for,
- * and why. Tier 2, struct_size first; enumerated by anira_plan_report_slots at the
- * caller's stride. In this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST
- * on both sides, ANIRA_EDGE_ZERO_COPY, recipe "host", no reason.
+ * and why, and the role of the tensor, which decides the entries that take the slot.
+ * Tier 2, struct_size first; enumerated by anira_plan_report_slots at the caller's
+ * stride (a caller whose header ends before a tail field gets its rows without it). In
+ * this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST on both sides,
+ * ANIRA_EDGE_ZERO_COPY, recipe "host", no reason.
  */
 typedef struct anira_plan_slot {
     uint32_t struct_size;  /**< sizeof(anira_plan_slot) of the caller's header. */
@@ -121,11 +123,21 @@ typedef struct anira_plan_slot {
      * is.
      */
     const char* reason;
+    /**
+     * anira_role of the slot's spec: what the tensor is to the handler and which entries take
+     * the slot. ANIRA_ROLE_STREAMED: the block calls (process, push_data, pop_data, their
+     * _multi and _wait forms); ANIRA_ROLE_STATIC: anira_handler_set_static_input /
+     * anira_handler_get_static_output or an element of a _multi form; ANIRA_ROLE_STATE: no Hard
+     * entry (its position in a _multi array is the empty tensor); ANIRA_ROLE_BUFFER never
+     * appears under a Hard contract, which refuses the spec at prepare. The same in every plan
+     * of the report: the role is the model config's, not the plan's.
+     */
+    uint32_t role;
 } anira_plan_slot;
 /**
  * @brief No edge.
  */
-#define ANIRA_PLAN_SLOT_INIT ANIRA_INIT(anira_plan_slot, sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_UNAVAILABLE, ANIRA_EDGE_UNAVAILABLE, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL)
+#define ANIRA_PLAN_SLOT_INIT ANIRA_INIT(anira_plan_slot, sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_UNAVAILABLE, ANIRA_EDGE_UNAVAILABLE, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED)
 
 /**
  * @brief One extension a plan consumes: where it sits (the host and the tensor or entry it is

@@ -725,7 +725,8 @@ convention of 3.1 (``out == NULL`` asks for the count, a short buffer returns
 ``anira_plan_info`` per candidate that has a model entry in the configuration (the engine, the
 provider, the custom engine's id, the budget of that plan), and per plan the
 ``anira_plan_slot`` rows of its inputs and outputs (host rows in this pre-release: host to
-host, zero-copy, recipe ``"host"``, the wait strategy the core runs) and the
+host, zero-copy, recipe ``"host"``, the wait strategy the core runs; ``role`` is the
+``anira_role`` of the tensor's spec, the same in every plan) and the
 ``anira_plan_ext`` rows of the extensions it consumes. Every successful prepare also logs the
 report as Info records of the group ``anira.capi`` (set the context's log level to
 ``ANIRA_LOG_INFO`` or ``ANIRA_LOG_DEBUG`` to see them): a head line with the counts and the
@@ -821,7 +822,9 @@ stage's ``anira_stage_ctx`` all index by. The two lists are unrelated, so the si
 ``process`` forms name one slot per side: a model with ``data`` at input 1 and
 ``processed_data`` at output 0 calls ``anira_handler_process(h, &in, 1, &out, 0, &delivered)``.
 A host that does not want to hard-code a slot resolves it by the tensor's canonical name at
-setup.
+setup, and asks what a slot is through the plan report: ``anira_plan_slot.role`` is the
+``anira_role`` of the slot's spec, which decides the entries that take the slot (a stage reads
+it in its ``prepare``, which receives the report).
 ``release``, ``manager_ctx`` and ``acquire`` are not read; the memory is borrowed until the
 call returns. Every tensor of a call is validated before anything is pushed, so a refusal
 writes no ring: a malformed descriptor is ``ANIRA_ERROR_INVALID_ARGUMENT`` (a rank other than

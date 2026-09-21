@@ -417,7 +417,59 @@ struct SlotProbe {
     std::array<std::atomic<float>, k_capacity> m_data_first{};    ///< model_inputs[2][0]
     std::atomic<size_t> m_calls{0};
     std::atomic<uint32_t> m_other_counts{0};  ///< ctxs whose tensor counts were not 3 and 3
+    /// anira_plan_slot::role of every slot of plan 0, as the stage's prepare read them from the
+    /// plan report (the control thread: plain members).
+    std::array<uint32_t, 3> m_input_roles{ANIRA_ROLE_FORCE32,
+                                          ANIRA_ROLE_FORCE32,
+                                          ANIRA_ROLE_FORCE32};
+    std::array<uint32_t, 3> m_output_roles{ANIRA_ROLE_FORCE32,
+                                           ANIRA_ROLE_FORCE32,
+                                           ANIRA_ROLE_FORCE32};
+    uint32_t m_prepares = 0;
 };
+
+// A stage asks what each tensor is before it runs: the role of every slot, from the report its
+// prepare receives.
+anira_status ANIRA_CALL probe_roles(anira_handler* /*handler*/,
+                                    const anira_plan_report* report,
+                                    void* user_data) {
+    auto* probe = static_cast<SlotProbe*>(user_data);
+    for (const anira_bool inputs : {anira_bool{1}, anira_bool{0}}) {
+        std::array<anira_plan_slot, 3> slots{ANIRA_PLAN_SLOT_INIT,
+                                             ANIRA_PLAN_SLOT_INIT,
+                                             ANIRA_PLAN_SLOT_INIT};
+        uint32_t rows = 3;
+        const anira_status status = anira_plan_report_slots(report,
+                                                            0,
+                                                            inputs,
+                                                            sizeof(anira_plan_slot),
+                                                            &rows,
+                                                            slots.data());
+        if (status != ANIRA_OK || rows != 3) { return ANIRA_ERROR_INVALID_STATE; }
+        std::array<uint32_t, 3>& roles = inputs != 0 ? probe->m_input_roles : probe->m_output_roles;
+        for (size_t slot = 0; slot < 3; ++slot) { roles.at(slot) = slots.at(slot).role; }
+    }
+    ++probe->m_prepares;
+    return ANIRA_OK;
+}
+
+// anira_plan_slot as a caller compiled before the tail field `role` has it: the record ends
+// behind `reason`.
+// NOLINTBEGIN(readability-identifier-naming) the C record's own names
+struct PlanSlotWithoutRole {
+    uint32_t struct_size;
+    uint32_t slot;
+    uint32_t is_input;
+    uint32_t domain_in;
+    uint32_t domain_out;
+    uint32_t edge_class;
+    uint32_t allocate_class;
+    uint32_t wait_strategy;
+    const char* recipe;
+    const char* reason;
+};
+// NOLINTEND(readability-identifier-naming)
+static_assert(sizeof(PlanSlotWithoutRole) == offsetof(anira_plan_slot, role));
 
 anira_status ANIRA_CALL probe_slots(const anira_stage_ctx* ctx, void* user_data) ANIRA_NONBLOCKING {
     auto* probe = static_cast<SlotProbe*>(user_data);
@@ -446,6 +498,7 @@ TEST(AbiState, OneSlotSpacePerSide) {
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
     stage.name = "slot-probe";
     stage.user_data = &probe;
+    stage.prepare = &probe_roles;
     stage.before_inference = &probe_slots;
     Rig rig(wide_model(),
             k_wide,
@@ -539,7 +592,45 @@ TEST(AbiState, OneSlotSpacePerSide) {
                                           slots.data()),
                   ANIRA_OK);
         for (uint32_t slot = 0; slot < 3; ++slot) { EXPECT_EQ(slots.at(slot).slot, slot); }
+        // The role of every tensor, which decides the entries that take its slot: Static, State,
+        // Streamed on the input side; State, Streamed, Static on the output side.
+        const std::array<uint32_t, 3> expected_roles =
+            inputs != 0
+                ? std::array<uint32_t, 3>{ANIRA_ROLE_STATIC, ANIRA_ROLE_STATE, ANIRA_ROLE_STREAMED}
+                : std::array<uint32_t, 3>{ANIRA_ROLE_STATE, ANIRA_ROLE_STREAMED, ANIRA_ROLE_STATIC};
+        for (uint32_t slot = 0; slot < 3; ++slot) {
+            EXPECT_EQ(slots.at(slot).role, expected_roles.at(slot))
+                << (inputs != 0 ? "input " : "output ") << slot;
+        }
+        // The stage's prepare read the same from the report it was handed.
+        EXPECT_EQ(inputs != 0 ? probe.m_input_roles : probe.m_output_roles, expected_roles);
+
+        // A caller whose header ends before `role` still gets its rows, at its own stride: the
+        // fields it knows, and nothing behind the last record it asked for.
+        std::array<PlanSlotWithoutRole, 4> old_rows{};
+        constexpr uint32_t k_untouched = 0xA5A5A5A5U;
+        old_rows.at(3).struct_size = k_untouched;
+        old_rows.at(3).slot = k_untouched;
+        uint32_t old_count = 3;
+        ASSERT_EQ(anira_plan_report_slots(report,
+                                          0,
+                                          inputs,
+                                          sizeof(PlanSlotWithoutRole),
+                                          &old_count,
+                                          reinterpret_cast<anira_plan_slot*>(old_rows.data())),
+                  ANIRA_OK);
+        EXPECT_EQ(old_count, 3U);
+        for (uint32_t slot = 0; slot < 3; ++slot) {
+            EXPECT_EQ(old_rows.at(slot).slot, slot);
+            EXPECT_EQ(old_rows.at(slot).is_input, inputs);
+            EXPECT_EQ(old_rows.at(slot).edge_class, static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
+            EXPECT_STREQ(old_rows.at(slot).recipe, "host");
+            EXPECT_EQ(old_rows.at(slot).reason, nullptr);
+        }
+        EXPECT_EQ(old_rows.at(3).struct_size, k_untouched);
+        EXPECT_EQ(old_rows.at(3).slot, k_untouched);
     }
+    EXPECT_EQ(probe.m_prepares, 1U);
     // The report's log lines name the slot and the canonical name of its tensor, State included.
 #ifdef ENABLE_LOGGING
     EXPECT_EQ(anira_test::count_records(collector, "input 0 'values_in'", "native"), 1U);
