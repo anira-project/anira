@@ -7,9 +7,11 @@
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
 #include <anira/scheduler/Core.h>
 #include <gtest/gtest.h>
@@ -295,7 +297,34 @@ TEST(AbiPrepare, BypassIsRefusedWhenNoAnchoredInputHasTheOutputsChannelCount) {
 
 namespace {
 
-enum class Form { InPlace, Separate, Multi };
+/// The _f32 forms, and the tensor forms of the same calls: one packed mono block per side
+/// (Tensor), one tensor per slot with the Static gain as [1, 1] (TensorMulti).
+enum class Form { InPlace, Separate, Multi, Tensor, TensorMulti };
+
+constexpr float k_backup = 0.5F;  // what the backup function of ANIRA_MISS_CALLBACK writes
+
+/// The backup function: k_backup into every requested value of every output. The outputs are
+/// mono here: one plane under an _f32 form, one packed block under a tensor form. Declared
+/// ANIRA_NONBLOCKING (clang refuses to add the attribute through the conversion to
+/// anira_miss_fn) and free of assertions: it runs on the driver thread.
+anira_status ANIRA_CALL fill_backup(anira_handler* /*handler*/,
+                                    const anira_tensor* /*inputs*/,
+                                    uint32_t /*num_inputs*/,
+                                    const anira_tensor* outputs,
+                                    uint32_t num_outputs,
+                                    void* /*user_data*/) ANIRA_NONBLOCKING {
+    for (uint32_t slot = 0; slot < num_outputs; ++slot) {
+        const anira_tensor& output = outputs[slot];
+        if (output.shape[1] <= 0) { continue; }
+        const bool planar = (output.flags & static_cast<uint32_t>(ANIRA_TENSOR_PLANAR)) != 0U;
+        float* samples = planar
+                             ? static_cast<float*>(anira_tensor_plane(&output, 0, ANIRA_DTYPE_F32))
+                             : anira_tensor_data_f32(&output);
+        if (samples == nullptr) { return ANIRA_ERROR_INTERNAL; }
+        for (int64_t i = 0; i < output.shape[1]; ++i) { samples[i] = k_backup; }
+    }
+    return ANIRA_OK;
+}
 
 /// What one call delivered: the entry's status and the streamed output's count.
 struct Delivered {
@@ -362,6 +391,48 @@ Delivered call(anira_handler* handler,
             delivered.m_count = delivered.m_status == ANIRA_OK ? num_out[0] : 0;
             return delivered;
         }
+        case Form::Tensor: {
+            out.assign(k_block, -1.0F);
+            const std::array<int64_t, 2> shape{1, static_cast<int64_t>(k_block)};
+            std::vector<float> block = in;
+            anira_tensor in_tensor;
+            anira_tensor out_tensor;
+            anira_tensor_init_host(&in_tensor, block.data(), ANIRA_DTYPE_F32, 2, shape.data());
+            anira_tensor_init_host(&out_tensor, out.data(), ANIRA_DTYPE_F32, 2, shape.data());
+            delivered.m_count = 7;  // a pure out parameter: written on every return
+            delivered.m_status =
+                anira_handler_process(handler, &in_tensor, &out_tensor, 0, &delivered.m_count);
+            return delivered;
+        }
+        case Form::TensorMulti: {
+            out.assign(k_block, -1.0F);
+            const std::array<int64_t, 2> shape{1, static_cast<int64_t>(k_block)};
+            const std::array<int64_t, 2> one{1, 1};
+            const std::array<int64_t, 2> none{1, 0};
+            std::vector<float> block = in;
+            float gain = 1.0F;
+            std::array<anira_tensor, 2> ins{};
+            std::array<anira_tensor, 2> outs{};
+            anira_tensor_init_host(ins.data(), block.data(), ANIRA_DTYPE_F32, 2, shape.data());
+            anira_tensor_init_host(&ins[1], &gain, ANIRA_DTYPE_F32, 2, one.data());
+            anira_tensor_init_host(outs.data(), out.data(), ANIRA_DTYPE_F32, 2, shape.data());
+            // Without static_out the Static output is an empty tensor with no memory.
+            anira_tensor_init_host(&outs[1],
+                                   static_out ? &gain_out : nullptr,
+                                   ANIRA_DTYPE_F32,
+                                   2,
+                                   static_out ? one.data() : none.data());
+            std::array<size_t, 2> counts{7, 7};
+            delivered.m_status =
+                anira_handler_process_multi(handler, ins.data(), 2, outs.data(), 2, counts.data());
+            if (delivered.m_status == ANIRA_OK) {
+                EXPECT_EQ(counts[1], static_out ? 1U : 0U);
+            } else {
+                EXPECT_EQ(counts[1], 0U) << "a miss reports 0 for every slot";
+            }
+            delivered.m_count = counts[0];
+            return delivered;
+        }
     }
     return delivered;
 }
@@ -390,8 +461,9 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
     const ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
     Handler handler(context, model, candidates);
-    ASSERT_EQ(handler.prepare(explicit_contract(k_block, k_rate, policy)), ANIRA_OK)
-        << handler.m_err.message;
+    anira::ContractHandle contract = explicit_contract(k_block, k_rate, policy);
+    if (policy == ANIRA_MISS_CALLBACK) { contract.hard_miss_fn(&fill_backup, nullptr); }
+    ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
     anira_handler* h = handler.m_handler;
     ASSERT_EQ(anira_handler_get_latency(h, 0), k_block) << "one block of priming";
     anira_drain_log();
@@ -425,6 +497,10 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
             if (static_out) { EXPECT_EQ(gain_out, 1.0F) << "the last completed value"; }
             break;
         case ANIRA_MISS_ZEROS: expect_all(out, 0.0F, "block 3"); break;
+        case ANIRA_MISS_CALLBACK:
+            expect_all(out, k_backup, "block 3");
+            if (static_out) { EXPECT_EQ(gain_out, k_backup) << "the whole block is the host's"; }
+            break;
         default: FAIL() << "unknown policy";
     }
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << "a miss records nothing";
@@ -482,6 +558,28 @@ TEST(AbiPrepare, HoldLastRepeatsTheLastDeliveredBlock) {
 
 TEST(AbiPrepare, ZerosZeroFillsAStarvedBlock) {
     run_miss_sequence(ANIRA_MISS_ZEROS, Form::InPlace, false);
+}
+
+// The same sequence through the tensor forms: the policies act on the bytes of the host
+// block whatever entry family carried it.
+TEST(AbiPrepare, TheTensorFormsFollowTheMissPolicies) {
+    run_miss_sequence(ANIRA_MISS_BYPASS, Form::Tensor, false);
+    run_miss_sequence(ANIRA_MISS_BYPASS, Form::TensorMulti, false);
+    run_miss_sequence(ANIRA_MISS_HOLD_LAST, Form::Tensor, false);
+    run_miss_sequence(ANIRA_MISS_HOLD_LAST, Form::TensorMulti, true);
+    run_miss_sequence(ANIRA_MISS_ZEROS, Form::TensorMulti, false);
+}
+
+// ANIRA_MISS_CALLBACK: the host's function fills the starved block, under the _f32 forms (it
+// receives planar float32 tensors over the caller's channel pointers) and under the tensor
+// forms (the caller's own tensors); the block still counts as missed and the stream realigns.
+TEST(AbiPrepare, CallbackHandsAStarvedBlockToTheHost) {
+    run_miss_sequence(ANIRA_MISS_CALLBACK, Form::InPlace, false);
+    run_miss_sequence(ANIRA_MISS_CALLBACK, Form::Separate, false);
+    run_miss_sequence(ANIRA_MISS_CALLBACK, Form::Multi, true);
+    run_miss_sequence(ANIRA_MISS_CALLBACK, Form::Tensor, false);
+    run_miss_sequence(ANIRA_MISS_CALLBACK, Form::TensorMulti, true);
+    run_miss_sequence(ANIRA_MISS_CALLBACK, Form::TensorMulti, false);
 }
 
 // The multi forms' num_out is the caller's request array. A host that keeps one array

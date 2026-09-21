@@ -87,6 +87,16 @@ inline anira::ModelConfig gain_with_custom(bool default_custom = true) {
     return model;
 }
 
+/// The stereo twin of gain_with_custom(): the bundled stereo gain model ([batch 1, channel 2,
+/// time 512] and the static gain) plus the engine-free custom row. Two channels are what tells
+/// an interleaved block from a planar one; the mono model cannot.
+inline anira::ModelConfig stereo_gain_with_custom(bool default_custom = true) {
+    anira::ModelConfig model = anira::ModelConfig::from_file(k_stereo_gain_model_json);
+    model.add_model_path(k_custom, "custom-processor");
+    if (default_custom) { model.default_engine(k_custom); }
+    return model;
+}
+
 /// The engines of this build the bundled gain and CNN files run on. LiteRT is left out: its
 /// runtime refuses simple_gain_network_mono.tflite at the warm-up inference ("Cannot
 /// auto-resize tensor args_0_1: no dims_signature exists" -- the static gain scalar), a pair
