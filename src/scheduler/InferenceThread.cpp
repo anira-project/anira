@@ -377,11 +377,20 @@ void InferenceThread::do_inference(
     // handler's word), logged on its first occurrence since the latch's re-arm.
     try {
         session->m_pp_processor.before_inference(thread_safe_struct->m_tensor_input_data, backend);
-        inference(session,
-                  backend,
-                  thread_safe_struct->m_tensor_input_data,
-                  thread_safe_struct->m_tensor_output_data);
-        session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data, backend);
+        // A stage chain leaves the status of a failed before_inference or after_inference on
+        // the chunk (it records the failure itself; a 2.x processor never writes the field):
+        // the rest is skipped and the chunk delivers zeros.
+        if (thread_safe_struct->m_stage_status == ANIRA_OK) {
+            inference(session,
+                      backend,
+                      thread_safe_struct->m_tensor_input_data,
+                      thread_safe_struct->m_tensor_output_data);
+            session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data,
+                                                    backend);
+        }
+        if (thread_safe_struct->m_stage_status != ANIRA_OK) {
+            for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        }
     } catch (const std::exception& e) {
         for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
         if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {

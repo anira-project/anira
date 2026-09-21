@@ -17,13 +17,14 @@
 #include "handler.h"
 
 #include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
+#include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
+#include <anira/abi/version.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/InferenceThread.h>
@@ -52,6 +53,7 @@
 #include "context.h"
 #include "ext_registry.h"
 #include "handles.h"
+#include "stage.h"
 #include "translate.h"
 
 using anira::capi::translate_exception;
@@ -67,6 +69,8 @@ constexpr uint32_t k_plan_slot_head = 8 * sizeof(uint32_t);
 constexpr uint32_t k_plan_ext_head = 2 * sizeof(uint32_t);
 // The fixed head of anira_backend_id: struct_size, engine, provider.
 constexpr uint32_t k_backend_id_head = 3 * sizeof(uint32_t);
+// The three leading slots of a callback descriptor: struct_size, abi_version, user_data.
+constexpr uint32_t k_stage_desc_head = offsetof(anira_stage_desc, user_data) + sizeof(void*);
 // A timeout at or above this many milliseconds (about 31 years) waits without limit: the
 // double -> int64 nanosecond conversion and now() + budget would overflow.
 constexpr double k_max_wait_ms = 1e12;
@@ -517,7 +521,8 @@ anira_plan_slot host_slot(uint32_t slot, bool is_input, anira_wait_strategy wait
 // candidate consumes; every string the rows point at is copied into the report's store.
 void build_report(anira_handler& handler,
                   const anira_model_config& model,
-                  const anira_contract& snapshot) {
+                  const anira_contract& snapshot,
+                  const anira::capi::StageFacts& stages) {
     anira_plan_report& report = handler.m_report;
     // The strategy the pool runs, first-wins across users: this session is a user now.
     const anira_wait_strategy wait = anira::Core::get_wait_strategy();
@@ -540,7 +545,7 @@ void build_report(anira_handler& handler,
         candidate.engine = plan.m_info.engine;
         candidate.engine_id = plan.m_info.engine_id;
         const std::vector<anira::capi::ExtPlanRow> rows =
-            anira::capi::ext_consumed_rows(model, &snapshot, &candidate, 1);
+            anira::capi::ext_consumed_rows(model, &snapshot, &candidate, 1, &stages.m_consumers);
         std::vector<anira_plan_ext> exts;
         for (size_t j = 0; j < rows.size(); ++j) {
             anira_plan_ext ext = ANIRA_PLAN_EXT_INIT;
@@ -703,14 +708,17 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     const auto num_ids = static_cast<uint32_t>(ids.size());
 
     // Every rule (the contract's, the structural ones again, the extension walk with the
-    // contract's bag), the miss policy against the anchor, then the 2.x configuration.
+    // contract's bag), the miss policy against the anchor, then the 2.x configuration. The
+    // stage chain relaxes the ring dtype rule for a side whose phase a stage fills, and its
+    // consumed kinds join the walk.
+    const anira::capi::StageFacts stages = anira::capi::stage_facts(handler.m_pipeline.m_stages);
     anira::capi::Derived derived;
-    anira::capi::validate(model, &snapshot, ids.data(), num_ids, derived);
+    anira::capi::validate(model, &snapshot, ids.data(), num_ids, derived, &stages);
     const anira::capi::HardContract& hard = *snapshot.hard();  // validate refused Async
     const anira::RingDtypes ring_dtypes = anira::capi::make_ring_dtypes(snapshot, model);
     check_miss_policy(hard, model, derived, ring_dtypes);
     anira::InferenceConfig config =
-        anira::capi::make_inference_config(model, snapshot, ids.data(), num_ids);
+        anira::capi::make_inference_config(model, snapshot, ids.data(), num_ids, &stages);
     const anira::HostConfig host = anira::capi::make_host_config(snapshot, model);
 
     // Quiescence: the previous session is released before the new one is built.
@@ -719,8 +727,13 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // The session: Core::create_session loads every surviving row's model (the FIXED warm-up
     // runs there) and throws NO_SUCH_FILE / MODEL_LOAD / ENGINE, which the firewall
     // classifies. The session records into the handler's latch from its construction.
+    // The one processor the session sees is the stage chain, whether the pipeline has a stage
+    // or not: without one it runs the default bodies, which are the 2.x default processor's.
     handler.m_inference_config = std::move(config);
-    handler.m_pp = std::make_unique<anira::PrePostProcessor>(handler.m_inference_config);
+    auto chain = std::make_unique<anira::capi::StageChainProcessor>(handler.m_inference_config,
+                                                                    handler.m_pipeline.m_stages);
+    anira::capi::StageChainProcessor* const chain_processor = chain.get();
+    handler.m_pp = std::move(chain);
     handler.m_manager = std::make_unique<anira::InferenceManager>(*handler.m_pp,
                                                                   handler.m_inference_config,
                                                                   nullptr,
@@ -734,6 +747,14 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // The plan table and the initial selection, on the session before it is prepared.
     build_plans(handler, model, derived, hard);
     handler.m_manager->prepare(host, anira::CustomLatencies{}, ring_dtypes);
+    // The session's structs and rings exist now, and no chunk does: the chain binds to them.
+    // What a ctx reports for a chunk is the engine and provider of the plan it was stamped with.
+    std::vector<anira::capi::StageChainProcessor::PlanPair> plan_pairs;
+    plan_pairs.reserve(handler.m_plans.size());
+    for (const anira::capi::Plan& plan : handler.m_plans) {
+        plan_pairs.push_back({.m_engine = plan.m_info.engine, .m_provider = plan.m_info.provider});
+    }
+    chain_processor->bind(handler.m_manager->session(), std::move(plan_pairs));
 
     // The slot counts and the resolved ring dtypes of the driver thread.
     handler.m_num_inputs =
@@ -769,7 +790,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_contract_wait = std::chrono::microseconds(static_cast<std::chrono::microseconds::rep>(
         static_cast<double>(hard.m_block_max) / hard.m_rate * 1e6 * hard.m_wait_ratio));
 
-    build_report(handler, model, snapshot);
+    build_report(handler, model, snapshot, stages);
     log_report(handler, model);
 
     handler.m_contract = std::move(snapshot);
@@ -782,6 +803,22 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                           suppressed);
     }
     handler.m_prepared.store(true, std::memory_order_release);
+
+    // Last, the prepare function of every stage that has one, in chain order, with the report
+    // that now exists. The handler counts as prepared while they run, so its getters answer;
+    // no driver thread runs (prepare overlaps no other entry). A status other than ANIRA_OK
+    // fails this prepare with it, and the caller unprepares the handler.
+    for (const std::shared_ptr<anira::capi::StageCarrier>& stage : handler.m_pipeline.m_stages) {
+        const anira_stage_desc& desc = stage->desc();
+        if (desc.prepare == nullptr) { continue; }
+        const anira_status status = desc.prepare(&handler, &handler.m_report, desc.user_data);
+        if (status != ANIRA_OK) {
+            throw StatusError(status,
+                              std::string("stage '") + stage->name() + "': prepare returned " +
+                                  std::to_string(static_cast<int>(status)) + " (" +
+                                  anira_status_string(status) + ")");
+        }
+    }
 }
 
 // ==== the report enumerators ==================================================================
@@ -847,7 +884,9 @@ std::vector<anira_backend_id> anira_pipeline::candidate_ids() const {
 }
 
 anira_pipeline::anira_pipeline(const anira_pipeline& other)
-    : m_candidates(other.m_candidates), m_has_inference(other.m_has_inference) {
+    : m_candidates(other.m_candidates)
+    , m_has_inference(other.m_has_inference)
+    , m_stages(other.m_stages) {  // the carriers are shared, never cloned
     m_variants.reserve(other.m_variants.size());
     for (const anira_model_config& variant : other.m_variants) {
         m_variants.push_back(anira::capi::clone_model_config(variant));
@@ -952,6 +991,62 @@ anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* pipeline,
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
+anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipeline,
+                                                 const anira_stage_desc* desc,
+                                                 anira_error* err) ANIRA_NOEXCEPT try {
+    ANIRA_CAPI_REQUIRE(pipeline != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: NULL pipeline");
+    ANIRA_CAPI_REQUIRE(desc != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "pipeline: NULL desc");
+    ANIRA_CAPI_REQUIRE(desc->struct_size >= k_stage_desc_head,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: the stage's struct_size %u is below the three leading slots "
+                       "{struct_size, abi_version, user_data}",
+                       desc->struct_size);
+    // Within the caller's struct_size, over the defaults: a slot an older header lacks reads
+    // as in ANIRA_STAGE_DESC_INIT.
+    anira_stage_desc value = ANIRA_STAGE_DESC_INIT;
+    std::memcpy(&value, desc, std::min<size_t>(desc->struct_size, sizeof(anira_stage_desc)));
+    value.struct_size = sizeof(anira_stage_desc);
+    ANIRA_CAPI_REQUIRE(!ANIRA_FAILED(anira_check_abi(value.abi_version)),
+                       err,
+                       ANIRA_ERROR_ABI_VERSION,
+                       "pipeline: the stage was compiled against ABI 0x%08x, which this library "
+                       "does not serve",
+                       value.abi_version);
+    ANIRA_CAPI_REQUIRE(value.reserved == 0,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: the stage's reserved is %u; it must be 0",
+                       value.reserved);
+    ANIRA_CAPI_REQUIRE(value.consumed_kinds != nullptr || value.num_consumed_kinds == 0,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: the stage's consumed_kinds is NULL with a count of %u",
+                       value.num_consumed_kinds);
+    for (uint32_t i = 0; i < value.num_consumed_kinds; ++i) {
+        ANIRA_CAPI_REQUIRE(value.consumed_kinds[i] != nullptr,
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "pipeline: the stage's consumed_kinds[%u] is NULL",
+                           i);
+    }
+    ANIRA_CAPI_REQUIRE(
+        value.domain_in == ANIRA_DOMAIN_HOST && value.domain_out == ANIRA_DOMAIN_HOST,
+        err,
+        ANIRA_ERROR_NOT_SUPPORTED,
+        "pipeline: the stage's domains are %u -> %u; every stage is a host stage "
+        "in this pre-release (ANIRA_DOMAIN_HOST on both sides)",
+        value.domain_in,
+        value.domain_out);
+    // The carrier copies the name and the kinds; its index is its name when it has none.
+    pipeline->m_stages.push_back(
+        std::make_shared<anira::capi::StageCarrier>(value, pipeline->m_stages.size()));
+    return ANIRA_OK;
+} catch (...) { return translate_exception(err, __func__); }
+
 void ANIRA_CALL anira_pipeline_destroy(anira_pipeline* pipeline) ANIRA_NOEXCEPT try {
     delete pipeline;
 } catch (...) { anira::capi::report_void_failure(__func__); }
@@ -981,12 +1076,14 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
     // variant no candidate matches is CONFIG here. Nothing loads: the models load at
     // prepare, where the InferenceConfig needs the contract.
     const std::vector<anira_backend_id> ids = pipeline->candidate_ids();
+    const anira::capi::StageFacts stages = anira::capi::stage_facts(pipeline->m_stages);
     anira::capi::Derived derived;
     anira::capi::validate(pipeline->m_variants[0],
                           nullptr,
                           ids.data(),
                           static_cast<uint32_t>(ids.size()),
-                          derived);
+                          derived,
+                          &stages);
 
     auto handler = std::make_unique<anira_handler>();
     handler->m_pipeline = anira_pipeline(*pipeline);

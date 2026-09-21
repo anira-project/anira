@@ -252,7 +252,8 @@
             "anira_capabilities",
             "anira_inference_thread",
             "anira_handler",
-            "anira_plan_report"
+            "anira_plan_report",
+            "anira_ring"
           ]
         },
         {
@@ -2999,7 +3000,7 @@
           "status": "promised",
           "since": "0.2",
           "doc": "sizeof of a record of this library, for an allocator that cannot see the header (TypeScript, a binding): the Tier-1 records, whose size is the same on every target, and the enumerated Tier-2 records, whose size is the target's and is the element stride of the array enumerators.",
-          "return_doc": "The size in bytes; 0 for an id this library does not know. In this pre-release ANIRA_STRUCT_STAGE_CTX is not registered yet and returns 0."
+          "return_doc": "The size in bytes; 0 for an id this library does not know."
         },
         {
           "kind": "function",
@@ -3873,7 +3874,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.1",
-          "doc": "The ring dtype of one tensor under a Hard contract: the element type the tensor forms of the Hard entries carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in anira converts: the Hard entries copy between the host and the ring, a ring dtype that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare. Set per tensor by canonical name, so an input and an output may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no Streamed tensor is checked at prepare, not here.",
+          "doc": "The ring dtype of one tensor under a Hard contract: the element type the tensor forms of the Hard entries carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in anira converts: the Hard entries copy between the host and the ring, a ring dtype that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare, unless a stage of the pipeline fills the phase that moves that ring (pre_process for an input, post_process for an output) and so takes the difference on itself; the default bodies of anira/abi/stage.h still refuse such a slot at run time. Set per tensor by canonical name, so an input and an output may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no Streamed tensor is checked at prepare, not here.",
           "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of 0."
         },
         {
@@ -6275,10 +6276,608 @@
       ]
     },
     {
+      "file": "stage.h",
+      "guard": "ANIRA_ABI_STAGE_H",
+      "brief": "The ring accessors, the stage context and the stage descriptor (section 7).",
+      "doc": "A stage is a descriptor, not a class: anira_stage_desc names up to four phase callbacks (pre_process, post_process, before_inference, after_inference), a prepare and a release function, one user_data slot and a name, and is handed once to anira_pipeline_add_stage, which copies it into a refcounted carrier. The callbacks are the host's; nothing about a stage is a vtable in the library. Every phase callback receives an anira_stage_ctx that anira fills on its own stack for the duration of the call: the phase, the engine and provider of the plan the chunk was submitted under, the tensor counts of the model's input and output lists, and the arrays of that phase (rings and model tensors; an array that does not belong to the phase is NULL). Indices into the arrays are tensor indices: the position in the model configuration's input or output list, the order the engine binds. The tensor descriptors are re-pointed on every call, so nothing about them may be cached across calls. The rings stay inside anira: a stage moves elements through the ten anira_ring accessors, which state the dtype they believe the ring holds and move nothing when it is another one (nothing converts, in either direction). The filled slots of a phase run in chain order, in all four phases. The default body of a phase (anira_stage_default_pre_process, anira_stage_default_post_process) runs once per chunk and only when no stage of the chain fills that slot; a stage that fills it owns the phase and calls the default itself when it wants it. When several stages fill one phase they see the same chunk one after the other, so the second finds the tensors the first filled and the rings the first moved: exactly one stage of the chain should move a slot's ring, itself or through the default, and the others work on the tensors. anira counts: after the pre_process phase every Streamed input ring must have given up exactly the slot's hop per channel, after the post_process phase every Streamed output ring must have gained exactly its hop. A shortfall is repaired, so the stream stays aligned (the missing elements are discarded from an input ring, an output ring is topped up with zeros); an excess cannot be undone. Either way anira_handler_rt_error reads ANIRA_ERROR_CONFIG and one latched record names the stage, the tensor, the expected and the moved count. A phase callback that returns anything but ANIRA_OK fails its chunk: later stages of that phase do not run, the status goes into anira_handler_rt_error with one latched record naming the stage, and the chunk delivers zeros at its stream position (a failed pre_process is not submitted to an engine; a failed before_inference or after_inference skips the rest and zeroes the model outputs; after a failed post_process anira tops every Streamed output ring up to the chunk's hop with zeros, because a ring cannot take a push back). In this pre-release every stage is a host stage (ANIRA_DOMAIN_HOST on both sides), every model tensor is host memory of ANIRA_DTYPE_F32, the contract is Hard, so ticket is ANIRA_TICKET_INVALID and pre_process and post_process run on the driver thread, and variant is 0.",
+      "includes": [
+        "<stddef.h>",
+        "<stdint.h>",
+        "export.h",
+        "status.h",
+        "enums.h",
+        "tensor.h"
+      ],
+      "entities": [
+        {
+          "kind": "function",
+          "name": "anira_ring_dtype",
+          "returns": "anira_dtype",
+          "params": [
+            {
+              "type": "const anira_ring*",
+              "name": "ring",
+              "doc": "A ring of the stage context, or NULL."
+            }
+          ],
+          "thread": "driver-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "The element type the ring stores: the ring dtype the host declared for the slot on the Hard contract (anira_contract_hard_set_ring_dtype), ANIRA_DTYPE_F32 when nothing was declared. It is never inferred from the tensor spec's dtype, which may differ when a stage of the chain converts; every data accessor states the dtype it believes it is reading or writing.",
+          "return_doc": "The ring's dtype; 0, which is no dtype, for a NULL ring."
+        },
+        {
+          "kind": "function",
+          "name": "anira_ring_num_channels",
+          "returns": "uint32_t",
+          "params": [
+            {
+              "type": "const anira_ring*",
+              "name": "ring",
+              "doc": "A ring of the stage context, or NULL."
+            }
+          ],
+          "thread": "driver-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "The channel count of the ring: the extent of the Channel axis of its Streamed tensor spec, 1 without one.",
+          "return_doc": "The number of channels; 0 for a NULL ring."
+        },
+        {
+          "kind": "function",
+          "name": "anira_ring_available",
+          "returns": "size_t",
+          "params": [
+            {
+              "type": "const anira_ring*",
+              "name": "ring",
+              "doc": "A ring of the stage context, or NULL."
+            },
+            {
+              "type": "uint32_t",
+              "name": "channel",
+              "doc": "The channel, below anira_ring_num_channels."
+            }
+          ],
+          "thread": "driver-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "The unread elements of one channel.",
+          "return_doc": "The count; 0 for a NULL ring, and 0 with ANIRA_ERROR_INVALID_ARGUMENT recorded in anira_handler_rt_error for a channel out of range."
+        },
+        {
+          "kind": "function",
+          "name": "anira_ring_available_past",
+          "returns": "size_t",
+          "params": [
+            {
+              "type": "const anira_ring*",
+              "name": "ring",
+              "doc": "A ring of the stage context, or NULL."
+            },
+            {
+              "type": "uint32_t",
+              "name": "channel",
+              "doc": "The channel, below anira_ring_num_channels."
+            }
+          ],
+          "thread": "driver-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "The consumed elements of one channel the ring still retains as history: what anira_ring_peek_past_block can address. 0 right after prepare or reset, growing as elements are popped, bounded by the ring's capacity.",
+          "return_doc": "The count; 0 for a NULL ring, and 0 with ANIRA_ERROR_INVALID_ARGUMENT recorded in anira_handler_rt_error for a channel out of range."
+        },
+        {
+          "kind": "function",
+          "name": "anira_ring_pop_block",
+          "returns": "size_t",
+          "params": [
+            {
+              "type": "anira_ring*",
+              "name": "ring",
+              "doc": "An input ring of the stage context, or NULL."
+            },
+            {
+              "type": "uint32_t",
+              "name": "channel",
+              "doc": "The channel, below anira_ring_num_channels."
+            },
+            {
+              "type": "void*",
+              "name": "out",
+              "doc": "Room for count elements of dtype, packed."
+            },
+            {
+              "type": "anira_dtype",
+              "name": "dtype",
+              "doc": "The dtype of the memory at out; it must be anira_ring_dtype(ring)."
+            },
+            {
+              "type": "size_t",
+              "name": "count",
+              "doc": "Elements to pop."
+            }
+          ],
+          "thread": "driver-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "Pops count elements of one channel into out, oldest first. Exactly count elements are written: those beyond the available ones are value-initialised (zero).",
+          "return_doc": "count; 0 with nothing popped and nothing written for a NULL ring, a NULL out with a count above 0 (ANIRA_ERROR_INVALID_ARGUMENT recorded), a channel out of range (ANIRA_ERROR_INVALID_ARGUMENT recorded) or a dtype that is not the ring's (ANIRA_ERROR_CONFIG recorded in anira_handler_rt_error with one latched record; nothing converts)."
+        },
+        {
+          "kind": "function",
+          "name": "anira_ring_peek_past_block",
+          "returns": "size_t",
+          "params": [
+            {
+              "type": "const anira_ring*",
+              "name": "ring",
+              "doc": "An input ring of the stage context, or NULL."
+            },
+            {
+              "type": "uint32_t",
+              "name": "channel",
+              "doc": "The channel, below anira_ring_num_channels."
+            },
+            {
+              "type": "void*",
+              "name": "out",
+              "doc": "Room for count elements of dtype, packed."
+            },
+            {
+              "type": "anira_dtype",
+              "name": "dtype",
+              "doc": "The dtype of the memory at out; it must be anira_ring_dtype(ring)."
+            },
+            {
+              "type": "size_t",
+              "name": "count",
+              "doc": "Elements of history to copy."
+            }
+          ],
+          "thread": "driver-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "Copies the count most recently consumed elements of one channel into out without popping, oldest first, so that out[count - 1] is the element popped last: the receptive field of a model whose window is longer than its hop. The range is not checked against anira_ring_available_past: history the ring never held reads as zero after prepare or reset.",
+          "return_doc": "count; 0 with nothing written under the refusals of anira_ring_pop_block."
+        },
+        {
+          "kind": "function",
+          "name": "anira_ring_push_block",
+          "returns": "size_t",
+          "params": [
+            {
+              "type": "anira_ring*",
+              "name": "ring",
+              "doc": "An output ring of the stage context, or NULL."
+            },
+            {
+              "type": "uint32_t",
+              "name": "channel",
+              "doc": "The channel, below anira_ring_num_channels."
+            },
+            {
+              "type": "const void*",
+              "name": "in",
+              "doc": "count elements of dtype, packed."
+            },
+            {
+              "type": "anira_dtype",
+              "name": "dtype",
+              "doc": "The dtype of the memory at in; it must be anira_ring_dtype(ring)."
+            },
+            {
+              "type": "size_t",
+              "name": "count",
+              "doc": "Elements to push."
+            }
+          ],
+          "thread": "driver-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "Pushes count elements into one channel. A full ring overwrites its oldest elements; anira sizes an output ring so that one hop per submitted chunk always fits.",
+          "return_doc": "count; 0 with nothing pushed for a NULL ring, a NULL in with a count above 0 (ANIRA_ERROR_INVALID_ARGUMENT recorded), a channel out of range (ANIRA_ERROR_INVALID_ARGUMENT recorded) or a dtype that is not the ring's (ANIRA_ERROR_CONFIG recorded in anira_handler_rt_error with one latched record; nothing converts)."
+        },
+        {
+          "kind": "function",
+          "name": "anira_ring_push_fill",
+          "returns": "size_t",
+          "params": [
+            {
+              "type": "anira_ring*",
+              "name": "ring",
+              "doc": "An output ring of the stage context, or NULL."
+            },
+            {
+              "type": "uint32_t",
+              "name": "channel",
+              "doc": "The channel, below anira_ring_num_channels."
+            },
+            {
+              "type": "const void*",
+              "name": "value",
+              "doc": "One element of dtype."
+            },
+            {
+              "type": "anira_dtype",
+              "name": "dtype",
+              "doc": "The dtype of the element at value; it must be anira_ring_dtype(ring)."
+            },
+            {
+              "type": "size_t",
+              "name": "count",
+              "doc": "Copies to push."
+            }
+          ],
+          "thread": "driver-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "Pushes count copies of one element into one channel.",
+          "return_doc": "count; 0 with nothing pushed under the refusals of anira_ring_push_block (a NULL value is the NULL in)."
+        },
+        {
+          "kind": "function",
+          "name": "anira_ring_discard",
+          "returns": "size_t",
+          "params": [
+            {
+              "type": "anira_ring*",
+              "name": "ring",
+              "doc": "An input ring of the stage context, or NULL."
+            },
+            {
+              "type": "uint32_t",
+              "name": "channel",
+              "doc": "The channel, below anira_ring_num_channels."
+            },
+            {
+              "type": "size_t",
+              "name": "count",
+              "doc": "Unread elements to drop."
+            }
+          ],
+          "thread": "driver-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "Drops up to count unread elements of one channel; they become history like popped ones. No element crosses the call, so it takes no dtype and has no dtype refusal.",
+          "return_doc": "The elements dropped, at most the available ones; 0 for a NULL ring, and 0 with ANIRA_ERROR_INVALID_ARGUMENT recorded in anira_handler_rt_error for a channel out of range."
+        },
+        {
+          "kind": "function",
+          "name": "anira_ring_pop_windows",
+          "returns": "size_t",
+          "params": [
+            {
+              "type": "anira_ring*",
+              "name": "ring",
+              "doc": "An input ring of the stage context, or NULL."
+            },
+            {
+              "type": "uint32_t",
+              "name": "channel",
+              "doc": "The channel, below anira_ring_num_channels."
+            },
+            {
+              "type": "void*",
+              "name": "out",
+              "doc": "The base of the destination, in elements of dtype: room for offset + num_batches * (num_new + num_old) elements."
+            },
+            {
+              "type": "anira_dtype",
+              "name": "dtype",
+              "doc": "The dtype of the memory at out; it must be anira_ring_dtype(ring)."
+            },
+            {
+              "type": "size_t",
+              "name": "num_new",
+              "doc": "Freshly popped elements per window."
+            },
+            {
+              "type": "size_t",
+              "name": "num_old",
+              "doc": "Elements of history ahead of them per window."
+            },
+            {
+              "type": "size_t",
+              "name": "offset",
+              "doc": "Elements to skip at out before the first window."
+            },
+            {
+              "type": "uint32_t",
+              "name": "num_batches",
+              "doc": "The number of windows."
+            }
+          ],
+          "thread": "driver-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "Pops num_batches overlapping windows of one channel: window b lands at out + offset + b * (num_new + num_old) and holds the num_old most recently consumed elements followed by num_new freshly popped ones, the batched sliding-window layout a model with an input shape [num_batches, ..., num_new + num_old] expects. It pops num_batches * num_new elements in all; with num_batches 1 and offset 0 it is anira_ring_peek_past_block followed by anira_ring_pop_block.",
+          "return_doc": "The elements written, num_batches * (num_new + num_old); 0 with nothing popped and nothing written under the refusals of anira_ring_pop_block."
+        },
+        {
+          "kind": "struct",
+          "name": "anira_stage_ctx",
+          "tier": 1,
+          "struct_id": "ANIRA_STRUCT_STAGE_CTX",
+          "size": 64,
+          "align": 8,
+          "doc": "What a phase callback of a stage sees. Tier 1: 64 bytes, frozen, identical on every target; no struct_size. anira fills one on its own stack per call, so the record and the arrays it points at are valid until the callback returns and must not be kept. Every scalar but phase has the same value in all four phases of a chunk. An array that does not belong to the phase is NULL: pre_process sees input_rings and model_inputs, before_inference model_inputs, after_inference model_outputs, post_process model_outputs and output_rings. The arrays are indexed by tensor index, the position in the model configuration's input or output list (the order the engine binds), and have num_inputs or num_outputs entries. The tensor descriptors are re-pointed on every call (an engine may swap the memory behind a tensor between two inferences), so a stage reads the data pointer through anira_tensor_data on every call and caches nothing of a descriptor.",
+          "fields": [
+            {
+              "name": "phase",
+              "type": "uint32_t",
+              "doc": "anira_stage_phase: the phase this call runs in."
+            },
+            {
+              "name": "engine",
+              "type": "uint32_t",
+              "doc": "anira_engine of the plan the chunk was submitted under; ANIRA_ENGINE_NONE for a custom engine."
+            },
+            {
+              "name": "provider",
+              "type": "uint32_t",
+              "doc": "anira_provider of that plan."
+            },
+            {
+              "name": "variant",
+              "type": "uint32_t",
+              "doc": "The variant of that plan; 0 in this pre-release."
+            },
+            {
+              "name": "num_inputs",
+              "type": "uint32_t",
+              "doc": "The tensors of the model's input list: the length of input_rings and model_inputs."
+            },
+            {
+              "name": "num_outputs",
+              "type": "uint32_t",
+              "doc": "The tensors of the model's output list: the length of model_outputs and output_rings."
+            },
+            {
+              "name": "ticket",
+              "type": "uint32_t",
+              "doc": "The anira_ticket of the submitting job under an Async contract; ANIRA_TICKET_INVALID under a Hard contract."
+            },
+            {
+              "name": "reserved",
+              "type": "uint32_t",
+              "doc": "Zero."
+            },
+            {
+              "name": "input_rings",
+              "ptr": "anira_ring* const",
+              "doc": "ANIRA_PHASE_PRE_PROCESS only, else NULL: one entry per input tensor, the ring of a Streamed tensor and NULL for a tensor of another role."
+            },
+            {
+              "name": "model_inputs",
+              "ptr": "anira_tensor",
+              "doc": "ANIRA_PHASE_PRE_PROCESS and ANIRA_PHASE_BEFORE_INFERENCE, else NULL: the model's input tensors in the spec's shape, host memory owned by anira, for the stage to write. In pre_process every Static input is already materialised."
+            },
+            {
+              "name": "model_outputs",
+              "ptr": "anira_tensor",
+              "doc": "ANIRA_PHASE_AFTER_INFERENCE and ANIRA_PHASE_POST_PROCESS, else NULL: the model's output tensors in the spec's shape, host memory owned by anira. A chunk that completed without an inference (dropped, failed) reads as zeros."
+            },
+            {
+              "name": "output_rings",
+              "ptr": "anira_ring* const",
+              "doc": "ANIRA_PHASE_POST_PROCESS only, else NULL: one entry per output tensor, the ring of a Streamed tensor and NULL for a tensor of another role."
+            }
+          ]
+        },
+        {
+          "kind": "callback",
+          "name": "anira_stage_fn",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const anira_stage_ctx*",
+              "name": "ctx",
+              "doc": "The context of this call; valid until the callback returns."
+            },
+            {
+              "type": "void*",
+              "name": "user_data",
+              "doc": "The descriptor's user_data."
+            }
+          ],
+          "thread": "driver-thread | inference-thread",
+          "nonblocking": true,
+          "doc": "A phase callback of a stage. pre_process and post_process run on the thread that drives the Hard entries (the driver thread, or the thread inside a _wait twin); before_inference and after_inference run on an inference thread, around the engine call. The body is real-time on both: no allocation, no lock, no system call, and of anira only the [callback-safe] entries. Return ANIRA_OK, or any other status to fail the chunk: later stages of that phase do not run, the status goes into anira_handler_rt_error with one latched record naming the stage, and the chunk delivers zeros at its stream position (the file comment has the rule per phase)."
+        },
+        {
+          "kind": "callback",
+          "name": "anira_stage_prepare_fn",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_handler*",
+              "name": "handler",
+              "doc": "The handler being prepared."
+            },
+            {
+              "type": "const anira_plan_report*",
+              "name": "report",
+              "doc": "The plan report of this prepare; valid while the handler stays prepared."
+            },
+            {
+              "type": "void*",
+              "name": "user_data",
+              "doc": "The descriptor's user_data."
+            }
+          ],
+          "thread": "main-thread",
+          "doc": "The prepare function of a stage: called by anira_handler_prepare on its caller's thread after the plan report is built, once per prepare, in chain order. It may allocate. Of anira it may call the [callback-safe] entries and the handler's getters (the handler counts as prepared while it runs), never prepare, destroy or a Hard entry. A status other than ANIRA_OK fails anira_handler_prepare with that status, the message naming the stage, and leaves the handler unprepared."
+        },
+        {
+          "kind": "callback",
+          "name": "anira_stage_release_fn",
+          "returns": "void",
+          "params": [
+            {
+              "type": "void*",
+              "name": "user_data",
+              "doc": "The descriptor's user_data."
+            }
+          ],
+          "thread": "main-thread",
+          "doc": "The release function of a stage: called exactly once, when the last carrier of the descriptor dies, on the thread of that destroy (anira_pipeline_destroy or anira_handler_destroy, whichever comes last). No callback of the stage runs afterwards."
+        },
+        {
+          "kind": "struct",
+          "name": "anira_stage_desc",
+          "tier": 2,
+          "callback_descriptor": true,
+          "padding_free": true,
+          "doc": "A stage, handed once to anira_pipeline_add_stage and copied within struct_size into a refcounted carrier that the pipeline and every handler created from it share. Tier 2: struct_size first, user_data third (its offset never moves), growth at the tail. A NULL phase slot means the stage does not take part in that phase.",
+          "fields": [
+            {
+              "name": "struct_size",
+              "type": "uint32_t",
+              "doc": "sizeof(anira_stage_desc) of the caller's header."
+            },
+            {
+              "name": "abi_version",
+              "type": "uint32_t",
+              "doc": "ANIRA_ABI_VERSION the caller compiled against."
+            },
+            {
+              "name": "user_data",
+              "type": "void*",
+              "doc": "Handed to every callback as it is; never read by anira."
+            },
+            {
+              "name": "name",
+              "type": "const char*",
+              "doc": "The stage's name, copied by anira_pipeline_add_stage (the caller's string may die when the call returns). NULL or an empty string reads \"stage#<index>\", the position in the chain. Every latched record about the stage, a prepare failure it causes and the consumer column of its anira_plan_ext rows carry it. Names need not be unique."
+            },
+            {
+              "name": "domain_in",
+              "type": "uint32_t",
+              "doc": "anira_domain the stage reads; ANIRA_DOMAIN_HOST in this pre-release."
+            },
+            {
+              "name": "domain_out",
+              "type": "uint32_t",
+              "doc": "anira_domain the stage writes; ANIRA_DOMAIN_HOST in this pre-release."
+            },
+            {
+              "name": "consumed_kinds",
+              "type": "const char* const*",
+              "doc": "The extensions the stage reads at prepare, as \"<host>:<kind>\" strings (hosts: tensor_spec, model, model_config, context, contract), copied; NULL with a count of 0 for none. They join the consumed-or-fail walk of anira_handler_create and anira_handler_prepare, and each consumed slot is an anira_plan_ext row whose consumer is the stage's name."
+            },
+            {
+              "name": "num_consumed_kinds",
+              "type": "uint32_t",
+              "doc": "The length of consumed_kinds."
+            },
+            {
+              "name": "reserved",
+              "type": "uint32_t",
+              "doc": "Zero."
+            },
+            {
+              "name": "pre_process",
+              "type": "anira_stage_fn",
+              "doc": "ANIRA_PHASE_PRE_PROCESS: forms the model inputs from the input rings. A stage that fills it owns the phase and calls anira_stage_default_pre_process itself when it wants the default fill. NULL: not taking part."
+            },
+            {
+              "name": "post_process",
+              "type": "anira_stage_fn",
+              "doc": "ANIRA_PHASE_POST_PROCESS: pushes the model outputs into the output rings; anira_stage_default_post_process is the default push. NULL: not taking part."
+            },
+            {
+              "name": "before_inference",
+              "type": "anira_stage_fn",
+              "doc": "ANIRA_PHASE_BEFORE_INFERENCE, on the inference thread ahead of the engine call. NULL: not taking part."
+            },
+            {
+              "name": "after_inference",
+              "type": "anira_stage_fn",
+              "doc": "ANIRA_PHASE_AFTER_INFERENCE, on the inference thread behind the engine call. NULL: not taking part."
+            },
+            {
+              "name": "prepare",
+              "type": "anira_stage_prepare_fn",
+              "doc": "Called at every anira_handler_prepare; NULL for none."
+            },
+            {
+              "name": "release",
+              "type": "anira_stage_release_fn",
+              "doc": "Called once, when the last carrier dies; NULL for none."
+            }
+          ],
+          "init": {
+            "name": "ANIRA_STAGE_DESC_INIT",
+            "value": "sizeof(anira_stage_desc), ANIRA_ABI_VERSION, NULL, NULL, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL",
+            "doc": "A host stage without a name and without a callback."
+          }
+        },
+        {
+          "kind": "function",
+          "name": "anira_stage_default_pre_process",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const anira_stage_ctx*",
+              "name": "ctx",
+              "doc": "The context the stage's pre_process received."
+            }
+          ],
+          "thread": "driver-thread | inference-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "The default pre_process, for a stage that wants it (\"call super\"): for every Streamed input it pops one hop per channel from the ring into the model tensor, which it reads as packed row-major memory: channel c of a tensor of n elements per channel starts at element c * n. Where n is the hop, that is the plain pop. Where n is above the hop, the receptive field of a sliding-window model, the n minus hop elements at the head of the channel are the ring's history (anira_ring_peek_past_block) and the hop is popped behind them. It never touches a tensor of another role. anira runs it itself, once per chunk, when no stage of the chain fills pre_process.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL ctx or a ctx of another phase than ANIRA_PHASE_PRE_PROCESS; ANIRA_ERROR_CONFIG when the ring dtype of a Streamed input is not its tensor's dtype, with that tensor untouched and the others filled (nothing converts: a stage that declared another ring dtype pops that ring itself). The status is returned, never recorded by the default itself: a stage that returns it fails the chunk with it."
+        },
+        {
+          "kind": "function",
+          "name": "anira_stage_default_post_process",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const anira_stage_ctx*",
+              "name": "ctx",
+              "doc": "The context the stage's post_process received."
+            }
+          ],
+          "thread": "driver-thread | inference-thread",
+          "callback_safe": true,
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "The default post_process, for a stage that wants it (\"call super\"): for every Streamed output it pushes one hop per channel from the model tensor, read as packed row-major memory, into the ring: channel c from element c * hop. It never touches a tensor of another role. anira runs it itself, once per chunk, when no stage of the chain fills post_process.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL ctx or a ctx of another phase than ANIRA_PHASE_POST_PROCESS; ANIRA_ERROR_CONFIG when the ring dtype of a Streamed output is not its tensor's dtype, with that ring untouched and the others pushed. The status is returned, never recorded by the default itself: a stage that returns it fails the chunk with it."
+        }
+      ]
+    },
+    {
       "file": "handler.h",
       "guard": "ANIRA_ABI_HANDLER_H",
       "brief": "The pipeline, the handler, the plan report and the Hard entries (section 6).",
-      "doc": "A pipeline is a config object: one inference stage (a model configuration and its candidate backends), copied by anira_handler_create and destroyable right after. A handler is the runtime object over one context: anira_handler_prepare takes a Hard contract, validates the configuration against it, loads the models of the surviving candidates, sizes the rings and builds the plan report; from then on the driver thread pumps samples through the Hard entries, which are ANIRA_NONBLOCKING and never wait, and a thread that may wait calls their _wait twins. The entries under the bare names (anira_handler_process, push_data, pop_data, their _multi forms and the _wait twins) take a host block as an anira_tensor of anira/abi/tensor.h, one tensor per slot: the logical shape is [channels, samples] ([1, values] for a Static slot), the sample count is shape[1], the dtype must be the slot's (the ring dtype of a Streamed slot; nothing converts) and the memory is host memory in one of three descriptions, for any channel count: planar (ANIRA_TENSOR_PLANAR, one pointer per channel), one block read by strides in elements (contiguous is {samples, 1}, interleaved is {1, channels}), or one block with all-zero strides (packed row-major). Every description is copied straight between the host memory and the ring. A descriptor is never written, an output's included (the memory it names is), so a host builds its tensors once and reuses them; in place is the same tensor as input and output; an empty tensor (shape[1] == 0, its memory arm not read, NULL legal) leaves a slot out. release, manager_ctx and acquire are not read: the memory is borrowed until the call returns. A host that holds float channel pointers (float* const*, what an audio host hands out) builds one planar tensor over its pointer array with anira_tensor_init_host_planar, once, and stores shape[1] before each call. Every Hard entry returns an anira_status: ANIRA_OK, ANIRA_MISSED for a block the miss policy filled (a success), or a failure. The delivered counts come back through a nullable size_t* delivered, a pure out parameter written on every return: zeroed first, then on ANIRA_OK shape[1] of each output (clamped to the tensor's size for a Static output); 0 on ANIRA_MISSED and on a failure. It is never read: the request is shape[1] of the output tensor. Real-time refusals carry no anira_error: the entry returns the failure status, records it in anira_handler_rt_error and logs once through the real-time queue. A handler counts as a user of the core: anira_shutdown is refused while one lives. In this pre-release every handler is Host-only, one plan per candidate engine of one variant, an Async contract is refused at prepare, and every ring the handler prepares holds ANIRA_DTYPE_F32 (a ring dtype that differs from its spec's dtype is refused at prepare).",
+      "doc": "A pipeline is a config object: one inference stage (a model configuration and its candidate backends) and any number of pre- and post-processing stages around it (anira_pipeline_add_stage, the descriptor of anira/abi/stage.h), copied by anira_handler_create and destroyable right after. A handler is the runtime object over one context: anira_handler_prepare takes a Hard contract, validates the configuration against it, loads the models of the surviving candidates, sizes the rings and builds the plan report; from then on the driver thread pumps samples through the Hard entries, which are ANIRA_NONBLOCKING and never wait, and a thread that may wait calls their _wait twins. The entries under the bare names (anira_handler_process, push_data, pop_data, their _multi forms and the _wait twins) take a host block as an anira_tensor of anira/abi/tensor.h, one tensor per slot: the logical shape is [channels, samples] ([1, values] for a Static slot), the sample count is shape[1], the dtype must be the slot's (the ring dtype of a Streamed slot; nothing converts) and the memory is host memory in one of three descriptions, for any channel count: planar (ANIRA_TENSOR_PLANAR, one pointer per channel), one block read by strides in elements (contiguous is {samples, 1}, interleaved is {1, channels}), or one block with all-zero strides (packed row-major). Every description is copied straight between the host memory and the ring. A descriptor is never written, an output's included (the memory it names is), so a host builds its tensors once and reuses them; in place is the same tensor as input and output; an empty tensor (shape[1] == 0, its memory arm not read, NULL legal) leaves a slot out. release, manager_ctx and acquire are not read: the memory is borrowed until the call returns. A host that holds float channel pointers (float* const*, what an audio host hands out) builds one planar tensor over its pointer array with anira_tensor_init_host_planar, once, and stores shape[1] before each call. Every Hard entry returns an anira_status: ANIRA_OK, ANIRA_MISSED for a block the miss policy filled (a success), or a failure. The delivered counts come back through a nullable size_t* delivered, a pure out parameter written on every return: zeroed first, then on ANIRA_OK shape[1] of each output (clamped to the tensor's size for a Static output); 0 on ANIRA_MISSED and on a failure. It is never read: the request is shape[1] of the output tensor. Real-time refusals carry no anira_error: the entry returns the failure status, records it in anira_handler_rt_error and logs once through the real-time queue. A handler counts as a user of the core: anira_shutdown is refused while one lives. In this pre-release every handler is Host-only, one plan per candidate engine of one variant, an Async contract is refused at prepare, and every model tensor is ANIRA_DTYPE_F32: a ring dtype that differs from its spec's dtype is refused at prepare unless a stage of the pipeline fills the phase that moves that ring (pre_process for an input, post_process for an output), since nothing in anira converts.",
       "includes": [
         "<stddef.h>",
         "<stdint.h>",
@@ -6286,7 +6885,8 @@
         "status.h",
         "enums.h",
         "tensor.h",
-        "context.h"
+        "context.h",
+        "stage.h"
       ],
       "entities": [
         {
@@ -6455,7 +7055,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Creates an empty pipeline. A pipeline holds exactly one inference stage (anira_pipeline_add_inference); the pre- and post-processing stages around it arrive with a later pre-release. Value-like: copied by anira_handler_create, destroyable right after.",
+          "doc": "Creates an empty pipeline. A pipeline holds exactly one inference stage (anira_pipeline_add_inference) and any number of pre- and post-processing stages (anira_pipeline_add_stage). Value-like: copied by anira_handler_create, destroyable right after; the copy shares the carriers of the stages.",
           "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL out."
         },
         {
@@ -6502,6 +7102,33 @@
         },
         {
           "kind": "function",
+          "name": "anira_pipeline_add_stage",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_pipeline*",
+              "name": "pipeline",
+              "doc": "The pipeline."
+            },
+            {
+              "type": "const anira_stage_desc*",
+              "name": "desc",
+              "doc": "The stage; min(struct_size, sizeof(anira_stage_desc)) bytes are copied, with the name and the consumed kinds, so the record and its strings may die when the call returns. The slots a shorter struct_size does not cover read as in ANIRA_STAGE_DESC_INIT."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.2",
+          "doc": "Appends a stage to the pipeline's chain: the descriptor is copied into a refcounted carrier, which the pipeline and every handler created from it share, and release fires exactly once, when the last of them is destroyed. The chain order is the order of the calls: the filled slots of a phase run in it, in all four phases. The position of a stage relative to anira_pipeline_add_inference means nothing in this pre-release. A refused call creates no carrier and never calls release.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline or desc, a struct_size below the three leading slots {struct_size, abi_version, user_data}, a reserved that is not 0 or a NULL consumed_kinds (or a NULL entry in it) with a count above 0; ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve (anira_check_abi); ANIRA_ERROR_NOT_SUPPORTED for a domain_in or domain_out other than ANIRA_DOMAIN_HOST."
+        },
+        {
+          "kind": "function",
           "name": "anira_pipeline_destroy",
           "returns": "void",
           "params": [
@@ -6514,7 +7141,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Destroys a pipeline; handlers created from it keep their copy."
+          "doc": "Destroys a pipeline; handlers created from it keep their copy. The release function of a stage fires here when no handler shares its carrier any more."
         },
         {
           "kind": "function",
@@ -6562,7 +7189,7 @@
           "thread": "main-thread & !loader-lock",
           "status": "promised",
           "since": "0.2",
-          "doc": "Destroys a handler: releases its session (in-flight inferences are drained, the thread pool joins with the last session of this copy, which is why the call must not run under a loader lock), frees the plan report, stops counting as a user of the core and drops the handler's reference on its context. The driver thread must have stopped calling the Hard entries."
+          "doc": "Destroys a handler: releases its session (in-flight inferences are drained, the thread pool joins with the last session of this copy, which is why the call must not run under a loader lock), frees the plan report, stops counting as a user of the core, drops the handler's reference on its context and its share of the stage carriers (the release function of a stage fires here when this handler held the last one). The driver thread must have stopped calling the Hard entries."
         },
         {
           "kind": "function",
@@ -6588,8 +7215,8 @@
           "thread": "main-thread & !processing",
           "status": "promised",
           "since": "0.2",
-          "doc": "The blocking quiescence point, and the one call no other handler entry may overlap: validates the variant against the contract (geometry, the explicit budget, the warm-up mode, the miss policy against the anchor, the ring dtypes by canonical name, the contract's extensions), loads the model of every candidate with an entry, warms up as the contract says, sizes the rings for the contract's block range and the latency, builds the plan report, selects the plan of the variant's default engine when that engine has a plan (else plan 0), logs the report (Info records of the group anira.capi: the counts and the selected plan, then one record per plan, per slot and per consumed extension) and re-arms the real-time latches, logging the count of failures suppressed since the last prepare or reset. A second prepare replaces the previous session whole. A failed prepare leaves the handler unprepared. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's channel count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor or differs from its spec's dtype (ANIRA_ERROR_CONFIG naming the field).",
-          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or contract; ANIRA_ERROR_CONFIG for a rule the configuration breaks, with the offending field named in the message; ANIRA_ERROR_NOT_SUPPORTED for what this pre-release cannot do; ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load."
+          "doc": "The blocking quiescence point, and the one call no other handler entry may overlap: validates the variant against the contract (geometry, the explicit budget, the warm-up mode, the miss policy against the anchor, the ring dtypes by canonical name, the contract's extensions), loads the model of every candidate with an entry, warms up as the contract says, sizes the rings for the contract's block range and the latency, builds the plan report, selects the plan of the variant's default engine when that engine has a plan (else plan 0), logs the report (Info records of the group anira.capi: the counts and the selected plan, then one record per plan, per slot and per consumed extension) re-arms the real-time latches, logging the count of failures suppressed since the last prepare or reset, and last calls the prepare function of every stage that has one, in chain order, with the handler and the report (a status other than ANIRA_OK fails this call with it, the message naming the stage). A second prepare replaces the previous session whole. A failed prepare leaves the handler unprepared. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's channel count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor, or one that differs from its spec's dtype while no stage of the pipeline fills the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field).",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or contract; ANIRA_ERROR_CONFIG for a rule the configuration breaks, with the offending field named in the message; ANIRA_ERROR_NOT_SUPPORTED for what this pre-release cannot do; ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a stage's prepare function returned."
         },
         {
           "kind": "function",

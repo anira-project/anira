@@ -812,8 +812,9 @@ public:
     /// The ring dtype of one tensor under this Hard contract, by canonical name: the element
     /// type the tensor forms of the Hard entries carry across the ABI and the ring holds as is;
     /// F32 for every tensor never set. Nothing
-    /// converts: a name that is not a Streamed tensor, or a ring dtype that differs from the spec's
-    /// dtype, is ANIRA_ERROR_CONFIG at anira_handler_prepare.
+    /// converts: a name that is not a Streamed tensor is ANIRA_ERROR_CONFIG at
+    /// anira_handler_prepare, and so is a ring dtype that differs from the spec's dtype unless a
+    /// stage of the pipeline fills the phase that moves that ring (anira_pipeline_add_stage).
     ContractHandle& hard_ring_dtype(std::string_view canonical, DType dtype) {
         const std::string name(canonical);
         detail::check(anira_contract_hard_set_ring_dtype(m_contract, name.c_str(), dtype),

@@ -39,6 +39,7 @@ enum class RtKind : uint32_t {
     InvalidArgument = 1U << 4,
     Engine = 1U << 5,
     NotSupported = 1U << 6,
+    Other = 1U << 7,  ///< any other status, through record_any only (a stage callback's)
 };
 
 /// The kind bit of a status; 0 for a status that never latches.
@@ -81,12 +82,20 @@ struct RtLatch {
     bool record(anira_status status) noexcept ANIRA_NONBLOCKING {
         const uint32_t bit = rt_kind_bit(status);
         if (bit == 0) { return false; }
-        m_rt_error.store(static_cast<int32_t>(status), std::memory_order_relaxed);
-        if ((m_latched.fetch_or(bit, std::memory_order_relaxed) & bit) != 0) {
-            m_suppressed.fetch_add(1, std::memory_order_relaxed);
-            return false;
-        }
-        return true;
+        return record_kind(status, bit);
+    }
+
+    /**
+     * @brief Records a status that is not anira's to choose: what a stage callback returned.
+     *
+     * A status with a kind bit latches under it, like record(); any other one (the host may
+     * return every anira_status) latches under RtKind::Other, so that it still reaches
+     * rt_error and is logged once.
+     * @return True on the kind's first occurrence since the last re-arm: log it.
+     */
+    bool record_any(anira_status status) noexcept ANIRA_NONBLOCKING {
+        const uint32_t bit = rt_kind_bit(status);
+        return record_kind(status, bit != 0 ? bit : static_cast<uint32_t>(RtKind::Other));
     }
 
     /**
@@ -116,6 +125,17 @@ struct RtLatch {
     /// The last recorded status; ANIRA_OK when nothing was recorded since the last re-arm.
     anira_status rt_error() const noexcept ANIRA_NONBLOCKING {
         return static_cast<anira_status>(m_rt_error.load(std::memory_order_relaxed));
+    }
+
+private:
+    /// Last-wins into rt_error, then the kind's bit: true when it was not set yet.
+    bool record_kind(anira_status status, uint32_t bit) noexcept ANIRA_NONBLOCKING {
+        m_rt_error.store(static_cast<int32_t>(status), std::memory_order_relaxed);
+        if ((m_latched.fetch_or(bit, std::memory_order_relaxed) & bit) != 0) {
+            m_suppressed.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        return true;
     }
 };
 

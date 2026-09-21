@@ -18,8 +18,10 @@
  * third one is a backup function of ANIRA_MISS_CALLBACK, which reads and fills its tensors
  * through the [callback-safe] accessors and is handed to anira_contract_hard_set_miss_fn: the
  * conversion to anira_miss_fn is clean only because the function is declared
- * ANIRA_NONBLOCKING itself (clang refuses to add the attribute through a conversion). The
- * file grows with abi/stage.h (the ring accessors and the stage defaults) and with the
+ * ANIRA_NONBLOCKING itself (clang refuses to add the attribute through a conversion). A
+ * fourth one is a phase callback of anira/abi/stage.h: it calls the ten ring accessors and the
+ * two default bodies, all [callback-safe], and lands in the four anira_stage_fn slots of a
+ * descriptor, which needs the attribute for the same reason. The file grows with the
  * handler's [callback-safe] entries.
  */
 #include <anira/abi/config.h>
@@ -27,6 +29,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
+#include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <stddef.h>
@@ -122,6 +125,65 @@ static anira_status ANIRA_CALL anira_rt_contract_miss(anira_handler* handler,
         for (i = 0; i < samples; ++i) { out[(int64_t)i * step] = first; }
     }
     return ANIRA_OK;
+}
+
+/* anira/abi/stage.h: a phase callback as a host writes one. In pre_process it moves one hop of
+   every Streamed input by hand, through every accessor a stage has; in post_process it pushes
+   the outputs; anything else is left to the default bodies. */
+static anira_status ANIRA_CALL anira_rt_contract_stage(const anira_stage_ctx* ctx,
+                                                       void* user_data) ANIRA_NONBLOCKING {
+    uint32_t slot = 0;
+    (void)user_data;
+    if (ctx->phase == (uint32_t)ANIRA_PHASE_PRE_PROCESS) {
+        for (slot = 0; slot < ctx->num_inputs; ++slot) {
+            anira_ring* ring = ctx->input_rings[slot];
+            const anira_dtype dtype = anira_ring_dtype(ring);
+            void* data = anira_tensor_data(&ctx->model_inputs[slot], dtype);
+            const size_t elements = anira_tensor_num_elements(&ctx->model_inputs[slot]);
+            uint32_t channel = 0;
+            if (ring == NULL || data == NULL) { continue; }
+            for (channel = 0; channel < anira_ring_num_channels(ring); ++channel) {
+                const size_t fresh = anira_ring_available(ring, channel);
+                const size_t past = anira_ring_available_past(ring, channel);
+                if (fresh + past < elements) {
+                    (void)anira_ring_discard(ring, channel, fresh);
+                } else if (past > 0u) {
+                    (void)anira_ring_pop_windows(ring, channel, data, dtype, fresh, past, 0u, 1u);
+                } else {
+                    (void)anira_ring_peek_past_block(ring, channel, data, dtype, 0u);
+                    (void)anira_ring_pop_block(ring, channel, data, dtype, fresh);
+                }
+            }
+        }
+        return anira_stage_default_pre_process(ctx);
+    }
+    if (ctx->phase == (uint32_t)ANIRA_PHASE_POST_PROCESS) {
+        for (slot = 0; slot < ctx->num_outputs; ++slot) {
+            anira_ring* ring = ctx->output_rings[slot];
+            const anira_dtype dtype = anira_ring_dtype(ring);
+            const void* data = anira_tensor_data(&ctx->model_outputs[slot], dtype);
+            if (ring == NULL || data == NULL) { continue; }
+            (void)anira_ring_push_block(ring, 0u, data, dtype, 0u);
+            (void)anira_ring_push_fill(ring, 0u, data, dtype, 0u);
+        }
+        return anira_stage_default_post_process(ctx);
+    }
+    return ANIRA_OK;
+}
+
+/* anira_pipeline_add_stage is [main-thread]: a plain function fills the descriptor. The four
+   phase slots take the nonblocking function as it is. */
+/* NOLINTNEXTLINE(misc-use-internal-linkage) */
+anira_status anira_rt_contract_add_stage(anira_pipeline* pipeline, void* user_data);
+anira_status anira_rt_contract_add_stage(anira_pipeline* pipeline, void* user_data) {
+    anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
+    stage.user_data = user_data;
+    stage.name = "rt-contract";
+    stage.pre_process = anira_rt_contract_stage;
+    stage.post_process = anira_rt_contract_stage;
+    stage.before_inference = anira_rt_contract_stage;
+    stage.after_inference = anira_rt_contract_stage;
+    return anira_pipeline_add_stage(pipeline, &stage, NULL);
 }
 
 /* The setter is [main-thread]: a plain function hands the pair over. */

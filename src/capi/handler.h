@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "handles.h"
+#include "stage.h"
 
 namespace anira::capi {
 
@@ -59,6 +60,10 @@ struct anira_pipeline {
     std::vector<anira::capi::Candidate> m_candidates;  ///< never empty after add_inference: the
                                                        ///< caller's list, or the default set
     bool m_has_inference = false;
+    /// The stage chain, in the order of the anira_pipeline_add_stage calls. The carriers are
+    /// shared with every copy of the pipeline (anira_handler_create's), so a stage's release
+    /// fires once, when the last of them dies.
+    anira::capi::StageChain m_stages;
 
     /// The candidate view a translate/ext call takes (pointers into the strings); control
     /// thread only. Never empty after add_inference.
@@ -89,8 +94,9 @@ struct anira_handler {
     anira_contract m_contract;           ///< the snapshot of the last successful prepare (Hard)
     anira::InferenceConfig m_inference_config;      ///< built at prepare; must outlive m_manager
                                                     ///< and m_pp
-    std::unique_ptr<anira::PrePostProcessor> m_pp;  ///< the default 2.x processor until the
-                                                    ///< stages arrive (needs m_inference_config)
+    std::unique_ptr<anira::PrePostProcessor> m_pp;  ///< the StageChainProcessor over
+                                                    ///< m_pipeline.m_stages, rebuilt by every
+                                                    ///< prepare (needs m_inference_config)
     std::unique_ptr<anira::InferenceManager> m_manager;  ///< the session; null while
                                                          ///< unprepared (declared after m_pp:
                                                          ///< destroyed first)

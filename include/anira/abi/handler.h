@@ -10,27 +10,29 @@
  * @brief The pipeline, the handler, the plan report and the Hard entries (section 6).
  *
  * A pipeline is a config object: one inference stage (a model configuration and its candidate
- * backends), copied by anira_handler_create and destroyable right after. A handler is the
- * runtime object over one context: anira_handler_prepare takes a Hard contract, validates the
- * configuration against it, loads the models of the surviving candidates, sizes the rings and
- * builds the plan report; from then on the driver thread pumps samples through the Hard
- * entries, which are ANIRA_NONBLOCKING and never wait, and a thread that may wait calls their
- * _wait twins. The entries under the bare names (anira_handler_process, push_data, pop_data,
- * their _multi forms and the _wait twins) take a host block as an anira_tensor of
- * anira/abi/tensor.h, one tensor per slot: the logical shape is [channels, samples] ([1,
- * values] for a Static slot), the sample count is shape[1], the dtype must be the slot's (the
- * ring dtype of a Streamed slot; nothing converts) and the memory is host memory in one of
- * three descriptions, for any channel count: planar (ANIRA_TENSOR_PLANAR, one pointer per
- * channel), one block read by strides in elements (contiguous is {samples, 1}, interleaved is
- * {1, channels}), or one block with all-zero strides (packed row-major). Every description is
- * copied straight between the host memory and the ring. A descriptor is never written, an
- * output's included (the memory it names is), so a host builds its tensors once and reuses
- * them; in place is the same tensor as input and output; an empty tensor (shape[1] == 0, its
- * memory arm not read, NULL legal) leaves a slot out. release, manager_ctx and acquire are not
- * read: the memory is borrowed until the call returns. A host that holds float channel pointers
- * (float* const*, what an audio host hands out) builds one planar tensor over its pointer array
- * with anira_tensor_init_host_planar, once, and stores shape[1] before each call. Every Hard
- * entry returns an anira_status: ANIRA_OK, ANIRA_MISSED for a block the miss policy filled (a
+ * backends) and any number of pre- and post-processing stages around it
+ * (anira_pipeline_add_stage, the descriptor of anira/abi/stage.h), copied by
+ * anira_handler_create and destroyable right after. A handler is the runtime object over one
+ * context: anira_handler_prepare takes a Hard contract, validates the configuration against it,
+ * loads the models of the surviving candidates, sizes the rings and builds the plan report;
+ * from then on the driver thread pumps samples through the Hard entries, which are
+ * ANIRA_NONBLOCKING and never wait, and a thread that may wait calls their _wait twins. The
+ * entries under the bare names (anira_handler_process, push_data, pop_data, their _multi forms
+ * and the _wait twins) take a host block as an anira_tensor of anira/abi/tensor.h, one tensor
+ * per slot: the logical shape is [channels, samples] ([1, values] for a Static slot), the
+ * sample count is shape[1], the dtype must be the slot's (the ring dtype of a Streamed slot;
+ * nothing converts) and the memory is host memory in one of three descriptions, for any channel
+ * count: planar (ANIRA_TENSOR_PLANAR, one pointer per channel), one block read by strides in
+ * elements (contiguous is {samples, 1}, interleaved is {1, channels}), or one block with
+ * all-zero strides (packed row-major). Every description is copied straight between the host
+ * memory and the ring. A descriptor is never written, an output's included (the memory it names
+ * is), so a host builds its tensors once and reuses them; in place is the same tensor as input
+ * and output; an empty tensor (shape[1] == 0, its memory arm not read, NULL legal) leaves a
+ * slot out. release, manager_ctx and acquire are not read: the memory is borrowed until the
+ * call returns. A host that holds float channel pointers (float* const*, what an audio host
+ * hands out) builds one planar tensor over its pointer array with
+ * anira_tensor_init_host_planar, once, and stores shape[1] before each call. Every Hard entry
+ * returns an anira_status: ANIRA_OK, ANIRA_MISSED for a block the miss policy filled (a
  * success), or a failure. The delivered counts come back through a nullable size_t* delivered,
  * a pure out parameter written on every return: zeroed first, then on ANIRA_OK shape[1] of each
  * output (clamped to the tensor's size for a Static output); 0 on ANIRA_MISSED and on a
@@ -39,8 +41,9 @@
  * anira_handler_rt_error and logs once through the real-time queue. A handler counts as a user
  * of the core: anira_shutdown is refused while one lives. In this pre-release every handler is
  * Host-only, one plan per candidate engine of one variant, an Async contract is refused at
- * prepare, and every ring the handler prepares holds ANIRA_DTYPE_F32 (a ring dtype that differs
- * from its spec's dtype is refused at prepare).
+ * prepare, and every model tensor is ANIRA_DTYPE_F32: a ring dtype that differs from its spec's
+ * dtype is refused at prepare unless a stage of the pipeline fills the phase that moves that
+ * ring (pre_process for an input, post_process for an output), since nothing in anira converts.
  */
 
 #include <stddef.h>
@@ -50,6 +53,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/context.h>
+#include <anira/abi/stage.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -157,9 +161,9 @@ typedef struct anira_plan_info {
 
 /**
  * @brief Creates an empty pipeline. A pipeline holds exactly one inference stage
- * (anira_pipeline_add_inference); the pre- and post-processing stages around it arrive
- * with a later pre-release. Value-like: copied by anira_handler_create, destroyable
- * right after.
+ * (anira_pipeline_add_inference) and any number of pre- and post-processing stages
+ * (anira_pipeline_add_stage). Value-like: copied by anira_handler_create, destroyable
+ * right after; the copy shares the carriers of the stages.
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL out.
@@ -211,7 +215,35 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* p
                                                                anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Destroys a pipeline; handlers created from it keep their copy.
+ * @brief Appends a stage to the pipeline's chain: the descriptor is copied into a refcounted
+ * carrier, which the pipeline and every handler created from it share, and release fires
+ * exactly once, when the last of them is destroyed. The chain order is the order of the
+ * calls: the filled slots of a phase run in it, in all four phases. The position of a
+ * stage relative to anira_pipeline_add_inference means nothing in this pre-release. A
+ * refused call creates no carrier and never calls release.
+ * @param pipeline The pipeline.
+ * @param desc The stage; min(struct_size, sizeof(anira_stage_desc)) bytes are copied, with the
+ *        name and the consumed kinds, so the record and its strings may die when the call
+ *        returns. The slots a shorter struct_size does not cover read as in
+ *        ANIRA_STAGE_DESC_INIT.
+ * @param err Nullable.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline or desc, a struct_size
+ *         below the three leading slots {struct_size, abi_version, user_data}, a reserved that
+ *         is not 0 or a NULL consumed_kinds (or a NULL entry in it) with a count above 0;
+ *         ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve
+ *         (anira_check_abi); ANIRA_ERROR_NOT_SUPPORTED for a domain_in or domain_out other than
+ *         ANIRA_DOMAIN_HOST.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipeline,
+                                                           const anira_stage_desc* desc,
+                                                           anira_error* err) ANIRA_NOEXCEPT;
+
+/**
+ * @brief Destroys a pipeline; handlers created from it keep their copy. The release function of
+ * a stage fires here when no handler shares its carrier any more.
  * @param pipeline The handle; NULL is a no-op.
  * @par Thread contract
  * [main-thread]
@@ -253,9 +285,10 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_create(anira_context* context,
 /**
  * @brief Destroys a handler: releases its session (in-flight inferences are drained, the thread
  * pool joins with the last session of this copy, which is why the call must not run
- * under a loader lock), frees the plan report, stops counting as a user of the core and
- * drops the handler's reference on its context. The driver thread must have stopped
- * calling the Hard entries.
+ * under a loader lock), frees the plan report, stops counting as a user of the core,
+ * drops the handler's reference on its context and its share of the stage carriers (the
+ * release function of a stage fires here when this handler held the last one). The
+ * driver thread must have stopped calling the Hard entries.
  * @param handler The handle; NULL is a no-op.
  * @par Thread contract
  * [main-thread & !loader-lock]
@@ -272,16 +305,19 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * builds the plan report, selects the plan of the variant's default engine when that
  * engine has a plan (else plan 0), logs the report (Info records of the group
  * anira.capi: the counts and the selected plan, then one record per plan, per slot and
- * per consumed extension) and re-arms the real-time latches, logging the count of
- * failures suppressed since the last prepare or reset. A second prepare replaces the
- * previous session whole. A failed prepare leaves the handler unprepared. Refused in
- * this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
+ * per consumed extension) re-arms the real-time latches, logging the count of failures
+ * suppressed since the last prepare or reset, and last calls the prepare function of
+ * every stage that has one, in chain order, with the handler and the report (a status
+ * other than ANIRA_OK fails this call with it, the message naming the stage). A second
+ * prepare replaces the previous session whole. A failed prepare leaves the handler
+ * unprepared. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
  * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED
  * or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed
  * output's channel count or ring dtype differs from the anchored input's,
  * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype
- * that names no Streamed tensor or differs from its spec's dtype (ANIRA_ERROR_CONFIG
- * naming the field).
+ * that names no Streamed tensor, or one that differs from its spec's dtype while no
+ * stage of the pipeline fills the phase that moves that ring (ANIRA_ERROR_CONFIG naming
+ * the field).
  * @param handler The handler.
  * @param contract A Hard contract, copied; the handle may be destroyed when the call returns.
  * @param err Nullable.
@@ -291,7 +327,7 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  *         ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on
  *         the contract, the model or a spec that this build does not know or nothing consumes;
  *         ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model
- *         does not load.
+ *         does not load; the status a stage's prepare function returned.
  * @par Thread contract
  * [main-thread & !processing]
  * @since ABI 0.2

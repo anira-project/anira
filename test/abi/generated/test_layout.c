@@ -17,6 +17,7 @@
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
 #include <anira/abi/thread.h>
+#include <anira/abi/stage.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/draft/tensor_platform.h>
 
@@ -305,6 +306,54 @@ _Static_assert(offsetof(anira_backend_id, struct_size) == 0, "anira_backend_id.s
 
 _Static_assert(offsetof(anira_edge_info, struct_size) == 0, "anira_edge_info.struct_size first");
 
+_Static_assert(sizeof(anira_stage_ctx) == 64, "anira_stage_ctx size");
+_Static_assert(_Alignof(anira_stage_ctx) == 8, "anira_stage_ctx align");
+_Static_assert(offsetof(anira_stage_ctx, phase) == 0, "anira_stage_ctx.phase offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->phase) == 4, "anira_stage_ctx.phase size");
+_Static_assert(offsetof(anira_stage_ctx, engine) == 4, "anira_stage_ctx.engine offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->engine) == 4, "anira_stage_ctx.engine size");
+_Static_assert(offsetof(anira_stage_ctx, provider) == 8, "anira_stage_ctx.provider offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->provider) == 4, "anira_stage_ctx.provider size");
+_Static_assert(offsetof(anira_stage_ctx, variant) == 12, "anira_stage_ctx.variant offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->variant) == 4, "anira_stage_ctx.variant size");
+_Static_assert(offsetof(anira_stage_ctx, num_inputs) == 16, "anira_stage_ctx.num_inputs offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->num_inputs) == 4, "anira_stage_ctx.num_inputs size");
+_Static_assert(offsetof(anira_stage_ctx, num_outputs) == 20, "anira_stage_ctx.num_outputs offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->num_outputs) == 4, "anira_stage_ctx.num_outputs size");
+_Static_assert(offsetof(anira_stage_ctx, ticket) == 24, "anira_stage_ctx.ticket offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->ticket) == 4, "anira_stage_ctx.ticket size");
+_Static_assert(offsetof(anira_stage_ctx, reserved) == 28, "anira_stage_ctx.reserved offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->reserved) == 4, "anira_stage_ctx.reserved size");
+_Static_assert(offsetof(anira_stage_ctx, input_rings) == 32, "anira_stage_ctx.input_rings offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->input_rings_bits) == 8, "anira_stage_ctx.input_rings is an 8-byte slot");
+_Static_assert(offsetof(anira_stage_ctx, model_inputs) == 40, "anira_stage_ctx.model_inputs offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->model_inputs_bits) == 8, "anira_stage_ctx.model_inputs is an 8-byte slot");
+_Static_assert(offsetof(anira_stage_ctx, model_outputs) == 48, "anira_stage_ctx.model_outputs offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->model_outputs_bits) == 8, "anira_stage_ctx.model_outputs is an 8-byte slot");
+_Static_assert(offsetof(anira_stage_ctx, output_rings) == 56, "anira_stage_ctx.output_rings offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->output_rings_bits) == 8, "anira_stage_ctx.output_rings is an 8-byte slot");
+
+_Static_assert(offsetof(anira_stage_desc, struct_size) == 0, "anira_stage_desc.struct_size first");
+_Static_assert(offsetof(anira_stage_desc, abi_version) == 4, "anira_stage_desc.abi_version second");
+_Static_assert(offsetof(anira_stage_desc, user_data) == 8, "anira_stage_desc.user_data third");
+_Static_assert(sizeof(anira_stage_desc) ==
+                   sizeof(((const anira_stage_desc*)0)->struct_size) +
+                   sizeof(((const anira_stage_desc*)0)->abi_version) +
+                   sizeof(((const anira_stage_desc*)0)->user_data) +
+                   sizeof(((const anira_stage_desc*)0)->name) +
+                   sizeof(((const anira_stage_desc*)0)->domain_in) +
+                   sizeof(((const anira_stage_desc*)0)->domain_out) +
+                   sizeof(((const anira_stage_desc*)0)->consumed_kinds) +
+                   sizeof(((const anira_stage_desc*)0)->num_consumed_kinds) +
+                   sizeof(((const anira_stage_desc*)0)->reserved) +
+                   sizeof(((const anira_stage_desc*)0)->pre_process) +
+                   sizeof(((const anira_stage_desc*)0)->post_process) +
+                   sizeof(((const anira_stage_desc*)0)->before_inference) +
+                   sizeof(((const anira_stage_desc*)0)->after_inference) +
+                   sizeof(((const anira_stage_desc*)0)->prepare) +
+                   sizeof(((const anira_stage_desc*)0)->release),
+               "anira_stage_desc has no implicit padding");
+
 _Static_assert(offsetof(anira_plan_slot, struct_size) == 0, "anira_plan_slot.struct_size first");
 
 _Static_assert(offsetof(anira_plan_ext, struct_size) == 0, "anira_plan_ext.struct_size first");
@@ -395,5 +444,18 @@ int main(void) {
     printf("field anira_tensor.manager_ctx offset %u size %u\n", (unsigned)offsetof(anira_tensor, manager_ctx), 8u);
     printf("field anira_tensor.release offset %u size %u\n", (unsigned)offsetof(anira_tensor, release), 8u);
     printf("field anira_tensor.acquire offset %u size %u\n", (unsigned)offsetof(anira_tensor, acquire), (unsigned)sizeof(((const anira_tensor*)0)->acquire));
+    printf("struct anira_stage_ctx size %u align %u\n", (unsigned)sizeof(anira_stage_ctx), (unsigned)_Alignof(anira_stage_ctx));
+    printf("field anira_stage_ctx.phase offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, phase), (unsigned)sizeof(((const anira_stage_ctx*)0)->phase));
+    printf("field anira_stage_ctx.engine offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, engine), (unsigned)sizeof(((const anira_stage_ctx*)0)->engine));
+    printf("field anira_stage_ctx.provider offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, provider), (unsigned)sizeof(((const anira_stage_ctx*)0)->provider));
+    printf("field anira_stage_ctx.variant offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, variant), (unsigned)sizeof(((const anira_stage_ctx*)0)->variant));
+    printf("field anira_stage_ctx.num_inputs offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, num_inputs), (unsigned)sizeof(((const anira_stage_ctx*)0)->num_inputs));
+    printf("field anira_stage_ctx.num_outputs offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, num_outputs), (unsigned)sizeof(((const anira_stage_ctx*)0)->num_outputs));
+    printf("field anira_stage_ctx.ticket offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, ticket), (unsigned)sizeof(((const anira_stage_ctx*)0)->ticket));
+    printf("field anira_stage_ctx.reserved offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, reserved), (unsigned)sizeof(((const anira_stage_ctx*)0)->reserved));
+    printf("field anira_stage_ctx.input_rings offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, input_rings), 8u);
+    printf("field anira_stage_ctx.model_inputs offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, model_inputs), 8u);
+    printf("field anira_stage_ctx.model_outputs offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, model_outputs), 8u);
+    printf("field anira_stage_ctx.output_rings offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, output_rings), 8u);
     return 0;
 }

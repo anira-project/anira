@@ -262,7 +262,9 @@ void check_spec(const anira_tensor_spec& spec,
     }
 }
 
-void check_contract(const anira_contract& contract, const anira_model_config& model) {
+void check_contract(const anira_contract& contract,
+                    const anira_model_config& model,
+                    const StageFacts* stages) {
     const HardContract* hard = contract.hard();
     if (hard == nullptr) {
         not_supported(
@@ -293,9 +295,13 @@ void check_contract(const anira_contract& contract, const anira_model_config& mo
                      std::to_string(hard->m_wait_ratio) + ")");
     }
     // The ring dtype rules: a ring exists on a Streamed tensor only, and it holds the
-    // spec's dtype as is (nothing in anira converts).
+    // spec's dtype as is (nothing in anira converts), unless a stage of the pipeline fills the
+    // phase that moves that ring (pre_process pops the input rings, post_process pushes the
+    // output rings) and so takes the difference on itself. The default bodies still refuse
+    // such a slot at run time.
     for (const auto& [name, dtype] : hard->m_ring_dtypes) {
-        const anira_tensor_spec* spec = find_spec(model, name, nullptr, nullptr);
+        bool is_input = true;
+        const anira_tensor_spec* spec = find_spec(model, name, &is_input, nullptr);
         if (spec == nullptr) {
             config_error("contract: the ring dtype of '" + name + "' names no tensor");
         }
@@ -303,11 +309,14 @@ void check_contract(const anira_contract& contract, const anira_model_config& mo
             config_error("contract: the ring dtype of '" + name + "' is set on a " +
                          role_word(spec->m_role) + " tensor; only a Streamed tensor has a ring");
         }
-        if (dtype != spec->m_dtype) {
+        const bool stage_moves_ring =
+            stages != nullptr && (is_input ? stages->m_fills_pre : stages->m_fills_post);
+        if (dtype != spec->m_dtype && !stage_moves_ring) {
             config_error("contract: the ring dtype of '" + name + "' is " + hex_dtype(dtype) +
                          " but its spec's dtype is " + hex_dtype(spec->m_dtype) +
-                         "; nothing converts (a stage that consumes the difference arrives "
-                         "with a later pre-release)");
+                         "; nothing converts (add a stage that fills " +
+                         (is_input ? "pre_process" : "post_process") +
+                         " and converts, anira_pipeline_add_stage)");
         }
     }
 }
@@ -480,10 +489,17 @@ void check_extensions(const anira_model_config& model,
                       const anira_context_config* config,
                       const anira_contract* contract,
                       const anira_backend_id* candidates,
-                      uint32_t num_candidates) {
+                      uint32_t num_candidates,
+                      const StageFacts* stages = nullptr) {
     anira_error local = ANIRA_ERROR_INIT;
     const anira_status status =
-        ext_check_consumed(model, config, contract, candidates, num_candidates, &local);
+        ext_check_consumed(model,
+                           config,
+                           contract,
+                           candidates,
+                           num_candidates,
+                           &local,
+                           stages != nullptr ? &stages->m_consumers : nullptr);
     if (ANIRA_FAILED(status)) { refuse(status, local.message); }
 }
 
@@ -563,11 +579,12 @@ void validate(const anira_model_config& model,
               const anira_contract* contract,
               const anira_backend_id* candidates,
               uint32_t num_candidates,
-              Derived& out) {
+              Derived& out,
+              const StageFacts* stages) {
     out = Derived{};
     if (model.m_inputs.empty()) { config_error("no input tensor"); }
     if (model.m_outputs.empty()) { config_error("no output tensor"); }
-    if (contract != nullptr) { check_contract(*contract, model); }
+    if (contract != nullptr) { check_contract(*contract, model, stages); }
     const HardContract* hard = contract != nullptr ? contract->hard() : nullptr;
     out.m_inputs.resize(model.m_inputs.size());
     out.m_outputs.resize(model.m_outputs.size());
@@ -581,7 +598,7 @@ void validate(const anira_model_config& model,
     check_ratios(model, out);
     check_rows(model, candidates, num_candidates, out);
     check_layouts(model, out);
-    check_extensions(model, nullptr, contract, candidates, num_candidates);
+    check_extensions(model, nullptr, contract, candidates, num_candidates, stages);
 }
 
 anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
@@ -607,9 +624,10 @@ anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
 anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                              const anira_contract& contract,
                                              const anira_backend_id* candidates,
-                                             uint32_t num_candidates) {
+                                             uint32_t num_candidates,
+                                             const StageFacts* stages) {
     Derived derived;
-    validate(model, &contract, candidates, num_candidates, derived);
+    validate(model, &contract, candidates, num_candidates, derived, stages);
     const HardContract& hard = *contract.hard();
 
     std::vector<anira::ModelData> model_data;

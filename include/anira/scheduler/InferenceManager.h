@@ -427,6 +427,17 @@ public:
     const std::vector<unsigned int>& latencies() const noexcept { return m_session->m_latency; }
 
     /**
+     * @brief The session behind this manager
+     *
+     * For the stage chain of a 3.x handler, which binds to the session's structs and rings
+     * after prepare() (the pre/post virtuals receive a struct's buffers, never the struct).
+     * The session lives as long as the manager.
+     *
+     * @return The session
+     */
+    SessionElement& session() noexcept { return *m_session; }
+
+    /**
      * @brief What a missed block delivers (anira_miss_policy)
      *
      * ANIRA_MISS_ZEROS is the 2.x behaviour and the default; ANIRA_MISS_HOLD_LAST repeats

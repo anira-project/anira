@@ -8,10 +8,12 @@
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
+#include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
@@ -41,6 +43,26 @@ static_assert(ANIRA_PHASE_BEFORE_INFERENCE == 2 && ANIRA_PHASE_INFERENCE == 3 &&
                   ANIRA_PHASE_AFTER_INFERENCE == 4,
               "before < inference < after");
 static_assert(ANIRA_PHASE_PREPARE == 5 && ANIRA_PHASE_RELEASE == 6, "the lifecycle phases");
+// anira/abi/stage.h: the stage context is frozen at 64 bytes, eight scalars and four pointer
+// slots, and travels by value like the tensor.
+static_assert(sizeof(anira_stage_ctx) == 64 && alignof(anira_stage_ctx) == 8,
+              "anira_stage_ctx is frozen");
+static_assert(offsetof(anira_stage_ctx, input_rings) == 32 &&
+                  offsetof(anira_stage_ctx, output_rings) == 56,
+              "the four pointer slots follow the eight scalars");
+static_assert(std::is_trivially_copyable_v<anira_stage_ctx> &&
+                  std::is_standard_layout_v<anira_stage_ctx>,
+              "anira_stage_ctx is a POD");
+// The rings of a context are anira's: the array's entries cannot be re-pointed by a stage.
+static_assert(std::is_same_v<decltype(anira_stage_ctx::input_rings), anira_ring* const*>,
+              "input_rings is an array of const ring pointers");
+static_assert(std::is_same_v<decltype(anira_stage_desc::consumed_kinds), const char* const*>,
+              "consumed_kinds is an array of const strings");
+// The descriptor's callback slots are the named typedefs.
+static_assert(std::is_same_v<decltype(anira_stage_desc::pre_process), anira_stage_fn> &&
+                  std::is_same_v<decltype(anira_stage_desc::prepare), anira_stage_prepare_fn> &&
+                  std::is_same_v<decltype(anira_stage_desc::release), anira_stage_release_fn>,
+              "the slots of anira_stage_desc");
 
 [[maybe_unused]] int anira_header_cxx17_probe() {
     const anira_error err = ANIRA_ERROR_INIT;
@@ -68,6 +90,12 @@ static_assert(ANIRA_PHASE_PREPARE == 5 && ANIRA_PHASE_RELEASE == 6, "the lifecyc
     tensor.handle.host.ptr = &checks;
     checks += tensor.release == nullptr && tensor.ndim == 0u ? 1 : 0;
     checks += d3d12.device == nullptr && webgpu.exec == ANIRA_EXEC_WORKER ? 1 : 0;
+    const anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;  // the initializer as C++17 braces it
+    anira_stage_ctx ctx{};
+    ctx.ticket = ANIRA_TICKET_INVALID;
+    checks += stage.struct_size == sizeof(anira_stage_desc) && stage.name == nullptr ? 1 : 0;
+    checks += stage.domain_out == ANIRA_DOMAIN_HOST && stage.release == nullptr ? 1 : 0;
+    checks += ctx.model_inputs == nullptr && ctx.output_rings_bits == 0u ? 1 : 0;
     return checks;
 }
 
@@ -91,6 +119,10 @@ static_assert(
 static_assert(noexcept(anira_handler_process(nullptr, nullptr, nullptr, 0, nullptr)));
 static_assert(noexcept(anira_handler_pop_data_multi(nullptr, nullptr, 0, nullptr)));
 static_assert(noexcept(anira_handler_process_wait(nullptr, nullptr, nullptr, 0.0, 0, nullptr)));
+// The stage entries: a ring accessor, a default body and the control-path add.
+static_assert(noexcept(anira_ring_pop_block(nullptr, 0, nullptr, ANIRA_DTYPE_F32, 0)));
+static_assert(noexcept(anira_stage_default_pre_process(nullptr)));
+static_assert(noexcept(anira_pipeline_add_stage(nullptr, nullptr, nullptr)));
 static_assert(std::is_invocable_r_v<anira_status,
                                     decltype(&anira_handler_push_data),
                                     anira_handler*,

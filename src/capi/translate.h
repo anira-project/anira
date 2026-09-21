@@ -55,6 +55,20 @@ struct Derived {
     size_t m_anchor_index = 0;
 };
 
+/// What a pipeline's stage chain means to the validator (stage_facts() of stage.h builds it
+/// from the carriers; no chain is the default everywhere).
+struct StageFacts {
+    /// A stage fills pre_process: it pops the input rings itself, so the ring dtype of an input
+    /// may differ from its spec's dtype (the stage takes the difference on itself).
+    bool m_fills_pre = false;
+    /// A stage fills post_process: the same for the ring dtype of an output.
+    bool m_fills_post = false;
+    /// One consumer per stage that declares consumed kinds, named after the stage (m_name
+    /// points into the carrier, which outlives the facts); they join the consumed-or-fail walk
+    /// behind anira's own adapters.
+    std::vector<ExtConsumer> m_consumers;
+};
+
 /// The 2.x backend a model row maps to, or nullopt when this build has no adapter for it
 /// (an engine that is not compiled in, a custom engine other than anira.v2.custom).
 ANIRA_API std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcept;
@@ -72,23 +86,29 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 /// {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps the custom rows, a non-NULL engine_id keeps
 /// the custom rows of that name; the provider is not read. Throws StatusError with
 /// ANIRA_ERROR_CONFIG for a rule the configuration breaks (no surviving row among them)
-/// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do.
+/// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do. `stages` is what the
+/// pipeline's stage chain adds (NULL: no chain, the bridge's case): the ring dtype rule
+/// relaxes for a side whose phase a stage fills, and the stages' consumed kinds join the
+/// extension walk.
 ANIRA_API void validate(const anira_model_config& model,
                         const anira_contract* contract,
                         const anira_backend_id* candidates,
                         uint32_t num_candidates,
-                        Derived& out);
+                        Derived& out,
+                        const StageFacts* stages = nullptr);
 
 /// The 2.x InferenceConfig of a model config under a Hard contract (validate, then map).
 ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                                        const anira_contract& contract,
                                                        const anira_backend_id* candidates,
-                                                       uint32_t num_candidates);
+                                                       uint32_t num_candidates,
+                                                       const StageFacts* stages = nullptr);
 
 /// The ring dtype of every slot: two vectors sized to the model's input and output lists,
 /// ANIRA_DTYPE_F32 everywhere, then each entry of the Hard contract's ring dtypes resolved
 /// by tensor name into its slot. Run validate first: it refuses a name that matches no
-/// tensor, a non-Streamed tensor, and a dtype other than the spec's (nothing converts).
+/// tensor, a non-Streamed tensor, and a dtype other than the spec's (nothing converts) unless
+/// a stage fills the phase that moves that ring.
 ANIRA_API anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
                                              const anira_model_config& model);
 

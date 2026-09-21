@@ -305,9 +305,11 @@ an ``anira::ContractHandle``.
   entries (section 3.2; they take the ``anira_tensor`` of section 3.3) carry it across the
   ABI as is. Per tensor, so an
   input and an output may differ; every tensor never set uses ``ANIRA_DTYPE_F32``. Nothing
-  in anira converts: a name that is not a Streamed tensor, and a ring dtype that differs
-  from the spec's dtype (the model's), are ``ANIRA_ERROR_CONFIG`` at prepare (a stage that
-  consumes the difference arrives with a later pre-release).
+  in anira converts: a name that is not a Streamed tensor is ``ANIRA_ERROR_CONFIG`` at
+  prepare, and so is a ring dtype that differs from the spec's dtype (the model's), unless a
+  stage of the pipeline fills the phase that moves that ring (``pre_process`` for an input,
+  ``post_process`` for an output; ``anira_pipeline_add_stage``) and so takes the conversion
+  on itself.
 
 An **Async** contract (the ``anira::Async`` aggregate: an optional ``deadline``, ``on_late``,
 ``priority``, ``lanes``, ``max_in_flight``, ``delivery``) describes jobs without a real-time
@@ -623,9 +625,13 @@ is a config object, ``anira_pipeline_create`` / ``anira_pipeline_add_inference``
 configuration and, optionally, the candidate backends as ``anira_backend_id`` rows; ``NULL``
 means every engine this build carries plus the custom entries, an entry for an absent engine
 being skipped) / ``anira_pipeline_destroy``, copied by the handler that takes it and
-destroyable right after. A pipeline holds exactly one inference stage; the pre- and
-post-processing stages around it arrive with a later pre-release. A custom engine is part of
-the inference stage and never a stage of its own: it is one more implementation a
+destroyable right after. A pipeline holds exactly one inference stage and any number of pre-
+and post-processing stages around it: ``anira_pipeline_add_stage`` copies an
+``anira_stage_desc`` of ``anira/abi/stage.h`` (a name, up to four phase callbacks, a prepare
+and a release function, one ``user_data`` slot) into a carrier the pipeline and its handlers
+share, and the header's reference describes the context a callback receives, the ring
+accessors, the default bodies and what a failing callback does to its chunk. A custom engine
+is part of the inference stage and never a stage of its own: it is one more implementation a
 candidate's ``engine_id`` resolves to, and its call runs in ``ANIRA_PHASE_INFERENCE`` (the
 phase of ``anira_stage_phase`` between ``ANIRA_PHASE_BEFORE_INFERENCE`` and
 ``ANIRA_PHASE_AFTER_INFERENCE``) exactly as a built-in engine's does. Registering one by name
@@ -640,8 +646,9 @@ against the Hard contract (the rules of section 1.1 and the contract's own: geom
 explicit budget, a fixed or no warmup, the miss policy against the anchor, the ring dtypes by
 canonical name), loads the model of every candidate that has an entry, sizes the rings for the
 block range and the latency, selects the plan of the variant's default engine (else plan 0)
-and builds the plan report; a second prepare replaces the session whole, a failed one leaves
-the handler unprepared. ``anira_handler_destroy`` releases the session and, with the last
+builds the plan report and, last, calls the prepare function of every stage that has one
+(a status other than ``ANIRA_OK`` fails the prepare with it); a second prepare replaces the
+session whole, a failed one leaves the handler unprepared. ``anira_handler_destroy`` releases the session and, with the last
 handler in this copy of anira, joins the inference thread pool; a handler counts as a user of
 the core, so ``anira_shutdown`` is refused while one lives. What this pre-release refuses at
 prepare, with ``ANIRA_ERROR_NOT_SUPPORTED``: an Async contract, ``ANIRA_BUDGET_MEASURED`` and
@@ -879,8 +886,7 @@ visible. The three records are Tier 1: no ``struct_size`` and no version field, 
 is their version, their layout is committed in ``abi/layout-<major>.txt`` and mirrored for
 JavaScript in the generated ``web/src/abi/layout.ts``, and
 ``anira_sizeof(ANIRA_STRUCT_TENSOR)`` answers an allocator that cannot see the header (``0``
-for an id this build does not know; in this pre-release that includes
-``ANIRA_STRUCT_STAGE_CTX``). The Hard entries of 3.2 take host tensors; only host memory is
+for an id this build does not know). The Hard entries of 3.2 take host tensors; only host memory is
 read in this pre-release, and the Static tensor entries follow.
 
 **The factories.** ``anira_tensor_init_host(&t, data, dtype, ndim, shape)`` and

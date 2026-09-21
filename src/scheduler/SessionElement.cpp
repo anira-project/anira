@@ -411,6 +411,19 @@ void SessionElement::prepare(const HostConfig& host_config,
         }
     }
 
+    // What the C ring accessors and the default stage bodies need of a ring: its hop, and the
+    // way back to this session's latch (abi/stage.h). A non-streamable slot has no ring to move.
+    m_ring_owner.m_rt = m_rt;
+    m_ring_owner.m_stage = nullptr;
+    for (size_t i = 0; i < m_send_buffer.size(); ++i) {
+        m_send_buffer[i].set_owner(m_inference_config.get_preprocess_input_size()[i],
+                                   &m_ring_owner);
+    }
+    for (size_t i = 0; i < m_receive_buffer.size(); ++i) {
+        m_receive_buffer[i].set_owner(m_inference_config.get_postprocess_output_size()[i],
+                                      &m_ring_owner);
+    }
+
     // Prime the latency with zeros of the ring's own element type
     for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
         if (m_latency[i] > 0) {

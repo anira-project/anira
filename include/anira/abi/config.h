@@ -490,9 +490,12 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contr
  * of the Hard entries carry across the ABI and anira_ring_dtype reports, held by the
  * ring as is. Nothing in anira converts: the Hard entries copy between the host and the
  * ring, a ring dtype that differs from the spec's dtype (the model's) is
- * ANIRA_ERROR_CONFIG at prepare. Set per tensor by canonical name, so an input and an
- * output may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no
- * Streamed tensor is checked at prepare, not here.
+ * ANIRA_ERROR_CONFIG at prepare, unless a stage of the pipeline fills the phase that
+ * moves that ring (pre_process for an input, post_process for an output) and so takes
+ * the difference on itself; the default bodies of anira/abi/stage.h still refuse such a
+ * slot at run time. Set per tensor by canonical name, so an input and an output may
+ * differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no Streamed
+ * tensor is checked at prepare, not here.
  * @param contract A Hard contract.
  * @param canonical The tensor's canonical name (the one its spec was created with).
  * @param dtype The element type of the host's samples for that tensor; ANIRA_DTYPE_F32 for

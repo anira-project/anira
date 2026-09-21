@@ -583,8 +583,7 @@ ANIRA_API size_t ANIRA_CALL anira_tensor_extent(const anira_tensor* tensor,
  * and the enumerated Tier-2 records, whose size is the target's and is the element
  * stride of the array enumerators.
  * @param id The record.
- * @return The size in bytes; 0 for an id this library does not know. In this pre-release
- *         ANIRA_STRUCT_STAGE_CTX is not registered yet and returns 0.
+ * @return The size in bytes; 0 for an id this library does not know.
  * @par Thread contract
  * [thread-safe] [callback-safe] ANIRA_NONBLOCKING
  * @since ABI 0.2

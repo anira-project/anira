@@ -341,3 +341,22 @@ export const anira_tensor = {
     },
   },
 } as const
+
+export const anira_stage_ctx = {
+  size: 64,
+  align: 8,
+  fields: {
+    phase: { offset: 0, size: 4 },
+    engine: { offset: 4, size: 4 },
+    provider: { offset: 8, size: 4 },
+    variant: { offset: 12, size: 4 },
+    num_inputs: { offset: 16, size: 4 },
+    num_outputs: { offset: 20, size: 4 },
+    ticket: { offset: 24, size: 4 },
+    reserved: { offset: 28, size: 4 },
+    input_rings: { offset: 32, size: 8, ptr: true },
+    model_inputs: { offset: 40, size: 8, ptr: true },
+    model_outputs: { offset: 48, size: 8, ptr: true },
+    output_rings: { offset: 56, size: 8, ptr: true },
+  },
+} as const
