@@ -181,30 +181,81 @@ The C headers under ``include/anira/abi/`` are generated, never edited by hand. 
 single source of truth is ``abi/anira.yml``; ``python3 tools/abi/gen.py --repo . --write``
 (or the ``anira_abi_regen`` build target; needs ``pip install pyyaml``) validates the
 registry against the header conventions of ``docs/anira-v3-architecture.md`` and
-rewrites the headers, ``web/src/abi/enums.ts``, the symbol and wasm export lists, the
-tables under ``src/capi/generated/`` and ``test/abi/generated/``, ``abi/layout-<major>.txt``
-and the enum pages under ``docs/sphinx/api/enum/``. Commit the registry together with
-every regenerated file: the ``anira_abi_generate`` test and the ``build_web`` workflow run
-``gen.py --check`` and fail on any drift. ``gen.py --diff-against <git-ref>`` says whether
-the registry changes since a tag are appended (a minor or pre-release) or breaking (a
-major). The generated files carry a ``.clang-format`` with ``DisableFormat`` and a
+rewrites the headers, ``web/src/abi/enums.ts`` and ``web/src/abi/layout.ts``, the symbol and
+wasm export lists, the tables under ``src/capi/generated/`` (the status texts, and
+``struct_sizes.inc`` behind ``anira_sizeof``) and ``test/abi/generated/``,
+``abi/layout-<major>.txt`` and the enum pages under ``docs/sphinx/api/enum/``. Commit the
+registry together with every regenerated file: the ``anira_abi_generate`` test and the
+``build_web`` workflow run ``gen.py --check`` and fail on any drift. ``gen.py --diff-against
+<git-ref>`` says whether the registry changes since a tag are appended (a minor or
+pre-release) or breaking (a major). The generated files carry a ``.clang-format`` with
+``DisableFormat`` (``include/anira/abi/``'s covers the ``draft/`` folder below it) and a
 ``NOLINTBEGIN(readability-identifier-naming)`` block, so the pinned root configs stay
-untouched. Every function entry of the registry carries a ``thread`` tag from the vocabulary
-of the architecture document (``main-thread``, ``driver-thread``, ``inference-thread``,
+untouched; ``layout.ts`` is emitted the way prettier prints it under ``web/.prettierrc``
+(check it with ``npx prettier --check src/abi/layout.ts``, and never run ``npm run format``:
+it rewrites the generated ``enums.ts``, which then fails ``--check``).
+
+Entity kinds are ``verbatim``, ``typedef``, ``define``, ``enum``, ``handles``, ``struct``,
+``union``, ``callback`` and ``function``. A struct field or a union arm has exactly one shape:
+``type`` (a C type, with an optional ``array``; in a Tier-1 record a fixed-width scalar or an
+earlier Tier-1 record), ``ptr`` (an ``ANIRA_PTR`` slot), ``fields`` (a named member of an
+unnamed struct type, as an arm only) or ``arms`` (a named member of an unnamed union type, in a
+Tier-1 struct only). Arms are never truly anonymous structs, which ISO C++ does not have and
+``-pedantic`` refuses. A ``union`` is a Tier-1 record (``tier: 1`` with ``size`` and
+``align``); its layout is the largest arm rounded up to the largest alignment, and the layout
+table has one row per member and, inside an unnamed struct or union, one per member of it,
+written as the C designator (``field anira_sync_token.u.vk.value offset 16 size 8``). An
+``array`` extent is 1 or more. ``struct_id: ANIRA_STRUCT_<X>`` links a record to its
+``anira_struct_id`` constant, which is what ``anira_sizeof`` answers from; every Tier-1 record
+must carry it, an id without a record is legal and answers 0. ``function_type: true`` makes a
+callback a function type (``typedef R (ANIRA_CALL name)(...)``), so that ``ANIRA_PTR(name,
+slot)`` is a function pointer (a function type sits in a pointer slot only, never in a member,
+a parameter or a return), and ``forward: true`` on the struct it names emits ``typedef struct X
+X;`` ahead of the first entity that names ``X``. ``padding_free: true`` on a Tier-2 struct
+makes ``test_layout.c`` assert that ``sizeof`` equals the sum of the member sizes on every
+target: a descriptor is copied by its setter within the caller's ``struct_size``, so padding a
+caller never wrote cannot become a slot later, and a tail slot that would leave a hole is
+followed by an explicit ``reserved``. A header with ``draft: true`` lives under
+``include/anira/abi/draft/`` (``file: draft/<name>.h``, guard ``ANIRA_ABI_DRAFT_*``) and holds
+``status: draft`` functions only, no record, enum or handle; its names go to
+``abi/symbols-draft.txt``, no umbrella includes it, and promotion moves a name between the two
+symbol lists and its declaration into a promised header without renaming it; a draft function
+is outside the promise, so ``--diff-against`` lists a changed, removed or promoted one as an
+addition, while a changed arm of a frozen union (an appended one included), a changed
+signature, thread tag or ``nonblocking`` and a removed ``callback_safe`` are breaks. The
+generator refuses a member name repeated within one C scope (the fields of a struct, the arms
+of a union, the fields of one arm; an ``ANIRA_PTR`` slot takes both ``name`` and
+``name_bits``), so ``--check`` exits 1 with ``duplicate field <name> in <scope>``; arms may
+reuse a name across arms, each being its own scope. Exit codes: 0 clean, 1 a registry error, 2
+drift under ``--check``, 3 usage.
+
+Every function entry of the registry carries a ``thread`` tag from the vocabulary of the
+architecture document (``main-thread``, ``driver-thread``, ``inference-thread``,
 ``thread-safe``, with their state qualifiers), ``callback_safe`` where it applies and
 ``nonblocking: true`` where the body is real-time; the generator refuses an entry without a
-tag, a 64-bit argument or an ``anira_error*`` on a nonblocking entry, and writes the tag as
-the ``@par Thread contract`` line of the generated Doxygen. The C-side tests and gates live in ``test/abi/`` (the ``test_abi`` binary,
-``anira_abi_layout``, ``anira_header_c11`` / ``anira_header_cxx17`` /
-``anira_header_coexist``); a Tier-1 layout may change only in a commit that changes
-``ANIRA_ABI_MAJOR``, and ``anira_abi_layout_regen`` rewrites the committed table then.
-Three presence gates make sure every promised and draft entry point has a body on every
-leg: ``anira_abi_link`` (the generated ``test/abi/generated/link_probe.c`` takes the address
-of every name and links ``anira::anira`` like a consumer, on static and shared legs alike),
-``anira_symbol_baseline`` (``cmake/abi-symbols.cmake``: every name is in the shared
-library's real export table, read with ``nm`` or ``dumpbin``) and the WebAssembly link,
-whose ``-sEXPORTED_FUNCTIONS`` is the generated ``web/src/abi/exports_wasm.txt``. So a
-registry entry needs its body — including on Emscripten — in the same pull request.
+tag, a 64-bit argument or an ``anira_error*`` on a nonblocking entry, and writes the tag as the
+``@par Thread contract`` line of the generated Doxygen. The 64-bit rule has a closed allowlist
+of six names: ``anira_now_ns`` and the factories ``anira_tensor_init_vulkan``,
+``anira_tensor_init_opaque_fd``, ``anira_tensor_init_wgpu_buffer``,
+``anira_tensor_init_dmabuf`` and ``anira_tensor_init_iosurface``, whose parameters are vendor
+handles and byte sizes at their wire width; the rationale is that nothing which produces such a
+handle runs in JavaScript, and a seventh name needs the same argument, not a convenience. The
+C-side tests and gates live in ``test/abi/`` (the ``test_abi`` binary, ``anira_abi_layout``,
+``anira_header_c11`` / ``anira_header_cxx17`` / ``anira_header_cxx20``,
+``anira_header_coexist`` / ``anira_header_cxx20_with_v2`` and ``anira_abi_rt_contract``, a
+nonblocking C function calling every ``[callback-safe]`` tensor entry, compiled with
+``-Werror=function-effects`` on clang 20 or later). While ``ANIRA_ABI_MAJOR`` is 0 the Tier-1
+layout table grows with the registry: ``gen.py --write`` rewrites ``abi/layout-0.txt`` with the
+headers, and ``anira_abi_layout`` proves that the compiler lays the records out as the
+generator's natural-alignment model says. From the v3.0.0 freeze on a Tier-1 layout may change
+only in a commit that changes ``ANIRA_ABI_MAJOR``. Three presence gates make sure every
+promised and draft entry point has a body on every leg: ``anira_abi_link`` (the generated
+``test/abi/generated/link_probe.c`` takes the address of every name and links ``anira::anira``
+like a consumer, on static and shared legs alike), ``anira_symbol_baseline``
+(``cmake/abi-symbols.cmake``: every name of both lists is in the shared library's real export
+table, read with ``nm`` or ``dumpbin``) and the WebAssembly link, whose
+``-sEXPORTED_FUNCTIONS`` is the generated ``web/src/abi/exports_wasm.txt``. So a registry
+entry, a draft one included, needs its body in the same pull request, on Emscripten too.
 
 Reproducing CI locally
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -232,10 +283,16 @@ Three sanitizer presets gate the merge queue, and each reproduces locally with
    (clang's ``nonblocking`` attribute) hot path — the C entries of
    ``anira/abi/handler.h`` and the 2.x ``process``/``push_data``/``pop_data``/
    ``reset`` — with no suppressions, so any allocation, lock, sleep, semaphore or
-   stream syscall reached from a real-time context fails. Requires clang ≥ 20.
+   stream syscall reached from a real-time context fails. The compile-time half of the
+   same contract is ``anira_abi_rt_contract`` (``test/abi/test_rt_contract.c``): under
+   ``-Werror=function-effects`` a nonblocking body may call only entries whose declaration
+   is ``ANIRA_NONBLOCKING``. Requires clang ≥ 20.
 
 ``desktop-tests-asan``
-   AddressSanitizer + UndefinedBehaviorSanitizer.
+   AddressSanitizer + UndefinedBehaviorSanitizer. UndefinedBehaviorSanitizer includes
+   clang's function sanitizer: a call through a function pointer whose type is not the
+   callee's is reported, which is why the DLPack trampoline of ``src/capi/tensor.cpp``
+   carries ``no_sanitize("function")``.
 
 ``desktop-tests-tsan``
    ThreadSanitizer.

@@ -117,11 +117,22 @@ typedef struct anira_vulkan_desc {
     void* instance;  /**< VkInstance. */
     void* physical;  /**< VkPhysicalDevice. */
     void* device;  /**< VkDevice. */
+    /**
+     * Index of the physical device anira picks when it owns the device (ANIRA_OWNERSHIP_OWNED);
+     * the JSON key vulkan.device. A tail slot appended at ABI 0.2: a shorter record of an older
+     * caller reads as 0.
+     */
+    int32_t device_index;
+    /**
+     * Zero. Keeps the record free of tail padding on 64-bit targets: a setter copies within
+     * struct_size, so padding a caller never wrote could not become a slot later.
+     */
+    uint32_t reserved;
 } anira_vulkan_desc;
 /**
- * @brief OWNED, queue family 0, index 0, no handles.
+ * @brief OWNED, queue family 0, queue index 0, no handles, device index 0.
  */
-#define ANIRA_VULKAN_DESC_INIT ANIRA_INIT(anira_vulkan_desc, sizeof(anira_vulkan_desc), ANIRA_OWNERSHIP_OWNED, 0u, 0u, NULL, NULL, NULL)
+#define ANIRA_VULKAN_DESC_INIT ANIRA_INIT(anira_vulkan_desc, sizeof(anira_vulkan_desc), ANIRA_OWNERSHIP_OWNED, 0u, 0u, NULL, NULL, NULL, 0, 0u)
 
 /**
  * @brief The Metal block of a context config.

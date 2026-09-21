@@ -9,10 +9,11 @@
  * can be included beside <anira/anira.h>.
  *
  * Scope at this pre-release: the configuration half (tensor specs, model, context and
- * contract configuration, job options), the Context over the core, and the pipeline half of
- * section 6: Pipeline, stage::Inference and PlanReport. The InferenceHandler class and the
- * _wait twins arrive with the runtime cut-over; until then a handler is driven through the C
- * entries of anira/abi/handler.h.
+ * contract configuration, job options), the Context over the core, the pipeline half of
+ * section 6 (Pipeline, stage::Inference and PlanReport) and the runtime tensor of section 1:
+ * Tensor and SyncToken, the C structs of anira/abi/tensor.h with factories on them. The
+ * InferenceHandler class and the _wait twins arrive with the runtime cut-over; until then a
+ * handler is driven through the C entries of anira/abi/handler.h.
  *
  * Deviations from the architecture document, section 6 (stated here and on the docs page):
  * anira::JsonConfigLoader is not declared (the 2.x class of that name is still in every
@@ -24,13 +25,22 @@
  * chains (the document's returns void); add_model_bytes and set_model_bytes carry the
  * (release, ctx) pair of the C entry and have custom-engine twins; JobOptions has no
  * on_complete yet (it arrives with Ticket); a contract file loads into a ContractHandle,
- * patched with hard_geometry and the other setters, not into an anira::Contract aggregate.
+ * patched with hard_geometry and the other setters, not into an anira::Contract aggregate;
+ * Tensor has data(DType) beside data_f32, and from_host_planar / plane<T> for planar host
+ * memory (typed by the element, which the document does not have); from_metal, from_iosurface,
+ * from_ahardwarebuffer and from_d3d12 are not declared and there is no anira_all.hpp (the draft
+ * factories have no C++ spelling while unmeasured: call anira_tensor_init_metal(&tensor, ...)
+ * on a Tensor).
  *
  * Requirements: C++20 with exceptions; std::filesystem, which on Apple platforms means a
  * deployment target of macOS 10.15 / iOS 13 or later.
  *
- * Every entry is [main-thread] and may allocate; the ABI is checked once per process on the
- * first handle created (anira_check_abi against ANIRA_ABI_VERSION).
+ * Every entry is [main-thread] and may allocate, except the Tensor factories and accessors,
+ * which are the [thread-safe] [callback-safe] real-time field fills and reads of
+ * anira/abi/tensor.h (noexcept; only Tensor::from_dlpack is [main-thread] and throws), and
+ * SyncToken::reset / dup, which are [thread-safe, !audio-thread]. The ABI is checked once per
+ * process on the first handle created (anira_check_abi against ANIRA_ABI_VERSION); a Tensor
+ * is no handle and checks nothing.
  */
 #ifndef ANIRA_HPP
 #define ANIRA_HPP
@@ -59,6 +69,7 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
 #include <anira/abi/version.h>
 
@@ -79,6 +90,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -257,6 +269,269 @@ struct KeptExt {
 };
 
 }  // namespace detail
+
+// ---- runtime tensors (section 1) -----------------------------------------------------------
+
+namespace detail {
+
+/// The rank the C factories take for a shape; a span longer than ANIRA_MAX_RANK maps onto a
+/// rank they refuse, so no size is ever truncated into a legal one.
+constexpr uint32_t rank_of(std::span<const int64_t> shape) noexcept {
+    constexpr std::size_t k_max_rank = ANIRA_MAX_RANK;
+    return static_cast<uint32_t>(shape.size() > k_max_rank ? k_max_rank + 1 : shape.size());
+}
+
+/// The plane count the C factory takes; a span too long for uint32_t maps onto a count no
+/// shape[0] of a real tensor equals, so the factory refuses it.
+constexpr uint32_t plane_count_of(std::size_t planes) noexcept {
+    constexpr std::size_t k_max_count = 0xffffffffU;
+    return static_cast<uint32_t>(planes > k_max_count ? k_max_count : planes);
+}
+
+/// The anira_dtype of a C++ element type, one lane: what the typed spellings
+/// (Tensor::from_host_planar, Tensor::plane) derive the dtype from. A closed list: the
+/// fixed-width integers, float, double and bool; const is ignored.
+template <class T>
+constexpr DType dtype_of() noexcept {
+    using Element = std::remove_cv_t<T>;
+    if constexpr (std::is_same_v<Element, float>) {
+        return ANIRA_DTYPE_F32;
+    } else if constexpr (std::is_same_v<Element, double>) {
+        return ANIRA_DTYPE_F64;
+    } else if constexpr (std::is_same_v<Element, bool>) {
+        static_assert(sizeof(bool) == 1, "ANIRA_DTYPE_BOOL8 is one byte");
+        return ANIRA_DTYPE_BOOL8;
+    } else if constexpr (std::is_same_v<Element, int8_t> || std::is_same_v<Element, int16_t> ||
+                         std::is_same_v<Element, int32_t> || std::is_same_v<Element, int64_t>) {
+        return ANIRA_MAKE_DTYPE(ANIRA_DTYPE_INT, sizeof(Element) * 8, 1);
+    } else if constexpr (std::is_same_v<Element, uint8_t> || std::is_same_v<Element, uint16_t> ||
+                         std::is_same_v<Element, uint32_t> || std::is_same_v<Element, uint64_t>) {
+        return ANIRA_MAKE_DTYPE(ANIRA_DTYPE_UINT, sizeof(Element) * 8, 1);
+    } else {
+        static_assert(sizeof(Element) == 0,
+                      "no anira_dtype for this element type: use the fixed-width integers, "
+                      "float, double or bool, or the untyped C entries");
+        return 0;
+    }
+}
+
+}  // namespace detail
+
+/**
+ * @brief anira_sync_token with its two calls on it: the same 24-byte C struct, no member added,
+ * so a SyncToken* is an anira_sync_token*.
+ *
+ * Not an RAII type: the token travels inside a trivially copyable anira_tensor and every
+ * hand-off is a transfer, so reset() is explicit. Both calls are [thread-safe, !audio-thread]:
+ * close and dup are system calls.
+ */
+struct SyncToken : anira_sync_token {
+    /// Closes the fd of an owning kind and zeroes the token (anira_sync_token_reset).
+    void reset() noexcept { anira_sync_token_reset(this); }
+
+    /// A duplicate that outlives its source (anira_sync_token_dup): dup() for the two owning fd
+    /// kinds, a plain copy otherwise. Throws anira::Error when the fd cannot be duplicated.
+    SyncToken dup() const {
+        SyncToken out{};
+        detail::check(anira_sync_token_dup(this, &out), "anira_sync_token_dup");
+        return out;
+    }
+};
+
+/**
+ * @brief anira_tensor with names and factories on it: the C struct itself (216 bytes, trivially
+ * copyable, no member added), so a Tensor* is an anira_tensor*.
+ *
+ * The from_* factories are the anira_tensor_init_* field fills over a std::span shape:
+ * [thread-safe] [callback-safe], real-time, noexcept. They refuse like the C entries: dtype 0,
+ * more than ANIRA_MAX_RANK extents or a negative extent give the all-zero record (dtype 0).
+ * Only from_dlpack can fail with a message and throws. The factories of the draft platform
+ * arms (anira/abi/draft/tensor_platform.h) have no C++ spelling while they are unmeasured:
+ * call anira_tensor_init_metal(&tensor, ...) and its siblings on a Tensor.
+ */
+struct Tensor : anira_tensor {
+    /// anira_tensor_init_host: pageable host memory, borrowed.
+    static Tensor from_host(void* data, DType dtype, std::span<const int64_t> shape) noexcept {
+        Tensor tensor{};
+        anira_tensor_init_host(&tensor, data, dtype, detail::rank_of(shape), shape.data());
+        return tensor;
+    }
+
+    /// anira_tensor_init_pinned: page-locked host memory, borrowed.
+    static Tensor from_pinned(void* data, DType dtype, std::span<const int64_t> shape) noexcept {
+        Tensor tensor{};
+        anira_tensor_init_pinned(&tensor, data, dtype, detail::rank_of(shape), shape.data());
+        return tensor;
+    }
+
+    /// anira_tensor_init_host_planar: planar host memory, one pointer per plane of axis 0 (the
+    /// channel pointers of an audio host), borrowed like the memory. The element type names the
+    /// dtype and is spelled at the call, Tensor::from_host_planar<float>(channels, shape); the
+    /// span's size must equal shape[0], else the all-zero record comes back, as in C. A const
+    /// element type sets ANIRA_TENSOR_READ_ONLY. Only an entry that says so accepts a planar
+    /// tensor.
+    template <class T>
+    static Tensor from_host_planar(std::span<T* const> planes,
+                                   std::span<const int64_t> shape) noexcept {
+        Tensor tensor{};
+        // The one cast of the typed spelling: T* const* to the const void* the C entry takes.
+        anira_tensor_init_host_planar(&tensor,
+                                      static_cast<const void*>(planes.data()),
+                                      detail::plane_count_of(planes.size()),
+                                      detail::dtype_of<T>(),
+                                      detail::rank_of(shape),
+                                      shape.data());
+        if constexpr (std::is_const_v<T>) {
+            if (tensor.dtype != 0) {
+                tensor.flags |= static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY);
+            }
+        }
+        return tensor;
+    }
+
+    /// anira_tensor_init_cuda: a device pointer; event is a cudaEvent_t or nullptr (visible).
+    static Tensor from_cuda(void* ptr,
+                            int32_t device,
+                            void* event,
+                            DType dtype,
+                            std::span<const int64_t> shape) noexcept {
+        Tensor tensor{};
+        anira_tensor_init_cuda(&tensor,
+                               ptr,
+                               device,
+                               event,
+                               dtype,
+                               detail::rank_of(shape),
+                               shape.data());
+        return tensor;
+    }
+
+    /// anira_tensor_init_gl_buffer: a GL buffer object; glsync is a GLsync or nullptr (visible).
+    static Tensor from_gl_buffer(uint32_t id,
+                                 uint32_t target,
+                                 void* glsync,
+                                 DType dtype,
+                                 std::span<const int64_t> shape) noexcept {
+        Tensor tensor{};
+        anira_tensor_init_gl_buffer(&tensor,
+                                    id,
+                                    target,
+                                    glsync,
+                                    dtype,
+                                    detail::rank_of(shape),
+                                    shape.data());
+        return tensor;
+    }
+
+    /// anira_tensor_init_vulkan: VkBuffer, VkDeviceMemory and offset at their wire width; a
+    /// timeline semaphore of 0 means visible.
+    static Tensor from_vulkan(uint64_t buffer,
+                              uint64_t memory,
+                              uint64_t offset,
+                              uint64_t timeline,
+                              uint64_t value,
+                              DType dtype,
+                              std::span<const int64_t> shape) noexcept {
+        Tensor tensor{};
+        anira_tensor_init_vulkan(&tensor,
+                                 buffer,
+                                 memory,
+                                 offset,
+                                 timeline,
+                                 value,
+                                 dtype,
+                                 detail::rank_of(shape),
+                                 shape.data());
+        return tensor;
+    }
+
+    /// anira_tensor_init_opaque_fd: exported opaque memory; no fence.
+    static Tensor from_opaque_fd(int32_t fd,
+                                 uint64_t size,
+                                 DType dtype,
+                                 std::span<const int64_t> shape) noexcept {
+        Tensor tensor{};
+        anira_tensor_init_opaque_fd(&tensor, fd, size, dtype, detail::rank_of(shape), shape.data());
+        return tensor;
+    }
+
+    /// anira_tensor_init_wgpu_buffer: the fence is copied into acquire and that copy is the
+    /// hand-off (the caller does not reset its source); nullptr means visible.
+    static Tensor from_wgpu_buffer(void* buffer,
+                                   uint64_t offset,
+                                   const SyncToken* fence,
+                                   DType dtype,
+                                   std::span<const int64_t> shape) noexcept {
+        Tensor tensor{};
+        anira_tensor_init_wgpu_buffer(&tensor,
+                                      buffer,
+                                      offset,
+                                      fence,
+                                      dtype,
+                                      detail::rank_of(shape),
+                                      shape.data());
+        return tensor;
+    }
+
+    /// anira_tensor_init_dmabuf: exported buffer memory; a sync_fd of 0 or more is owned by the
+    /// tensor's acquire token from here on, a negative one means visible.
+    static Tensor from_dmabuf(int32_t fd,
+                              uint64_t size,
+                              uint64_t offset,
+                              int32_t sync_fd,
+                              DType dtype,
+                              std::span<const int64_t> shape) noexcept {
+        Tensor tensor{};
+        anira_tensor_init_dmabuf(&tensor,
+                                 fd,
+                                 size,
+                                 offset,
+                                 sync_fd,
+                                 dtype,
+                                 detail::rank_of(shape),
+                                 shape.data());
+        return tensor;
+    }
+
+    /// anira_tensor_init_dlpack over a DLManagedTensorVersioned* of DLPack major 1 ([main-thread]).
+    /// On success the managed tensor belongs to the record and release calls its deleter once;
+    /// on failure this throws anira::Error and the caller keeps the managed tensor.
+    static Tensor from_dlpack(void* dl_managed_tensor_versioned) {
+        Tensor tensor{};
+        anira_error err{};
+        detail::check(anira_tensor_init_dlpack(&tensor, dl_managed_tensor_versioned, &err), err);
+        return tensor;
+    }
+
+    /// anira_tensor_data_f32: the first element of a one-block host float32 tensor, nullptr
+    /// otherwise (a device tensor, another dtype, a planar tensor).
+    float* data_f32() const noexcept { return anira_tensor_data_f32(this); }
+
+    /// anira_tensor_data: the first element of a host tensor whose dtype equals the argument,
+    /// nullptr otherwise; never converts.
+    void* data(DType element_dtype) const noexcept {
+        return anira_tensor_data(this, element_dtype);
+    }
+
+    /// anira_tensor_plane: the first element of one plane of a planar host tensor whose dtype is
+    /// T's, nullptr otherwise (a one-block tensor, a plane out of range, another dtype).
+    template <class T>
+    T* plane(uint32_t index) const noexcept {
+        return static_cast<T*>(anira_tensor_plane(this, index, detail::dtype_of<T>()));
+    }
+
+    /// anira_tensor_num_elements: the product of the extents, 1 at rank 0, 0 for the all-zero
+    /// record of a refused factory.
+    std::size_t num_elements() const noexcept { return anira_tensor_num_elements(this); }
+
+    /// anira_tensor_extent: one extent, 0 for an axis at or above ndim.
+    std::size_t extent(uint32_t axis) const noexcept { return anira_tensor_extent(this, axis); }
+};
+
+static_assert(sizeof(SyncToken) == sizeof(anira_sync_token) &&
+              std::is_trivially_copyable_v<SyncToken> && std::is_standard_layout_v<SyncToken>);
+static_assert(sizeof(Tensor) == sizeof(anira_tensor) && std::is_trivially_copyable_v<Tensor> &&
+              std::is_standard_layout_v<Tensor>);
 
 // ---- tensor spec (section 2) ---------------------------------------------------------------
 

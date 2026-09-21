@@ -7,11 +7,13 @@
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
+#include <anira/abi/draft/tensor_platform.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
 #include <anira/abi/version.h>
 #include <stddef.h>
@@ -70,6 +72,7 @@ int anira_header_c_probe(void) {
         checks +=
             gl.struct_size == sizeof(anira_gl_desc) && gl.threads == ANIRA_GL_CALLER_THREAD ? 1 : 0;
         checks += vulkan.struct_size == sizeof(anira_vulkan_desc) && vulkan.device == NULL ? 1 : 0;
+        checks += vulkan.device_index == 0 && vulkan.reserved == 0u ? 1 : 0;
         checks += metal.struct_size == sizeof(anira_metal_desc) ? 1 : 0;
         checks += d3d12.struct_size == sizeof(anira_d3d12_desc) ? 1 : 0;
         checks +=
@@ -99,6 +102,46 @@ int anira_header_c_probe(void) {
             checks += anira_num_inference_threads() == 0u ? 1 : 0;
             checks += anira_handler_rt_error(NULL) == ANIRA_OK ? 1 : 0;
             checks += anira_plan_report_num_plans(NULL) == 0u ? 1 : 0;
+        }
+    }
+    {
+        /* anira/abi/tensor.h from C11: the three frozen sizes, a record zeroed and filled by
+           hand (both names of an ANIRA_PTR slot), and behind the never-true branch the host
+           factory, the planar factory over a float*[2] WITHOUT a cast (the channel pointers of
+           an audio host), the accessors, anira_sizeof, a draft factory and the token reset. */
+        anira_tensor tensor;
+        anira_sync_token token;
+        float samples[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        float* channels[2];
+        const float* const* read_channels;
+        const int64_t shape[1] = {4};
+        const int64_t block[2] = {2, 2};
+        channels[0] = samples;
+        channels[1] = samples + 2;
+        read_channels = (const float* const*)channels;
+        memset(&tensor, 0, sizeof(tensor));
+        memset(&token, 0, sizeof(token));
+        tensor.handle.host.ptr = samples;
+        checks += sizeof(anira_tensor) == 216u && sizeof(anira_sync_token) == 24u ? 1 : 0;
+        checks += sizeof(anira_memory_handle) == 24u && sizeof(tensor.handle.raw) == 24u ? 1 : 0;
+        checks += tensor.handle.host.ptr_bits != 0u && tensor.release == NULL ? 1 : 0;
+        checks += token.kind == (uint32_t)ANIRA_SYNC_NONE && token.u.raw[1] == 0u ? 1 : 0;
+        if (checks < 0) { /* never true: the object is never linked */
+            anira_tensor_init_host(&tensor, samples, ANIRA_DTYPE_F32, 1u, shape);
+            checks += anira_tensor_data_f32(&tensor) == samples ? 1 : 0;
+            checks += anira_tensor_data(&tensor, ANIRA_DTYPE_F32) != NULL ? 1 : 0;
+            checks += anira_tensor_num_elements(&tensor) == 4u ? 1 : 0;
+            checks += anira_tensor_extent(&tensor, 0u) == 4u ? 1 : 0;
+            checks += anira_sizeof(ANIRA_STRUCT_TENSOR) == sizeof(anira_tensor) ? 1 : 0;
+            /* No cast, on purpose: the gate proves a float** converts as it is. */
+            /* NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion) */
+            anira_tensor_init_host_planar(&tensor, channels, 2u, ANIRA_DTYPE_F32, 2u, block);
+            checks += anira_tensor_plane(&tensor, 1u, ANIRA_DTYPE_F32) == samples + 2 ? 1 : 0;
+            checks += (tensor.flags & (uint32_t)ANIRA_TENSOR_PLANAR) != 0u ? 1 : 0;
+            /* NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion) */
+            anira_tensor_init_host_planar(&tensor, read_channels, 2u, ANIRA_DTYPE_F32, 2u, block);
+            anira_tensor_init_metal(&tensor, NULL, NULL, ANIRA_DTYPE_F32, 1u, shape);
+            anira_sync_token_reset(&token);
         }
     }
     return checks;

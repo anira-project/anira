@@ -5,12 +5,15 @@ The registry is the single source of truth for the versioned C ABI. This script
 validates it against the header conventions of docs/anira-v3-architecture.md
 (section 6a) and emits, deterministically and without any other tool:
 
-  include/anira/abi/<file>.h              the C11 headers (never edit by hand)
+  include/anira/abi/<file>.h              the C11 headers (never edit by hand); a header with
+                                          `draft: true` is include/anira/abi/draft/<name>.h
   web/src/abi/enums.ts                    the TypeScript mirror of enums and defines
+  web/src/abi/layout.ts                   size, align and member offsets of the Tier-1 records
   abi/symbols-<major>.txt                 the promised entry points, sorted
   abi/symbols-draft.txt                   the draft entry points, sorted
   web/src/abi/exports_wasm.txt            the Emscripten export list (_-prefixed)
   src/capi/generated/status_strings.inc   ANIRA_STATUS_TEXT(name, "text") per status
+  src/capi/generated/struct_sizes.inc     ANIRA_STRUCT_SIZE(id, type) per record anira_sizeof answers
   test/abi/generated/test_layout.c        gate 3: _Static_asserts and the layout printer
   test/abi/generated/link_probe.c         the presence gate anira_abi_link: the address of every
                                           promised and draft entry in one table
@@ -71,12 +74,18 @@ WIDE_INT_ALLOWLIST = {
     "anira_tensor_init_opaque_fd",
     "anira_tensor_init_wgpu_buffer",
     "anira_tensor_init_dmabuf",
+    "anira_tensor_init_iosurface",
 }
 FUNCTION_RE = re.compile(r"^anira_[a-z0-9_]+$")
 TYPE_RE = re.compile(r"^anira_[a-z0-9_]+$")
 MACRO_RE = re.compile(r"^ANIRA_[A-Z0-9_]+$")
 TERMINATOR_VALUE = 0x7FFFFFFF
 FORCE32_RE = re.compile(r"^ANIRA_[A-Z0-9_]+_FORCE32$")
+MEMBER_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+DRAFT_FILE_RE = re.compile(r"^draft/[a-z0-9_]+\.h$")
+DRAFT_GUARD_PREFIX = "ANIRA_ABI_DRAFT_"
+STRUCT_ID_ENUM = "anira_struct_id"
+TS_WIDTH = 90  # web/.prettierrc printWidth: a longer generated line would be re-wrapped by prettier
 
 SCALAR_SIZES = {
     "int8_t": (1, 1),
@@ -152,46 +161,170 @@ def constants(reg: dict) -> dict[str, int]:
     return out
 
 
-def layout_of(struct: dict, struct_sizes: dict[str, tuple[int, int]], consts: dict[str, int]) -> tuple[list[dict], int, int]:
-    """Natural-alignment layout of a struct's fields: (rows, total size, align)."""
+def is_record(ent: dict) -> bool:
+    """A Tier-1 record: a union, or a struct of tier 1. Only these have a committed layout."""
+    return ent["kind"] == "union" or (ent["kind"] == "struct" and ent.get("tier") == 1)
+
+
+def tier1_records(reg: dict):
+    """(header, entity) of every Tier-1 record in registry order: a record used as a member
+    type must precede its user."""
+    for header, ent in entities(reg):
+        if is_record(ent):
+            yield header, ent
+
+
+def leaf_layout(owner: str, member: dict, records: dict[str, dict], consts: dict[str, int]) -> dict:
+    """The node of a leaf member: an ANIRA_PTR slot, a scalar, a named Tier-1 record, or an
+    array of the latter two. Offsets are filled in by the caller."""
+    node = {"name": member["name"], "offset": 0, "ptr": "ptr" in member, "count": None, "record": None, "members": []}
+    if "ptr" in member:
+        node["size"], node["align"] = PTR_SLOT
+        return node
+    base = member["type"]
+    if base in SCALAR_SIZES:
+        size, align = SCALAR_SIZES[base]
+    elif base in records:
+        size, align = records[base]["size"], records[base]["align"]
+        node["record"] = base
+    else:
+        raise RegistryError(
+            f"{owner}: member {member['name']} has type {base!r}, whose size is unknown (a Tier-1 "
+            "member is a fixed-width scalar, an ANIRA_PTR slot or a Tier-1 record declared before it)"
+        )
+    count = member.get("array")
+    if count is not None:
+        if isinstance(count, int) and not isinstance(count, bool):
+            extent = count
+        elif str(count) in consts:
+            extent = consts[str(count)]
+        else:
+            try:
+                extent = int_value(count)
+            except RegistryError as exc:
+                raise RegistryError(
+                    f"{owner}: array extent {count!r} of {member['name']} is neither a "
+                    "literal nor an object-like define of the registry"
+                ) from exc
+        if extent < 1:
+            raise RegistryError(f"{owner}: array extent {count!r} of {member['name']} must be 1 or more")
+        size *= extent
+        node["count"] = extent
+    node["size"], node["align"] = size, align
+    return node
+
+
+def shift(node: dict, delta: int) -> None:
+    node["offset"] += delta
+    for child in node["members"]:
+        shift(child, delta)
+
+
+def member_layout(owner: str, member: dict, records: dict[str, dict], consts: dict[str, int]) -> dict:
+    """The node of one member at offset 0: a leaf, `fields` (a named member of an unnamed struct
+    type, laid out sequentially) or `arms` (a named member of an unnamed union type, every arm
+    at offset 0)."""
+    if "fields" in member:
+        members, size, align = sequence_layout(f"{owner}.{member['name']}", member["fields"], records, consts)
+    elif "arms" in member:
+        members, size, align = overlay_layout(f"{owner}.{member['name']}", member["arms"], records, consts)
+    else:
+        return leaf_layout(owner, member, records, consts)
+    return {"name": member["name"], "offset": 0, "size": size, "align": align, "ptr": False, "count": None, "record": None, "members": members}
+
+
+def sequence_layout(owner: str, members: list[dict], records: dict[str, dict], consts: dict[str, int]) -> tuple[list[dict], int, int]:
+    """Natural-alignment layout of struct members: (nodes, total size, align)."""
     offset = 0
     max_align = 1
-    rows = []
-    for field in struct["fields"]:
-        if "ptr" in field:
-            size, align = PTR_SLOT
-        else:
-            base = field["type"]
-            if base in SCALAR_SIZES:
-                size, align = SCALAR_SIZES[base]
-            elif base in struct_sizes:
-                size, align = struct_sizes[base]
-            else:
-                raise RegistryError(
-                    f"struct {struct['name']}: field {field['name']} has type {base!r}, "
-                    "whose size is unknown (a Tier-1 field must be a fixed-width scalar, "
-                    "an ANIRA_PTR slot or another Tier-1 struct)"
-                )
-            count = field.get("array")
-            if count is not None:
-                if isinstance(count, int):
-                    size *= count
-                elif str(count) in consts:
-                    size *= consts[str(count)]
-                else:
-                    try:
-                        size *= int_value(count)
-                    except RegistryError as exc:
-                        raise RegistryError(
-                            f"struct {struct['name']}: array extent {count!r} of {field['name']} is neither a "
-                            "literal nor an object-like define of the registry"
-                        ) from exc
-        offset = (offset + align - 1) // align * align
-        rows.append({"name": field["name"], "offset": offset, "size": size, "align": align})
-        offset += size
-        max_align = max(max_align, align)
+    nodes = []
+    for member in members:
+        node = member_layout(owner, member, records, consts)
+        offset = (offset + node["align"] - 1) // node["align"] * node["align"]
+        shift(node, offset)
+        nodes.append(node)
+        offset += node["size"]
+        max_align = max(max_align, node["align"])
     total = (offset + max_align - 1) // max_align * max_align
-    return rows, total, max_align
+    return nodes, total, max_align
+
+
+def overlay_layout(owner: str, arms: list[dict], records: dict[str, dict], consts: dict[str, int]) -> tuple[list[dict], int, int]:
+    """Layout of union arms: every arm at offset 0, size = the largest arm rounded up to the
+    largest alignment."""
+    nodes = [member_layout(owner, arm, records, consts) for arm in arms]
+    max_align = max((n["align"] for n in nodes), default=1)
+    size = max((n["size"] for n in nodes), default=0)
+    total = (size + max_align - 1) // max_align * max_align
+    return nodes, total, max_align
+
+
+def record_layout(ent: dict, records: dict[str, dict], consts: dict[str, int]) -> dict:
+    """The layout tree of a Tier-1 record: {"name", "kind", "size", "align", "members"}."""
+    if ent["kind"] == "union":
+        members, size, align = overlay_layout(ent["name"], ent["arms"], records, consts)
+    else:
+        members, size, align = sequence_layout(ent["name"], ent["fields"], records, consts)
+    return {"name": ent["name"], "kind": ent["kind"], "size": size, "align": align, "members": members}
+
+
+def tier1_layouts(reg: dict) -> list[dict]:
+    """The layout tree of every Tier-1 record, in registry order. The one model behind
+    abi/layout-<major>.txt, test_layout.c, layout.ts and the declared size/align check."""
+    records: dict[str, dict] = {}
+    consts = constants(reg)
+    for _, ent in tier1_records(reg):
+        records[ent["name"]] = record_layout(ent, records, consts)
+    return list(records.values())
+
+
+def layout_rows(tree: dict) -> list[dict]:
+    """The flat rows of a record, depth first: one row per member and, for a member of an
+    unnamed struct or union type, one row per member inside it. `path` is the C member
+    designator from the record (`u.vk.value`); a member of a named record type is one row."""
+    rows: list[dict] = []
+
+    def walk(nodes: list[dict], prefix: str) -> None:
+        for node in nodes:
+            path = prefix + node["name"]
+            rows.append({"path": path, "offset": node["offset"], "size": node["size"], "ptr": node["ptr"]})
+            walk(node["members"], path + ".")
+
+    walk(tree["members"], "")
+    return rows
+
+
+def member_shape(member: dict) -> str | None:
+    """Which of the four member shapes a field or arm has: `type` (a scalar, a named Tier-1
+    record, either as an array), `ptr` (an ANIRA_PTR slot), `fields` (a named member of an
+    unnamed struct type) or `arms` (a named member of an unnamed union type)."""
+    keys = [k for k in ("type", "ptr", "fields", "arms") if k in member]
+    return keys[0] if len(keys) == 1 else None
+
+
+def type_strings(ent: dict) -> list[str]:
+    """Every C type an entity spells: parameter and return types, member types and pointees."""
+    if ent["kind"] in ("function", "callback"):
+        return [p["type"] for p in ent.get("params", [])] + [ent["returns"]]
+    if ent["kind"] == "typedef":
+        return [str(ent.get("type", ""))]
+    out: list[str] = []
+
+    def walk(members) -> None:
+        for m in members if isinstance(members, list) else []:
+            if not isinstance(m, dict):
+                continue  # malformed: validate() reports it
+            out.extend(str(m[k]) for k in ("type", "ptr") if k in m)
+            walk(m.get("fields", []))
+            walk(m.get("arms", []))
+
+    walk(ent.get("fields", []))
+    walk(ent.get("arms", []))
+    return out
+
+
+def names_type(ent: dict, name: str) -> bool:
+    return any(re.search(rf"\b{re.escape(name)}\b", t) for t in type_strings(ent))
 
 
 def validate(reg: dict) -> None:
@@ -211,11 +344,26 @@ def validate(reg: dict) -> None:
             if not inc.startswith("<") and inc not in seen:
                 err(f"{h['file']}: includes {inc}, which is not listed before it")
         seen.append(h["file"])
+    for h in headers:
+        file = h["file"]
+        if bool(h.get("draft")) != file.startswith("draft/"):
+            err(f"{file}: draft: true and a file under draft/ go together")
+        if h.get("draft"):
+            if not DRAFT_FILE_RE.match(file):
+                err(f"{file}: a draft header is named draft/<name>.h")
+            if not str(h.get("guard", DRAFT_GUARD_PREFIX)).startswith(DRAFT_GUARD_PREFIX):
+                err(f"{file}: the guard of a draft header starts with {DRAFT_GUARD_PREFIX}")
+        else:
+            for inc in h.get("includes", []):
+                if inc.startswith("draft/"):
+                    err(f"{file}: includes the draft header {inc}; only a draft header may")
 
     enum_names: set[str] = set()
     struct_names: set[str] = set()
     handle_names: set[str] = set()
     typedef_names: set[str] = set()
+    function_type_names: set[str] = set()
+    struct_ids: list[tuple[str, dict]] = []
     all_names: dict[str, str] = {}
 
     def claim(name: str, where: str) -> None:
@@ -223,9 +371,69 @@ def validate(reg: dict) -> None:
             err(f"{where}: name {name} already used by {all_names[name]}")
         all_names[name] = where
 
+    def members_ok(where: str, scope: str, members) -> bool:
+        """A member list is a list of mappings that each carry a name."""
+        if isinstance(members, list) and all(isinstance(m, dict) and isinstance(m.get("name"), str) for m in members):
+            return True
+        err(f"{where}: the members of {scope} are a list of mappings, each with a name")
+        return False
+
+    def check_scope(where: str, scope: str, members: list[dict]) -> None:
+        """One C scope: member names are unique, and an ANIRA_PTR slot also declares <name>_bits."""
+        taken: set[str] = set()
+        for m in members:
+            for n in [m["name"]] + ([m["name"] + "_bits"] if "ptr" in m else []):
+                if n in taken:
+                    err(f"{where}: duplicate field {n} in {scope}")
+                taken.add(n)
+
+    def check_name(where: str, m: dict) -> None:
+        if not MEMBER_RE.match(m["name"]):
+            err(f"{where}: field {m['name']} must be lower_case")
+
+    def check_leaf(where: str, m: dict) -> None:
+        check_name(where, m)
+        if m.get("type") in enum_names:
+            err(f"{where}: field {m['name']} is enum-typed; struct fields carry uint32_t")
+        if "ptr" not in m and m.get("type", "").replace("const ", "").strip() in TARGET_WIDTH_TYPES:
+            err(f"{where}: field {m['name']} has a target-width type ({m['type']}); records carry fixed-width integers only")
+        if m.get("type") in function_type_names:
+            err(f"{where}: field {m['name']} names the function type {m['type']}; a function type sits in a pointer slot (ptr: {m['type']})")
+        if "ptr" in m and "array" in m:
+            err(f"{where}: field {m['name']}: an ANIRA_PTR slot takes no array extent")
+
+    def check_arms(where: str, scope: str, arms: list[dict]) -> None:
+        if not members_ok(where, scope, arms):
+            return
+        if not arms:
+            err(f"{where}: {scope} has no arms")
+        check_scope(where, scope, arms)
+        for arm in arms:
+            shape = member_shape(arm)
+            if shape is None:
+                err(f"{where}: arm {arm['name']} of {scope} carries exactly one of type, ptr, fields")
+            elif shape == "arms":
+                err(f"{where}: arm {arm['name']} of {scope} is a leaf or an unnamed struct (fields), never a union")
+            elif shape == "fields":
+                check_name(where, arm)
+                if not members_ok(where, f"{scope}.{arm['name']}", arm["fields"]):
+                    continue
+                if not arm["fields"]:
+                    err(f"{where}: arm {arm['name']} of {scope} has no fields")
+                check_scope(where, f"{scope}.{arm['name']}", arm["fields"])
+                for f in arm["fields"]:
+                    if member_shape(f) not in ("type", "ptr"):
+                        err(f"{where}: {scope}.{arm['name']}.{f['name']}: the struct of an arm holds leaf members only (type or ptr)")
+                    else:
+                        check_leaf(where, f)
+            else:
+                check_leaf(where, arm)
+
     for h, ent in entities(reg):
         kind = ent["kind"]
         where = f"{h['file']}:{ent.get('name', kind)}"
+        if h.get("draft") and kind in ("enum", "struct", "union", "handles"):
+            err(f"{where}: a draft header declares functions, callbacks, typedefs and defines only")
         if kind == "enum":
             name = ent["name"]
             if not TYPE_RE.match(name):
@@ -272,16 +480,25 @@ def validate(reg: dict) -> None:
             claim(name, where)
             struct_names.add(name)
             fields = ent.get("fields", [])
+            if not members_ok(where, name, fields):
+                continue
             if not fields:
                 err(f"{where}: struct without fields")
-            for f in fields:
-                if f.get("type") in enum_names:
-                    err(f"{where}: field {f['name']} is enum-typed; struct fields carry uint32_t")
-                if "ptr" not in f and f.get("type", "").replace("const ", "").strip() in TARGET_WIDTH_TYPES:
-                    err(f"{where}: field {f['name']} has a target-width type ({f['type']}); records carry fixed-width integers only")
-                if not re.match(r"^[a-z][a-z0-9_]*$", f["name"]):
-                    err(f"{where}: field {f['name']} must be lower_case")
             tier = ent.get("tier")
+            check_scope(where, name, fields)
+            for f in fields:
+                shape = member_shape(f)
+                if shape is None:
+                    err(f"{where}: field {f['name']} carries exactly one of type, ptr, arms")
+                elif shape == "fields":
+                    err(f"{where}: field {f['name']}: an unnamed struct type is an arm of a union, never a direct field")
+                elif shape == "arms":
+                    check_name(where, f)
+                    if tier != 1:
+                        err(f"{where}: field {f['name']}: only a Tier-1 struct carries a union member")
+                    check_arms(where, f"{name}.{f['name']}", f["arms"])
+                else:
+                    check_leaf(where, f)
             if tier not in (1, 2):
                 err(f"{where}: tier must be 1 or 2")
             if tier == 2 and fields:
@@ -297,8 +514,32 @@ def validate(reg: dict) -> None:
                         err(f"{where}: a callback descriptor starts with {{struct_size, abi_version, user_data}}")
             if tier == 1 and ("size" not in ent or "align" not in ent):
                 err(f"{where}: a Tier-1 struct declares its size and align")
+            if ent.get("padding_free") and tier != 2:
+                err(f"{where}: padding_free: true belongs on a Tier-2 struct (a Tier-1 record has every offset in the layout table)")
             if "init" in ent and not MACRO_RE.match(ent["init"]["name"]):
                 err(f"{where}: init macro must match {MACRO_RE.pattern}")
+            if tier == 1 and "struct_id" not in ent:
+                err(f"{where}: a Tier-1 record names its {STRUCT_ID_ENUM} constant (struct_id:)")
+            if "struct_id" in ent:
+                struct_ids.append((where, ent))
+        elif kind == "union":
+            name = ent["name"]
+            if not TYPE_RE.match(name):
+                err(f"{where}: union name must match {TYPE_RE.pattern}")
+            claim(name, where)
+            struct_names.add(name)
+            if ent.get("tier") != 1:
+                err(f"{where}: a union is a Tier-1 record (tier: 1)")
+            if "size" not in ent or "align" not in ent:
+                err(f"{where}: a Tier-1 union declares its size and align")
+            for key in ("fields", "init", "forward", "callback_descriptor"):
+                if key in ent:
+                    err(f"{where}: a union takes no {key!r} key")
+            check_arms(where, name, ent.get("arms", []))
+            if "struct_id" not in ent:
+                err(f"{where}: a Tier-1 record names its {STRUCT_ID_ENUM} constant (struct_id:)")
+            else:
+                struct_ids.append((where, ent))
         elif kind == "handles":
             for name in ent["names"]:
                 if not TYPE_RE.match(name):
@@ -321,6 +562,12 @@ def validate(reg: dict) -> None:
             if not FUNCTION_RE.match(name):
                 err(f"{where}: name must match {FUNCTION_RE.pattern}")
             claim(name, where)
+            if ent.get("function_type"):
+                if kind != "callback":
+                    err(f"{where}: function_type: true belongs on a callback")
+                function_type_names.add(name)
+            if kind == "function" and bool(h.get("draft")) != (ent.get("status") == "draft"):
+                err(f"{where}: status: draft and a draft header go together")
             tag = ent.get("thread")
             if tag not in THREAD_TAGS:
                 err(f"{where}: thread tag {tag!r} is not in the vocabulary {sorted(THREAD_TAGS)}")
@@ -335,6 +582,8 @@ def validate(reg: dict) -> None:
                 err(f"{where}: status must be promised or draft")
             types = [p["type"] for p in ent.get("params", [])] + [ent["returns"]]
             for t in types:
+                if t.replace("const ", "").strip() in function_type_names:
+                    err(f"{where}: {t} is a function type; a parameter or a return names it through a pointer ({t}*)")
                 if nb and name not in WIDE_INT_ALLOWLIST and re.search(r"\b(u?int64_t)\b", t) and "*" not in t:
                     err(f"{where}: an ANIRA_NONBLOCKING declaration carries no 64-bit integer ({t})")
                 if nb and t.replace(" ", "") == "anira_error*":
@@ -352,21 +601,42 @@ def validate(reg: dict) -> None:
                 bare = t.replace("const ", "").strip()
                 if bare in struct_names and "*" not in t:
                     err(f"{h['file']}:{ent['name']}: struct {bare} passed by value")
-    struct_sizes: dict[str, tuple[int, int]] = {}
+    # struct_id: a constant of anira_struct_id (declared in a later header than anira_error), used once
+    id_enum = next((e for _, e in entities(reg, "enum") if e["name"] == STRUCT_ID_ENUM), None)
+    id_names = {v["name"] for v in id_enum["values"]} - {id_enum.get("terminator")} if id_enum else set()
+    id_owner: dict[str, str] = {}
+    for where, ent in struct_ids:
+        sid = ent["struct_id"]
+        if sid not in id_names:
+            err(f"{where}: struct_id {sid} is not a constant of {STRUCT_ID_ENUM}")
+        elif sid in id_owner:
+            err(f"{where}: struct_id {sid} already names {id_owner[sid]}")
+        id_owner[sid] = ent["name"]
+    # forward: true needs an earlier entity of the same header that names the struct
+    for h in headers:
+        earlier: list[dict] = []
+        for ent in h.get("entities", []):
+            if ent["kind"] == "struct" and ent.get("forward") and not any(names_type(e, ent["name"]) for e in earlier):
+                err(f"{h['file']}:{ent['name']}: forward: true, but no earlier entity of {h['file']} names {ent['name']}")
+            if ent["kind"] in ("function", "callback", "struct", "union", "typedef"):
+                earlier.append(ent)
+    records: dict[str, dict] = {}
     consts = constants(reg)
-    for h, ent in entities(reg, "struct"):
-        if ent.get("tier") == 1:
-            try:
-                rows, total, align = layout_of(ent, struct_sizes, consts)
-            except RegistryError as exc:
-                err(str(exc))
-                continue
-            struct_sizes[ent["name"]] = (total, align)
-            if total != int(ent["size"]) or align != int(ent["align"]):
-                err(
-                    f"{h['file']}:{ent['name']}: declared {ent['size']}/{ent['align']}, "
-                    f"the fields give {total}/{align}"
-                )
+    for h, ent in tier1_records(reg):
+        try:
+            tree = record_layout(ent, records, consts)
+        except RegistryError as exc:
+            err(str(exc))
+            continue
+        except (KeyError, TypeError):
+            continue  # a malformed member, reported above
+        records[ent["name"]] = tree
+        if "size" in ent and "align" in ent and (tree["size"] != int(ent["size"]) or tree["align"] != int(ent["align"])):
+            part = "arms" if ent["kind"] == "union" else "fields"
+            err(
+                f"{h['file']}:{ent['name']}: declared {ent['size']}/{ent['align']}, "
+                f"the {part} give {tree['size']}/{tree['align']}"
+            )
     if errors:
         raise RegistryError("\n".join(errors))
 
@@ -441,7 +711,9 @@ def function_decl(fn: dict) -> str:
 
 def callback_decl(cb: dict) -> str:
     params = cb.get("params", [])
-    head = f"typedef {cb['returns']} (ANIRA_CALL* {cb['name']})("
+    # function_type: a function TYPE, so that ANIRA_PTR(name, slot) is a function pointer
+    star = "" if cb.get("function_type") else "*"
+    head = f"typedef {cb['returns']} (ANIRA_CALL{star} {cb['name']})("
     tail = ")" + (" ANIRA_NONBLOCKING" if cb.get("nonblocking") else "") + ";"
     joined = ", ".join(param_text(p) for p in params) or "void"
     line = head + joined + tail
@@ -483,26 +755,62 @@ def field_decl(f: dict) -> str:
     return f"{f['type']} {f['name']}{arr};"
 
 
-def emit_struct(ent: dict) -> str:
-    out = [doc_block(ent.get("brief") or ent["doc"], ent.get("doc") if ent.get("brief") else None)]
-    out.append(f"typedef struct {ent['name']} {{")
-    for f in ent["fields"]:
-        decl = "    " + field_decl(f)
-        fdoc = f.get("doc")
-        if fdoc:
-            trailing = f"{decl}  /**< {fdoc} */"
-            if len(trailing) <= WIDTH and "\n" not in fdoc:
+def emit_members(members: list[dict], indent: str) -> list[str]:
+    """The member declarations of a struct or union body. A leaf is one declaration; `fields`
+    is a named member of an unnamed struct type, `arms` of an unnamed union type (never truly
+    anonymous: ISO C++ has no anonymous structs). The doc of a leaf trails it or sits above
+    it; the doc of an aggregate member follows its closing line as a /**< block, so that
+    Doxygen attaches it to the member and not to the unnamed type."""
+    out: list[str] = []
+    for m in members:
+        mdoc = m.get("doc")
+        if "fields" in m or "arms" in m:
+            out.append(f"{indent}{'struct' if 'fields' in m else 'union'} {{")
+            out.extend(emit_members(m.get("fields") or m["arms"], indent + "    "))
+            close = f"{indent}}} {m['name']};"
+            if not mdoc:
+                out.append(close)
+            elif len(f"{close}  /**< {mdoc} */") <= WIDTH and "\n" not in mdoc:
+                out.append(f"{close}  /**< {mdoc} */")
+            else:
+                lines = wrap(mdoc, DOC_WIDTH - len(indent) - 5)
+                out.append(close)
+                out.append(f"{indent}/**< {lines[0]}")
+                out.extend(f"{indent} *   {line}" for line in lines[1:])
+                out.append(f"{indent} */")
+            continue
+        decl = indent + field_decl(m)
+        if mdoc:
+            trailing = f"{decl}  /**< {mdoc} */"
+            if len(trailing) <= WIDTH and "\n" not in mdoc:
                 out.append(trailing)
             else:
-                out.append(doc_block(None, fdoc, indent="    "))
+                out.append(doc_block(None, mdoc, indent=indent))
                 out.append(decl)
         else:
             out.append(decl)
-    out.append(f"}} {ent['name']};")
+    return out
+
+
+def emit_struct(ent: dict) -> str:
+    out = [doc_block(ent.get("brief") or ent["doc"], ent.get("doc") if ent.get("brief") else None)]
+    # forward: true -- `typedef struct X X;` was emitted ahead of the first entity that names X
+    forward = bool(ent.get("forward"))
+    out.append(f"struct {ent['name']} {{" if forward else f"typedef struct {ent['name']} {{")
+    out.extend(emit_members(ent["fields"], "    "))
+    out.append("};" if forward else f"}} {ent['name']};")
     init = ent.get("init")
     if init:
         out.append(doc_block(init.get("doc", f"Default initializer of {ent['name']}.")))
         out.append(f"#define {init['name']} ANIRA_INIT({ent['name']}, {init['value']})")
+    return "\n".join(out)
+
+
+def emit_union(ent: dict) -> str:
+    out = [doc_block(ent.get("brief") or ent["doc"], ent.get("doc") if ent.get("brief") else None)]
+    out.append(f"typedef union {ent['name']} {{")
+    out.extend(emit_members(ent["arms"], "    "))
+    out.append(f"}} {ent['name']};")
     return "\n".join(out)
 
 
@@ -564,14 +872,22 @@ def emit_header(reg: dict, header: dict) -> str:
     # using), type names inside ANIRA_INIT / ANIRA_PTR that no parentheses can wrap.
     out.append(f"// NOLINTBEGIN({NOLINT_CHECKS})")
     out.append("")
+    pending_forward = [e["name"] for e in header.get("entities", []) if e["kind"] == "struct" and e.get("forward")]
     for ent in header.get("entities", []):
         kind = ent["kind"]
+        for name in [n for n in pending_forward if names_type(ent, n)]:
+            out.append(f"/* Forward declaration: struct {name} is defined below. */")
+            out.append(f"typedef struct {name} {name};")
+            out.append("")
+            pending_forward.remove(name)
         if kind == "verbatim":
             out.append(ent["text"].rstrip("\n"))
         elif kind == "enum":
             out.append(emit_enum(ent))
         elif kind == "struct":
             out.append(emit_struct(ent))
+        elif kind == "union":
+            out.append(emit_union(ent))
         elif kind == "define":
             out.append(emit_define(ent))
         elif kind == "typedef":
@@ -671,25 +987,25 @@ def emit_layout_test(reg: dict) -> str:
     out.append('_Static_assert(ANIRA_DTYPE_BITS(ANIRA_DTYPE_F32) == 32, "dtype bits");')
     out.append('_Static_assert(ANIRA_DTYPE_LANES(ANIRA_DTYPE_F32) == 1, "dtype lanes");')
     out.append("")
-    struct_sizes: dict[str, tuple[int, int]] = {}
-    consts = constants(reg)
-    tier1 = []
-    for _, ent in entities(reg, "struct"):
+    trees = {tree["name"]: tree for tree in tier1_layouts(reg)}
+    for _, ent in entities(reg):
+        if ent["kind"] not in ("struct", "union"):
+            continue
         name = ent["name"]
-        if ent.get("tier") == 1:
-            rows, total, align = layout_of(ent, struct_sizes, consts)
-            struct_sizes[name] = (total, align)
-            tier1.append((ent, rows))
-            out.append(f'_Static_assert(sizeof({name}) == {total}, "{name} size");')
-            out.append(f'_Static_assert(_Alignof({name}) == {align}, "{name} align");')
-            for f, row in zip(ent["fields"], rows):
-                out.append(f'_Static_assert(offsetof({name}, {f["name"]}) == {row["offset"]}, "{name}.{f["name"]} offset");')
-                if "ptr" in f:
-                    out.append(f'_Static_assert(sizeof(((const {name}*)0)->{f["name"]}_bits) == 8, "{name}.{f["name"]} is an 8-byte slot");')
+        if name in trees:
+            tree = trees[name]
+            out.append(f'_Static_assert(sizeof({name}) == {tree["size"]}, "{name} size");')
+            out.append(f'_Static_assert(_Alignof({name}) == {tree["align"]}, "{name} align");')
+            for row in layout_rows(tree):
+                path = row["path"]
+                out.append(f'_Static_assert(offsetof({name}, {path}) == {row["offset"]}, "{name}.{path} offset");')
+                if row["ptr"]:
+                    out.append(f'_Static_assert(sizeof(((const {name}*)0)->{path}_bits) == 8, "{name}.{path} is an 8-byte slot");')
                 else:
-                    out.append(f'_Static_assert(sizeof(((const {name}*)0)->{f["name"]}) == {row["size"]}, "{name}.{f["name"]} size");')
+                    out.append(f'_Static_assert(sizeof(((const {name}*)0)->{path}) == {row["size"]}, "{name}.{path} size");')
         else:
-            first = ent["fields"][0]
+            fields = ent["fields"]
+            first = fields[0]
             if first["name"] == "struct_size":
                 out.append(f'_Static_assert(offsetof({name}, struct_size) == 0, "{name}.struct_size first");')
             else:
@@ -698,14 +1014,24 @@ def emit_layout_test(reg: dict) -> str:
             if ent.get("callback_descriptor"):
                 out.append(f'_Static_assert(offsetof({name}, abi_version) == 4, "{name}.abi_version second");')
                 out.append(f'_Static_assert(offsetof({name}, user_data) == 8, "{name}.user_data third");')
+            if ent.get("padding_free"):
+                # A descriptor a setter copies within the caller's struct_size: padding bytes are
+                # unspecified, so a later tail slot laid over them would read garbage from every
+                # older caller. The compiler checks it on every target (a Tier-2 layout differs
+                # between ILP32 and LP64, so no offset can be asserted as a number).
+                out.append(f"_Static_assert(sizeof({name}) ==")
+                for i, f in enumerate(fields):
+                    out.append(f"                   sizeof(((const {name}*)0)->{f['name']}){' +' if i + 1 < len(fields) else ','}")
+                out.append(f'               "{name} has no implicit padding");')
         out.append("")
     out.append("int main(void) {")
-    for ent, rows in tier1:
-        name = ent["name"]
-        out.append(f'    printf("struct {name} size %u align %u\\n", (unsigned)sizeof({name}), (unsigned)_Alignof({name}));')
-        for f, row in zip(ent["fields"], rows):
-            size_expr = "8u" if "ptr" in f else f"(unsigned)sizeof(((const {name}*)0)->{f['name']})"
-            out.append(f'    printf("field {name}.{f["name"]} offset %u size %u\\n", (unsigned)offsetof({name}, {f["name"]}), {size_expr});')
+    for tree in trees.values():
+        name = tree["name"]
+        out.append(f'    printf("{tree["kind"]} {name} size %u align %u\\n", (unsigned)sizeof({name}), (unsigned)_Alignof({name}));')
+        for row in layout_rows(tree):
+            path = row["path"]
+            size_expr = "8u" if row["ptr"] else f"(unsigned)sizeof(((const {name}*)0)->{path})"
+            out.append(f'    printf("field {name}.{path} offset %u size %u\\n", (unsigned)offsetof({name}, {path}), {size_expr});')
     out.append("    return 0;")
     out.append("}")
     return "\n".join(out) + "\n"
@@ -764,19 +1090,75 @@ def emit_link_probe(reg: dict) -> str:
 
 
 def emit_layout_table(reg: dict) -> str:
-    """The expected abi/layout-<major>.txt, from the registry's natural-alignment model."""
-    struct_sizes: dict[str, tuple[int, int]] = {}
-    consts = constants(reg)
+    """The expected abi/layout-<major>.txt, from the registry's natural-alignment model. Byte
+    for byte what the printer of test_layout.c writes: both walk layout_rows()."""
     out = []
-    for _, ent in entities(reg, "struct"):
-        if ent.get("tier") != 1:
-            continue
-        rows, total, align = layout_of(ent, struct_sizes, consts)
-        struct_sizes[ent["name"]] = (total, align)
-        out.append(f"struct {ent['name']} size {total} align {align}")
-        for row in rows:
-            out.append(f"field {ent['name']}.{row['name']} offset {row['offset']} size {row['size']}")
+    for tree in tier1_layouts(reg):
+        out.append(f"{tree['kind']} {tree['name']} size {tree['size']} align {tree['align']}")
+        for row in layout_rows(tree):
+            out.append(f"field {tree['name']}.{row['path']} offset {row['offset']} size {row['size']}")
     return "\n".join(out) + "\n"
+
+
+def emit_struct_sizes(reg: dict) -> str:
+    """src/capi/generated/struct_sizes.inc: the records anira_sizeof() answers for, by id value."""
+    enum = next((e for _, e in entities(reg, "enum") if e["name"] == STRUCT_ID_ENUM), None)
+    value_of = {v["name"]: int_value(v["value"]) for v in enum["values"]} if enum else {}
+    linked = [(value_of[e["struct_id"]], e["struct_id"], e["name"]) for _, e in entities(reg) if e["kind"] in ("struct", "union") and e.get("struct_id") in value_of]
+    out = [f"/* {GENERATED_BANNER} */", "/* ANIRA_STRUCT_SIZE(id, type): anira_sizeof(id) returns sizeof(type); any other id returns 0. */"]
+    for _, sid, name in sorted(linked):
+        out.append(f"ANIRA_STRUCT_SIZE({sid}, {name})")
+    return "\n".join(out) + "\n"
+
+
+def emit_layout_ts(reg: dict) -> str:
+    """web/src/abi/layout.ts: size, align and every member offset of the Tier-1 records, from the
+    same model as abi/layout-<major>.txt. Offsets count from the start of the exported record;
+    a member of a named record type is expanded in place, so reading a tensor needs no
+    arithmetic. Emitted the way prettier prints it (web/.prettierrc): a leaf on one line, an
+    aggregate one property per line, no line over 90 columns."""
+    trees = {tree["name"]: tree for tree in tier1_layouts(reg)}
+    out = [
+        f"// {GENERATED_BANNER}",
+        "// Byte layout of the Tier-1 records, identical on wasm32, LP64 and LLP64: what",
+        "// abi/layout-<major>.txt commits. Offsets count from the start of the exported record; a",
+        "// member of a record type is expanded in place. `ptr: true` marks an 8-byte ANIRA_PTR",
+        "// slot (on wasm32 the pointer is its low 4 bytes), `count` the extent of an array member.",
+        "",
+    ]
+
+    def members_ts(nodes: list[dict], base: int, indent: str) -> list[str]:
+        lines = []
+        for node in nodes:
+            offset = base + node["offset"]
+            children = trees[node["record"]]["members"] if node["record"] and node["count"] is None else node["members"]
+            child_base = offset if node["record"] else base
+            if not children:
+                extra = ", ptr: true" if node["ptr"] else (f", count: {node['count']}" if node["count"] is not None else "")
+                lines.append(f"{indent}{node['name']}: {{ offset: {offset}, size: {node['size']}{extra} }},")
+                continue
+            lines.append(f"{indent}{node['name']}: {{")
+            lines.append(f"{indent}  offset: {offset},")
+            lines.append(f"{indent}  size: {node['size']},")
+            lines.append(f"{indent}  fields: {{")
+            lines.extend(members_ts(children, child_base, indent + "    "))
+            lines.append(f"{indent}  }},")
+            lines.append(f"{indent}}},")
+        return lines
+
+    for tree in trees.values():
+        out.append(f"export const {tree['name']} = {{")
+        out.append(f"  size: {tree['size']},")
+        out.append(f"  align: {tree['align']},")
+        out.append("  fields: {")
+        out.extend(members_ts(tree["members"], 0, "    "))
+        out.append("  },")
+        out.append("} as const")
+        out.append("")
+    for line in out:
+        if len(line) > TS_WIDTH:
+            raise RegistryError(f"web/src/abi/layout.ts: a generated line exceeds {TS_WIDTH} columns, which prettier would re-wrap: {line.strip()}")
+    return "\n".join(out)
 
 
 def emit_status_strings(reg: dict) -> str:
@@ -811,7 +1193,9 @@ def generate(reg: dict) -> dict[str, str]:
     files[f"abi/symbols-{major}.txt"] = "".join(f"{n}\n" for n in promised)
     files["abi/symbols-draft.txt"] = "".join(f"{n}\n" for n in draft)
     files["web/src/abi/exports_wasm.txt"] = "".join(f"_{n}\n" for n in ["malloc", "free"] + promised + draft)
+    files["web/src/abi/layout.ts"] = emit_layout_ts(reg)
     files["src/capi/generated/status_strings.inc"] = emit_status_strings(reg)
+    files["src/capi/generated/struct_sizes.inc"] = emit_struct_sizes(reg)
     files["test/abi/generated/test_layout.c"] = emit_layout_test(reg)
     files["test/abi/generated/link_probe.c"] = emit_link_probe(reg)
     files[f"abi/layout-{major}.txt"] = emit_layout_table(reg)
@@ -819,6 +1203,14 @@ def generate(reg: dict) -> dict[str, str]:
         files[f"docs/sphinx/api/enum/{ent['name']}.rst"] = emit_enum_page(ent)
     files["abi/anira.json"] = json.dumps(reg, indent=2) + "\n"
     return files
+
+
+def member_sigs(members: list[dict]) -> list[tuple]:
+    """What the layout of a member list depends on, nested arms and their fields included."""
+    return [
+        (m["name"], m.get("type"), m.get("ptr"), m.get("array"), member_sigs(m.get("fields", [])), member_sigs(m.get("arms", [])))
+        for m in members
+    ]
 
 
 def diff_registries(old: dict, new: dict) -> tuple[list[str], list[str]]:
@@ -838,8 +1230,13 @@ def diff_registries(old: dict, new: dict) -> tuple[list[str], list[str]]:
 
     old_idx, new_idx = index(old), index(new)
     for name, (kind, ent) in old_idx.items():
+        # a draft function is a declaration, not a promise: whatever happens to it is admitted
+        draft = kind == "function" and ent.get("status") == "draft"
         if name not in new_idx:
-            errors.append(f"removed {kind} {name}")
+            if draft:
+                additions.append(f"draft function {name}: removed (outside the promise)")
+            else:
+                errors.append(f"removed {kind} {name}")
             continue
         nkind, nent = new_idx[name]
         if nkind != kind:
@@ -857,16 +1254,30 @@ def diff_registries(old: dict, new: dict) -> tuple[list[str], list[str]]:
                 if vn not in ov:
                     additions.append(f"enum {name}: appended {vn}")
         elif kind in ("function", "callback"):
-            sig = lambda e: (e["returns"], [(p["type"], p.get("name")) for p in e.get("params", [])])
+            sig = lambda e: (e["returns"], [(p["type"], p.get("name")) for p in e.get("params", [])], bool(e.get("function_type")))
+            contract = lambda e: (e.get("thread"), bool(e.get("nonblocking")))
+            if draft:
+                if sig(ent) != sig(nent) or contract(ent) != contract(nent) or bool(ent.get("callback_safe")) != bool(nent.get("callback_safe")):
+                    additions.append(f"draft function {name}: changed (outside the promise)")
+                if nent.get("status") == "promised":
+                    additions.append(f"function {name}: promoted from draft")
+                continue
             if sig(ent) != sig(nent):
                 errors.append(f"{kind} {name}: signature changed")
-            if ent.get("thread") != nent.get("thread") or bool(ent.get("nonblocking")) != bool(nent.get("nonblocking")):
+            if contract(ent) != contract(nent):
                 errors.append(f"{kind} {name}: thread contract changed")
+            if ent.get("callback_safe") and not nent.get("callback_safe"):
+                errors.append(f"{kind} {name}: callback-safe removed")
+            elif nent.get("callback_safe") and not ent.get("callback_safe"):
+                additions.append(f"{kind} {name}: callback-safe added")
             if ent.get("status") == "promised" and nent.get("status") != "promised":
                 errors.append(f"function {name}: demoted from promised")
+        elif kind == "union":
+            if member_sigs(ent["arms"]) != member_sigs(nent["arms"]):
+                errors.append(f"Tier-1 union {name}: layout changed")
         elif kind == "struct":
-            of = [(f["name"], f.get("type"), f.get("ptr"), f.get("array")) for f in ent["fields"]]
-            nf = [(f["name"], f.get("type"), f.get("ptr"), f.get("array")) for f in nent["fields"]]
+            of = member_sigs(ent["fields"])
+            nf = member_sigs(nent["fields"])
             if ent.get("tier") == 1 and of != nf:
                 errors.append(f"Tier-1 struct {name}: layout changed")
             elif nf[: len(of)] != of:

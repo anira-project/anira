@@ -627,17 +627,16 @@ void load_context_v3(const Json& root, anira_context_config& context_config) {
                 });
         } else if (key == "vulkan") {
             static const anira_vulkan_desc k_defaults = ANIRA_VULKAN_DESC_INIT;
-            int32_t device = 0;
             load_device_block(value,
                               path,
                               context_config.m_vulkan,
                               k_defaults,
-                              [&device](const std::string& k,
-                                        const Json& v,
-                                        const std::string& p,
-                                        anira_vulkan_desc& d) {
+                              [](const std::string& k,
+                                 const Json& v,
+                                 const std::string& p,
+                                 anira_vulkan_desc& d) {
                                   if (k == "device") {
-                                      device = static_cast<int32_t>(require_i64(v, p));
+                                      d.device_index = static_cast<int32_t>(require_i64(v, p));
                                       return true;
                                   }
                                   if (k == "queue_family") {
@@ -650,7 +649,6 @@ void load_context_v3(const Json& root, anira_context_config& context_config) {
                                   }
                                   return false;
                               });
-            context_config.m_vulkan_device = device;
         } else if (key == "metal") {
             static const anira_metal_desc k_defaults = ANIRA_METAL_DESC_INIT;
             load_device_block(
@@ -1351,7 +1349,7 @@ Json context_to_json(const anira_context_config& context_config) {
     }
     if (context_config.m_vulkan) {
         Json vulkan = Json::object();
-        vulkan["device"] = context_config.m_vulkan_device;
+        vulkan["device"] = context_config.m_vulkan->device_index;
         vulkan["queue_family"] = context_config.m_vulkan->queue_family;
         vulkan["queue_index"] = context_config.m_vulkan->queue_index;
         root["vulkan"] = vulkan;

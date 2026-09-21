@@ -7,14 +7,17 @@
 #   anira_abi_layout      gate 3: generated/test_layout.c pins every enum's width and
 #                         terminator and every Tier-1 sizeof/offsetof with _Static_assert;
 #                         its printed table is diffed against abi/layout-<major>.txt
-#   anira_header_c11      gate 4: every M1 header, alone and together, as C11 under the
-#                         strict flags with no anira define at all
+#   anira_header_c11      gate 4: every header of _abi_headers, alone and together, as C11
+#                         under the strict flags with no anira define at all
 #   anira_header_cxx17    gate 4: the same as C++17
 #   anira_header_cxx20    gate 4: anira.hpp alone as C++20 under the strict flags, the
 #                         wrapper's API exercised at compile time (nothing runs)
 #   anira_header_coexist  the v2 C++ umbrella and the C headers in one TU, both orders
 #   anira_header_cxx20_with_v2
 #                         the v2 C++ umbrella and anira.hpp in one TU, both orders
+#   anira_abi_rt_contract gate 6 (seed): test_rt_contract.c, one ANIRA_NONBLOCKING function
+#                         calling every [callback-safe] tensor entry, under
+#                         -Werror=function-effects on clang 20 or later
 #   anira_abi_link        presence: generated/link_probe.c takes the address of every
 #                         promised and draft entry point and links anira::anira the way a
 #                         consumer does; an entry without a body fails this link (on a
@@ -31,7 +34,7 @@ if(TANH_OPERATING_SYSTEM STREQUAL "Emscripten")
     return()
 endif()
 
-set(_abi_headers export status version enums log config context core thread handler)
+set(_abi_headers export status version enums log tensor config context core thread handler draft/tensor_platform)
 set(_abi_include_dirs "${anira_SOURCE_DIR}/include" "${ANIRA_GENERATED_INCLUDE_DIR}")
 if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     set(_abi_on_device TRUE)
@@ -115,12 +118,15 @@ set(_gate4_dir "${CMAKE_CURRENT_BINARY_DIR}/gate4")
 set(_gate4_c "")
 set(_gate4_cxx "")
 foreach(_h IN LISTS _abi_headers)
-    anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.c"
-        "#include <anira/abi/${_h}.h>\nint anira_gate4_${_h}_c(void);\nint anira_gate4_${_h}_c(void) { return 0; }\n")
-    anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.cpp"
-        "#include <anira/abi/${_h}.h>\nint anira_gate4_${_h}_cxx();\nint anira_gate4_${_h}_cxx() { return 0; }\n")
-    list(APPEND _gate4_c "${_gate4_dir}/only_${_h}.c")
-    list(APPEND _gate4_cxx "${_gate4_dir}/only_${_h}.cpp")
+    # draft/tensor_platform: the include path keeps its slash, the wrapper's symbol and file
+    # name take the C identifier (draft_tensor_platform).
+    string(MAKE_C_IDENTIFIER "${_h}" _id)
+    anira_abi_write_if_changed("${_gate4_dir}/only_${_id}.c"
+        "#include <anira/abi/${_h}.h>\nint anira_gate4_${_id}_c(void);\nint anira_gate4_${_id}_c(void) { return 0; }\n")
+    anira_abi_write_if_changed("${_gate4_dir}/only_${_id}.cpp"
+        "#include <anira/abi/${_h}.h>\nint anira_gate4_${_id}_cxx();\nint anira_gate4_${_id}_cxx() { return 0; }\n")
+    list(APPEND _gate4_c "${_gate4_dir}/only_${_id}.c")
+    list(APPEND _gate4_cxx "${_gate4_dir}/only_${_id}.cpp")
 endforeach()
 if(_abi_on_device)
     add_library(anira_header_c11 OBJECT header_c.c ${_gate4_c})
@@ -145,6 +151,33 @@ else()
     anira_abi_build_test(anira_header_cxx20)
 endif()
 anira_abi_consumer_target(anira_header_cxx20 CXX 20)
+if(NOT _abi_strict_flags MATCHES "/W4")
+    # MSVC's /W4 refuses a parameter that hides a member (C4458), inherited ones included:
+    # Tensor and SyncToken derive from the C records. -Wshadow is the same check in gcc and
+    # clang, so the wrapper cannot pass here and fail on the Windows leg.
+    target_compile_options(anira_header_cxx20 PRIVATE -Wshadow)
+endif()
+
+# ---- gate 6 (seed): the real-time contract in a consumer's compiler -------------------------
+# test_rt_contract.c is one ANIRA_NONBLOCKING function calling every [callback-safe] entry of
+# the tensor headers. Consumer-shaped like the header gates (C11, the strict flags, no anira
+# define), plus -Werror=function-effects where the compiler has the analysis: upstream clang
+# 20 or later behind the GNU front end. gcc rejects the flag outright; an older clang (an NDK)
+# and AppleClang, whose version numbers are its own, may not know the warning group, which
+# the strict -Werror would turn fatal; clang-cl is left out until a leg proves it. There the
+# file is plain C11. Nothing links it: a regression is a compiler error.
+if(_abi_on_device)
+    add_library(anira_abi_rt_contract OBJECT test_rt_contract.c)
+else()
+    add_library(anira_abi_rt_contract OBJECT EXCLUDE_FROM_ALL test_rt_contract.c)
+    anira_abi_build_test(anira_abi_rt_contract)
+endif()
+anira_abi_consumer_target(anira_abi_rt_contract C)
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang"
+        AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 20
+        AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(anira_abi_rt_contract PRIVATE -Werror=function-effects)
+endif()
 
 # ---- the umbrellas in one TU -------------------------------------------------------------
 # header_coexist.inc includes <anira/anira.h> and the C headers in the order its two

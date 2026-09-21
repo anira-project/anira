@@ -591,6 +591,24 @@ TEST(AbiContextConfig, DeviceDescriptorsAreCopiedWithinStructSize) {
                 m.m_config->m_webgpu);
 }
 
+TEST(AbiContextConfig, TheVulkanDeviceIndexIsATailSlot) {
+    const Config m;
+    anira_vulkan_desc vulkan = ANIRA_VULKAN_DESC_INIT;
+    EXPECT_EQ(vulkan.device_index, 0) << "ANIRA_VULKAN_DESC_INIT: device index 0";
+    vulkan.queue_index = 1;
+    vulkan.device_index = 7;
+    ASSERT_EQ(anira_context_config_set_vulkan(m.m_config, &vulkan), ANIRA_OK);
+    EXPECT_EQ(m.m_config->m_vulkan.value_or(anira_vulkan_desc{}).device_index, 7);
+    // An older, shorter header: the record ends where device_index begins, so the slot is
+    // not read and keeps the default, as pinned_pool_limit does in the CUDA case above.
+    vulkan.struct_size = static_cast<uint32_t>(offsetof(anira_vulkan_desc, device_index));
+    ASSERT_EQ(anira_context_config_set_vulkan(m.m_config, &vulkan), ANIRA_OK);
+    const anira_vulkan_desc stored = m.m_config->m_vulkan.value_or(anira_vulkan_desc{});
+    EXPECT_EQ(stored.struct_size, sizeof(anira_vulkan_desc)) << "normalized to this build's size";
+    EXPECT_EQ(stored.queue_index, 1u);
+    EXPECT_EQ(stored.device_index, 0) << "the tail keeps the default";
+}
+
 // ---- contract ---------------------------------------------------------------------------------
 
 TEST(AbiContract, HardAndAsyncGateTheirSetters) {

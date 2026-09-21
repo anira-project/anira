@@ -6,5 +6,6 @@ API Documentation
 
     classlist
     structlist
+    unionlist
     enumlist
     typedeflist
