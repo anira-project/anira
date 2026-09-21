@@ -308,7 +308,11 @@ typedef enum anira_axis_tag {
 typedef enum anira_role {
     ANIRA_ROLE_STREAMED = 0,  /**< Has a Time axis consumed window-wise (inputs and outputs). */
     /**
-     * The whole submitted buffer is one model tensor, no Time axis (frames, images).
+     * The whole submitted buffer is one model tensor, no Time axis (frames, images): a per-job
+     * payload, which arrives with the Async contract. The spec is valid in a model config and a
+     * model file; anira_handler_prepare refuses it under a Hard contract with
+     * ANIRA_ERROR_NOT_SUPPORTED (a persistent side input under a Hard contract is
+     * ANIRA_ROLE_STATIC).
      */
     ANIRA_ROLE_BUFFER = 1,
     /**

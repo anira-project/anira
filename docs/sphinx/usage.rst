@@ -84,7 +84,10 @@ The roles are:
 - ``ANIRA_ROLE_STATIC``: no time semantics, one value per run, such as a gain or a
   conditioning vector.
 - ``ANIRA_ROLE_BUFFER``: the whole submitted buffer is one tensor, no Time axis (frames,
-  images).
+  images). A Buffer tensor is a per-job payload and arrives with the Async contract: the spec
+  is valid in a model config and a model file, and ``anira_handler_prepare`` refuses it under
+  a Hard contract with ``ANIRA_ERROR_NOT_SUPPORTED``, naming the tensor. A persistent side
+  input under a Hard contract is ``ANIRA_ROLE_STATIC``.
 - ``ANIRA_ROLE_STATE``: declared state, one half of a pair of a state input and a state output
   with equal dtype and shape (an exported recurrent hidden state, a streaming-convolution
   cache). The input half names the output half it is fed from (``"state_source"`` in a model
@@ -863,9 +866,9 @@ in the JUCE example above, which is legal there: the factory is a field fill,
 the input's over ``const float* const*`` with ``ANIRA_TENSOR_READ_ONLY`` ORed into ``flags``.
 A Static tensor is never planar: it is one block in the spec's shape (next paragraph).
 
-**Static tensors.** A tensor without a ring (a Static spec, and a Buffer spec under a Hard
-contract) has one description everywhere: the whole tensor in the spec's shape and dtype, any
-dtype, a Channel axis of any extent included. One ``anira_tensor_init_host`` over the spec's
+**Static tensors.** A Static tensor has one description everywhere: the whole tensor in the
+spec's shape and dtype, any dtype, a Channel axis of any extent included (a Buffer spec is not
+served this way: under a Hard contract it is refused at prepare, see section 1.1). One ``anira_tensor_init_host`` over the spec's
 extents builds it (all-zero strides are packed row-major; other strides are read and written
 as given). The handler keeps the value in a store of its own, sized and zeroed at
 ``anira_handler_create``, untouched by ``anira_handler_prepare`` and ``anira_handler_reset``:

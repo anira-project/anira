@@ -15,7 +15,7 @@
 // the stems return. A host that holds float channel pointers presents them itself, as one
 // planar tensor over its pointer array (anira_tensor_init_host_planar).
 //
-// The stems move Streamed slots. A Static (or Buffer) slot has no ring: its value lives in the
+// The stems move Streamed slots. A Static slot has no ring: its value lives in the
 // handler's Static store (static_store.h), whole tensors in the spec's shape and dtype, written
 // by anira_handler_set_static_input and read by anira_handler_get_static_output. A multi form
 // is that sequence: the set of every non-empty Static input element, the stem, the get of every
@@ -686,6 +686,36 @@ void check_miss_policy(const anira::capi::HardContract& hard,
     }
 }
 
+// The Buffer rule of prepare, after validate. A Buffer tensor is a per-job payload: the whole
+// submitted buffer is one tensor, which is what an Async submit carries. A Hard contract streams
+// blocks and has no job to attach it to, so the handler refuses the model here, where the
+// contract is first known. The spec itself stays valid (create and the model files take it),
+// and the rule lives here and not in capi::validate, like the miss policy's: validate also
+// serves the 2.x bridge (anira::v3compat::to_inference_config), which carries a Buffer tensor
+// as a 2.x non-streamable tensor and keeps doing so. A persistent side input under a Hard
+// contract is the Static role.
+void check_buffer_specs(const anira_model_config& model) {
+    const auto first_buffer =
+        [](const std::vector<anira_tensor_spec>& specs) -> const anira_tensor_spec* {
+        const auto found = std::ranges::find_if(specs, [](const anira_tensor_spec& spec) {
+            return spec.m_role == ANIRA_ROLE_BUFFER;
+        });
+        return found != specs.end() ? &*found : nullptr;
+    };
+    // The inputs before the outputs, each in list order: the first one is named.
+    const anira_tensor_spec* spec = first_buffer(model.m_inputs);
+    const bool is_input = spec != nullptr;
+    if (spec == nullptr) { spec = first_buffer(model.m_outputs); }
+    if (spec == nullptr) { return; }
+    const std::string side = is_input ? "input" : "output";
+    throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                      "contract: " + side + " tensor '" + spec->m_name +
+                          "' is a Buffer tensor, and a Hard contract cannot carry one: Buffer "
+                          "tensors arrive with the Async contract (a Buffer is a per-job "
+                          "payload); use the Static role for a persistent side " +
+                          side + " under a Hard contract");
+}
+
 // Whether a model entry is the variant's default engine (by id for a custom engine, by
 // engine otherwise; ANIRA_ENGINE_NONE without an id names none).
 bool names_default_engine(const anira_model_config& model, const anira::capi::ModelEntry& row) {
@@ -958,6 +988,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     anira::capi::Derived derived;
     anira::capi::validate(model, &snapshot, ids.data(), num_ids, derived, &stages);
     const anira::capi::HardContract& hard = *snapshot.hard();  // validate refused Async
+    check_buffer_specs(model);
     const anira::RingDtypes ring_dtypes = anira::capi::make_ring_dtypes(snapshot, model);
     check_miss_policy(hard, model, derived, ring_dtypes);
     anira::InferenceConfig config =
@@ -1337,9 +1368,9 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
 
     auto handler = std::make_unique<anira_handler>();
     handler->m_pipeline = anira_pipeline(*pipeline);
-    // The Static store: one zeroed buffer per Static or Buffer tensor, in the spec's shape and
-    // dtype (the copy fixes the specs, so it is never resized), and an empty entry per Streamed
-    // and per State tensor. From here on the two Static entries work, prepared or not.
+    // The Static store: one zeroed buffer per Static tensor, in the spec's shape and dtype (the
+    // copy fixes the specs, so it is never resized), and an empty entry per tensor of any other
+    // role. From here on the two Static entries work, prepared or not.
     const anira_model_config& model = handler->m_pipeline.m_variants[0];
     const auto build_side = [](const std::vector<anira_tensor_spec>& specs,
                                const std::vector<anira::capi::DerivedSpec>& rows,
@@ -1347,10 +1378,10 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
         side.resize(specs.size());
         for (size_t i = 0; i < specs.size(); ++i) {
             // A Streamed tensor has a ring; a State tensor is the session's (it is fed and
-            // captured on the inference thread) and no entry of the handler carries it.
-            if (specs[i].m_role == ANIRA_ROLE_STREAMED || specs[i].m_role == ANIRA_ROLE_STATE) {
-                continue;
-            }
+            // captured on the inference thread) and no entry of the handler carries it; a
+            // Buffer tensor is a per-job payload of the Async contract, and prepare refuses it
+            // under a Hard one (check_buffer_specs), so nothing is stored for it.
+            if (specs[i].m_role != ANIRA_ROLE_STATIC) { continue; }
             side[i] = std::make_unique<anira::capi::StaticSlot>(rows[i].m_dims, specs[i].m_dtype);
         }
     };

@@ -74,7 +74,15 @@ TensorSpec two_channel_static(std::string_view name) {
     return spec;
 }
 
-/// [batch 1][time 4]: a Buffer tensor, four values; it has no ring under a Hard contract.
+/// [batch 1][any 4]: a second Static tensor of another shape, four values.
+TensorSpec four_values(std::string_view name) {
+    TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC);
+    spec.axis(0, ANIRA_AXIS_BATCH, 1).axis(1, ANIRA_AXIS_ANY, 4);
+    return spec;
+}
+
+/// [batch 1][time 4]: a Buffer tensor, the whole submitted buffer as one tensor. A per-job
+/// payload of the Async contract: valid as a spec, refused by prepare under a Hard contract.
 TensorSpec buffer_values(std::string_view name) {
     TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_BUFFER);
     spec.axis(0, ANIRA_AXIS_BATCH, 1).axis(1, ANIRA_AXIS_TIME, 4);
@@ -82,12 +90,27 @@ TensorSpec buffer_values(std::string_view name) {
 }
 
 constexpr std::array<int64_t, 3> k_static_shape{1, 2, 3};
-constexpr std::array<int64_t, 2> k_buffer_shape{1, 4};
+constexpr std::array<int64_t, 2> k_four_shape{1, 4};
 constexpr size_t k_static_elements = 6;
 using StaticValues = std::array<float, k_static_elements>;
 
-/// Slot 0: a two-channel stream. Slot 1: the two-channel Static tensor. Slot 2: the Buffer.
+/// Slot 0: a two-channel stream. Slot 1: the two-channel Static tensor. Slot 2: the second
+/// Static tensor, of another shape.
 ModelConfig static_model() {
+    ModelConfig model;
+    model.add_model_path(anira_test::k_custom, "custom-processor");
+    model.input(streamed("in", 2));
+    model.input(two_channel_static("values_in"));
+    model.input(four_values("four_in"));
+    model.output(streamed("out", 2));
+    model.output(two_channel_static("values_out"));
+    model.output(four_values("four_out"));
+    model.max_instances(2);
+    return model;
+}
+
+/// static_model() with a Buffer tensor in slot 2 of either side.
+ModelConfig buffer_model() {
     ModelConfig model;
     model.add_model_path(anira_test::k_custom, "custom-processor");
     model.input(streamed("in", 2));
@@ -232,19 +255,62 @@ TEST(AbiHandlerStatic, ATwoChannelStaticTensorTravelsWhole) {
     EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK);
 }
 
-TEST(AbiHandlerStatic, ABufferSlotIsServedLikeAStaticOne) {
+// A second Static tensor, of another shape, travels whole beside the first.
+TEST(AbiHandlerStatic, ASecondStaticSlotOfAnotherShapeTravelsWhole) {
     GateRig rig;
     ASSERT_TRUE(rig.ready());
     const std::array<float, 4> in{1.5F, 2.5F, 3.5F, 4.5F};
-    const anira_tensor in_tensor = whole_f32(in.data(), k_buffer_shape);
+    const anira_tensor in_tensor = whole_f32(in.data(), k_four_shape);
     ASSERT_EQ(anira_handler_set_static_input(rig.get(), 2, &in_tensor), ANIRA_OK);
     ASSERT_TRUE(ANIRA_SUCCEEDED(rig.stream_block()));
     rig.settle();
     std::array<float, 4> out{};
-    const anira_tensor out_tensor = whole_f32(out.data(), k_buffer_shape);
+    const anira_tensor out_tensor = whole_f32(out.data(), k_four_shape);
     ASSERT_EQ(anira_handler_get_static_output(rig.get(), 2, &out_tensor), ANIRA_OK);
     EXPECT_EQ(out, in);
     EXPECT_EQ(anira_handler_get_latency(rig.get(), 2), 0U) << "no ring, no stream latency";
+}
+
+// A Buffer tensor is a per-job payload, which arrives with the Async contract. The spec is
+// valid (create takes it, no contract is known yet), nothing is stored for it, and prepare
+// under a Hard contract refuses the model with NOT_SUPPORTED, naming the tensor.
+TEST(AbiHandlerStatic, ABufferSpecUnderAHardContractIsRefusedAtPrepare) {
+    const anira_test::Context context;
+    const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
+                                                    .engine = ANIRA_ENGINE_NONE,
+                                                    .provider = ANIRA_PROVIDER_DEFAULT,
+                                                    .engine_id = nullptr}};
+    anira_test::Handler handler(context, buffer_model(), candidates);
+    anira_handler* h = handler.m_handler;
+    ASSERT_NE(h, nullptr) << "a Buffer spec is valid without a contract: " << handler.m_err.message;
+
+    // No store for the Buffer slot: the Static entries take a Static slot only, and the Static
+    // slot beside it works as ever.
+    EXPECT_EQ(h->m_static.input(2), nullptr);
+    EXPECT_EQ(h->m_static.output(2), nullptr);
+    EXPECT_NE(h->m_static.input(1), nullptr);
+    std::array<float, 4> four{1.5F, 2.5F, 3.5F, 4.5F};
+    const anira_tensor four_tensor = whole_f32(four.data(), k_four_shape);
+    EXPECT_EQ(anira_handler_set_static_input(h, 2, &four_tensor), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_get_static_output(h, 2, &four_tensor), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(four, (std::array<float, 4>{1.5F, 2.5F, 3.5F, 4.5F})) << "a refused get wrote";
+    const StaticValues values = values_of(10.0F);
+    const anira_tensor values_tensor = whole_f32(values.data(), k_static_shape);
+    EXPECT_EQ(anira_handler_set_static_input(h, 1, &values_tensor), ANIRA_OK);
+
+    anira::ContractHandle contract =
+        anira_test::explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
+    contract.hard_geometry(1, k_hop, k_rate);
+    EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_NOT_SUPPORTED);
+    const std::string message = handler.m_err.message;
+    EXPECT_NE(message.find("'buffer_in'"), std::string::npos) << message;
+    EXPECT_NE(message.find("Buffer"), std::string::npos) << message;
+    EXPECT_NE(message.find("Async contract"), std::string::npos) << message;
+    // The handler stays unprepared, and says so.
+    std::array<float, static_cast<size_t>(2) * k_hop> samples{};
+    const anira_tensor block = whole_f32(samples.data(), {2, k_hop});
+    EXPECT_EQ(anira_handler_process(h, &block, 0, &block, 0, nullptr), ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_get_latency(h, 0), 0U);
 }
 
 TEST(AbiHandlerStatic, ValuesSetBeforePrepareSurviveAndTheOutputSurvivesResetAndPrepare) {
@@ -451,7 +517,7 @@ TEST(AbiHandlerStatic, ASingleFormOnAStaticSlotIsRefused) {
     expect_refused(anira_handler_push_data(h, &whole, 1), "push_data");
     expect_refused(anira_handler_pop_data(h, &whole, 1, &delivered), "pop_data");
     expect_refused(anira_handler_process_wait(h, &whole, 2, &whole, 2, 0.0, &delivered),
-                   "process_wait on the Buffer slot");
+                   "process_wait on the second Static slot");
     expect_refused(anira_handler_pop_data_wait(h, &whole, 0.0, 1, &delivered), "pop_data_wait");
     EXPECT_EQ(memory, values_of(80.0F));
     const StaticValues zeros{};
@@ -465,8 +531,8 @@ struct Block {
     std::array<float, static_cast<size_t>(2) * k_hop> m_stream_out{};
     StaticValues m_values_in{};
     StaticValues m_values_out{};
-    std::array<float, 4> m_buffer_in{};
-    std::array<float, 4> m_buffer_out{};
+    std::array<float, 4> m_four_in{};
+    std::array<float, 4> m_four_out{};
 
     explicit Block(size_t k) {
         for (size_t i = 0; i < m_stream_in.size(); ++i) {
@@ -475,18 +541,18 @@ struct Block {
         m_stream_out.fill(k_untouched);
         m_values_in = values_of(static_cast<float>(1000 * (k + 1)));
         m_values_out.fill(k_untouched);
-        for (size_t i = 0; i < 4; ++i) { m_buffer_in.at(i) = static_cast<float>((k * 10) + i); }
-        m_buffer_out.fill(k_untouched);
+        for (size_t i = 0; i < 4; ++i) { m_four_in.at(i) = static_cast<float>((k * 10) + i); }
+        m_four_out.fill(k_untouched);
     }
     std::array<anira_tensor, 3> inputs() const {
         return {whole_f32(m_stream_in.data(), {2, k_hop}),
                 whole_f32(m_values_in.data(), k_static_shape),
-                whole_f32(m_buffer_in.data(), k_buffer_shape)};
+                whole_f32(m_four_in.data(), k_four_shape)};
     }
     std::array<anira_tensor, 3> outputs() {
         return {whole_f32(m_stream_out.data(), {2, k_hop}),
                 whole_f32(m_values_out.data(), k_static_shape),
-                whole_f32(m_buffer_out.data(), k_buffer_shape)};
+                whole_f32(m_four_out.data(), k_four_shape)};
     }
 };
 
@@ -525,7 +591,7 @@ TEST(AbiHandlerStatic, AMultiCallEqualsTheThreeCallSequence) {
         EXPECT_EQ(delivered[0], streamed_count);
         EXPECT_EQ(a.m_stream_out, b.m_stream_out);
         EXPECT_EQ(a.m_values_out, b.m_values_out);
-        EXPECT_EQ(a.m_buffer_out, b.m_buffer_out);
+        EXPECT_EQ(a.m_four_out, b.m_four_out);
         if (k > 0) {
             EXPECT_EQ(a.m_values_out, Block(k - 1).m_values_in) << "what the last inference saw";
         }
@@ -543,7 +609,7 @@ TEST(AbiHandlerStatic, AMultiCallEqualsTheThreeCallSequence) {
     EXPECT_EQ(delivered[0], k_hop);
     EXPECT_EQ(delivered[1], k_static_elements);
     EXPECT_EQ(pushed.m_values_out, pushed.m_values_in);
-    EXPECT_EQ(pushed.m_buffer_out, pushed.m_buffer_in);
+    EXPECT_EQ(pushed.m_four_out, pushed.m_four_in);
 }
 
 TEST(AbiHandlerStatic, EveryElementIsValidatedBeforeAnythingIsSetOrPushed) {

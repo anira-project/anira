@@ -36,8 +36,10 @@
  * delivered counts come back through a nullable size_t* delivered, a pure out parameter written
  * on every return: zeroed first, then on ANIRA_OK shape[1] of each Streamed output; 0 on
  * ANIRA_MISSED and on a failure. It is never read: the request is shape[1] of the output
- * tensor. A tensor without a ring (a Static spec, and a Buffer spec under a Hard contract) has
- * one description everywhere: the whole tensor in the spec's shape and dtype, any dtype, a
+ * tensor. A Buffer spec under a Hard contract is ANIRA_ERROR_NOT_SUPPORTED at
+ * anira_handler_prepare: a Buffer tensor is a per-job payload and arrives with the Async
+ * contract; a persistent side input under a Hard contract is the Static role. A Static tensor
+ * has one description everywhere: the whole tensor in the spec's shape and dtype, any dtype, a
  * Channel axis of any extent included. The handler holds its value in a store of its own,
  * zeroed at anira_handler_create and untouched by prepare and by reset:
  * anira_handler_set_static_input writes an input, which every inference submitted afterwards
@@ -340,11 +342,13 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or contract;
  *         ANIRA_ERROR_CONFIG for a rule the configuration breaks, with the offending field
- *         named in the message; ANIRA_ERROR_NOT_SUPPORTED for what this pre-release cannot do;
- *         ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on
- *         the contract, the model or a spec that this build does not know or nothing consumes;
- *         ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model
- *         does not load; the status a stage's prepare function returned.
+ *         named in the message; ANIRA_ERROR_NOT_SUPPORTED for what this pre-release cannot do,
+ *         a Buffer spec under a Hard contract included (Buffer tensors arrive with the Async
+ *         contract; the message names the tensor); ANIRA_ERROR_EXTENSION_UNKNOWN or
+ *         ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a
+ *         spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE,
+ *         ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a
+ *         stage's prepare function returned.
  * @par Thread contract
  * [main-thread & !processing]
  * @since ABI 0.2
@@ -715,9 +719,8 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_pop_data_multi(anira_handler* ha
  * thread breaks the tag: the tensor still never tears, but a writer preempted inside the
  * call can make the driver thread wait for it.
  * @param handler The handler; prepared or not.
- * @param slot The slot: the tensor's position in the model config's input list; a tensor the
- *        handler stores (a Static spec, or a Buffer spec under a Hard contract). A
- *        Streamed and a State slot are refused.
+ * @param slot The slot: the tensor's position in the model config's input list; a Static
+ *        tensor. A slot of any other role is refused.
  * @param tensor The whole tensor: a host tensor of exactly the spec's rank, extents and dtype
  *        (any dtype, the spec's; a Channel axis of any extent is one of its axes), over
  *        one block of host memory read by its strides in elements, all-zero strides
@@ -755,9 +758,8 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_set_static_input(anira_handler* 
  * anira_handler_create on.
  * @param handler The handler; prepared or not. Not const: a refusal is recorded in its
  *        rt_error.
- * @param slot The slot: the tensor's position in the model config's output list; a tensor the
- *        handler stores (a Static spec, or a Buffer spec under a Hard contract). A
- *        Streamed and a State slot are refused.
+ * @param slot The slot: the tensor's position in the model config's output list; a Static
+ *        tensor. A slot of any other role is refused.
  * @param out The whole tensor, described as for anira_handler_set_static_input; the descriptor
  *        is never written, the memory it names is, by its strides.
  * @return ANIRA_OK; the failures of anira_handler_set_static_input, and

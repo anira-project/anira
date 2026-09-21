@@ -493,7 +493,7 @@ headers:
         doc: "How a tensor spec is fed and drained."
         values:
           - {name: ANIRA_ROLE_STREAMED, value: 0, doc: "Has a Time axis consumed window-wise (inputs and outputs)."}
-          - {name: ANIRA_ROLE_BUFFER, value: 1, doc: "The whole submitted buffer is one model tensor, no Time axis (frames, images)."}
+          - {name: ANIRA_ROLE_BUFFER, value: 1, doc: "The whole submitted buffer is one model tensor, no Time axis (frames, images): a per-job payload, which arrives with the Async contract. The spec is valid in a model config and a model file; anira_handler_prepare refuses it under a Hard contract with ANIRA_ERROR_NOT_SUPPORTED (a persistent side input under a Hard contract is ANIRA_ROLE_STATIC)."}
           - {name: ANIRA_ROLE_STATIC, value: 2, doc: "No time semantics: conditioning in, scalar or embedding out; one value per job."}
           - {name: ANIRA_ROLE_STATE, value: 3, doc: "Declared state: one half of a pair of a state input and a state output with equal dtype and shape, paired by anira_tensor_spec_set_state_source on the input. anira feeds the input from the session's state buffer ahead of every before_inference stage and captures the output into it behind every after_inference stage, on the inference thread; the buffer is zeroed at prepare and re-initialised by anira_handler_reset. A State spec may stand anywhere in its list and has a slot like every other tensor, its position in the model config's list, but no Hard entry carries it: a single form that names its slot is ANIRA_ERROR_INVALID_ARGUMENT, and its position in an array of a _multi form must be the empty tensor (a rank of 1 or more with an extent of 0). A stage sees it at the same slot. No Time axis, window, time ratio or latency; float32 in this pre-release."}
           - {name: ANIRA_ROLE_FORCE32, value: "0x7fffffff"}
@@ -3065,7 +3065,9 @@ headers:
       delivered, a pure out parameter written on every return: zeroed first, then on ANIRA_OK
       shape[1] of each Streamed output; 0 on ANIRA_MISSED and on a failure. It is never read:
       the request is shape[1] of the output tensor.
-      A tensor without a ring (a Static spec, and a Buffer spec under a Hard contract) has one
+      A Buffer spec under a Hard contract is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_prepare:
+      a Buffer tensor is a per-job payload and arrives with the Async contract; a persistent
+      side input under a Hard contract is the Static role. A Static tensor has one
       description everywhere: the whole tensor in the spec's shape and dtype, any dtype, a Channel
       axis of any extent included. The handler holds its value in a store of its own, zeroed at
       anira_handler_create and untouched by prepare and by reset: anira_handler_set_static_input
@@ -3234,7 +3236,7 @@ headers:
         status: promised
         since: "0.2"
         doc: "The blocking quiescence point, and the one call no other handler entry may overlap: validates the variant against the contract (geometry, the explicit budget, the warm-up mode, the miss policy against the anchor, the ring dtypes by canonical name, the contract's extensions), loads the model of every candidate with an entry, warms up as the contract says, sizes the rings for the contract's block range and the latency, builds the plan report, selects the plan of the variant's default engine when that engine has a plan (else plan 0), logs the report (Info records of the group anira.capi: the counts and the selected plan, then one record per plan, per slot and per consumed extension) re-arms the real-time latches, logging the count of failures suppressed since the last prepare or reset, and last calls the prepare function of every stage that has one, in chain order, with the handler and the report (a status other than ANIRA_OK fails this call with it, the message naming the stage). A second prepare replaces the previous session whole. A failed prepare leaves the handler unprepared. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's channel count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor, or one that differs from its spec's dtype while no stage of the pipeline fills the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field)."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or contract; ANIRA_ERROR_CONFIG for a rule the configuration breaks, with the offending field named in the message; ANIRA_ERROR_NOT_SUPPORTED for what this pre-release cannot do; ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a stage's prepare function returned."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or contract; ANIRA_ERROR_CONFIG for a rule the configuration breaks, with the offending field named in the message; ANIRA_ERROR_NOT_SUPPORTED for what this pre-release cannot do, a Buffer spec under a Hard contract included (Buffer tensors arrive with the Async contract; the message names the tensor); ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a stage's prepare function returned."
 
       - kind: function
         name: anira_handler_plan_report
@@ -3431,7 +3433,7 @@ headers:
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler; prepared or not."}
-          - {type: uint32_t, name: slot, doc: "The slot: the tensor's position in the model config's input list; a tensor the handler stores (a Static spec, or a Buffer spec under a Hard contract). A Streamed and a State slot are refused."}
+          - {type: uint32_t, name: slot, doc: "The slot: the tensor's position in the model config's input list; a Static tensor. A slot of any other role is refused."}
           - {type: const anira_tensor*, name: tensor, doc: "The whole tensor: a host tensor of exactly the spec's rank, extents and dtype (any dtype, the spec's; a Channel axis of any extent is one of its axes), over one block of host memory read by its strides in elements, all-zero strides being packed row-major. Never written; release, manager_ctx and acquire are not read, the memory is borrowed until the call returns."}
         thread: driver-thread
         nonblocking: true
@@ -3445,7 +3447,7 @@ headers:
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler; prepared or not. Not const: a refusal is recorded in its rt_error."}
-          - {type: uint32_t, name: slot, doc: "The slot: the tensor's position in the model config's output list; a tensor the handler stores (a Static spec, or a Buffer spec under a Hard contract). A Streamed and a State slot are refused."}
+          - {type: uint32_t, name: slot, doc: "The slot: the tensor's position in the model config's output list; a Static tensor. A slot of any other role is refused."}
           - {type: const anira_tensor*, name: out, doc: "The whole tensor, described as for anira_handler_set_static_input; the descriptor is never written, the memory it names is, by its strides."}
         thread: driver-thread
         nonblocking: true

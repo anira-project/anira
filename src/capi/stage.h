@@ -73,7 +73,7 @@ ANIRA_API StageFacts stage_facts(const StageChain& chain);
 /// the plan the chunk was stamped with, and the status slot the scheduler reads after a failed
 /// phase.
 ///
-/// The tensors without a ring (Static, Buffer) travel through the handler's Static store
+/// The Static tensors travel through the handler's Static store
 /// (static_store.h), whole and typed: every one is materialised into model_inputs ahead of any
 /// stage's pre_process and captured from model_outputs behind the last post_process, each under
 /// its slot's latch. A chunk that completed as zeros (dropped, or failed in a stage or in the

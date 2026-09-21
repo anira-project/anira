@@ -95,7 +95,7 @@ struct anira_handler {
     anira_contract m_contract;           ///< the snapshot of the last successful prepare (Hard)
     anira::InferenceConfig m_inference_config;  ///< built at prepare; must outlive m_manager
                                                 ///< and m_pp
-    /// The Static store: one typed buffer per Static or Buffer tensor of either side, in the
+    /// The Static store: one typed buffer per Static tensor of either side, in the
     /// spec's shape and dtype. Built and zeroed by anira_handler_create from the pipeline copy,
     /// never resized, untouched by prepare and by reset (m_pp and m_manager are rebuilt by
     /// every prepare, the values set before one survive it). Its vectors are as long as the
