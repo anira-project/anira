@@ -75,6 +75,7 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_BackendSwitch.cpp
 	scheduler/test_ConcurrentLifecycle.cpp
 	scheduler/test_CoreConfigMismatch.cpp
+	scheduler/test_CopyPathOracle.cpp
 	scheduler/test_CoreLifecycle.cpp
 	scheduler/test_CreateSessionFailure.cpp
 	scheduler/test_FallbackPaths.cpp
@@ -84,6 +85,7 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp
 	scheduler/test_StatefulOrdering.cpp
+	scheduler/test_TensorStems.cpp
 )
 # handles.h (anira_context_config, what Core::create_session takes) for test_ProcessorPooling.
 target_include_directories(test_scheduler PRIVATE "${anira_SOURCE_DIR}/src")
@@ -123,6 +125,7 @@ anira_add_test_binary(test_abi
 	abi/test_Context.cpp
 	abi/test_Thread.cpp
 	abi/test_Handler.cpp
+	abi/test_HandlerCopyOracle.cpp
 	abi/test_HandlerWait.cpp
 	abi/test_Prepare.cpp
 	abi/test_RtError.cpp

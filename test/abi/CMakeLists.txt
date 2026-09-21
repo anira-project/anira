@@ -154,8 +154,14 @@ anira_abi_consumer_target(anira_header_cxx20 CXX 20)
 if(NOT _abi_strict_flags MATCHES "/W4")
     # MSVC's /W4 refuses a parameter that hides a member (C4458), inherited ones included:
     # Tensor and SyncToken derive from the C records. -Wshadow is the same check in gcc and
-    # clang, so the wrapper cannot pass here and fail on the Windows leg.
+    # clang, so the wrapper cannot pass here and fail on the Windows leg. clang's
+    # -Wshadow-field extends it to the static factories: JUCE's recommended warning flags
+    # carry it, so a plugin that includes anira.hpp would otherwise see one warning per
+    # factory parameter named after a field of anira_tensor.
     target_compile_options(anira_header_cxx20 PRIVATE -Wshadow)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(anira_header_cxx20 PRIVATE -Wshadow-field)
+    endif()
 endif()
 
 # ---- gate 6 (seed): the real-time contract in a consumer's compiler -------------------------

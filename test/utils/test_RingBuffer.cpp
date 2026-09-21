@@ -1,9 +1,11 @@
 #include <anira/abi/enums.h>
 #include <anira/utils/RingBuffer.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "gtest/gtest.h"
 
@@ -73,6 +75,7 @@ void round_trip(anira_dtype dtype) {
     anira::RingBuffer ring;
     ASSERT_TRUE(ring.initialize_with_positions(2, 8, dtype));
     EXPECT_EQ(ring.dtype(), dtype);
+    EXPECT_EQ(ring.element_size(), sizeof(T));
     EXPECT_EQ(ring.num_channels(), 2U);
     EXPECT_EQ(ring.capacity(), 8U);
     EXPECT_EQ(ring.available(1), 0U);
@@ -234,6 +237,256 @@ TEST(RingBufferTyped, ADefaultConstructedRingIsAnEmptyFloat32Ring) {
     // std::vector<anira::RingBuffer> input(1) and the like rely on it.
     const anira::RingBuffer ring;
     EXPECT_EQ(ring.dtype(), ANIRA_DTYPE_F32);
+    EXPECT_EQ(ring.element_size(), sizeof(float));
     EXPECT_EQ(ring.capacity(), 0U);
     EXPECT_EQ(ring.num_channels(), 0U);
+}
+
+// ---- The strided block calls: one channel of an interleaved block per call --------------------
+
+namespace {
+
+constexpr size_t k_strided_capacity = 8;
+
+// Every channel its own sequence, and no value twice within what a ring can hold; below 100, so
+// that it is exact in every one of the ten element types.
+template <typename T>
+T strided_value(size_t frame, size_t channel) {
+    return static_cast<T>(((frame * 7) + (channel * 13) + 1) % 100);
+}
+
+// The strided calls of a ring of `dtype` (stored as `T`) against the per-sample calls of a
+// reference instantiation of the same storage, for a block of `num_channels` interleaved
+// channels: channel `c` is pushed from `block + c` and popped into `block + c`, stride
+// `num_channels`. The rounds wrap the ring, fill it exactly, pop beyond what is available and
+// push more than the capacity.
+template <typename T>
+void strided_differential(anira_dtype dtype, size_t num_channels) {
+    SCOPED_TRACE(testing::Message() << "interleaved channels: " << num_channels);
+    anira::RingBuffer ring;
+    ASSERT_TRUE(ring.initialize_with_positions(num_channels, k_strided_capacity, dtype));
+    RingBufferT<T> reference;
+    reference.initialize_with_positions(num_channels, k_strided_capacity);
+
+    struct Round {
+        size_t m_push;
+        size_t m_pop;
+    };
+    // available after each round: 2 (wrapped), 2 (filled exactly to 8 in between), 0 (the pop
+    // asks for 2 more than the 5 available), 0 (11 pushed into 8: the tail survives).
+    const std::array<Round, 4> rounds{{{5, 3}, {6, 6}, {3, 7}, {11, 8}}};
+    const T sentinel = static_cast<T>(101);
+    size_t frame_offset = 0;
+    for (const Round& round : rounds) {
+        SCOPED_TRACE(testing::Message() << "push " << round.m_push << ", pop " << round.m_pop);
+        std::vector<T> block(round.m_push * num_channels);
+        for (size_t frame = 0; frame < round.m_push; ++frame) {
+            for (size_t channel = 0; channel < num_channels; ++channel) {
+                block[(frame * num_channels) + channel] =
+                    strided_value<T>(frame_offset + frame, channel);
+            }
+        }
+        frame_offset += round.m_push;
+        for (size_t channel = 0; channel < num_channels; ++channel) {
+            EXPECT_EQ(
+                ring.push_block(channel, block.data() + channel, dtype, round.m_push, num_channels),
+                round.m_push);
+            for (size_t frame = 0; frame < round.m_push; ++frame) {
+                reference.push_sample(channel, block[(frame * num_channels) + channel]);
+            }
+            EXPECT_EQ(ring.available(channel), reference.get_available_samples(channel));
+        }
+
+        std::vector<T> popped(round.m_pop * num_channels, sentinel);
+        std::vector<T> expected(round.m_pop * num_channels, sentinel);
+        for (size_t channel = 0; channel < num_channels; ++channel) {
+            EXPECT_EQ(
+                ring.pop_block(channel, popped.data() + channel, dtype, round.m_pop, num_channels),
+                round.m_pop);
+            for (size_t frame = 0; frame < round.m_pop; ++frame) {
+                // An empty channel pops a value-initialised element: the tail of a pop beyond
+                // the available count.
+                expected[(frame * num_channels) + channel] = reference.pop_sample(channel);
+            }
+            EXPECT_EQ(ring.available(channel), reference.get_available_samples(channel));
+            EXPECT_EQ(ring.available_past(channel), reference.get_available_past_samples(channel));
+        }
+        EXPECT_EQ(popped, expected);
+
+        // The history, oldest first, through the same stride.
+        const size_t num_past = std::min<size_t>(round.m_pop, 4);
+        std::vector<T> past(num_past * num_channels, sentinel);
+        std::vector<T> expected_past(num_past * num_channels, sentinel);
+        for (size_t channel = 0; channel < num_channels; ++channel) {
+            EXPECT_EQ(
+                ring.peek_past_block(channel, past.data() + channel, dtype, num_past, num_channels),
+                num_past);
+            for (size_t k = 0; k < num_past; ++k) {
+                expected_past[(k * num_channels) + channel] =
+                    reference.get_past_sample(channel, num_past - k);
+            }
+        }
+        EXPECT_EQ(past, expected_past);
+    }
+}
+
+// What a strided call leaves alone: the elements between the strided ones, and everything when
+// the dtype is not the ring's own.
+template <typename T>
+void strided_writes_only_its_run(anira_dtype dtype) {
+    constexpr size_t k_stride = 3;
+    constexpr size_t k_frames = 4;
+    anira::RingBuffer ring;
+    ASSERT_TRUE(ring.initialize_with_positions(1, k_strided_capacity, dtype));
+    std::array<T, k_frames * k_stride> block{};
+    for (size_t i = 0; i < block.size(); ++i) { block[i] = static_cast<T>(i + 1); }
+    const T sentinel = static_cast<T>(101);
+
+    // Another dtype moves nothing and writes nothing, under a stride too.
+    const anira_dtype other = dtype == ANIRA_DTYPE_F32 ? ANIRA_DTYPE_I16 : ANIRA_DTYPE_F32;
+    EXPECT_EQ(ring.push_block(0, block.data(), other, k_frames, k_stride), 0U);
+    EXPECT_EQ(ring.available(0), 0U) << "nothing was pushed";
+
+    ASSERT_EQ(ring.push_block(0, block.data() + 1, dtype, k_frames, k_stride), k_frames);
+    std::array<T, k_frames * k_stride> untouched{};
+    untouched.fill(sentinel);
+    EXPECT_EQ(ring.pop_block(0, untouched.data(), other, k_frames, k_stride), 0U);
+    EXPECT_EQ(ring.peek_past_block(0, untouched.data(), other, k_frames, k_stride), 0U);
+    EXPECT_EQ(ring.available(0), k_frames) << "nothing was popped";
+    for (const T& element : untouched) { EXPECT_EQ(element, sentinel); }
+
+    // The pop asks for two more than the available four: six strided elements are written, the
+    // last two value-initialised, and no element between them.
+    constexpr size_t k_popped = k_frames + 2;
+    std::array<T, k_popped * k_stride> popped{};
+    popped.fill(sentinel);
+    EXPECT_EQ(ring.pop_block(0, popped.data() + 2, dtype, k_popped, k_stride), k_popped);
+    for (size_t i = 0; i < popped.size(); ++i) {
+        const size_t frame = i / k_stride;
+        if (i % k_stride != 2) {
+            EXPECT_EQ(popped[i], sentinel) << "element " << i << " is not part of the run";
+        } else if (frame < k_frames) {
+            EXPECT_EQ(popped[i], block[(frame * k_stride) + 1]) << "frame " << frame;
+        } else {
+            EXPECT_EQ(popped[i], T{}) << "frame " << frame << " is beyond the available count";
+        }
+    }
+
+    std::array<T, k_frames * k_stride> past{};
+    past.fill(sentinel);
+    EXPECT_EQ(ring.peek_past_block(0, past.data(), dtype, k_frames, k_stride), k_frames);
+    for (size_t i = 0; i < past.size(); ++i) {
+        const size_t frame = i / k_stride;
+        if (i % k_stride != 0) {
+            EXPECT_EQ(past[i], sentinel) << "element " << i << " is not part of the run";
+        } else {
+            EXPECT_EQ(past[i], block[(frame * k_stride) + 1]) << "frame " << frame;
+        }
+    }
+}
+
+// A stride of 1, spelled or defaulted, is the unit-stride call of the storage.
+template <typename T>
+void unit_stride_is_the_unit_call(anira_dtype dtype) {
+    anira::RingBuffer defaulted;
+    anira::RingBuffer spelled;
+    ASSERT_TRUE(defaulted.initialize_with_positions(1, k_strided_capacity, dtype));
+    ASSERT_TRUE(spelled.initialize_with_positions(1, k_strided_capacity, dtype));
+    RingBufferT<T> reference;
+    reference.initialize_with_positions(1, k_strided_capacity);
+
+    const T sentinel = static_cast<T>(101);
+    size_t frame_offset = 0;
+    // 6 of 8, then 11 (wraps, and more than the capacity), popped 5 and then 9 (beyond the 8
+    // available).
+    const std::array<std::array<size_t, 2>, 2> rounds{{{6, 5}, {11, 9}}};
+    for (const auto& [num_push, num_pop] : rounds) {
+        std::vector<T> block(num_push);
+        for (size_t frame = 0; frame < num_push; ++frame) {
+            block[frame] = strided_value<T>(frame_offset + frame, 0);
+        }
+        frame_offset += num_push;
+        EXPECT_EQ(defaulted.push_block(0, block.data(), dtype, num_push), num_push);
+        EXPECT_EQ(spelled.push_block(0, block.data(), dtype, num_push, 1), num_push);
+        reference.push_block(0, block.data(), num_push);
+
+        std::vector<T> from_defaulted(num_pop, sentinel);
+        std::vector<T> from_spelled(num_pop, sentinel);
+        std::vector<T> expected(num_pop, sentinel);
+        EXPECT_EQ(defaulted.pop_block(0, from_defaulted.data(), dtype, num_pop), num_pop);
+        EXPECT_EQ(spelled.pop_block(0, from_spelled.data(), dtype, num_pop, 1), num_pop);
+        reference.pop_block(0, expected.data(), num_pop);
+        EXPECT_EQ(from_defaulted, expected);
+        EXPECT_EQ(from_spelled, expected);
+
+        std::vector<T> past_defaulted(3, sentinel);
+        std::vector<T> past_spelled(3, sentinel);
+        std::vector<T> expected_past(3, sentinel);
+        EXPECT_EQ(defaulted.peek_past_block(0, past_defaulted.data(), dtype, 3), 3U);
+        EXPECT_EQ(spelled.peek_past_block(0, past_spelled.data(), dtype, 3, 1), 3U);
+        reference.peek_past_block(0, expected_past.data(), 3);
+        EXPECT_EQ(past_defaulted, expected_past);
+        EXPECT_EQ(past_spelled, expected_past);
+    }
+}
+
+template <typename T>
+void strided(anira_dtype dtype) {
+    for (const size_t num_channels : {size_t{1}, size_t{2}, size_t{3}, size_t{6}}) {
+        strided_differential<T>(dtype, num_channels);
+    }
+    strided_writes_only_its_run<T>(dtype);
+    unit_stride_is_the_unit_call<T>(dtype);
+}
+
+}  // namespace
+
+TEST(RingBufferStrided, Float32) {
+    strided<float>(ANIRA_DTYPE_F32);
+}
+TEST(RingBufferStrided, Float64) {
+    strided<double>(ANIRA_DTYPE_F64);
+}
+TEST(RingBufferStrided, Float16IsStoredAsItsBits) {
+    strided<uint16_t>(ANIRA_DTYPE_F16);
+}
+TEST(RingBufferStrided, BFloat16IsStoredAsItsBits) {
+    strided<uint16_t>(ANIRA_DTYPE_BF16);
+}
+TEST(RingBufferStrided, Int8) {
+    strided<int8_t>(ANIRA_DTYPE_I8);
+}
+TEST(RingBufferStrided, UInt8) {
+    strided<uint8_t>(ANIRA_DTYPE_U8);
+}
+TEST(RingBufferStrided, Bool8) {
+    strided<uint8_t>(ANIRA_DTYPE_BOOL8);
+}
+TEST(RingBufferStrided, Int16) {
+    strided<int16_t>(ANIRA_DTYPE_I16);
+}
+TEST(RingBufferStrided, Int32) {
+    strided<int32_t>(ANIRA_DTYPE_I32);
+}
+TEST(RingBufferStrided, Int64) {
+    strided<int64_t>(ANIRA_DTYPE_I64);
+}
+
+// The float face is untouched by the stride: a float pointer with three arguments is still the
+// 2.x call, never the typed one with a defaulted stride.
+TEST(RingBufferStrided, TheFloatFaceKeepsItsThreeArguments) {
+    anira::RingBuffer ring;
+    ring.initialize_with_positions(1, 4);
+    const std::array<float, 3> in{1.0F, 2.0F, 3.0F};
+    ring.push_block(0, in.data(), in.size());
+    EXPECT_EQ(ring.available(0), 3U);
+    // Interleaved stereo, the right channel: 10 and 20.
+    const std::array<float, 4> interleaved{-1.0F, 10.0F, -1.0F, 20.0F};
+    EXPECT_EQ(ring.push_block(0, interleaved.data() + 1, ANIRA_DTYPE_F32, 2, 2), 2U);
+    std::array<float, 4> out{};
+    ring.pop_block(0, out.data(), out.size());
+    EXPECT_FLOAT_EQ(out[0], 2.0F) << "5 into 4: the oldest element was overwritten";
+    EXPECT_FLOAT_EQ(out[1], 3.0F);
+    EXPECT_FLOAT_EQ(out[2], 10.0F);
+    EXPECT_FLOAT_EQ(out[3], 20.0F);
 }

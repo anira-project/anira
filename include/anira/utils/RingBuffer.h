@@ -41,6 +41,14 @@
  * ring element. The block API therefore takes the caller's dtype beside the data and refuses,
  * returning 0 with nothing written, when it is not the ring's own.
  *
+ * Strides. push_block(), pop_block() and peek_past_block() take the distance between two
+ * consecutive elements of the caller's run as `stride`, counted in elements of the ring's dtype
+ * (never in bytes) and 1 or more: element `k` of the run is `data[k * stride]`. One channel of an
+ * interleaved block of `C` channels is `data = block + c`, `stride = C`, so it moves between the
+ * host's memory and the ring in one copy, without a de-interleaved block in between, for any
+ * `C`. A stride of 1, the default, is the packed run and takes the unit-stride path of the
+ * storage (two block copies); the elements between the strided ones are neither read nor written.
+ *
  * ABI. This is a C++ type with a std::variant inside: like every 2.x class it is compiled into
  * the library and into whoever includes this header, so it is not a stable binary interface and
  * its layout may change with any release. What crosses the ABI is the opaque `anira_ring*` and
@@ -112,6 +120,11 @@ public:
     /// The element type this ring stores (float32 for a ring that was never initialised).
     [[nodiscard]] anira_dtype dtype() const noexcept { return k_arm_dtypes[m_storage.index()]; }
 
+    /// Bytes of one element of this ring: `sizeof(T)` of the instantiation behind dtype() (4 for a
+    /// ring that was never initialised). What a caller that addresses its memory in bytes needs
+    /// to turn an element offset or a stride into a byte offset.
+    [[nodiscard]] size_t element_size() const noexcept { return k_arm_sizes[m_storage.index()]; }
+
     [[nodiscard]] size_t num_channels() const {
         return std::visit([](const auto& ring) { return ring.get_num_channels(); }, m_storage);
     }
@@ -138,40 +151,94 @@ public:
     // ---- The block API: dtype-checked, never converting. Every call returns the number of
     // elements it moved, and 0 with nothing written when `dtype` is not the ring's own. -------
 
-    /// Pushes `count` elements of `dtype` from `data` into `channel` (the oldest are overwritten
-    /// when the ring is full).
-    size_t push_block(size_t channel, const void* data, anira_dtype dtype, size_t count) {
+    /**
+     * @brief Pushes `count` elements of `dtype` into `channel`, read from `data[0]`,
+     * `data[stride]`, `data[2 * stride]`, ... (the oldest are overwritten when the ring is full).
+     *
+     * A block larger than the capacity keeps its last capacity() elements, under a stride as
+     * well: the elements before them are skipped, never read.
+     *
+     * @param channel The channel of the ring.
+     * @param data The first element of the run; `count` elements of `dtype`, `stride` apart.
+     * @param dtype The dtype of the caller's memory; it must be the ring's own.
+     * @param count Elements to push.
+     * @param stride Elements of `dtype` between two consecutive elements of the run, 1 or more;
+     * 1, the default, is a packed run. One channel of an interleaved block of `C` channels is
+     * `data = block + c` with `stride = C`.
+     * @return `count`; 0, with nothing pushed, when `dtype` is not the ring's dtype.
+     */
+    size_t push_block(size_t channel,
+                      const void* data,
+                      anira_dtype dtype,
+                      size_t count,
+                      size_t stride = 1) {
         if (dtype != this->dtype()) { return 0; }
         std::visit(
             [&](auto& ring) {
                 using T = element_t<decltype(ring)>;
-                ring.push_block(channel, static_cast<const T*>(data), count);
+                ring.push_block(channel, static_cast<const T*>(data), count, stride);
             },
             m_storage);
         return count;
     }
 
-    /// Pops `count` elements of `dtype` from `channel` into `data`; the elements beyond the
-    /// available ones are value-initialised.
-    size_t pop_block(size_t channel, void* data, anira_dtype dtype, size_t count) {
+    /**
+     * @brief Pops `count` elements of `dtype` from `channel` into `data[0]`, `data[stride]`,
+     * `data[2 * stride]`, ...; the elements beyond the available ones are value-initialised.
+     *
+     * Exactly `count` elements of the caller's memory are written, the value-initialised tail
+     * included; the elements between the strided ones are not touched.
+     *
+     * @param channel The channel of the ring.
+     * @param data The first element of the run; room for `count` elements of `dtype`, `stride`
+     * apart.
+     * @param dtype The dtype of the caller's memory; it must be the ring's own.
+     * @param count Elements to pop.
+     * @param stride Elements of `dtype` between two consecutive elements of the run, 1 or more;
+     * 1, the default, is a packed run.
+     * @return `count`; 0, with nothing popped and nothing written, when `dtype` is not the
+     * ring's dtype.
+     */
+    size_t pop_block(size_t channel,
+                     void* data,
+                     anira_dtype dtype,
+                     size_t count,
+                     size_t stride = 1) {
         if (dtype != this->dtype()) { return 0; }
         std::visit(
             [&](auto& ring) {
                 using T = element_t<decltype(ring)>;
-                ring.pop_block(channel, static_cast<T*>(data), count);
+                ring.pop_block(channel, static_cast<T*>(data), count, stride);
             },
             m_storage);
         return count;
     }
 
-    /// Copies the `count` most recently consumed elements of `channel` (history) into `data`,
-    /// oldest first, without popping.
-    size_t peek_past_block(size_t channel, void* data, anira_dtype dtype, size_t count) const {
+    /**
+     * @brief Copies the `count` most recently consumed elements of `channel` (history) into
+     * `data[0]`, `data[stride]`, ..., oldest first, without popping:
+     * `data[(count - 1) * stride]` is the element popped last.
+     *
+     * @param channel The channel of the ring.
+     * @param data The first element of the run; room for `count` elements of `dtype`, `stride`
+     * apart.
+     * @param dtype The dtype of the caller's memory; it must be the ring's own.
+     * @param count Elements of history to copy. Like get_past_sample() the range is not checked
+     * against available_past().
+     * @param stride Elements of `dtype` between two consecutive elements of the run, 1 or more;
+     * 1, the default, is a packed run.
+     * @return `count`; 0, with nothing written, when `dtype` is not the ring's dtype.
+     */
+    size_t peek_past_block(size_t channel,
+                           void* data,
+                           anira_dtype dtype,
+                           size_t count,
+                           size_t stride = 1) const {
         if (dtype != this->dtype()) { return 0; }
         std::visit(
             [&](const auto& ring) {
                 using T = element_t<decltype(ring)>;
-                ring.peek_past_block(channel, static_cast<T*>(data), count);
+                ring.peek_past_block(channel, static_cast<T*>(data), count, stride);
             },
             m_storage);
         return count;
@@ -310,6 +377,18 @@ private:
                                                                       ANIRA_DTYPE_I16,
                                                                       ANIRA_DTYPE_I32,
                                                                       ANIRA_DTYPE_I64};
+    // sizeof(T) of each arm, in the same order: what element_size() reports. A table beside
+    // k_arm_dtypes and not a std::visit, so that element_size() is noexcept like dtype().
+    static constexpr std::array<size_t, k_num_arms> k_arm_sizes{sizeof(float),
+                                                                sizeof(double),
+                                                                sizeof(uint16_t),
+                                                                sizeof(uint16_t),
+                                                                sizeof(int8_t),
+                                                                sizeof(uint8_t),
+                                                                sizeof(uint8_t),
+                                                                sizeof(int16_t),
+                                                                sizeof(int32_t),
+                                                                sizeof(int64_t)};
 
     template <typename Ring>
     struct element_of;
