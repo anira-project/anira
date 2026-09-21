@@ -422,11 +422,11 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract
  * tensor entry the tensors are the caller's own (a single-tensor form on a side with
  * several slots passes the handler's array, the caller's descriptor in its slot and
  * empty tensors beside it, which name no memory: no pointer of an earlier call stays in
- * a slot); under an _f32 entry and the 2.x float functions they are planar float32
- * tensors over the caller's channel pointers. Return ANIRA_OK when the outputs are
- * filled; any other status makes anira zero-fill every requested output. Either way the
- * block counts as missed: the entry returns ANIRA_MISSED with a delivered count of 0,
- * and the stream stays time-aligned. The function must not call a Hard entry,
+ * a slot); under the float functions of the 2.x anira::InferenceHandler they are planar
+ * float32 tensors over the caller's channel pointers. Return ANIRA_OK when the outputs
+ * are filled; any other status makes anira zero-fill every requested output. Either way
+ * the block counts as missed: the entry returns ANIRA_MISSED with a delivered count of
+ * 0, and the stream stays time-aligned. The function must not call a Hard entry,
  * anira_handler_reset or anira_handler_prepare of the same handler, and it is real-time
  * code: no allocation, no lock, no system call. Under clang a function converted to this
  * type must itself be declared ANIRA_NONBLOCKING.
@@ -492,9 +492,8 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contr
  * ring as is. Nothing in anira converts: the Hard entries copy between the host and the
  * ring, a ring dtype that differs from the spec's dtype (the model's) is
  * ANIRA_ERROR_CONFIG at prepare. Set per tensor by canonical name, so an input and an
- * output may differ; ANIRA_DTYPE_F32 for every tensor never set, which is what the _f32
- * entries are legal on. A name that matches no Streamed tensor is checked at prepare,
- * not here.
+ * output may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no
+ * Streamed tensor is checked at prepare, not here.
  * @param contract A Hard contract.
  * @param canonical The tensor's canonical name (the one its spec was created with).
  * @param dtype The element type of the host's samples for that tensor; ANIRA_DTYPE_F32 for

@@ -48,10 +48,10 @@ struct RtLatch;
  *
  * Host blocks reach the rings through one copy path, written over anira_tensor (see "The
  * tensor stems" below): one tensor per slot, of any ring element type, planar, contiguous or
- * interleaved. The manager takes host tensors and nothing else. The float faces of the library,
- * anira::InferenceHandler and the `anira_handler_*_f32` entries, present their channel pointers
- * as planar float32 tensors before they call it; a direct caller that holds channel pointers
- * does the same with anira_tensor_init_host_planar().
+ * interleaved. The manager takes host tensors and nothing else. The float face of the library,
+ * anira::InferenceHandler, presents its channel pointers as planar float32 tensors before it
+ * calls it; a direct caller that holds channel pointers, a host of the C ABI included, does
+ * the same with anira_tensor_init_host_planar().
  *
  * @note This class coordinates between multiple components and should be used
  *       as the primary interface for inference operations rather than directly
@@ -146,10 +146,10 @@ public:
      * @name The tensor stems
      *
      * The host<->ring copy path, and the only way into it: what an entry that takes host
-     * tensors calls, and what the float faces call with the planar float32 tensors they
-     * present. A call hands over one anira_tensor per slot, in slot order and covering every
-     * slot of that side: `inputs` has one tensor per input tensor of the InferenceConfig,
-     * `outputs` one per output tensor.
+     * tensors calls, and what the float face (anira::InferenceHandler) calls with the planar
+     * float32 tensors it presents. A call hands over one anira_tensor per slot, in slot order and
+     * covering every slot of that side: `inputs` has one tensor per input tensor of the
+     * InferenceConfig, `outputs` one per output tensor.
      *
      * The tensor of a slot is a host block of the logical shape `[channels, samples]` (`[1,
      * values]` for a non-streamable slot), over memory in one of three descriptions, for any

@@ -24,7 +24,6 @@
 #include <string>
 #include <vector>
 
-#include "../scheduler/PlanarFloatAdapter.h"
 #include "handles.h"
 
 namespace anira::capi {
@@ -109,12 +108,6 @@ struct anira_handler {
     std::atomic<bool> m_prepared{false};  ///< release at the end of a successful prepare;
                                           ///< acquire in every nonblocking entry
     anira::RtLatch m_rt;                  ///< rt_error, the kind bits, the suppressed count
-    /// The _f32 entries' face of the manager, sized at prepare: the caller's channel pointers
-    /// and counts become its planar float32 tensors, one per slot, which the entry hands to a
-    /// tensor stem (and the manager, on a missed block, to the miss function). Apart from
-    /// m_input_tensors / m_output_tensors below: those are the tensor entries' staging arrays
-    /// and carry the slot's ring dtype and the caller's own description.
-    anira::PlanarFloatAdapter m_float_adapter;
     /// The dtype a host block of the slot must carry, resolved at prepare: the ring dtype of a
     /// Streamed slot (F32 default); float32 for a Static slot, whose values the copy path
     /// moves as float and whose spec dtype is float32 in this pre-release.
