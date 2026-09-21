@@ -471,7 +471,10 @@ void fill_static(Block& block) {
     for (size_t i = 0; i < k_static_in.size(); ++i) { block.at(0, i) = k_static_in.at(i); }
 }
 
-TEST(AbiHandlerTensor, ProcessMultiCarriesStaticSlotsAndReportsTheClampedCount) {
+// A Static element of a multi form is the whole tensor in the spec's shape ([1, 3] here), what
+// the two Static entries take: the model passes the values through, and the count of a carried
+// Static output is its element count.
+TEST(AbiHandlerTensor, ProcessMultiCarriesStaticSlotsAsWholeTensors) {
     Rig rig(multi_model());
     ASSERT_TRUE(rig.ready());
     const size_t latency = rig.latency(0);
@@ -480,7 +483,7 @@ TEST(AbiHandlerTensor, ProcessMultiCarriesStaticSlotsAndReportsTheClampedCount) 
         Block stream_in(Layout::Interleaved, 3, k_hop);
         Block values_in(Layout::Packed, 1, 3);
         Block stream_out(Layout::Planar, 3, k_hop);
-        Block values_out(Layout::Packed, 1, 5);  // two values more than the slot holds
+        Block values_out(Layout::Packed, 1, 3);
         fill_input(stream_in, position);
         fill_static(values_in);
         const std::array<anira_tensor, 2> inputs{stream_in.tensor(), values_in.tensor()};
@@ -498,7 +501,7 @@ TEST(AbiHandlerTensor, ProcessMultiCarriesStaticSlotsAndReportsTheClampedCount) 
                   ANIRA_OK);
         if (k % 2 == 0) {
             EXPECT_EQ(delivered[0], k_hop);
-            EXPECT_EQ(delivered[1], 3U) << "a Static output reports its clamped count";
+            EXPECT_EQ(delivered[1], 3U) << "a Static output reports its element count";
         }
         EXPECT_EQ(bytes_of(inputs[0]), inputs_before[0]);
         EXPECT_EQ(bytes_of(inputs[1]), inputs_before[1]);
@@ -510,11 +513,10 @@ TEST(AbiHandlerTensor, ProcessMultiCarriesStaticSlotsAndReportsTheClampedCount) 
                     << "block " << k << ", channel " << channel << ", sample " << i;
             }
         }
-        if (k > 0) {  // an inference has completed: the model passed the values through
-            for (size_t i = 0; i < 3; ++i) { EXPECT_EQ(values_out.at(0, i), k_static_in.at(i)); }
+        // Zeros until an inference has completed, then what the model passed through.
+        for (size_t i = 0; i < 3; ++i) {
+            EXPECT_EQ(values_out.at(0, i), k > 0 ? k_static_in.at(i) : 0.0F) << "block " << k;
         }
-        EXPECT_EQ(values_out.at(0, 3), k_untouched) << "written past the slot's value count";
-        EXPECT_EQ(values_out.at(0, 4), k_untouched);
         position += k_hop;
         rig.settle();
     }
@@ -527,10 +529,11 @@ TEST(AbiHandlerTensor, ASingleTensorFormLeavesTheOtherSlotsEmpty) {
     const size_t latency = rig.latency(0);
     size_t position = 0;
     for (size_t k = 0; k < 3; ++k) {
-        // Slot 1 first, then slot 0: each call carries one slot, the other stays empty.
+        // The Static slot through its own entries, the Streamed slot through the single forms:
+        // each of those carries one slot, the other stays empty.
         Block values_in(Layout::Packed, 1, 3);
         fill_static(values_in);
-        ASSERT_EQ(anira_handler_push_data(handler, &values_in.tensor(), 1), ANIRA_OK);
+        ASSERT_EQ(anira_handler_set_static_input(handler, 1, &values_in.tensor()), ANIRA_OK);
         Block stream_in(Layout::Interleaved, 3, k_hop);
         fill_input(stream_in, position);
         ASSERT_EQ(anira_handler_push_data(handler, &stream_in.tensor(), 0), ANIRA_OK);
@@ -538,12 +541,8 @@ TEST(AbiHandlerTensor, ASingleTensorFormLeavesTheOtherSlotsEmpty) {
             EXPECT_EQ(slot.shape[1], 0) << "a staged slot is an empty tensor again";
         }
 
-        const Block values_out(Layout::Packed, 1, 5);
-        size_t delivered = k_unset;
-        ASSERT_EQ(anira_handler_pop_data(handler, &values_out.tensor(), 1, &delivered), ANIRA_OK);
-        EXPECT_EQ(delivered, 3U);
         Block stream_out(Layout::Contiguous, 3, k_hop);
-        delivered = k_unset;
+        size_t delivered = k_unset;
         ASSERT_EQ(anira_handler_pop_data(handler, &stream_out.tensor(), 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_hop);
         for (const anira_tensor& slot : handler->m_output_tensors) {
@@ -554,6 +553,13 @@ TEST(AbiHandlerTensor, ASingleTensorFormLeavesTheOtherSlotsEmpty) {
                 ASSERT_EQ(stream_out.at(channel, i), expected_value(channel, position + i, latency))
                     << "block " << k << ", channel " << channel << ", sample " << i;
             }
+        }
+        // The inference the push submitted is still at the gate: the store holds what the
+        // model produced last (nothing yet in block 0).
+        const Block values_out(Layout::Packed, 1, 3);
+        ASSERT_EQ(anira_handler_get_static_output(handler, 1, &values_out.tensor()), ANIRA_OK);
+        for (size_t i = 0; i < 3; ++i) {
+            EXPECT_EQ(values_out.at(0, i), k > 0 ? k_static_in.at(i) : 0.0F) << "block " << k;
         }
         position += k_hop;
         rig.settle();
@@ -1090,8 +1096,8 @@ TEST(AbiHandlerTensor, ARefusalIsLoggedOncePerKindAndNamesTheSlot) {
 #ifdef ENABLE_LOGGING
     EXPECT_EQ(anira_test::count_records(collector, "nothing converts", "rt"), 1U);
     EXPECT_EQ(anira_test::find_record(collector, "nothing converts", "rt").m_message,
-              "anira_handler_push_data_multi: the tensor of input slot 1 has dtype " +
-                  std::to_string(ANIRA_DTYPE_I16) + ", the slot's is " +
+              "anira_handler_push_data_multi: the tensor of Static input slot 1 has dtype " +
+                  std::to_string(ANIRA_DTYPE_I16) + ", the spec's is " +
                   std::to_string(ANIRA_DTYPE_F32) + "; nothing converts");
     EXPECT_EQ(anira_test::count_records(collector, "does not know", "rt"), 1U);
     EXPECT_NE(anira_test::find_record(collector, "does not know", "rt")
@@ -1119,7 +1125,7 @@ TEST(AbiHandlerTensor, AWaitTwinWithoutAThreadRunsTheStemAndRefuses) {
     Block stream_in(Layout::Interleaved, 3, k_hop);
     Block values_in(Layout::Packed, 1, 3);
     Block stream_out(Layout::Planar, 3, k_hop);
-    const Block values_out(Layout::Packed, 1, 5);
+    const Block values_out(Layout::Packed, 1, 3);
     fill_input(stream_in, 0);
     fill_static(values_in);
     const std::array<anira_tensor, 2> inputs{stream_in.tensor(), values_in.tensor()};
@@ -1159,7 +1165,7 @@ TEST(AbiHandlerTensor, AWaitTwinWithoutAThreadRunsTheStemAndRefuses) {
                                                ANIRA_WAIT_CONTRACT),
               ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(counts[0], 0U);
-    EXPECT_EQ(counts[1], 0U);
+    EXPECT_EQ(counts[1], 3U) << "the sequence ran: the Static output is the stored value, whole";
 }
 
 // ---- ANIRA_MISS_CALLBACK -----------------------------------------------------------------------
@@ -1387,7 +1393,7 @@ TEST_F(AbiHandlerTensorMiss, AMultiFormHandsOverTheCallersArrays) {
                                           delivered.data()),
               ANIRA_MISSED);
     EXPECT_EQ(delivered[0], 0U);
-    EXPECT_EQ(delivered[1], 0U);
+    EXPECT_EQ(delivered[1], 3U) << "a carried Static output is whole on a miss too";
     ASSERT_EQ(m_state.m_calls, 1);
     EXPECT_EQ(m_state.m_inputs, inputs.data());
     EXPECT_EQ(m_state.m_outputs, outputs.data());
@@ -1433,9 +1439,10 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
     anira_handler* handler = rig.get();
     const auto empty_values = bytes_of(empty_slot(1));
     {
-        // Slot 1 on both sides through the single-tensor forms, described with everything the
-        // staged copy could keep: the planar flag, a plane array, a byte offset, a stride. The
-        // memory and the plane array die with this scope.
+        // Slot 1 is Static: a single-tensor form refuses it (its single form is the Static
+        // entry), so nothing of this descriptor is ever staged, whatever it carries: the planar
+        // flag, a plane array, a byte offset, a stride. The memory and the plane array die with
+        // this scope.
         std::array<float, 4> memory{k_untouched, k_static_in[0], k_static_in[1], k_static_in[2]};
         std::array<float*, 1> planes{memory.data()};
         const std::array<int64_t, 2> shape{1, 3};
@@ -1448,11 +1455,12 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
                                       shape.data());
         values.byte_offset = sizeof(float);
         values.strides[1] = 1;
-        ASSERT_EQ(anira_handler_push_data(handler, &values, 1), ANIRA_OK);
-        ASSERT_EQ(anira_handler_pop_data(handler, &values, 1, nullptr), ANIRA_OK);
+        ASSERT_EQ(anira_handler_push_data(handler, &values, 1), ANIRA_ERROR_INVALID_ARGUMENT);
+        ASSERT_EQ(anira_handler_pop_data(handler, &values, 1, nullptr),
+                  ANIRA_ERROR_INVALID_ARGUMENT);
         EXPECT_EQ(m_state.m_calls, 0);
     }
-    EXPECT_EQ(bytes_of(handler->m_input_tensors[1]), empty_values) << "un-staged to the last byte";
+    EXPECT_EQ(bytes_of(handler->m_input_tensors[1]), empty_values) << "never staged";
     EXPECT_EQ(bytes_of(handler->m_output_tensors[1]), empty_values);
 
     // Latency 16: two delivered blocks of slot 0 empty the ring, the third one starves.
@@ -1508,11 +1516,21 @@ TEST_F(AbiHandlerTensorMiss, AFloatHostsPlanarTensorsReachTheMissFunctionAsTheyA
     const std::array<size_t, 2> num_in{k_hop, 0};
     const std::array<size_t, 2> num_out{k_hop, 0};
     {
-        // An earlier call carries the Static slots over memory that dies with this scope.
+        // An earlier call carries the Static slots (whole tensors, which is how the face
+        // presents a carried Static slot) over memory that dies with this scope.
         std::array<float, 3> values{k_static_in};
-        const std::array<float*, 1> value_channels{values.data()};
-        ASSERT_EQ(face.push_data(value_channels.data(), 3, 1), ANIRA_OK);
-        ASSERT_EQ(face.pop_data(value_channels.data(), 3, 1, nullptr), ANIRA_OK);
+        const std::array<const float*, 1> value_in{values.data()};
+        const std::array<float*, 1> value_out{values.data()};
+        const std::array<const float* const*, 2> static_in{nullptr, value_in.data()};
+        const std::array<float* const*, 2> static_out{nullptr, value_out.data()};
+        const std::array<size_t, 2> static_count{0, 3};
+        ASSERT_EQ(face.process_multi(static_in.data(),
+                                     static_count.data(),
+                                     static_out.data(),
+                                     static_count.data(),
+                                     nullptr),
+                  ANIRA_OK);
+        EXPECT_EQ(m_state.m_calls, 0);
     }
     anira_status status = ANIRA_OK;
     std::array<size_t, 2> delivered{k_unset, k_unset};
@@ -1529,9 +1547,9 @@ TEST_F(AbiHandlerTensorMiss, AFloatHostsPlanarTensorsReachTheMissFunctionAsTheyA
     ASSERT_EQ(m_state.m_calls, 1);
     EXPECT_EQ(m_state.m_num_inputs, 2U);
     EXPECT_EQ(m_state.m_num_outputs, 2U);
-    // The arrays the entry was handed, as they are: the caller's own, here the adapter's.
-    EXPECT_EQ(m_state.m_inputs, face.inputs());
-    EXPECT_EQ(m_state.m_outputs, face.outputs());
+    // The arrays the entry was handed, as they are: the caller's own, here the face's.
+    EXPECT_EQ(m_state.m_inputs, face.multi_inputs());
+    EXPECT_EQ(m_state.m_outputs, face.multi_outputs());
     const anira_tensor& input = m_state.m_input_copies[0];
     EXPECT_EQ(
         input.flags,
@@ -1739,11 +1757,13 @@ TEST(AbiHandlerTensor, AnInterleavedBlockMatchesTheTwoPointXHandlerOnEveryPlan) 
                 c_in.at(0, i) = left.at(i);
                 c_in.at(1, i) = right.at(i);
             }
-            Block gain_in(Layout::Packed, 1, 1);
-            const Block gain_out(Layout::Packed, 1, 1);
-            gain_in.at(0, 0) = 1.0F;
-            const std::array<anira_tensor, 2> inputs{c_in.tensor(), gain_in.tensor()};
-            const std::array<anira_tensor, 2> outputs{c_out.tensor(), gain_out.tensor()};
+            // The Static gain travels whole, in the spec's shape: [1].
+            const float gain_in = 1.0F;
+            float gain_out = k_untouched;
+            const std::array<anira_tensor, 2> inputs{c_in.tensor(),
+                                                     anira_test::whole_f32(&gain_in, {1})};
+            const std::array<anira_tensor, 2> outputs{c_out.tensor(),
+                                                      anira_test::whole_f32(&gain_out, {1})};
             std::array<size_t, 2> delivered{k_unset, k_unset};
             const size_t prev_c = anira_test::available(h);
             ASSERT_EQ(anira_handler_process_multi(h,
@@ -1783,8 +1803,8 @@ TEST(AbiHandlerTensor, AnInterleavedBlockMatchesTheTwoPointXHandlerOnEveryPlan) 
             // result of block 4 and the 2.x side that of block 3, with every sample of the
             // stream bit-equal. What the value is differs per engine, too. The values of a
             // Static output are compared exactly where the gate makes the order certain:
-            // ProcessMultiCarriesStaticSlotsAndReportsTheClampedCount.
-            EXPECT_NE(gain_out.at(0, 0), k_untouched) << "block " << k;
+            // ProcessMultiCarriesStaticSlotsAsWholeTensors, and test_HandlerStatic.cpp.
+            EXPECT_NE(gain_out, k_untouched) << "block " << k;
             EXPECT_NE(v_gain_out, k_untouched) << "block " << k;
             for (size_t i = 0; i < k_block; ++i) {
                 ASSERT_EQ(c_out.at(0, i), v_left.at(i)) << "block " << k << ", left " << i;

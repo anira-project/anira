@@ -133,6 +133,13 @@ int anira_header_c_probe(void) {
             checks += now > 0.0 && ANIRA_SUCCEEDED(status) && count > 0u ? 1 : 0;
             checks += anira_num_inference_threads() == 0u ? 1 : 0;
             checks += anira_handler_rt_error(NULL) == ANIRA_OK ? 1 : 0;
+            /* The Static entries: a slot and a whole tensor; a NULL handler is refused. */
+            checks += anira_handler_set_static_input(NULL, 0u, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks +=
+                anira_handler_get_static_output(NULL, 0u, NULL) == ANIRA_ERROR_INVALID_ARGUMENT ? 1
+                                                                                                : 0;
             checks += anira_plan_report_num_plans(NULL) == 0u ? 1 : 0;
         }
     }

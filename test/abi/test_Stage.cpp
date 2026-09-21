@@ -481,8 +481,12 @@ TEST(AbiStage, CtxPerPhase) {
     ASSERT_EQ(handler.prepare(anira_test::file_contract(k_gain_contract_json, k_hop)), ANIRA_OK)
         << handler.m_err.message;
     anira_handler* h = handler.m_handler;
-    // The Static input travels through the processor's atomics until the Static store lands.
-    h->m_pp->set_input(0.5F, 1, 0);
+    // The Static input: the whole tensor in the spec's shape ([1]), through the handler's store.
+    float gain_value = 0.5F;
+    const std::array<int64_t, 1> gain_shape{1};
+    anira_tensor gain_tensor{};
+    anira_tensor_init_host(&gain_tensor, &gain_value, ANIRA_DTYPE_F32, 1, gain_shape.data());
+    ASSERT_EQ(anira_handler_set_static_input(h, 1, &gain_tensor), ANIRA_OK);
 
     Stream stream(h);
     stream.blocks(3);
@@ -558,6 +562,49 @@ TEST(AbiStage, CtxPerPhase) {
     EXPECT_EQ(probe.m_thread.at(ANIRA_PHASE_POST_PROCESS), std::this_thread::get_id());
     EXPECT_NE(probe.m_thread.at(ANIRA_PHASE_BEFORE_INFERENCE), std::this_thread::get_id());
     EXPECT_NE(probe.m_thread.at(ANIRA_PHASE_AFTER_INFERENCE), std::this_thread::get_id());
+}
+
+namespace {
+
+// A stage's prepare may call the two Static entries: no driver thread runs during prepare, and
+// the store is the handler's, so the value is what the first inference sees.
+anira_status ANIRA_CALL set_gain_in_prepare(anira_handler* handler,
+                                            const anira_plan_report* /*report*/,
+                                            void* /*user_data*/) {
+    float gain_value = 0.25F;
+    const std::array<int64_t, 1> gain_shape{1};
+    anira_tensor gain_tensor{};
+    anira_tensor_init_host(&gain_tensor, &gain_value, ANIRA_DTYPE_F32, 1, gain_shape.data());
+    const anira_status set = anira_handler_set_static_input(handler, 1, &gain_tensor);
+    if (set != ANIRA_OK) { return set; }
+    // The output store answers too: zeros, nothing has been captured yet.
+    float gain_out = -1.0F;
+    anira_tensor out_tensor{};
+    anira_tensor_init_host(&out_tensor, &gain_out, ANIRA_DTYPE_F32, 1, gain_shape.data());
+    const anira_status got = anira_handler_get_static_output(handler, 1, &out_tensor);
+    return got != ANIRA_OK || gain_out == 0.0F ? got : ANIRA_ERROR_INTERNAL;
+}
+
+}  // namespace
+
+TEST(AbiStage, AStagesPrepareMaySetAStaticInput) {
+    const Context context;
+    Probe probe;
+    probe.m_defaults = 1;
+    anira_stage_desc stage = named_stage("sets-gain", &probe);
+    stage.pre_process = probe_phase;
+    stage.prepare = set_gain_in_prepare;
+    const std::vector<anira_backend_id> candidates = anira_test::custom_candidates();
+    StagedHandler handler(context, anira_test::gain_with_custom(), {stage}, candidates);
+    ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
+    ASSERT_EQ(handler.prepare(anira_test::file_contract(k_gain_contract_json, k_hop)), ANIRA_OK)
+        << handler.m_err.message;
+    anira_handler* h = handler.m_handler;
+    Stream stream(h);
+    stream.blocks(2);
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    EXPECT_EQ(probe.m_static_input, 0.25F) << "what prepare stored is what pre_process found";
 }
 
 // ============================================================================================

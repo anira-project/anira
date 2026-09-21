@@ -390,9 +390,11 @@ void InferenceThread::do_inference(
         }
         if (thread_safe_struct->m_stage_status != ANIRA_OK) {
             for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+            thread_safe_struct->m_completed_as_zeros = true;
         }
     } catch (const std::exception& e) {
         for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        thread_safe_struct->m_completed_as_zeros = true;
         if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
             ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
                                "inference failed in session %d: %s; delivering zeros",
@@ -401,6 +403,7 @@ void InferenceThread::do_inference(
         }
     } catch (...) {
         for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        thread_safe_struct->m_completed_as_zeros = true;
         if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
             ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
                                "inference failed in session %d: non-std exception; delivering "

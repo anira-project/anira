@@ -26,6 +26,7 @@
 
 #include "handles.h"
 #include "stage.h"
+#include "static_store.h"
 
 namespace anira::capi {
 
@@ -92,11 +93,18 @@ struct anira_handler {
     anira_context* m_context = nullptr;  ///< add-ref'd at create, released at destroy
     anira_pipeline m_pipeline;           ///< the copy
     anira_contract m_contract;           ///< the snapshot of the last successful prepare (Hard)
-    anira::InferenceConfig m_inference_config;      ///< built at prepare; must outlive m_manager
-                                                    ///< and m_pp
-    std::unique_ptr<anira::PrePostProcessor> m_pp;  ///< the StageChainProcessor over
-                                                    ///< m_pipeline.m_stages, rebuilt by every
-                                                    ///< prepare (needs m_inference_config)
+    anira::InferenceConfig m_inference_config;  ///< built at prepare; must outlive m_manager
+                                                ///< and m_pp
+    /// The Static store: one typed buffer per Static or Buffer slot of either side, in the
+    /// spec's shape and dtype. Built and zeroed by anira_handler_create from the pipeline copy,
+    /// never resized, untouched by prepare and by reset (m_pp and m_manager are rebuilt by
+    /// every prepare, the values set before one survive it). Its vectors are as long as the
+    /// host's slot lists from create on: the slot bound of the two Static entries, which are
+    /// legal on an unprepared handler. Declared before m_pp, which reads it: destroyed after.
+    anira::capi::StaticStore m_static;
+    std::unique_ptr<anira::PrePostProcessor> m_pp;       ///< the StageChainProcessor over
+                                                         ///< m_pipeline.m_stages, rebuilt by every
+                                                         ///< prepare (needs m_inference_config)
     std::unique_ptr<anira::InferenceManager> m_manager;  ///< the session; null while
                                                          ///< unprepared (declared after m_pp:
                                                          ///< destroyed first)
@@ -115,16 +123,18 @@ struct anira_handler {
                                           ///< acquire in every nonblocking entry
     anira::RtLatch m_rt;                  ///< rt_error, the kind bits, the suppressed count
     /// The dtype a host block of the slot must carry, resolved at prepare: the ring dtype of a
-    /// Streamed slot (F32 default); float32 for a Static slot, whose values the copy path
-    /// moves as float and whose spec dtype is float32 in this pre-release.
+    /// Streamed slot (F32 default). A Static slot has no ring: its entry is the spec's dtype,
+    /// which its empty tensor below carries; the tensor of a Static slot is checked against
+    /// the store (m_static), never against this vector.
     std::vector<anira_dtype> m_input_ring_dtypes;
     std::vector<anira_dtype> m_output_ring_dtypes;
     // What the tensor forms know per slot, filled at prepare: the channel count a host block
-    // must have in shape[0] (1 for a Static slot), and one array of empty tensors per side
-    // (rank 2, shape {channels, 0}, the slot's dtype, host memory, no pointer). A
-    // single-tensor form on a side with several slots copies the caller's descriptor into its
-    // slot of the array, hands the array to the manager, which takes one tensor per slot, and
-    // sets shape[1] of that entry back to 0 before it returns.
+    // of a Streamed slot must have in shape[0] (1 for a Static slot, which has no host block),
+    // and one array of empty tensors per side (rank 2, shape {channels, 0}, the slot's dtype,
+    // host memory, no pointer). A single-tensor form on a side with several slots copies the
+    // caller's descriptor into its slot of the array, hands the array to the manager, which
+    // takes one tensor per slot, and sets that entry back to the empty tensor before it
+    // returns. The entry of a Static slot stays empty: a single form never names one.
     std::vector<uint32_t> m_input_channels;
     std::vector<uint32_t> m_output_channels;
     std::vector<anira_tensor> m_input_tensors;
@@ -135,6 +145,11 @@ struct anira_handler {
     /// reads two plain members and not the contract's variant.
     anira_miss_fn m_miss_fn = nullptr;
     void* m_miss_user_data = nullptr;
+    /// Set by the trampoline of ANIRA_MISS_CALLBACK when it ran for the block of the running
+    /// call: it filled the Static output elements ahead of the host's function, which may have
+    /// overwritten them, so the entry skips its own get step for that block. Cleared by every
+    /// multi form before its stem. Driving thread only.
+    bool m_miss_fn_ran = false;
 };
 
 // NOLINTEND(readability-identifier-naming)

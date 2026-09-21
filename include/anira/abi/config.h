@@ -423,12 +423,16 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract
  * several slots passes the handler's array, the caller's descriptor in its slot and
  * empty tensors beside it, which name no memory: no pointer of an earlier call stays in
  * a slot). Return ANIRA_OK when the outputs are filled; any other status makes anira
- * zero-fill every requested output. Either way the block counts as missed: the entry
- * returns ANIRA_MISSED with a delivered count of 0, and the stream stays time-aligned.
- * The function must not call a Hard entry, anira_handler_reset or anira_handler_prepare
- * of the same handler, and it is real-time code: no allocation, no lock, no system call.
- * Under clang a function converted to this type must itself be declared
- * ANIRA_NONBLOCKING.
+ * zero-fill every requested Streamed output. Either way the block counts as missed: the
+ * entry returns ANIRA_MISSED with a delivered count of 0 for every Streamed slot, and
+ * the stream stays time-aligned. The function has the last word on every output of the
+ * block, the Static ones of a _multi form included: anira fills them with the stored
+ * value before the call and does not touch them afterwards. What the function writes
+ * there reaches the caller's memory only, never the handler's store:
+ * anira_handler_get_static_output keeps returning what the model produced. The function
+ * must not call a Hard entry, anira_handler_reset or anira_handler_prepare of the same
+ * handler, and it is real-time code: no allocation, no lock, no system call. Under clang
+ * a function converted to this type must itself be declared ANIRA_NONBLOCKING.
  * @param handler The handler whose block was missed.
  * @param inputs One tensor per input slot, in slot order and covering every slot: the very
  *        arrays the copy path was handed. A slot the call did not carry is an empty
@@ -436,10 +440,13 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract
  *        inputs. The block of a process form is already pushed and still intact in host
  *        memory, in place too.
  * @param num_inputs The handler's number of input slots.
- * @param outputs One tensor per output slot; shape[1] is the request, and the memory is the
- *        function's to fill. A slot whose shape[1] is 0 was not requested. The
- *        descriptors are const: write through anira_tensor_data, anira_tensor_plane or
- *        the handle, by the tensor's strides.
+ * @param outputs One tensor per output slot; shape[1] of a Streamed slot is the request, and
+ *        the memory is the function's to fill. A slot whose tensor is empty (an extent
+ *        of 0) was not requested. A non-empty Static element of a _multi form is the
+ *        whole tensor in the spec's shape and already holds the stored value (the
+ *        latest the model produced): leave it, or overwrite it. The descriptors are
+ *        const: write through anira_tensor_data, anira_tensor_plane or the handle, by
+ *        the tensor's strides.
  * @param num_outputs The handler's number of output slots.
  * @param user_data The user_data of anira_contract_hard_set_miss_fn.
  * @par Thread contract

@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "ext_registry.h"
+#include "static_store.h"
 #include "translate.h"
 
 // The members of anira_ring dispatch through std::visit, which is declared to throw
@@ -348,9 +349,12 @@ StageFacts stage_facts(const StageChain& chain) {
     return facts;
 }
 
-StageChainProcessor::StageChainProcessor(anira::InferenceConfig& config, const StageChain& chain)
+StageChainProcessor::StageChainProcessor(anira::InferenceConfig& config,
+                                         const StageChain& chain,
+                                         const StaticStore& store)
     : anira::PrePostProcessor(config)
     , m_chain(chain)
+    , m_store(store)
     , m_input_shapes(config.get_tensor_input_shape())
     , m_output_shapes(config.get_tensor_output_shape()) {
     for (const std::shared_ptr<StageCarrier>& stage : m_chain) {
@@ -557,14 +561,14 @@ void StageChainProcessor::pre_process(std::vector<anira::RingBuffer>& input,
         anira::PrePostProcessor::pre_process(input, output, current_inference_backend);
         return;
     }
-    // Every Static input is materialised ahead of any stage, the way the 2.x default moves it:
-    // out of the float atomics this class inherits (the Static store replaces them).
+    // Every tensor without a ring is materialised ahead of any stage: the whole tensor out of
+    // the handler's Static store, under its slot's latch, into the struct's packed buffer.
     for (size_t tensor = 0; tensor < output.size() && tensor < m_input_rings.size(); ++tensor) {
         if (m_input_rings[tensor] != nullptr) { continue; }
-        const size_t size = m_inference_config.get_tensor_input_size()[tensor];
-        for (size_t sample = 0; sample < size; ++sample) {
-            output[tensor].set_sample(0, sample, get_input(tensor, sample));
-        }
+        const StaticSlot* slot = m_store.input(tensor);
+        if (slot == nullptr) { continue; }
+        slot->read_packed(output[tensor].get_write_pointer(0),
+                          m_inference_config.get_tensor_input_size()[tensor] * sizeof(float));
     }
     repoint(chunk->m_inputs, output, m_input_shapes);
     anira_stage_ctx ctx = make_ctx(ANIRA_PHASE_PRE_PROCESS, *chunk);
@@ -613,13 +617,17 @@ void StageChainProcessor::post_process(std::vector<anira::BufferF>& input,
     // so a failed or short phase is topped up with zeros and the stream stays aligned.
     check_output_hops(/*report=*/status == ANIRA_OK);
 
-    // Every Static output is taken behind the last stage, the way the 2.x default moves it.
+    // Every tensor without a ring is captured behind the last stage, the whole tensor into the
+    // store under its slot's latch. Not from a chunk that completed as zeros (dropped, failed
+    // in a stage or in the engine) and not behind a failed post_process: the store holds what
+    // the model produced.
+    if (status != ANIRA_OK || chunk->m_struct->m_completed_as_zeros) { return; }
     for (size_t tensor = 0; tensor < input.size() && tensor < m_output_rings.size(); ++tensor) {
         if (m_output_rings[tensor] != nullptr) { continue; }
-        const size_t size = m_inference_config.get_tensor_output_size()[tensor];
-        for (size_t sample = 0; sample < size; ++sample) {
-            set_output(input[tensor].get_sample(0, sample), tensor, sample);
-        }
+        StaticSlot* slot = m_store.output(tensor);
+        if (slot == nullptr) { continue; }
+        slot->write_packed(input[tensor].get_read_pointer(0),
+                           m_inference_config.get_tensor_output_size()[tensor] * sizeof(float));
     }
 }
 

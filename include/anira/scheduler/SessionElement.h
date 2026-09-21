@@ -267,6 +267,14 @@ public:
         // field: written by the thread that holds the struct, synced by the queue handoffs
         // like the stamps above.
         anira_status m_stage_status{ANIRA_OK};
+        // Whether the chunk completed as zeros: dropped (SessionElement::complete_with_zeros:
+        // a full queue, a failed pre_process, a stale or unclaimable task) or failed on the
+        // inference thread (a throw, a failed before_inference or after_inference), its output
+        // buffers cleared. Core::pre_process resets it. A 3.x stage chain reads it in
+        // post_process: such a chunk does not overwrite the handler's Static output store.
+        // Plain field, synced by the queue handoffs like the stamps above (written before the
+        // done signal, read after it).
+        bool m_completed_as_zeros{false};
         std::vector<BufferF> m_tensor_input_data;   ///< Input tensor data buffers
         std::vector<BufferF> m_tensor_output_data;  ///< Output tensor data buffers
     };

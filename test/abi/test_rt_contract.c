@@ -91,6 +91,9 @@ size_t anira_rt_contract_hard(anira_handler* handler,
     total += anira_handler_push_data_multi(handler, inputs, 1u) == ANIRA_OK ? 1u : 0u;
     total += anira_handler_pop_data(handler, outputs, 0u, delivered) == ANIRA_OK ? 1u : 0u;
     total += anira_handler_pop_data_multi(handler, outputs, 1u, delivered) == ANIRA_OK ? 1u : 0u;
+    /* The Static entries are [driver-thread] and nonblocking like the Hard entries. */
+    total += anira_handler_set_static_input(handler, 1u, inputs) == ANIRA_OK ? 1u : 0u;
+    total += anira_handler_get_static_output(handler, 1u, outputs) == ANIRA_OK ? 1u : 0u;
     return total;
 }
 

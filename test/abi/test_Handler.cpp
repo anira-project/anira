@@ -159,7 +159,9 @@ struct Oracle {
     }
 
     /// One block on both sides; c and v receive the outputs, n_c and n_v the counts. The
-    /// static gain slot travels through the multi forms with one value, 1.0F.
+    /// static gain slot travels through the multi forms with one value, 1.0F: on the C side as
+    /// the whole tensor in the spec's shape (FloatFace presents a carried Static slot that way),
+    /// on the 2.x side as a count of values inside the float*** block.
     void run_block(size_t k,
                    size_t block,
                    Form form,
@@ -1002,7 +1004,7 @@ TEST(AbiHandler, HandlerDestroyJoinsThePoolWithTheLastSession) {
     EXPECT_EQ(anira_shutdown(), ANIRA_OK) << "nothing lives";
 }
 
-TEST(AbiHandler, GeneratorPushIsANoOpAndPopPulls) {
+TEST(AbiHandler, GeneratorSetsItsStaticInputAndPopPulls) {
     constexpr size_t k_hop = 2048;
     const Context context;
     const anira::ModelConfig model = anira_test::generator_model();
@@ -1020,11 +1022,10 @@ TEST(AbiHandler, GeneratorPushIsANoOpAndPopPulls) {
     const DestroyFirst destroy_first(handler);
     EXPECT_EQ(anira_handler_get_latency(h, 0), k_hop) << "a generator counts from its first pull";
 
-    // A push on a generator's static input submits nothing.
+    // Setting a generator's Static input submits nothing: the pulls drive the inferences.
     const std::array<float, 4> params{3.0F, 0.0F, 0.0F, 0.0F};
-    const std::array<const float*, 1> param_ch{params.data()};
-    const anira_tensor param = anira_test::planar_f32(param_ch.data(), 1, 4);  // [1, values]
-    EXPECT_EQ(anira_handler_push_data(h, &param, 0), ANIRA_OK);
+    const anira_tensor param = anira_test::whole_f32(params.data(), {1, 4});  // the spec's shape
+    EXPECT_EQ(anira_handler_set_static_input(h, 0, &param), ANIRA_OK);
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     EXPECT_EQ(backend.m_calls.load(), 0);
 
@@ -1042,4 +1043,12 @@ TEST(AbiHandler, GeneratorPushIsANoOpAndPopPulls) {
         expect_all(out, call == 0 ? 0.0F : 3.0F, call == 0 ? "the priming zeros" : "the fill");
     }
     EXPECT_EQ(anira_handler_get_latency(h, 0), k_hop);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+
+    // A generator has no slot the single push form takes: input 0 is Static, and the single
+    // form of a Static slot is anira_handler_set_static_input.
+    const int calls = backend.m_calls.load();
+    EXPECT_EQ(anira_handler_push_data(h, &param, 0), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(backend.m_calls.load(), calls) << "a refused call submits nothing";
 }

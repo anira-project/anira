@@ -302,14 +302,16 @@ namespace {
 
 /// The calls of a float host over planar tensors, one pointer per channel (InPlace: one tensor
 /// on both sides, Separate, Multi: one tensor per slot), and the same calls over packed
-/// blocks: one packed mono block per side (Tensor), one tensor per slot with the Static gain
-/// as [1, 1] (TensorMulti).
+/// blocks: one packed mono block per side (Tensor), one tensor per slot (TensorMulti). The
+/// Static gain of a multi form is the whole tensor in the spec's shape, [1], under both.
 enum class Form { InPlace, Separate, Multi, Tensor, TensorMulti };
 
 constexpr float k_backup = 0.5F;  // what the backup function of ANIRA_MISS_CALLBACK writes
 
-/// The backup function: k_backup into every requested value of every output. The outputs are
-/// mono here: one plane under a planar form, one packed block under a packed one. Declared
+/// The backup function: k_backup into every requested value of every output. The streamed
+/// outputs are mono here: one plane under a planar form, one packed block under a packed one; a
+/// carried Static output is the whole tensor, rank 1, which holds the stored value when the
+/// function is called and is overwritten like the rest. Declared
 /// ANIRA_NONBLOCKING (clang refuses to add the attribute through the conversion to
 /// anira_miss_fn) and free of assertions: it runs on the driver thread.
 anira_status ANIRA_CALL fill_backup(anira_handler* /*handler*/,
@@ -320,6 +322,13 @@ anira_status ANIRA_CALL fill_backup(anira_handler* /*handler*/,
                                     void* /*user_data*/) ANIRA_NONBLOCKING {
     for (uint32_t slot = 0; slot < num_outputs; ++slot) {
         const anira_tensor& output = outputs[slot];
+        if (output.ndim == 1) {  // the Static gain: [1], or the empty [0] of a slot left out
+            float* values = anira_tensor_data_f32(&output);
+            for (int64_t i = 0; values != nullptr && i < output.shape[0]; ++i) {
+                values[i] = k_backup;
+            }
+            continue;
+        }
         if (output.shape[1] <= 0) { continue; }
         const bool planar = (output.flags & static_cast<uint32_t>(ANIRA_TENSOR_PLANAR)) != 0U;
         float* samples = planar
@@ -368,23 +377,22 @@ Delivered call(anira_handler* handler,
             out.assign(k_block, -1.0F);
             const float gain = 1.0F;
             const std::array<const float*, 1> in_ch{in.data()};
-            const std::array<const float*, 1> gain_ch{&gain};
             const std::array<float*, 1> out_ch{out.data()};
-            const std::array<float*, 1> gain_out_ch{&gain_out};
             const std::array<anira_tensor, 2> ins{anira_test::planar_f32(in_ch.data(), 1, k_block),
-                                                  anira_test::planar_f32(gain_ch.data(), 1, 1)};
+                                                  anira_test::whole_f32(&gain, {1})};
             // Without static_out the Static output is an empty tensor with no planes.
             const std::array<anira_tensor, 2> outs{
                 anira_test::planar_f32(out_ch.data(), 1, k_block),
-                static_out ? anira_test::planar_f32(gain_out_ch.data(), 1, 1)
+                static_out ? anira_test::whole_f32(&gain_out, {1})
                            : anira_test::empty_planar_f32(1)};
             std::array<size_t, 2> counts{7, 7};  // a pure out parameter: written on every return
             delivered.m_status =
                 anira_handler_process_multi(handler, ins.data(), 2, outs.data(), 2, counts.data());
-            // A missed block delivers 0 on every slot (the status says what the buffers hold).
+            // A missed block delivers 0 on every Streamed slot (the status says what the
+            // buffers hold); a carried Static output is its whole tensor on a miss too.
             if (delivered.m_status == ANIRA_MISSED) {
                 EXPECT_EQ(counts[0], 0U) << "a missed block delivers 0";
-                EXPECT_EQ(counts[1], 0U) << "a missed block delivers 0";
+                EXPECT_EQ(counts[1], static_out ? 1U : 0U) << "the stored value, whole";
             }
             delivered.m_count = counts[0];
             return delivered;
@@ -405,29 +413,26 @@ Delivered call(anira_handler* handler,
         case Form::TensorMulti: {
             out.assign(k_block, -1.0F);
             const std::array<int64_t, 2> shape{1, static_cast<int64_t>(k_block)};
-            const std::array<int64_t, 2> one{1, 1};
-            const std::array<int64_t, 2> none{1, 0};
+            const std::array<int64_t, 1> one{1};   // the gain's spec: one value, rank 1
+            const std::array<int64_t, 1> none{0};  // an extent of 0: the slot is left out
             std::vector<float> block = in;
             float gain = 1.0F;
             std::array<anira_tensor, 2> ins{};
             std::array<anira_tensor, 2> outs{};
             anira_tensor_init_host(ins.data(), block.data(), ANIRA_DTYPE_F32, 2, shape.data());
-            anira_tensor_init_host(&ins[1], &gain, ANIRA_DTYPE_F32, 2, one.data());
+            anira_tensor_init_host(&ins[1], &gain, ANIRA_DTYPE_F32, 1, one.data());
             anira_tensor_init_host(outs.data(), out.data(), ANIRA_DTYPE_F32, 2, shape.data());
             // Without static_out the Static output is an empty tensor with no memory.
             anira_tensor_init_host(&outs[1],
                                    static_out ? &gain_out : nullptr,
                                    ANIRA_DTYPE_F32,
-                                   2,
+                                   1,
                                    static_out ? one.data() : none.data());
             std::array<size_t, 2> counts{7, 7};
             delivered.m_status =
                 anira_handler_process_multi(handler, ins.data(), 2, outs.data(), 2, counts.data());
-            if (delivered.m_status == ANIRA_OK) {
-                EXPECT_EQ(counts[1], static_out ? 1U : 0U);
-            } else {
-                EXPECT_EQ(counts[1], 0U) << "a miss reports 0 for every slot";
-            }
+            // The element count of a carried Static output, on ANIRA_OK and on a miss alike.
+            EXPECT_EQ(counts[1], static_out ? 1U : 0U);
             delivered.m_count = counts[0];
             return delivered;
         }
@@ -492,9 +497,13 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
         case ANIRA_MISS_BYPASS: expect_same_block(out, ramp(3), 3); break;
         case ANIRA_MISS_HOLD_LAST:
             expect_same_block(out, ramp(1), 3);
-            if (static_out) { EXPECT_EQ(gain_out, 1.0F) << "the last completed value"; }
+            if (static_out) { EXPECT_EQ(gain_out, 1.0F) << "the stored value"; }
             break;
-        case ANIRA_MISS_ZEROS: expect_all(out, 0.0F, "block 3"); break;
+        case ANIRA_MISS_ZEROS:
+            expect_all(out, 0.0F, "block 3");
+            // The miss policies define nothing for a Static output: the stored value.
+            if (static_out) { EXPECT_EQ(gain_out, 1.0F) << "the stored value, not zeros"; }
+            break;
         case ANIRA_MISS_CALLBACK:
             expect_all(out, k_backup, "block 3");
             if (static_out) { EXPECT_EQ(gain_out, k_backup) << "the whole block is the host's"; }
@@ -601,11 +610,10 @@ TEST(AbiPrepare, TensorsBuiltOnceSurviveAMiss) {
     std::vector<float> out(k_block, -1.0F);
     const float gain = 1.0F;
     const std::array<const float*, 1> in_ch{in.data()};
-    const std::array<const float*, 1> gain_ch{&gain};
     const std::array<float*, 1> out_ch{out.data()};
     // Built once, reused by every call below; the Static output is left out (an empty tensor).
     const std::array<anira_tensor, 2> ins{anira_test::planar_f32(in_ch.data(), 1, k_block),
-                                          anira_test::planar_f32(gain_ch.data(), 1, 1)};
+                                          anira_test::whole_f32(&gain, {1})};
     const std::array<anira_tensor, 2> outs{anira_test::planar_f32(out_ch.data(), 1, k_block),
                                            anira_test::empty_planar_f32(1)};
     // The bytes of the output descriptors, as test_HandlerTensor's bytes_of() takes them.

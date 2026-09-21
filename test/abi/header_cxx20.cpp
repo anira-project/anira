@@ -66,6 +66,15 @@ static_assert(std::is_same_v<decltype(anira::Hard::miss_user_data), void*>);
 static_assert(
     std::is_same_v<decltype(&anira::ContractHandle::hard_miss_fn),
                    anira::ContractHandle& (anira::ContractHandle::*)(anira_miss_fn, void*)>);
+// The Static entries reach a C++ consumer through anira.hpp until the handler class arrives: a
+// slot and a whole anira::Tensor, which is an anira_tensor.
+static_assert(noexcept(anira_handler_set_static_input(nullptr, 0, nullptr)));
+static_assert(noexcept(anira_handler_get_static_output(nullptr, 0, nullptr)));
+static_assert(std::is_invocable_r_v<anira_status,
+                                    decltype(&anira_handler_set_static_input),
+                                    anira_handler*,
+                                    uint32_t,
+                                    const anira::Tensor*>);
 
 // The runtime tensor and its token are the C structs with names on them: same size, no member
 // added, trivially copyable, so a Tensor* is an anira_tensor*. The field fills and the reads

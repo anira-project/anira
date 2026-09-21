@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 
+#include "static_store.h"
 #include "translate.h"
 
 namespace anira::capi {
@@ -72,10 +73,12 @@ ANIRA_API StageFacts stage_facts(const StageChain& chain);
 /// the plan the chunk was stamped with, and the status slot the scheduler reads after a failed
 /// phase.
 ///
-/// Until the Static store arrives the non-streamable tensors keep travelling through the float
-/// atomics this class inherits, exactly as the 2.x default processor moves them: materialised
-/// into model_inputs ahead of every pre_process, taken from model_outputs behind every
-/// post_process.
+/// The tensors without a ring (Static, Buffer) travel through the handler's Static store
+/// (static_store.h), whole and typed: every one is materialised into model_inputs ahead of any
+/// stage's pre_process and captured from model_outputs behind the last post_process, each under
+/// its slot's latch. A chunk that completed as zeros (dropped, or failed in a stage or in the
+/// engine) captures nothing: the store holds what the model produced. The float atomics this
+/// class inherits from the 2.x processor are not used.
 class ANIRA_API StageChainProcessor final : public anira::PrePostProcessor {
 public:
     /// What the ctx reports for a chunk stamped with one plan of the handler's table.
@@ -84,8 +87,12 @@ public:
         uint32_t m_provider = ANIRA_PROVIDER_DEFAULT;
     };
 
-    /// `config` and `chain` must outlive the processor (the handler owns all three).
-    StageChainProcessor(anira::InferenceConfig& config, const StageChain& chain);
+    /// `config`, `chain` and `store` must outlive the processor (the handler owns all four).
+    /// The store is indexed by host slot, the model's tensors by tensor index: the two are
+    /// equal while no spec is hidden from the host.
+    StageChainProcessor(anira::InferenceConfig& config,
+                        const StageChain& chain,
+                        const StaticStore& store);
 
     /// Control thread, after the session's prepare and before its first chunk: the struct
     /// table, the ring arrays and one preallocated tensor array per struct and side.
@@ -134,6 +141,7 @@ private:
                     size_t moved) noexcept ANIRA_NONBLOCKING;
 
     const StageChain& m_chain;
+    const StaticStore& m_store;  ///< the handler's; read in pre_process, written in post_process
     /// The first and the last stage that fill each ring-moving phase (NULL: none does, the
     /// default body runs): whom the count check names.
     const StageCarrier* m_first_pre = nullptr;

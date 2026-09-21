@@ -61,9 +61,9 @@ Pull pull(anira_handler* handler, float param, std::vector<float>& out, double t
     const size_t n = out.size();
     const std::array<float, 4> params{param, 0.0F, 0.0F, 0.0F};
     std::ranges::fill(out, -1.0F);
-    const std::array<const float*, 1> param_ch{params.data()};
     const std::array<float*, 1> out_ch{out.data()};
-    const anira_tensor in = anira_test::planar_f32(param_ch.data(), 1, 4);
+    // The Static input of a multi form is the whole tensor in the spec's shape, [1, 4].
+    const anira_tensor in = anira_test::whole_f32(params.data(), {1, 4});
     const anira_tensor outs = anira_test::planar_f32(out_ch.data(), 1, n);
     std::array<size_t, 1> delivered{7};
     Pull result;
@@ -268,13 +268,11 @@ TEST(AbiHandlerWait, TheTensorTwinsMissAtTheDeadlineAndDeliverWithoutLimit) {
     EXPECT_GE(elapsed, std::chrono::milliseconds(20));
     EXPECT_LT(elapsed, std::chrono::milliseconds(500)) << "the deadline, not the stall";
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    // A generator's single forms: input 0 is Static, so the parameter goes through
+    // anira_handler_set_static_input and the pull is the pop twin.
     delivered = 7;
-    EXPECT_EQ(anira_handler_process_wait(h,
-                                         &param_tensor,
-                                         &out_tensor,
-                                         ANIRA_WAIT_FOREVER,
-                                         0,
-                                         &delivered),
+    EXPECT_EQ(anira_handler_set_static_input(h, 0, &param_tensor), ANIRA_OK);
+    EXPECT_EQ(anira_handler_pop_data_wait(h, &out_tensor, ANIRA_WAIT_FOREVER, 0, &delivered),
               ANIRA_OK);
     EXPECT_EQ(delivered, k_hop);
 
@@ -427,14 +425,12 @@ TEST_P(AbiHandlerWaitRatio, InvalidStateWithoutAnActiveThread) {
     const Pull second = pull(h, 2.0F, out, ANIRA_WAIT_FOREVER);
     EXPECT_EQ(second.m_status, ANIRA_ERROR_INVALID_STATE);
     expect_stem_count(second.m_delivered, "the multi twin's second stem");
-    // The single-tensor twins refuse the same way, and their count is the stem's too.
+    // The single-tensor pop twin refuses the same way, and its count is the stem's too. (A
+    // generator has no single process form: its input slot 0 is Static, whose single form is
+    // anira_handler_set_static_input.)
     const std::array<float*, 1> out_ch{out.data()};
     const anira_tensor io = anira_test::planar_f32(out_ch.data(), 1, k_hop);
     size_t delivered = 7;
-    EXPECT_EQ(anira_handler_process_wait(h, &io, &io, ANIRA_WAIT_FOREVER, 0, &delivered),
-              ANIRA_ERROR_INVALID_STATE);
-    expect_stem_count(delivered, "the in-place twin's stem");
-    delivered = 7;
     EXPECT_EQ(anira_handler_pop_data_wait(h, &io, ANIRA_WAIT_CONTRACT, 0, &delivered),
               ANIRA_ERROR_INVALID_STATE);
     expect_stem_count(delivered, "the pop twin's stem");

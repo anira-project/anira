@@ -284,6 +284,7 @@ void SessionElement::complete_with_zeros(
     // the output side consumes the task at its correct position like any other
     // and frees the struct, it just yields silence for this chunk.
     for (auto& output_data : thread_safe_struct->m_tensor_output_data) { output_data.clear(); }
+    thread_safe_struct->m_completed_as_zeros = true;  // before the done signal
     if (m_inference_config.m_blocking_ratio > 0.f) {
         thread_safe_struct->m_done_semaphore.release();
     } else {

@@ -258,7 +258,10 @@ an ``anira::ContractHandle``.
   anchor) or when the channel counts differ, ``prepare`` refuses it with
   ``ANIRA_ERROR_CONFIG`` naming ``on_miss``.
   ``ANIRA_MISS_HOLD_LAST`` repeats the last block the output delivered (one block-sized buffer
-  per output channel, allocated at prepare) and the latest value of a Static output.
+  per output channel, allocated at prepare).
+  The policies speak about Streamed outputs. They define nothing for a Static output, which is
+  the handler's stored value, the latest the model produced, on a delivered block and on a
+  missed one alike (section 3.2, *Static tensors*).
   ``ANIRA_MISS_ZEROS`` delivers silence, what the 2.x runtime did: the contract a 2.x document
   upgrades to carries it, and so do the bundled RAVE encoder and decoder files (one audio
   channel against four latents). Every other bundled contract file keeps the default.
@@ -745,10 +748,11 @@ and ``anira_handler_pop_data(h, out, tensor_index, &delivered)`` /
 as C entries, ``[driver-thread]`` and ``ANIRA_NONBLOCKING``. A host block is one
 ``anira_tensor`` (section 3.3) per slot, handed over as ``const anira_tensor*``, an output's
 included: anira never writes a descriptor, it writes the memory an output names, so a host
-builds its tensors once and reuses them. The logical shape is always ``[channels, samples]``
-(``[1, samples]`` for a spec without a Channel axis, ``[1, values]`` for a Static slot), the
+builds its tensors once and reuses them. These entries carry the Streamed tensors (a Static
+tensor travels whole, see *Static tensors* below). The logical shape of a host block is always
+``[channels, samples]`` (``[1, samples]`` for a spec without a Channel axis), the
 sample count is ``shape[1]`` (there is no ``num_in`` / ``num_out``), and the tensor's dtype
-must be the slot's, which is the ring dtype of a Streamed slot: nothing converts, and another
+must be the slot's ring dtype: nothing converts, and another
 dtype is ``ANIRA_ERROR_CONFIG``. The memory is host memory (``ANIRA_DOMAIN_HOST`` or
 ``ANIRA_DOMAIN_HOST_PINNED``) in one of three descriptions:
 
@@ -788,7 +792,8 @@ description is copied straight between the host memory and the ring, and the two
 call may be described differently. In place is the same tensor as input and output; there is
 no ``_inplace`` name. An *empty tensor* (``shape[1] == 0``; its memory arm is not read, so
 NULL is legal) leaves a slot out: the multi forms take exactly one tensor per slot, Static
-slots included, and ``num_inputs`` / ``num_outputs`` must be the handler's slot counts.
+slots included (the whole tensor or an empty one, see *Static tensors* below), and
+``num_inputs`` / ``num_outputs`` must be the handler's slot counts.
 ``release``, ``manager_ctx`` and ``acquire`` are not read; the memory is borrowed until the
 call returns. Every tensor of a call is validated before anything is pushed, so a refusal
 writes no ring: a malformed descriptor is ``ANIRA_ERROR_INVALID_ARGUMENT`` (a rank other than
@@ -800,9 +805,9 @@ is ``0``, a channel that does not start on a multiple of the element size), a fl
 library does not know is ``ANIRA_ERROR_NOT_SUPPORTED``, and the checks run in the order rank,
 domain, flags, shape, dtype, memory and strides, the input before the output. ``delivered``
 is a nullable pure out parameter (an array of ``num_outputs`` counts in the multi forms),
-written on every return: zeroed first, then ``shape[1]`` of each output on ``ANIRA_OK``
-(clamped to the tensor's size for a Static output) and ``0`` on ``ANIRA_MISSED`` and on a
-failure. It is never read: the request is ``shape[1]`` of the output tensor, so a miss leaves
+written on every return: zeroed first, then ``shape[1]`` of each Streamed output on
+``ANIRA_OK`` and ``0`` on ``ANIRA_MISSED`` and on a failure (a carried Static output of a multi
+form reports its element count on ``ANIRA_OK`` and on ``ANIRA_MISSED`` alike). It is never read: the request is ``shape[1]`` of the output tensor, so a miss leaves
 nothing to refill. Under ``ANIRA_MISS_BYPASS``, input and output
 memory that overlap under two different descriptions are undefined on a miss; the same tensor
 on both sides is left where it is.
@@ -831,7 +836,56 @@ callbacks (``juce::AudioBuffer::getArrayOfWritePointers``) fills the tensor in t
 in the JUCE example above, which is legal there: the factory is a field fill,
 ``[thread-safe]`` and ``ANIRA_NONBLOCKING``. Separate input and output buffers are two tensors,
 the input's over ``const float* const*`` with ``ANIRA_TENSOR_READ_ONLY`` ORed into ``flags``.
-A Static slot is ``[1, values]`` over one pointer.
+A Static tensor is never planar: it is one block in the spec's shape (next paragraph).
+
+**Static tensors.** A tensor without a ring (a Static spec, and a Buffer spec under a Hard
+contract) has one description everywhere: the whole tensor in the spec's shape and dtype, any
+dtype, a Channel axis of any extent included. One ``anira_tensor_init_host`` over the spec's
+extents builds it (all-zero strides are packed row-major; other strides are read and written
+as given). The handler keeps the value in a store of its own, sized and zeroed at
+``anira_handler_create``, untouched by ``anira_handler_prepare`` and ``anira_handler_reset``:
+
+- ``anira_handler_set_static_input(h, slot, &tensor)`` stores an input. Every inference
+  submitted afterwards sees it whole (it is copied under a latch and materialised into the
+  model's input tensor ahead of any stage), so a value set between two calls never tears.
+- ``anira_handler_get_static_output(h, slot, &out)`` reads the value the latest collected
+  inference produced; all zeros before the first. A chunk that completed as zeros (dropped, or
+  failed in a stage or in the engine) captures nothing: the store holds what the model
+  produced last.
+
+Both are ``[driver-thread]`` and ``ANIRA_NONBLOCKING``, legal from create on (a value set before
+prepare survives it) and from a stage's ``prepare``. "Fits" is a check, never a clamp: another
+rank or extent is ``ANIRA_ERROR_INVALID_ARGUMENT`` (there is no partial Static tensor and no
+count), another dtype ``ANIRA_ERROR_CONFIG``, ``ANIRA_TENSOR_PLANAR`` or an unknown flag
+``ANIRA_ERROR_NOT_SUPPORTED``; a slot out of range or a Streamed slot, NULL or misaligned
+memory, a negative stride and ``ANIRA_TENSOR_READ_ONLY`` on the output are
+``ANIRA_ERROR_INVALID_ARGUMENT``. Every refusal but the NULL handler is recorded in
+``anira_handler_rt_error``.
+
+.. code-block:: c
+
+    /* Spec: "gain", ANIRA_ROLE_STATIC, axes [any 1]: one float32 value. */
+    float gain = 0.5f;
+    const int64_t gain_shape[1] = {1};
+    anira_tensor gain_tensor;
+    anira_tensor_init_host(&gain_tensor, &gain, ANIRA_DTYPE_F32, 1, gain_shape);
+    anira_handler_set_static_input(handler, 1, &gain_tensor);   /* input slot 1 */
+
+The multi forms accept a Static tensor as the element of its slot, and are *defined* as the
+sequence they abbreviate, over the same functions: ``set_static_input`` for every non-empty
+Static element of ``inputs``, the streamed call over the Streamed elements,
+``get_static_output`` for every non-empty Static element of ``outputs``. Every element is
+validated before anything is set or pushed. An element is *empty*, and leaves its slot out,
+when it has a rank of 1 or more and an extent of 0 (``{channels, 0}`` for a Streamed slot; a
+spec extent is never 0); nothing else of it is read. A single form names a Streamed slot only:
+``tensor_index`` naming a Static slot on either side is ``ANIRA_ERROR_INVALID_ARGUMENT``,
+because the single form of a Static slot is the pair above (a generator with Static input 0
+calls ``anira_handler_set_static_input(h, 0, ..)`` and ``anira_handler_pop_data(h, .., 0, ..)``).
+On a missed block a carried Static output holds the stored value under every policy. Under
+``ANIRA_MISS_CALLBACK`` anira fills the non-empty Static output elements with the stored value
+first and then calls the ``anira_miss_fn``, which may leave or overwrite them and so has the
+last word on every output of the block; what it writes reaches the caller's memory only, never
+the store.
 
 **Status and counts.** Every Hard entry returns an ``anira_status``: ``ANIRA_OK`` when the
 block was delivered in full; ``ANIRA_MISSED`` when its inference had not completed, which is
@@ -886,8 +940,8 @@ visible. The three records are Tier 1: no ``struct_size`` and no version field, 
 is their version, their layout is committed in ``abi/layout-<major>.txt`` and mirrored for
 JavaScript in the generated ``web/src/abi/layout.ts``, and
 ``anira_sizeof(ANIRA_STRUCT_TENSOR)`` answers an allocator that cannot see the header (``0``
-for an id this build does not know). The Hard entries of 3.2 take host tensors; only host memory is
-read in this pre-release, and the Static tensor entries follow.
+for an id this build does not know). The Hard entries and the two Static entries of 3.2 take
+host tensors; only host memory is read in this pre-release.
 
 **The factories.** ``anira_tensor_init_host(&t, data, dtype, ndim, shape)`` and
 ``anira_tensor_init_pinned`` describe host memory; ``anira_tensor_init_cuda(&t, ptr, device,

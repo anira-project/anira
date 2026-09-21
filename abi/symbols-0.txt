@@ -54,6 +54,7 @@ anira_handler_get_available_samples
 anira_handler_get_latencies
 anira_handler_get_latency
 anira_handler_get_plan
+anira_handler_get_static_output
 anira_handler_plan_report
 anira_handler_pop_data
 anira_handler_pop_data_multi
@@ -69,6 +70,7 @@ anira_handler_push_data_multi
 anira_handler_reset
 anira_handler_rt_error
 anira_handler_set_plan
+anira_handler_set_static_input
 anira_has_core
 anira_inference_thread_create
 anira_inference_thread_destroy

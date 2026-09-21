@@ -151,9 +151,16 @@ public:
      * covering every slot of that side: `inputs` has one tensor per input tensor of the
      * InferenceConfig, `outputs` one per output tensor.
      *
-     * The tensor of a slot is a host block of the logical shape `[channels, samples]` (`[1,
-     * values]` for a non-streamable slot), over memory in one of three descriptions, for any
-     * channel count:
+     * The stems move the streamed slots. A non-streamable slot (no stream size in the
+     * InferenceConfig: a Static tensor of a 3.x model) has no ring and is not the copy path's:
+     * its tensor is never read, whatever it holds, its delivered count is always 0, and a miss
+     * leaves its memory alone. Its values travel beside the stems: through the Static store of a
+     * 3.x handler (whole tensors in the spec's shape, src/capi/static_store.h), and for the 2.x
+     * face through anira::NonStreamableRouter (src/scheduler/NonStreamableRouter.h), which keeps
+     * the value count, the clamp and the miss rules of the 2.x `float***` blocks.
+     *
+     * The tensor of a streamed slot is a host block of the logical shape `[channels, samples]`,
+     * over memory in one of three descriptions, for any channel count:
      * - planar (ANIRA_TENSOR_PLANAR): `handle.planes.ptrs[c]` is channel `c`; `byte_offset` and
      *   `strides[1]` apply inside each plane, `strides[0]` is ignored;
      * - one block read by `strides` (in elements): channel `c` starts `c * strides[0]`
@@ -165,28 +172,26 @@ public:
      * ring call per channel, with no intermediate copy; a unit stride is the ring's plain
      * block copy.
      *
-     * The request of a slot is `shape[1]`: the samples to push, or to pop (a value count,
-     * clamped to the tensor's size, for a non-streamable slot). A slot whose `shape[1]` is 0
-     * is not touched and its memory arm is not read, so an empty tensor may carry NULL memory:
-     * that is how a call leaves a slot out. The descriptors are const: anira never writes a
-     * tensor, an output's included; it writes the memory the output names. In place is the
+     * The request of a slot is `shape[1]`: the samples to push, or to pop. A slot whose
+     * `shape[1]` is 0 is not touched and its memory arm is not read, so an empty tensor may carry
+     * NULL memory: that is how a call leaves a slot out. The descriptors are const: anira never
+     * writes a tensor, an output's included; it writes the memory the output names. In place is the
      * same tensor on both sides (or two tensors that describe the same memory the same way).
      *
      * Trust. The descriptors are validated by the caller (the library's own check is
      * anira::tensor_run::check_host_tensor, src/scheduler/TensorRun.h). The manager takes on
-     * trust the rank (2), the domain (host memory), `shape[0]` (the slot's channel count, 1 for
-     * a non-streamable slot), the pointers, `byte_offset` and the strides (1 or more on the
-     * sample axis, or all zero), and does not check them again: a malformed tensor is
-     * undefined behaviour here. The one thing it checks is the dtype, because the float
-     * faces reach it without a validator: the tensor's dtype must be the slot's (the ring
-     * dtype of a streamed slot, see RingDtypes; float32 for a non-streamable one), nothing
+     * trust the rank (2), the domain (host memory), `shape[0]` (the slot's channel count), the
+     * pointers, `byte_offset` and the strides (1 or more on the sample axis, or all zero), and
+     * does not check them again: a malformed tensor is undefined behaviour here. The one thing
+     * it checks is the dtype, because the float faces reach it without a validator: the
+     * tensor's dtype must be the slot's (the ring dtype, see RingDtypes), nothing
      * converts. A mismatched input is not pushed; a mismatched output is zero-filled at the
      * tensor's own element size, is not popped and reports 0; either is logged once through
      * the real-time queue (RtSite::TensorDtypeMismatch).
      *
      * The returned array is the manager's own, one delivered count per output slot, valid
-     * until the next call: the request of a delivered block (clamped for a non-streamable
-     * slot), 0 for every slot of a missed block (last_block_missed()). Nothing bounds a
+     * until the next call: the request of a delivered block, 0 for a non-streamable slot and
+     * for every slot of a missed block (last_block_missed()). Nothing bounds a
      * request by the host block size: a push larger than the send ring keeps its tail, a
      * request the receive ring cannot serve is a miss.
      *
@@ -252,8 +257,8 @@ public:
      * decoupled push/pop pattern. Finished inferences are collected here as well, as long as
      * the receive buffers have room for them (Core::collect_completed()), so push-only usage
      * never exhausts the inference structs; a host that never pops a streamed output is
-     * warned. On a generator session (no streamable input) this only stores the parameter
-     * values: inference is driven by the output demand of the process and pop forms.
+     * warned. On a generator session (no streamable input) there is nothing to push: inference
+     * is driven by the output demand of the process and pop forms.
      *
      * @param inputs One tensor per input slot (see "The tensor stems")
      *
@@ -576,23 +581,21 @@ private:
      * @brief What the copy path knows about one slot, read once at prepare()
      */
     struct SlotCopy {
-        size_t m_channels = 1;  ///< Runs of the slot's host block: the channel count, 1 for a
-                                ///< non-streamable slot
+        size_t m_channels = 1;  ///< Runs of the slot's host block: the channel count
         size_t m_element_size = sizeof(float);  ///< Bytes of one element of m_dtype
-        anira_dtype m_dtype = ANIRA_DTYPE_F32;  ///< The ring dtype; float32 for a
-                                                ///< non-streamable slot
-        bool m_streamed = false;                ///< Whether the slot has a ring
+        anira_dtype m_dtype = ANIRA_DTYPE_F32;  ///< The ring dtype
+        bool m_streamed = false;  ///< Whether the slot has a ring; the stems move no other
     };
 
     /**
      * @brief Host -> ring: pushes every carried input (the one implementation under every
      * process and push form)
      *
-     * A streamed slot is one strided ring push per channel; a non-streamable slot stores its
-     * values in the PrePostProcessor, clamped to the tensor's size. An input whose count is 0
-     * is not touched and its tensor's memory arm is not read (the single-tensor forms hand
-     * the other slots over without memory). An input whose dtype is not the slot's is not pushed,
-     * its count is set to 0 and the site RtSite::TensorDtypeMismatch records it.
+     * A streamed slot is one strided ring push per channel; a non-streamable slot is never
+     * carried (load_counts()). An input whose count is 0 is not touched and its tensor's memory arm
+     * is not read (the single-tensor forms hand the other slots over without memory). An input
+     * whose dtype is not the slot's is not pushed, its count is set to 0 and the site
+     * RtSite::TensorDtypeMismatch records it.
      *
      * @param inputs One tensor per input slot; trusted but for the dtype
      * @param num_samples The manager's input counts, loaded from shape[1]
@@ -659,7 +662,7 @@ private:
      * @brief Zeros the requested samples of one output (the 2.x clear rule for one tensor)
      *
      * @param output The output's tensor
-     * @param num_samples The requested samples (not clamped for a non-streamable output)
+     * @param num_samples The requested samples
      * @param tensor_index The output to clear
      */
     void clear_output(const anira_tensor& output, size_t num_samples, size_t tensor_index);
@@ -673,8 +676,11 @@ private:
                         const char* side,
                         size_t tensor_index) const;
 
-    /// Loads the manager's count array of one side from shape[1] of every tensor.
-    static void load_counts(const anira_tensor* tensors, std::vector<size_t>& counts) noexcept;
+    /// Loads the manager's count array of one side: shape[1] of the tensor of every streamed
+    /// slot, 0 for a non-streamable slot, whose tensor is not read.
+    static void load_counts(const anira_tensor* tensors,
+                            const std::vector<SlotCopy>& slots,
+                            std::vector<size_t>& counts) noexcept;
 
     /// The arithmetic of contract_wait_budget() for a reference block of `reference_samples`.
     std::chrono::steady_clock::duration wait_budget_of(size_t reference_samples) const noexcept;
@@ -701,7 +707,6 @@ private:
 private:
     InferenceConfig& m_inference_config;  ///< Reference to the inference configuration containing
                                           ///< model settings
-    PrePostProcessor& m_pp_processor;  ///< Reference to the preprocessing/postprocessing pipeline
     std::shared_ptr<SessionElement> m_session;  ///< Shared pointer to the current inference session
     HostConfig m_host_config;                   ///< Current host audio configuration
 
