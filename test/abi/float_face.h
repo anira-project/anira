@@ -188,15 +188,15 @@ public:
                                             delivered);
     }
 
-    // ---- the _wait twins -------------------------------------------------------------------
+    // ---- the _wait twins: the bare form with timeout_ms appended ----------------------------
 
     anira_status process_wait(const float* const* in,
                               size_t num_in,
                               float* const* out,
                               size_t num_out,
-                              double timeout_ms,
                               uint32_t slot,
-                              size_t* delivered) {
+                              size_t* delivered,
+                              double timeout_ms) {
         const anira_tensor* inputs = m_adapter.present_input(slot, in, num_in);
         const anira_tensor* outputs = m_adapter.present_output(slot, out, num_out);
         return anira_handler_process_wait(m_handler,
@@ -204,24 +204,24 @@ public:
                                           slot,
                                           &outputs[slot],
                                           slot,
-                                          timeout_ms,
-                                          delivered);
+                                          delivered,
+                                          timeout_ms);
     }
 
     anira_status process_inplace_wait(float* const* data,
                                       size_t num_samples,
-                                      double timeout_ms,
                                       uint32_t slot,
-                                      size_t* delivered) {
-        return process_wait(data, num_samples, data, num_samples, timeout_ms, slot, delivered);
+                                      size_t* delivered,
+                                      double timeout_ms) {
+        return process_wait(data, num_samples, data, num_samples, slot, delivered, timeout_ms);
     }
 
     anira_status process_multi_wait(const float* const* const* in,
                                     const size_t* num_in,
                                     float* const* const* out,
                                     const size_t* num_out,
-                                    double timeout_ms,
-                                    size_t* delivered) {
+                                    size_t* delivered,
+                                    double timeout_ms) {
         const anira_tensor* inputs = whole_inputs(in, num_in);
         const anira_tensor* outputs = whole_outputs(out, num_out);
         return anira_handler_process_multi_wait(m_handler,
@@ -235,17 +235,17 @@ public:
 
     anira_status pop_data_wait(float* const* out,
                                size_t num_out,
-                               double timeout_ms,
                                uint32_t slot,
-                               size_t* delivered) {
+                               size_t* delivered,
+                               double timeout_ms) {
         const anira_tensor* outputs = m_adapter.present_output(slot, out, num_out);
-        return anira_handler_pop_data_wait(m_handler, &outputs[slot], timeout_ms, slot, delivered);
+        return anira_handler_pop_data_wait(m_handler, &outputs[slot], slot, delivered, timeout_ms);
     }
 
     anira_status pop_data_multi_wait(float* const* const* out,
                                      const size_t* num_out,
-                                     double timeout_ms,
-                                     size_t* delivered) {
+                                     size_t* delivered,
+                                     double timeout_ms) {
         return anira_handler_pop_data_multi_wait(m_handler,
                                                  whole_outputs(out, num_out),
                                                  m_handler->m_num_outputs,

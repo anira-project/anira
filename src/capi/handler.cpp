@@ -22,7 +22,7 @@
 // non-empty Static output element, over the same two functions the entries call.
 //
 // One slot space. A slot is the tensor's position in the model config's list of its side, and
-// that one number is what the host names (`tensor_index`, `slot`, `in_slot`, `out_slot`, the
+// that one number is what the host names (`slot`, `in_slot`, `out_slot`, the
 // positions of the multi forms' arrays and of `delivered`, the latency vector, the report's
 // slot rows) and what the session, the stems, the handler's two port vectors and the stage
 // chain index by. The ROLE of the tensor decides the port's arm and with it which entries take a
@@ -1581,16 +1581,15 @@ anira_status ANIRA_CALL anira_handler_process_multi(anira_handler* handler,
 
 anira_status ANIRA_CALL anira_handler_push_data(anira_handler* handler,
                                                 const anira_tensor* in,
-                                                uint32_t tensor_index)
-    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+                                                uint32_t slot) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
-    if (!has_arguments(*handler, input_slot(*handler, in, tensor_index), __func__)) {
+    if (!has_arguments(*handler, input_slot(*handler, in, slot), __func__)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    const anira_status status = slot_tensor_status(*handler, *in, true, tensor_index, __func__);
+    const anira_status status = slot_tensor_status(*handler, *in, true, slot, __func__);
     if (status != ANIRA_OK) { return status; }
-    const StagedTensor inputs(handler->m_input_tensors, *in, tensor_index);
+    const StagedTensor inputs(handler->m_input_tensors, *in, slot);
     handler->m_manager->push_data(inputs.array());
     return ANIRA_OK;
 }
@@ -1613,19 +1612,19 @@ anira_status ANIRA_CALL anira_handler_push_data_multi(anira_handler* handler,
 
 anira_status ANIRA_CALL anira_handler_pop_data(anira_handler* handler,
                                                const anira_tensor* out,
-                                               uint32_t tensor_index,
+                                               uint32_t slot,
                                                size_t* delivered) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     set_delivered(delivered, 0);
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
-    if (!has_arguments(*handler, output_slot(*handler, out, tensor_index), __func__)) {
+    if (!has_arguments(*handler, output_slot(*handler, out, slot), __func__)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    const anira_status status = slot_tensor_status(*handler, *out, false, tensor_index, __func__);
+    const anira_status status = slot_tensor_status(*handler, *out, false, slot, __func__);
     if (status != ANIRA_OK) { return status; }
-    const StagedTensor outputs(handler->m_output_tensors, *out, tensor_index);
+    const StagedTensor outputs(handler->m_output_tensors, *out, slot);
     const size_t* counts = handler->m_manager->pop_data(outputs.array());
-    set_delivered(delivered, counts[tensor_index]);
+    set_delivered(delivered, counts[slot]);
     return block_status(*handler);
 }
 
@@ -1691,12 +1690,12 @@ anira_status ANIRA_CALL anira_handler_get_static_output(anira_handler* handler,
 // vector by reference while the handler is prepared (prepare is the quiescence point): one
 // entry per output slot, 0 for a tensor without a ring (Static, State).
 
-uint32_t ANIRA_CALL anira_handler_get_latency(const anira_handler* handler, uint32_t tensor_index)
-    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+uint32_t ANIRA_CALL anira_handler_get_latency(const anira_handler* handler,
+                                              uint32_t slot) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr || !handler->m_prepared.load(std::memory_order_acquire)) { return 0U; }
-    if (tensor_index >= handler->m_num_outputs) { return 0U; }
+    if (slot >= handler->m_num_outputs) { return 0U; }
     const std::vector<unsigned int>& latencies = handler->m_manager->latencies();
-    return tensor_index < latencies.size() ? static_cast<uint32_t>(latencies[tensor_index]) : 0U;
+    return slot < latencies.size() ? static_cast<uint32_t>(latencies[slot]) : 0U;
 }
 
 anira_status ANIRA_CALL anira_handler_get_latencies(const anira_handler* handler,
@@ -1721,28 +1720,26 @@ anira_status ANIRA_CALL anira_handler_get_latencies(const anira_handler* handler
 }
 
 anira_status ANIRA_CALL anira_handler_get_available_samples(anira_handler* handler,
-                                                            uint32_t tensor_index,
+                                                            uint32_t slot,
                                                             uint32_t channel,
                                                             size_t* out)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     set_delivered(out, 0);
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
-    if (!has_arguments(*handler,
-                       out != nullptr && tensor_index < handler->m_num_outputs,
-                       __func__)) {
+    if (!has_arguments(*handler, out != nullptr && slot < handler->m_num_outputs, __func__)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     const anira::InferenceConfig& config = handler->m_inference_config;
     // An output without a ring (Static, State): 0, nothing recorded.
-    if (config.get_postprocess_output_size()[tensor_index] == 0) { return ANIRA_OK; }
+    if (config.get_postprocess_output_size()[slot] == 0) { return ANIRA_OK; }
     // The ring's own accessor is unbounded on the channel.
     if (!has_arguments(*handler,
-                       channel < config.get_postprocess_output_channels()[tensor_index],
+                       channel < config.get_postprocess_output_channels()[slot],
                        __func__)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    *out = handler->m_manager->get_available_samples(tensor_index, channel);
+    *out = handler->m_manager->get_available_samples(slot, channel);
     return ANIRA_OK;
 }
 
@@ -1764,16 +1761,17 @@ anira_status ANIRA_CALL anira_handler_rt_error(const anira_handler* handler)
 }
 
 // ==== the _wait twins over host tensors =======================================================
-// The same checks as the nonblocking stems (the prepared check before the thread count),
-// then the wait; not ANIRA_NONBLOCKING.
+// A twin is its bare form with `double timeout_ms` appended as the last parameter. The same
+// checks as the nonblocking stems (the prepared check before the thread count), then the wait;
+// not ANIRA_NONBLOCKING.
 
 anira_status ANIRA_CALL anira_handler_process_wait(anira_handler* handler,
                                                    const anira_tensor* in,
                                                    uint32_t in_slot,
                                                    const anira_tensor* out,
                                                    uint32_t out_slot,
-                                                   double timeout_ms,
-                                                   size_t* delivered) ANIRA_NOEXCEPT {
+                                                   size_t* delivered,
+                                                   double timeout_ms) ANIRA_NOEXCEPT {
     set_delivered(delivered, 0);
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
@@ -1827,21 +1825,21 @@ anira_status ANIRA_CALL anira_handler_process_multi_wait(anira_handler* handler,
 
 anira_status ANIRA_CALL anira_handler_pop_data_wait(anira_handler* handler,
                                                     const anira_tensor* out,
-                                                    double timeout_ms,
-                                                    uint32_t tensor_index,
-                                                    size_t* delivered) ANIRA_NOEXCEPT {
+                                                    uint32_t slot,
+                                                    size_t* delivered,
+                                                    double timeout_ms) ANIRA_NOEXCEPT {
     set_delivered(delivered, 0);
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     if (!is_prepared(*handler, __func__)) { return ANIRA_ERROR_NOT_PREPARED; }
-    if (!has_arguments(*handler, output_slot(*handler, out, tensor_index), __func__)) {
+    if (!has_arguments(*handler, output_slot(*handler, out, slot), __func__)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    anira_status status = slot_tensor_status(*handler, *out, false, tensor_index, __func__);
+    anira_status status = slot_tensor_status(*handler, *out, false, slot, __func__);
     if (status != ANIRA_OK) { return status; }
-    const StagedTensor outputs(handler->m_output_tensors, *out, tensor_index);
+    const StagedTensor outputs(handler->m_output_tensors, *out, slot);
     const size_t* counts = nullptr;
     status = pop_tensors_wait_body(*handler, outputs.array(), timeout_ms, __func__, counts);
-    set_delivered(delivered, counts[tensor_index]);
+    set_delivered(delivered, counts[slot]);
     return status;
 }
 

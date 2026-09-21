@@ -277,20 +277,20 @@ inline std::vector<float> ramp(size_t block_index, size_t n = k_block) {
 
 /// anira_handler_get_available_samples as a value: the samples waiting in channel 0 of the
 /// output ring, 0 on a failure (a test that cares about the status calls the entry itself).
-inline size_t available(anira_handler* handler, uint32_t tensor_index = 0) {
+inline size_t available(anira_handler* handler, uint32_t slot = 0) {
     size_t count = 0;
-    anira_handler_get_available_samples(handler, tensor_index, 0, &count);
+    anira_handler_get_available_samples(handler, slot, 0, &count);
     return count;
 }
 
-/// Waits until the output ring of tensor_index holds `expected` samples again (the loop of
+/// Waits until the output ring of slot holds `expected` samples again (the loop of
 /// test_InferenceHandler.cpp); fails after k_wait_s.
-inline void wait_for_available(anira_handler* handler, size_t expected, uint32_t tensor_index = 0) {
+inline void wait_for_available(anira_handler* handler, size_t expected, uint32_t slot = 0) {
     const auto start = std::chrono::steady_clock::now();
-    while (available(handler, tensor_index) != expected) {
+    while (available(handler, slot) != expected) {
         if (std::chrono::steady_clock::now() > start + std::chrono::seconds(k_wait_s)) {
             FAIL() << "timeout while waiting for " << expected << " available samples (have "
-                   << available(handler, tensor_index) << ")";
+                   << available(handler, slot) << ")";
         }
         std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
@@ -298,8 +298,8 @@ inline void wait_for_available(anira_handler* handler, size_t expected, uint32_t
 
 /// After a process form: the call popped one block and its inference pushes one hop back,
 /// so "available returns to prev" means the block's inference completed and was collected.
-inline void wait_for_block(anira_handler* handler, size_t prev, uint32_t tensor_index = 0) {
-    wait_for_available(handler, prev, tensor_index);
+inline void wait_for_block(anira_handler* handler, size_t prev, uint32_t slot = 0) {
+    wait_for_available(handler, prev, slot);
 }
 
 /// The 2.x twin of wait_for_block.

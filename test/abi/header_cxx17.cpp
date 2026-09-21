@@ -119,7 +119,7 @@ static_assert(
 // The two-slot forms: each side names its own slot, the tensor's position in its list.
 static_assert(noexcept(anira_handler_process(nullptr, nullptr, 0, nullptr, 0, nullptr)));
 static_assert(noexcept(anira_handler_pop_data_multi(nullptr, nullptr, 0, nullptr)));
-static_assert(noexcept(anira_handler_process_wait(nullptr, nullptr, 0, nullptr, 0, 0.0, nullptr)));
+static_assert(noexcept(anira_handler_process_wait(nullptr, nullptr, 0, nullptr, 0, nullptr, 0.0)));
 // The Static entries: a slot and a whole tensor, const on both (anira writes the memory an
 // output names, never its descriptor); the handler of the getter is not const.
 static_assert(noexcept(anira_handler_set_static_input(nullptr, 0, nullptr)));

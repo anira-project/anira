@@ -761,8 +761,8 @@ class arrives with the runtime cut-over.
 **The Hard entries.** The driver thread pumps its blocks through
 ``anira_handler_process(h, in, in_slot, out, out_slot, &delivered)``,
 ``anira_handler_process_multi(h, inputs, num_inputs, outputs, num_outputs, delivered)``,
-``anira_handler_push_data(h, in, tensor_index)`` / ``push_data_multi(h, inputs, num_inputs)``
-and ``anira_handler_pop_data(h, out, tensor_index, &delivered)`` /
+``anira_handler_push_data(h, in, slot)`` / ``push_data_multi(h, inputs, num_inputs)``
+and ``anira_handler_pop_data(h, out, slot, &delivered)`` /
 ``pop_data_multi(h, outputs, num_outputs, delivered)``, the 2.x methods of sections 5.1 to 5.4
 as C entries, ``[driver-thread]`` and ``ANIRA_NONBLOCKING``. A host block is one
 ``anira_tensor`` (section 3.3) per slot, handed over as ``const anira_tensor*``, an output's
@@ -815,8 +815,8 @@ slots included (the whole tensor or an empty one, see *Static tensors* below) an
 too (always an empty one: anira feeds declared state itself, and anything else at that
 position is ``ANIRA_ERROR_INVALID_ARGUMENT``), and ``num_inputs`` / ``num_outputs`` must be
 the lengths of the model config's two lists. A *slot* is one number everywhere: the tensor's
-position in the model config's input list or output list, which is what ``tensor_index``,
-``slot``, ``in_slot`` and ``out_slot``, the ``_multi`` arrays and their ``delivered`` counts,
+position in the model config's input list or output list, which is what ``slot``,
+``in_slot`` and ``out_slot``, the ``_multi`` arrays and their ``delivered`` counts,
 the latency vector (``0`` for an output that is not Streamed), the plan report's rows and a
 stage's ``anira_stage_ctx`` all index by. The two lists are unrelated, so the single
 ``process`` forms name one slot per side: a model with ``data`` at input 1 and
@@ -909,7 +909,7 @@ Static element of ``inputs``, the streamed call over the Streamed elements,
 validated before anything is set or pushed. An element is *empty*, and leaves its slot out,
 when it has a rank of 1 or more and an extent of 0 (``{channels, 0}`` for a Streamed slot; a
 spec extent is never 0); nothing else of it is read. A single form names a Streamed slot only:
-``tensor_index`` naming a Static slot on either side is ``ANIRA_ERROR_INVALID_ARGUMENT``,
+a ``slot`` naming a Static tensor on either side is ``ANIRA_ERROR_INVALID_ARGUMENT``,
 because the single form of a Static slot is the pair above (a generator with Static input 0
 calls ``anira_handler_set_static_input(h, 0, ..)`` and ``anira_handler_pop_data(h, .., 0, ..)``).
 On a missed block a carried Static output holds the stored value under every policy. Under
@@ -924,8 +924,7 @@ a success (``ANIRA_FAILED(status)`` is false): the memory holds what the miss po
 (section 1.3) and every delivered count is ``0``; or a failure, where every delivered count
 is ``0`` as well. None of them waits, and a refusal carries no ``anira_error``: the entry
 returns the failure status, records it in ``anira_handler_rt_error`` and logs once through
-the real-time queue (:doc:`logging`); a miss is not recorded. ``tensor_index`` is the slot in
-the input and the output list.
+the real-time queue (:doc:`logging`); a miss is not recorded.
 ``anira_handler_get_latency(h, i)`` and ``anira_handler_get_latencies(h, &count, out)``
 (index-aligned with the output list, ``0`` for a Static output) are valid from prepare on;
 ``anira_handler_get_available_samples(h, i, channel, &count)`` collects the completed
@@ -933,10 +932,12 @@ inferences and reports what waits in the output ring (right after prepare, the l
 ``anira_handler_reset(h)`` is the wait-free stream reset of 5.5; ``anira_handler_rt_error(h)``
 the last real-time failure, readable from any thread and any callback.
 
-**The _wait twins.** ``anira_handler_process_wait(h, in, in_slot, out, out_slot, timeout_ms,
-&delivered)``, ``process_multi_wait(h, inputs, num_inputs, outputs, num_outputs, delivered,
-timeout_ms)``, ``pop_data_wait(h, out, timeout_ms, tensor_index, &delivered)`` and
-``pop_data_multi_wait`` wait for the block's inference:
+**The _wait twins.** A ``_wait`` twin is its bare form with ``double timeout_ms`` appended as
+the last parameter: ``anira_handler_process_wait(h, in, in_slot, out, out_slot, &delivered,
+timeout_ms)``, ``process_multi_wait(h, inputs, num_inputs, outputs, num_outputs, delivered,
+timeout_ms)``, ``pop_data_wait(h, out, slot, &delivered, timeout_ms)`` and
+``pop_data_multi_wait(h, outputs, num_outputs, delivered, timeout_ms)`` wait for the block's
+inference:
 ``timeout_ms >= 0`` explicitly, ``ANIRA_WAIT_CONTRACT`` for ``wait_ratio`` times the block
 duration (the call's block on the process forms — the 2.x ``blocking_ratio`` wait inside
 ``process`` — and the contract's ``block_max`` on the pop forms), ``ANIRA_WAIT_FOREVER``

@@ -455,7 +455,7 @@ TEST(AbiHandler, UnpreparedEntriesRecordNotPrepared) {
               ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(multi_delivered[0], 0U) << "a refused multi form zeroes its counts";
     delivered = 7;
-    EXPECT_EQ(anira_handler_process_wait(h, &io, 0, &io, 0, ANIRA_WAIT_FOREVER, &delivered),
+    EXPECT_EQ(anira_handler_process_wait(h, &io, 0, &io, 0, &delivered, ANIRA_WAIT_FOREVER),
               ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(delivered, 0U);
     delivered = 7;

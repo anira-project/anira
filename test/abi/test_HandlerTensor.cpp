@@ -324,8 +324,8 @@ Outcome call(Rig& rig, Form form, const anira_tensor& in, const anira_tensor& ou
                                                           0,
                                                           &out,
                                                           0,
-                                                          ANIRA_WAIT_FOREVER,
-                                                          &outcome.m_delivered);
+                                                          &outcome.m_delivered,
+                                                          ANIRA_WAIT_FOREVER);
             rig.open_gate(false);
             break;
         case Form::PushPopWait:
@@ -333,9 +333,9 @@ Outcome call(Rig& rig, Form form, const anira_tensor& in, const anira_tensor& ou
             EXPECT_EQ(anira_handler_push_data(handler, &in, 0), ANIRA_OK);
             outcome.m_status = anira_handler_pop_data_wait(handler,
                                                            &out,
-                                                           ANIRA_WAIT_FOREVER,
                                                            0,
-                                                           &outcome.m_delivered);
+                                                           &outcome.m_delivered,
+                                                           ANIRA_WAIT_FOREVER);
             rig.open_gate(false);
             break;
     }
@@ -732,12 +732,12 @@ TEST(AbiHandlerTensor, ANullHandlerIsRefusedAndTheCountsAreZeroed) {
     EXPECT_EQ(counts[0], 0U);
     EXPECT_EQ(counts[1], k_unset) << "one count was announced";
     delivered = k_unset;
-    EXPECT_EQ(anira_handler_process_wait(nullptr, tensor, 0, tensor, 0, 0.0, &delivered),
+    EXPECT_EQ(anira_handler_process_wait(nullptr, tensor, 0, tensor, 0, &delivered, 0.0),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(delivered, 0U);
     EXPECT_EQ(anira_handler_process_multi_wait(nullptr, tensor, 1, tensor, 1, nullptr, 0.0),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_handler_pop_data_wait(nullptr, tensor, 0.0, 0, nullptr),
+    EXPECT_EQ(anira_handler_pop_data_wait(nullptr, tensor, 0, nullptr, 0.0),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_pop_data_multi_wait(nullptr, tensor, 1, nullptr, 0.0),
               ANIRA_ERROR_INVALID_ARGUMENT);
@@ -767,12 +767,12 @@ TEST(AbiHandlerTensor, UnpreparedEntriesRecordNotPrepared) {
     EXPECT_EQ(anira_handler_push_data_multi(h, tensor, 1), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_pop_data(h, tensor, 0, nullptr), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_pop_data_multi(h, tensor, 1, nullptr), ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_process_wait(h, tensor, 0, tensor, 0, ANIRA_WAIT_FOREVER, nullptr),
+    EXPECT_EQ(anira_handler_process_wait(h, tensor, 0, tensor, 0, nullptr, ANIRA_WAIT_FOREVER),
               ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(
         anira_handler_process_multi_wait(h, tensor, 1, tensor, 1, nullptr, ANIRA_WAIT_FOREVER),
         ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_pop_data_wait(h, tensor, ANIRA_WAIT_FOREVER, 0, nullptr),
+    EXPECT_EQ(anira_handler_pop_data_wait(h, tensor, 0, nullptr, ANIRA_WAIT_FOREVER),
               ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_pop_data_multi_wait(h, tensor, 1, nullptr, ANIRA_WAIT_FOREVER),
               ANIRA_ERROR_NOT_PREPARED);
@@ -879,9 +879,9 @@ TEST(AbiHandlerTensor, EveryMalformedTensorIsRefusedBeforeAnythingIsPushed) {
         EXPECT_EQ(anira_handler_pop_data_multi(h, &bad.tensor(), 1, counts.data()),
                   refusal.m_status);
         EXPECT_EQ(counts[0], 0U);
-        EXPECT_EQ(anira_handler_process_wait(h, &good.tensor(), 0, &bad.tensor(), 0, 0.0, nullptr),
+        EXPECT_EQ(anira_handler_process_wait(h, &good.tensor(), 0, &bad.tensor(), 0, nullptr, 0.0),
                   refusal.m_status);
-        EXPECT_EQ(anira_handler_pop_data_wait(h, &bad.tensor(), 0.0, 0, nullptr), refusal.m_status);
+        EXPECT_EQ(anira_handler_pop_data_wait(h, &bad.tensor(), 0, nullptr, 0.0), refusal.m_status);
 
         EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(0), 0U)
             << "a refused call pushed samples";
@@ -1050,7 +1050,7 @@ TEST(AbiHandlerTensor, TheArgumentsAreRefused) {
     EXPECT_EQ(anira_handler_push_data(h, tensors.data(), 2), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_pop_data(h, nullptr, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_pop_data(h, tensors.data(), 2, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_handler_pop_data_wait(h, tensors.data(), 0.0, 2, nullptr),
+    EXPECT_EQ(anira_handler_pop_data_wait(h, tensors.data(), 2, nullptr, 0.0),
               ANIRA_ERROR_INVALID_ARGUMENT);
 
     // The multi forms take exactly one tensor per slot, Static slots included.
@@ -1156,8 +1156,8 @@ TEST(AbiHandlerTensor, AWaitTwinWithoutAThreadRunsTheStemAndRefuses) {
                                          0,
                                          outputs.data(),
                                          0,
-                                         ANIRA_WAIT_FOREVER,
-                                         &delivered),
+                                         &delivered,
+                                         ANIRA_WAIT_FOREVER),
               ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(delivered, k_hop);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_STATE);
@@ -1171,7 +1171,7 @@ TEST(AbiHandlerTensor, AWaitTwinWithoutAThreadRunsTheStemAndRefuses) {
 
     // The ring is empty now: the stem misses, and the counts say so.
     delivered = k_unset;
-    EXPECT_EQ(anira_handler_pop_data_wait(h, outputs.data(), ANIRA_WAIT_CONTRACT, 0, &delivered),
+    EXPECT_EQ(anira_handler_pop_data_wait(h, outputs.data(), 0, &delivered, ANIRA_WAIT_CONTRACT),
               ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(delivered, 0U);
     counts = {k_unset, k_unset};
@@ -1607,8 +1607,8 @@ TEST_F(AbiHandlerTensorMiss, AWaitTwinWithoutAThreadCallsItAndStillRefuses) {
                                              0,
                                              &out.tensor(),
                                              0,
-                                             ANIRA_WAIT_FOREVER,
-                                             &delivered),
+                                             &delivered,
+                                             ANIRA_WAIT_FOREVER),
                   ANIRA_ERROR_INVALID_STATE);
         if (k == 0) {
             EXPECT_EQ(delivered, k_hop);

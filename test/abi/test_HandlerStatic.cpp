@@ -522,9 +522,9 @@ TEST(AbiHandlerStatic, ASingleFormOnAStaticSlotIsRefused) {
                    "process, a Static out_slot beside a Streamed in_slot");
     expect_refused(anira_handler_push_data(h, &whole, 1), "push_data");
     expect_refused(anira_handler_pop_data(h, &whole, 1, &delivered), "pop_data");
-    expect_refused(anira_handler_process_wait(h, &whole, 2, &whole, 2, 0.0, &delivered),
+    expect_refused(anira_handler_process_wait(h, &whole, 2, &whole, 2, &delivered, 0.0),
                    "process_wait on the second Static slot");
-    expect_refused(anira_handler_pop_data_wait(h, &whole, 0.0, 1, &delivered), "pop_data_wait");
+    expect_refused(anira_handler_pop_data_wait(h, &whole, 1, &delivered, 0.0), "pop_data_wait");
     EXPECT_EQ(memory, values_of(80.0F));
     const StaticValues zeros{};
     EXPECT_EQ(stored_output(h), zeros) << "a refused single form set nothing";

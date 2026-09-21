@@ -324,8 +324,8 @@ public:
                                           data_slot(),
                                           &out_tensor,
                                           processed_slot(),
-                                          ANIRA_WAIT_FOREVER,
-                                          nullptr);
+                                          nullptr,
+                                          ANIRA_WAIT_FOREVER);
     }
 
 private:

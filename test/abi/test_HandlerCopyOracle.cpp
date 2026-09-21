@@ -263,9 +263,9 @@ public:
                                        num_in,
                                        out.planes(),
                                        num_out,
-                                       ANIRA_WAIT_FOREVER,
                                        slot,
-                                       count)
+                                       count,
+                                       ANIRA_WAIT_FOREVER)
                 : m_face->process(in.planes(), num_in, out.planes(), num_out, slot, count);
         m_gate->m_open.store(false);
         add_header(entry("process_f32", options) + " slot=" + std::to_string(slot) +
@@ -293,9 +293,9 @@ public:
         const anira_status status =
             options.m_wait ? m_face->process_inplace_wait(data.planes(),
                                                           num_samples,
-                                                          ANIRA_WAIT_FOREVER,
                                                           slot,
-                                                          count)
+                                                          count,
+                                                          ANIRA_WAIT_FOREVER)
                            : m_face->process_inplace(data.planes(), num_samples, slot, count);
         m_gate->m_open.store(false);
         add_header(entry("process_f32_inplace", options) + " slot=" + std::to_string(slot) +
@@ -335,8 +335,8 @@ public:
                                                                                 in_counts.data(),
                                                                                 out_planes.data(),
                                                                                 out_counts.data(),
-                                                                                ANIRA_WAIT_FOREVER,
-                                                                                delivered.data())
+                                                                                delivered.data(),
+                                                                                ANIRA_WAIT_FOREVER)
                                                    : m_face->process_multi(in_planes.data(),
                                                                            in_counts.data(),
                                                                            out_planes.data(),
@@ -423,7 +423,7 @@ public:
         open_gate_for(options);
         const anira_status status =
             options.m_wait
-                ? m_face->pop_data_wait(out.planes(), num_out, ANIRA_WAIT_FOREVER, slot, count)
+                ? m_face->pop_data_wait(out.planes(), num_out, slot, count, ANIRA_WAIT_FOREVER)
                 : m_face->pop_data(out.planes(), num_out, slot, count);
         m_gate->m_open.store(false);
         add_header(entry("pop_data_f32", options) + " slot=" + std::to_string(slot) +
@@ -451,8 +451,8 @@ public:
             options.m_wait
                 ? m_face->pop_data_multi_wait(out_planes.data(),
                                               out_counts.data(),
-                                              ANIRA_WAIT_FOREVER,
-                                              delivered.data())
+                                              delivered.data(),
+                                              ANIRA_WAIT_FOREVER)
                 : m_face->pop_data_multi(out_planes.data(), out_counts.data(), delivered.data());
         m_gate->m_open.store(false);
         deliver_num_out(status, delivered, num_out);
@@ -538,7 +538,7 @@ private:
             open_gate_for(options);
             const anira_status popped =
                 options.m_wait
-                    ? m_face->pop_data_wait(out.planes(), num_out, ANIRA_WAIT_FOREVER, slot, count)
+                    ? m_face->pop_data_wait(out.planes(), num_out, slot, count, ANIRA_WAIT_FOREVER)
                     : m_face->pop_data(out.planes(), num_out, slot, count);
             m_gate->m_open.store(false);
             if (status == ANIRA_OK) { status = popped; }
