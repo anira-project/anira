@@ -351,16 +351,28 @@ struct SyncToken : anira_sync_token {
  */
 struct Tensor : anira_tensor {
     /// anira_tensor_init_host: pageable host memory, borrowed.
-    static Tensor from_host(void* data, DType dtype, std::span<const int64_t> shape) noexcept {
+    static Tensor from_host(void* data,
+                            DType element_dtype,
+                            std::span<const int64_t> extents) noexcept {
         Tensor tensor{};
-        anira_tensor_init_host(&tensor, data, dtype, detail::rank_of(shape), shape.data());
+        anira_tensor_init_host(&tensor,
+                               data,
+                               element_dtype,
+                               detail::rank_of(extents),
+                               extents.data());
         return tensor;
     }
 
     /// anira_tensor_init_pinned: page-locked host memory, borrowed.
-    static Tensor from_pinned(void* data, DType dtype, std::span<const int64_t> shape) noexcept {
+    static Tensor from_pinned(void* data,
+                              DType element_dtype,
+                              std::span<const int64_t> extents) noexcept {
         Tensor tensor{};
-        anira_tensor_init_pinned(&tensor, data, dtype, detail::rank_of(shape), shape.data());
+        anira_tensor_init_pinned(&tensor,
+                                 data,
+                                 element_dtype,
+                                 detail::rank_of(extents),
+                                 extents.data());
         return tensor;
     }
 
@@ -372,17 +384,19 @@ struct Tensor : anira_tensor {
     /// tensor.
     template <class T>
     static Tensor from_host_planar(std::span<T* const> planes,
-                                   std::span<const int64_t> shape) noexcept {
+                                   std::span<const int64_t> extents) noexcept {
         Tensor tensor{};
         // The one cast of the typed spelling: T* const* to the const void* the C entry takes.
         anira_tensor_init_host_planar(&tensor,
                                       static_cast<const void*>(planes.data()),
                                       detail::plane_count_of(planes.size()),
                                       detail::dtype_of<T>(),
-                                      detail::rank_of(shape),
-                                      shape.data());
-        if (std::is_const_v<T> && tensor.dtype != 0) {
-            tensor.flags |= static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY);
+                                      detail::rank_of(extents),
+                                      extents.data());
+        if constexpr (std::is_const_v<T>) {
+            if (tensor.dtype != 0) {
+                tensor.flags |= static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY);
+            }
         }
         return tensor;
     }
@@ -391,16 +405,16 @@ struct Tensor : anira_tensor {
     static Tensor from_cuda(void* ptr,
                             int32_t device,
                             void* event,
-                            DType dtype,
-                            std::span<const int64_t> shape) noexcept {
+                            DType element_dtype,
+                            std::span<const int64_t> extents) noexcept {
         Tensor tensor{};
         anira_tensor_init_cuda(&tensor,
                                ptr,
                                device,
                                event,
-                               dtype,
-                               detail::rank_of(shape),
-                               shape.data());
+                               element_dtype,
+                               detail::rank_of(extents),
+                               extents.data());
         return tensor;
     }
 
@@ -408,16 +422,16 @@ struct Tensor : anira_tensor {
     static Tensor from_gl_buffer(uint32_t id,
                                  uint32_t target,
                                  void* glsync,
-                                 DType dtype,
-                                 std::span<const int64_t> shape) noexcept {
+                                 DType element_dtype,
+                                 std::span<const int64_t> extents) noexcept {
         Tensor tensor{};
         anira_tensor_init_gl_buffer(&tensor,
                                     id,
                                     target,
                                     glsync,
-                                    dtype,
-                                    detail::rank_of(shape),
-                                    shape.data());
+                                    element_dtype,
+                                    detail::rank_of(extents),
+                                    extents.data());
         return tensor;
     }
 
@@ -428,8 +442,8 @@ struct Tensor : anira_tensor {
                               uint64_t offset,
                               uint64_t timeline,
                               uint64_t value,
-                              DType dtype,
-                              std::span<const int64_t> shape) noexcept {
+                              DType element_dtype,
+                              std::span<const int64_t> extents) noexcept {
         Tensor tensor{};
         anira_tensor_init_vulkan(&tensor,
                                  buffer,
@@ -437,19 +451,24 @@ struct Tensor : anira_tensor {
                                  offset,
                                  timeline,
                                  value,
-                                 dtype,
-                                 detail::rank_of(shape),
-                                 shape.data());
+                                 element_dtype,
+                                 detail::rank_of(extents),
+                                 extents.data());
         return tensor;
     }
 
     /// anira_tensor_init_opaque_fd: exported opaque memory; no fence.
     static Tensor from_opaque_fd(int32_t fd,
                                  uint64_t size,
-                                 DType dtype,
-                                 std::span<const int64_t> shape) noexcept {
+                                 DType element_dtype,
+                                 std::span<const int64_t> extents) noexcept {
         Tensor tensor{};
-        anira_tensor_init_opaque_fd(&tensor, fd, size, dtype, detail::rank_of(shape), shape.data());
+        anira_tensor_init_opaque_fd(&tensor,
+                                    fd,
+                                    size,
+                                    element_dtype,
+                                    detail::rank_of(extents),
+                                    extents.data());
         return tensor;
     }
 
@@ -458,16 +477,16 @@ struct Tensor : anira_tensor {
     static Tensor from_wgpu_buffer(void* buffer,
                                    uint64_t offset,
                                    const SyncToken* fence,
-                                   DType dtype,
-                                   std::span<const int64_t> shape) noexcept {
+                                   DType element_dtype,
+                                   std::span<const int64_t> extents) noexcept {
         Tensor tensor{};
         anira_tensor_init_wgpu_buffer(&tensor,
                                       buffer,
                                       offset,
                                       fence,
-                                      dtype,
-                                      detail::rank_of(shape),
-                                      shape.data());
+                                      element_dtype,
+                                      detail::rank_of(extents),
+                                      extents.data());
         return tensor;
     }
 
@@ -477,17 +496,17 @@ struct Tensor : anira_tensor {
                               uint64_t size,
                               uint64_t offset,
                               int32_t sync_fd,
-                              DType dtype,
-                              std::span<const int64_t> shape) noexcept {
+                              DType element_dtype,
+                              std::span<const int64_t> extents) noexcept {
         Tensor tensor{};
         anira_tensor_init_dmabuf(&tensor,
                                  fd,
                                  size,
                                  offset,
                                  sync_fd,
-                                 dtype,
-                                 detail::rank_of(shape),
-                                 shape.data());
+                                 element_dtype,
+                                 detail::rank_of(extents),
+                                 extents.data());
         return tensor;
     }
 
