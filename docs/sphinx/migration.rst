@@ -30,7 +30,8 @@ Where the 2.x API stands in this pre-release
   ``pop_data`` and their variants) are gone. Code that drove a manager directly presents one
   ``anira_tensor`` per slot to the function of the same name, for channel pointers with
   ``anira_tensor_init_host_planar`` (:doc:`usage` section 3.3); ``anira::InferenceHandler``
-  and the ``_f32`` entries do exactly that for their callers.
+  does exactly that for its callers, and a host of the C ABI does it itself (:doc:`usage`
+  section 3.2).
 - **The bundled models.** The 2.x fixture headers with their ``anira::InferenceConfig`` statics
   (``cnn_config``, ``hybridnn_config``, ``rnn_config``, ``gain_config``, ``stereo_gain_config``,
   ``rave_funk_drum_config`` and the encoder and decoder) are gone. Every bundled model ships a

@@ -132,9 +132,8 @@ The real-time path
 An ``ANIRA_NONBLOCKING`` entry does at most three things when it refuses:
 
 1. It returns the failure ``anira_status``; a form with a count out-parameter writes ``0``
-   (the ``_f32`` multi forms leave their request array ``num_out`` untouched; the tensor multi
-   forms zero their ``delivered`` array). ``ANIRA_MISSED`` is not a refusal and does
-   none of the three.
+   (the multi forms zero their ``delivered`` array). ``ANIRA_MISSED`` is not a refusal and
+   does none of the three.
 2. It stores the status into the handler's ``rt_error``, a relaxed atomic readable through
    ``anira_handler_rt_error(h)`` from any thread and from inside any callback, when the refusal
    is a contract violation: ``ANIRA_ERROR_WRONG_CONTRACT`` (a Hard entry on an Async handler or
