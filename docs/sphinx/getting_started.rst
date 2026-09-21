@@ -66,7 +66,7 @@ Some neural network models require multiple input tensors or produce multiple ou
 An important distinction in multi-tensor processing is between **streamable** and **non-streamable** tensors:
 
 - **Streamable tensors**: Contain data that varies over time (e.g., audio samples, time-series data). They can have multiple channels.
-- **Non-streamable tensors**: Contain static parameters or metadata (e.g., control parameters, configuration values, global settings). Only one channel is allowed.
+- **Non-streamable tensors**: Contain static parameters or metadata (e.g., control parameters, configuration values, global settings). They have the shape the model file gives them and travel whole; a Channel axis is one of that shape's axes and may have any extent.
 
 Here's how to configure and process multi-tensor models with anira. The model file names
 every tensor and gives the two control tensors the ``static`` role (one value per inference,

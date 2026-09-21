@@ -223,13 +223,10 @@ void check_spec(const anira_tensor_spec& spec,
         }
     }
 
-    out.m_channels = channel_axis.has_value() ? out.m_dims[*channel_axis] : 1;
-    if (!streamed && out.m_channels != 1) {
-        config_error(where + std::string("a ") + role +
-                     " tensor's Channel axis must have extent 1 (got " +
-                     std::to_string(out.m_channels) +
-                     "): the 2.x runtime carries one channel for a non-streamed tensor");
-    }
+    // The Channel tag maps onto ring channels on a Streamed tensor only. A non-Streamed tensor
+    // has the spec's shape, a Channel axis of any extent being one of its axes, and moves as the
+    // product of its extents: the 2.x runtime carries it as one channel.
+    out.m_channels = streamed && channel_axis.has_value() ? out.m_dims[*channel_axis] : 1;
     if (is_input && spec.m_latency != 0) { config_error(where + "latency is an output property"); }
     if (spec.m_latency < 0) {
         config_error(where + "latency must not be negative (got " + std::to_string(spec.m_latency) +

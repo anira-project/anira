@@ -91,7 +91,10 @@ a tag and an extent; NCHW against NHWC is just a different order of tags. Tags a
 ``ANIRA_AXIS_BATCH``, ``ANIRA_AXIS_CHANNEL``, ``ANIRA_AXIS_TIME``, ``ANIRA_AXIS_HEIGHT``,
 ``ANIRA_AXIS_WIDTH``, ``ANIRA_AXIS_FEATURE`` and ``ANIRA_AXIS_ANY`` (no semantics). The extent
 of the Time axis of a streamed spec may be ``ANIRA_DYNAMIC`` when the model accepts any
-length; a streamed spec has exactly one Time axis and at most one Channel axis.
+length; a streamed spec has exactly one Time axis and at most one Channel axis. The Channel
+tag maps onto ring channels on a streamed tensor only. A Static or a Buffer tensor has the
+spec's shape: it may carry a Channel axis of any extent (at most one), the tag describes that
+axis and nothing more, and the tensor moves as the product of its extents.
 
 A streamed spec also carries its **window**, ``window(window_min, window_max, overlap)``: how
 many elements along the Time axis one inference consumes (``window_min`` and ``window_max``,
