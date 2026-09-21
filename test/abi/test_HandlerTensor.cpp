@@ -1500,6 +1500,14 @@ TEST_F(AbiHandlerTensorMiss, TheFloatEntriesHandOverPlanarFloatTensors) {
     const std::array<float* const*, 2> out{out_channels.data(), nullptr};
     const std::array<size_t, 2> num_in{k_hop, 0};
     std::array<size_t, 2> num_out{k_hop, 0};
+    {
+        // An earlier call carries the Static slots over memory that dies with this scope.
+        std::array<float, 3> values{k_static_in};
+        const std::array<float*, 1> value_channels{values.data()};
+        ASSERT_EQ(anira_handler_push_data_f32(rig.get(), value_channels.data(), 3, 1), ANIRA_OK);
+        ASSERT_EQ(anira_handler_pop_data_f32(rig.get(), value_channels.data(), 3, 1, nullptr),
+                  ANIRA_OK);
+    }
     anira_status status = ANIRA_OK;
     for (int k = 0; k < 3; ++k) {
         status = anira_handler_process_f32_multi(rig.get(),
@@ -1527,6 +1535,10 @@ TEST_F(AbiHandlerTensorMiss, TheFloatEntriesHandOverPlanarFloatTensors) {
     EXPECT_EQ(output.flags, static_cast<uint32_t>(ANIRA_TENSOR_PLANAR));
     EXPECT_EQ(anira_tensor_plane(&output, 1, ANIRA_DTYPE_F32), out_data[1].data());
     EXPECT_EQ(m_state.m_output_copies[1].shape[1], 0);
+    // The slots the missed call did not carry name no memory: not the dead array of the
+    // earlier call that carried them.
+    EXPECT_EQ(anira_tensor_plane(&m_state.m_input_copies[1], 0, ANIRA_DTYPE_F32), nullptr);
+    EXPECT_EQ(anira_tensor_plane(&m_state.m_output_copies[1], 0, ANIRA_DTYPE_F32), nullptr);
     for (size_t channel = 0; channel < 3; ++channel) {
         for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(out_data.at(channel).at(i), k_backup); }
     }
