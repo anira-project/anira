@@ -25,8 +25,8 @@
 #include <vector>
 
 #include "handles.h"
+#include "port.h"
 #include "stage.h"
-#include "static_store.h"
 
 namespace anira::capi {
 
@@ -95,13 +95,18 @@ struct anira_handler {
     anira_contract m_contract;           ///< the snapshot of the last successful prepare (Hard)
     anira::InferenceConfig m_inference_config;  ///< built at prepare; must outlive m_manager
                                                 ///< and m_pp
-    /// The Static store: one typed buffer per Static tensor of either side, in the
-    /// spec's shape and dtype. Built and zeroed by anira_handler_create from the pipeline copy,
-    /// never resized, untouched by prepare and by reset (m_pp and m_manager are rebuilt by
-    /// every prepare, the values set before one survive it). Its vectors are as long as the
-    /// model's tensor lists and indexed by slot, like everything else of the handler and the
-    /// stage chain. Declared before m_pp, which reads it: destroyed after.
-    anira::capi::StaticStore m_static;
+    /// The ports: per side one entry per tensor of the model config's list, indexed by slot
+    /// like everything else of the handler and the stage chain, and a variant of what the
+    /// tensor is in here (port.h): a stream port (what a host block must carry, the session's
+    /// ring), a static port (the stored whole-tensor value, in the spec's shape and dtype), a
+    /// state port (the slot of the pair's other half), a buffer port (nothing: refused under a
+    /// Hard contract). Built by anira_handler_create from the pipeline copy, the Static values
+    /// zeroed, and never resized; an arm never changes. prepare fills the stream ports' fields
+    /// and leaves the Static values alone, and so does reset (m_pp and m_manager are rebuilt
+    /// by every prepare, the values set before one survive it). Declared before m_pp, which
+    /// reads and writes them: destroyed after.
+    std::vector<anira::capi::Port> m_input_ports;
+    std::vector<anira::capi::Port> m_output_ports;
     std::unique_ptr<anira::PrePostProcessor> m_pp;       ///< the StageChainProcessor over
                                                          ///< m_pipeline.m_stages, rebuilt by every
                                                          ///< prepare (needs m_inference_config)
@@ -122,23 +127,14 @@ struct anira_handler {
     std::atomic<bool> m_prepared{false};  ///< release at the end of a successful prepare;
                                           ///< acquire in every nonblocking entry
     anira::RtLatch m_rt;                  ///< rt_error, the kind bits, the suppressed count
-    /// The dtype a host block of the slot must carry, resolved at prepare: the ring dtype of a
-    /// Streamed slot (F32 default). A Static slot has no ring: its entry is the spec's dtype,
-    /// which its empty tensor below carries; the tensor of a Static slot is checked against
-    /// the store (m_static), never against this vector.
-    std::vector<anira_dtype> m_input_ring_dtypes;
-    std::vector<anira_dtype> m_output_ring_dtypes;
-    // What the tensor forms know per slot, filled at prepare: the channel count a host block
-    // of a Streamed slot must have in shape[0] (1 for a Static slot, which has no host block),
-    // and one array of empty tensors per side (rank 2, shape {channels, 0}, the slot's dtype,
-    // host memory, no pointer). A single-tensor form on a side with several slots copies the
-    // caller's descriptor into its slot of the array, hands the array to the manager, which
-    // takes one tensor per slot, and sets that entry back to the empty tensor before it
-    // returns. The entry of a Static or a State slot stays empty: a single form never names
-    // one. All of them, the two ring dtype vectors above included, are indexed by slot: the
-    // tensor's position in the model config's list of its side.
-    std::vector<uint32_t> m_input_channels;
-    std::vector<uint32_t> m_output_channels;
+    // One array of empty tensors per side, built at prepare from the ports (rank 2, shape
+    // {channels, 0}, the slot's dtype, host memory, no pointer; the channel count and the dtype
+    // are the stream port's, 1 and the spec's dtype for a Static slot, which has no host
+    // block). A single-tensor form on a side with several slots copies the caller's descriptor
+    // into its slot of the array, hands the array to the manager, which takes one tensor per
+    // slot, and sets that entry back to the empty tensor before it returns. The entry of a
+    // Static or a State slot stays empty: a single form never names one. Indexed by slot, like
+    // the ports: the tensor's position in the model config's list of its side.
     std::vector<anira_tensor> m_input_tensors;
     std::vector<anira_tensor> m_output_tensors;
     /// The lengths of the model config's two tensor lists, set by anira_handler_create (the

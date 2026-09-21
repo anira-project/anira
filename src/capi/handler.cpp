@@ -16,7 +16,7 @@
 // planar tensor over its pointer array (anira_tensor_init_host_planar).
 //
 // The stems move Streamed slots. A Static slot has no ring: its value lives in the
-// handler's Static store (static_store.h), whole tensors in the spec's shape and dtype, written
+// handler's static port (port.h), a whole tensor in the spec's shape and dtype, written
 // by anira_handler_set_static_input and read by anira_handler_get_static_output. A multi form
 // is that sequence: the set of every non-empty Static input element, the stem, the get of every
 // non-empty Static output element, over the same two functions the entries call.
@@ -24,8 +24,9 @@
 // One slot space. A slot is the tensor's position in the model config's list of its side, and
 // that one number is what the host names (`tensor_index`, `slot`, `in_slot`, `out_slot`, the
 // positions of the multi forms' arrays and of `delivered`, the latency vector, the report's
-// slot rows) and what the session, the stems, the Static store and the stage chain index by.
-// The ROLE of the tensor decides which entries take a slot: a Streamed one the block calls, a
+// slot rows) and what the session, the stems, the handler's two port vectors and the stage
+// chain index by. The ROLE of the tensor decides the port's arm and with it which entries take a
+// slot: a Streamed one the block calls, a
 // Static one the two Static entries or a multi form's element, a State one no Hard entry at
 // all (declared state: the session feeds and captures it on the inference thread), so a single
 // form that names it is refused and its position in a multi form's array must be the empty
@@ -62,6 +63,7 @@
 #include <ratio>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "../scheduler/TensorRun.h"
@@ -69,8 +71,8 @@
 #include "context.h"
 #include "ext_registry.h"
 #include "handles.h"
+#include "port.h"
 #include "stage.h"
-#include "static_store.h"
 #include "translate.h"
 
 using anira::capi::translate_exception;
@@ -123,34 +125,12 @@ bool has_arguments(anira_handler& handler, bool ok, const char* entry) noexcept 
 
 // ==== the slots ===============================================================================
 
-// The spec of a slot in the pipeline copy, which anira_handler_create fixed and nothing changes:
-// a plain read. `slot` is below the side's count, and the handler is one anira_handler_create
-// built (it has its variant): every caller but slot_name runs behind the prepared check.
-const anira_tensor_spec& slot_spec(const anira_handler& handler,
-                                   bool input,
-                                   uint32_t slot) noexcept ANIRA_NONBLOCKING {
-    const anira_model_config& model = handler.m_pipeline.m_variants[0];
-    return input ? model.m_inputs[slot] : model.m_outputs[slot];
-}
-
-// The role of a slot decides which entries take it. `slot` is below the side's count.
-bool is_role(const anira_handler& handler,
-             bool input,
-             uint32_t slot,
-             anira_role role) noexcept ANIRA_NONBLOCKING {
-    return slot_spec(handler, input, slot).m_role == role;
-}
-
-// The Static store of a slot: NULL for a Streamed and for a State slot, and for a number at or
-// above the side's count (the store is as long as the model's list and indexed by slot).
-anira::capi::StaticSlot* static_input(const anira_handler& handler,
-                                      uint32_t slot) noexcept ANIRA_NONBLOCKING {
-    return handler.m_static.input(slot);
-}
-
-anira::capi::StaticSlot* static_output(const anira_handler& handler,
-                                       uint32_t slot) noexcept ANIRA_NONBLOCKING {
-    return handler.m_static.output(slot);
+// The port of a slot answers what the tensor is in here (port.h): anira_handler_create fixed
+// the arm from the spec's role, and nothing changes it. Every question below is a plain read
+// of the handler's port vector (std::get_if), a slot at or beyond the side's count included.
+const std::vector<anira::capi::Port>& side_ports(const anira_handler& handler,
+                                                 bool input) noexcept ANIRA_NONBLOCKING {
+    return input ? handler.m_input_ports : handler.m_output_ports;
 }
 
 // The canonical name of a slot's tensor, for a record: the host names the tensor by its slot
@@ -162,22 +142,21 @@ anira::capi::StaticSlot* static_output(const anira_handler& handler,
     // A handler anira_handler_create built has its variant; a bare one (a test's white-box
     // handler, which reaches the Static entries unprepared) has no name.
     if (handler.m_pipeline.m_variants.empty()) { return ""; }
-    return slot_spec(handler, input, slot).m_name.c_str();
+    const anira_model_config& model = handler.m_pipeline.m_variants[0];
+    return (input ? model.m_inputs[slot] : model.m_outputs[slot]).m_name.c_str();
 }
 
 // The argument predicates of the single-tensor forms (the pointers are checked for NULL only;
 // the descriptors themselves go through slot_tensor_status). A single form is the form of a
-// Streamed slot: a number that names a Static or a State slot is refused like one out of
-// range, because the single form of a Static slot is anira_handler_set_static_input /
-// _get_static_output and a State tensor is never the host's.
+// Streamed slot, the one with a stream port: a number that names a Static or a State slot is
+// refused like one out of range, because the single form of a Static slot is
+// anira_handler_set_static_input / _get_static_output and a State tensor is never the host's.
 bool input_slot(const anira_handler& handler, const anira_tensor* in, uint32_t slot) noexcept {
-    return in != nullptr && slot < handler.m_num_inputs &&
-           is_role(handler, true, slot, ANIRA_ROLE_STREAMED);
+    return in != nullptr && anira::capi::stream_port(handler.m_input_ports, slot) != nullptr;
 }
 
 bool output_slot(const anira_handler& handler, const anira_tensor* out, uint32_t slot) noexcept {
-    return out != nullptr && slot < handler.m_num_outputs &&
-           is_role(handler, false, slot, ANIRA_ROLE_STREAMED);
+    return out != nullptr && anira::capi::stream_port(handler.m_output_ports, slot) != nullptr;
 }
 
 // The two-slot form: each side names its own slot.
@@ -191,19 +170,22 @@ bool both_slots(const anira_handler& handler,
 
 // ==== the host tensors ========================================================================
 
-// One host tensor of a tensor form against its slot: the check the manager's stems leave to
-// their caller (anira::tensor_run::check_host_tensor: a status only, no allocation, no log,
-// the order rank, domain, flags, shape, dtype, memory and strides). A refusal is recorded
-// last-wins like every other and logged on the kind's first occurrence, naming the slot.
+// One host tensor of a tensor form against its slot's stream port: the check the manager's
+// stems leave to their caller (anira::tensor_run::check_host_tensor: a status only, no
+// allocation, no log, the order rank, domain, flags, shape, dtype, memory and strides). A
+// refusal is recorded last-wins like every other and logged on the kind's first occurrence,
+// naming the slot. Every caller asked the port first (input_slot, output_slot,
+// side_tensors_status): `slot` has a stream port.
 anira_status slot_tensor_status(anira_handler& handler,
                                 const anira_tensor& tensor,
                                 bool input,
                                 uint32_t slot,
                                 [[maybe_unused]] const char* entry) noexcept ANIRA_NONBLOCKING {
-    const anira_dtype dtype =
-        input ? handler.m_input_ring_dtypes[slot] : handler.m_output_ring_dtypes[slot];
-    const uint32_t channels =
-        input ? handler.m_input_channels[slot] : handler.m_output_channels[slot];
+    const anira::capi::StreamPort* port =
+        anira::capi::stream_port(side_ports(handler, input), slot);
+    if (port == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const anira_dtype dtype = port->m_ring_dtype;
+    const uint32_t channels = port->m_channels;
     const anira_status status =
         anira::tensor_run::check_host_tensor(tensor, dtype, channels, /*output=*/!input);
     if (status == ANIRA_OK || !handler.m_rt.record(status)) { return status; }
@@ -264,10 +246,10 @@ bool is_empty_element(const anira_tensor& tensor) noexcept ANIRA_NONBLOCKING {
     return false;
 }
 
-// One tensor against its Static slot: "fits" is a check, never a clamp (StaticSlot::check: a
-// status only, the order domain, flags, shape, dtype, memory and strides). A refusal is
-// recorded last-wins like every other and logged on the kind's first occurrence, naming the
-// slot. The one check of the two Static entries and of a Static element of a multi form.
+// One tensor against its static port's value: "fits" is a check, never a clamp (StaticSlot::check:
+// a status only, the order domain, flags, shape, dtype, memory and strides). A refusal is recorded
+// last-wins like every other and logged on the kind's first occurrence, naming the slot. The one
+// check of the two Static entries and of a Static element of a multi form.
 anira_status static_tensor_status(anira_handler& handler,
                                   const anira::capi::StaticSlot& store,
                                   const anira_tensor& tensor,
@@ -348,28 +330,27 @@ anira_status state_element_status(anira_handler& handler,
     return ANIRA_ERROR_INVALID_ARGUMENT;
 }
 
-// Every tensor of one side of a multi form, in slot order; the first refusal ends the walk. A
-// Streamed slot's element is a host block; a Static slot's is the whole tensor or an empty one;
-// a State slot's is the empty tensor.
+// Every tensor of one side of a multi form, in slot order; the first refusal ends the walk.
+// The port decides what the element must be: a stream port's is a host block; a static port's
+// is the whole tensor or an empty one; a state port's is the empty tensor. A buffer port is
+// never met behind the prepared check (prepare refuses the spec under a Hard contract).
 anira_status side_tensors_status(anira_handler& handler,
                                  const anira_tensor* tensors,
                                  bool input,
                                  const char* entry) noexcept ANIRA_NONBLOCKING {
-    const uint32_t count = input ? handler.m_num_inputs : handler.m_num_outputs;
-    for (uint32_t slot = 0; slot < count; ++slot) {
-        if (is_role(handler, input, slot, ANIRA_ROLE_STATE)) {
-            const anira_status status =
-                state_element_status(handler, tensors[slot], input, slot, entry);
-            if (status != ANIRA_OK) { return status; }
-            continue;
+    const std::vector<anira::capi::Port>& ports = side_ports(handler, input);
+    for (uint32_t slot = 0; slot < ports.size(); ++slot) {
+        const anira::capi::Port& port = ports[slot];
+        anira_status status = ANIRA_OK;
+        if (std::holds_alternative<anira::capi::StreamPort>(port)) {
+            status = slot_tensor_status(handler, tensors[slot], input, slot, entry);
+        } else if (const auto* fixed = std::get_if<anira::capi::StaticPort>(&port)) {
+            if (is_empty_element(tensors[slot])) { continue; }
+            status =
+                static_tensor_status(handler, fixed->m_value, tensors[slot], input, slot, entry);
+        } else if (std::holds_alternative<anira::capi::StatePort>(port)) {
+            status = state_element_status(handler, tensors[slot], input, slot, entry);
         }
-        const anira::capi::StaticSlot* store =
-            input ? static_input(handler, slot) : static_output(handler, slot);
-        if (store != nullptr && is_empty_element(tensors[slot])) { continue; }
-        const anira_status status =
-            store != nullptr
-                ? static_tensor_status(handler, *store, tensors[slot], input, slot, entry)
-                : slot_tensor_status(handler, tensors[slot], input, slot, entry);
         if (status != ANIRA_OK) { return status; }
     }
     return ANIRA_OK;
@@ -380,7 +361,7 @@ anira_status side_tensors_status(anira_handler& handler,
 void set_static_inputs(anira_handler& handler,
                        const anira_tensor* inputs) noexcept ANIRA_NONBLOCKING {
     for (uint32_t slot = 0; slot < handler.m_num_inputs; ++slot) {
-        anira::capi::StaticSlot* store = static_input(handler, slot);
+        anira::capi::StaticSlot* store = anira::capi::static_slot(handler.m_input_ports, slot);
         if (store == nullptr || is_empty_element(inputs[slot])) { continue; }
         store->write(inputs[slot]);
     }
@@ -392,7 +373,8 @@ void set_static_inputs(anira_handler& handler,
 void get_static_outputs(const anira_handler& handler,
                         const anira_tensor* outputs) noexcept ANIRA_NONBLOCKING {
     for (uint32_t slot = 0; slot < handler.m_num_outputs; ++slot) {
-        const anira::capi::StaticSlot* store = static_output(handler, slot);
+        const anira::capi::StaticSlot* store =
+            anira::capi::static_slot(handler.m_output_ports, slot);
         if (store == nullptr || is_empty_element(outputs[slot])) { continue; }
         store->read(outputs[slot]);
     }
@@ -474,7 +456,8 @@ void set_static_delivered(const anira_handler& handler,
                           size_t* delivered) noexcept ANIRA_NONBLOCKING {
     if (delivered == nullptr) { return; }
     for (uint32_t slot = 0; slot < handler.m_num_outputs; ++slot) {
-        const anira::capi::StaticSlot* store = static_output(handler, slot);
+        const anira::capi::StaticSlot* store =
+            anira::capi::static_slot(handler.m_output_ports, slot);
         if (store == nullptr || is_empty_element(outputs[slot])) { continue; }
         delivered[slot] = store->num_elements();
     }
@@ -624,11 +607,19 @@ void clear_report(anira_plan_report& report) noexcept {
 // Releases the session and everything prepare built; the handler is unprepared afterwards.
 // The session goes first (Core::release_session drains the in-flight work and joins the pool
 // with the last session), then the processor, the report and the plan table; the
-// InferenceConfig stays until the next prepare replaces it or destroy frees it.
+// InferenceConfig stays until the next prepare replaces it or destroy frees it. The rings die
+// with the session: no stream port names one while the handler is unprepared.
 void unprepare(anira_handler& handler) noexcept {
     handler.m_prepared.store(false, std::memory_order_release);
     handler.m_manager.reset();
     handler.m_pp.reset();
+    for (auto* ports : {&handler.m_input_ports, &handler.m_output_ports}) {
+        for (anira::capi::Port& port : *ports) {
+            if (auto* stream = std::get_if<anira::capi::StreamPort>(&port)) {
+                stream->m_ring = nullptr;
+            }
+        }
+    }
     clear_report(handler.m_report);
     handler.m_plans.clear();
 }
@@ -959,13 +950,23 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
 }
 
 // One empty tensor per slot of a side: rank 2, shape {channels, 0}, the slot's dtype, host
-// memory, no pointer.
-std::vector<anira_tensor> empty_tensors(const std::vector<uint32_t>& channels,
-                                        const std::vector<anira_dtype>& dtypes) {
-    std::vector<anira_tensor> tensors(channels.size());
-    for (size_t i = 0; i < channels.size(); ++i) {
-        const std::array<int64_t, 2> shape{static_cast<int64_t>(channels[i]), 0};
-        anira_tensor_init_host(&tensors[i], nullptr, dtypes[i], 2, shape.data());
+// memory, no pointer. The channel count and the dtype are the stream port's; a slot without a
+// host block has 1 channel and the spec's dtype (a static port) or the resolved ring dtype of
+// its position (`ring_dtypes`, float32 where the contract names none).
+std::vector<anira_tensor> empty_tensors(const std::vector<anira::capi::Port>& ports,
+                                        const std::vector<anira_dtype>& ring_dtypes) {
+    std::vector<anira_tensor> tensors(ports.size());
+    for (size_t i = 0; i < ports.size(); ++i) {
+        uint32_t channels = 1;
+        anira_dtype dtype = ring_dtypes[i];
+        if (const auto* stream = std::get_if<anira::capi::StreamPort>(&ports[i])) {
+            channels = stream->m_channels;
+            dtype = stream->m_ring_dtype;
+        } else if (const auto* fixed = std::get_if<anira::capi::StaticPort>(&ports[i])) {
+            dtype = fixed->m_value.dtype();
+        }
+        const std::array<int64_t, 2> shape{static_cast<int64_t>(channels), 0};
+        anira_tensor_init_host(&tensors[i], nullptr, dtype, 2, shape.data());
     }
     return tensors;
 }
@@ -1006,7 +1007,8 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_inference_config = std::move(config);
     auto chain = std::make_unique<anira::capi::StageChainProcessor>(handler.m_inference_config,
                                                                     handler.m_pipeline.m_stages,
-                                                                    handler.m_static);
+                                                                    handler.m_input_ports,
+                                                                    handler.m_output_ports);
     anira::capi::StageChainProcessor* const chain_processor = chain.get();
     handler.m_pp = std::move(chain);
     handler.m_manager = std::make_unique<anira::InferenceManager>(*handler.m_pp,
@@ -1025,7 +1027,8 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     build_plans(handler, model, derived, hard);
     handler.m_manager->set_state_pairs(anira::capi::make_state_pairs(model));
     handler.m_manager->prepare(host, anira::CustomLatencies{}, ring_dtypes);
-    // The session's structs and rings exist now, and no chunk does: the chain binds to them.
+    // The session's structs and rings exist now, and no chunk does: the chain binds to them,
+    // and every stream port gets its ring.
     // What a ctx reports for a chunk is the engine and provider of the plan it was stamped with.
     std::vector<anira::capi::StageChainProcessor::PlanPair> plan_pairs;
     plan_pairs.reserve(handler.m_plans.size());
@@ -1034,38 +1037,33 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     }
     chain_processor->bind(handler.m_manager->session(), std::move(plan_pairs));
 
-    // What the driver thread knows per slot (the counts are create's): the dtype a host block
-    // must carry (the resolved ring dtype of a Streamed slot) and the channel count of a host
-    // block; then the empty tensors of the single-tensor forms. A Static slot has no ring and
-    // no host block: its dtype entry is the spec's, its channel count 1, its entry of either
-    // array stays the empty tensor, and its tensors are checked against the store. A State
-    // slot has neither a ring nor a store: its entry is an empty tensor nothing ever replaces.
+    // What the driver thread knows per Streamed slot, on its stream port: the dtype a host
+    // block must carry (the resolved ring dtype) and the channel count of a host block; then
+    // the empty tensors of the single-tensor forms. A Static slot has no ring and no host
+    // block: its entry of either array stays the empty tensor, and its tensors are checked
+    // against the static port's value. A State slot has neither a ring nor a value: its entry
+    // is an empty tensor nothing ever replaces.
     const anira::InferenceConfig& prepared = handler.m_inference_config;
-    handler.m_input_ring_dtypes.assign(handler.m_num_inputs, ANIRA_DTYPE_F32);
-    handler.m_input_channels.assign(handler.m_num_inputs, 1U);
     for (uint32_t slot = 0; slot < handler.m_num_inputs; ++slot) {
-        const anira::capi::StaticSlot* store = handler.m_static.input(slot);
-        handler.m_input_ring_dtypes[slot] =
-            store != nullptr ? store->dtype() : ring_dtypes.m_inputs[slot];
-        if (prepared.get_preprocess_input_size()[slot] > 0) {
-            handler.m_input_channels[slot] =
-                static_cast<uint32_t>(prepared.get_preprocess_input_channels()[slot]);
-        }
+        auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_input_ports[slot]);
+        if (stream == nullptr) { continue; }
+        stream->m_ring_dtype = ring_dtypes.m_inputs[slot];
+        stream->m_channels =
+            prepared.get_preprocess_input_size()[slot] > 0
+                ? static_cast<uint32_t>(prepared.get_preprocess_input_channels()[slot])
+                : 1U;
     }
-    handler.m_output_ring_dtypes.assign(handler.m_num_outputs, ANIRA_DTYPE_F32);
-    handler.m_output_channels.assign(handler.m_num_outputs, 1U);
     for (uint32_t slot = 0; slot < handler.m_num_outputs; ++slot) {
-        const anira::capi::StaticSlot* store = handler.m_static.output(slot);
-        handler.m_output_ring_dtypes[slot] =
-            store != nullptr ? store->dtype() : ring_dtypes.m_outputs[slot];
-        if (prepared.get_postprocess_output_size()[slot] > 0) {
-            handler.m_output_channels[slot] =
-                static_cast<uint32_t>(prepared.get_postprocess_output_channels()[slot]);
-        }
+        auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_output_ports[slot]);
+        if (stream == nullptr) { continue; }
+        stream->m_ring_dtype = ring_dtypes.m_outputs[slot];
+        stream->m_channels =
+            prepared.get_postprocess_output_size()[slot] > 0
+                ? static_cast<uint32_t>(prepared.get_postprocess_output_channels()[slot])
+                : 1U;
     }
-    handler.m_input_tensors = empty_tensors(handler.m_input_channels, handler.m_input_ring_dtypes);
-    handler.m_output_tensors =
-        empty_tensors(handler.m_output_channels, handler.m_output_ring_dtypes);
+    handler.m_input_tensors = empty_tensors(handler.m_input_ports, ring_dtypes.m_inputs);
+    handler.m_output_tensors = empty_tensors(handler.m_output_ports, ring_dtypes.m_outputs);
     // ANIRA_WAIT_CONTRACT of the pop twins: wait_ratio x block_max / rate, the block a pop
     // has no input to measure by.
     handler.m_contract_wait = std::chrono::microseconds(static_cast<std::chrono::microseconds::rep>(
@@ -1368,25 +1366,39 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
 
     auto handler = std::make_unique<anira_handler>();
     handler->m_pipeline = anira_pipeline(*pipeline);
-    // The Static store: one zeroed buffer per Static tensor, in the spec's shape and dtype (the
-    // copy fixes the specs, so it is never resized), and an empty entry per tensor of any other
-    // role. From here on the two Static entries work, prepared or not.
+    // The ports: one per tensor of either list, the arm by the spec's role (the copy fixes the
+    // specs, so the vectors are never resized and no arm ever changes). A static port holds
+    // its zeroed value in the spec's shape and dtype, built in place (an atomic does not
+    // move): from here on the two Static entries work, prepared or not. A stream port gets
+    // its fields at prepare. A State tensor is the session's (it is fed and captured on the
+    // inference thread) and no entry of the handler carries it; a Buffer tensor is a per-job
+    // payload of the Async contract, and prepare refuses it under a Hard one
+    // (check_buffer_specs), so its port holds nothing.
     const anira_model_config& model = handler->m_pipeline.m_variants[0];
     const auto build_side = [](const std::vector<anira_tensor_spec>& specs,
                                const std::vector<anira::capi::DerivedSpec>& rows,
-                               std::vector<std::unique_ptr<anira::capi::StaticSlot>>& side) {
-        side.resize(specs.size());
+                               std::vector<anira::capi::Port>& side) {
+        side = std::vector<anira::capi::Port>(specs.size());  // stream ports
         for (size_t i = 0; i < specs.size(); ++i) {
-            // A Streamed tensor has a ring; a State tensor is the session's (it is fed and
-            // captured on the inference thread) and no entry of the handler carries it; a
-            // Buffer tensor is a per-job payload of the Async contract, and prepare refuses it
-            // under a Hard one (check_buffer_specs), so nothing is stored for it.
-            if (specs[i].m_role != ANIRA_ROLE_STATIC) { continue; }
-            side[i] = std::make_unique<anira::capi::StaticSlot>(rows[i].m_dims, specs[i].m_dtype);
+            switch (specs[i].m_role) {
+                case ANIRA_ROLE_STATIC:
+                    side[i].emplace<anira::capi::StaticPort>(rows[i].m_dims, specs[i].m_dtype);
+                    break;
+                case ANIRA_ROLE_STATE: side[i].emplace<anira::capi::StatePort>(); break;
+                case ANIRA_ROLE_BUFFER: side[i].emplace<anira::capi::BufferPort>(); break;
+                default: break;  // ANIRA_ROLE_STREAMED
+            }
         }
     };
-    build_side(model.m_inputs, derived.m_inputs, handler->m_static.m_inputs);
-    build_side(model.m_outputs, derived.m_outputs, handler->m_static.m_outputs);
+    build_side(model.m_inputs, derived.m_inputs, handler->m_input_ports);
+    build_side(model.m_outputs, derived.m_outputs, handler->m_output_ports);
+    // The two halves of a declared state pair name each other (validate resolved the pairs).
+    for (const anira::StatePair& pair : anira::capi::make_state_pairs(model)) {
+        auto* input = std::get_if<anira::capi::StatePort>(&handler->m_input_ports[pair.m_input]);
+        auto* output = std::get_if<anira::capi::StatePort>(&handler->m_output_ports[pair.m_output]);
+        if (input != nullptr) { input->m_partner = static_cast<uint32_t>(pair.m_output); }
+        if (output != nullptr) { output->m_partner = static_cast<uint32_t>(pair.m_input); }
+    }
     // The slot counts, the lengths of the model config's two lists: the bound of every entry
     // that names a slot, the two Static entries on an unprepared handler included.
     handler->m_num_inputs = static_cast<uint32_t>(model.m_inputs.size());
@@ -1642,7 +1654,7 @@ anira_status ANIRA_CALL anira_handler_set_static_input(anira_handler* handler,
                                                        const anira_tensor* tensor)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    anira::capi::StaticSlot* store = static_input(*handler, slot);
+    anira::capi::StaticSlot* store = anira::capi::static_slot(handler->m_input_ports, slot);
     if (!has_arguments(*handler, store != nullptr && tensor != nullptr, __func__)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
@@ -1658,7 +1670,7 @@ anira_status ANIRA_CALL anira_handler_get_static_output(anira_handler* handler,
                                                         const anira_tensor* out)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    const anira::capi::StaticSlot* store = static_output(*handler, slot);
+    const anira::capi::StaticSlot* store = anira::capi::static_slot(handler->m_output_ports, slot);
     if (!has_arguments(*handler, store != nullptr && out != nullptr, __func__)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }

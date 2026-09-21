@@ -76,7 +76,7 @@
 #include <vector>
 
 #include "../support/copy_oracle.h"
-#include "capi/static_store.h"
+#include "capi/port.h"
 #include "float_face.h"
 #include "handler_copy_oracle_golden.h"
 #include "handler_support.h"
@@ -483,10 +483,10 @@ public:
 private:
     /// The store of a Static slot, NULL for a Streamed one.
     const anira::capi::StaticSlot* static_input(uint32_t slot) const {
-        return m_handler.m_handler->m_static.input(slot);
+        return anira::capi::static_slot(m_handler.m_handler->m_input_ports, slot);
     }
     const anira::capi::StaticSlot* static_output(uint32_t slot) const {
-        return m_handler.m_handler->m_static.output(slot);
+        return anira::capi::static_slot(m_handler.m_handler->m_output_ports, slot);
     }
 
     /// The recorded counts of a multi form with every Static count above 0 replaced by the

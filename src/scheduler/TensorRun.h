@@ -195,7 +195,7 @@ inline void store_f32(const Run& run, size_t index, float value) noexcept {
 /**
  * @brief Whether `tensor` is a well-formed host block of one Streamed slot: what channel_run()
  * and InferenceManager's tensor stems take on trust. A Static tensor is no host block: it
- * travels whole, in the spec's shape, and has its own check (src/capi/static_store.h).
+ * travels whole, in the spec's shape, and has its own check (src/capi/port.h).
  *
  * A status only: no allocation, no log. The checks run in a fixed order (the rank, the domain,
  * the flags, the shape, the dtype, then the memory and the strides), so a tensor that is wrong

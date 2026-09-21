@@ -1,6 +1,6 @@
 // The Static tensors of anira/abi/handler.h: anira_handler_set_static_input,
 // anira_handler_get_static_output, the Static elements of the _multi forms and the handler's
-// store behind them (src/capi/static_store.h). A Static tensor has one description everywhere:
+// store behind them (src/capi/port.h). A Static tensor has one description everywhere:
 // the whole tensor in the spec's shape and dtype. Every case is engine-free: the one model path
 // is the custom row, the session's custom backend is a gate that runs BackendBase::process
 // (tensor i of the output is tensor i of the input), so what goes in as a Static input comes
@@ -34,12 +34,13 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "../support/copy_oracle.h"
 #include "../support/log_record_collector.h"
 #include "capi/handler.h"
-#include "capi/static_store.h"
+#include "capi/port.h"
 #include "float_face.h"
 #include "handler_support.h"
 
@@ -284,11 +285,16 @@ TEST(AbiHandlerStatic, ABufferSpecUnderAHardContractIsRefusedAtPrepare) {
     anira_handler* h = handler.m_handler;
     ASSERT_NE(h, nullptr) << "a Buffer spec is valid without a contract: " << handler.m_err.message;
 
-    // No store for the Buffer slot: the Static entries take a Static slot only, and the Static
-    // slot beside it works as ever.
-    EXPECT_EQ(h->m_static.input(2), nullptr);
-    EXPECT_EQ(h->m_static.output(2), nullptr);
-    EXPECT_NE(h->m_static.input(1), nullptr);
+    // The Buffer slot has a buffer port, which holds nothing: the Static entries take a Static
+    // slot only, and the Static slot beside it works as ever.
+    ASSERT_EQ(h->m_input_ports.size(), 3U);
+    ASSERT_EQ(h->m_output_ports.size(), 3U);
+    EXPECT_TRUE(std::holds_alternative<anira::capi::BufferPort>(h->m_input_ports[2]));
+    EXPECT_TRUE(std::holds_alternative<anira::capi::BufferPort>(h->m_output_ports[2]));
+    EXPECT_EQ(anira::capi::port_role(h->m_input_ports[2]), ANIRA_ROLE_BUFFER);
+    EXPECT_EQ(anira::capi::static_slot(h->m_input_ports, 2), nullptr);
+    EXPECT_EQ(anira::capi::static_slot(h->m_output_ports, 2), nullptr);
+    EXPECT_NE(anira::capi::static_slot(h->m_input_ports, 1), nullptr);
     std::array<float, 4> four{1.5F, 2.5F, 3.5F, 4.5F};
     const anira_tensor four_tensor = whole_f32(four.data(), k_four_shape);
     EXPECT_EQ(anira_handler_set_static_input(h, 2, &four_tensor), ANIRA_ERROR_INVALID_ARGUMENT);
@@ -776,10 +782,13 @@ template <typename T>
 void typed_round_trip(anira_dtype dtype) {
     auto handler = std::make_unique<anira_handler>();
     const std::vector<int64_t> shape{2, 3};
-    handler->m_static.m_inputs.push_back(std::make_unique<anira::capi::StaticSlot>(shape, dtype));
-    handler->m_static.m_outputs.push_back(std::make_unique<anira::capi::StaticSlot>(shape, dtype));
-    // What anira_handler_create builds beside the store: the slot counts, the lengths of the
-    // model config's two lists (one tensor per side here, slot 0).
+    // What anira_handler_create builds: one port per tensor, sized once and the static port's
+    // value constructed in place (it holds atomics and does not move), and the slot counts, the
+    // lengths of the model config's two lists (one tensor per side here, slot 0).
+    handler->m_input_ports = std::vector<anira::capi::Port>(1);
+    handler->m_output_ports = std::vector<anira::capi::Port>(1);
+    handler->m_input_ports[0].emplace<anira::capi::StaticPort>(shape, dtype);
+    handler->m_output_ports[0].emplace<anira::capi::StaticPort>(shape, dtype);
     handler->m_num_inputs = 1;
     handler->m_num_outputs = 1;
     const std::array<T, 6> values{T{-3}, T{2}, T{32767}, T{-32768}, T{5}, T{6}};
@@ -787,13 +796,14 @@ void typed_round_trip(anira_dtype dtype) {
     anira_tensor_init_host(&in, const_cast<T*>(values.data()), dtype, 2, shape.data());
     ASSERT_EQ(anira_handler_set_static_input(handler.get(), 0, &in), ANIRA_OK);
     // What the chain does between the two stores, without a session: packed out, packed in.
-    const anira::capi::StaticSlot* input_store = handler->m_static.input(0);
+    const anira::capi::StaticSlot* input_store =
+        anira::capi::static_slot(handler->m_input_ports, 0);
     ASSERT_NE(input_store, nullptr);
-    ASSERT_NE(handler->m_static.output(0), nullptr);
+    ASSERT_NE(anira::capi::static_slot(handler->m_output_ports, 0), nullptr);
     std::array<T, 6> model{};
     input_store->read_packed(model.data(), sizeof(model));
     EXPECT_EQ(model, values);
-    handler->m_static.output(0)->write_packed(model.data(), sizeof(model));
+    anira::capi::static_slot(handler->m_output_ports, 0)->write_packed(model.data(), sizeof(model));
     std::array<T, 6> out{};
     anira_tensor out_tensor{};
     anira_tensor_init_host(&out_tensor, out.data(), dtype, 2, shape.data());

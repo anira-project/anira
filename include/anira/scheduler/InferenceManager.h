@@ -154,8 +154,8 @@ public:
      * The stems move the streamed slots. A non-streamable slot (no stream size in the
      * InferenceConfig: a Static tensor of a 3.x model) has no ring and is not the copy path's:
      * its tensor is never read, whatever it holds, its delivered count is always 0, and a miss
-     * leaves its memory alone. Its values travel beside the stems: through the Static store of a
-     * 3.x handler (whole tensors in the spec's shape, src/capi/static_store.h), and for the 2.x
+     * leaves its memory alone. Its values travel beside the stems: through the static ports of a
+     * 3.x handler (whole tensors in the spec's shape, src/capi/port.h), and for the 2.x
      * face through anira::NonStreamableRouter (src/scheduler/NonStreamableRouter.h), which keeps
      * the value count, the clamp and the miss rules of the 2.x `float***` blocks.
      *

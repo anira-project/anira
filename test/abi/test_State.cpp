@@ -46,9 +46,11 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "../support/log_record_collector.h"
+#include "capi/port.h"
 #include "float_face.h"
 #include "handler_support.h"
 
@@ -461,12 +463,38 @@ TEST(AbiState, OneSlotSpacePerSide) {
     EXPECT_EQ(h->m_num_outputs, 3U);
     EXPECT_EQ(rig.data_slot(), 2U);
     EXPECT_EQ(rig.processed_slot(), 1U);
-    // The State tensors have no Static store: no entry of the handler carries them, and the
+    // One port per tensor, indexed by slot, the arm by the spec's role. The two halves of the
+    // pair name each other; they hold no value: no entry of the handler carries them, and the
     // chain's materialisation never touches them.
-    EXPECT_EQ(h->m_static.input(1), nullptr);
-    EXPECT_EQ(h->m_static.output(0), nullptr);
-    EXPECT_NE(h->m_static.input(0), nullptr);
-    EXPECT_NE(h->m_static.output(2), nullptr);
+    using anira::capi::port_role;
+    ASSERT_EQ(h->m_input_ports.size(), 3U);
+    ASSERT_EQ(h->m_output_ports.size(), 3U);
+    EXPECT_EQ(port_role(h->m_input_ports[0]), ANIRA_ROLE_STATIC);
+    EXPECT_EQ(port_role(h->m_input_ports[1]), ANIRA_ROLE_STATE);
+    EXPECT_EQ(port_role(h->m_input_ports[2]), ANIRA_ROLE_STREAMED);
+    EXPECT_EQ(port_role(h->m_output_ports[0]), ANIRA_ROLE_STATE);
+    EXPECT_EQ(port_role(h->m_output_ports[1]), ANIRA_ROLE_STREAMED);
+    EXPECT_EQ(port_role(h->m_output_ports[2]), ANIRA_ROLE_STATIC);
+    const auto* state_in = std::get_if<anira::capi::StatePort>(&h->m_input_ports[1]);
+    const auto* state_out = std::get_if<anira::capi::StatePort>(&h->m_output_ports[0]);
+    ASSERT_NE(state_in, nullptr);
+    ASSERT_NE(state_out, nullptr);
+    EXPECT_EQ(state_in->m_partner, 0U);
+    EXPECT_EQ(state_out->m_partner, 1U);
+    EXPECT_EQ(anira::capi::static_slot(h->m_input_ports, 1), nullptr);
+    EXPECT_EQ(anira::capi::static_slot(h->m_output_ports, 0), nullptr);
+    EXPECT_NE(anira::capi::static_slot(h->m_input_ports, 0), nullptr);
+    EXPECT_NE(anira::capi::static_slot(h->m_output_ports, 2), nullptr);
+    // A stream port carries what a host block of the slot must have, and the session's ring.
+    const anira::capi::StreamPort* data = anira::capi::stream_port(h->m_input_ports, 2);
+    const anira::capi::StreamPort* processed = anira::capi::stream_port(h->m_output_ports, 1);
+    ASSERT_NE(data, nullptr);
+    ASSERT_NE(processed, nullptr);
+    EXPECT_EQ(data->m_ring_dtype, static_cast<anira_dtype>(ANIRA_DTYPE_F32));
+    EXPECT_EQ(data->m_ring, &h->m_manager->session().m_send_buffer[2]);
+    EXPECT_EQ(processed->m_ring, &h->m_manager->session().m_receive_buffer[1]);
+    EXPECT_EQ(anira::capi::stream_port(h->m_input_ports, 0), nullptr);
+    EXPECT_EQ(anira::capi::stream_port(h->m_input_ports, 3), nullptr) << "beyond the side's count";
 
     // The latency vector: one entry per output tensor, 0 for one that is not Streamed.
     uint32_t count = 0;
@@ -615,7 +643,7 @@ TEST(AbiState, AStatePositionInAMultiArrayMustBeEmpty) {
     std::vector<size_t> delivered(3, 77);
     const auto stored_input = [&] {
         std::array<float, 3> stored{};
-        h->m_static.input(0)->read_packed(stored.data(), sizeof(stored));
+        anira::capi::static_slot(h->m_input_ports, 0)->read_packed(stored.data(), sizeof(stored));
         return stored;
     };
 

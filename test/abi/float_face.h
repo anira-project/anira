@@ -267,7 +267,8 @@ private:
     const anira_tensor* whole_inputs(const float* const* const* in, const size_t* num_in) {
         const anira_tensor* planar = m_adapter.present_inputs(in, num_in);
         for (uint32_t slot = 0; slot < m_handler->m_num_inputs; ++slot) {
-            const anira::capi::StaticSlot* store = m_handler->m_static.input(slot);
+            const anira::capi::StaticSlot* store =
+                anira::capi::static_slot(m_handler->m_input_ports, slot);
             m_inputs[slot] = store != nullptr && num_in[slot] > 0
                                  ? whole_f32(in[slot][0], store->shape())
                                  : planar[slot];
@@ -278,7 +279,8 @@ private:
     const anira_tensor* whole_outputs(float* const* const* out, const size_t* num_out) {
         const anira_tensor* planar = m_adapter.present_outputs(out, num_out);
         for (uint32_t slot = 0; slot < m_handler->m_num_outputs; ++slot) {
-            const anira::capi::StaticSlot* store = m_handler->m_static.output(slot);
+            const anira::capi::StaticSlot* store =
+                anira::capi::static_slot(m_handler->m_output_ports, slot);
             m_outputs[slot] = store != nullptr && num_out[slot] > 0
                                   ? whole_f32(out[slot][0], store->shape())
                                   : planar[slot];

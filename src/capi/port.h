@@ -1,14 +1,29 @@
-#ifndef ANIRA_CAPI_STATIC_STORE_H
-#define ANIRA_CAPI_STATIC_STORE_H
+#ifndef ANIRA_CAPI_PORT_H
+#define ANIRA_CAPI_PORT_H
 /*
- * The Static store of a C-created handler: one typed buffer per Static tensor, in the spec's
- * shape and dtype (a Buffer tensor is a per-job payload of the Async contract and is refused
- * under a Hard one: nothing is stored for it). Sized and zeroed once,
- * at anira_handler_create, never resized, untouched by prepare and by reset: what
- * anira_handler_set_static_input stores and the stage chain materialises into the model's
- * input tensors, and what the chain captures from the model's output tensors and
- * anira_handler_get_static_output returns. Private to src/capi (and the tests through the
- * src/ include directory): header-inline, not installed, not exported.
+ * The ports of a C-created handler: what each tensor of the model config IS inside the handler.
+ * anira_handler holds one vector of ports per side, indexed by slot (the tensor's position in
+ * the model config's list of its side), and the role of the tensor's spec decides the arm:
+ *
+ *   Streamed -> StreamPort: the session's ring, and what a host block of the slot must carry.
+ *   Static   -> StaticPort: the stored whole-tensor value (StaticSlot), in the spec's shape and
+ *               dtype.
+ *   State    -> StatePort: the slot of the other half of the pair. The session feeds and
+ *               captures the tensor on the inference thread; no Hard entry carries it.
+ *   Buffer   -> BufferPort: nothing. A Buffer tensor is a per-job payload of the Async
+ *               contract and is refused under a Hard one at prepare.
+ *
+ * The vectors are built once, at anira_handler_create, and never resized; an arm never changes.
+ * prepare fills the fields of a StreamPort; every per-call path only reads (std::get_if, which
+ * cannot throw). The entries of the handler and the stage chain ask the port: which entry takes
+ * a slot, what a multi form's element must be, what the chain materialises and captures.
+ * Private to src/capi (and the tests through the src/ include directory): header-inline, not
+ * installed, not exported.
+ *
+ * The Static value: sized and zeroed once, at anira_handler_create, untouched by prepare and by
+ * reset: what anira_handler_set_static_input stores and the stage chain materialises into the
+ * model's input tensors, and what the chain captures from the model's output tensors and
+ * anira_handler_get_static_output returns.
  *
  * The latch is a sequence counter per slot with one writer: the counter is odd while a write
  * runs, a reader copies and takes the copy only when the counter was even and is unchanged
@@ -35,15 +50,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <memory>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "../scheduler/TensorRun.h"
 
 namespace anira::capi {
 
-/// One slot of the store.
+/// The stored value of one Static tensor.
 class StaticSlot {
 public:
     /// `shape` is the spec's (every extent above 0, at most ANIRA_MAX_RANK of them), `dtype`
@@ -270,25 +285,68 @@ private:
     std::vector<std::atomic<uint64_t>> m_words;  ///< The values, eight bytes per word
 };
 
-/// The store of one handler: per side one entry per tensor of the model's list, in list order,
-/// so it is indexed by slot like the handler's entries and the stage chain. NULL for a Streamed
-/// tensor (it has a ring, and the Hard entries move it) and for a State tensor (the session
-/// feeds and captures it on the inference thread, and no entry of the handler carries it).
-/// Built once, at anira_handler_create.
-struct StaticStore {
-    std::vector<std::unique_ptr<StaticSlot>> m_inputs;
-    std::vector<std::unique_ptr<StaticSlot>> m_outputs;
-
-    /// The store of a tensor, or NULL for a Streamed or a State tensor and for an index out of
-    /// range.
-    StaticSlot* input(size_t tensor) const noexcept {
-        return tensor < m_inputs.size() ? m_inputs[tensor].get() : nullptr;
-    }
-    StaticSlot* output(size_t tensor) const noexcept {
-        return tensor < m_outputs.size() ? m_outputs[tensor].get() : nullptr;
-    }
+/// A Streamed tensor. The fields are prepare's (the contract resolves the ring dtype, the
+/// InferenceConfig the channel count, the session owns the ring); create leaves the defaults.
+struct StreamPort {
+    uint32_t m_channels = 1;                     ///< shape[0] a host block of the slot must have
+    anira_dtype m_ring_dtype = ANIRA_DTYPE_F32;  ///< the dtype a host block of the slot must carry
+    /// The session's ring (SessionElement::m_send_buffer / m_receive_buffer at the slot), set
+    /// by StageChainProcessor::bind and valid while that session lives; NULL before.
+    anira_ring* m_ring = nullptr;
 };
+
+/// A Static tensor: the typed whole-tensor value with its sequence counter. Constructed in
+/// place (an atomic does not move).
+struct StaticPort {
+    StaticPort(std::vector<int64_t> shape, anira_dtype dtype) : m_value(std::move(shape), dtype) {}
+    StaticSlot m_value;
+};
+
+/// One half of a declared state pair: `m_partner` is the slot of the other half, on the other
+/// side.
+struct StatePort {
+    uint32_t m_partner = 0;
+};
+
+/// A Buffer tensor holds nothing: prepare refuses the spec under a Hard contract, so no
+/// per-call path ever meets the arm.
+struct BufferPort {};
+
+/// What the tensor of a slot is inside the handler. The arm follows the spec's role and never
+/// changes after anira_handler_create.
+using Port = std::variant<StreamPort, StaticPort, StatePort, BufferPort>;
+
+/// The role a port's arm stands for: a plain read of the variant's index.
+inline anira_role port_role(const Port& port) noexcept {
+    if (std::holds_alternative<StreamPort>(port)) { return ANIRA_ROLE_STREAMED; }
+    if (std::holds_alternative<StaticPort>(port)) { return ANIRA_ROLE_STATIC; }
+    if (std::holds_alternative<StatePort>(port)) { return ANIRA_ROLE_STATE; }
+    return ANIRA_ROLE_BUFFER;
+}
+
+/// The stream port of a slot, or NULL for a tensor of another role and for a slot at or beyond
+/// the side's count.
+inline const StreamPort* stream_port(const std::vector<Port>& ports, size_t slot) noexcept {
+    return slot < ports.size() ? std::get_if<StreamPort>(&ports[slot]) : nullptr;
+}
+
+/// The stored value of a Static slot, or NULL for a tensor of another role and for a slot at
+/// or beyond the side's count.
+inline StaticSlot* static_slot(std::vector<Port>& ports, size_t slot) noexcept {
+    StaticPort* port = slot < ports.size() ? std::get_if<StaticPort>(&ports[slot]) : nullptr;
+    return port != nullptr ? &port->m_value : nullptr;
+}
+
+inline const StaticSlot* static_slot(const std::vector<Port>& ports, size_t slot) noexcept {
+    const StaticPort* port = slot < ports.size() ? std::get_if<StaticPort>(&ports[slot]) : nullptr;
+    return port != nullptr ? &port->m_value : nullptr;
+}
+
+/// Whether the slot is one half of a declared state pair (false at or beyond the side's count).
+inline bool is_state_port(const std::vector<Port>& ports, size_t slot) noexcept {
+    return slot < ports.size() && std::holds_alternative<StatePort>(ports[slot]);
+}
 
 }  // namespace anira::capi
 
-#endif  // ANIRA_CAPI_STATIC_STORE_H
+#endif  // ANIRA_CAPI_PORT_H

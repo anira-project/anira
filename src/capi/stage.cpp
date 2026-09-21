@@ -29,10 +29,11 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ext_registry.h"
-#include "static_store.h"
+#include "port.h"
 #include "translate.h"
 
 // The members of anira_ring dispatch through std::visit, which is declared to throw
@@ -351,10 +352,12 @@ StageFacts stage_facts(const StageChain& chain) {
 
 StageChainProcessor::StageChainProcessor(anira::InferenceConfig& config,
                                          const StageChain& chain,
-                                         const StaticStore& store)
+                                         std::vector<Port>& input_ports,
+                                         std::vector<Port>& output_ports)
     : anira::PrePostProcessor(config)
     , m_chain(chain)
-    , m_store(store)
+    , m_input_ports(input_ports)
+    , m_output_ports(output_ports)
     , m_input_shapes(config.get_tensor_input_shape())
     , m_output_shapes(config.get_tensor_output_shape()) {
     for (const std::shared_ptr<StageCarrier>& stage : m_chain) {
@@ -383,20 +386,29 @@ void StageChainProcessor::bind(anira::SessionElement& session, std::vector<PlanP
         chunk.m_outputs.resize(m_output_shapes.size());
         m_chunks.push_back(std::move(chunk));
     }
-    // A ring exists for a Streamed tensor only; the others read NULL in the ctx.
+    // A ring exists for a Streamed tensor only: its stream port names the session's ring from
+    // here on, and the others read NULL in the ctx.
     size_t input_channels = 0;
-    m_input_rings.assign(m_input_shapes.size(), nullptr);
-    for (size_t i = 0; i < m_input_rings.size() && i < session.m_send_buffer.size(); ++i) {
-        if (m_inference_config.get_preprocess_input_size()[i] == 0) { continue; }
-        m_input_rings[i] = &session.m_send_buffer[i];
-        input_channels += session.m_send_buffer[i].num_channels();
+    m_ctx_input_rings.assign(m_input_ports.size(), nullptr);
+    for (size_t i = 0; i < m_input_ports.size() && i < session.m_send_buffer.size(); ++i) {
+        auto* stream = std::get_if<StreamPort>(&m_input_ports[i]);
+        if (stream == nullptr || m_inference_config.get_preprocess_input_size()[i] == 0) {
+            continue;
+        }
+        stream->m_ring = &session.m_send_buffer[i];
+        m_ctx_input_rings[i] = stream->m_ring;
+        input_channels += stream->m_ring->num_channels();
     }
     size_t output_channels = 0;
-    m_output_rings.assign(m_output_shapes.size(), nullptr);
-    for (size_t i = 0; i < m_output_rings.size() && i < session.m_receive_buffer.size(); ++i) {
-        if (m_inference_config.get_postprocess_output_size()[i] == 0) { continue; }
-        m_output_rings[i] = &session.m_receive_buffer[i];
-        output_channels += session.m_receive_buffer[i].num_channels();
+    m_ctx_output_rings.assign(m_output_ports.size(), nullptr);
+    for (size_t i = 0; i < m_output_ports.size() && i < session.m_receive_buffer.size(); ++i) {
+        auto* stream = std::get_if<StreamPort>(&m_output_ports[i]);
+        if (stream == nullptr || m_inference_config.get_postprocess_output_size()[i] == 0) {
+            continue;
+        }
+        stream->m_ring = &session.m_receive_buffer[i];
+        m_ctx_output_rings[i] = stream->m_ring;
+        output_channels += stream->m_ring->num_channels();
     }
     m_before.assign(std::max(input_channels, output_channels), 0);
 }
@@ -465,11 +477,12 @@ anira_status StageChainProcessor::run_phase(const anira_stage_ctx& ctx,
     return ANIRA_OK;
 }
 
-void StageChainProcessor::snapshot(const std::vector<anira_ring*>& rings) noexcept
-    ANIRA_NONBLOCKING {
+void StageChainProcessor::snapshot(const std::vector<Port>& ports) noexcept ANIRA_NONBLOCKING {
     size_t entry = 0;
-    for (const anira_ring* ring : rings) {
-        if (ring == nullptr) { continue; }
+    for (const Port& port : ports) {
+        const auto* stream = std::get_if<StreamPort>(&port);
+        if (stream == nullptr || stream->m_ring == nullptr) { continue; }
+        const anira_ring* ring = stream->m_ring;
         const size_t channels = ring->num_channels();
         for (size_t channel = 0; channel < channels; ++channel) {
             m_before[entry++] = ring->available(channel);
@@ -510,9 +523,10 @@ void StageChainProcessor::report_hop([[maybe_unused]] uint32_t phase,
 
 void StageChainProcessor::check_input_hops(bool report) noexcept ANIRA_NONBLOCKING {
     size_t entry = 0;
-    for (size_t tensor = 0; tensor < m_input_rings.size(); ++tensor) {
-        anira_ring* ring = m_input_rings[tensor];
-        if (ring == nullptr) { continue; }
+    for (size_t tensor = 0; tensor < m_input_ports.size(); ++tensor) {
+        const auto* stream = std::get_if<StreamPort>(&m_input_ports[tensor]);
+        if (stream == nullptr || stream->m_ring == nullptr) { continue; }
+        anira_ring* ring = stream->m_ring;
         const size_t channels = ring->num_channels();
         for (size_t channel = 0; channel < channels; ++channel) {
             const size_t before = m_before[entry++];
@@ -532,9 +546,10 @@ void StageChainProcessor::check_input_hops(bool report) noexcept ANIRA_NONBLOCKI
 
 void StageChainProcessor::check_output_hops(bool report) noexcept ANIRA_NONBLOCKING {
     size_t entry = 0;
-    for (size_t tensor = 0; tensor < m_output_rings.size(); ++tensor) {
-        anira_ring* ring = m_output_rings[tensor];
-        if (ring == nullptr) { continue; }
+    for (size_t tensor = 0; tensor < m_output_ports.size(); ++tensor) {
+        const auto* stream = std::get_if<StreamPort>(&m_output_ports[tensor]);
+        if (stream == nullptr || stream->m_ring == nullptr) { continue; }
+        anira_ring* ring = stream->m_ring;
         const size_t channels = ring->num_channels();
         for (size_t channel = 0; channel < channels; ++channel) {
             const size_t before = m_before[entry++];
@@ -562,22 +577,22 @@ void StageChainProcessor::pre_process(std::vector<anira::RingBuffer>& input,
         return;
     }
     // Every Static tensor is materialised ahead of any stage: the whole tensor out
-    // of the handler's Static store, under its slot's latch, into the struct's packed buffer. A
-    // State tensor has no ring and no store either: the session feeds it on the inference
+    // of its static port, under the slot's latch, into the struct's packed buffer. A
+    // State tensor has no ring and no value either: the session feeds it on the inference
     // thread, and nothing on this thread touches it.
-    for (size_t tensor = 0; tensor < output.size() && tensor < m_input_rings.size(); ++tensor) {
-        if (m_input_rings[tensor] != nullptr) { continue; }
-        const StaticSlot* slot = m_store.input(tensor);
-        if (slot == nullptr) { continue; }
-        slot->read_packed(output[tensor].get_write_pointer(0),
-                          m_inference_config.get_tensor_input_size()[tensor] * sizeof(float));
+    for (size_t tensor = 0; tensor < output.size() && tensor < m_input_ports.size(); ++tensor) {
+        const auto* fixed = std::get_if<StaticPort>(&m_input_ports[tensor]);
+        if (fixed == nullptr) { continue; }
+        fixed->m_value.read_packed(
+            output[tensor].get_write_pointer(0),
+            m_inference_config.get_tensor_input_size()[tensor] * sizeof(float));
     }
     repoint(chunk->m_inputs, output, m_input_shapes);
     anira_stage_ctx ctx = make_ctx(ANIRA_PHASE_PRE_PROCESS, *chunk);
-    ctx.input_rings = m_input_rings.data();
+    ctx.input_rings = m_ctx_input_rings.data();
     ctx.model_inputs = chunk->m_inputs.data();
 
-    snapshot(m_input_rings);
+    snapshot(m_input_ports);
     anira_status status = ANIRA_OK;
     if (m_first_pre != nullptr) {
         status = run_phase(ctx, /*on_driver=*/true);
@@ -605,9 +620,9 @@ void StageChainProcessor::post_process(std::vector<anira::BufferF>& input,
     repoint(chunk->m_outputs, input, m_output_shapes);
     anira_stage_ctx ctx = make_ctx(ANIRA_PHASE_POST_PROCESS, *chunk);
     ctx.model_outputs = chunk->m_outputs.data();
-    ctx.output_rings = m_output_rings.data();
+    ctx.output_rings = m_ctx_output_rings.data();
 
-    snapshot(m_output_rings);
+    snapshot(m_output_ports);
     anira_status status = ANIRA_OK;
     if (m_first_post != nullptr) {
         status = run_phase(ctx, /*on_driver=*/true);
@@ -620,17 +635,17 @@ void StageChainProcessor::post_process(std::vector<anira::BufferF>& input,
     check_output_hops(/*report=*/status == ANIRA_OK);
 
     // Every Static tensor is captured behind the last stage, the whole tensor into
-    // the store under its slot's latch (a State tensor has no store: the session captured it on
-    // the inference thread). Not from a chunk that completed as zeros (dropped, failed
-    // in a stage or in the engine) and not behind a failed post_process: the store holds what
-    // the model produced.
+    // its static port under the slot's latch (a State tensor has no port value: the session
+    // captured it on the inference thread). Not from a chunk that completed as zeros (dropped,
+    // failed in a stage or in the engine) and not behind a failed post_process: the port holds
+    // what the model produced.
     if (status != ANIRA_OK || chunk->m_struct->m_completed_as_zeros) { return; }
-    for (size_t tensor = 0; tensor < input.size() && tensor < m_output_rings.size(); ++tensor) {
-        if (m_output_rings[tensor] != nullptr) { continue; }
-        StaticSlot* slot = m_store.output(tensor);
-        if (slot == nullptr) { continue; }
-        slot->write_packed(input[tensor].get_read_pointer(0),
-                           m_inference_config.get_tensor_output_size()[tensor] * sizeof(float));
+    for (size_t tensor = 0; tensor < input.size() && tensor < m_output_ports.size(); ++tensor) {
+        auto* fixed = std::get_if<StaticPort>(&m_output_ports[tensor]);
+        if (fixed == nullptr) { continue; }
+        fixed->m_value.write_packed(
+            input[tensor].get_read_pointer(0),
+            m_inference_config.get_tensor_output_size()[tensor] * sizeof(float));
     }
 }
 

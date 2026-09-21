@@ -23,7 +23,7 @@
 #include <string>
 #include <vector>
 
-#include "static_store.h"
+#include "port.h"
 #include "translate.h"
 
 namespace anira::capi {
@@ -73,12 +73,14 @@ ANIRA_API StageFacts stage_facts(const StageChain& chain);
 /// the plan the chunk was stamped with, and the status slot the scheduler reads after a failed
 /// phase.
 ///
-/// The Static tensors travel through the handler's Static store
-/// (static_store.h), whole and typed: every one is materialised into model_inputs ahead of any
-/// stage's pre_process and captured from model_outputs behind the last post_process, each under
-/// its slot's latch. A chunk that completed as zeros (dropped, or failed in a stage or in the
-/// engine) captures nothing: the store holds what the model produced. The float atomics this
-/// class inherits from the 2.x processor are not used.
+/// The chain reads the handler's two port vectors (port.h), indexed by slot: the role of a
+/// slot is its port's arm and the ring of a slot its stream port's, both plain reads. The
+/// Static tensors travel through their static ports, whole and typed: every one is
+/// materialised into model_inputs ahead of any stage's pre_process and captured from
+/// model_outputs behind the last post_process, each under its slot's latch. A chunk that
+/// completed as zeros (dropped, or failed in a stage or in the engine) captures nothing: the
+/// port holds what the model produced. The float atomics this class inherits from the 2.x
+/// processor are not used.
 class ANIRA_API StageChainProcessor final : public anira::PrePostProcessor {
 public:
     /// What the ctx reports for a chunk stamped with one plan of the handler's table.
@@ -87,15 +89,18 @@ public:
         uint32_t m_provider = ANIRA_PROVIDER_DEFAULT;
     };
 
-    /// `config`, `chain` and `store` must outlive the processor (the handler owns all four).
-    /// The store and the model's tensors are indexed by slot, the tensor's position in the
-    /// model config's list of its side: the one numbering of the handler's entries too.
+    /// `config`, `chain` and the two port vectors must outlive the processor (the handler
+    /// owns all five). The ports and the model's tensors are indexed by slot, the tensor's
+    /// position in the model config's list of its side: the one numbering of the handler's
+    /// entries too. The vectors are never resized and no arm changes while the processor lives.
     StageChainProcessor(anira::InferenceConfig& config,
                         const StageChain& chain,
-                        const StaticStore& store);
+                        std::vector<Port>& input_ports,
+                        std::vector<Port>& output_ports);
 
     /// Control thread, after the session's prepare and before its first chunk: the struct
-    /// table, the ring arrays and one preallocated tensor array per struct and side.
+    /// table, the ring of every stream port (the session's, at the port's slot), the ring
+    /// arrays a ctx carries and one preallocated tensor array per struct and side.
     void bind(anira::SessionElement& session, std::vector<PlanPair> plans);
 
     void pre_process(std::vector<anira::RingBuffer>& input,
@@ -126,12 +131,12 @@ private:
     anira_status run_phase(const anira_stage_ctx& ctx, bool on_driver) noexcept ANIRA_NONBLOCKING;
     /// Records a failed phase: last-wins into rt_error, one record per kind naming the stage.
     void fail(const char* stage, uint32_t phase, anira_status status) noexcept ANIRA_NONBLOCKING;
-    /// The count check around the two ring-moving phases: snapshot() reads available() of
-    /// every channel ahead of the phase; the check behind it repairs a shortfall (an input ring
-    /// discards to its hop, an output ring is topped up with zeros) and, with `report`, records
-    /// ANIRA_ERROR_CONFIG with one latched record for the first channel that moved another
-    /// count than its hop.
-    void snapshot(const std::vector<anira_ring*>& rings) noexcept ANIRA_NONBLOCKING;
+    /// The count check around the two ring-moving phases, over the stream ports of one side:
+    /// snapshot() reads available() of every channel ahead of the phase; the check behind it
+    /// repairs a shortfall (an input ring discards to its hop, an output ring is topped up with
+    /// zeros) and, with `report`, records ANIRA_ERROR_CONFIG with one latched record for the first
+    /// channel that moved another count than its hop.
+    void snapshot(const std::vector<Port>& ports) noexcept ANIRA_NONBLOCKING;
     void check_input_hops(bool report) noexcept ANIRA_NONBLOCKING;
     void check_output_hops(bool report) noexcept ANIRA_NONBLOCKING;
     void report_hop(uint32_t phase,
@@ -141,7 +146,10 @@ private:
                     size_t moved) noexcept ANIRA_NONBLOCKING;
 
     const StageChain& m_chain;
-    const StaticStore& m_store;  ///< the handler's; read in pre_process, written in post_process
+    /// The handler's ports. bind() sets the stream ports' rings; pre_process reads the static
+    /// input ports, post_process writes the static output ports.
+    std::vector<Port>& m_input_ports;
+    std::vector<Port>& m_output_ports;
     /// The first and the last stage that fill each ring-moving phase (NULL: none does, the
     /// default body runs): whom the count check names.
     const StageCarrier* m_first_pre = nullptr;
@@ -156,10 +164,13 @@ private:
     std::vector<std::vector<int64_t>> m_input_shapes;   ///< the spec's extents per tensor
     std::vector<std::vector<int64_t>> m_output_shapes;  ///< the spec's extents per tensor
     std::vector<Chunk> m_chunks;
-    std::vector<anira_ring*> m_input_rings;   ///< per input tensor; NULL for a non-Streamed one
-    std::vector<anira_ring*> m_output_rings;  ///< per output tensor; NULL likewise
+    /// What anira_stage_ctx::input_rings and output_rings point at, the one array the struct
+    /// asks for: the stream ports' rings by slot, NULL for a slot of another role. Filled by
+    /// bind() from the ports and read by nothing in here but the ctx fill.
+    std::vector<anira_ring*> m_ctx_input_rings;
+    std::vector<anira_ring*> m_ctx_output_rings;
     /// The count check's scratch: available() of every channel of every ring of one side,
-    /// read ahead of the phase (one entry per channel, in ring order). Driving thread only.
+    /// read ahead of the phase (one entry per channel, in slot order). Driving thread only.
     std::vector<size_t> m_before;
 };
 
