@@ -14,10 +14,15 @@
  * dup are system calls). Calling one of them from the function below is a compile error under
  * clang, which is the point. A second ANIRA_NONBLOCKING function calls the six [driver-thread]
  * Hard entries over host tensors of anira/abi/handler.h, which is what a host's audio callback
- * does; their four _wait twins are [any-thread, blocking] and absent for the same reason. The
+ * does; their four _wait twins are [any-thread, blocking] and absent for the same reason. A
+ * third one is a backup function of ANIRA_MISS_CALLBACK, which reads and fills its tensors
+ * through the [callback-safe] accessors and is handed to anira_contract_hard_set_miss_fn: the
+ * conversion to anira_miss_fn is clean only because the function is declared
+ * ANIRA_NONBLOCKING itself (clang refuses to add the attribute through a conversion). The
  * file grows with abi/stage.h (the ring accessors and the stage defaults) and with the
  * handler's [callback-safe] entries.
  */
+#include <anira/abi/config.h>
 #include <anira/abi/draft/tensor_platform.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
@@ -84,4 +89,44 @@ size_t anira_rt_contract_hard(anira_handler* handler,
     total += anira_handler_pop_data(handler, outputs, 0u, delivered) == ANIRA_OK ? 1u : 0u;
     total += anira_handler_pop_data_multi(handler, outputs, 1u, delivered) == ANIRA_OK ? 1u : 0u;
     return total;
+}
+
+/* anira/abi/config.h: a backup function of ANIRA_MISS_CALLBACK as a host writes one. It fills
+   channel 0 of every requested float32 output with the first sample of input 0 and declines a
+   block it cannot fill. */
+static anira_status ANIRA_CALL anira_rt_contract_miss(anira_handler* handler,
+                                                      const anira_tensor* inputs,
+                                                      uint32_t num_inputs,
+                                                      const anira_tensor* outputs,
+                                                      uint32_t num_outputs,
+                                                      void* user_data) ANIRA_NONBLOCKING {
+    float first = 0.0f;
+    uint32_t slot = 0;
+    (void)user_data;
+    if (anira_handler_rt_error(handler) != ANIRA_OK) { return ANIRA_ERROR_INVALID_STATE; }
+    if (num_inputs > 0u && anira_tensor_extent(&inputs[0], 1u) > 0u) {
+        const float* in = (inputs[0].flags & (uint32_t)ANIRA_TENSOR_PLANAR) != 0u
+                              ? (const float*)anira_tensor_plane(&inputs[0], 0u, ANIRA_DTYPE_F32)
+                              : anira_tensor_data_f32(&inputs[0]);
+        if (in != NULL) { first = in[0]; }
+    }
+    for (slot = 0; slot < num_outputs; ++slot) {
+        const size_t samples = anira_tensor_extent(&outputs[slot], 1u);
+        const int64_t step = outputs[slot].strides[1] != 0 ? outputs[slot].strides[1] : 1;
+        float* out = (outputs[slot].flags & (uint32_t)ANIRA_TENSOR_PLANAR) != 0u
+                         ? (float*)anira_tensor_plane(&outputs[slot], 0u, ANIRA_DTYPE_F32)
+                         : anira_tensor_data_f32(&outputs[slot]);
+        size_t i = 0;
+        if (samples == 0u) { continue; }
+        if (out == NULL) { return ANIRA_ERROR_NOT_SUPPORTED; }
+        for (i = 0; i < samples; ++i) { out[(int64_t)i * step] = first; }
+    }
+    return ANIRA_OK;
+}
+
+/* The setter is [main-thread]: a plain function hands the pair over. */
+/* NOLINTNEXTLINE(misc-use-internal-linkage) */
+anira_status anira_rt_contract_set_miss(anira_contract* contract, void* user_data);
+anira_status anira_rt_contract_set_miss(anira_contract* contract, void* user_data) {
+    return anira_contract_hard_set_miss_fn(contract, anira_rt_contract_miss, user_data);
 }

@@ -617,9 +617,19 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
     // leaves the anchor's count at 0.
     const bool bypass_ready = m_on_miss == ANIRA_MISS_BYPASS && m_session->m_reference.m_is_input &&
                               bypass_num_input[reference] > 0;
+    // ANIRA_MISS_CALLBACK: one call for the whole block, with the arrays this call was handed.
+    // The counts are not zeroed yet, shape[1] of every output is its request, and the input
+    // of a process form is pushed and still intact in host memory. A hook that declines, or
+    // no hook, leaves the fill to the loop (zeros).
+    const bool host_filled = m_on_miss == ANIRA_MISS_CALLBACK && m_miss_hook != nullptr &&
+                             m_miss_hook(m_miss_hook_ctx,
+                                         bypass_inputs,
+                                         static_cast<uint32_t>(m_input_slots.size()),
+                                         outputs,
+                                         static_cast<uint32_t>(num_outputs));
     for (size_t i = 0; i < num_outputs; ++i) {
         const bool streamed = m_output_slots[i].m_streamed;
-        if (num_samples[i] > 0) {
+        if (num_samples[i] > 0 && !host_filled) {
             switch (m_on_miss) {
                 case ANIRA_MISS_HOLD_LAST:
                     if (streamed) {
@@ -652,6 +662,7 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
                         clear_output(outputs[i], num_samples[i], i);
                     }
                     break;
+                case ANIRA_MISS_CALLBACK:  // the hook declined, or there is none
                 case ANIRA_MISS_ZEROS:
                 default: clear_output(outputs[i], num_samples[i], i); break;
             }

@@ -634,6 +634,25 @@ anira_status pop_tensors_wait_body(anira_handler& handler,
 
 // ==== prepare's pieces ========================================================================
 
+// What the manager calls once per missed block under ANIRA_MISS_CALLBACK, on the thread that
+// drives the call: it forwards the arrays the copy path was handed, as they are, to the host's
+// function. Nothing is built on a miss. The host's status decides: ANIRA_OK means the outputs
+// are filled, anything else makes the manager zero-fill them. prepare refused a CALLBACK
+// contract without a function, so the pointer is set.
+bool miss_hook(void* ctx,
+               const anira_tensor* inputs,
+               uint32_t num_inputs,
+               const anira_tensor* outputs,
+               uint32_t num_outputs) noexcept ANIRA_NONBLOCKING {
+    auto* handler = static_cast<anira_handler*>(ctx);
+    return handler->m_miss_fn(handler,
+                              inputs,
+                              num_inputs,
+                              outputs,
+                              num_outputs,
+                              handler->m_miss_user_data) == ANIRA_OK;
+}
+
 void clear_report(anira_plan_report& report) noexcept {
     report.m_plans.clear();
     report.m_inputs.clear();
@@ -654,6 +673,8 @@ void unprepare(anira_handler& handler) noexcept {
     handler.m_plans.clear();
 }
 
+// The CALLBACK rule of prepare: the policy needs its function (the two setters work in either
+// order, and a contract file cannot carry one, so the question is asked here).
 // The BYPASS rules of prepare, after validate (the bridge never implemented on_miss, so the
 // rule lives here and not in capi::validate): the anchor must be an input, and every
 // streamed output must have the anchored input's channel count and its ring dtype (the block
@@ -663,6 +684,13 @@ void check_miss_policy(const anira::capi::HardContract& hard,
                        const anira_model_config& model,
                        const anira::capi::Derived& derived,
                        const anira::RingDtypes& ring_dtypes) {
+    if (hard.m_on_miss == ANIRA_MISS_CALLBACK && hard.m_miss_fn == nullptr) {
+        throw StatusError(ANIRA_ERROR_CONFIG,
+                          "contract: on_miss CALLBACK needs a backup function and none is set; "
+                          "call anira_contract_hard_set_miss_fn on the contract (a contract "
+                          "file names the policy only), or set on_miss to BYPASS, HOLD_LAST or "
+                          "ZEROS");
+    }
     if (hard.m_on_miss != ANIRA_MISS_BYPASS) { return; }
     if (!derived.m_anchor_is_input) {
         throw StatusError(ANIRA_ERROR_CONFIG,
@@ -986,6 +1014,10 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                                                                   handler.m_context->m_config,
                                                                   &handler.m_rt);
     handler.m_manager->set_miss_policy(hard.m_on_miss);
+    handler.m_miss_fn = hard.m_miss_fn;
+    handler.m_miss_user_data = hard.m_miss_user_data;
+    handler.m_manager->set_miss_hook(hard.m_on_miss == ANIRA_MISS_CALLBACK ? &miss_hook : nullptr,
+                                     &handler);
     // The plan table and the initial selection, on the session before it is prepared.
     build_plans(handler, model, derived, hard);
     handler.m_manager->prepare(host, anira::CustomLatencies{}, ring_dtypes);

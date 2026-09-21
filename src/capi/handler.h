@@ -131,6 +131,10 @@ struct anira_handler {
     std::vector<anira_tensor> m_output_tensors;
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
+    /// ANIRA_MISS_CALLBACK: the contract's pair, cached at prepare so that the driver thread
+    /// reads two plain members and not the contract's variant.
+    anira_miss_fn m_miss_fn = nullptr;
+    void* m_miss_user_data = nullptr;
 };
 
 // NOLINTEND(readability-identifier-naming)

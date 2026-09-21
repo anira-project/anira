@@ -4,6 +4,7 @@
 
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -657,6 +658,50 @@ TEST(AbiCxx, LegacyContractReportsUpgraded) {
     const ContractHandle contract = std::move(legacy).value_or(ContractHandle{nullptr});
     EXPECT_TRUE(contract.upgraded()) << "the product of a 2.x document";
     EXPECT_EQ(contract.kind(), ANIRA_CONTRACT_HARD);
+}
+
+namespace {
+// A backup function of ANIRA_MISS_CALLBACK; declared ANIRA_NONBLOCKING, as clang asks of a
+// function converted to anira_miss_fn. Never called here.
+anira_status ANIRA_CALL cxx_decline_miss(anira_handler* /*handler*/,
+                                         const anira_tensor* /*inputs*/,
+                                         uint32_t /*num_inputs*/,
+                                         const anira_tensor* /*outputs*/,
+                                         uint32_t /*num_outputs*/,
+                                         void* /*user_data*/) ANIRA_NONBLOCKING {
+    return ANIRA_ERROR_NOT_SUPPORTED;
+}
+}  // namespace
+
+TEST(AbiCxx, TheMissFunctionTravelsThroughTheAggregateAndTheSetter) {
+    int user = 0;
+    const anira::Hard hard{
+        .block_min = 64,
+        .block_max = 64,
+        .rate = 48000.0,
+        .on_miss = ANIRA_MISS_CALLBACK,
+        .miss_fn = &cxx_decline_miss,
+        .miss_user_data = &user,
+    };
+    const ContractHandle minted(hard);
+    const anira::capi::HardContract* fields = minted.native()->hard();
+    ASSERT_NE(fields, nullptr);
+    EXPECT_EQ(fields->m_on_miss, ANIRA_MISS_CALLBACK);
+    EXPECT_EQ(fields->m_miss_fn, &cxx_decline_miss);
+    EXPECT_EQ(fields->m_miss_user_data, &user);
+
+    const ContractHandle plain{anira::Hard{}};
+    EXPECT_EQ(plain.native()->hard()->m_miss_fn, nullptr);
+
+    ContractHandle loaded = ContractHandle::from_json(anira_test::k_contract_hard_v3);
+    loaded.hard_on_miss(ANIRA_MISS_CALLBACK).hard_miss_fn(&cxx_decline_miss, &user);
+    EXPECT_EQ(loaded.native()->hard()->m_miss_fn, &cxx_decline_miss);
+    EXPECT_EQ(loaded.native()->hard()->m_miss_user_data, &user);
+    loaded.hard_miss_fn(nullptr, nullptr);
+    EXPECT_EQ(loaded.native()->hard()->m_miss_fn, nullptr);
+
+    ContractHandle async_contract{anira::Async{}};
+    EXPECT_THROW(async_contract.hard_miss_fn(&cxx_decline_miss, nullptr), anira::Error);
 }
 
 TEST(AbiCxx, ContractSettersPatchALoadedContract) {

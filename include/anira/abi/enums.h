@@ -364,6 +364,12 @@ typedef enum anira_miss_policy {
     ANIRA_MISS_BYPASS = 0,
     ANIRA_MISS_HOLD_LAST = 1,  /**< Repeat the last output. */
     ANIRA_MISS_ZEROS = 2,  /**< Deliver zeros. */
+    /**
+     * Call the contract's anira_miss_fn (anira_contract_hard_set_miss_fn), once per missed
+     * block, to fill the outputs; zeros when it returns another status than ANIRA_OK. The
+     * policy without a function is ANIRA_ERROR_CONFIG at prepare.
+     */
+    ANIRA_MISS_CALLBACK = 3,
     ANIRA_MISS_POLICY_FORCE32 = 0x7fffffff
 } anira_miss_policy;
 

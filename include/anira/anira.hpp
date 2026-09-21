@@ -626,6 +626,12 @@ struct Hard {
     anira_warmup_mode warmup = ANIRA_WARMUP_UNTIL_STABLE;
     uint32_t warmup_iterations = 0;  ///< Fixed only
     anira_miss_policy on_miss = ANIRA_MISS_BYPASS;
+    /// ANIRA_MISS_CALLBACK only: the backup function that fills a missed block, and the pointer
+    /// it is handed. A raw function pointer, called on the driver thread; it and what
+    /// miss_user_data points at must outlive the prepared handler. Under clang the function
+    /// must be declared ANIRA_NONBLOCKING.
+    anira_miss_fn miss_fn = nullptr;
+    void* miss_user_data = nullptr;
     double wait_ratio = 0;  ///< v2 blocking_ratio
     anira_edge_cost edge_cost = ANIRA_EDGE_COST_PERMISSIVE;
 };
@@ -674,6 +680,8 @@ inline anira_contract* mint(const Hard& hard) {
               "anira_contract_hard_set_warmup");
         check(anira_contract_hard_set_on_miss(contract, hard.on_miss),
               "anira_contract_hard_set_on_miss");
+        check(anira_contract_hard_set_miss_fn(contract, hard.miss_fn, hard.miss_user_data),
+              "anira_contract_hard_set_miss_fn");
         check(anira_contract_hard_set_wait_ratio(contract, hard.wait_ratio),
               "anira_contract_hard_set_wait_ratio");
         check(anira_contract_set_edge_cost(contract, hard.edge_cost),
@@ -813,6 +821,12 @@ public:
     ContractHandle& hard_on_miss(anira_miss_policy policy) {
         detail::check(anira_contract_hard_set_on_miss(m_contract, policy),
                       "anira_contract_hard_set_on_miss");
+        return *this;
+    }
+    /// The backup function of ANIRA_MISS_CALLBACK (NULL clears it); see Hard::miss_fn.
+    ContractHandle& hard_miss_fn(anira_miss_fn fn, void* user_data) {
+        detail::check(anira_contract_hard_set_miss_fn(m_contract, fn, user_data),
+                      "anira_contract_hard_set_miss_fn");
         return *this;
     }
     ContractHandle& hard_wait_ratio(double ratio) {

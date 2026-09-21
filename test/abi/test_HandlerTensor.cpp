@@ -15,8 +15,10 @@
 // closed during every nonblocking call; settle() opens it until every submitted inference is
 // collected. A starved block is a call without the settle. No sleeps, no wall clock.
 
+#include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
@@ -32,6 +34,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "../support/copy_oracle.h"
@@ -197,12 +200,15 @@ class Rig {
 public:
     explicit Rig(const ModelConfig& model,
                  anira_miss_policy policy = ANIRA_MISS_ZEROS,
-                 uint32_t threads = 2)
+                 uint32_t threads = 2,
+                 anira_miss_fn miss_fn = nullptr,
+                 void* miss_user_data = nullptr)
         : m_context(threads), m_handler(m_context, model, m_candidates) {
         // Blocks of 1 to k_hop samples.
         anira::ContractHandle contract =
             anira_test::explicit_contract(k_hop, k_rate, policy, 0.0, 1.0);
         contract.hard_geometry(1, k_hop, k_rate);
+        contract.hard_miss_fn(miss_fn, miss_user_data);
         const anira_status prepared = m_handler.prepare(contract);
         EXPECT_EQ(prepared, ANIRA_OK) << m_handler.m_err.message;
         if (prepared != ANIRA_OK) { return; }
@@ -1145,6 +1151,365 @@ TEST(AbiHandlerTensor, AWaitTwinWithoutAThreadRunsTheStemAndRefuses) {
               ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(counts[0], 0U);
     EXPECT_EQ(counts[1], 0U);
+}
+
+// ---- ANIRA_MISS_CALLBACK -----------------------------------------------------------------------
+// The backup function runs on the driver thread inside an ANIRA_NONBLOCKING entry, so it is
+// declared ANIRA_NONBLOCKING, holds no gtest assertion (a failing EXPECT allocates, and under
+// RealtimeSanitizer that aborts the process in place of failing the test), allocates nothing
+// and writes only into storage its fixture owns. Every EXPECT runs after the call. The state
+// is a member of the fixture, fresh for every test.
+
+constexpr size_t k_samples = k_hop;  // k_hop as a sample count
+constexpr float k_backup = 0.25F;    // what the backup function writes
+constexpr size_t k_recorded = 4;     // the slots per side the state has room for
+
+struct MissState {
+    int m_calls = 0;
+    anira_status m_return = ANIRA_OK;
+    anira_handler* m_handler = nullptr;
+    const anira_tensor* m_inputs = nullptr;
+    const anira_tensor* m_outputs = nullptr;
+    uint32_t m_num_inputs = 0;
+    uint32_t m_num_outputs = 0;
+    std::array<anira_tensor, k_recorded> m_input_copies{};
+    std::array<anira_tensor, k_recorded> m_output_copies{};
+    float m_first_input = 0.0F;  ///< sample 0 of the last channel of input 0, when it has samples
+    float m_last_input = 0.0F;   ///< its last sample
+    std::thread::id m_thread;
+};
+
+/// Element (channel, sample) of a float32 host tensor, by its description; NULL when the
+/// tensor names no such memory. Callback-safe entries only.
+float* element_of(const anira_tensor& tensor, size_t channel, size_t sample) ANIRA_NONBLOCKING {
+    const bool planar = (tensor.flags & static_cast<uint32_t>(ANIRA_TENSOR_PLANAR)) != 0U;
+    const bool packed = tensor.strides[0] == 0 && tensor.strides[1] == 0;
+    const int64_t step = tensor.strides[1] != 0 ? tensor.strides[1] : 1;
+    const auto index = static_cast<int64_t>(sample) * step;
+    if (planar) {
+        auto* plane = static_cast<float*>(
+            anira_tensor_plane(&tensor, static_cast<uint32_t>(channel), ANIRA_DTYPE_F32));
+        return plane != nullptr ? plane + index : nullptr;
+    }
+    float* base = anira_tensor_data_f32(&tensor);
+    const int64_t channel_stride = packed ? tensor.shape[1] : tensor.strides[0];
+    return base != nullptr ? base + (static_cast<int64_t>(channel) * channel_stride) + index
+                           : nullptr;
+}
+
+anira_status ANIRA_CALL backup(anira_handler* handler,
+                               const anira_tensor* inputs,
+                               uint32_t num_inputs,
+                               const anira_tensor* outputs,
+                               uint32_t num_outputs,
+                               void* user_data) ANIRA_NONBLOCKING {
+    auto* state = static_cast<MissState*>(user_data);
+    ++state->m_calls;
+    state->m_handler = handler;
+    state->m_inputs = inputs;
+    state->m_outputs = outputs;
+    state->m_num_inputs = num_inputs;
+    state->m_num_outputs = num_outputs;
+    state->m_thread = std::this_thread::get_id();
+    for (uint32_t i = 0; i < num_inputs && i < k_recorded; ++i) {
+        state->m_input_copies.at(i) = inputs[i];
+    }
+    for (uint32_t i = 0; i < num_outputs && i < k_recorded; ++i) {
+        state->m_output_copies.at(i) = outputs[i];
+    }
+    if (num_inputs > 0 && inputs[0].shape[1] > 0) {
+        const auto last_channel = static_cast<size_t>(inputs[0].shape[0] - 1);
+        const auto last_sample = static_cast<size_t>(inputs[0].shape[1] - 1);
+        const float* first = element_of(inputs[0], last_channel, 0);
+        const float* last = element_of(inputs[0], last_channel, last_sample);
+        if (first != nullptr && last != nullptr) {
+            state->m_first_input = *first;
+            state->m_last_input = *last;
+        }
+    }
+    // Every requested output: k_backup + the slot, in every channel.
+    for (uint32_t slot = 0; slot < num_outputs; ++slot) {
+        const auto channels = static_cast<size_t>(outputs[slot].shape[0]);
+        const auto samples = static_cast<size_t>(outputs[slot].shape[1]);
+        for (size_t channel = 0; channel < channels; ++channel) {
+            for (size_t i = 0; i < samples; ++i) {
+                float* out = element_of(outputs[slot], channel, i);
+                if (out == nullptr) { return ANIRA_ERROR_INTERNAL; }
+                *out = k_backup + static_cast<float>(slot);
+            }
+        }
+    }
+    return state->m_return;
+}
+
+class AbiHandlerTensorMiss : public testing::Test {
+protected:
+    /// Two delivered blocks, the second left at the gate, so that the next block starves.
+    static void starve(Rig& rig, size_t channels) {
+        ASSERT_LT(rig.latency(), 2U * k_samples) << "the third block would not starve";
+        for (size_t k = 0; k < 2; ++k) {
+            Block in(Layout::Planar, channels, k_hop);
+            const Block out(Layout::Planar, channels, k_hop);
+            fill_input(in, k * k_samples);
+            ASSERT_EQ(anira_handler_process(rig.get(), &in.tensor(), &out.tensor(), 0, nullptr),
+                      ANIRA_OK);
+            if (k == 0) { rig.settle(); }
+        }
+    }
+
+    MissState m_state;
+};
+
+TEST_F(AbiHandlerTensorMiss, TheBackupFunctionFillsTheWholeBlockOncePerMiss) {
+    Rig rig(pass_through(2), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
+    ASSERT_TRUE(rig.ready());
+    starve(rig, 2);
+    EXPECT_EQ(m_state.m_calls, 0) << "a delivered block does not call it";
+    for (int miss = 1; miss <= 2; ++miss) {
+        Block in(Layout::Interleaved, 2, k_hop);
+        const Block out(Layout::Interleaved, 2, k_hop);
+        fill_input(in, 2 * k_samples);
+        const auto in_before = bytes_of(in.tensor());
+        const auto out_before = bytes_of(out.tensor());
+        size_t delivered = k_unset;
+        EXPECT_EQ(anira_handler_process(rig.get(), &in.tensor(), &out.tensor(), 0, &delivered),
+                  ANIRA_MISSED)
+            << "the host filled the block, and it still counts as missed";
+        EXPECT_EQ(delivered, 0U);
+        EXPECT_EQ(m_state.m_calls, miss) << "once per missed block";
+        EXPECT_EQ(m_state.m_handler, rig.get());
+        EXPECT_EQ(m_state.m_thread, std::this_thread::get_id()) << "on the driving thread";
+        EXPECT_EQ(m_state.m_num_inputs, 1U);
+        EXPECT_EQ(m_state.m_num_outputs, 1U);
+        EXPECT_EQ(m_state.m_inputs, &in.tensor()) << "the caller's own descriptor";
+        EXPECT_EQ(m_state.m_outputs, &out.tensor());
+        EXPECT_EQ(m_state.m_first_input, stream_value(1, 2 * k_samples)) << "the pushed block";
+        EXPECT_EQ(m_state.m_last_input, stream_value(1, (3 * k_samples) - 1));
+        EXPECT_EQ(bytes_of(in.tensor()), in_before);
+        EXPECT_EQ(bytes_of(out.tensor()), out_before);
+        for (size_t channel = 0; channel < 2; ++channel) {
+            for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(out.at(channel, i), k_backup); }
+        }
+    }
+    EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK) << "a miss is not recorded";
+}
+
+TEST_F(AbiHandlerTensorMiss, AnInPlaceBlockIsTheInputAndTheOutputOfTheFunction) {
+    Rig rig(pass_through(2), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
+    ASSERT_TRUE(rig.ready());
+    starve(rig, 2);
+    Block block(Layout::Interleaved, 2, k_hop);
+    fill_input(block, 2 * k_samples);
+    EXPECT_EQ(anira_handler_process(rig.get(), &block.tensor(), &block.tensor(), 0, nullptr),
+              ANIRA_MISSED);
+    EXPECT_EQ(m_state.m_calls, 1);
+    EXPECT_EQ(m_state.m_inputs, m_state.m_outputs);
+    EXPECT_EQ(m_state.m_first_input, stream_value(1, 2 * k_samples))
+        << "the input was still intact";
+    for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(block.at(1, i), k_backup); }
+}
+
+TEST_F(AbiHandlerTensorMiss, AFailingStatusZeroFills) {
+    m_state.m_return = ANIRA_ERROR_NOT_SUPPORTED;
+    Rig rig(pass_through(2), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
+    ASSERT_TRUE(rig.ready());
+    starve(rig, 2);
+    Block in(Layout::Planar, 2, k_hop);
+    const Block out(Layout::Interleaved, 2, k_hop);
+    fill_input(in, 2 * k_samples);
+    size_t delivered = k_unset;
+    EXPECT_EQ(anira_handler_process(rig.get(), &in.tensor(), &out.tensor(), 0, &delivered),
+              ANIRA_MISSED);
+    EXPECT_EQ(delivered, 0U);
+    EXPECT_EQ(m_state.m_calls, 1);
+    for (size_t channel = 0; channel < 2; ++channel) {
+        for (size_t i = 0; i < k_hop; ++i) {
+            ASSERT_EQ(out.at(channel, i), 0.0F) << "what the function wrote is overwritten";
+        }
+    }
+    EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK);
+}
+
+TEST_F(AbiHandlerTensorMiss, APopPassesEmptyInputs) {
+    Rig rig(pass_through(2), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
+    ASSERT_TRUE(rig.ready());
+    starve(rig, 2);
+    const Block out(Layout::Contiguous, 2, k_hop);
+    size_t delivered = k_unset;
+    EXPECT_EQ(anira_handler_pop_data(rig.get(), &out.tensor(), 0, &delivered), ANIRA_MISSED);
+    EXPECT_EQ(delivered, 0U);
+    ASSERT_EQ(m_state.m_calls, 1);
+    EXPECT_EQ(m_state.m_num_inputs, 1U);
+    const anira_tensor& input = m_state.m_input_copies[0];
+    EXPECT_EQ(input.ndim, 2U);
+    EXPECT_EQ(input.shape[0], 2);
+    EXPECT_EQ(input.shape[1], 0) << "an empty tensor: a pop has no input block";
+    EXPECT_EQ(input.dtype, ANIRA_DTYPE_F32);
+    EXPECT_EQ(m_state.m_outputs, &out.tensor());
+    for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(out.at(0, i), k_backup); }
+}
+
+TEST_F(AbiHandlerTensorMiss, AMultiFormHandsOverTheCallersArrays) {
+    const Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
+    ASSERT_TRUE(rig.ready());
+    ASSERT_EQ(rig.latency(0), 2U * k_samples);
+    // Latency 16: two delivered blocks empty the ring while their inferences wait.
+    for (size_t k = 0; k < 2; ++k) {
+        Block in(Layout::Planar, 3, k_hop);
+        const Block out(Layout::Planar, 3, k_hop);
+        fill_input(in, k * k_samples);
+        ASSERT_EQ(anira_handler_process(rig.get(), &in.tensor(), &out.tensor(), 0, nullptr),
+                  ANIRA_OK);
+    }
+    Block stream_in(Layout::Interleaved, 3, k_hop);
+    Block values_in(Layout::Packed, 1, 3);
+    const Block stream_out(Layout::Planar, 3, k_hop);
+    const Block values_out(Layout::Packed, 1, 3);
+    fill_input(stream_in, 2 * k_samples);
+    fill_static(values_in);
+    const std::array<anira_tensor, 2> inputs{stream_in.tensor(), values_in.tensor()};
+    const std::array<anira_tensor, 2> outputs{stream_out.tensor(), values_out.tensor()};
+    std::array<size_t, 2> delivered{k_unset, k_unset};
+    EXPECT_EQ(anira_handler_process_multi(rig.get(),
+                                          inputs.data(),
+                                          2,
+                                          outputs.data(),
+                                          2,
+                                          delivered.data()),
+              ANIRA_MISSED);
+    EXPECT_EQ(delivered[0], 0U);
+    EXPECT_EQ(delivered[1], 0U);
+    ASSERT_EQ(m_state.m_calls, 1);
+    EXPECT_EQ(m_state.m_inputs, inputs.data());
+    EXPECT_EQ(m_state.m_outputs, outputs.data());
+    EXPECT_EQ(m_state.m_num_inputs, 2U);
+    EXPECT_EQ(m_state.m_num_outputs, 2U);
+    EXPECT_EQ(m_state.m_first_input, stream_value(2, 2 * k_samples));
+    for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(stream_out.at(2, i), k_backup); }
+    for (size_t i = 0; i < 3; ++i) { ASSERT_EQ(values_out.at(0, i), k_backup + 1.0F); }
+
+    // A single-tensor form on the same handler: the handler's array, the caller's descriptor
+    // in its slot and an empty tensor beside it.
+    const Block single_out(Layout::Interleaved, 3, k_hop);
+    EXPECT_EQ(
+        anira_handler_process(rig.get(), &stream_in.tensor(), &single_out.tensor(), 0, nullptr),
+        ANIRA_MISSED);
+    ASSERT_EQ(m_state.m_calls, 2);
+    EXPECT_EQ(m_state.m_inputs, rig.get()->m_input_tensors.data());
+    EXPECT_EQ(m_state.m_outputs, rig.get()->m_output_tensors.data());
+    EXPECT_EQ(bytes_of(m_state.m_input_copies[0]), bytes_of(stream_in.tensor()));
+    EXPECT_EQ(bytes_of(m_state.m_output_copies[0]), bytes_of(single_out.tensor()));
+    EXPECT_EQ(m_state.m_input_copies[1].shape[1], 0) << "the slot the call did not carry";
+    EXPECT_EQ(m_state.m_input_copies[1].shape[0], 1);
+    EXPECT_EQ(m_state.m_output_copies[1].shape[1], 0);
+    for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(single_out.at(1, i), k_backup); }
+}
+
+TEST_F(AbiHandlerTensorMiss, TheFloatEntriesHandOverPlanarFloatTensors) {
+    const Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
+    ASSERT_TRUE(rig.ready());
+    ASSERT_EQ(rig.latency(0), 2U * k_samples);
+    std::array<std::vector<float>, 3> in_data;
+    std::array<std::vector<float>, 3> out_data;
+    std::array<const float*, 3> in_channels{};
+    std::array<float*, 3> out_channels{};
+    for (size_t channel = 0; channel < 3; ++channel) {
+        in_data.at(channel).assign(k_hop, static_cast<float>(channel + 1));
+        out_data.at(channel).assign(k_hop, k_untouched);
+        in_channels.at(channel) = in_data.at(channel).data();
+        out_channels.at(channel) = out_data.at(channel).data();
+    }
+    // The Static slots are left out: a request of 0 with a NULL pointer.
+    const std::array<const float* const*, 2> in{in_channels.data(), nullptr};
+    const std::array<float* const*, 2> out{out_channels.data(), nullptr};
+    const std::array<size_t, 2> num_in{k_hop, 0};
+    std::array<size_t, 2> num_out{k_hop, 0};
+    anira_status status = ANIRA_OK;
+    for (int k = 0; k < 3; ++k) {
+        status = anira_handler_process_f32_multi(rig.get(),
+                                                 in.data(),
+                                                 num_in.data(),
+                                                 out.data(),
+                                                 num_out.data());
+    }
+    EXPECT_EQ(status, ANIRA_MISSED);
+    EXPECT_EQ(num_out[0], k_hop) << "a miss keeps the request";
+    ASSERT_EQ(m_state.m_calls, 1);
+    EXPECT_EQ(m_state.m_num_inputs, 2U);
+    EXPECT_EQ(m_state.m_num_outputs, 2U);
+    const anira_tensor& input = m_state.m_input_copies[0];
+    EXPECT_EQ(
+        input.flags,
+        static_cast<uint32_t>(ANIRA_TENSOR_PLANAR) | static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY));
+    EXPECT_EQ(input.dtype, ANIRA_DTYPE_F32);
+    EXPECT_EQ(input.shape[0], 3);
+    EXPECT_EQ(input.shape[1], static_cast<int64_t>(k_hop));
+    EXPECT_EQ(anira_tensor_plane(&input, 2, ANIRA_DTYPE_F32), in_data[2].data());
+    EXPECT_EQ(m_state.m_first_input, 3.0F);
+    EXPECT_EQ(m_state.m_input_copies[1].shape[1], 0) << "the slot the call did not carry";
+    const anira_tensor& output = m_state.m_output_copies[0];
+    EXPECT_EQ(output.flags, static_cast<uint32_t>(ANIRA_TENSOR_PLANAR));
+    EXPECT_EQ(anira_tensor_plane(&output, 1, ANIRA_DTYPE_F32), out_data[1].data());
+    EXPECT_EQ(m_state.m_output_copies[1].shape[1], 0);
+    for (size_t channel = 0; channel < 3; ++channel) {
+        for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(out_data.at(channel).at(i), k_backup); }
+    }
+}
+
+TEST_F(AbiHandlerTensorMiss, AWaitTwinWithoutAThreadCallsItAndStillRefuses) {
+    const Rig rig(pass_through(2), ANIRA_MISS_CALLBACK, /*threads=*/0, &backup, &m_state);
+    ASSERT_TRUE(rig.ready());
+    ASSERT_LT(rig.latency(), 2U * k_samples);
+    size_t delivered = k_unset;
+    for (int k = 0; k < 2; ++k) {
+        Block in(Layout::Interleaved, 2, k_hop);
+        const Block out(Layout::Planar, 2, k_hop);
+        fill_input(in, static_cast<size_t>(k) * k_samples);
+        delivered = k_unset;
+        EXPECT_EQ(anira_handler_process_wait(rig.get(),
+                                             &in.tensor(),
+                                             &out.tensor(),
+                                             ANIRA_WAIT_FOREVER,
+                                             0,
+                                             &delivered),
+                  ANIRA_ERROR_INVALID_STATE);
+        if (k == 0) {
+            EXPECT_EQ(delivered, k_hop);
+            EXPECT_EQ(m_state.m_calls, 0);
+        } else {
+            EXPECT_EQ(delivered, 0U);
+            EXPECT_EQ(m_state.m_calls, 1) << "the stem missed and the function ran";
+            for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(out.at(0, i), k_backup); }
+        }
+    }
+}
+
+TEST(AbiHandlerTensor, TheCallbackPolicyNeedsItsFunctionAtPrepare) {
+    const anira_test::Context context;
+    const ModelConfig model = pass_through(2);
+    const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
+                                                    .engine = ANIRA_ENGINE_NONE,
+                                                    .provider = ANIRA_PROVIDER_DEFAULT,
+                                                    .engine_id = nullptr}};
+    anira_test::Handler handler(context, model, candidates);
+    // A parsed contract names the policy; a file cannot carry the function.
+    anira::ContractHandle contract = anira::ContractHandle::from_json(
+        R"({"hard": {"budget": {"ms": 1.0}, "warmup": {"fixed": 0}, "on_miss": "callback"}})");
+    contract.hard_geometry(1, k_hop, k_rate);
+    anira_error err = ANIRA_ERROR_INIT;
+    EXPECT_EQ(handler.prepare(contract, &err), ANIRA_ERROR_CONFIG);
+    EXPECT_NE(std::string(err.message).find("on_miss"), std::string::npos) << err.message;
+    EXPECT_NE(std::string(err.message).find("anira_contract_hard_set_miss_fn"), std::string::npos);
+    EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
+
+    MissState state;
+    contract.hard_miss_fn(&backup, &state);
+    EXPECT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(handler.m_handler->m_miss_fn, &backup);
+    EXPECT_EQ(handler.m_handler->m_miss_user_data, &state);
+    // The function without the policy is legal and unused.
+    contract.hard_on_miss(ANIRA_MISS_ZEROS);
+    EXPECT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
 }
 
 }  // namespace

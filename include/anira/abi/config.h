@@ -25,6 +25,7 @@
 #include <anira/abi/status.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
+#include <anira/abi/tensor.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -403,7 +404,8 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_warmup(anira_contract*
  * @brief What the handler delivers when an inference misses its deadline.
  * @param contract A Hard contract.
  * @param policy BYPASS (default; requires shape-compatible I/O along the anchored Time axis),
- *        HOLD_LAST or ZEROS.
+ *        HOLD_LAST, ZEROS or CALLBACK (needs anira_contract_hard_set_miss_fn, in either
+ *        order; checked at prepare).
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for an unknown policy.
  * @par Thread contract
@@ -412,6 +414,62 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_warmup(anira_contract*
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract* contract,
                                                                   anira_miss_policy policy) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The backup function of ANIRA_MISS_CALLBACK: fills a whole missed block, every slot at
+ * once and whatever the slots' dtypes. Called once per missed block on the thread that
+ * called the Hard entry: the driver thread, or the thread inside a _wait twin. Under a
+ * tensor entry the tensors are the caller's own (a single-tensor form on a side with
+ * several slots passes the handler's array, the caller's descriptor in its slot and
+ * empty tensors beside it); under an _f32 entry and the 2.x float functions they are
+ * planar float32 tensors over the caller's channel pointers. Return ANIRA_OK when the
+ * outputs are filled; any other status makes anira zero-fill every requested output.
+ * Either way the block counts as missed: the entry returns ANIRA_MISSED with a delivered
+ * count of 0, and the stream stays time-aligned. The function must not call a Hard
+ * entry, anira_handler_reset or anira_handler_prepare of the same handler, and it is
+ * real-time code: no allocation, no lock, no system call. Under clang a function
+ * converted to this type must itself be declared ANIRA_NONBLOCKING.
+ * @param handler The handler whose block was missed.
+ * @param inputs One tensor per input slot, in slot order and covering every slot: the very
+ *        arrays the copy path was handed. A slot the call did not carry is an empty
+ *        tensor (shape[1] == 0, its memory arm not to be read); a pop passes empty
+ *        inputs. The block of a process form is already pushed and still intact in host
+ *        memory, in place too.
+ * @param num_inputs The handler's number of input slots.
+ * @param outputs One tensor per output slot; shape[1] is the request, and the memory is the
+ *        function's to fill. A slot whose shape[1] is 0 was not requested. The
+ *        descriptors are const: write through anira_tensor_data, anira_tensor_plane or
+ *        the handle, by the tensor's strides.
+ * @param num_outputs The handler's number of output slots.
+ * @param user_data The user_data of anira_contract_hard_set_miss_fn.
+ * @par Thread contract
+ * [driver-thread] ANIRA_NONBLOCKING
+ */
+typedef anira_status (ANIRA_CALL* anira_miss_fn)(anira_handler* handler,
+                                                 const anira_tensor* inputs,
+                                                 uint32_t num_inputs,
+                                                 const anira_tensor* outputs,
+                                                 uint32_t num_outputs,
+                                                 void* user_data) ANIRA_NONBLOCKING;
+
+/**
+ * @brief The backup function of ANIRA_MISS_CALLBACK. The pair is copied with the contract at
+ * anira_handler_prepare and must outlive the prepared handler; it is read only under the
+ * CALLBACK policy, in whichever order the two setters ran. A contract file can say
+ * "on_miss": "callback" but cannot carry a function: set the pair on the parsed contract
+ * before prepare.
+ * @param contract A Hard contract.
+ * @param fn The backup function, or NULL to clear the pair.
+ * @param user_data Handed to fn as it is; never read by anira.
+ * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_miss_fn(anira_contract* contract,
+                                                                  anira_miss_fn fn,
+                                                                  void* user_data) ANIRA_NOEXCEPT;
 
 /**
  * @brief The wait ratio consumed by the _wait twins only: how long, as a fraction of the block

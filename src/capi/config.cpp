@@ -47,7 +47,7 @@ bool valid_warmup_mode(anira_warmup_mode mode) {
     return mode >= ANIRA_WARMUP_NONE && mode <= ANIRA_WARMUP_UNTIL_STABLE;
 }
 bool valid_miss_policy(anira_miss_policy policy) {
-    return policy >= ANIRA_MISS_BYPASS && policy <= ANIRA_MISS_ZEROS;
+    return policy >= ANIRA_MISS_BYPASS && policy <= ANIRA_MISS_CALLBACK;
 }
 bool valid_late_policy(anira_late_policy policy) {
     return policy == ANIRA_LATE_FINISH || policy == ANIRA_LATE_DROP;
@@ -329,6 +329,19 @@ anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract* contract
     if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
     if (!valid_miss_policy(policy)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     hard->m_on_miss = policy;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+// The pair is stored as it is: whether the policy needs it is prepare's question, so the two
+// setters work in either order. A NULL fn clears the pair.
+anira_status ANIRA_CALL anira_contract_hard_set_miss_fn(anira_contract* contract,
+                                                        anira_miss_fn fn,
+                                                        void* user_data) ANIRA_NOEXCEPT try {
+    if (contract == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    hard->m_miss_fn = fn;
+    hard->m_miss_user_data = fn != nullptr ? user_data : nullptr;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 

@@ -1,8 +1,10 @@
 #include <anira/abi/build_info.h>
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
 #include <gtest/gtest.h>
 
@@ -610,6 +612,53 @@ TEST(AbiContextConfig, TheVulkanDeviceIndexIsATailSlot) {
 }
 
 // ---- contract ---------------------------------------------------------------------------------
+
+namespace {
+// A backup function of ANIRA_MISS_CALLBACK; never called here.
+anira_status ANIRA_CALL decline_miss(anira_handler* /*handler*/,
+                                     const anira_tensor* /*inputs*/,
+                                     uint32_t /*num_inputs*/,
+                                     const anira_tensor* /*outputs*/,
+                                     uint32_t /*num_outputs*/,
+                                     void* /*user_data*/) ANIRA_NONBLOCKING {
+    return ANIRA_ERROR_NOT_SUPPORTED;
+}
+}  // namespace
+
+TEST(AbiContract, TheMissFunctionIsAPairOnAHardContract) {
+    anira_contract* hard = nullptr;
+    anira_contract* async_contract = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_contract_create_hard(0, 0, 0.0, &hard, &err), ANIRA_OK);
+    ASSERT_EQ(anira_contract_create_async(&async_contract, &err), ANIRA_OK);
+    int user = 0;
+    EXPECT_EQ(hard->hard()->m_miss_fn, nullptr);
+    // The two setters work in either order: the function before the policy.
+    EXPECT_EQ(anira_contract_hard_set_miss_fn(hard, &decline_miss, &user), ANIRA_OK);
+    EXPECT_EQ(hard->hard()->m_miss_fn, &decline_miss);
+    EXPECT_EQ(hard->hard()->m_miss_user_data, &user);
+    EXPECT_EQ(hard->hard()->m_on_miss, ANIRA_MISS_BYPASS) << "the function does not set the policy";
+    EXPECT_EQ(anira_contract_hard_set_on_miss(hard, ANIRA_MISS_CALLBACK), ANIRA_OK);
+    EXPECT_EQ(hard->hard()->m_on_miss, ANIRA_MISS_CALLBACK);
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange): the value past the last
+    EXPECT_EQ(anira_contract_hard_set_on_miss(hard, static_cast<anira_miss_policy>(4)),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    // The copy a handler snapshots carries the pair.
+    const anira_contract copy = *hard;
+    EXPECT_EQ(copy.hard()->m_miss_fn, &decline_miss);
+    EXPECT_EQ(copy.hard()->m_miss_user_data, &user);
+    // NULL clears the pair, the user_data with it.
+    EXPECT_EQ(anira_contract_hard_set_miss_fn(hard, nullptr, &user), ANIRA_OK);
+    EXPECT_EQ(hard->hard()->m_miss_fn, nullptr);
+    EXPECT_EQ(hard->hard()->m_miss_user_data, nullptr);
+
+    EXPECT_EQ(anira_contract_hard_set_miss_fn(async_contract, &decline_miss, nullptr),
+              ANIRA_ERROR_WRONG_CONTRACT);
+    EXPECT_EQ(anira_contract_hard_set_miss_fn(nullptr, &decline_miss, nullptr),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    anira_contract_destroy(hard);
+    anira_contract_destroy(async_contract);
+}
 
 TEST(AbiContract, HardAndAsyncGateTheirSetters) {
     anira_contract* hard = nullptr;

@@ -192,10 +192,13 @@ const std::array<std::pair<const char*, anira_log_drain>, 2> k_drains{{
     {"thread", ANIRA_LOG_DRAIN_THREAD},
     {"manual", ANIRA_LOG_DRAIN_MANUAL},
 }};
-const std::array<std::pair<const char*, anira_miss_policy>, 3> k_miss{{
+// "callback" names the policy only: a file cannot carry the function, so the host sets the
+// pair on the parsed contract (anira_contract_hard_set_miss_fn), else prepare refuses it.
+const std::array<std::pair<const char*, anira_miss_policy>, 4> k_miss{{
     {"bypass", ANIRA_MISS_BYPASS},
     {"hold_last", ANIRA_MISS_HOLD_LAST},
     {"zeros", ANIRA_MISS_ZEROS},
+    {"callback", ANIRA_MISS_CALLBACK},
 }};
 const std::array<std::pair<const char*, anira_late_policy>, 2> k_late{{
     {"finish", ANIRA_LATE_FINISH},

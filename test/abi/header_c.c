@@ -146,6 +146,10 @@ int anira_header_c_probe(void) {
                and the output of one call (in place), the descriptor const on both sides. */
             /* NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion) */
             anira_tensor_init_host_planar(&tensor, channels, 2u, ANIRA_DTYPE_F32, 2u, block);
+            checks +=
+                anira_contract_hard_set_miss_fn(NULL, NULL, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
+                    ? 1
+                    : 0;
             checks += anira_handler_process(NULL, &tensor, &tensor, 0u, NULL) ==
                               ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1

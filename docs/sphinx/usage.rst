@@ -259,6 +259,37 @@ an ``anira::ContractHandle``.
   ``ANIRA_MISS_ZEROS`` delivers silence, what the 2.x runtime did: the contract a 2.x document
   upgrades to carries it, and so do the bundled RAVE encoder and decoder files (one audio
   channel against four latents). Every other bundled contract file keeps the default.
+  ``ANIRA_MISS_CALLBACK`` hands the missed block to a backup function of the host,
+  ``anira_miss_fn``, set with ``anira_contract_hard_set_miss_fn(contract, fn, user_data)``
+  (``Hard::miss_fn`` / ``miss_user_data``, ``ContractHandle::hard_miss_fn``). It is called once
+  per missed block on the thread that called the entry, for the whole block: ``inputs`` and
+  ``outputs`` are one ``anira_tensor`` per slot, in slot order and covering every slot, the very
+  arrays the entry was handed (section 3.2; planar float32 tensors over the caller's channel
+  pointers under an ``_f32`` entry). A slot the call did not carry is an empty tensor
+  (``shape[1] == 0``), a pop passes empty inputs, and the input block of a process form is
+  already pushed and still intact, in place too. The function fills the memory of every output
+  whose ``shape[1]`` is above ``0`` and returns ``ANIRA_OK``; any other status makes anira
+  zero-fill them. The entry still returns ``ANIRA_MISSED`` with a count of ``0``. The function
+  is real-time code (no allocation, no lock, no system call), must not call a Hard entry,
+  ``anira_handler_reset`` or ``anira_handler_prepare`` of the same handler, and must outlive
+  the prepared handler together with its ``user_data``. Under clang it has to be declared
+  ``ANIRA_NONBLOCKING`` itself, because the attribute cannot be added by the conversion to
+  ``anira_miss_fn``:
+
+  .. code-block:: c
+
+      static anira_status ANIRA_CALL fade_out(anira_handler* handler,
+                                              const anira_tensor* inputs, uint32_t num_inputs,
+                                              const anira_tensor* outputs, uint32_t num_outputs,
+                                              void* user_data) ANIRA_NONBLOCKING;
+
+      anira_contract_hard_set_on_miss(contract, ANIRA_MISS_CALLBACK);
+      anira_contract_hard_set_miss_fn(contract, fade_out, &my_state);
+
+  The two setters work in either order. The policy without a function is
+  ``ANIRA_ERROR_CONFIG`` at ``prepare``, naming ``on_miss``. A contract file can say
+  ``"on_miss": "callback"`` but cannot carry a function: set the pair on the parsed contract
+  before ``prepare``.
 - **Wait ratio.** ``wait_ratio`` is the fraction of the block period a ``_wait`` entry
   (``anira_handler_process_f32_inplace_wait`` and its twins, section 3.2) may spend waiting for the
   block's inference when called with ``ANIRA_WAIT_CONTRACT``; ``0`` (the default) never
@@ -379,7 +410,8 @@ threads), ``wait_strategy``, the ``log`` block (``level``, ``drain``, ``queue_ca
 code-only and patched with the device setters afterwards. The contract file has exactly one
 root, ``{"hard": {...}}`` or ``{"async": {...}}``, with ``budget`` as ``"measured"`` or
 ``{"ms": 1.8}``, ``warmup`` as ``"until_stable"``, ``"none"`` or ``{"fixed": 200}``,
-``on_miss`` as ``"bypass"``, ``"hold_last"`` or ``"zeros"``, ``wait_ratio`` as a number, the
+``on_miss`` as ``"bypass"``, ``"hold_last"``, ``"zeros"`` or ``"callback"`` (the policy only:
+the function is set in code), ``wait_ratio`` as a number, the
 geometry keys ``block_min`` / ``block_max`` / ``rate`` (optional; a plugin patches them from
 the host with ``hard_geometry``), ``ring_dtypes`` as ``{"audio_in": "int16"}`` (optional,
 by canonical name), and an optional top-level ``edge_cost``.

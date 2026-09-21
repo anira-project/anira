@@ -281,9 +281,10 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
  * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED
  * or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed
- * output's channel count differs from the anchored input's, a ring dtype that names no
- * Streamed tensor or differs from its spec's dtype (ANIRA_ERROR_CONFIG naming the
- * field).
+ * output's channel count or ring dtype differs from the anchored input's,
+ * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype
+ * that names no Streamed tensor or differs from its spec's dtype (ANIRA_ERROR_CONFIG
+ * naming the field).
  * @param handler The handler.
  * @param contract A Hard contract, copied; the handle may be destroyed when the call returns.
  * @param err Nullable.
@@ -593,12 +594,12 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_pop_data_multi(anira_handler* ha
  * completed is an on_miss event: the contract's policy fills out (ANIRA_MISS_ZEROS
  * zeros, ANIRA_MISS_HOLD_LAST the last delivered block, ANIRA_MISS_BYPASS min(num_in,
  * num_out) samples per channel of the input block when tensor_index is the anchored
- * input's slot and zeros past it; any other slot zeros) and the call returns
- * ANIRA_MISSED, a success: the buffers are valid and the stream stays time-aligned. A
- * refusal is a failure status (ANIRA_FAILED), recorded in anira_handler_rt_error; a miss
- * is not recorded. Legal on float32 rings only. The float32 shorthand of
- * anira_handler_process over planar channel buffers: the same copy path, with the counts
- * as arguments.
+ * input's slot and zeros past it; any other slot zeros, ANIRA_MISS_CALLBACK what the
+ * contract's anira_miss_fn writes) and the call returns ANIRA_MISSED, a success: the
+ * buffers are valid and the stream stays time-aligned. A refusal is a failure status
+ * (ANIRA_FAILED), recorded in anira_handler_rt_error; a miss is not recorded. Legal on
+ * float32 rings only. The float32 shorthand of anira_handler_process over planar channel
+ * buffers: the same copy path, with the counts as arguments.
  * @param handler The handler.
  * @param in One float buffer per channel of the input tensor.
  * @param num_in Input samples per channel.
