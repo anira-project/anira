@@ -381,8 +381,10 @@ struct Tensor : anira_tensor {
                                       detail::dtype_of<T>(),
                                       detail::rank_of(shape),
                                       shape.data());
-        if (std::is_const_v<T> && tensor.dtype != 0) {
-            tensor.flags |= static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY);
+        if constexpr (std::is_const_v<T>) {
+            if (tensor.dtype != 0) {
+                tensor.flags |= static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY);
+            }
         }
         return tensor;
     }
