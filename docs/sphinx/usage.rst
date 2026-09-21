@@ -248,8 +248,9 @@ an ``anira::ContractHandle``.
   when the block is popped (the entry returns ``ANIRA_MISSED``, a success, with a delivered
   count of ``0`` under every policy, so the miss is visible; the policy decides what the
   buffers hold, and the stream stays time-aligned). ``ANIRA_MISS_BYPASS`` (the default) copies
-  the block the same call pushed into the anchored input into the output (``process_f32`` and
-  its ``_inplace`` / ``_multi`` forms with the anchored input's slot; a call on another slot,
+  the block the same call pushed into the anchored input into the output (``process`` /
+  ``process_multi``, ``process_f32`` and its ``_inplace`` / ``_multi`` forms, with the anchored
+  input's slot; a call on another slot,
   and a pop, which has no input block, deliver zeros), which needs an anchored input ring with
   the output's channel count: when the anchor is an output (a generator, or a named output
   anchor) or when the channel counts differ, ``prepare`` refuses it with
@@ -723,7 +724,78 @@ objects (``anira::Pipeline pipe{anira::stage::Inference(cfg, {{ANIRA_ENGINE_ONNX
 ``anira::PlanReport(anira_handler_plan_report(h)).plans()``); the ``anira::InferenceHandler``
 class arrives with the runtime cut-over.
 
-**The Hard entries.** ``anira_handler_process_f32(h, in, num_in, out, num_out, tensor_index,
+**The Hard entries.** The driver thread pumps its blocks through
+``anira_handler_process(h, in, out, tensor_index, &delivered)``,
+``anira_handler_process_multi(h, inputs, num_inputs, outputs, num_outputs, delivered)``,
+``anira_handler_push_data(h, in, tensor_index)`` / ``push_data_multi(h, inputs, num_inputs)``
+and ``anira_handler_pop_data(h, out, tensor_index, &delivered)`` /
+``pop_data_multi(h, outputs, num_outputs, delivered)``, the 2.x methods of sections 5.1 to 5.4
+as C entries, ``[driver-thread]`` and ``ANIRA_NONBLOCKING``. A host block is one
+``anira_tensor`` (section 3.3) per slot, handed over as ``const anira_tensor*``, an output's
+included: anira never writes a descriptor, it writes the memory an output names, so a host
+builds its tensors once and reuses them. The logical shape is always ``[channels, samples]``
+(``[1, samples]`` for a spec without a Channel axis, ``[1, values]`` for a Static slot), the
+sample count is ``shape[1]`` (there is no ``num_in`` / ``num_out``), and the tensor's dtype
+must be the slot's, which is the ring dtype of a Streamed slot: nothing converts, and another
+dtype is ``ANIRA_ERROR_CONFIG``. The memory is host memory (``ANIRA_DOMAIN_HOST`` or
+``ANIRA_DOMAIN_HOST_PINNED``) in one of three descriptions:
+
+- *planar*, one pointer per channel, which is what JUCE and CLAP hand out. These are the
+  entries that accept ``ANIRA_TENSOR_PLANAR``; the channel pointers convert without a cast:
+
+  .. code-block:: cpp
+
+      // juce::AudioBuffer<float>& buffer, in place
+      const int64_t shape[2] = {buffer.getNumChannels(), buffer.getNumSamples()};
+      anira_tensor block;
+      anira_tensor_init_host_planar(&block, buffer.getArrayOfWritePointers(),
+                                    (uint32_t)buffer.getNumChannels(), ANIRA_DTYPE_F32, 2, shape);
+      anira_handler_process(handler, &block, &block, 0, NULL);
+
+- *one block read by strides*, in elements: contiguous channels are ``{samples, 1}``, an
+  interleaved block, which is what miniaudio and most device callbacks hand out, is
+  ``{1, channels}``. No factory takes strides: assign them on the struct after
+  ``anira_tensor_init_host``:
+
+  .. code-block:: c
+
+      /* miniaudio: float* frames_out, const float* frames_in, frame_count, 2 channels */
+      const int64_t shape[2] = {2, (int64_t)frame_count};
+      anira_tensor in, out;
+      anira_tensor_init_host(&in, (void*)frames_in, ANIRA_DTYPE_F32, 2, shape);
+      in.flags |= ANIRA_TENSOR_READ_ONLY;
+      anira_tensor_init_host(&out, frames_out, ANIRA_DTYPE_F32, 2, shape);
+      in.strides[0] = out.strides[0] = 1;
+      in.strides[1] = out.strides[1] = 2; /* the channel count */
+      anira_handler_process(handler, &in, &out, 0, &delivered);
+
+- *one packed block*, all-zero strides, which reads as ``{samples, 1}``.
+
+The rule holds for any channel count (stereo is the instance ``channels = 2``), every
+description is copied straight between the host memory and the ring, and the two sides of a
+call may be described differently. In place is the same tensor as input and output; there is
+no ``_inplace`` name. An *empty tensor* (``shape[1] == 0``; its memory arm is not read, so
+NULL is legal) leaves a slot out: the multi forms take exactly one tensor per slot, Static
+slots included, and ``num_inputs`` / ``num_outputs`` must be the handler's slot counts.
+``release``, ``manager_ctx`` and ``acquire`` are not read; the memory is borrowed until the
+call returns. Every tensor of a call is validated before anything is pushed, so a refusal
+writes no ring: a malformed descriptor is ``ANIRA_ERROR_INVALID_ARGUMENT`` (a rank other than
+2, which catches the zeroed record a refused factory leaves, another domain,
+``ANIRA_TENSOR_READ_ONLY`` on an output, ``shape[0]`` other than the slot's channel count, a
+negative ``shape[1]``, and with samples: NULL memory, a plane count other than ``shape[0]``, a
+NULL plane, a negative stride, a stride of ``0`` on an axis longer than 1 unless every stride
+is ``0``, a channel that does not start on a multiple of the element size), a flag bit this
+library does not know is ``ANIRA_ERROR_NOT_SUPPORTED``, and the checks run in the order rank,
+domain, flags, shape, dtype, memory and strides, the input before the output. ``delivered``
+is a nullable pure out parameter (an array of ``num_outputs`` counts in the multi forms),
+written on every return: zeroed first, then ``shape[1]`` of each output on ``ANIRA_OK``
+(clamped to the tensor's size for a Static output) and ``0`` on ``ANIRA_MISSED`` and on a
+failure. It is never read, so it needs no refill after a miss; that is where it differs from
+the ``num_out`` of the float32 shorthand below. Under ``ANIRA_MISS_BYPASS``, input and output
+memory that overlap under two different descriptions are undefined on a miss; the same tensor
+on both sides is left where it is.
+
+**The float32 shorthand.** ``anira_handler_process_f32(h, in, num_in, out, num_out, tensor_index,
 &delivered)``, ``anira_handler_process_f32_inplace(h, data, num_samples, tensor_index,
 &delivered)`` (one buffer set, read and overwritten),
 ``anira_handler_process_f32_multi(h, in, num_in, out, num_out)`` (every tensor at once, the
@@ -732,9 +804,10 @@ each count back, the request, clamped to the tensor's size for a Static output, 
 block or a failure leaves the array as the caller set it, so one array serves every call; an
 output requested with ``0`` is left untouched), ``anira_handler_push_data_f32`` /
 ``push_data_f32_multi`` and ``anira_handler_pop_data_f32`` / ``pop_data_f32_multi`` are the
-2.x methods of sections 5.1 to 5.4 as C entries, ``[driver-thread]`` and
-``ANIRA_NONBLOCKING``. Every one returns an ``anira_status`` and hands the delivered count back
-through a nullable ``size_t*`` (the multi forms through ``num_out``): ``ANIRA_OK`` when the
+same calls over planar channel buffers, with the counts as arguments, ``[driver-thread]`` and
+``ANIRA_NONBLOCKING`` like the tensor forms, and they run on the same copy path. Every Hard
+entry, of either family, returns an ``anira_status`` and hands the delivered count back
+through a nullable ``size_t*`` (the ``_f32`` multi forms through ``num_out``): ``ANIRA_OK`` when the
 block was delivered in full; ``ANIRA_MISSED`` when its inference had not completed, which is
 a success (``ANIRA_FAILED(status)`` is false): the buffers hold what the miss policy chose
 (section 1.3), a single form's count is ``0`` and a multi form's ``num_out`` stays at the
@@ -746,10 +819,8 @@ the output list; a Static tensor carries its values in channel 0 of the multi fo
 ``_f32`` entries are the float32 face over planar channel buffers (``float* const*``, what an
 audio host hands out) and are legal on ``ANIRA_DTYPE_F32`` rings; ``anira_handler_process_f32``
 takes separate input and output buffers, ``_inplace`` is the 2.x shape over one buffer set,
-``_multi`` covers every tensor at once. The entries under the bare names,
-``anira_handler_process`` / ``push_data`` / ``pop_data`` with their ``_multi`` forms and
-``_wait`` twins, take the ``anira_tensor`` of section 3.3, one tensor per slot, and carry
-their dtype on the tensor.
+``_multi`` covers every tensor at once; a slot whose request is ``0`` may carry a NULL
+pointer there.
 ``anira_handler_get_latency(h, i)`` and ``anira_handler_get_latencies(h, &count, out)``
 (index-aligned with the output list, ``0`` for a Static output) are valid from prepare on;
 ``anira_handler_get_available_samples(h, i, channel, &count)`` collects the completed
@@ -757,9 +828,13 @@ inferences and reports what waits in the output ring (right after prepare, the l
 ``anira_handler_reset(h)`` is the wait-free stream reset of 5.5; ``anira_handler_rt_error(h)``
 the last real-time failure, readable from any thread and any callback.
 
-**The _wait twins.** ``anira_handler_process_f32_inplace_wait(h, data, num_samples, timeout_ms,
+**The _wait twins.** ``anira_handler_process_wait(h, in, out, timeout_ms, tensor_index,
+&delivered)``, ``process_multi_wait(h, inputs, num_inputs, outputs, num_outputs, delivered,
+timeout_ms)``, ``pop_data_wait`` and ``pop_data_multi_wait`` over tensors, and
+``anira_handler_process_f32_inplace_wait(h, data, num_samples, timeout_ms,
 tensor_index, &delivered)``, ``process_f32_wait``, ``process_f32_multi_wait``,
-``pop_data_f32_wait`` and ``pop_data_f32_multi_wait`` wait for the block's inference:
+``pop_data_f32_wait`` and ``pop_data_f32_multi_wait`` over channel buffers, wait for the
+block's inference:
 ``timeout_ms >= 0`` explicitly, ``ANIRA_WAIT_CONTRACT`` for ``wait_ratio`` times the block
 duration (the call's block on the process forms — the 2.x ``blocking_ratio`` wait inside
 ``process`` — and the contract's ``block_max`` on the pop forms), ``ANIRA_WAIT_FOREVER``
@@ -770,8 +845,9 @@ WebAssembly every wait spins); a block not completed at the timeout is a miss as
 nonblocking entry, ``ANIRA_MISSED``, and without an inference thread inside its loop (the
 core's pool or ``anira_inference_thread_run_loop``; a host pumping
 ``anira_inference_thread_execute`` itself is not counted) they do what the nonblocking entry
-does and return ``ANIRA_ERROR_INVALID_STATE`` at once, the count holding what that delivered.
-A push never waits.
+does and return ``ANIRA_ERROR_INVALID_STATE`` at once, the count holding what that delivered
+(the ``delivered`` array of a tensor multi twin too; the ``num_out`` of an ``_f32`` multi twin
+is left as the caller set it). A push never waits.
 
 3.3. Runtime tensors
 ~~~~~~~~~~~~~~~~~~~~
