@@ -15,6 +15,12 @@
 // read off that call: the count arrays after it, the pointer deliver_counts() returned, the
 // manager's miss flag, the outcome of a wait.
 //
+// The non-streamable (Static) tensors of a block are the 2.x face's own business: the stems
+// move streamed slots, and anira::NonStreamableRouter (src/scheduler/NonStreamableRouter.h),
+// which anira::InferenceHandler owns beside the adapter, stores and reads back the others around
+// every stem call, with the clamp, the clamped count and the miss rules the transcripts pin.
+// The rig calls every stem through it, as that class does.
+//
 // test/support/copy_oracle.h says what a transcript is and why a scenario is a pure function
 // of its calls; test/abi/test_HandlerCopyOracle.cpp is the twin one level up, the same kind of
 // recording under the Hard entries of the C ABI, presented through the same adapter.
@@ -42,6 +48,7 @@
 #include "../support/copy_oracle.h"
 #include "copy_path_oracle_golden.h"
 #include "gtest/gtest.h"
+#include "scheduler/NonStreamableRouter.h"
 #include "scheduler/PlanarFloatAdapter.h"
 
 using namespace anira;
@@ -187,6 +194,7 @@ public:
         m_manager.set_miss_policy(policy);
         m_manager.prepare(host_config());
         m_adapter.prepare(m_config);
+        m_router.prepare();
         for (const std::shared_ptr<SessionElement>& session : Core::get_sessions()) {
             if (session->m_session_id == m_manager.get_session_id()) { m_session = session; }
         }
@@ -260,25 +268,25 @@ public:
             m_adapter.present_outputs(out_planes.data(), num_out.data());
         const size_t* delivered = nullptr;
         switch (stem) {
-            case Stem::Process: delivered = m_manager.process(in_tensors, out_tensors); break;
+            case Stem::Process: delivered = m_router.process(in_tensors, out_tensors); break;
             case Stem::ProcessNowait:
-                delivered = m_manager.process_nowait(in_tensors, out_tensors);
+                delivered = m_router.process_nowait(in_tensors, out_tensors);
                 break;
             case Stem::ProcessWait:
-                delivered = m_manager.process_wait(in_tensors,
-                                                   out_tensors,
-                                                   std::chrono::steady_clock::duration::max(),
-                                                   outcome);
+                delivered = m_router.process_wait(in_tensors,
+                                                  out_tensors,
+                                                  std::chrono::steady_clock::duration::max(),
+                                                  outcome);
                 break;
-            case Stem::PopData: delivered = m_manager.pop_data(out_tensors); break;
+            case Stem::PopData: delivered = m_router.pop_data(out_tensors); break;
             case Stem::PopDataUntil:
                 delivered =
-                    m_manager.pop_data(out_tensors, std::chrono::steady_clock::time_point::max());
+                    m_router.pop_data(out_tensors, std::chrono::steady_clock::time_point::max());
                 break;
             case Stem::PopDataWait:
-                delivered = m_manager.pop_data_wait(out_tensors,
-                                                    std::chrono::steady_clock::duration::max(),
-                                                    outcome);
+                delivered = m_router.pop_data_wait(out_tensors,
+                                                   std::chrono::steady_clock::duration::max(),
+                                                   outcome);
                 break;
         }
         // The count protocol of the float face: the stem's counts into the caller's array,
@@ -327,7 +335,7 @@ public:
         }
         const anira_tensor* in_tensors =
             m_adapter.present_inputs(in_planes.data(), in_counts.data());
-        m_manager.push_data(in_tensors);
+        m_router.push_data(in_tensors);
         const std::vector<size_t> num_in = presented_counts(in_tensors, in_counts.size());
         std::string header =
             "#" + std::to_string(call) + " push_data in=" + oracle::format_counts(in_counts);
@@ -365,6 +373,7 @@ private:
     std::unique_ptr<anira_test::GateBackend> m_gate;
     InferenceManager m_manager;
     PlanarFloatAdapter m_adapter;  ///< the float face, sized beside the manager's prepare
+    NonStreamableRouter m_router{m_manager, m_pp_processor, m_config};  ///< the Static slots
     Mode m_mode;
     std::shared_ptr<SessionElement> m_session;
     std::vector<size_t> m_positions;  ///< per input slot, the samples pushed so far

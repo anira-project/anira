@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "scheduler/NonStreamableRouter.h"
 #include "scheduler/PlanarFloatAdapter.h"
 
 namespace anira {
@@ -26,6 +27,9 @@ InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor,
     : m_inference_config(inference_config)
     , m_inference_manager(pp_processor, inference_config, nullptr, core_config)
     , m_float_adapter(std::make_unique<PlanarFloatAdapter>())
+    , m_router(std::make_unique<NonStreamableRouter>(m_inference_manager,
+                                                     pp_processor,
+                                                     inference_config))
     , m_num_input_tensors(inference_config.get_tensor_input_shape().size())
     , m_num_output_tensors(inference_config.get_tensor_output_shape().size()) {
     // Use malloc for better control over memory alignment
@@ -55,6 +59,9 @@ InferenceHandler::InferenceHandler(PrePostProcessor& pp_processor,
     : m_inference_config(inference_config)
     , m_inference_manager(pp_processor, inference_config, &custom_processor, core_config)
     , m_float_adapter(std::make_unique<PlanarFloatAdapter>())
+    , m_router(std::make_unique<NonStreamableRouter>(m_inference_manager,
+                                                     pp_processor,
+                                                     inference_config))
     , m_num_input_tensors(inference_config.get_tensor_input_shape().size())
     , m_num_output_tensors(inference_config.get_tensor_output_shape().size()) {
     // Use malloc for better control over memory alignment
@@ -89,6 +96,7 @@ void InferenceHandler::prepare(HostConfig new_audio_config) {
         new_audio_config,
         std::vector<long>(m_inference_config.get_tensor_output_shape().size(), -1));
     m_float_adapter->prepare(m_inference_config);
+    m_router->prepare();
 }
 
 void InferenceHandler::prepare(HostConfig new_audio_config,
@@ -112,6 +120,7 @@ void InferenceHandler::prepare(HostConfig new_audio_config,
     }
     m_inference_manager.prepare(new_audio_config, custom_latency_vector);
     m_float_adapter->prepare(m_inference_config);
+    m_router->prepare();
 }
 
 void InferenceHandler::prepare(HostConfig new_audio_config,
@@ -128,6 +137,7 @@ void InferenceHandler::prepare(HostConfig new_audio_config,
     }
     m_inference_manager.prepare(new_audio_config, custom_latency_long);
     m_float_adapter->prepare(m_inference_config);
+    m_router->prepare();
 }
 
 size_t InferenceHandler::process(float* const* data, size_t num_samples, size_t tensor_index) {
@@ -165,11 +175,12 @@ size_t* InferenceHandler::process(const float* const* const* input_data,
                                   float* const* const* output_data,
                                   size_t* num_output_samples) {
     // The manager takes host tensors: the adapter presents the channel pointers as planar
-    // float32 tensors and writes the delivered counts back into the caller's array.
+    // float32 tensors and writes the delivered counts back into the caller's array. The
+    // manager's stems move the streamed slots; the router moves the non-streamable ones of the
+    // same block around the stem call (the values, the clamp, the clamped count).
     const anira_tensor* inputs = m_float_adapter->present_inputs(input_data, num_input_samples);
     const anira_tensor* outputs = m_float_adapter->present_outputs(output_data, num_output_samples);
-    return m_float_adapter->deliver_counts(m_inference_manager.process(inputs, outputs),
-                                           num_output_samples);
+    return m_float_adapter->deliver_counts(m_router->process(inputs, outputs), num_output_samples);
 }
 
 void InferenceHandler::push_data(const float* const* input_data,
@@ -184,7 +195,7 @@ void InferenceHandler::push_data(const float* const* input_data,
 }
 
 void InferenceHandler::push_data(const float* const* const* input_data, size_t* num_input_samples) {
-    m_inference_manager.push_data(m_float_adapter->present_inputs(input_data, num_input_samples));
+    m_router->push_data(m_float_adapter->present_inputs(input_data, num_input_samples));
 }
 
 size_t InferenceHandler::pop_data(float* const* output_data,
@@ -215,15 +226,14 @@ size_t InferenceHandler::pop_data(float* const* output_data,
 
 size_t* InferenceHandler::pop_data(float* const* const* output_data, size_t* num_output_samples) {
     const anira_tensor* outputs = m_float_adapter->present_outputs(output_data, num_output_samples);
-    return m_float_adapter->deliver_counts(m_inference_manager.pop_data(outputs),
-                                           num_output_samples);
+    return m_float_adapter->deliver_counts(m_router->pop_data(outputs), num_output_samples);
 }
 
 size_t* InferenceHandler::pop_data(float* const* const* output_data,
                                    size_t* num_output_samples,
                                    std::chrono::steady_clock::time_point wait_until) {
     const anira_tensor* outputs = m_float_adapter->present_outputs(output_data, num_output_samples);
-    return m_float_adapter->deliver_counts(m_inference_manager.pop_data(outputs, wait_until),
+    return m_float_adapter->deliver_counts(m_router->pop_data(outputs, wait_until),
                                            num_output_samples);
 }
 

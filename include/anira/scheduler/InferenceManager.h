@@ -452,6 +452,10 @@ public:
      */
     void set_miss_policy(anira_miss_policy policy) noexcept { m_on_miss = policy; }
 
+    /// The policy set_miss_policy() stored (ANIRA_MISS_ZEROS by default). What a face that
+    /// fills part of a missed block itself reads: the 2.x face's non-streamable outputs.
+    anira_miss_policy miss_policy() const noexcept { return m_on_miss; }
+
     /**
      * @brief The function ANIRA_MISS_CALLBACK calls to fill a missed block
      *

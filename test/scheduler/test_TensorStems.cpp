@@ -48,6 +48,7 @@
 #include "../support/copy_oracle.h"
 #include "copy_path_oracle_golden.h"
 #include "gtest/gtest.h"
+#include "scheduler/NonStreamableRouter.h"
 #include "scheduler/PlanarFloatAdapter.h"
 #include "scheduler/TensorRun.h"
 
@@ -368,6 +369,7 @@ public:
         m_manager.set_miss_policy(policy);
         m_manager.prepare(host_config(), CustomLatencies{}, ring_dtypes);
         m_adapter.prepare(m_config);
+        m_router.prepare();
         for (const std::shared_ptr<SessionElement>& candidate : Core::get_sessions()) {
             if (candidate->m_session_id == m_manager.get_session_id()) { m_session = candidate; }
         }
@@ -544,7 +546,7 @@ public:
             }
             const anira_tensor* presented =
                 m_adapter.present_inputs(in_planes.data(), in_counts.data());
-            m_manager.push_data(presented);
+            m_router.push_data(presented);
             for (size_t slot = 0; slot < in_counts.size(); ++slot) {
                 num_in.push_back(static_cast<size_t>(presented[slot].shape[1]));
             }
@@ -556,7 +558,7 @@ public:
                     unused ? empty_tensor(inputs[slot].channels())
                            : inputs[slot].tensor(in_counts[slot], ANIRA_DTYPE_F32, true));
             }
-            m_manager.push_data(in_tensors.data());
+            m_router.push_data(in_tensors.data());
             for (const anira_tensor& tensor : in_tensors) {
                 num_in.push_back(static_cast<size_t>(tensor.shape[1]));
             }
@@ -645,21 +647,24 @@ private:
         return call_stem(stem, inputs.data(), outputs.data(), outcome);
     }
 
-    /// The tensor stem of each name, over the arrays of either face.
+    /// The tensor stem of each name, over the arrays of either face, through the 2.x face's
+    /// router: the stems move the streamed slots, the router the Static ones around them
+    /// (src/scheduler/NonStreamableRouter.h), which is where the recorded clamp, the clamped
+    /// count and the miss rules of a Static slot live.
     const size_t* call_stem(Stem stem,
                             const anira_tensor* inputs,
                             const anira_tensor* outputs,
                             Core::WaitOutcome& outcome) {
         constexpr auto k_forever = std::chrono::steady_clock::duration::max();
         switch (stem) {
-            case Stem::Process: return m_manager.process(inputs, outputs);
-            case Stem::ProcessNowait: return m_manager.process_nowait(inputs, outputs);
+            case Stem::Process: return m_router.process(inputs, outputs);
+            case Stem::ProcessNowait: return m_router.process_nowait(inputs, outputs);
             case Stem::ProcessWait:
-                return m_manager.process_wait(inputs, outputs, k_forever, outcome);
-            case Stem::PopData: return m_manager.pop_data(outputs);
+                return m_router.process_wait(inputs, outputs, k_forever, outcome);
+            case Stem::PopData: return m_router.pop_data(outputs);
             case Stem::PopDataUntil:
-                return m_manager.pop_data(outputs, std::chrono::steady_clock::time_point::max());
-            case Stem::PopDataWait: return m_manager.pop_data_wait(outputs, k_forever, outcome);
+                return m_router.pop_data(outputs, std::chrono::steady_clock::time_point::max());
+            case Stem::PopDataWait: return m_router.pop_data_wait(outputs, k_forever, outcome);
         }
         return nullptr;
     }
@@ -669,6 +674,7 @@ private:
     std::unique_ptr<anira_test::GateBackend> m_gate;
     InferenceManager m_manager;
     PlanarFloatAdapter m_adapter;  ///< Face::FloatAdapter: sized beside the manager's prepare
+    NonStreamableRouter m_router{m_manager, m_pp_processor, m_config};  ///< the Static slots
     Face m_face;
     Layouts m_layouts;
     Mode m_mode;
