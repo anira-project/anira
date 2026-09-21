@@ -325,7 +325,7 @@ enum class Model { PassThrough, FanOut, ParamRamp };
 /// How a rig hands its blocks to the tensor stems.
 enum class Face {
     FloatAdapter,  ///< separate channel pointers, presented by a PlanarFloatAdapter the way
-                   ///< anira::InferenceHandler and the _f32 entries present theirs
+                   ///< anira::InferenceHandler presents its own
     Tensor         ///< hand-built tensors over blocks of the rig's two layouts
 };
 
@@ -881,9 +881,9 @@ HostBlock<float> ramp_block(Layout layout, size_t channels, size_t count, size_t
 constexpr std::array<size_t, 4> k_channel_counts{1, 2, 3, 6};
 
 // The stems as a driver thread calls them. RealtimeSanitizer looks at what runs inside a
-// nonblocking function, and the float adapter under the _f32 entries only ever reaches the
-// unit-stride paths; these bring the strided ones into its view. No gtest assertion in here:
-// a failing one allocates.
+// nonblocking function, and a planar float32 block, which is all the float adapter presents,
+// only ever reaches the unit-stride paths; these bring the strided ones into its view. No gtest
+// assertion in here: a failing one allocates.
 const size_t* process_on_the_driver_thread(InferenceManager& manager,
                                            const anira_tensor* inputs,
                                            const anira_tensor* outputs) ANIRA_NONBLOCKING {

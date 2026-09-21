@@ -1,9 +1,11 @@
 #ifndef ANIRA_TEST_COPY_ORACLE_H
 #define ANIRA_TEST_COPY_ORACLE_H
 
-// The tools of the copy-path recording (test/scheduler/test_CopyPathOracle.cpp over the
-// float*** functions of InferenceManager, test/abi/test_HandlerCopyOracle.cpp over the _f32
-// Hard entries): the host memory of a call, the input ramps, the transcript a scenario writes
+// The tools of the copy-path recording (test/scheduler/test_CopyPathOracle.cpp over the tensor
+// stems of InferenceManager, test/abi/test_HandlerCopyOracle.cpp over the Hard entries of the C
+// ABI, both through an anira::PlanarFloatAdapter; the transcripts were recorded under the
+// float*** functions and the _f32 entries those calls replaced, and are not re-recorded): the
+// host memory of a call, the input ramps, the transcript a scenario writes
 // and its comparison with the golden transcript, and the clocked gate that makes a scenario
 // a pure function of its calls.
 //

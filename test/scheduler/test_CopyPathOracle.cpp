@@ -7,8 +7,8 @@
 // counts, the miss flag, every float a call wrote and every float it left alone.
 //
 // The manager takes host tensors only now. The float face is anira::PlanarFloatAdapter
-// (src/scheduler/PlanarFloatAdapter.h), which anira::InferenceHandler and the _f32 Hard entries
-// own, and the rig drives it the way they do: the adapter presents the channel pointers, the
+// (src/scheduler/PlanarFloatAdapter.h), which anira::InferenceHandler owns, and the rig drives
+// it the way that class does: the adapter presents the channel pointers, the
 // tensor stem of the same name runs on its tensors (the seven: process, process_nowait,
 // process_wait, push_data, pop_data, its deadline form, pop_data_wait), and deliver_counts()
 // writes the delivered counts into the caller's array. Every word of a transcript's header is
@@ -16,7 +16,8 @@
 // manager's miss flag, the outcome of a wait.
 //
 // test/support/copy_oracle.h says what a transcript is and why a scenario is a pure function
-// of its calls; test/abi/test_HandlerCopyOracle.cpp is the twin over the _f32 Hard entries.
+// of its calls; test/abi/test_HandlerCopyOracle.cpp is the twin one level up, the same kind of
+// recording under the Hard entries of the C ABI, presented through the same adapter.
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
