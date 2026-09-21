@@ -421,14 +421,15 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract
  * called the Hard entry: the driver thread, or the thread inside a _wait twin. Under a
  * tensor entry the tensors are the caller's own (a single-tensor form on a side with
  * several slots passes the handler's array, the caller's descriptor in its slot and
- * empty tensors beside it); under an _f32 entry and the 2.x float functions they are
- * planar float32 tensors over the caller's channel pointers. Return ANIRA_OK when the
- * outputs are filled; any other status makes anira zero-fill every requested output.
- * Either way the block counts as missed: the entry returns ANIRA_MISSED with a delivered
- * count of 0, and the stream stays time-aligned. The function must not call a Hard
- * entry, anira_handler_reset or anira_handler_prepare of the same handler, and it is
- * real-time code: no allocation, no lock, no system call. Under clang a function
- * converted to this type must itself be declared ANIRA_NONBLOCKING.
+ * empty tensors beside it, which name no memory: no pointer of an earlier call stays in
+ * a slot); under an _f32 entry and the 2.x float functions they are planar float32
+ * tensors over the caller's channel pointers. Return ANIRA_OK when the outputs are
+ * filled; any other status makes anira zero-fill every requested output. Either way the
+ * block counts as missed: the entry returns ANIRA_MISSED with a delivered count of 0,
+ * and the stream stays time-aligned. The function must not call a Hard entry,
+ * anira_handler_reset or anira_handler_prepare of the same handler, and it is real-time
+ * code: no allocation, no lock, no system call. Under clang a function converted to this
+ * type must itself be declared ANIRA_NONBLOCKING.
  * @param handler The handler whose block was missed.
  * @param inputs One tensor per input slot, in slot order and covering every slot: the very
  *        arrays the copy path was handed. A slot the call did not carry is an empty

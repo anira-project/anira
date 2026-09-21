@@ -235,7 +235,10 @@ bool slot_array(const anira_tensor* tensors, uint32_t count, uint32_t slots) noe
 // The array a single-tensor form hands the manager, which takes one tensor per slot: on a side
 // with one slot the caller's descriptor is that array; on a side with more the handler's
 // array of empty tensors with the caller's descriptor copied into its slot (one struct copy,
-// nothing is built), made an empty tensor again when the call returns.
+// nothing is built). When the call returns the slot is the empty tensor of prepare again,
+// every field of it: a later call that does not carry the slot hands the array to the miss
+// function, which must not find the memory arm, the byte offset, the flags or the release
+// pair of an earlier caller in it (the memory they name may be gone by then).
 class StagedTensor {
 public:
     StagedTensor(std::vector<anira_tensor>& slots,
@@ -248,7 +251,12 @@ public:
         }
     }
     ~StagedTensor() {
-        if (m_staged != nullptr) { m_staged->shape[1] = 0; }
+        if (m_staged == nullptr) { return; }
+        // What empty_tensors() built: the staged descriptor passed the check, so its dtype and
+        // shape[0] are the slot's. A field fill (zero, then a few stores), and the factory
+        // reads its arguments before it zeroes the record.
+        const std::array<int64_t, 2> shape{m_staged->shape[0], 0};
+        anira_tensor_init_host(m_staged, nullptr, m_staged->dtype, 2, shape.data());
     }
     StagedTensor(const StagedTensor&) = delete;
     StagedTensor& operator=(const StagedTensor&) = delete;

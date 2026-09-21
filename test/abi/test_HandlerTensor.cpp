@@ -1413,6 +1413,74 @@ TEST_F(AbiHandlerTensorMiss, AMultiFormHandsOverTheCallersArrays) {
     for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(single_out.at(1, i), k_backup); }
 }
 
+/// The empty tensor anira_handler_prepare builds for a float32 slot: rank 2, {channels, 0},
+/// host memory, no pointer.
+anira_tensor empty_slot(int64_t channels) {
+    const std::array<int64_t, 2> shape{channels, 0};
+    anira_tensor tensor{};
+    anira_tensor_init_host(&tensor, nullptr, ANIRA_DTYPE_F32, 2, shape.data());
+    return tensor;
+}
+
+// The handler's arrays serve every single-tensor call. A slot a call staged is the empty tensor
+// of prepare again when the call returns, so the function never finds the pointers of an
+// earlier call, which may name dead memory by then, in a slot the missed call did not carry.
+TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall) {
+    const Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
+    ASSERT_TRUE(rig.ready());
+    ASSERT_EQ(rig.latency(0), 2U * k_samples);
+    anira_handler* handler = rig.get();
+    const auto empty_values = bytes_of(empty_slot(1));
+    {
+        // Slot 1 on both sides through the single-tensor forms, described with everything the
+        // staged copy could keep: the planar flag, a plane array, a byte offset, a stride. The
+        // memory and the plane array die with this scope.
+        std::array<float, 4> memory{k_untouched, k_static_in[0], k_static_in[1], k_static_in[2]};
+        std::array<float*, 1> planes{memory.data()};
+        const std::array<int64_t, 2> shape{1, 3};
+        anira_tensor values{};
+        anira_tensor_init_host_planar(&values,
+                                      static_cast<const void*>(planes.data()),
+                                      1,
+                                      ANIRA_DTYPE_F32,
+                                      2,
+                                      shape.data());
+        values.byte_offset = sizeof(float);
+        values.strides[1] = 1;
+        ASSERT_EQ(anira_handler_push_data(handler, &values, 1), ANIRA_OK);
+        ASSERT_EQ(anira_handler_pop_data(handler, &values, 1, nullptr), ANIRA_OK);
+        EXPECT_EQ(m_state.m_calls, 0);
+    }
+    EXPECT_EQ(bytes_of(handler->m_input_tensors[1]), empty_values) << "un-staged to the last byte";
+    EXPECT_EQ(bytes_of(handler->m_output_tensors[1]), empty_values);
+
+    // Latency 16: two delivered blocks of slot 0 empty the ring, the third one starves.
+    for (size_t k = 0; k < 3; ++k) {
+        Block in(Layout::Planar, 3, k_hop);
+        const Block out(Layout::Planar, 3, k_hop);
+        fill_input(in, k * k_samples);
+        ASSERT_EQ(anira_handler_process(handler, &in.tensor(), &out.tensor(), 0, nullptr),
+                  k < 2 ? ANIRA_OK : ANIRA_MISSED);
+    }
+    ASSERT_EQ(m_state.m_calls, 1);
+    ASSERT_EQ(m_state.m_inputs, handler->m_input_tensors.data());
+    ASSERT_EQ(m_state.m_outputs, handler->m_output_tensors.data());
+    EXPECT_GT(m_state.m_input_copies[0].shape[1], 0) << "the slot the call carried";
+    // What the function was handed in the other slot, copied while it ran.
+    for (const anira_tensor* slot : {&m_state.m_input_copies[1], &m_state.m_output_copies[1]}) {
+        EXPECT_EQ(slot->shape[0], 1);
+        EXPECT_EQ(slot->shape[1], 0);
+        EXPECT_EQ(slot->handle.raw[0], 0U) << "a pointer of the earlier call";
+        EXPECT_EQ(slot->handle.raw[1], 0U);
+        EXPECT_EQ(slot->handle.raw[2], 0U);
+        EXPECT_EQ(slot->byte_offset, 0U);
+        EXPECT_EQ(bytes_of(*slot), empty_values);
+    }
+    // The carried slot is un-staged the same way once the missed call has returned.
+    EXPECT_EQ(bytes_of(handler->m_input_tensors[0]), bytes_of(empty_slot(3)));
+    EXPECT_EQ(bytes_of(handler->m_output_tensors[0]), bytes_of(empty_slot(3)));
+}
+
 TEST_F(AbiHandlerTensorMiss, TheFloatEntriesHandOverPlanarFloatTensors) {
     const Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
     ASSERT_TRUE(rig.ready());
