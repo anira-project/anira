@@ -249,14 +249,6 @@ const size_t* InferenceManager::pop_data(const anira_tensor* outputs,
 }
 
 std::chrono::steady_clock::duration InferenceManager::contract_wait_budget(
-    const size_t* num_input_samples,
-    const size_t* num_output_samples) const noexcept {
-    return wait_budget_of(m_session->m_reference.m_is_input
-                              ? num_input_samples[m_session->m_reference.m_index]
-                              : num_output_samples[m_session->m_reference.m_index]);
-}
-
-std::chrono::steady_clock::duration InferenceManager::contract_wait_budget(
     const anira_tensor* inputs,
     const anira_tensor* outputs) const noexcept {
     const anira_tensor& reference = m_session->m_reference.m_is_input

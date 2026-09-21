@@ -333,8 +333,12 @@ public:
                            std::chrono::steady_clock::time_point wait_until);
 
     /**
-     * @brief contract_wait_budget() of a tensor call: the block is measured by `shape[1]` of
-     * the anchored tensor. What a waiting entry computes before it calls process_wait().
+     * @brief The 2.x blocking_ratio wait of one process call
+     *
+     * InferenceConfig::m_blocking_ratio times the reference block's duration: `shape[1]` of the
+     * anchored tensor over the host sample rate, in the arithmetic of the 2.x process(), so
+     * the deadline the 2.x path waits for is unchanged. What a waiting entry computes before
+     * it calls process_wait(). The process forms only: a pop has no input block to measure.
      *
      * @param inputs One tensor per input slot
      * @param outputs One tensor per output slot
@@ -345,22 +349,6 @@ public:
         const anira_tensor* outputs) const noexcept;
 
     ///@}
-
-    /**
-     * @brief The 2.x blocking_ratio wait of one process() call
-     *
-     * InferenceConfig::m_blocking_ratio times the reference block's duration (the anchored
-     * tensor's sample count over the host sample rate), in the arithmetic of the 2.x
-     * process(), so the deadline the 2.x path waits for is unchanged. The process forms
-     * only: a pop has no input counts to measure the block by.
-     *
-     * @param num_input_samples Array of input sample counts for each tensor
-     * @param num_output_samples Array of requested output sample counts for each tensor
-     * @return The wait budget
-     */
-    std::chrono::steady_clock::duration contract_wait_budget(
-        const size_t* num_input_samples,
-        const size_t* num_output_samples) const noexcept;
 
     /**
      * @brief Replaces the session's plan table (SessionElement::m_plan_backends) and selects
