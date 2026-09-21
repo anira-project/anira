@@ -1453,6 +1453,85 @@ TEST(TensorStems, TheFloatAdapterOnAnInt16RingCopiesNothing) {
     EXPECT_EQ(site.m_latched.load(), 1U);
 }
 
+// The adapter alone, without a manager. A slot a call does not carry is an empty tensor whose
+// planes are NULL, whatever an earlier call stored there, and the caller's channel array of
+// that slot is not read (it may be NULL). A miss function (ANIRA_MISS_CALLBACK) is handed
+// these arrays as they are, so a pointer of an earlier call, whose memory may be gone by then,
+// must not survive in a slot the present call left out. Both present forms, both sides; each
+// slot is first shown to hold the caller's pointer, so a NULL afterwards is the adapter's doing.
+TEST(TensorStems, TheFloatAdapterNullsThePlanesOfASlotACallDidNotCarry) {
+    const InferenceConfig config = multi_config();  // a 3-channel stream and 3 Static values
+    PlanarFloatAdapter adapter;
+    adapter.prepare(config);
+
+    std::array<std::vector<float>, 3> stream_in;
+    std::array<std::vector<float>, 3> stream_out;
+    std::array<const float*, 3> stream_in_channels{};
+    std::array<float*, 3> stream_out_channels{};
+    for (size_t channel = 0; channel < 3; ++channel) {
+        stream_in.at(channel).assign(k_hop, 1.F);
+        stream_out.at(channel).assign(k_hop, 0.F);
+        stream_in_channels.at(channel) = stream_in.at(channel).data();
+        stream_out_channels.at(channel) = stream_out.at(channel).data();
+    }
+    const std::array<float, 3> values_in{1.F, 2.F, 3.F};
+    std::array<float, 3> values_out{};
+    const std::array<const float*, 1> values_in_channels{values_in.data()};
+    const std::array<float*, 1> values_out_channels{values_out.data()};
+
+    const std::array<const float* const*, 2> in_both{stream_in_channels.data(),
+                                                     values_in_channels.data()};
+    const std::array<float* const*, 2> out_both{stream_out_channels.data(),
+                                                values_out_channels.data()};
+    const std::array<size_t, 2> count_both{k_hop, 3};
+    const auto plane = [](const anira_tensor& tensor, uint32_t index) {
+        return anira_tensor_plane(&tensor, index, ANIRA_DTYPE_F32);
+    };
+    const auto carry_both = [&] {
+        const anira_tensor* inputs = adapter.present_inputs(in_both.data(), count_both.data());
+        const anira_tensor* outputs = adapter.present_outputs(out_both.data(), count_both.data());
+        // The control: every slot names the caller's memory after a call that carried it.
+        EXPECT_EQ(plane(inputs[0], 2), stream_in[2].data());
+        EXPECT_EQ(plane(inputs[1], 0), values_in.data());
+        EXPECT_EQ(plane(outputs[0], 2), stream_out[2].data());
+        EXPECT_EQ(plane(outputs[1], 0), values_out.data());
+    };
+
+    // The multi forms: the Static slot left out, its channel array NULL and not read.
+    carry_both();
+    {
+        const std::array<const float* const*, 2> in_stream{stream_in_channels.data(), nullptr};
+        const std::array<float* const*, 2> out_stream{stream_out_channels.data(), nullptr};
+        const std::array<size_t, 2> count_stream{k_hop, 0};
+        const anira_tensor* inputs = adapter.present_inputs(in_stream.data(), count_stream.data());
+        const anira_tensor* outputs =
+            adapter.present_outputs(out_stream.data(), count_stream.data());
+        EXPECT_EQ(inputs[1].shape[1], 0);
+        EXPECT_EQ(outputs[1].shape[1], 0);
+        EXPECT_EQ(plane(inputs[1], 0), nullptr) << "a pointer of the earlier call";
+        EXPECT_EQ(plane(outputs[1], 0), nullptr) << "a pointer of the earlier call";
+        EXPECT_EQ(inputs[0].shape[1], static_cast<int64_t>(k_hop)) << "the carried slot";
+        EXPECT_EQ(plane(inputs[0], 2), stream_in[2].data()) << "the carried slot";
+        EXPECT_EQ(plane(outputs[0], 2), stream_out[2].data()) << "the carried slot";
+    }
+
+    // The single forms: slot 1 carried, every plane of slot 0 left out.
+    carry_both();
+    {
+        const anira_tensor* inputs = adapter.present_input(1, values_in_channels.data(), 3);
+        const anira_tensor* outputs = adapter.present_output(1, values_out_channels.data(), 3);
+        EXPECT_EQ(inputs[0].shape[1], 0);
+        EXPECT_EQ(outputs[0].shape[1], 0);
+        for (uint32_t channel = 0; channel < 3; ++channel) {
+            EXPECT_EQ(plane(inputs[0], channel), nullptr) << "input channel " << channel;
+            EXPECT_EQ(plane(outputs[0], channel), nullptr) << "output channel " << channel;
+        }
+        EXPECT_EQ(inputs[1].shape[1], 3) << "the carried slot";
+        EXPECT_EQ(plane(inputs[1], 0), values_in.data()) << "the carried slot";
+        EXPECT_EQ(plane(outputs[1], 0), values_out.data()) << "the carried slot";
+    }
+}
+
 // ---- the run helper and the validator, on int16 data -------------------------------------------
 
 TEST(TensorRun, ChannelRunResolvesEveryDescription) {

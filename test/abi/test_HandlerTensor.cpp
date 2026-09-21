@@ -3,7 +3,7 @@
 // host block is one anira_tensor per slot, of the logical shape [channels, samples], over
 // planar memory, one block read by strides (contiguous, interleaved) or one packed block.
 //
-// The tensor entries, the _f32 entries and the 2.x handler share one copy path, so a
+// The tensor entries and the 2.x handler share one copy path, so a
 // pass-through model cancels a symmetric stride bug and no single oracle would see it. The
 // cases are therefore named comparisons: absolute expectations per description (every channel
 // its own ramp, late by the reported latency), crossed descriptions on the two sides, in
@@ -47,6 +47,7 @@
 #include "../support/copy_oracle.h"
 #include "../support/inference_config_eq.h"
 #include "../support/log_record_collector.h"
+#include "float_face.h"
 #include "handler_support.h"
 
 namespace {
@@ -1481,10 +1482,16 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
     EXPECT_EQ(bytes_of(handler->m_output_tensors[0]), bytes_of(empty_slot(3)));
 }
 
-TEST_F(AbiHandlerTensorMiss, TheFloatEntriesHandOverPlanarFloatTensors) {
+// A float host: channel pointers presented as planar float32 tensors through an
+// anira::PlanarFloatAdapter (anira_test::FloatFace), the way the 2.x anira::InferenceHandler
+// presents its own. The miss function is handed the caller's arrays as they are, and a slot
+// the missed call did not carry names no memory: the adapter nulls the planes of a slot it
+// leaves out, so the pointers of an earlier call never reach the function.
+TEST_F(AbiHandlerTensorMiss, AFloatHostsPlanarTensorsReachTheMissFunctionAsTheyAre) {
     const Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
     ASSERT_TRUE(rig.ready());
     ASSERT_EQ(rig.latency(0), 2U * k_samples);
+    anira_test::FloatFace face(rig.get());
     std::array<std::vector<float>, 3> in_data;
     std::array<std::vector<float>, 3> out_data;
     std::array<const float*, 3> in_channels{};
@@ -1499,31 +1506,32 @@ TEST_F(AbiHandlerTensorMiss, TheFloatEntriesHandOverPlanarFloatTensors) {
     const std::array<const float* const*, 2> in{in_channels.data(), nullptr};
     const std::array<float* const*, 2> out{out_channels.data(), nullptr};
     const std::array<size_t, 2> num_in{k_hop, 0};
-    std::array<size_t, 2> num_out{k_hop, 0};
+    const std::array<size_t, 2> num_out{k_hop, 0};
     {
         // An earlier call carries the Static slots over memory that dies with this scope.
         std::array<float, 3> values{k_static_in};
         const std::array<float*, 1> value_channels{values.data()};
-        ASSERT_EQ(anira_handler_push_data_f32(rig.get(), value_channels.data(), 3, 1), ANIRA_OK);
-        ASSERT_EQ(anira_handler_pop_data_f32(rig.get(), value_channels.data(), 3, 1, nullptr),
-                  ANIRA_OK);
+        ASSERT_EQ(face.push_data(value_channels.data(), 3, 1), ANIRA_OK);
+        ASSERT_EQ(face.pop_data(value_channels.data(), 3, 1, nullptr), ANIRA_OK);
     }
     anira_status status = ANIRA_OK;
+    std::array<size_t, 2> delivered{k_unset, k_unset};
     for (int k = 0; k < 3; ++k) {
-        status = anira_handler_process_f32_multi(rig.get(),
-                                                 in.data(),
-                                                 num_in.data(),
-                                                 out.data(),
-                                                 num_out.data());
+        status = face.process_multi(in.data(),
+                                    num_in.data(),
+                                    out.data(),
+                                    num_out.data(),
+                                    delivered.data());
     }
     EXPECT_EQ(status, ANIRA_MISSED);
-    EXPECT_EQ(num_out[0], k_hop) << "a miss keeps the request";
+    EXPECT_EQ(delivered[0], 0U) << "a missed block delivers 0";
+    EXPECT_EQ(delivered[1], 0U);
     ASSERT_EQ(m_state.m_calls, 1);
     EXPECT_EQ(m_state.m_num_inputs, 2U);
     EXPECT_EQ(m_state.m_num_outputs, 2U);
-    // The arrays the stem was handed: the tensors of the handler's float adapter.
-    EXPECT_EQ(m_state.m_inputs, rig.get()->m_float_adapter.inputs());
-    EXPECT_EQ(m_state.m_outputs, rig.get()->m_float_adapter.outputs());
+    // The arrays the entry was handed, as they are: the caller's own, here the adapter's.
+    EXPECT_EQ(m_state.m_inputs, face.inputs());
+    EXPECT_EQ(m_state.m_outputs, face.outputs());
     const anira_tensor& input = m_state.m_input_copies[0];
     EXPECT_EQ(
         input.flags,
@@ -1631,11 +1639,11 @@ TEST(AbiHandlerTensor, APushLandsEveryChannelInItsRing) {
     }
 }
 
-// Two faces of one core, stated as a consistency check: the same script through the _f32
-// entries over channel pointers and through the tensor entries over an interleaved block
-// gives the same statuses, the same counts and the same samples, missed blocks included. One
-// face after the other: a closed gate holds its inference thread, so two rigs at once would
-// starve each other's settle.
+// Two descriptions of one stream, stated as a consistency check: the same script over planar
+// blocks (one pointer per channel, what a float host holds) and over interleaved blocks gives
+// the same statuses, the same counts and the same samples, missed blocks included. One
+// description after the other: a closed gate holds its inference thread, so two rigs at once
+// would starve each other's settle.
 struct FaceBlock {
     anira_status m_status = ANIRA_OK;
     size_t m_delivered = k_unset;
@@ -1644,7 +1652,7 @@ struct FaceBlock {
 
 /// Blocks 0 and 1 are delivered, 2 and 3 starve (block 1 stays at the gate), 4 and 5 are
 /// delivered again after the catch-up.
-std::vector<FaceBlock> run_face(bool tensor_face, anira_miss_policy policy) {
+std::vector<FaceBlock> run_face(Layout layout, anira_miss_policy policy) {
     std::vector<FaceBlock> blocks;
     Rig rig(pass_through(2), policy);
     if (!rig.ready() || rig.latency() >= 2 * k_samples) {
@@ -1652,27 +1660,12 @@ std::vector<FaceBlock> run_face(bool tensor_face, anira_miss_policy policy) {
         return blocks;
     }
     for (size_t k = 0; k < 6; ++k) {
-        Block in(tensor_face ? Layout::Interleaved : Layout::Planar, 2, k_hop);
-        Block out(tensor_face ? Layout::Interleaved : Layout::Planar, 2, k_hop);
+        Block in(layout, 2, k_hop);
+        Block out(layout, 2, k_hop);
         fill_input(in, k * k_hop);
         FaceBlock block;
-        if (tensor_face) {
-            block.m_status = anira_handler_process(rig.get(),
-                                                   &in.tensor(),
-                                                   &out.tensor(),
-                                                   0,
-                                                   &block.m_delivered);
-        } else {
-            const std::array<const float*, 2> in_channels{&in.at(0, 0), &in.at(1, 0)};
-            const std::array<float*, 2> out_channels{&out.at(0, 0), &out.at(1, 0)};
-            block.m_status = anira_handler_process_f32(rig.get(),
-                                                       in_channels.data(),
-                                                       k_hop,
-                                                       out_channels.data(),
-                                                       k_hop,
-                                                       0,
-                                                       &block.m_delivered);
-        }
+        block.m_status =
+            anira_handler_process(rig.get(), &in.tensor(), &out.tensor(), 0, &block.m_delivered);
         for (size_t channel = 0; channel < 2; ++channel) {
             for (size_t i = 0; i < k_hop; ++i) { block.m_samples.push_back(out.at(channel, i)); }
         }
@@ -1684,19 +1677,20 @@ std::vector<FaceBlock> run_face(bool tensor_face, anira_miss_policy policy) {
 
 void expect_faces_agree(anira_miss_policy policy) {
     SCOPED_TRACE("policy " + std::to_string(policy));
-    const std::vector<FaceBlock> floats = run_face(false, policy);
-    const std::vector<FaceBlock> tensors = run_face(true, policy);
-    ASSERT_EQ(floats.size(), 6U);
-    ASSERT_EQ(tensors.size(), 6U);
+    const std::vector<FaceBlock> planar = run_face(Layout::Planar, policy);
+    const std::vector<FaceBlock> interleaved = run_face(Layout::Interleaved, policy);
+    ASSERT_EQ(planar.size(), 6U);
+    ASSERT_EQ(interleaved.size(), 6U);
     for (size_t k = 0; k < 6; ++k) {
-        EXPECT_EQ(tensors[k].m_status, floats[k].m_status) << "block " << k;
-        EXPECT_EQ(tensors[k].m_status, k == 2 || k == 3 ? ANIRA_MISSED : ANIRA_OK) << "block " << k;
-        EXPECT_EQ(tensors[k].m_delivered, floats[k].m_delivered) << "block " << k;
-        EXPECT_EQ(tensors[k].m_samples, floats[k].m_samples) << "block " << k;
+        EXPECT_EQ(interleaved[k].m_status, planar[k].m_status) << "block " << k;
+        EXPECT_EQ(interleaved[k].m_status, k == 2 || k == 3 ? ANIRA_MISSED : ANIRA_OK)
+            << "block " << k;
+        EXPECT_EQ(interleaved[k].m_delivered, planar[k].m_delivered) << "block " << k;
+        EXPECT_EQ(interleaved[k].m_samples, planar[k].m_samples) << "block " << k;
     }
 }
 
-TEST(AbiHandlerTensor, TheTensorEntriesAndTheFloatEntriesAgreeBitForBit) {
+TEST(AbiHandlerTensor, APlanarAndAnInterleavedBlockAgreeBitForBitAcrossMisses) {
     for (const anira_miss_policy policy :
          {ANIRA_MISS_ZEROS, ANIRA_MISS_HOLD_LAST, ANIRA_MISS_BYPASS}) {
         expect_faces_agree(policy);

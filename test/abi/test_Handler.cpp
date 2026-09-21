@@ -13,6 +13,7 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
 #include <anira/scheduler/Core.h>
 #include <anira/utils/HostConfig.h>
@@ -37,6 +38,7 @@
 #include "../../extras/models/model_files.h"
 #include "../support/inference_config_eq.h"
 #include "../support/log_record_collector.h"
+#include "float_face.h"
 #include "handler_support.h"
 
 namespace {
@@ -149,6 +151,7 @@ struct Oracle {
     /// the pooling claim the two InferenceConfigs must compare equal.
     void prepare(const anira::ContractHandle& contract, size_t block) {
         ASSERT_EQ(m_c.prepare(contract), ANIRA_OK) << m_c.m_err.message;
+        m_face = std::make_unique<anira_test::FloatFace>(m_c.m_handler);
         m_v2.prepare(anira::HostConfig(static_cast<float>(block), static_cast<float>(k_rate)));
         anira_test::expect_inference_config_eq(m_c.m_handler->m_inference_config, m_config_2x);
         m_num_inputs = m_c.m_handler->m_num_inputs;
@@ -164,6 +167,7 @@ struct Oracle {
                    std::vector<float>& v,
                    size_t& n_c,
                    size_t& n_v) {
+        ASSERT_NE(m_face, nullptr) << "run_block before a successful prepare";
         const std::vector<float> in = ramp(k, block);
         c = in;
         v = in;
@@ -181,8 +185,7 @@ struct Oracle {
             case Form::InPlace: {
                 const std::array<float*, 1> c_ch{c.data()};
                 const std::array<float*, 1> v_ch{v.data()};
-                EXPECT_EQ(anira_handler_process_f32_inplace(h(), c_ch.data(), block, 0, &n_c),
-                          ANIRA_OK)
+                EXPECT_EQ(m_face->process_inplace(c_ch.data(), block, 0, &n_c), ANIRA_OK)
                     << "block " << k;
                 wait_for_block(h(), prev_c);
                 n_v = m_v2.process(v_ch.data(), block);
@@ -194,9 +197,8 @@ struct Oracle {
                 const std::array<float*, 1> c_ch{c_out.data()};
                 const std::array<const float*, 1> v_in{v.data()};
                 const std::array<float*, 1> v_ch{v_out.data()};
-                EXPECT_EQ(
-                    anira_handler_process_f32(h(), c_in.data(), block, c_ch.data(), block, 0, &n_c),
-                    ANIRA_OK)
+                EXPECT_EQ(m_face->process(c_in.data(), block, c_ch.data(), block, 0, &n_c),
+                          ANIRA_OK)
                     << "block " << k;
                 wait_for_block(h(), prev_c);
                 n_v = m_v2.process(v_in.data(), block, v_ch.data(), block);
@@ -213,14 +215,15 @@ struct Oracle {
                 const std::array<float*, 1> c_out_ch{c_out.data()};
                 const std::array<float*, 1> c_gout_ch{&gain_out_c};
                 const std::array<float* const*, 2> c_outs{c_out_ch.data(), c_gout_ch.data()};
-                std::array<size_t, 2> c_num_out{block, 1};
-                EXPECT_EQ(anira_handler_process_f32_multi(h(),
-                                                          c_in.data(),
-                                                          c_num_in.data(),
-                                                          c_outs.data(),
-                                                          c_num_out.data()),
+                const std::array<size_t, 2> c_num_out{block, 1};
+                std::array<size_t, 2> c_delivered{7, 7};
+                EXPECT_EQ(m_face->process_multi(c_in.data(),
+                                                c_num_in.data(),
+                                                c_outs.data(),
+                                                c_num_out.data(),
+                                                c_delivered.data()),
                           ANIRA_OK);
-                n_c = c_num_out[0];
+                n_c = c_delivered[0];
                 wait_for_block(h(), prev_c);
 
                 const std::array<const float*, 1> v_in_ch{v.data()};
@@ -235,7 +238,7 @@ struct Oracle {
                     m_v2.process(v_in.data(), v_num_in.data(), v_outs.data(), v_num_out.data())[0];
                 wait_for_block(m_v2, prev_v);
                 if (m_num_outputs > 1) {
-                    EXPECT_EQ(c_num_out[1], 1U) << "block " << k;
+                    EXPECT_EQ(c_delivered[1], 1U) << "block " << k;
                     EXPECT_EQ(v_num_out[1], 1U) << "block " << k;
                     EXPECT_EQ(gain_out_c, gain_out_v) << "block " << k;
                 }
@@ -246,10 +249,9 @@ struct Oracle {
             case Form::PushPop: {
                 const std::array<const float*, 1> c_in{c.data()};
                 const std::array<float*, 1> c_ch{c_out.data()};
-                EXPECT_EQ(anira_handler_push_data_f32(h(), c_in.data(), block, 0), ANIRA_OK);
+                EXPECT_EQ(m_face->push_data(c_in.data(), block, 0), ANIRA_OK);
                 wait_for_push(h(), prev_c, block);
-                EXPECT_EQ(anira_handler_pop_data_f32(h(), c_ch.data(), block, 0, &n_c), ANIRA_OK)
-                    << "block " << k;
+                EXPECT_EQ(m_face->pop_data(c_ch.data(), block, 0, &n_c), ANIRA_OK) << "block " << k;
                 const std::array<const float*, 1> v_in{v.data()};
                 const std::array<float*, 1> v_ch{v_out.data()};
                 m_v2.push_data(v_in.data(), block);
@@ -267,13 +269,14 @@ struct Oracle {
                 const std::array<float*, 1> c_out_ch{c_out.data()};
                 const std::array<float*, 1> c_gout_ch{&gain_out_c};
                 const std::array<float* const*, 2> c_outs{c_out_ch.data(), c_gout_ch.data()};
-                std::array<size_t, 2> c_num_out{block, 1};
-                EXPECT_EQ(anira_handler_push_data_f32_multi(h(), c_in.data(), c_num_in.data()),
-                          ANIRA_OK);
+                const std::array<size_t, 2> c_num_out{block, 1};
+                std::array<size_t, 2> c_delivered{7, 7};
+                EXPECT_EQ(m_face->push_data_multi(c_in.data(), c_num_in.data()), ANIRA_OK);
                 wait_for_push(h(), prev_c, block);
-                EXPECT_EQ(anira_handler_pop_data_f32_multi(h(), c_outs.data(), c_num_out.data()),
-                          ANIRA_OK);
-                n_c = c_num_out[0];
+                EXPECT_EQ(
+                    m_face->pop_data_multi(c_outs.data(), c_num_out.data(), c_delivered.data()),
+                    ANIRA_OK);
+                n_c = c_delivered[0];
 
                 const std::array<const float*, 1> v_in_ch{v.data()};
                 const std::array<const float*, 1> v_gain_ch{&gain_in_v};
@@ -322,6 +325,7 @@ struct Oracle {
     anira::InferenceHandler m_v2;
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
+    std::unique_ptr<anira_test::FloatFace> m_face;  ///< the C side's float face, built by prepare()
     size_t m_next_block = 1;
 };
 
@@ -367,33 +371,28 @@ TEST(AbiHandler, NullArgumentsAreRefused) {
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(handler, nullptr);
 
+    // The blocks of a float host: planar tensors over its channel pointers, the same tensor
+    // on both sides for in place.
     std::vector<float> block(k_block, 0.0F);
     const std::array<float*, 1> ptrs{block.data()};
     const std::array<const float*, 1> in_ptrs{block.data()};
-    const std::array<const float* const*, 1> in_multi{in_ptrs.data()};
-    const std::array<float* const*, 1> out_multi{ptrs.data()};
-    const std::array<size_t, 1> num_in{k_block};
-    std::array<size_t, 1> num_out{k_block};
+    const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
+    const anira_tensor in = anira_test::planar_f32(in_ptrs.data(), 1, k_block);
     uint32_t count = 0;
     size_t delivered = 7;
-    EXPECT_EQ(anira_handler_process_f32_inplace(nullptr, ptrs.data(), k_block, 0, &delivered),
+    EXPECT_EQ(anira_handler_process(nullptr, &io, &io, 0, &delivered),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(delivered, 0U) << "a refusal writes 0 to the caller's count";
-    EXPECT_EQ(anira_handler_process_f32_inplace(nullptr, ptrs.data(), k_block, 0, nullptr),
-              ANIRA_ERROR_INVALID_ARGUMENT)
+    EXPECT_EQ(anira_handler_process(nullptr, &io, &io, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT)
         << "the count is optional";
-    EXPECT_EQ(anira_handler_push_data_f32(nullptr, in_ptrs.data(), k_block, 0),
-              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_push_data(nullptr, &in, 0), ANIRA_ERROR_INVALID_ARGUMENT);
     delivered = 7;
-    EXPECT_EQ(anira_handler_pop_data_f32(nullptr, ptrs.data(), k_block, 0, &delivered),
-              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_pop_data(nullptr, &io, 0, &delivered), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(delivered, 0U);
-    EXPECT_EQ(anira_handler_process_f32_multi(nullptr,
-                                              in_multi.data(),
-                                              num_in.data(),
-                                              out_multi.data(),
-                                              num_out.data()),
+    std::array<size_t, 1> multi_delivered{7};
+    EXPECT_EQ(anira_handler_process_multi(nullptr, &in, 1, &io, 1, multi_delivered.data()),
               ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(multi_delivered[0], 0U) << "the counts of a multi form are zeroed on every return";
     EXPECT_EQ(anira_handler_get_latency(nullptr, 0), 0U);
     EXPECT_EQ(anira_handler_get_latencies(nullptr, &count, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
     delivered = 7;
@@ -430,39 +429,31 @@ TEST(AbiHandler, UnpreparedEntriesRecordNotPrepared) {
     anira_handler* h = handler.m_handler;
     ASSERT_NE(h, nullptr);
 
+    // An unprepared handler has no slots to size an adapter by: the blocks are planar tensors
+    // built by hand, as a float host builds them before its first prepare.
     std::vector<float> block(k_block, 0.25F);
     const std::array<float*, 1> ptrs{block.data()};
     const std::array<const float*, 1> in_ptrs{block.data()};
-    const std::array<const float* const*, 1> in_multi{in_ptrs.data()};
-    const std::array<float* const*, 1> out_multi{ptrs.data()};
-    const std::array<size_t, 1> num_in{k_block};
-    std::array<size_t, 1> num_out{k_block};
+    const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
+    const anira_tensor in = anira_test::planar_f32(in_ptrs.data(), 1, k_block);
 
     size_t delivered = 7;
-    EXPECT_EQ(anira_handler_process_f32_inplace(h, ptrs.data(), k_block, 0, &delivered),
-              ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(delivered, 0U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_push_data_f32(h, in_ptrs.data(), k_block, 0), ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_pop_data_f32(h, ptrs.data(), k_block, 0, &delivered),
+    EXPECT_EQ(anira_handler_push_data(h, &in, 0), ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_pop_data(h, &io, 0, &delivered), ANIRA_ERROR_NOT_PREPARED);
+    std::array<size_t, 1> multi_delivered{7};
+    EXPECT_EQ(anira_handler_process_multi(h, &in, 1, &io, 1, multi_delivered.data()),
               ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_process_f32_multi(h,
-                                              in_multi.data(),
-                                              num_in.data(),
-                                              out_multi.data(),
-                                              num_out.data()),
+    EXPECT_EQ(multi_delivered[0], 0U) << "a refused multi form zeroes its counts";
+    EXPECT_EQ(anira_handler_push_data_multi(h, &in, 1), ANIRA_ERROR_NOT_PREPARED);
+    multi_delivered[0] = 7;
+    EXPECT_EQ(anira_handler_pop_data_multi(h, &io, 1, multi_delivered.data()),
               ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_push_data_f32_multi(h, in_multi.data(), num_in.data()),
-              ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(anira_handler_pop_data_f32_multi(h, out_multi.data(), num_out.data()),
-              ANIRA_ERROR_NOT_PREPARED);
-    EXPECT_EQ(num_out[0], k_block) << "a refused multi form leaves the request array untouched";
-    EXPECT_EQ(anira_handler_process_f32_inplace_wait(h,
-                                                     ptrs.data(),
-                                                     k_block,
-                                                     ANIRA_WAIT_FOREVER,
-                                                     0,
-                                                     &delivered),
+    EXPECT_EQ(multi_delivered[0], 0U) << "a refused multi form zeroes its counts";
+    delivered = 7;
+    EXPECT_EQ(anira_handler_process_wait(h, &io, &io, ANIRA_WAIT_FOREVER, 0, &delivered),
               ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(delivered, 0U);
     delivered = 7;
@@ -480,7 +471,7 @@ TEST(AbiHandler, UnpreparedEntriesRecordNotPrepared) {
         << "the kind is latched: the later refusals are suppressed";
     const RecordCollector::Record record =
         anira_test::find_record(collector, "handler not prepared", "rt");
-    EXPECT_EQ(record.m_message, "anira_handler_process_f32_inplace: handler not prepared");
+    EXPECT_EQ(record.m_message, "anira_handler_process: handler not prepared");
     EXPECT_EQ(record.m_flags, ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);
     EXPECT_EQ(record.m_source, "rt");
     EXPECT_EQ(record.m_group, "anira.capi");
@@ -695,10 +686,10 @@ TEST(AbiHandler, AvailableSamplesTracksTheOutputRing) {
     for (size_t k = 1; k <= 4; ++k) {
         std::vector<float> block = ramp(k);
         const std::array<float*, 1> ptrs{block.data()};
+        const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
         const size_t prev = anira_test::available(h);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_process_f32_inplace(h, ptrs.data(), k_block, 0, &delivered),
-                  ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_block);
         wait_for_block(h, prev);
     }
@@ -767,8 +758,8 @@ TEST(AbiHandler, ResetReSeedsTheStreamAndClearsRtError) {
 
     std::vector<float> block = ramp(99);
     const std::array<float*, 1> ptrs{block.data()};
-    EXPECT_EQ(anira_handler_process_f32_inplace(h, ptrs.data(), k_block, 99, nullptr),
-              ANIRA_ERROR_INVALID_ARGUMENT);
+    const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
+    EXPECT_EQ(anira_handler_process(h, &io, &io, 99, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
     oracle.reset();
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
@@ -827,10 +818,10 @@ TEST(AbiHandler, PlanReportRows) {
     for (size_t k = 1; k <= 2; ++k) {
         std::vector<float> block = ramp(k);
         const std::array<float*, 1> ptrs{block.data()};
+        const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
         const size_t prev = anira_test::available(h);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_process_f32_inplace(h, ptrs.data(), k_block, 0, &delivered),
-                  ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_block);
         wait_for_block(h, prev);
     }
@@ -975,10 +966,10 @@ TEST(AbiHandler, ConfigsAreCopiedAndDestroyableRightAfterCreate) {
     for (size_t k = 1; k <= 4; ++k) {
         std::vector<float> block = ramp(k);
         const std::array<float*, 1> ptrs{block.data()};
+        const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
         const size_t prev = anira_test::available(h);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_process_f32_inplace(h, ptrs.data(), k_block, 0, &delivered),
-                  ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_block);
         wait_for_block(h, prev);
         if (k == 1) {
@@ -1032,26 +1023,21 @@ TEST(AbiHandler, GeneratorPushIsANoOpAndPopPulls) {
     // A push on a generator's static input submits nothing.
     const std::array<float, 4> params{3.0F, 0.0F, 0.0F, 0.0F};
     const std::array<const float*, 1> param_ch{params.data()};
-    EXPECT_EQ(anira_handler_push_data_f32(h, param_ch.data(), 4, 0), ANIRA_OK);
+    const anira_tensor param = anira_test::planar_f32(param_ch.data(), 1, 4);  // [1, values]
+    EXPECT_EQ(anira_handler_push_data(h, &param, 0), ANIRA_OK);
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     EXPECT_EQ(backend.m_calls.load(), 0);
 
     // A pull delivers the priming block first, then the parameter's fill.
     for (int call = 0; call < 2; ++call) {
         std::vector<float> out(k_hop, -1.0F);
-        const std::array<const float* const*, 1> in{param_ch.data()};
-        const std::array<size_t, 1> num_in{4};
         const std::array<float*, 1> out_ch{out.data()};
-        const std::array<float* const*, 1> outs{out_ch.data()};
-        std::array<size_t, 1> num_out{k_hop};
+        const anira_tensor pulled = anira_test::planar_f32(out_ch.data(), 1, k_hop);
+        std::array<size_t, 1> delivered{7};
         const size_t prev = anira_test::available(h);
-        ASSERT_EQ(anira_handler_process_f32_multi(h,
-                                                  in.data(),
-                                                  num_in.data(),
-                                                  outs.data(),
-                                                  num_out.data()),
+        ASSERT_EQ(anira_handler_process_multi(h, &param, 1, &pulled, 1, delivered.data()),
                   ANIRA_OK);
-        EXPECT_EQ(num_out[0], k_hop) << "call " << call;
+        EXPECT_EQ(delivered[0], k_hop) << "call " << call;
         wait_for_block(h, prev);
         expect_all(out, call == 0 ? 0.0F : 3.0F, call == 0 ? "the priming zeros" : "the fill");
     }
