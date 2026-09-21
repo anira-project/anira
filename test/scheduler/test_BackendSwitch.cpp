@@ -15,6 +15,8 @@
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/tensor.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
@@ -266,14 +268,19 @@ TEST(BackendSwitch, TwoPlansOnOneBackendStayDistinct) {
         ASSERT_TRUE(manager.set_plan(1));
 
         // A chunk submitted under plan 1 carries the index 1, not "the CUSTOM plan".
+        // The manager takes host tensors: one planar block, in place (the same tensor on
+        // both sides).
         std::vector<float> io(k_block, 0.5F);
-        const std::array<const float*, 1> in_channels = {io.data()};
-        const std::array<float*, 1> out_channels = {io.data()};
-        const std::array<const float* const*, 1> inputs = {in_channels.data()};
-        const std::array<float* const*, 1> outputs = {out_channels.data()};
-        std::array<size_t, 1> num_in = {k_block};
-        std::array<size_t, 1> num_out = {k_block};
-        manager.process(inputs.data(), num_in.data(), outputs.data(), num_out.data());
+        const std::array<float*, 1> channels = {io.data()};
+        const std::array<int64_t, 2> shape = {1, static_cast<int64_t>(k_block)};
+        anira_tensor block{};
+        anira_tensor_init_host_planar(&block,
+                                      static_cast<const void*>(channels.data()),
+                                      1,
+                                      ANIRA_DTYPE_F32,
+                                      2,
+                                      shape.data());
+        manager.process(&block, &block);
         const auto deadline = std::chrono::steady_clock::now() + k_wait;
         while (pp.m_post.empty() && std::chrono::steady_clock::now() < deadline) {
             static_cast<void>(manager.get_available_samples(0, 0));

@@ -48,7 +48,10 @@ struct RtLatch;
  *
  * Host blocks reach the rings through one copy path, written over anira_tensor (see "The
  * tensor stems" below): one tensor per slot, of any ring element type, planar, contiguous or
- * interleaved. The functions that take `float***` data are float32 planar adapters onto it.
+ * interleaved. The manager takes host tensors and nothing else. The float faces of the library,
+ * anira::InferenceHandler and the `anira_handler_*_f32` entries, present their channel pointers
+ * as planar float32 tensors before they call it; a direct caller that holds channel pointers
+ * does the same with anira_tensor_init_host_planar().
  *
  * @note This class coordinates between multiple components and should be used
  *       as the primary interface for inference operations rather than directly
@@ -140,160 +143,13 @@ public:
                  const RingDtypes& ring_dtypes);
 
     /**
-     * @brief Processes multi-tensor audio data with separate input and output buffers
-     *
-     * Performs complete inference processing for multiple tensors simultaneously,
-     * handling preprocessing, inference execution, and postprocessing. This method
-     * supports complex model architectures with multiple inputs and outputs.
-     *
-     * @param input_data Input data organized as data[tensor_index][channel][sample]
-     * @param num_input_samples Array of input sample counts for each tensor
-     * @param output_data Output data buffers organized as data[tensor_index][channel][sample]
-     * @param num_output_samples Array of maximum output sample counts for each tensor
-     * @return Array of actual output sample counts for each tensor
-     *
-     * @note This method is real-time safe and should not allocate memory
-     */
-    size_t* process(const float* const* const* input_data,
-                    size_t* num_input_samples,
-                    float* const* const* output_data,
-                    size_t* num_output_samples);
-
-    /**
-     * @brief Pushes input data to the inference pipeline for asynchronous processing
-     *
-     * Queues input data for processing without waiting for results. This enables
-     * decoupled input/output processing where data can be pushed and popped
-     * independently for buffered processing scenarios. Finished inferences are
-     * collected here as well, as long as the receive buffers have room for them
-     * (Core::collect_completed()), so push-only usage never exhausts the
-     * inference structs; a host that never pops a streamed output is warned. On a
-     * generator session (no streamable input) this only stores the parameter
-     * values: inference is driven by the output demand of process()/pop_data().
-     *
-     * @param input_data Input data organized as data[tensor_index][channel][sample]
-     * @param num_input_samples Array of input sample counts for each tensor (a value count,
-     * clamped to the tensor size, for non-streamable tensors)
-     *
-     * @note This method is real-time safe and should not allocate memory
-     */
-    void push_data(const float* const* const* input_data, size_t* num_input_samples);
-
-    /**
-     * @brief Pops processed output data from the inference pipeline (non-blocking)
-     *
-     * Retrieves available processed data from the inference pipeline. Should be used in
-     * conjunction with push_data for decoupled processing patterns. This method does not block
-     * and returns immediately with any available output. On a generator session (no
-     * streamable input) this is the pull that drives inference: the requested number of
-     * samples on the reference output is added to the demand and one inference is submitted
-     * per postprocess_output_size demanded samples, before results are collected.
-     *
-     * @param output_data Output buffers organized as data[tensor_index][channel][sample]
-     * @param num_output_samples Array of maximum output sample counts for each tensor
-     * @return Array of actual output sample counts for each tensor
-     *
-     * @note This method is real-time safe and should not allocate memory.
-     */
-    size_t* pop_data(float* const* const* output_data, size_t* num_output_samples);
-
-    /**
-     * @brief Pops processed output data from the inference pipeline with timeout
-     *
-     * Retrieves processed data from the inference pipeline, waiting until either data is available
-     * or the specified timeout expires. Should be used in conjunction with push_data for decoupled
-     * processing patterns. This method blocks until output is available or the wait_until time is
-     * reached.
-     *
-     * @param output_data Output buffers organized as data[tensor_index][channel][sample]
-     * @param num_output_samples Array of maximum output sample counts for each tensor
-     * @param wait_until Time point until which the method will wait for output data to become
-     * available
-     * @return Array of actual output sample counts for each tensor
-     *
-     * @note This method is not 100% real-time safe due to potential blocking.
-     */
-    size_t* pop_data(float* const* const* output_data,
-                     size_t* num_output_samples,
-                     std::chrono::steady_clock::time_point wait_until);
-
-    /**
-     * @brief The wait-free body of process(): push, submit, collect what completed, pop
-     *
-     * Pushes the input, registers the output demand, submits the block and collects the
-     * results that have completed (Core::new_data_request() without a deadline) before
-     * popping; a block that has not completed is delivered through the miss policy
-     * (set_miss_policy()) and counted as missing. The 3.x path's process form; the 2.x
-     * process() is this when InferenceConfig::m_blocking_ratio is 0.
-     *
-     * @param input_data Input data organized as data[tensor_index][channel][sample]
-     * @param num_input_samples Array of input sample counts for each tensor
-     * @param output_data Output data buffers organized as data[tensor_index][channel][sample]
-     * @param num_output_samples Array of maximum output sample counts for each tensor
-     * @return Array of actual output sample counts for each tensor (0 on a miss)
-     *
-     * @note Real-time safe: allocates nothing, never waits.
-     */
-    size_t* process_nowait(const float* const* const* input_data,
-                           size_t* num_input_samples,
-                           float* const* const* output_data,
-                           size_t* num_output_samples);
-
-    /**
-     * @brief process() that waits up to a budget for the block's result
-     *
-     * Like process_nowait(), but waits for the submitted block's result on the session's
-     * completion primitive (Core::new_data_request() with a deadline): the semaphore when
-     * InferenceConfig::m_blocking_ratio > 0, else the atomic flag polled every
-     * millisecond. The deadline is read from the clock after the submit, exactly where the
-     * 2.x process() read it. A budget of std::chrono::steady_clock::duration::max() waits
-     * without limit, re-checking that an inference thread runs (Core::WaitOutcome::NoThread
-     * otherwise).
-     *
-     * @param input_data Input data organized as data[tensor_index][channel][sample]
-     * @param num_input_samples Array of input sample counts for each tensor
-     * @param output_data Output data buffers organized as data[tensor_index][channel][sample]
-     * @param num_output_samples Array of maximum output sample counts for each tensor
-     * @param budget How long to wait at most (duration::max() = without limit)
-     * @param outcome How the wait ended
-     * @return Array of actual output sample counts for each tensor (0 on a miss)
-     *
-     * @note Not real-time safe for as long as it waits.
-     */
-    size_t* process_wait(const float* const* const* input_data,
-                         size_t* num_input_samples,
-                         float* const* const* output_data,
-                         size_t* num_output_samples,
-                         std::chrono::steady_clock::duration budget,
-                         Core::WaitOutcome& outcome);
-
-    /**
-     * @brief pop_data() that waits up to a budget for the next result
-     *
-     * Registers the output demand (a generator is submitted here), then waits as
-     * process_wait() does and pops. There is no input in a pop, so a BYPASS miss delivers
-     * zeros.
-     *
-     * @param output_data Output buffers organized as data[tensor_index][channel][sample]
-     * @param num_output_samples Array of maximum output sample counts for each tensor
-     * @param budget How long to wait at most (duration::max() = without limit)
-     * @param outcome How the wait ended
-     * @return Array of actual output sample counts for each tensor (0 on a miss)
-     *
-     * @note Not real-time safe for as long as it waits.
-     */
-    size_t* pop_data_wait(float* const* const* output_data,
-                          size_t* num_output_samples,
-                          std::chrono::steady_clock::duration budget,
-                          Core::WaitOutcome& outcome);
-
-    /**
      * @name The tensor stems
      *
-     * The host<->ring copy path itself: what every `float***` function above adapts onto, and
-     * what an entry that takes host tensors calls. A call hands over one anira_tensor per
-     * slot, in slot order and covering every slot of that side: `inputs` has one tensor per
-     * input tensor of the InferenceConfig, `outputs` one per output tensor.
+     * The host<->ring copy path, and the only way into it: what an entry that takes host
+     * tensors calls, and what the float faces call with the planar float32 tensors they
+     * present. A call hands over one anira_tensor per slot, in slot order and covering every
+     * slot of that side: `inputs` has one tensor per input tensor of the InferenceConfig,
+     * `outputs` one per output tensor.
      *
      * The tensor of a slot is a host block of the logical shape `[channels, samples]` (`[1,
      * values]` for a non-streamable slot), over memory in one of three descriptions, for any
@@ -322,7 +178,7 @@ public:
      * a non-streamable slot), the pointers, `byte_offset` and the strides (1 or more on the
      * sample axis, or all zero), and does not check them again: a malformed tensor is
      * undefined behaviour here. The one thing it checks is the dtype, because the float
-     * adapters reach it without a validator: the tensor's dtype must be the slot's (the ring
+     * faces reach it without a validator: the tensor's dtype must be the slot's (the ring
      * dtype of a streamed slot, see RingDtypes; float32 for a non-streamable one), nothing
      * converts. A mismatched input is not pushed; a mismatched output is zero-filled at the
      * tensor's own element size, is not popped and reports 0; either is logged once through
@@ -342,22 +198,39 @@ public:
      * miss. The delivered path is safe for any description: the input is read completely
      * before an output is written.
      *
-     * All five are real-time safe as their `float***` counterparts are: nothing is allocated,
-     * and only the two `_wait` forms wait.
+     * None of them allocates. process_nowait(), push_data() and pop_data() never wait and
+     * are real-time safe; process_wait(), pop_data_wait() and the deadline form of pop_data()
+     * wait, and process() waits when the InferenceConfig has a blocking ratio.
      */
     ///@{
 
     /**
-     * @brief process_nowait() over host tensors: push, submit, collect what completed, pop
+     * @brief The wait-free process call: push, submit, collect what completed, pop
+     *
+     * Pushes the input, registers the output demand, submits the block and collects the
+     * results that have completed (Core::new_data_request() without a deadline) before
+     * popping; a block that has not completed is delivered through the miss policy
+     * (set_miss_policy()) and counted as missing. The 3.x path's process form; process() is
+     * this when InferenceConfig::m_blocking_ratio is 0.
      *
      * @param inputs One tensor per input slot (see "The tensor stems")
      * @param outputs One tensor per output slot; the same tensor as the input for in place
      * @return The delivered count per output slot (0 on a miss)
+     *
+     * @note Real-time safe: allocates nothing, never waits.
      */
     const size_t* process_nowait(const anira_tensor* inputs, const anira_tensor* outputs);
 
     /**
-     * @brief process_wait() over host tensors
+     * @brief The process call that waits up to a budget for the block's result
+     *
+     * Like process_nowait(), but waits for the submitted block's result on the session's
+     * completion primitive (Core::new_data_request() with a deadline): the semaphore when
+     * InferenceConfig::m_blocking_ratio > 0, else the atomic flag polled every
+     * millisecond. The deadline is read from the clock after the submit, exactly where the
+     * 2.x process() read it. A budget of std::chrono::steady_clock::duration::max() waits
+     * without limit, re-checking that an inference thread runs (Core::WaitOutcome::NoThread
+     * otherwise).
      *
      * @param inputs One tensor per input slot (see "The tensor stems")
      * @param outputs One tensor per output slot; the same tensor as the input for in place
@@ -373,22 +246,43 @@ public:
                                Core::WaitOutcome& outcome);
 
     /**
-     * @brief push_data() over host tensors
+     * @brief Pushes input to the inference pipeline for asynchronous processing
+     *
+     * Queues input for processing without waiting for results: the input side of the
+     * decoupled push/pop pattern. Finished inferences are collected here as well, as long as
+     * the receive buffers have room for them (Core::collect_completed()), so push-only usage
+     * never exhausts the inference structs; a host that never pops a streamed output is
+     * warned. On a generator session (no streamable input) this only stores the parameter
+     * values: inference is driven by the output demand of the process and pop forms.
      *
      * @param inputs One tensor per input slot (see "The tensor stems")
+     *
+     * @note Real-time safe: allocates nothing, never waits.
      */
     void push_data(const anira_tensor* inputs);
 
     /**
-     * @brief pop_data() over host tensors (non-blocking)
+     * @brief Pops processed output from the inference pipeline (non-blocking)
+     *
+     * The output side of the decoupled push/pop pattern: collects what has completed and
+     * pops, without waiting. On a generator session (no streamable input) this is the pull
+     * that drives inference: the requested number of samples on the reference output is added
+     * to the demand and one inference is submitted per postprocess_output_size demanded
+     * samples, before results are collected.
      *
      * @param outputs One tensor per output slot (see "The tensor stems")
      * @return The delivered count per output slot (0 on a miss)
+     *
+     * @note Real-time safe: allocates nothing, never waits.
      */
     const size_t* pop_data(const anira_tensor* outputs);
 
     /**
-     * @brief pop_data_wait() over host tensors
+     * @brief pop_data() that waits up to a budget for the next result
+     *
+     * Registers the output demand (a generator is submitted here), then waits as
+     * process_wait() does and pops. There is no input in a pop, so a BYPASS miss delivers
+     * zeros.
      *
      * @param outputs One tensor per output slot (see "The tensor stems")
      * @param budget How long to wait at most (duration::max() = without limit)
@@ -564,12 +458,12 @@ public:
      *
      * Called once per missed block on the thread that drives the call, in the starvation path
      * of process_output(): after the catch-up and the all-or-nothing gate, before anything is
-     * filled. It receives the arrays the copy path was handed, so nothing is rebuilt on a
-     * miss: the caller's tensors under a tensor stem, the manager's planar float32 adapter
-     * tensors under a `float***` function (a slot the call did not carry is an empty tensor),
-     * and the manager's empty input tensors in a pop. The outputs' shape[1] are the requests;
-     * the input block of a process form is already pushed and still intact in host memory.
-     * It must be real-time safe and must not call back into this manager.
+     * filled. It receives the arrays the stem was handed, as they are, so nothing is rebuilt
+     * on a miss: the caller's tensors (under a float face of the library the planar float32
+     * tensors that face presented, in which a slot the call did not carry is an empty tensor
+     * without memory), and the manager's empty input tensors in a pop. The outputs' shape[1]
+     * are the requests; the input block of a process form is already pushed and still intact
+     * in host memory. It must be real-time safe and must not call back into this manager.
      */
     using MissHook = bool (*)(void* ctx,
                               const anira_tensor* inputs,
@@ -693,9 +587,9 @@ private:
      *
      * A streamed slot is one strided ring push per channel; a non-streamable slot stores its
      * values in the PrePostProcessor, clamped to the tensor's size. An input whose count is 0
-     * is not touched and its tensor's memory arm is not read (the single-tensor forms leave
-     * the other slots unset). An input whose dtype is not the slot's is not pushed, its count
-     * is set to 0 and the site RtSite::TensorDtypeMismatch records it.
+     * is not touched and its tensor's memory arm is not read (the single-tensor forms hand
+     * the other slots over without memory). An input whose dtype is not the slot's is not pushed,
+     * its count is set to 0 and the site RtSite::TensorDtypeMismatch records it.
      *
      * @param inputs One tensor per input slot; trusted but for the dtype
      * @param num_samples The manager's input counts, loaded from shape[1]
@@ -709,9 +603,9 @@ private:
      * Pops every requested output when the whole block has completed; otherwise delivers
      * the block through the miss policy (zeros, the held block, or the anchored input's
      * block), counts the request as missing and returns 0 for every output. An output
-     * whose count is 0 is not touched on either path (the single-tensor forms leave the
-     * other slots unset). An output whose dtype is not the slot's is zero-filled at the
-     * tensor's element size before anything else moves, and is then a count of 0.
+     * whose count is 0 is not touched on either path (the single-tensor forms hand the
+     * other slots over without memory). An output whose dtype is not the slot's is zero-filled at
+     * the tensor's element size before anything else moves, and is then a count of 0.
      *
      * @param outputs One tensor per output slot; trusted but for the dtype
      * @param num_samples The manager's output counts, loaded from shape[1]
@@ -776,30 +670,6 @@ private:
                         const char* side,
                         size_t tensor_index) const;
 
-    /**
-     * @brief The `float***` adapters: point the manager's planar float32 input tensors at the
-     * caller's channel pointers
-     *
-     * Per slot one store of shape[1] and, for a count above 0, one store per channel; a slot
-     * whose count is 0 becomes an empty tensor and its pointers are not read (the caller may
-     * pass NULL for it).
-     *
-     * @param input_data Input data organized as data[tensor_index][channel][sample]
-     * @param num_input_samples Array of input sample counts for each tensor; never written
-     */
-    void present_inputs(const float* const* const* input_data,
-                        const size_t* num_input_samples) noexcept;
-
-    /// present_inputs() for the output side.
-    void present_outputs(float* const* const* output_data,
-                         const size_t* num_output_samples) noexcept;
-
-    /**
-     * @brief The `float***` adapters: copies the delivered counts of a tensor stem into the
-     * caller's array, which is what the `float***` functions return
-     */
-    size_t* deliver_counts(const size_t* delivered, size_t* num_output_samples) const noexcept;
-
     /// Loads the manager's count array of one side from shape[1] of every tensor.
     static void load_counts(const anira_tensor* tensors, std::vector<size_t>& counts) noexcept;
 
@@ -847,8 +717,8 @@ private:
     bool m_last_missed = false;           ///< The last process_output() took the starvation path
                                           ///< (last_block_missed()); driver thread only
 
-    // The copy state of the tensor stems and of the float*** adapters: sized and filled by
-    // prepare(), never resized on the driver thread.
+    // The copy state of the tensor stems: sized and filled by prepare(), never resized on the
+    // driver thread.
     std::vector<SlotCopy> m_input_slots;       ///< Per input slot
     std::vector<SlotCopy> m_output_slots;      ///< Per output slot
     std::vector<size_t> m_input_counts;        ///< Per input slot: the request of the running call
@@ -856,12 +726,6 @@ private:
                                                ///< count; what the tensor stems return
     std::vector<anira_tensor> m_empty_inputs;  ///< One empty tensor per input slot: the inputs
                                                ///< of a pop
-    std::vector<anira_tensor> m_adapter_inputs;   ///< The float*** adapters' planar float32
-                                                  ///< tensors, one per input slot
-    std::vector<anira_tensor> m_adapter_outputs;  ///< Likewise, one per output slot
-    std::vector<std::vector<void*>> m_adapter_input_planes;   ///< Their plane pointers, per
-                                                              ///< slot one per channel
-    std::vector<std::vector<void*>> m_adapter_output_planes;  ///< Likewise for the outputs
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr
