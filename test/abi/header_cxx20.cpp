@@ -59,6 +59,13 @@ static_assert(std::is_aggregate_v<anira::Hard>);
 static_assert(std::is_aggregate_v<anira::Async>);
 static_assert(std::is_aggregate_v<anira::JobOptions>);
 static_assert(std::is_same_v<anira::Contract, std::variant<anira::Hard, anira::Async>>);
+// The backup function of ANIRA_MISS_CALLBACK is the C typedef, a raw function pointer, on the
+// aggregate and on the handle's setter.
+static_assert(std::is_same_v<decltype(anira::Hard::miss_fn), anira_miss_fn>);
+static_assert(std::is_same_v<decltype(anira::Hard::miss_user_data), void*>);
+static_assert(
+    std::is_same_v<decltype(&anira::ContractHandle::hard_miss_fn),
+                   anira::ContractHandle& (anira::ContractHandle::*)(anira_miss_fn, void*)>);
 
 // The runtime tensor and its token are the C structs with names on them: same size, no member
 // added, trivially copyable, so a Tensor* is an anira_tensor*. The field fills and the reads
@@ -117,6 +124,7 @@ int anira_header_cxx20_probe() {
         model.model_ext(0, anira::ext::Entry{.name = "decode"}).input(spec);
         context.ext(anira::ext::Entry{.name = "forward"});
         loaded.ext(anira::ext::Entry{.name = "forward"});
+        loaded.hard_on_miss(ANIRA_MISS_CALLBACK).hard_miss_fn(nullptr, nullptr);
         job.ext(anira::ext::Entry{.name = "forward"});
         const anira::ContractHandle minted(contract);
         checks += model.upgraded() || context.upgraded() || loaded.upgraded() ? 1 : 0;

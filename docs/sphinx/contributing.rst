@@ -242,9 +242,10 @@ handles and byte sizes at their wire width; the rationale is that nothing which 
 handle runs in JavaScript, and a seventh name needs the same argument, not a convenience. The
 C-side tests and gates live in ``test/abi/`` (the ``test_abi`` binary, ``anira_abi_layout``,
 ``anira_header_c11`` / ``anira_header_cxx17`` / ``anira_header_cxx20``,
-``anira_header_coexist`` / ``anira_header_cxx20_with_v2`` and ``anira_abi_rt_contract``, a
-nonblocking C function calling every ``[callback-safe]`` tensor entry, compiled with
-``-Werror=function-effects`` on clang 20 or later). While ``ANIRA_ABI_MAJOR`` is 0 the Tier-1
+``anira_header_coexist`` / ``anira_header_cxx20_with_v2`` and ``anira_abi_rt_contract``:
+nonblocking C functions calling every ``[callback-safe]`` tensor entry and the nonblocking
+Hard entries over host tensors, and a backup function of ``ANIRA_MISS_CALLBACK`` handed to
+its setter, compiled with ``-Werror=function-effects`` on clang 20 or later). While ``ANIRA_ABI_MAJOR`` is 0 the Tier-1
 layout table grows with the registry: ``gen.py --write`` rewrites ``abi/layout-0.txt`` with the
 headers, and ``anira_abi_layout`` proves that the compiler lays the records out as the
 generator's natural-alignment model says. From the v3.0.0 freeze on a Tier-1 layout may change
@@ -286,7 +287,8 @@ Three sanitizer presets gate the merge queue, and each reproduces locally with
    stream syscall reached from a real-time context fails. The compile-time half of the
    same contract is ``anira_abi_rt_contract`` (``test/abi/test_rt_contract.c``): under
    ``-Werror=function-effects`` a nonblocking body may call only entries whose declaration
-   is ``ANIRA_NONBLOCKING``. Requires clang ≥ 20.
+   is ``ANIRA_NONBLOCKING``, and a function converted to a nonblocking callback type
+   (``anira_miss_fn``) must be declared ``ANIRA_NONBLOCKING`` itself. Requires clang ≥ 20.
 
 ``desktop-tests-asan``
    AddressSanitizer + UndefinedBehaviorSanitizer. UndefinedBehaviorSanitizer includes

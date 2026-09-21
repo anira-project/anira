@@ -6,11 +6,13 @@
 #include <anira/abi/draft/tensor_platform.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
+#include <anira/abi/handler.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
 
+#include <cstdint>
 #include <cstring>
 #include <type_traits>
 
@@ -84,6 +86,16 @@ static_assert(noexcept(anira_tensor_init_dlpack(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_sync_token_reset(nullptr)));
 static_assert(
     noexcept(anira_tensor_init_metal(nullptr, nullptr, nullptr, ANIRA_DTYPE_F32, 0, nullptr)));
+// The Hard entries over host tensors: a nonblocking stem, a multi form and a _wait twin. The
+// host block is a const anira_tensor*, an output's included.
+static_assert(noexcept(anira_handler_process(nullptr, nullptr, nullptr, 0, nullptr)));
+static_assert(noexcept(anira_handler_pop_data_multi(nullptr, nullptr, 0, nullptr)));
+static_assert(noexcept(anira_handler_process_wait(nullptr, nullptr, nullptr, 0.0, 0, nullptr)));
+static_assert(std::is_invocable_r_v<anira_status,
+                                    decltype(&anira_handler_push_data),
+                                    anira_handler*,
+                                    const anira_tensor*,
+                                    uint32_t>);
 
 }  // namespace
 // NOLINTEND(misc-include-cleaner)

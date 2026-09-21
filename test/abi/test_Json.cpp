@@ -389,6 +389,25 @@ TEST(AbiJsonContract, HardAndAsyncFiles) {
     anira_contract_destroy(hard);
 }
 
+// "callback" names the policy; a file cannot carry the function, so a parsed contract has
+// none and the host sets the pair afterwards (prepare refuses the policy without one).
+TEST(AbiJsonContract, OnMissCallbackNamesThePolicyOnly) {
+    anira_contract* hard = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    const char* text =
+        R"({"hard": {"budget": {"ms": 1.8}, "warmup": {"fixed": 2}, "on_miss": "callback"}})";
+    ASSERT_EQ(anira_contract_from_json(text, std::strlen(text), &hard, &err), ANIRA_OK)
+        << err.message;
+    EXPECT_EQ(hard->hard()->m_on_miss, ANIRA_MISS_CALLBACK);
+    EXPECT_EQ(hard->hard()->m_miss_fn, nullptr);
+    EXPECT_EQ(hard->hard()->m_miss_user_data, nullptr);
+    anira_contract_destroy(hard);
+
+    const char* unknown = R"({"hard": {"on_miss": "call_back"}})";
+    EXPECT_EQ(anira_contract_from_json(unknown, std::strlen(unknown), &hard, &err),
+              ANIRA_ERROR_JSON);
+}
+
 TEST(AbiJsonContract, RingDtypesAreReadByTensorName) {
     static constexpr const char* k_text = R"({ "hard": {
         "block_min": 512, "block_max": 512, "rate": 48000, "budget": {"ms": 5},

@@ -176,6 +176,7 @@ export const anira_miss_policy = {
   ANIRA_MISS_BYPASS: 0,
   ANIRA_MISS_HOLD_LAST: 1,
   ANIRA_MISS_ZEROS: 2,
+  ANIRA_MISS_CALLBACK: 3,
 } as const
 export type anira_miss_policy = (typeof anira_miss_policy)[keyof typeof anira_miss_policy]
 

@@ -284,10 +284,15 @@ void InferenceManager::present_inputs(const float* const* const* input_data,
                                       const size_t* num_input_samples) noexcept {
     for (size_t slot = 0; slot < m_adapter_inputs.size(); ++slot) {
         m_adapter_inputs[slot].shape[1] = static_cast<int64_t>(num_input_samples[slot]);
-        // A slot whose count is 0 is an empty tensor: its pointers are not read (the
-        // single-tensor forms of the C handler leave them unset, a caller may pass NULL).
-        if (num_input_samples[slot] == 0) { continue; }
         std::vector<void*>& planes = m_adapter_input_planes[slot];
+        // A slot whose count is 0 is an empty tensor: the caller's pointers are not read (the
+        // single-tensor forms of the C handler leave them unset, a caller may pass NULL), and
+        // its planes name no memory, so a miss function never finds the pointers of an earlier
+        // call in a slot this call did not carry.
+        if (num_input_samples[slot] == 0) {
+            std::ranges::fill(planes, nullptr);
+            continue;
+        }
         for (size_t channel = 0; channel < planes.size(); ++channel) {
             // The core never writes through an input tensor (ANIRA_TENSOR_READ_ONLY).
             planes[channel] = const_cast<float*>(input_data[slot][channel]);
@@ -299,8 +304,11 @@ void InferenceManager::present_outputs(float* const* const* output_data,
                                        const size_t* num_output_samples) noexcept {
     for (size_t slot = 0; slot < m_adapter_outputs.size(); ++slot) {
         m_adapter_outputs[slot].shape[1] = static_cast<int64_t>(num_output_samples[slot]);
-        if (num_output_samples[slot] == 0) { continue; }
         std::vector<void*>& planes = m_adapter_output_planes[slot];
+        if (num_output_samples[slot] == 0) {
+            std::ranges::fill(planes, nullptr);
+            continue;
+        }
         for (size_t channel = 0; channel < planes.size(); ++channel) {
             planes[channel] = output_data[slot][channel];
         }
@@ -617,9 +625,19 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
     // leaves the anchor's count at 0.
     const bool bypass_ready = m_on_miss == ANIRA_MISS_BYPASS && m_session->m_reference.m_is_input &&
                               bypass_num_input[reference] > 0;
+    // ANIRA_MISS_CALLBACK: one call for the whole block, with the arrays this call was handed.
+    // The counts are not zeroed yet, shape[1] of every output is its request, and the input
+    // of a process form is pushed and still intact in host memory. A hook that declines, or
+    // no hook, leaves the fill to the loop (zeros).
+    const bool host_filled = m_on_miss == ANIRA_MISS_CALLBACK && m_miss_hook != nullptr &&
+                             m_miss_hook(m_miss_hook_ctx,
+                                         bypass_inputs,
+                                         static_cast<uint32_t>(m_input_slots.size()),
+                                         outputs,
+                                         static_cast<uint32_t>(num_outputs));
     for (size_t i = 0; i < num_outputs; ++i) {
         const bool streamed = m_output_slots[i].m_streamed;
-        if (num_samples[i] > 0) {
+        if (num_samples[i] > 0 && !host_filled) {
             switch (m_on_miss) {
                 case ANIRA_MISS_HOLD_LAST:
                     if (streamed) {
@@ -652,6 +670,7 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
                         clear_output(outputs[i], num_samples[i], i);
                     }
                     break;
+                case ANIRA_MISS_CALLBACK:  // the hook declined, or there is none
                 case ANIRA_MISS_ZEROS:
                 default: clear_output(outputs[i], num_samples[i], i); break;
             }

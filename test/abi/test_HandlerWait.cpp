@@ -8,6 +8,7 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <gtest/gtest.h>
@@ -223,6 +224,79 @@ TEST_P(AbiHandlerWaitRatio, ForeverIsTheDeterministicGenerator) {
     }
     EXPECT_EQ(backend.m_calls.load(), 10);
     EXPECT_GE(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(50));
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+}
+
+// The tensor twins on the generator: the four parameters as a [1, 4] tensor, the stream as
+// [1, k_hop]. A deadline is a miss (ANIRA_MISSED, delivered 0), ANIRA_WAIT_FOREVER delivers,
+// and delivered is written on every return.
+TEST(AbiHandlerWait, TheTensorTwinsMissAtTheDeadlineAndDeliverWithoutLimit) {
+    const Context context;
+    const std::vector<anira_backend_id> none = none_only();
+    std::vector<float> out(k_hop, -1.0F);
+    std::array<float, 4> params{1.0F, 0.0F, 0.0F, 0.0F};
+    const std::array<int64_t, 2> param_shape{1, 4};
+    const std::array<int64_t, 2> out_shape{1, static_cast<int64_t>(k_hop)};
+    anira_tensor param_tensor;
+    anira_tensor out_tensor;
+    anira_tensor_init_host(&param_tensor, params.data(), ANIRA_DTYPE_F32, 2, param_shape.data());
+    anira_tensor_init_host(&out_tensor, out.data(), ANIRA_DTYPE_F32, 2, out_shape.data());
+
+    Handler handler(context, generator_model(), none);
+    ASSERT_EQ(handler.prepare(explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, 0.0, 10.0)),
+              ANIRA_OK)
+        << handler.m_err.message;
+    anira_handler* h = handler.m_handler;
+    // Every inference stalls for 1 s, far beyond the 20 ms deadlines and the 500 ms bounds.
+    SleepingParamFillBackend backend(h->m_inference_config);
+    backend.m_first_sleep_us = 1000000;
+    backend.m_sleep_us = 1000000;
+    ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
+    const DestroyFirst destroy_first(handler);
+
+    // The first pull delivers the priming zeros; the second finds the ring starved.
+    size_t delivered = 7;
+    EXPECT_EQ(
+        anira_handler_process_multi_wait(h, &param_tensor, 1, &out_tensor, 1, &delivered, 20.0),
+        ANIRA_OK);
+    EXPECT_EQ(delivered, k_hop);
+    delivered = 7;
+    auto start = std::chrono::steady_clock::now();
+    EXPECT_EQ(
+        anira_handler_process_multi_wait(h, &param_tensor, 1, &out_tensor, 1, &delivered, 20.0),
+        ANIRA_MISSED)
+        << "a miss, not a refusal";
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_EQ(delivered, 0U);
+    EXPECT_GE(elapsed, std::chrono::milliseconds(20));
+    EXPECT_LT(elapsed, std::chrono::milliseconds(500)) << "the deadline, not the stall";
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    delivered = 7;
+    EXPECT_EQ(anira_handler_process_wait(h,
+                                         &param_tensor,
+                                         &out_tensor,
+                                         ANIRA_WAIT_FOREVER,
+                                         0,
+                                         &delivered),
+              ANIRA_OK);
+    EXPECT_EQ(delivered, k_hop);
+
+    // The pop twins from a re-seeded stream: the priming block, then the stalled one.
+    anira_handler_reset(h);
+    delivered = 7;
+    EXPECT_EQ(anira_handler_pop_data_wait(h, &out_tensor, 20.0, 0, &delivered), ANIRA_OK);
+    EXPECT_EQ(delivered, k_hop);
+    delivered = 7;
+    start = std::chrono::steady_clock::now();
+    EXPECT_EQ(anira_handler_pop_data_multi_wait(h, &out_tensor, 1, &delivered, 20.0), ANIRA_MISSED);
+    elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_EQ(delivered, 0U);
+    EXPECT_GE(elapsed, std::chrono::milliseconds(20));
+    EXPECT_LT(elapsed, std::chrono::milliseconds(500));
+    delivered = 7;
+    EXPECT_EQ(anira_handler_pop_data_wait(h, &out_tensor, ANIRA_WAIT_FOREVER, 0, &delivered),
+              ANIRA_OK);
+    EXPECT_EQ(delivered, k_hop);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
 }
 

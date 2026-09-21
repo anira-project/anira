@@ -126,6 +126,7 @@ anira_add_test_binary(test_abi
 	abi/test_Thread.cpp
 	abi/test_Handler.cpp
 	abi/test_HandlerCopyOracle.cpp
+	abi/test_HandlerTensor.cpp
 	abi/test_HandlerWait.cpp
 	abi/test_Prepare.cpp
 	abi/test_RtError.cpp

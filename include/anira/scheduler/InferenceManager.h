@@ -513,12 +513,48 @@ public:
      * ANIRA_MISS_ZEROS is the 2.x behaviour and the default; ANIRA_MISS_HOLD_LAST repeats
      * the last delivered block of each output (the buffers are allocated at prepare());
      * ANIRA_MISS_BYPASS passes the anchored input's block through to the streamed outputs
-     * of a process call, zeros elsewhere. Under every policy a missed block returns 0 and
-     * counts as missing. Set before prepare(); never on the driver thread.
+     * of a process call, zeros elsewhere; ANIRA_MISS_CALLBACK calls the hook of
+     * set_miss_hook() once for the whole block and zero-fills when it declines. Under every
+     * policy a missed block returns 0 and counts as missing. Set before prepare(); never on
+     * the driver thread.
      *
      * @param policy The miss policy
      */
     void set_miss_policy(anira_miss_policy policy) noexcept { m_on_miss = policy; }
+
+    /**
+     * @brief The function ANIRA_MISS_CALLBACK calls to fill a missed block
+     *
+     * Called once per missed block on the thread that drives the call, in the starvation path
+     * of process_output(): after the catch-up and the all-or-nothing gate, before anything is
+     * filled. It receives the arrays the copy path was handed, so nothing is rebuilt on a
+     * miss: the caller's tensors under a tensor stem, the manager's planar float32 adapter
+     * tensors under a `float***` function (a slot the call did not carry is an empty tensor),
+     * and the manager's empty input tensors in a pop. The outputs' shape[1] are the requests;
+     * the input block of a process form is already pushed and still intact in host memory.
+     * It must be real-time safe and must not call back into this manager.
+     */
+    using MissHook = bool (*)(void* ctx,
+                              const anira_tensor* inputs,
+                              uint32_t num_inputs,
+                              const anira_tensor* outputs,
+                              uint32_t num_outputs) noexcept;
+
+    /**
+     * @brief Sets the hook of ANIRA_MISS_CALLBACK
+     *
+     * `true` from the hook means the outputs are filled; `false`, or no hook, zero-fills every
+     * requested output. The accounting of a missed block (the missing samples, the record,
+     * the returned counts of 0, last_block_missed()) is the same either way. Read under
+     * ANIRA_MISS_CALLBACK only. Set before prepare(); never on the driver thread.
+     *
+     * @param hook The hook, or nullptr
+     * @param ctx Handed to the hook as it is
+     */
+    void set_miss_hook(MissHook hook, void* ctx) noexcept {
+        m_miss_hook = hook;
+        m_miss_hook_ctx = ctx;
+    }
 
     /**
      * @brief Whether the last process or pop form delivered a missed block
@@ -763,6 +799,8 @@ private:
                                             ///< buffering
 
     anira_miss_policy m_on_miss = ANIRA_MISS_ZEROS;  ///< What a missed block delivers
+    MissHook m_miss_hook = nullptr;                  ///< ANIRA_MISS_CALLBACK: fills a missed block
+    void* m_miss_hook_ctx = nullptr;                 ///< The hook's first argument
     std::vector<std::vector<unsigned char>> m_hold;  ///< HOLD_LAST: per streamed output, the
                                                      ///< bytes of channels x capacity elements
                                                      ///< of the ring dtype, channel after channel

@@ -95,6 +95,11 @@ struct HardContract {
     anira_warmup_mode m_warmup = ANIRA_WARMUP_UNTIL_STABLE;
     uint32_t m_warmup_iterations = 0;
     anira_miss_policy m_on_miss = ANIRA_MISS_BYPASS;
+    /// The backup function of ANIRA_MISS_CALLBACK and its user_data: the host's pair, copied
+    /// with the contract (the snapshot of prepare included) and never owned. A contract parsed
+    /// from JSON has none; prepare refuses the policy without a function.
+    anira_miss_fn m_miss_fn = nullptr;
+    void* m_miss_user_data = nullptr;
     double m_wait_ratio = 0.0;
     /// Per-tensor ring dtype by canonical name: the element type the typed Hard entries
     /// carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in

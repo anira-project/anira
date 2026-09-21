@@ -15,9 +15,10 @@
 #   anira_header_coexist  the v2 C++ umbrella and the C headers in one TU, both orders
 #   anira_header_cxx20_with_v2
 #                         the v2 C++ umbrella and anira.hpp in one TU, both orders
-#   anira_abi_rt_contract gate 6 (seed): test_rt_contract.c, one ANIRA_NONBLOCKING function
-#                         calling every [callback-safe] tensor entry, under
-#                         -Werror=function-effects on clang 20 or later
+#   anira_abi_rt_contract gate 6 (seed): test_rt_contract.c, ANIRA_NONBLOCKING functions
+#                         calling every [callback-safe] tensor entry and the nonblocking Hard
+#                         entries over host tensors, under -Werror=function-effects on clang
+#                         20 or later
 #   anira_abi_link        presence: generated/link_probe.c takes the address of every
 #                         promised and draft entry point and links anira::anira the way a
 #                         consumer does; an entry without a body fails this link (on a
@@ -165,8 +166,8 @@ if(NOT _abi_strict_flags MATCHES "/W4")
 endif()
 
 # ---- gate 6 (seed): the real-time contract in a consumer's compiler -------------------------
-# test_rt_contract.c is one ANIRA_NONBLOCKING function calling every [callback-safe] entry of
-# the tensor headers. Consumer-shaped like the header gates (C11, the strict flags, no anira
+# test_rt_contract.c holds ANIRA_NONBLOCKING functions calling every [callback-safe] entry of
+# the tensor headers and the nonblocking Hard entries over host tensors. Consumer-shaped like the header gates (C11, the strict flags, no anira
 # define), plus -Werror=function-effects where the compiler has the analysis: upstream clang
 # 20 or later behind the GNU front end. gcc rejects the flag outright; an older clang (an NDK)
 # and AppleClang, whose version numbers are its own, may not know the warning group, which
