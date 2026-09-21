@@ -38,6 +38,7 @@ enum class RtKind : uint32_t {
     InvalidState = 1U << 3,
     InvalidArgument = 1U << 4,
     Engine = 1U << 5,
+    NotSupported = 1U << 6,
 };
 
 /// The kind bit of a status; 0 for a status that never latches.
@@ -49,6 +50,7 @@ constexpr uint32_t rt_kind_bit(anira_status status) noexcept {
         case ANIRA_ERROR_INVALID_STATE: return static_cast<uint32_t>(RtKind::InvalidState);
         case ANIRA_ERROR_INVALID_ARGUMENT: return static_cast<uint32_t>(RtKind::InvalidArgument);
         case ANIRA_ERROR_ENGINE: return static_cast<uint32_t>(RtKind::Engine);
+        case ANIRA_ERROR_NOT_SUPPORTED: return static_cast<uint32_t>(RtKind::NotSupported);
         default: return 0;
     }
 }

@@ -714,9 +714,10 @@ the output list; a Static tensor carries its values in channel 0 of the multi fo
 ``_f32`` entries are the float32 face over planar channel buffers (``float* const*``, what an
 audio host hands out) and are legal on ``ANIRA_DTYPE_F32`` rings; ``anira_handler_process_f32``
 takes separate input and output buffers, ``_inplace`` is the 2.x shape over one buffer set,
-``_multi`` covers every tensor at once. The bare names ``anira_handler_process`` / ``push_data``
-/ ``pop_data`` are reserved for the tensor forms, which take the ``anira_tensor`` of
-section 3.3, carry their dtype on the tensor and arrive with a later pre-release.
+``_multi`` covers every tensor at once. The entries under the bare names,
+``anira_handler_process`` / ``push_data`` / ``pop_data`` with their ``_multi`` forms and
+``_wait`` twins, take the ``anira_tensor`` of section 3.3, one tensor per slot, and carry
+their dtype on the tensor.
 ``anira_handler_get_latency(h, i)`` and ``anira_handler_get_latencies(h, &count, out)``
 (index-aligned with the output list, ``0`` for a Static output) are valid from prepare on;
 ``anira_handler_get_available_samples(h, i, channel, &count)`` collects the completed
@@ -763,9 +764,8 @@ is their version, their layout is committed in ``abi/layout-<major>.txt`` and mi
 JavaScript in the generated ``web/src/abi/layout.ts``, and
 ``anira_sizeof(ANIRA_STRUCT_TENSOR)`` answers an allocator that cannot see the header (``0``
 for an id this build does not know; in this pre-release that includes
-``ANIRA_STRUCT_STAGE_CTX``). No entry point takes an ``anira_tensor`` yet: the header freezes
-the records and ships their factories and accessors, only host memory is read, and the tensor
-forms of the Hard entries (3.2) and the Static tensor entries follow.
+``ANIRA_STRUCT_STAGE_CTX``). The Hard entries of 3.2 take host tensors; only host memory is
+read in this pre-release, and the Static tensor entries follow.
 
 **The factories.** ``anira_tensor_init_host(&t, data, dtype, ndim, shape)`` and
 ``anira_tensor_init_pinned`` describe host memory; ``anira_tensor_init_cuda(&t, ptr, device,

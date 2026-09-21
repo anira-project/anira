@@ -12,12 +12,17 @@
  * Deliberately absent: anira_tensor_init_dlpack ([main-thread], it can fail with a message)
  * and anira_sync_token_reset / anira_sync_token_dup ([thread-safe, !audio-thread]: close and
  * dup are system calls). Calling one of them from the function below is a compile error under
- * clang, which is the point. The file grows with abi/stage.h (the ring accessors and the stage
- * defaults) and with the handler's [callback-safe] entries.
+ * clang, which is the point. A second ANIRA_NONBLOCKING function calls the six [driver-thread]
+ * Hard entries over host tensors of anira/abi/handler.h, which is what a host's audio callback
+ * does; their four _wait twins are [any-thread, blocking] and absent for the same reason. The
+ * file grows with abi/stage.h (the ring accessors and the stage defaults) and with the
+ * handler's [callback-safe] entries.
  */
 #include <anira/abi/draft/tensor_platform.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
+#include <anira/abi/handler.h>
+#include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -55,5 +60,28 @@ size_t anira_rt_contract_tensor(anira_tensor* tensor,
     total += anira_tensor_num_elements(tensor);
     total += anira_tensor_extent(tensor, 0u);
     total += anira_sizeof(ANIRA_STRUCT_TENSOR);
+    return total;
+}
+
+/* anira/abi/handler.h: the six nonblocking Hard entries over host tensors, as a host's audio
+   callback calls them. */
+/* NOLINTNEXTLINE(misc-use-internal-linkage) */
+size_t anira_rt_contract_hard(anira_handler* handler,
+                              const anira_tensor* inputs,
+                              const anira_tensor* outputs,
+                              size_t* delivered) ANIRA_NONBLOCKING;
+size_t anira_rt_contract_hard(anira_handler* handler,
+                              const anira_tensor* inputs,
+                              const anira_tensor* outputs,
+                              size_t* delivered) ANIRA_NONBLOCKING {
+    size_t total = 0;
+    total += anira_handler_process(handler, inputs, outputs, 0u, delivered) == ANIRA_OK ? 1u : 0u;
+    total += anira_handler_process_multi(handler, inputs, 1u, outputs, 1u, delivered) == ANIRA_OK
+                 ? 1u
+                 : 0u;
+    total += anira_handler_push_data(handler, inputs, 0u) == ANIRA_OK ? 1u : 0u;
+    total += anira_handler_push_data_multi(handler, inputs, 1u) == ANIRA_OK ? 1u : 0u;
+    total += anira_handler_pop_data(handler, outputs, 0u, delivered) == ANIRA_OK ? 1u : 0u;
+    total += anira_handler_pop_data_multi(handler, outputs, 1u, delivered) == ANIRA_OK ? 1u : 0u;
     return total;
 }

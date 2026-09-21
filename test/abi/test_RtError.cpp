@@ -437,7 +437,8 @@ TEST(AbiRtLatch, CapacityNeverLatches) {
                                       ANIRA_ERROR_CONFIG,
                                       ANIRA_ERROR_INVALID_STATE,
                                       ANIRA_ERROR_INVALID_ARGUMENT,
-                                      ANIRA_ERROR_ENGINE}) {
+                                      ANIRA_ERROR_ENGINE,
+                                      ANIRA_ERROR_NOT_SUPPORTED}) {
         EXPECT_NE(anira::rt_kind_bit(status), 0U) << status;
     }
     for (const anira_status status : {ANIRA_OK, ANIRA_TIMEOUT, ANIRA_ERROR_INTERNAL}) {

@@ -132,16 +132,18 @@ The real-time path
 An ``ANIRA_NONBLOCKING`` entry does at most three things when it refuses:
 
 1. It returns the failure ``anira_status``; a form with a count out-parameter writes ``0``
-   (the multi forms leave ``num_out`` untouched). ``ANIRA_MISSED`` is not a refusal and does
+   (the ``_f32`` multi forms leave their request array ``num_out`` untouched; the tensor multi
+   forms zero their ``delivered`` array). ``ANIRA_MISSED`` is not a refusal and does
    none of the three.
 2. It stores the status into the handler's ``rt_error``, a relaxed atomic readable through
    ``anira_handler_rt_error(h)`` from any thread and from inside any callback, when the refusal
    is a contract violation: ``ANIRA_ERROR_WRONG_CONTRACT`` (a Hard entry on an Async handler or
    the reverse), ``ANIRA_ERROR_NOT_PREPARED``, ``ANIRA_ERROR_CONFIG`` (a submitted tensor's
-   dtype or axis tags, a ring accessor's dtype, a float entry on a non-float32 ring, a plan
-   index out of range), ``ANIRA_ERROR_INVALID_STATE`` (a ``_wait`` entry without an inference
+   dtype or axis tags, a ring accessor's dtype, a float entry on a non-float32 ring, a host
+   tensor whose dtype is not its slot's, a plan index out of range), ``ANIRA_ERROR_INVALID_STATE`` (a ``_wait`` entry without an inference
    thread inside its loop), ``ANIRA_ERROR_INVALID_ARGUMENT`` (a NULL buffer, a slot or channel
-   out of range) — and, from the inference thread, ``ANIRA_ERROR_ENGINE`` after a failed
+   out of range, a malformed host tensor), ``ANIRA_ERROR_NOT_SUPPORTED`` (a host tensor with a
+   flag bit this library does not know) — and, from the inference thread, ``ANIRA_ERROR_ENGINE`` after a failed
    inference, whose output is zeros. ``rt_error`` is last-wins and is cleared by ``prepare``
    and ``reset``; it is a plain word in the handler, readable from a crash handler and from a
    core dump, which is why it exists beside the best-effort record.

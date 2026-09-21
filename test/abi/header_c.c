@@ -142,6 +142,14 @@ int anira_header_c_probe(void) {
             anira_tensor_init_host_planar(&tensor, read_channels, 2u, ANIRA_DTYPE_F32, 2u, block);
             anira_tensor_init_metal(&tensor, NULL, NULL, ANIRA_DTYPE_F32, 1u, shape);
             anira_sync_token_reset(&token);
+            /* A Hard entry over host tensors from C11: the planar block of above as the input
+               and the output of one call (in place), the descriptor const on both sides. */
+            /* NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion) */
+            anira_tensor_init_host_planar(&tensor, channels, 2u, ANIRA_DTYPE_F32, 2u, block);
+            checks += anira_handler_process(NULL, &tensor, &tensor, 0u, NULL) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
         }
     }
     return checks;

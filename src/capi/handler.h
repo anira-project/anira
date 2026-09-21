@@ -9,6 +9,7 @@
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/context.h>
 #include <anira/abi/handler.h>
+#include <anira/abi/tensor.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
@@ -113,8 +114,21 @@ struct anira_handler {
     std::vector<size_t> m_input_num;
     std::vector<float* const*> m_output_ptrs;
     std::vector<size_t> m_output_num;
-    std::vector<anira_dtype> m_input_ring_dtypes;  ///< resolved at prepare, F32 default
+    /// The dtype a host block of the slot must carry, resolved at prepare: the ring dtype of a
+    /// Streamed slot (F32 default); float32 for a Static slot, whose values the copy path
+    /// moves as float and whose spec dtype is float32 in this pre-release.
+    std::vector<anira_dtype> m_input_ring_dtypes;
     std::vector<anira_dtype> m_output_ring_dtypes;
+    // What the tensor forms know per slot, filled at prepare: the channel count a host block
+    // must have in shape[0] (1 for a Static slot), and one array of empty tensors per side
+    // (rank 2, shape {channels, 0}, the slot's dtype, host memory, no pointer). A
+    // single-tensor form on a side with several slots copies the caller's descriptor into its
+    // slot of the array, hands the array to the manager, which takes one tensor per slot, and
+    // sets shape[1] of that entry back to 0 before it returns.
+    std::vector<uint32_t> m_input_channels;
+    std::vector<uint32_t> m_output_channels;
+    std::vector<anira_tensor> m_input_tensors;
+    std::vector<anira_tensor> m_output_tensors;
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
 };
