@@ -234,7 +234,11 @@ architecture document (``main-thread``, ``driver-thread``, ``inference-thread``,
 ``thread-safe``, with their state qualifiers), ``callback_safe`` where it applies and
 ``nonblocking: true`` where the body is real-time; the generator refuses an entry without a
 tag, a 64-bit argument or an ``anira_error*`` on a nonblocking entry, and writes the tag as the
-``@par Thread contract`` line of the generated Doxygen. The 64-bit rule has a closed allowlist
+``@par Thread contract`` line of the generated Doxygen. The vocabulary has one dual tag,
+``driver-thread | inference-thread``, for a callback that runs on the driving thread in some
+phases or contracts and on an inference thread in others (a stage callback, and the default
+bodies it may call): the body is real-time on both threads, so the generator requires
+``nonblocking: true`` for it exactly as it does for ``driver-thread``. The 64-bit rule has a closed allowlist
 of six names: ``anira_now_ns`` and the factories ``anira_tensor_init_vulkan``,
 ``anira_tensor_init_opaque_fd``, ``anira_tensor_init_wgpu_buffer``,
 ``anira_tensor_init_dmabuf`` and ``anira_tensor_init_iosurface``, whose parameters are vendor

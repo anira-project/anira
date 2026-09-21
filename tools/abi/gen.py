@@ -61,12 +61,16 @@ THREAD_TAGS = {
     "main-thread & !loader-lock",
     "driver-thread",
     "inference-thread",
+    # The one dual tag: a stage callback (and the two stage defaults it may call) runs on the
+    # driving thread under Hard and on an inference thread for before/after_inference and under
+    # Async. The body is real-time on both, so nonblocking is required.
+    "driver-thread | inference-thread",
     "thread-safe",
     "thread-safe, !audio-thread",
     "drain-thread",
     "any-thread, blocking",
 }
-NONBLOCKING_REQUIRED = {"driver-thread"}
+NONBLOCKING_REQUIRED = {"driver-thread", "driver-thread | inference-thread"}
 NONBLOCKING_FORBIDDEN_PREFIXES = ("main-thread", "any-thread, blocking")
 WIDE_INT_ALLOWLIST = {
     "anira_now_ns",
