@@ -10,12 +10,12 @@
 #include <anira/abi/export.h>
 #include <anira/abi/stage.h>
 #include <anira/abi/status.h>
-#include <anira/abi/tensor.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/system/Exports.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/RingBuffer.h>
+#include <anira/utils/RtLatch.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -63,21 +63,47 @@ using StageChain = std::vector<std::shared_ptr<StageCarrier>>;
 /// extension kinds the stages declare, as consumers named after them.
 ANIRA_API StageFacts stage_facts(const StageChain& chain);
 
+/// What anira_stage_ctx::frame names: what the six context accessors of anira/abi/stage.h
+/// (anira_stage_input_role to anira_stage_output_tensor) read to answer for a slot, and nothing
+/// else; the two default bodies go through the accessors. One lives on the stack of each phase
+/// entry point of the chain for the duration of that call. Nothing in it is built per slot: the
+/// accessors build what a stage asks for. A test of the default bodies fills one by hand.
+struct StageFrame {
+    /// The handler's ports per side, indexed by slot: the role of a slot is its port's arm, the
+    /// ring of a Streamed slot its stream port's.
+    const std::vector<Port>* m_input_ports = nullptr;
+    const std::vector<Port>* m_output_ports = nullptr;
+    /// The packed buffers of the chunk's struct on the side the phase exposes: the inputs in
+    /// pre_process and before_inference, the outputs in after_inference and post_process. The
+    /// other side stays NULL, and its tensor accessor answers ANIRA_ERROR_INVALID_STATE.
+    std::vector<anira::BufferF>* m_model_inputs = nullptr;
+    std::vector<anira::BufferF>* m_model_outputs = nullptr;
+    /// The spec's extents per slot.
+    const std::vector<std::vector<int64_t>>* m_input_shapes = nullptr;
+    const std::vector<std::vector<int64_t>>* m_output_shapes = nullptr;
+    /// The latch a refused accessor records into (the session's); NULL records nothing.
+    anira::RtLatch* m_rt = nullptr;
+    /// The stage whose callback is running, for that record; NULL outside one. It is here and
+    /// not read from the session's RingOwner because before_inference and after_inference run
+    /// on the inference threads, several at a time.
+    const char* m_stage = nullptr;
+};
+
 /// The one PrePostProcessor the session of a C-created handler sees: it fills an
-/// anira_stage_ctx on the stack per call and runs the chain's filled slots in chain order, or
-/// the default body of a phase, once, when no stage fills it.
+/// anira_stage_ctx and the StageFrame it names on the stack per call and runs the chain's
+/// filled slots in chain order, or the default body of a phase, once, when no stage fills it.
 ///
 /// The 2.x virtuals receive the buffers of a ThreadSafeStruct and never the struct, so bind()
-/// builds a table from the address of each struct's input and output vector to the struct
-/// (the structs are rebuilt by every session prepare). The struct carries what the ctx needs:
-/// the plan the chunk was stamped with, and the status slot the scheduler reads after a failed
-/// phase.
+/// builds a table of the session's structs, looked up by the address of a struct's input or
+/// output vector (the structs are rebuilt by every session prepare). The struct carries what
+/// the ctx needs: the plan the chunk was stamped with, and the status slot the scheduler reads
+/// after a failed phase.
 ///
 /// The chain reads the handler's two port vectors (port.h), indexed by slot: the role of a
 /// slot is its port's arm and the ring of a slot its stream port's, both plain reads. The
 /// Static tensors travel through their static ports, whole and typed: every one is
-/// materialised into model_inputs ahead of any stage's pre_process and captured from
-/// model_outputs behind the last post_process, each under its slot's latch. A chunk that
+/// materialised into the model's input ahead of any stage's pre_process and captured from
+/// the model's output behind the last post_process, each under its slot's latch. A chunk that
 /// completed as zeros (dropped, or failed in a stage or in the engine) captures nothing: the
 /// port holds what the model produced. The float atomics this class inherits from the 2.x
 /// processor are not used.
@@ -99,8 +125,8 @@ public:
                         std::vector<Port>& output_ports);
 
     /// Control thread, after the session's prepare and before its first chunk: the struct
-    /// table, the ring of every stream port (the session's, at the port's slot), the ring
-    /// arrays a ctx carries and one preallocated tensor array per struct and side.
+    /// table, the ring of every stream port (the session's, at the port's slot) and the count
+    /// check's scratch.
     void bind(anira::SessionElement& session, std::vector<PlanPair> plans);
 
     void pre_process(std::vector<anira::RingBuffer>& input,
@@ -115,20 +141,24 @@ public:
                          anira::InferenceBackend current_inference_backend) override;
 
 private:
-    /// One ThreadSafeStruct of the bound session and the tensor arrays its ctx points at.
-    struct Chunk {
-        anira::SessionElement::ThreadSafeStruct* m_struct = nullptr;
-        std::vector<anira_tensor> m_inputs;   ///< re-pointed on every call
-        std::vector<anira_tensor> m_outputs;  ///< re-pointed on every call
-    };
+    using Chunk = anira::SessionElement::ThreadSafeStruct;
 
+    /// The struct of the bound session that owns the vector, or NULL.
     Chunk* chunk_of_inputs(const std::vector<anira::BufferF>& inputs) noexcept ANIRA_NONBLOCKING;
     Chunk* chunk_of_outputs(const std::vector<anira::BufferF>& outputs) noexcept ANIRA_NONBLOCKING;
+    /// The frame of one phase call: the ports, the shapes and the latch. The entry point adds
+    /// the buffers of the side its phase exposes.
+    StageFrame make_frame() const noexcept ANIRA_NONBLOCKING;
+    /// The eight scalars of a ctx, and `frame` as its frame; the reserved slots stay NULL.
     anira_stage_ctx make_ctx(anira_stage_phase phase,
-                             const Chunk& chunk) const noexcept ANIRA_NONBLOCKING;
+                             const Chunk& chunk,
+                             const StageFrame& frame) const noexcept ANIRA_NONBLOCKING;
     /// Runs the filled slots of one phase in chain order; the first status that is not
-    /// ANIRA_OK ends the phase, is recorded with the stage's name and returned.
-    anira_status run_phase(const anira_stage_ctx& ctx, bool on_driver) noexcept ANIRA_NONBLOCKING;
+    /// ANIRA_OK ends the phase, is recorded with the stage's name and returned. `frame` is the
+    /// one `ctx` names: it carries the running stage's name around each callback.
+    anira_status run_phase(const anira_stage_ctx& ctx,
+                           StageFrame& frame,
+                           bool on_driver) noexcept ANIRA_NONBLOCKING;
     /// Records a failed phase: last-wins into rt_error, one record per kind naming the stage.
     void fail(const char* stage, uint32_t phase, anira_status status) noexcept ANIRA_NONBLOCKING;
     /// The count check around the two ring-moving phases, over the stream ports of one side:
@@ -163,12 +193,7 @@ private:
     std::vector<PlanPair> m_plans;
     std::vector<std::vector<int64_t>> m_input_shapes;   ///< the spec's extents per tensor
     std::vector<std::vector<int64_t>> m_output_shapes;  ///< the spec's extents per tensor
-    std::vector<Chunk> m_chunks;
-    /// What anira_stage_ctx::input_rings and output_rings point at, the one array the struct
-    /// asks for: the stream ports' rings by slot, NULL for a slot of another role. Filled by
-    /// bind() from the ports and read by nothing in here but the ctx fill.
-    std::vector<anira_ring*> m_ctx_input_rings;
-    std::vector<anira_ring*> m_ctx_output_rings;
+    std::vector<Chunk*> m_chunks;                       ///< the structs of the bound session
     /// The count check's scratch: available() of every channel of every ring of one side,
     /// read ahead of the phase (one entry per channel, in slot order). Driving thread only.
     std::vector<size_t> m_before;

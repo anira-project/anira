@@ -1,5 +1,5 @@
-// anira/abi/stage.h: the ring accessors, the stage context, the descriptor and its carrier, the
-// default bodies and the chain a C-created handler runs them in.
+// anira/abi/stage.h: the ring accessors, the stage context and its six accessors, the descriptor
+// and its carrier, the default bodies and the chain a C-created handler runs them in.
 //
 // A phase callback runs inside an ANIRA_NONBLOCKING entry (pre_process, post_process) or on an
 // inference thread (before_inference, after_inference), so every callback here is declared
@@ -42,10 +42,13 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
+#include "capi/port.h"
+#include "capi/stage.h"
 #include "float_face.h"
 #include "handler_support.h"
 
@@ -206,10 +209,16 @@ constexpr size_t k_tensors = 4;  // the tensors per side the record has room for
 struct Probe {
     std::array<std::atomic<int>, k_phases> m_calls{};
     std::array<anira_stage_ctx, k_phases> m_ctx{};
-    std::array<std::array<anira_tensor, k_tensors>, k_phases> m_inputs{};
-    std::array<std::array<anira_tensor, k_tensors>, k_phases> m_outputs{};
+    // What the six context accessors answered, per phase and slot: every phase asks all six
+    // for every slot, so the record is the table of what a phase exposes.
+    std::array<std::array<anira_role, k_tensors>, k_phases> m_input_roles{};
+    std::array<std::array<anira_role, k_tensors>, k_phases> m_output_roles{};
     std::array<std::array<anira_ring*, k_tensors>, k_phases> m_input_rings{};
     std::array<std::array<anira_ring*, k_tensors>, k_phases> m_output_rings{};
+    std::array<std::array<anira_status, k_tensors>, k_phases> m_input_status{};
+    std::array<std::array<anira_status, k_tensors>, k_phases> m_output_status{};
+    std::array<std::array<anira_tensor, k_tensors>, k_phases> m_inputs{};
+    std::array<std::array<anira_tensor, k_tensors>, k_phases> m_outputs{};
     std::array<std::thread::id, k_phases> m_thread{};
     float m_static_input = -1.0F;  ///< element 0 of model input 1 as pre_process found it
     // What the stage does in each phase: nothing, the default body (`m_defaults` times), and
@@ -231,30 +240,27 @@ anira_status ANIRA_CALL probe_phase(const anira_stage_ctx* ctx, void* user_data)
     probe->m_ctx.at(phase) = *ctx;
     probe->m_thread.at(phase) = std::this_thread::get_id();
     if (probe->m_order != nullptr) { probe->m_seen_order.at(phase) = probe->m_order->fetch_add(1); }
-    for (uint32_t i = 0; i < ctx->num_inputs && i < k_tensors; ++i) {
-        if (ctx->model_inputs != nullptr) {
-            probe->m_inputs.at(phase).at(i) = ctx->model_inputs[i];
-        }
-        if (ctx->input_rings != nullptr) {
-            probe->m_input_rings.at(phase).at(i) = ctx->input_rings[i];
-        }
+    for (uint32_t slot = 0; slot < ctx->num_inputs && slot < k_tensors; ++slot) {
+        probe->m_input_roles.at(phase).at(slot) = anira_stage_input_role(ctx, slot);
+        probe->m_input_rings.at(phase).at(slot) = anira_stage_input_ring(ctx, slot);
+        probe->m_input_status.at(phase).at(slot) =
+            anira_stage_input_tensor(ctx, slot, &probe->m_inputs.at(phase).at(slot));
     }
-    for (uint32_t i = 0; i < ctx->num_outputs && i < k_tensors; ++i) {
-        if (ctx->model_outputs != nullptr) {
-            probe->m_outputs.at(phase).at(i) = ctx->model_outputs[i];
-        }
-        if (ctx->output_rings != nullptr) {
-            probe->m_output_rings.at(phase).at(i) = ctx->output_rings[i];
-        }
+    for (uint32_t slot = 0; slot < ctx->num_outputs && slot < k_tensors; ++slot) {
+        probe->m_output_roles.at(phase).at(slot) = anira_stage_output_role(ctx, slot);
+        probe->m_output_rings.at(phase).at(slot) = anira_stage_output_ring(ctx, slot);
+        probe->m_output_status.at(phase).at(slot) =
+            anira_stage_output_tensor(ctx, slot, &probe->m_outputs.at(phase).at(slot));
     }
     if (phase == ANIRA_PHASE_PRE_PROCESS && ctx->num_inputs > 1) {
-        const float* gain = anira_tensor_data_f32(&ctx->model_inputs[1]);
+        const float* gain = anira_tensor_data_f32(&probe->m_inputs.at(phase).at(1));
         if (gain != nullptr) { probe->m_static_input = gain[0]; }
     }
     if (phase == probe->m_fail_phase && call == probe->m_fail_call) { return probe->m_fail_status; }
     if (phase == ANIRA_PHASE_POST_PROCESS && probe->m_scale != 1.0F) {
-        float* out = anira_tensor_data_f32(&ctx->model_outputs[0]);
-        const size_t count = anira_tensor_num_elements(&ctx->model_outputs[0]);
+        const anira_tensor& tensor = probe->m_outputs.at(phase).at(0);
+        float* out = anira_tensor_data_f32(&tensor);
+        const size_t count = anira_tensor_num_elements(&tensor);
         for (size_t n = 0; out != nullptr && n < count; ++n) { out[n] *= probe->m_scale; }
     }
     anira_status status = ANIRA_OK;
@@ -313,13 +319,18 @@ public:
 
 // ---- a converting stage ------------------------------------------------------------------------
 
-/// pre_process of a stage over an int16 input ring: pops one hop of int16 into its scratch
+/// pre_process of a stage over an int16 input ring, written with the context accessors only: it
+/// asks what slot 0 is, takes its ring and its model end, pops one hop of int16 into its scratch
 /// (user_data) and writes float32 into the model input. Nothing in anira converts.
 anira_status ANIRA_CALL int16_to_float(const anira_stage_ctx* ctx,
                                        void* user_data) ANIRA_NONBLOCKING {
     auto* scratch = static_cast<std::array<int16_t, k_hop>*>(user_data);
-    anira_ring* ring = ctx->input_rings[0];
-    float* samples = anira_tensor_data_f32(&ctx->model_inputs[0]);
+    if (anira_stage_input_role(ctx, 0) != ANIRA_ROLE_STREAMED) { return ANIRA_ERROR_CONFIG; }
+    anira_ring* ring = anira_stage_input_ring(ctx, 0);
+    anira_tensor tensor;
+    const anira_status exposed = anira_stage_input_tensor(ctx, 0, &tensor);
+    if (exposed != ANIRA_OK) { return exposed; }
+    float* samples = anira_tensor_data_f32(&tensor);
     if (ring == nullptr || samples == nullptr || anira_ring_dtype(ring) != ANIRA_DTYPE_I16) {
         return ANIRA_ERROR_CONFIG;
     }
@@ -331,6 +342,63 @@ anira_status ANIRA_CALL int16_to_float(const anira_stage_ctx* ctx,
     }
     return ANIRA_OK;
 }
+
+// ---- a context without a handler ---------------------------------------------------------------
+
+/// Whether every byte of the record is zero: what a refused tensor accessor leaves, like a
+/// refused anira_tensor_init_* factory. The record holds unions, so tidy refuses a plain memory
+/// compare over it (bugprone-suspicious-memory-comparison); an array of unsigned char compares
+/// byte for byte.
+bool all_zero(const anira_tensor& tensor) {
+    std::array<unsigned char, sizeof(anira_tensor)> bytes{};
+    std::memcpy(bytes.data(), &tensor, sizeof(anira_tensor));
+    return bytes == std::array<unsigned char, sizeof(anira_tensor)>{};
+}
+
+/// A ctx over a hand-filled StageFrame (src/capi/stage.h): one Streamed float32 tensor of
+/// `shape` on each side, both over `ring`, the memory of the model end owned here. What the
+/// chain fills per call, for the default bodies and the context accessors without a handler.
+struct HandBuiltCtx {
+    HandBuiltCtx(uint32_t phase, anira::RingBuffer& ring, std::vector<int64_t> shape) : m_ports(1) {
+        size_t elements = 1;
+        for (const int64_t extent : shape) { elements *= static_cast<size_t>(extent); }
+        m_shapes.push_back(std::move(shape));
+        m_buffers.emplace_back(1, elements);
+        m_buffers[0].clear();
+        std::get<anira::capi::StreamPort>(m_ports[0]).m_ring = &ring;
+        m_frame.m_input_ports = &m_ports;
+        m_frame.m_output_ports = &m_ports;
+        m_frame.m_input_shapes = &m_shapes;
+        m_frame.m_output_shapes = &m_shapes;
+        expose(phase);
+        m_ctx.num_inputs = 1;
+        m_ctx.num_outputs = 1;
+        m_ctx.frame = &m_frame;
+    }
+    HandBuiltCtx(const HandBuiltCtx&) = delete;  // the ctx names this object's frame
+    HandBuiltCtx& operator=(const HandBuiltCtx&) = delete;
+    HandBuiltCtx(HandBuiltCtx&&) = delete;
+    HandBuiltCtx& operator=(HandBuiltCtx&&) = delete;
+    ~HandBuiltCtx() = default;
+
+    /// The phase, and the buffers of the side that phase exposes, as the chain's entry points
+    /// fill them.
+    void expose(uint32_t phase) {
+        const bool inputs =
+            phase == ANIRA_PHASE_PRE_PROCESS || phase == ANIRA_PHASE_BEFORE_INFERENCE;
+        m_ctx.phase = phase;
+        m_frame.m_model_inputs = inputs ? &m_buffers : nullptr;
+        m_frame.m_model_outputs = inputs ? nullptr : &m_buffers;
+    }
+
+    float* data() { return m_buffers[0].get_write_pointer(0); }
+
+    std::vector<anira::capi::Port> m_ports;
+    std::vector<std::vector<int64_t>> m_shapes;
+    std::vector<anira::BufferF> m_buffers;
+    anira::capi::StageFrame m_frame;
+    anira_stage_ctx m_ctx{};
+};
 
 }  // namespace
 
@@ -515,21 +583,42 @@ TEST(AbiStage, CtxPerPhase) {
         EXPECT_EQ(ctx.num_outputs, 2U);
         EXPECT_EQ(ctx.ticket, ANIRA_TICKET_INVALID);
         EXPECT_EQ(ctx.reserved, 0U);
-        // An array that is not the phase's is NULL, the high half of its slot included.
+        // The frame is anira's; the reserved slots are NULL, their high halves included.
+        EXPECT_NE(ctx.frame_bits, 0U);
+        EXPECT_EQ(ctx.reserved_ptr0_bits, 0U);
+        EXPECT_EQ(ctx.reserved_ptr1_bits, 0U);
+        EXPECT_EQ(ctx.reserved_ptr2_bits, 0U);
+        // What a phase exposes, asked through the six accessors for every slot: the role in
+        // every phase; an input ring in pre_process and an output ring in post_process, the
+        // session's own for the Streamed tensor and NULL for the Static one; the model's inputs
+        // in pre_process and before_inference, its outputs in the two others, of either role.
+        // A tensor outside its phase is ANIRA_ERROR_INVALID_STATE and an all-zero record.
+        // Nothing of it is recorded: anira_handler_rt_error read ANIRA_OK above.
         const bool pre = phase == ANIRA_PHASE_PRE_PROCESS;
         const bool post = phase == ANIRA_PHASE_POST_PROCESS;
         const bool inputs = pre || phase == ANIRA_PHASE_BEFORE_INFERENCE;
-        EXPECT_EQ(ctx.input_rings_bits != 0, pre);
-        EXPECT_EQ(ctx.model_inputs_bits != 0, inputs);
-        EXPECT_EQ(ctx.model_outputs_bits != 0, !inputs);
-        EXPECT_EQ(ctx.output_rings_bits != 0, post);
+        EXPECT_EQ(probe.m_input_rings.at(phase).at(0),
+                  pre ? session->m_send_buffer.data() : nullptr);
+        EXPECT_EQ(probe.m_output_rings.at(phase).at(0),
+                  post ? session->m_receive_buffer.data() : nullptr);
+        EXPECT_EQ(probe.m_input_rings.at(phase).at(1), nullptr);
+        EXPECT_EQ(probe.m_output_rings.at(phase).at(1), nullptr);
+        for (size_t slot = 0; slot < 2; ++slot) {
+            SCOPED_TRACE("slot " + std::to_string(slot));
+            const anira_role role = slot == 0 ? ANIRA_ROLE_STREAMED : ANIRA_ROLE_STATIC;
+            EXPECT_EQ(probe.m_input_roles.at(phase).at(slot), role);
+            EXPECT_EQ(probe.m_output_roles.at(phase).at(slot), role);
+            EXPECT_EQ(probe.m_input_status.at(phase).at(slot),
+                      inputs ? ANIRA_OK : ANIRA_ERROR_INVALID_STATE);
+            EXPECT_EQ(probe.m_output_status.at(phase).at(slot),
+                      inputs ? ANIRA_ERROR_INVALID_STATE : ANIRA_OK);
+            EXPECT_EQ(probe.m_inputs.at(phase).at(slot).dtype, inputs ? ANIRA_DTYPE_F32 : 0U);
+            EXPECT_EQ(probe.m_outputs.at(phase).at(slot).dtype, inputs ? 0U : ANIRA_DTYPE_F32);
+            EXPECT_EQ(anira_tensor_data_f32(&probe.m_inputs.at(phase).at(slot)) != nullptr, inputs);
+            EXPECT_EQ(anira_tensor_data_f32(&probe.m_outputs.at(phase).at(slot)) != nullptr,
+                      !inputs);
+        }
     }
-    // The rings: the session's own for the Streamed tensor, NULL for the Static one.
-    EXPECT_EQ(probe.m_input_rings.at(ANIRA_PHASE_PRE_PROCESS).at(0), session->m_send_buffer.data());
-    EXPECT_EQ(probe.m_input_rings.at(ANIRA_PHASE_PRE_PROCESS).at(1), nullptr);
-    EXPECT_EQ(probe.m_output_rings.at(ANIRA_PHASE_POST_PROCESS).at(0),
-              session->m_receive_buffer.data());
-    EXPECT_EQ(probe.m_output_rings.at(ANIRA_PHASE_POST_PROCESS).at(1), nullptr);
     // The tensors: the spec's shape and dtype over a struct's own buffer, host memory.
     const anira_tensor& audio = probe.m_inputs.at(ANIRA_PHASE_PRE_PROCESS).at(0);
     EXPECT_EQ(audio.domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
@@ -562,6 +651,63 @@ TEST(AbiStage, CtxPerPhase) {
     EXPECT_EQ(probe.m_thread.at(ANIRA_PHASE_POST_PROCESS), std::this_thread::get_id());
     EXPECT_NE(probe.m_thread.at(ANIRA_PHASE_BEFORE_INFERENCE), std::this_thread::get_id());
     EXPECT_NE(probe.m_thread.at(ANIRA_PHASE_AFTER_INFERENCE), std::this_thread::get_id());
+}
+
+namespace {
+
+/// What the stage of ASlotBeyondTheCountIsRecordedWithTheStagesName got for a slot no tensor
+/// has. Written on an inference thread.
+struct Beyond {
+    std::atomic<uint32_t> m_role{0};
+    std::atomic<int32_t> m_status{ANIRA_OK};
+    std::atomic<uint32_t> m_dtype{1};
+    std::atomic<int> m_rings{0};
+};
+
+anira_status ANIRA_CALL ask_beyond(const anira_stage_ctx* ctx, void* user_data) ANIRA_NONBLOCKING {
+    auto* beyond = static_cast<Beyond*>(user_data);
+    const uint32_t slot = ctx->num_inputs;  // one beyond the last
+    beyond->m_role.store(static_cast<uint32_t>(anira_stage_input_role(ctx, slot)));
+    if (anira_stage_input_ring(ctx, slot) != nullptr) { beyond->m_rings.fetch_add(1); }
+    anira_tensor tensor;
+    beyond->m_status.store(anira_stage_input_tensor(ctx, slot, &tensor));
+    beyond->m_dtype.store(tensor.dtype);
+    return ANIRA_OK;
+}
+
+}  // namespace
+
+// A slot at the side's count, asked in before_inference: the refusal reaches the handler's
+// rt_error from the inference thread, and the one latched record names the entry and the stage
+// that asked. The stage returned ANIRA_OK, so the chunk is not failed and the stream is whole.
+TEST(AbiStage, ASlotBeyondTheCountIsRecordedWithTheStagesName) {
+    const Context context;
+    anira_drain_log();
+    RecordCollector collector;
+    Beyond beyond;
+    anira_stage_desc stage = named_stage("asks-beyond", &beyond);
+    stage.before_inference = ask_beyond;
+    StagedHandler handler(context, stream_model(), {stage});
+    ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
+    Stream stream(handler.m_handler);
+    stream.blocks(3);
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
+    expect_same_stream(stream.m_out, stream.expected());
+    EXPECT_EQ(beyond.m_role.load(), static_cast<uint32_t>(ANIRA_ROLE_FORCE32));
+    EXPECT_EQ(beyond.m_rings.load(), 0);
+    EXPECT_EQ(beyond.m_status.load(), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(beyond.m_dtype.load(), 0U) << "an all-zero record";
+    EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_ERROR_INVALID_ARGUMENT);
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    EXPECT_EQ(anira_test::count_records(collector, "is out of range", "rt"), 1U);
+    const RecordCollector::Record record =
+        anira_test::find_record(collector, "is out of range", "rt");
+    EXPECT_NE(record.m_message.find("anira_stage_input_role: stage 'asks-beyond': slot 1 is out "
+                                    "of range, the model has 1 input tensors"),
+              std::string::npos)
+        << record.m_message;
+#endif
 }
 
 namespace {
@@ -755,6 +901,121 @@ TEST(AbiStage, PopWindowsEqualsTheBatchedPop) {
 }
 
 // ============================================================================================
+// The context accessors over a hand-built context
+// ============================================================================================
+
+// The refusals of the six accessors, and what is not one: a NULL ring and a tensor outside its
+// phase are answers and record nothing; a slot out of range and a NULL out are recorded, one
+// record per kind naming the entry and the running stage.
+TEST(AbiStage, ContextAccessorsAnswerAndRefuse) {
+    const Context context;  // the real-time log queue is the core's
+    anira_drain_log();
+    RecordCollector collector;
+    anira::RtLatch latch;
+    anira::RingBuffer ring;
+    ASSERT_TRUE(ring.initialize_with_positions(1, 16, ANIRA_DTYPE_F32));
+    ring.set_owner(4, nullptr);
+    HandBuiltCtx built(ANIRA_PHASE_PRE_PROCESS, ring, {1, 1, 4});
+    built.m_frame.m_rt = &latch;
+    built.m_frame.m_stage = "asker";
+    const anira_stage_ctx& ctx = built.m_ctx;
+
+    // pre_process: the role, the input ring, the model's input; no output ring, no output.
+    EXPECT_EQ(anira_stage_input_role(&ctx, 0), ANIRA_ROLE_STREAMED);
+    EXPECT_EQ(anira_stage_output_role(&ctx, 0), ANIRA_ROLE_STREAMED);
+    EXPECT_EQ(anira_stage_input_ring(&ctx, 0), &ring);
+    EXPECT_EQ(anira_stage_output_ring(&ctx, 0), nullptr);
+    anira_tensor tensor;
+    ASSERT_EQ(anira_stage_input_tensor(&ctx, 0, &tensor), ANIRA_OK);
+    EXPECT_EQ(tensor.domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+    EXPECT_EQ(tensor.dtype, ANIRA_DTYPE_F32);
+    ASSERT_EQ(tensor.ndim, 3U);
+    EXPECT_EQ(tensor.shape[2], 4);
+    EXPECT_EQ(tensor.release, nullptr) << "borrowed";
+    EXPECT_EQ(anira_tensor_data_f32(&tensor), built.data());
+    std::memset(&tensor, 0xff, sizeof(tensor));
+    EXPECT_EQ(anira_stage_output_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_TRUE(all_zero(tensor)) << "an all-zero record";
+    EXPECT_EQ(tensor.dtype, 0U);
+    EXPECT_EQ(anira_tensor_data_f32(&tensor), nullptr);
+
+    // The other phases: the role stays, the rings and the tensors follow the phase.
+    built.expose(ANIRA_PHASE_BEFORE_INFERENCE);
+    EXPECT_EQ(anira_stage_input_role(&ctx, 0), ANIRA_ROLE_STREAMED);
+    EXPECT_EQ(anira_stage_input_ring(&ctx, 0), nullptr);
+    EXPECT_EQ(anira_stage_output_ring(&ctx, 0), nullptr);
+    EXPECT_EQ(anira_stage_input_tensor(&ctx, 0, &tensor), ANIRA_OK);
+    EXPECT_EQ(anira_stage_output_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
+    built.expose(ANIRA_PHASE_AFTER_INFERENCE);
+    EXPECT_EQ(anira_stage_input_ring(&ctx, 0), nullptr);
+    EXPECT_EQ(anira_stage_output_ring(&ctx, 0), nullptr);
+    EXPECT_EQ(anira_stage_input_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(anira_stage_output_tensor(&ctx, 0, &tensor), ANIRA_OK);
+    built.expose(ANIRA_PHASE_POST_PROCESS);
+    EXPECT_EQ(anira_stage_input_ring(&ctx, 0), nullptr);
+    EXPECT_EQ(anira_stage_output_ring(&ctx, 0), &ring);
+    EXPECT_EQ(anira_stage_input_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(anira_stage_output_tensor(&ctx, 0, &tensor), ANIRA_OK);
+    EXPECT_EQ(latch.rt_error(), ANIRA_OK) << "none of these answers is a refusal";
+
+    // A slot at or beyond the side's count: no role, no ring, INVALID_ARGUMENT. Every refusal
+    // is recorded; the first of its kind is the one that is logged, the others are counted.
+    EXPECT_EQ(anira_stage_input_role(&ctx, 1), ANIRA_ROLE_FORCE32);
+    EXPECT_EQ(latch.rt_error(), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(latch.m_suppressed.load(), 0U);
+    EXPECT_EQ(anira_stage_output_role(&ctx, 1), ANIRA_ROLE_FORCE32);
+    EXPECT_EQ(latch.m_suppressed.load(), 1U);
+    EXPECT_EQ(anira_stage_input_ring(&ctx, 7), nullptr);
+    EXPECT_EQ(latch.m_suppressed.load(), 2U);
+    EXPECT_EQ(anira_stage_output_ring(&ctx, 7), nullptr);
+    EXPECT_EQ(latch.m_suppressed.load(), 3U);
+    std::memset(&tensor, 0xff, sizeof(tensor));
+    EXPECT_EQ(anira_stage_input_tensor(&ctx, 1, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_TRUE(all_zero(tensor));
+    EXPECT_EQ(latch.m_suppressed.load(), 4U);
+    EXPECT_EQ(anira_stage_output_tensor(&ctx, 1, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(latch.m_suppressed.load(), 5U);
+    // A NULL out.
+    EXPECT_EQ(anira_stage_output_tensor(&ctx, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(latch.rearm(), 6U);
+
+    // A NULL ctx and a ctx without a frame: the refusal stands, and there is no latch to record
+    // into.
+    anira_stage_ctx bare{};
+    bare.phase = ANIRA_PHASE_PRE_PROCESS;
+    bare.num_inputs = 1;
+    bare.num_outputs = 1;
+    const std::array<const anira_stage_ctx*, 2> without_a_frame{nullptr, &bare};
+    for (const anira_stage_ctx* refused : without_a_frame) {
+        EXPECT_EQ(anira_stage_input_role(refused, 0), ANIRA_ROLE_FORCE32);
+        EXPECT_EQ(anira_stage_output_role(refused, 0), ANIRA_ROLE_FORCE32);
+        EXPECT_EQ(anira_stage_input_ring(refused, 0), nullptr);
+        EXPECT_EQ(anira_stage_output_ring(refused, 0), nullptr);
+        std::memset(&tensor, 0xff, sizeof(tensor));
+        EXPECT_EQ(anira_stage_input_tensor(refused, 0, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_TRUE(all_zero(tensor));
+        EXPECT_EQ(anira_stage_output_tensor(refused, 0, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_EQ(anira_stage_input_tensor(refused, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    }
+    EXPECT_EQ(anira_stage_default_pre_process(&bare), ANIRA_ERROR_INVALID_ARGUMENT);
+    bare.phase = ANIRA_PHASE_POST_PROCESS;
+    EXPECT_EQ(anira_stage_default_post_process(&bare), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(latch.rt_error(), ANIRA_OK);
+
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    // One record per kind: the first refusal, naming the entry and the running stage.
+    EXPECT_EQ(anira_test::count_records(collector, "is out of range", "rt"), 1U);
+    const RecordCollector::Record record =
+        anira_test::find_record(collector, "is out of range", "rt");
+    EXPECT_NE(record.m_message.find("anira_stage_input_role: stage 'asker': slot 1"),
+              std::string::npos)
+        << record.m_message;
+    EXPECT_EQ(record.m_flags, ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);
+#endif
+}
+
+// ============================================================================================
 // The default bodies over a hand-built context
 // ============================================================================================
 
@@ -766,32 +1027,24 @@ TEST(AbiStage, DefaultPreProcessFillsTheWindowHeadWithHistory) {
     anira::RingBuffer ring;
     ring.initialize_with_positions(1, 32);
     ring.set_owner(k_step, nullptr);
-    std::array<float, k_window> window{};
-    const std::array<int64_t, 3> shape{1, 1, static_cast<int64_t>(k_window)};
-    anira_tensor tensor{};
-    anira_tensor_init_host(&tensor, window.data(), ANIRA_DTYPE_F32, 3, shape.data());
-    std::array<anira_ring*, 1> rings{&ring};
-    anira_stage_ctx ctx{};
-    ctx.phase = ANIRA_PHASE_PRE_PROCESS;
-    ctx.num_inputs = 1;
-    ctx.input_rings = rings.data();
-    ctx.model_inputs = &tensor;
+    HandBuiltCtx built(ANIRA_PHASE_PRE_PROCESS, ring, {1, 1, static_cast<int64_t>(k_window)});
+    const float* window = built.data();
 
     for (size_t n = 0; n < k_step; ++n) { ring.push_sample(0, static_cast<float>(n + 1)); }
-    EXPECT_EQ(anira_stage_default_pre_process(&ctx), ANIRA_OK);
+    EXPECT_EQ(anira_stage_default_pre_process(&built.m_ctx), ANIRA_OK);
     for (size_t n = 0; n < k_step; ++n) {
-        EXPECT_EQ(window.at(n), 0.0F) << "no history yet, sample " << n;
-        EXPECT_EQ(window.at(k_step + n), static_cast<float>(n + 1));
+        EXPECT_EQ(window[n], 0.0F) << "no history yet, sample " << n;
+        EXPECT_EQ(window[k_step + n], static_cast<float>(n + 1));
     }
     for (size_t n = 0; n < k_step; ++n) { ring.push_sample(0, static_cast<float>(k_step + n + 1)); }
-    EXPECT_EQ(anira_stage_default_pre_process(&ctx), ANIRA_OK);
+    EXPECT_EQ(anira_stage_default_pre_process(&built.m_ctx), ANIRA_OK);
     for (size_t n = 0; n < k_window; ++n) {
-        EXPECT_EQ(window.at(n), static_cast<float>(n + 1)) << "window sample " << n;
+        EXPECT_EQ(window[n], static_cast<float>(n + 1)) << "window sample " << n;
     }
 
     // Another phase than its own, and a NULL context.
-    ctx.phase = ANIRA_PHASE_POST_PROCESS;
-    EXPECT_EQ(anira_stage_default_pre_process(&ctx), ANIRA_ERROR_INVALID_ARGUMENT);
+    built.expose(ANIRA_PHASE_POST_PROCESS);
+    EXPECT_EQ(anira_stage_default_pre_process(&built.m_ctx), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_stage_default_pre_process(nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_stage_default_post_process(nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
 }
@@ -802,21 +1055,12 @@ TEST(AbiStage, DefaultPreProcessTreatsAMultichannelTensorAsChannels) {
     anira::RingBuffer ring;
     ring.initialize_with_positions(4, 8);
     ring.set_owner(1, nullptr);
-    std::array<float, 4> latents{};
-    const std::array<int64_t, 3> shape{1, 4, 1};
-    anira_tensor tensor{};
-    anira_tensor_init_host(&tensor, latents.data(), ANIRA_DTYPE_F32, 3, shape.data());
-    std::array<anira_ring*, 1> rings{&ring};
-    anira_stage_ctx ctx{};
-    ctx.phase = ANIRA_PHASE_PRE_PROCESS;
-    ctx.num_inputs = 1;
-    ctx.input_rings = rings.data();
-    ctx.model_inputs = &tensor;
+    HandBuiltCtx built(ANIRA_PHASE_PRE_PROCESS, ring, {1, 4, 1});
     for (size_t channel = 0; channel < 4; ++channel) {
         ring.push_sample(channel, static_cast<float>(channel + 1));
     }
-    EXPECT_EQ(anira_stage_default_pre_process(&ctx), ANIRA_OK);
-    for (size_t n = 0; n < 4; ++n) { EXPECT_EQ(latents.at(n), static_cast<float>(n + 1)); }
+    EXPECT_EQ(anira_stage_default_pre_process(&built.m_ctx), ANIRA_OK);
+    for (size_t n = 0; n < 4; ++n) { EXPECT_EQ(built.data()[n], static_cast<float>(n + 1)); }
 }
 
 // A ring of another dtype than its tensor: that slot stays untouched, the status is CONFIG,
@@ -833,28 +1077,17 @@ TEST(AbiStage, DefaultBodiesRefuseARingOfAnotherDtype) {
     out_ring.set_owner(4, &owner);
     const std::array<int16_t, 4> words{1, 2, 3, 4};
     ASSERT_EQ(in_ring.push_block(0, words.data(), ANIRA_DTYPE_I16, 4), 4U);
-    std::array<float, 4> samples{9.0F, 9.0F, 9.0F, 9.0F};
-    const std::array<int64_t, 3> shape{1, 1, 4};
-    anira_tensor tensor{};
-    anira_tensor_init_host(&tensor, samples.data(), ANIRA_DTYPE_F32, 3, shape.data());
 
-    std::array<anira_ring*, 1> rings{&in_ring};
-    anira_stage_ctx ctx{};
-    ctx.phase = ANIRA_PHASE_PRE_PROCESS;
-    ctx.num_inputs = 1;
-    ctx.input_rings = rings.data();
-    ctx.model_inputs = &tensor;
-    EXPECT_EQ(anira_stage_default_pre_process(&ctx), ANIRA_ERROR_CONFIG);
+    HandBuiltCtx pre(ANIRA_PHASE_PRE_PROCESS, in_ring, {1, 1, 4});
+    pre.m_frame.m_rt = &latch;
+    for (size_t n = 0; n < 4; ++n) { pre.data()[n] = 9.0F; }
+    EXPECT_EQ(anira_stage_default_pre_process(&pre.m_ctx), ANIRA_ERROR_CONFIG);
     EXPECT_EQ(in_ring.available(0), 4U);
-    EXPECT_EQ(samples[0], 9.0F);
+    EXPECT_EQ(pre.data()[0], 9.0F);
 
-    rings[0] = &out_ring;
-    anira_stage_ctx post{};
-    post.phase = ANIRA_PHASE_POST_PROCESS;
-    post.num_outputs = 1;
-    post.model_outputs = &tensor;
-    post.output_rings = rings.data();
-    EXPECT_EQ(anira_stage_default_post_process(&post), ANIRA_ERROR_CONFIG);
+    HandBuiltCtx post(ANIRA_PHASE_POST_PROCESS, out_ring, {1, 1, 4});
+    post.m_frame.m_rt = &latch;
+    EXPECT_EQ(anira_stage_default_post_process(&post.m_ctx), ANIRA_ERROR_CONFIG);
     EXPECT_EQ(out_ring.available(0), 0U);
     EXPECT_EQ(latch.rt_error(), ANIRA_OK) << "the status is returned, not recorded";
 }
@@ -926,9 +1159,9 @@ TEST(AbiStage, TwoStagesRunInChainOrderOnOneChunk) {
     expect_same_stream(stream.m_out, wanted);
     EXPECT_EQ(scale.m_seen_order.at(ANIRA_PHASE_POST_PROCESS) + 1,
               push.m_seen_order.at(ANIRA_PHASE_POST_PROCESS));
-    EXPECT_EQ(scale.m_ctx.at(ANIRA_PHASE_POST_PROCESS).model_outputs,
-              push.m_ctx.at(ANIRA_PHASE_POST_PROCESS).model_outputs)
-        << "one chunk, one tensor array";
+    EXPECT_EQ(scale.m_outputs.at(ANIRA_PHASE_POST_PROCESS).at(0).handle.host.ptr,
+              push.m_outputs.at(ANIRA_PHASE_POST_PROCESS).at(0).handle.host.ptr)
+        << "one chunk, one model tensor";
     EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
 }
 

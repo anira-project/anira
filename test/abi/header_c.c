@@ -25,20 +25,23 @@ static void on_record(const anira_log_record* record, void* user_data) {
     (void)user_data;
 }
 
-/* anira/abi/stage.h from C11: a phase callback as a C host writes one (it pops the first
-   input ring into the first model input through the accessors and falls back on the default
-   body), a prepare and a release function. The three are assigned to the descriptor's slots
-   below, so their types are the typedefs' to the letter. */
+/* anira/abi/stage.h from C11: a phase callback as a C host writes one (it asks the context
+   what the first input is, pops its ring into its model end through the accessors and falls
+   back on the default body), a prepare and a release function. The three are assigned to the
+   descriptor's slots below, so their types are the typedefs' to the letter. */
 static anira_status ANIRA_CALL on_pre_process(const anira_stage_ctx* ctx,
                                               void* user_data) ANIRA_NONBLOCKING {
     (void)user_data;
-    if (ctx->num_inputs > 0u && ctx->input_rings != NULL && ctx->input_rings[0] != NULL) {
-        anira_ring* ring = ctx->input_rings[0];
-        const anira_dtype dtype = anira_ring_dtype(ring);
-        void* data = anira_tensor_data(&ctx->model_inputs[0], dtype);
-        const size_t count = anira_ring_available(ring, 0u);
-        if (data != NULL && anira_ring_pop_block(ring, 0u, data, dtype, count) == count) {
-            return ANIRA_OK;
+    if (ctx->num_inputs > 0u && anira_stage_input_role(ctx, 0u) == ANIRA_ROLE_STREAMED) {
+        anira_ring* ring = anira_stage_input_ring(ctx, 0u);
+        anira_tensor tensor;
+        if (ring != NULL && anira_stage_input_tensor(ctx, 0u, &tensor) == ANIRA_OK) {
+            const anira_dtype dtype = anira_ring_dtype(ring);
+            void* data = anira_tensor_data(&tensor, dtype);
+            const size_t count = anira_ring_available(ring, 0u);
+            if (data != NULL && anira_ring_pop_block(ring, 0u, data, dtype, count) == count) {
+                return ANIRA_OK;
+            }
         }
     }
     return anira_stage_default_pre_process(ctx);
@@ -205,17 +208,16 @@ int anira_header_c_probe(void) {
     {
         /* anira/abi/stage.h from C11: the descriptor's initializer with the three callback
            typedefs in its slots, the frozen size of the stage context, a context zeroed and
-           filled by hand (both names of an ANIRA_PTR slot, the ring array's pointee const),
-           and behind the never-true branch the entries a C host calls. */
+           filled by hand (both names of an ANIRA_PTR slot, the frame's pointee const), and
+           behind the never-true branch the entries a C host calls. */
         static const char* const kinds[1] = {"model:entry"};
         anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
         anira_stage_ctx ctx;
-        anira_ring* rings[1];
-        rings[0] = NULL;
+        anira_tensor model_end;
         memset(&ctx, 0, sizeof(ctx));
         ctx.phase = (uint32_t)ANIRA_PHASE_PRE_PROCESS;
         ctx.ticket = ANIRA_TICKET_INVALID;
-        ctx.input_rings = rings;
+        ctx.frame = kinds; /* any address: the frame is anira's, this one is never read */
         checks += stage.struct_size == sizeof(anira_stage_desc) && stage.name == NULL ? 1 : 0;
         checks +=
             stage.domain_in == (uint32_t)ANIRA_DOMAIN_HOST && stage.pre_process == NULL ? 1 : 0;
@@ -225,9 +227,8 @@ int anira_header_c_probe(void) {
         stage.pre_process = on_pre_process;
         stage.prepare = on_stage_prepare;
         stage.release = on_stage_release;
-        checks +=
-            sizeof(anira_stage_ctx) == 64u && offsetof(anira_stage_ctx, input_rings) == 32u ? 1 : 0;
-        checks += ctx.input_rings_bits != 0u && ctx.model_inputs == NULL ? 1 : 0;
+        checks += sizeof(anira_stage_ctx) == 64u && offsetof(anira_stage_ctx, frame) == 32u ? 1 : 0;
+        checks += ctx.frame_bits != 0u && ctx.reserved_ptr0 == NULL ? 1 : 0;
         if (checks < 0) { /* never true: the object is never linked */
             checks += anira_sizeof(ANIRA_STRUCT_STAGE_CTX) == 64u ? 1 : 0;
             checks += anira_pipeline_add_stage(NULL, &stage, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
@@ -237,6 +238,17 @@ int anira_header_c_probe(void) {
             checks +=
                 anira_stage_default_post_process(&ctx) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;
             checks += anira_ring_num_channels(NULL) == 0u ? 1 : 0;
+            /* The six context accessors, as a C host calls them. */
+            checks += anira_stage_input_role(NULL, 0u) == ANIRA_ROLE_FORCE32 ? 1 : 0;
+            checks += anira_stage_output_role(NULL, 0u) == ANIRA_ROLE_FORCE32 ? 1 : 0;
+            checks += anira_stage_input_ring(NULL, 0u) == NULL ? 1 : 0;
+            checks += anira_stage_output_ring(NULL, 0u) == NULL ? 1 : 0;
+            checks += anira_stage_input_tensor(NULL, 0u, &model_end) == ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks +=
+                anira_stage_output_tensor(NULL, 0u, &model_end) == ANIRA_ERROR_INVALID_ARGUMENT ? 1
+                                                                                                : 0;
         }
     }
     return checks;

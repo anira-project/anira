@@ -650,7 +650,20 @@ and post-processing stages around it: ``anira_pipeline_add_stage`` copies an
 ``anira_stage_desc`` of ``anira/abi/stage.h`` (a name, up to four phase callbacks, a prepare
 and a release function, one ``user_data`` slot) into a carrier the pipeline and its handlers
 share, and the header's reference describes the context a callback receives, the ring
-accessors, the default bodies and what a failing callback does to its chunk. A custom engine
+accessors, the default bodies and what a failing callback does to its chunk. The context
+(``anira_stage_ctx``) carries the phase, the plan's engine and provider and the two tensor
+counts, and no tensor and no ring: a callback asks per slot.
+``anira_stage_input_role(ctx, slot)`` / ``anira_stage_output_role`` answer what the tensor is
+(the ``anira_role`` of its spec); ``anira_stage_input_ring`` / ``anira_stage_output_ring``
+hand out the ring of a Streamed tensor in the phase that moves it (``pre_process`` for an
+input, ``post_process`` for an output) and ``NULL`` otherwise, which is the answer to "has
+this tensor a ring here" and not an error; ``anira_stage_input_tensor(ctx, slot, &tensor)`` /
+``anira_stage_output_tensor`` fill a descriptor of the *model end* of the slot, the tensor
+the engine binds (the inputs in ``pre_process`` and ``before_inference``, the outputs in
+``after_inference`` and ``post_process``; ``ANIRA_ERROR_INVALID_STATE`` in another phase).
+The descriptor is built by the call over the memory the tensor has right now, so a stage asks
+again in every callback and keeps nothing of it; the context's ``frame`` pointer is anira's
+and is never dereferenced by a stage. A custom engine
 is part of the inference stage and never a stage of its own: it is one more implementation a
 candidate's ``engine_id`` resolves to, and its call runs in ``ANIRA_PHASE_INFERENCE`` (the
 phase of ``anira_stage_phase`` between ``ANIRA_PHASE_BEFORE_INFERENCE`` and
@@ -817,14 +830,16 @@ position is ``ANIRA_ERROR_INVALID_ARGUMENT``), and ``num_inputs`` / ``num_output
 the lengths of the model config's two lists. A *slot* is one number everywhere: the tensor's
 position in the model config's input list or output list, which is what ``slot``,
 ``in_slot`` and ``out_slot``, the ``_multi`` arrays and their ``delivered`` counts,
-the latency vector (``0`` for an output that is not Streamed), the plan report's rows and a
-stage's ``anira_stage_ctx`` all index by. The two lists are unrelated, so the single
+the latency vector (``0`` for an output that is not Streamed), the plan report's rows and
+the context accessors of a stage (``anira_stage_input_role`` and its siblings) all index by.
+The two lists are unrelated, so the single
 ``process`` forms name one slot per side: a model with ``data`` at input 1 and
 ``processed_data`` at output 0 calls ``anira_handler_process(h, &in, 1, &out, 0, &delivered)``.
 A host that does not want to hard-code a slot resolves it by the tensor's canonical name at
 setup, and asks what a slot is through the plan report: ``anira_plan_slot.role`` is the
 ``anira_role`` of the slot's spec, which decides the entries that take the slot (a stage reads
-it in its ``prepare``, which receives the report).
+it in its ``prepare``, which receives the report, and per call from
+``anira_stage_input_role`` / ``anira_stage_output_role``).
 ``release``, ``manager_ctx`` and ``acquire`` are not read; the memory is borrowed until the
 call returns. Every tensor of a call is validated before anything is pushed, so a refusal
 writes no ring: a malformed descriptor is ``ANIRA_ERROR_INVALID_ARGUMENT`` (a rank other than

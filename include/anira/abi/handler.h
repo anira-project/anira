@@ -528,12 +528,13 @@ ANIRA_API uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handle
  *        Streamed tensor. A slot is that one number everywhere: every slot, in_slot and
  *        out_slot of this header, the positions of the arrays and delivered counts of
  *        the _multi forms and of anira_miss_fn, the latency vector, the plan report's
- *        slot rows and the indices of a stage's anira_stage_ctx use it, each against
- *        the list of its side. The role of the tensor decides which entries take its
- *        slot: a Streamed one the block calls, a Static one
- *        anira_handler_set_static_input / anira_handler_get_static_output or an element
- *        of a _multi form, a State one no Hard entry. A host that does not want to
- *        hard-code the number resolves it by the tensor's canonical name at setup.
+ *        slot rows and the slot of a stage's context accessors (anira_stage_input_role
+ *        and its siblings) use it, each against the list of its side. The role of the
+ *        tensor decides which entries take its slot: a Streamed one the block calls, a
+ *        Static one anira_handler_set_static_input / anira_handler_get_static_output or
+ *        an element of a _multi form, a State one no Hard entry. A host that does not
+ *        want to hard-code the number resolves it by the tensor's canonical name at
+ *        setup.
  * @param out The output block of out_slot, described the same way; shape[1] is the number of
  *        samples requested. The descriptor is never written, the memory it names is. The
  *        same tensor as in for in place.

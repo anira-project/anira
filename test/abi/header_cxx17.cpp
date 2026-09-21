@@ -44,18 +44,18 @@ static_assert(ANIRA_PHASE_BEFORE_INFERENCE == 2 && ANIRA_PHASE_INFERENCE == 3 &&
               "before < inference < after");
 static_assert(ANIRA_PHASE_PREPARE == 5 && ANIRA_PHASE_RELEASE == 6, "the lifecycle phases");
 // anira/abi/stage.h: the stage context is frozen at 64 bytes, eight scalars and four pointer
-// slots, and travels by value like the tensor.
+// slots (the frame and three reserved ones), and travels by value like the tensor.
 static_assert(sizeof(anira_stage_ctx) == 64 && alignof(anira_stage_ctx) == 8,
               "anira_stage_ctx is frozen");
-static_assert(offsetof(anira_stage_ctx, input_rings) == 32 &&
-                  offsetof(anira_stage_ctx, output_rings) == 56,
+static_assert(offsetof(anira_stage_ctx, frame) == 32 &&
+                  offsetof(anira_stage_ctx, reserved_ptr2) == 56,
               "the four pointer slots follow the eight scalars");
 static_assert(std::is_trivially_copyable_v<anira_stage_ctx> &&
                   std::is_standard_layout_v<anira_stage_ctx>,
               "anira_stage_ctx is a POD");
-// The rings of a context are anira's: the array's entries cannot be re-pointed by a stage.
-static_assert(std::is_same_v<decltype(anira_stage_ctx::input_rings), anira_ring* const*>,
-              "input_rings is an array of const ring pointers");
+// The frame of a context is anira's: opaque, and not to be written through.
+static_assert(std::is_same_v<decltype(anira_stage_ctx::frame), const void*>,
+              "frame is an opaque pointer to const");
 static_assert(std::is_same_v<decltype(anira_stage_desc::consumed_kinds), const char* const*>,
               "consumed_kinds is an array of const strings");
 // The descriptor's callback slots are the named typedefs.
@@ -95,7 +95,7 @@ static_assert(std::is_same_v<decltype(anira_stage_desc::pre_process), anira_stag
     ctx.ticket = ANIRA_TICKET_INVALID;
     checks += stage.struct_size == sizeof(anira_stage_desc) && stage.name == nullptr ? 1 : 0;
     checks += stage.domain_out == ANIRA_DOMAIN_HOST && stage.release == nullptr ? 1 : 0;
-    checks += ctx.model_inputs == nullptr && ctx.output_rings_bits == 0u ? 1 : 0;
+    checks += ctx.frame == nullptr && ctx.reserved_ptr2_bits == 0u ? 1 : 0;
     return checks;
 }
 
@@ -140,6 +140,9 @@ static_assert(std::is_invocable_r_v<anira_status,
 // The stage entries: a ring accessor, a default body and the control-path add.
 static_assert(noexcept(anira_ring_pop_block(nullptr, 0, nullptr, ANIRA_DTYPE_F32, 0)));
 static_assert(noexcept(anira_stage_default_pre_process(nullptr)));
+static_assert(noexcept(anira_stage_input_role(nullptr, 0)));
+static_assert(noexcept(anira_stage_output_ring(nullptr, 0)));
+static_assert(noexcept(anira_stage_input_tensor(nullptr, 0, nullptr)));
 static_assert(noexcept(anira_pipeline_add_stage(nullptr, nullptr, nullptr)));
 static_assert(std::is_invocable_r_v<anira_status,
                                     decltype(&anira_handler_push_data),

@@ -413,10 +413,18 @@ std::vector<size_t> hops(size_t count) {
 /// (the inference thread): a fixed array of atomics.
 struct SlotProbe {
     static constexpr size_t k_capacity = 8;
-    std::array<std::atomic<float>, k_capacity> m_static_first{};  ///< model_inputs[0][0]
-    std::array<std::atomic<float>, k_capacity> m_data_first{};    ///< model_inputs[2][0]
+    std::array<std::atomic<float>, k_capacity> m_static_first{};  ///< input slot 0, element 0
+    std::array<std::atomic<float>, k_capacity> m_data_first{};    ///< input slot 2, element 0
     std::atomic<size_t> m_calls{0};
     std::atomic<uint32_t> m_other_counts{0};  ///< ctxs whose tensor counts were not 3 and 3
+    /// What the context accessors answered in before_inference, per slot: the role of each
+    /// side, the rings that were not NULL and the statuses of the tensor accessors (the last
+    /// call's; every call answers the same).
+    std::array<std::atomic<uint32_t>, 3> m_ctx_input_roles{};
+    std::array<std::atomic<uint32_t>, 3> m_ctx_output_roles{};
+    std::atomic<uint32_t> m_rings_seen{0};
+    std::array<std::atomic<int32_t>, 3> m_input_tensor_status{};
+    std::array<std::atomic<int32_t>, 3> m_output_tensor_status{};
     /// anira_plan_slot::role of every slot of plan 0, as the stage's prepare read them from the
     /// plan report (the control thread: plain members).
     std::array<uint32_t, 3> m_input_roles{ANIRA_ROLE_FORCE32,
@@ -478,11 +486,28 @@ anira_status ANIRA_CALL probe_slots(const anira_stage_ctx* ctx, void* user_data)
         probe->m_other_counts.fetch_add(1);
         return ANIRA_OK;
     }
+    for (uint32_t slot = 0; slot < 3; ++slot) {
+        probe->m_ctx_input_roles.at(slot).store(
+            static_cast<uint32_t>(anira_stage_input_role(ctx, slot)));
+        probe->m_ctx_output_roles.at(slot).store(
+            static_cast<uint32_t>(anira_stage_output_role(ctx, slot)));
+        if (anira_stage_input_ring(ctx, slot) != nullptr) { probe->m_rings_seen.fetch_add(1); }
+        if (anira_stage_output_ring(ctx, slot) != nullptr) { probe->m_rings_seen.fetch_add(1); }
+        anira_tensor tensor;
+        probe->m_input_tensor_status.at(slot).store(anira_stage_input_tensor(ctx, slot, &tensor));
+        probe->m_output_tensor_status.at(slot).store(anira_stage_output_tensor(ctx, slot, &tensor));
+    }
     if (index < SlotProbe::k_capacity) {
         // The slots the host uses: the Static tensor it set at slot 0, the stream it pushed at
         // slot 2.
-        probe->m_static_first.at(index).store(anira_tensor_data_f32(&ctx->model_inputs[0])[0]);
-        probe->m_data_first.at(index).store(anira_tensor_data_f32(&ctx->model_inputs[2])[0]);
+        anira_tensor values;
+        anira_tensor data;
+        if (anira_stage_input_tensor(ctx, 0, &values) != ANIRA_OK ||
+            anira_stage_input_tensor(ctx, 2, &data) != ANIRA_OK) {
+            return ANIRA_ERROR_INTERNAL;
+        }
+        probe->m_static_first.at(index).store(anira_tensor_data_f32(&values)[0]);
+        probe->m_data_first.at(index).store(anira_tensor_data_f32(&data)[0]);
     }
     return ANIRA_OK;
 }
@@ -642,8 +667,8 @@ TEST(AbiState, OneSlotSpacePerSide) {
 #endif
 
     // The host entries and a stage agree on the numbers: the Static value set at input slot 0
-    // and the stream pushed at input slot 2 are what the stage reads at model_inputs[0] and [2],
-    // and the stream is popped at output slot 1.
+    // and the stream pushed at input slot 2 are what the stage reads from
+    // anira_stage_input_tensor at slots 0 and 2, and the stream is popped at output slot 1.
     std::array<float, 3> values{9.0F, 2.0F, 3.0F};
     const anira_tensor whole = whole_f32(values.data(), {1, 3});
     ASSERT_EQ(anira_handler_set_static_input(h, 0, &whole), ANIRA_OK);
@@ -658,6 +683,21 @@ TEST(AbiState, OneSlotSpacePerSide) {
         EXPECT_EQ(probe.m_static_first.at(hop).load(), 9.0F) << "hop " << hop;
         EXPECT_EQ(probe.m_data_first.at(hop).load(), input_sample(0, hop * k_hop)) << "hop " << hop;
     }
+    // A stage asks the ctx what each tensor is, and gets the port's arm: the answer of the plan
+    // report's role column, in the same numbering. before_inference exposes the model's inputs,
+    // of every role, and no ring; neither a NULL ring nor a tensor outside its phase is recorded.
+    for (size_t slot = 0; slot < 3; ++slot) {
+        SCOPED_TRACE("slot " + std::to_string(slot));
+        EXPECT_EQ(probe.m_ctx_input_roles.at(slot).load(),
+                  static_cast<uint32_t>(port_role(h->m_input_ports[slot])));
+        EXPECT_EQ(probe.m_ctx_output_roles.at(slot).load(),
+                  static_cast<uint32_t>(port_role(h->m_output_ports[slot])));
+        EXPECT_EQ(probe.m_ctx_input_roles.at(slot).load(), probe.m_input_roles.at(slot));
+        EXPECT_EQ(probe.m_ctx_output_roles.at(slot).load(), probe.m_output_roles.at(slot));
+        EXPECT_EQ(probe.m_input_tensor_status.at(slot).load(), ANIRA_OK);
+        EXPECT_EQ(probe.m_output_tensor_status.at(slot).load(), ANIRA_ERROR_INVALID_STATE);
+    }
+    EXPECT_EQ(probe.m_rings_seen.load(), 0U) << "no ring outside pre_process and post_process";
     std::array<float, 3> captured{};
     const anira_tensor captured_tensor = whole_f32(captured.data(), {1, 3});
     EXPECT_EQ(anira_handler_get_static_output(h, 2, &captured_tensor), ANIRA_OK);
@@ -1092,7 +1132,9 @@ anira_status ANIRA_CALL alter_before(const anira_stage_ctx* ctx,
                                      void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<StageLog*>(user_data);
     // Input slot 0 is the State tensor, for the stage as for the host (whose `data` is slot 1).
-    float* state_in = anira_tensor_data_f32(&ctx->model_inputs[0]);
+    anira_tensor tensor;
+    if (anira_stage_input_tensor(ctx, 0, &tensor) != ANIRA_OK) { return ANIRA_ERROR_INTERNAL; }
+    float* state_in = anira_tensor_data_f32(&tensor);
     const size_t index = log->m_num_fed.fetch_add(1);
     if (index < StageLog::k_capacity) { log->m_fed.at(index).store(state_in[0]); }
     if (ctx->num_inputs != 2 || ctx->num_outputs != 2) { log->m_other_counts.fetch_add(1); }
@@ -1103,7 +1145,9 @@ anira_status ANIRA_CALL alter_before(const anira_stage_ctx* ctx,
 anira_status ANIRA_CALL alter_after(const anira_stage_ctx* ctx, void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<StageLog*>(user_data);
     // Output slot 1 is the State tensor, not yet captured.
-    float* state_out = anira_tensor_data_f32(&ctx->model_outputs[1]);
+    anira_tensor tensor;
+    if (anira_stage_output_tensor(ctx, 1, &tensor) != ANIRA_OK) { return ANIRA_ERROR_INTERNAL; }
+    float* state_out = anira_tensor_data_f32(&tensor);
     const size_t index = log->m_num_produced.fetch_add(1);
     if (index < StageLog::k_capacity) { log->m_produced.at(index).store(state_out[0]); }
     state_out[0] -= k_offset;  // what is captured

@@ -324,14 +324,14 @@ _Static_assert(offsetof(anira_stage_ctx, ticket) == 24, "anira_stage_ctx.ticket 
 _Static_assert(sizeof(((const anira_stage_ctx*)0)->ticket) == 4, "anira_stage_ctx.ticket size");
 _Static_assert(offsetof(anira_stage_ctx, reserved) == 28, "anira_stage_ctx.reserved offset");
 _Static_assert(sizeof(((const anira_stage_ctx*)0)->reserved) == 4, "anira_stage_ctx.reserved size");
-_Static_assert(offsetof(anira_stage_ctx, input_rings) == 32, "anira_stage_ctx.input_rings offset");
-_Static_assert(sizeof(((const anira_stage_ctx*)0)->input_rings_bits) == 8, "anira_stage_ctx.input_rings is an 8-byte slot");
-_Static_assert(offsetof(anira_stage_ctx, model_inputs) == 40, "anira_stage_ctx.model_inputs offset");
-_Static_assert(sizeof(((const anira_stage_ctx*)0)->model_inputs_bits) == 8, "anira_stage_ctx.model_inputs is an 8-byte slot");
-_Static_assert(offsetof(anira_stage_ctx, model_outputs) == 48, "anira_stage_ctx.model_outputs offset");
-_Static_assert(sizeof(((const anira_stage_ctx*)0)->model_outputs_bits) == 8, "anira_stage_ctx.model_outputs is an 8-byte slot");
-_Static_assert(offsetof(anira_stage_ctx, output_rings) == 56, "anira_stage_ctx.output_rings offset");
-_Static_assert(sizeof(((const anira_stage_ctx*)0)->output_rings_bits) == 8, "anira_stage_ctx.output_rings is an 8-byte slot");
+_Static_assert(offsetof(anira_stage_ctx, frame) == 32, "anira_stage_ctx.frame offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->frame_bits) == 8, "anira_stage_ctx.frame is an 8-byte slot");
+_Static_assert(offsetof(anira_stage_ctx, reserved_ptr0) == 40, "anira_stage_ctx.reserved_ptr0 offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->reserved_ptr0_bits) == 8, "anira_stage_ctx.reserved_ptr0 is an 8-byte slot");
+_Static_assert(offsetof(anira_stage_ctx, reserved_ptr1) == 48, "anira_stage_ctx.reserved_ptr1 offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->reserved_ptr1_bits) == 8, "anira_stage_ctx.reserved_ptr1 is an 8-byte slot");
+_Static_assert(offsetof(anira_stage_ctx, reserved_ptr2) == 56, "anira_stage_ctx.reserved_ptr2 offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->reserved_ptr2_bits) == 8, "anira_stage_ctx.reserved_ptr2 is an 8-byte slot");
 
 _Static_assert(offsetof(anira_stage_desc, struct_size) == 0, "anira_stage_desc.struct_size first");
 _Static_assert(offsetof(anira_stage_desc, abi_version) == 4, "anira_stage_desc.abi_version second");
@@ -453,9 +453,9 @@ int main(void) {
     printf("field anira_stage_ctx.num_outputs offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, num_outputs), (unsigned)sizeof(((const anira_stage_ctx*)0)->num_outputs));
     printf("field anira_stage_ctx.ticket offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, ticket), (unsigned)sizeof(((const anira_stage_ctx*)0)->ticket));
     printf("field anira_stage_ctx.reserved offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, reserved), (unsigned)sizeof(((const anira_stage_ctx*)0)->reserved));
-    printf("field anira_stage_ctx.input_rings offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, input_rings), 8u);
-    printf("field anira_stage_ctx.model_inputs offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, model_inputs), 8u);
-    printf("field anira_stage_ctx.model_outputs offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, model_outputs), 8u);
-    printf("field anira_stage_ctx.output_rings offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, output_rings), 8u);
+    printf("field anira_stage_ctx.frame offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, frame), 8u);
+    printf("field anira_stage_ctx.reserved_ptr0 offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, reserved_ptr0), 8u);
+    printf("field anira_stage_ctx.reserved_ptr1 offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, reserved_ptr1), 8u);
+    printf("field anira_stage_ctx.reserved_ptr2 offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, reserved_ptr2), 8u);
     return 0;
 }

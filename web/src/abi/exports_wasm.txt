@@ -148,6 +148,12 @@ _anira_shutdown
 _anira_sizeof
 _anira_stage_default_post_process
 _anira_stage_default_pre_process
+_anira_stage_input_ring
+_anira_stage_input_role
+_anira_stage_input_tensor
+_anira_stage_output_ring
+_anira_stage_output_role
+_anira_stage_output_tensor
 _anira_status_string
 _anira_sync_token_dup
 _anira_sync_token_reset
