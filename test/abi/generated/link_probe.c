@@ -25,7 +25,7 @@ struct anira_link_entry {
     uintptr_t address;
 };
 
-#define ANIRA_LINK_PROBE_COUNT 180
+#define ANIRA_LINK_PROBE_COUNT 181
 
 /* The addresses are taken by assignment at run time, never in a static initializer:
    MSVC refuses the address of a dllimport there (C4232, identity not guaranteed). */
@@ -377,22 +377,24 @@ int main(void) {
     entries[170].address = (uintptr_t)&anira_tensor_spec_set_ext_json;
     entries[171].name = "anira_tensor_spec_set_latency";
     entries[171].address = (uintptr_t)&anira_tensor_spec_set_latency;
-    entries[172].name = "anira_tensor_spec_set_time_ratio";
-    entries[172].address = (uintptr_t)&anira_tensor_spec_set_time_ratio;
-    entries[173].name = "anira_tensor_spec_set_window";
-    entries[173].address = (uintptr_t)&anira_tensor_spec_set_window;
-    entries[174].name = "anira_version";
-    entries[174].address = (uintptr_t)&anira_version;
-    entries[175].name = "anira_version_string";
-    entries[175].address = (uintptr_t)&anira_version_string;
-    entries[176].name = "anira_tensor_init_ahardwarebuffer";
-    entries[176].address = (uintptr_t)&anira_tensor_init_ahardwarebuffer;
-    entries[177].name = "anira_tensor_init_d3d12";
-    entries[177].address = (uintptr_t)&anira_tensor_init_d3d12;
-    entries[178].name = "anira_tensor_init_iosurface";
-    entries[178].address = (uintptr_t)&anira_tensor_init_iosurface;
-    entries[179].name = "anira_tensor_init_metal";
-    entries[179].address = (uintptr_t)&anira_tensor_init_metal;
+    entries[172].name = "anira_tensor_spec_set_state_source";
+    entries[172].address = (uintptr_t)&anira_tensor_spec_set_state_source;
+    entries[173].name = "anira_tensor_spec_set_time_ratio";
+    entries[173].address = (uintptr_t)&anira_tensor_spec_set_time_ratio;
+    entries[174].name = "anira_tensor_spec_set_window";
+    entries[174].address = (uintptr_t)&anira_tensor_spec_set_window;
+    entries[175].name = "anira_version";
+    entries[175].address = (uintptr_t)&anira_version;
+    entries[176].name = "anira_version_string";
+    entries[176].address = (uintptr_t)&anira_version_string;
+    entries[177].name = "anira_tensor_init_ahardwarebuffer";
+    entries[177].address = (uintptr_t)&anira_tensor_init_ahardwarebuffer;
+    entries[178].name = "anira_tensor_init_d3d12";
+    entries[178].address = (uintptr_t)&anira_tensor_init_d3d12;
+    entries[179].name = "anira_tensor_init_iosurface";
+    entries[179].address = (uintptr_t)&anira_tensor_init_iosurface;
+    entries[180].name = "anira_tensor_init_metal";
+    entries[180].address = (uintptr_t)&anira_tensor_init_metal;
     for (i = 0; i < ANIRA_LINK_PROBE_COUNT; ++i) {
         if (entries[i].address == 0) {
             printf("missing: %s\n", entries[i].name);

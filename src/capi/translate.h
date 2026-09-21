@@ -30,6 +30,8 @@
 namespace anira {
 /// The ring dtype of every slot (include/anira/scheduler/SessionElement.h).
 struct RingDtypes;
+/// One pair of declared state, as tensor indices (include/anira/scheduler/SessionElement.h).
+struct StatePair;
 }  // namespace anira
 
 namespace anira::capi {
@@ -111,6 +113,13 @@ ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config&
 /// a stage fills the phase that moves that ring.
 ANIRA_API anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
                                              const anira_model_config& model);
+
+/// The declared state pairs of a model (ANIRA_ROLE_STATE), as tensor indices, in the order of
+/// the State inputs: what the session takes before it is prepared
+/// (SessionElement::set_state_pairs). Empty for a model without State specs. Run validate
+/// first: it refuses a State input without a source, a source that names no State output, a
+/// State output named by no input or by two, and two halves of unequal dtype or shape.
+ANIRA_API std::vector<anira::StatePair> make_state_pairs(const anira_model_config& model);
 
 /// The 2.x CoreConfig of a context config: threads, wait strategy and the log scalars, after
 /// check_context_extensions. Kept for the bridge (anira::v3compat::to_core_config); the core

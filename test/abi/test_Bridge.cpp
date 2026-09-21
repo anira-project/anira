@@ -5,6 +5,7 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
+#include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/compat/v3_to_v2.h>
@@ -118,6 +119,27 @@ TEST(AbiBridge, AConfigRuleThrowsConfigNamingTheTensor) {
     ASSERT_TRUE(thrown.m_thrown);
     EXPECT_EQ(thrown.m_status, ANIRA_ERROR_CONFIG);
     EXPECT_NE(thrown.m_what.find("tensor 'in'"), std::string::npos) << thrown.m_what;
+}
+
+// Declared state is a 3.x handler's: a bare 2.x InferenceConfig reaches a 2.x InferenceHandler,
+// which feeds nothing back, so the bridge refuses the role by the tensor's name instead of
+// letting the model run on a zero state.
+TEST(AbiBridge, AStateSpecIsNotSupported) {
+    ModelConfig model;
+    model.add_model_path(k_custom, "model.custom");
+    TensorSpec h_in("h_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+    h_in.axis(0, ANIRA_AXIS_BATCH, 1).axis(1, ANIRA_AXIS_FEATURE, 64);
+    ASSERT_EQ(anira_tensor_spec_set_state_source(h_in.native(), "h_out"), ANIRA_OK);
+    TensorSpec h_out("h_out", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+    h_out.axis(0, ANIRA_AXIS_BATCH, 1).axis(1, ANIRA_AXIS_FEATURE, 64);
+    model.input(h_in).input(streamed("in"));
+    model.output(streamed("out")).output(h_out);
+    const Thrown thrown =
+        thrown_by([&] { anira::v3compat::to_inference_config(model, explicit_hard()); });
+    ASSERT_TRUE(thrown.m_thrown);
+    EXPECT_EQ(thrown.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+    EXPECT_NE(thrown.m_what.find("tensor 'h_in'"), std::string::npos) << thrown.m_what;
+    EXPECT_NE(thrown.m_what.find("State tensor"), std::string::npos) << thrown.m_what;
 }
 
 TEST(AbiBridge, AForeignCustomEngineIsNotSupported) {

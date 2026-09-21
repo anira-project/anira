@@ -370,6 +370,19 @@ public:
     void set_plan_backends(std::vector<InferenceBackend> backends);
 
     /**
+     * @brief Hands the session its declared state pairs (SessionElement::set_state_pairs).
+     *
+     * What a 3.x handler calls for a model with `ANIRA_ROLE_STATE` tensors, after construction
+     * and before prepare(), which allocates one zeroed buffer per pair. The session feeds and
+     * captures the state around every inference, on the inference thread, and re-initialises
+     * it at the first inference after a reset. A 2.x session has no pairs.
+     *
+     * @throws std::invalid_argument for a tensor index out of range or a pair of unequal size
+     * @throws std::logic_error after prepare(); a refused call changes nothing
+     */
+    void set_state_pairs(std::vector<StatePair> pairs);
+
+    /**
      * @brief Selects the plan the next submitted chunk runs on
      *
      * The whole runtime selection: one relaxed store of one atomic (the dense plan index),

@@ -6,9 +6,11 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
+#include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/compat/v3_to_v2.h>
+#include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
@@ -27,6 +29,7 @@
 
 #include "../support/inference_config_eq.h"
 #include "../support/v2_documents.h"
+#include "capi/translate.h"
 #include "fixtures.h"
 
 namespace {
@@ -257,6 +260,53 @@ TEST(AbiTranslate, AChannelAxisOfAnyExtentOnANonStreamedSpec) {
               (anira::TensorShapeList{{1, 2, 512}, {2, 5}, {3, 2, 2}}));
     EXPECT_EQ(cfg.get_tensor_input_size(), (std::vector<size_t>{1024, 6, 256}));
     EXPECT_EQ(cfg.get_tensor_output_size(), (std::vector<size_t>{1024, 10, 12}));
+}
+
+// Declared state in the shared translator, which the handler configures its session with (the
+// bridge entry refuses the role: test_Bridge): a State spec rides the 2.x configuration like a
+// Static one, at its own position of the list (size 0, one channel, its dims in the tensor
+// shape, a Channel axis of any extent), and a pair forces the session-exclusive processor.
+TEST(AbiTranslate, AStatePairKeepsItsListPositionsAndForcesStateful) {
+    ModelConfig model;
+    model.add_model_path(k_custom, "model.custom");
+    model.state(ANIRA_MODEL_STATELESS);
+    TensorSpec h_in("h_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+    h_in.axis(0, ANIRA_AXIS_BATCH, 1).axis(1, ANIRA_AXIS_CHANNEL, 2).axis(2, ANIRA_AXIS_ANY, 2);
+    ASSERT_EQ(anira_tensor_spec_set_state_source(h_in.native(), "h_out"), ANIRA_OK);
+    TensorSpec h_out("h_out", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+    h_out.axis(0, ANIRA_AXIS_BATCH, 1).axis(1, ANIRA_AXIS_CHANNEL, 2).axis(2, ANIRA_AXIS_ANY, 2);
+    // The state first on the input side and last on the output side.
+    model.input(h_in).input(streamed("in", 512, 2));
+    model.output(streamed("out", 512, 2)).output(h_out);
+
+    const ContractHandle contract(explicit_hard());
+    const anira::InferenceConfig cfg =
+        anira::capi::make_inference_config(*model.native(), *contract.native(), nullptr, 0);
+    EXPECT_EQ(cfg.get_preprocess_input_size(), (std::vector<size_t>{0, 512}));
+    EXPECT_EQ(cfg.get_postprocess_output_size(), (std::vector<size_t>{512, 0}));
+    EXPECT_EQ(cfg.get_preprocess_input_channels(), (std::vector<size_t>{1, 2}));
+    EXPECT_EQ(cfg.get_postprocess_output_channels(), (std::vector<size_t>{2, 1}));
+    EXPECT_EQ(cfg.get_tensor_input_shape(), (anira::TensorShapeList{{1, 2, 2}, {1, 2, 512}}));
+    EXPECT_EQ(cfg.get_tensor_output_shape(), (anira::TensorShapeList{{1, 2, 512}, {1, 2, 2}}));
+    EXPECT_TRUE(cfg.m_session_exclusive_processor) << "a pair forces Stateful";
+
+    const std::vector<anira::StatePair> pairs = anira::capi::make_state_pairs(*model.native());
+    ASSERT_EQ(pairs.size(), 1U);
+    EXPECT_EQ(pairs[0].m_input, 0U);
+    EXPECT_EQ(pairs[0].m_output, 1U);
+
+    // The same model without the pair keeps what it says.
+    const anira::InferenceConfig plain =
+        anira::capi::make_inference_config(*minimal().state(ANIRA_MODEL_STATELESS).native(),
+                                           *contract.native(),
+                                           nullptr,
+                                           0);
+    EXPECT_FALSE(plain.m_session_exclusive_processor);
+    EXPECT_TRUE(anira::capi::make_state_pairs(*minimal().native()).empty());
+
+    const Outcome outcome = bridge(model);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+    expect_contains(outcome.m_message, "tensor 'h_in'");
 }
 
 TEST(AbiTranslate, ADynamicTimeExtentResolvesToTheWindow) {

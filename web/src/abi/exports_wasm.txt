@@ -172,6 +172,7 @@ _anira_tensor_spec_set_axis
 _anira_tensor_spec_set_ext
 _anira_tensor_spec_set_ext_json
 _anira_tensor_spec_set_latency
+_anira_tensor_spec_set_state_source
 _anira_tensor_spec_set_time_ratio
 _anira_tensor_spec_set_window
 _anira_version

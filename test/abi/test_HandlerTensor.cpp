@@ -1096,18 +1096,19 @@ TEST(AbiHandlerTensor, ARefusalIsLoggedOncePerKindAndNamesTheSlot) {
 #ifdef ENABLE_LOGGING
     EXPECT_EQ(anira_test::count_records(collector, "nothing converts", "rt"), 1U);
     EXPECT_EQ(anira_test::find_record(collector, "nothing converts", "rt").m_message,
-              "anira_handler_push_data_multi: the tensor of Static input slot 1 has dtype " +
+              "anira_handler_push_data_multi: the tensor of Static input slot 1 'values_in' has "
+              "dtype " +
                   std::to_string(ANIRA_DTYPE_I16) + ", the spec's is " +
                   std::to_string(ANIRA_DTYPE_F32) + "; nothing converts");
     EXPECT_EQ(anira_test::count_records(collector, "does not know", "rt"), 1U);
     EXPECT_NE(anira_test::find_record(collector, "does not know", "rt")
-                  .m_message.find("anira_handler_pop_data: the tensor of output slot 0"),
+                  .m_message.find("anira_handler_pop_data: the tensor of output slot 0 'out'"),
               std::string::npos);
     EXPECT_EQ(anira_test::count_records(collector, "is malformed", "rt"), 1U);
     const RecordCollector::Record malformed =
         anira_test::find_record(collector, "is malformed", "rt");
-    EXPECT_NE(malformed.m_message.find("anira_handler_push_data: the tensor of input slot 0 is "
-                                       "malformed (rank 3,"),
+    EXPECT_NE(malformed.m_message.find("anira_handler_push_data: the tensor of input slot 0 'in' "
+                                       "is malformed (rank 3,"),
               std::string::npos)
         << malformed.m_message;
     EXPECT_EQ(malformed.m_flags, ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);

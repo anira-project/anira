@@ -273,11 +273,14 @@ typedef struct anira_stage_ctx {
     uint32_t provider;  /**< anira_provider of that plan. */
     uint32_t variant;  /**< The variant of that plan; 0 in this pre-release. */
     /**
-     * The tensors of the model's input list: the length of input_rings and model_inputs.
+     * The tensors of the model's input list, State tensors included: the length of input_rings
+     * and model_inputs. A stage indexes by tensor index, the position in the model's list; the
+     * host's entries use host slot numbers, which skip State specs.
      */
     uint32_t num_inputs;
     /**
-     * The tensors of the model's output list: the length of model_outputs and output_rings.
+     * The tensors of the model's output list, State tensors included: the length of
+     * model_outputs and output_rings.
      */
     uint32_t num_outputs;
     /**
@@ -294,13 +297,16 @@ typedef struct anira_stage_ctx {
     /**
      * ANIRA_PHASE_PRE_PROCESS and ANIRA_PHASE_BEFORE_INFERENCE, else NULL: the model's input
      * tensors in the spec's shape, host memory owned by anira, for the stage to write. In
-     * pre_process every Static input is already materialised.
+     * pre_process every Static input is already materialised. In before_inference every State
+     * input is already fed from the session's state buffer: a stage may read or alter it, and
+     * what it leaves is what the engine gets.
      */
     ANIRA_PTR(anira_tensor, model_inputs);
     /**
      * ANIRA_PHASE_AFTER_INFERENCE and ANIRA_PHASE_POST_PROCESS, else NULL: the model's output
      * tensors in the spec's shape, host memory owned by anira. A chunk that completed without
-     * an inference (dropped, failed) reads as zeros.
+     * an inference (dropped, failed) reads as zeros. In after_inference a State output is not
+     * yet captured: what the last stage leaves in it is what the next inference is fed.
      */
     ANIRA_PTR(anira_tensor, model_outputs);
     /**

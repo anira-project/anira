@@ -150,6 +150,7 @@ export const anira_role = {
   ANIRA_ROLE_STREAMED: 0,
   ANIRA_ROLE_BUFFER: 1,
   ANIRA_ROLE_STATIC: 2,
+  ANIRA_ROLE_STATE: 3,
 } as const
 export type anira_role = (typeof anira_role)[keyof typeof anira_role]
 

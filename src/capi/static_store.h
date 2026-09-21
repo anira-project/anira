@@ -269,18 +269,22 @@ private:
     std::vector<std::atomic<uint64_t>> m_words;  ///< The values, eight bytes per word
 };
 
-/// The store of one handler: per side one entry per host slot, NULL for a Streamed slot (it
-/// has a ring, and the Hard entries move it). Built once, at anira_handler_create.
+/// The store of one handler: per side one entry per TENSOR of the model's list, in list order
+/// (the stage chain indexes it that way; the handler's entries map a host slot onto the tensor
+/// index first, anira::capi::HostSlots). NULL for a Streamed tensor (it has a ring, and the
+/// Hard entries move it) and for a State tensor (the session feeds and captures it on the
+/// inference thread, and the host never sees it). Built once, at anira_handler_create.
 struct StaticStore {
     std::vector<std::unique_ptr<StaticSlot>> m_inputs;
     std::vector<std::unique_ptr<StaticSlot>> m_outputs;
 
-    /// The slot, or NULL for a Streamed slot and for a number out of range.
-    StaticSlot* input(size_t slot) const noexcept {
-        return slot < m_inputs.size() ? m_inputs[slot].get() : nullptr;
+    /// The store of a tensor, or NULL for a Streamed or a State tensor and for an index out of
+    /// range.
+    StaticSlot* input(size_t tensor) const noexcept {
+        return tensor < m_inputs.size() ? m_inputs[tensor].get() : nullptr;
     }
-    StaticSlot* output(size_t slot) const noexcept {
-        return slot < m_outputs.size() ? m_outputs[slot].get() : nullptr;
+    StaticSlot* output(size_t tensor) const noexcept {
+        return tensor < m_outputs.size() ? m_outputs[tensor].get() : nullptr;
     }
 };
 

@@ -25,8 +25,12 @@
 // the multi forms' arrays and of `delivered`, the latency vector, the report's slot rows); the
 // session, the stems, the Static store and the stage chain work per TENSOR of the model's
 // lists. Every entry maps the first onto the second through the handler's table
-// (anira::capi::HostSlots, built by anira_handler_create), which is the identity while every
-// spec is host-visible.
+// (anira::capi::HostSlots, built by anira_handler_create). A host slot number counts the
+// host-visible specs of its side and skips State specs (declared state: the session feeds and
+// captures it on the inference thread, the host never sees it), so the table is the identity
+// for every model without a State spec, and then the caller's arrays reach the stems as they
+// are. With one the stems take longer arrays than the host hands: StemSide stages them per
+// call, and the miss trampoline hands the host's function the host's arrays.
 #include "handler.h"
 
 #include <anira/InferenceConfig.h>
@@ -121,7 +125,7 @@ bool has_arguments(anira_handler& handler, bool ok, const char* entry) noexcept 
 // ==== the host slots ==========================================================================
 
 // Whether the host sees a tensor, and so whether the tensor has a host slot number: a Streamed,
-// a Buffer and a Static spec are the host's to feed or to read.
+// a Buffer and a Static spec are the host's to feed or to read; a State spec is anira's.
 bool is_host_visible(const anira_tensor_spec& spec) noexcept {
     return spec.m_role == ANIRA_ROLE_STREAMED || spec.m_role == ANIRA_ROLE_BUFFER ||
            spec.m_role == ANIRA_ROLE_STATIC;
@@ -159,6 +163,20 @@ anira::capi::StaticSlot* static_output(const anira_handler& handler,
                                        uint32_t slot) noexcept ANIRA_NONBLOCKING {
     return slot < handler.m_num_outputs ? handler.m_static.output(handler.m_slots.output(slot))
                                         : nullptr;
+}
+
+// The canonical name of a host slot's tensor, for a record: the host names the tensor by its
+// slot number, the model file by this name, and with a State spec in front of it the slot
+// number is not the position in the file. `slot` is below the side's count. A pointer into
+// the pipeline copy, which never changes: no allocation.
+[[maybe_unused]] const char* slot_name(const anira_handler& handler,
+                                       bool input,
+                                       uint32_t slot) noexcept ANIRA_NONBLOCKING {
+    // A handler anira_handler_create built has its variant; a bare one (a test's) has no name.
+    if (handler.m_pipeline.m_variants.empty()) { return ""; }
+    const anira_model_config& model = handler.m_pipeline.m_variants[0];
+    return input ? model.m_inputs[handler.m_slots.input(slot)].m_name.c_str()
+                 : model.m_outputs[handler.m_slots.output(slot)].m_name.c_str();
 }
 
 // The argument predicates of the single-tensor forms (the pointers are checked for NULL only;
@@ -203,37 +221,41 @@ anira_status slot_tensor_status(anira_handler& handler,
     switch (status) {
         case ANIRA_ERROR_CONFIG:
             ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                                   "%s: the tensor of %s slot %u has dtype %u, the slot's is %u; "
-                                   "nothing converts",
+                                   "%s: the tensor of %s slot %u '%s' has dtype %u, the slot's is "
+                                   "%u; nothing converts",
                                    entry,
                                    side,
                                    slot,
+                                   slot_name(handler, input, slot),
                                    static_cast<unsigned int>(tensor.dtype),
                                    static_cast<unsigned int>(dtype));
             break;
         case ANIRA_ERROR_NOT_SUPPORTED:
             ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                                   "%s: the tensor of %s slot %u carries a flag this library does "
-                                   "not know (flags 0x%x)",
+                                   "%s: the tensor of %s slot %u '%s' carries a flag this library "
+                                   "does not know (flags 0x%x)",
                                    entry,
                                    side,
                                    slot,
+                                   slot_name(handler, input, slot),
                                    static_cast<unsigned int>(tensor.flags));
             break;
         default:
-            ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                                   "%s: the tensor of %s slot %u is malformed (rank %u, domain %u, "
-                                   "flags 0x%x, shape [%lld, %lld]); a host block is a rank 2 host "
-                                   "tensor [%u, samples] over memory its strides can address",
-                                   entry,
-                                   side,
-                                   slot,
-                                   static_cast<unsigned int>(tensor.ndim),
-                                   static_cast<unsigned int>(tensor.domain),
-                                   static_cast<unsigned int>(tensor.flags),
-                                   static_cast<long long>(tensor.shape[0]),
-                                   static_cast<long long>(tensor.shape[1]),
-                                   static_cast<unsigned int>(channels));
+            ANIRA_LOG_RT_VIOLATION(
+                anira::log_group::k_capi,
+                "%s: the tensor of %s slot %u '%s' is malformed (rank %u, domain "
+                "%u, flags 0x%x, shape [%lld, %lld]); a host block is a rank 2 "
+                "host tensor [%u, samples] over memory its strides can address",
+                entry,
+                side,
+                slot,
+                slot_name(handler, input, slot),
+                static_cast<unsigned int>(tensor.ndim),
+                static_cast<unsigned int>(tensor.domain),
+                static_cast<unsigned int>(tensor.flags),
+                static_cast<long long>(tensor.shape[0]),
+                static_cast<long long>(tensor.shape[1]),
+                static_cast<unsigned int>(channels));
             break;
     }
     return status;
@@ -268,38 +290,42 @@ anira_status static_tensor_status(anira_handler& handler,
     switch (status) {
         case ANIRA_ERROR_CONFIG:
             ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                                   "%s: the tensor of Static %s slot %u has dtype %u, the spec's "
-                                   "is %u; nothing converts",
+                                   "%s: the tensor of Static %s slot %u '%s' has dtype %u, the "
+                                   "spec's is %u; nothing converts",
                                    entry,
                                    side,
                                    slot,
+                                   slot_name(handler, input, slot),
                                    static_cast<unsigned int>(tensor.dtype),
                                    static_cast<unsigned int>(store.dtype()));
             break;
         case ANIRA_ERROR_NOT_SUPPORTED:
             ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                                   "%s: the tensor of Static %s slot %u is planar or carries a "
-                                   "flag this library does not know (flags 0x%x); a Static tensor "
-                                   "is one block",
+                                   "%s: the tensor of Static %s slot %u '%s' is planar or carries "
+                                   "a flag this library does not know (flags 0x%x); a Static "
+                                   "tensor is one block",
                                    entry,
                                    side,
                                    slot,
+                                   slot_name(handler, input, slot),
                                    static_cast<unsigned int>(tensor.flags));
             break;
         default:
-            ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                                   "%s: the tensor of Static %s slot %u does not fit (rank %u, "
-                                   "domain %u, flags 0x%x): a Static tensor travels whole, a host "
-                                   "tensor of the spec's rank %zu and extents (%zu elements) over "
-                                   "memory its strides can address",
-                                   entry,
-                                   side,
-                                   slot,
-                                   static_cast<unsigned int>(tensor.ndim),
-                                   static_cast<unsigned int>(tensor.domain),
-                                   static_cast<unsigned int>(tensor.flags),
-                                   store.shape().size(),
-                                   store.num_elements());
+            ANIRA_LOG_RT_VIOLATION(
+                anira::log_group::k_capi,
+                "%s: the tensor of Static %s slot %u '%s' does not fit (rank %u, "
+                "domain %u, flags 0x%x): a Static tensor travels whole, a host "
+                "tensor of the spec's rank %zu and extents (%zu elements) over "
+                "memory its strides can address",
+                entry,
+                side,
+                slot,
+                slot_name(handler, input, slot),
+                static_cast<unsigned int>(tensor.ndim),
+                static_cast<unsigned int>(tensor.domain),
+                static_cast<unsigned int>(tensor.flags),
+                store.shape().size(),
+                store.num_elements());
             break;
     }
     return status;
@@ -391,6 +417,73 @@ public:
 private:
     const anira_tensor* m_array;
     anira_tensor* m_staged = nullptr;
+};
+
+// One side of a call in front of its stem. `host` is the side's array in HOST numbering, as
+// long as the host's slot list: the caller's array of a multi form, a single form's
+// StagedTensor array. Without a State spec that is the array the stem takes, and this class
+// does nothing at all. With one the stem takes an array in TENSOR numbering that is longer:
+// the descriptors of the Streamed slots are copied to their tensor indices in the handler's
+// stem array (struct copies, nothing is built; a Static element is the handler's own business
+// and a State tensor is nobody's on the driving thread, so both stay the empty tensor), the
+// host array is noted for the miss trampoline, and when the call returns every staged entry is
+// the empty tensor of prepare again, so that no later call finds an earlier call's request or
+// memory in it.
+class StemSide {
+public:
+    StemSide(anira_handler& handler,
+             bool input,
+             const anira_tensor* host) noexcept ANIRA_NONBLOCKING : m_handler(handler),
+                                                                    m_input(input),
+                                                                    m_array(host) {
+        if (handler.m_slots.m_identity) { return; }
+        std::vector<anira_tensor>& stem = input ? handler.m_stem_inputs : handler.m_stem_outputs;
+        const uint32_t count = input ? handler.m_num_inputs : handler.m_num_outputs;
+        for (uint32_t slot = 0; slot < count; ++slot) {
+            if (!is_streamed(slot)) { continue; }
+            stem[tensor_of(slot)] = host[slot];
+        }
+        (input ? handler.m_call_inputs : handler.m_call_outputs) = host;
+        m_array = stem.data();
+    }
+    ~StemSide() {
+        if (m_handler.m_slots.m_identity) { return; }
+        std::vector<anira_tensor>& stem =
+            m_input ? m_handler.m_stem_inputs : m_handler.m_stem_outputs;
+        const std::vector<uint32_t>& channels =
+            m_input ? m_handler.m_input_channels : m_handler.m_output_channels;
+        const std::vector<anira_dtype>& dtypes =
+            m_input ? m_handler.m_input_ring_dtypes : m_handler.m_output_ring_dtypes;
+        for (uint32_t slot = 0; slot < channels.size(); ++slot) {
+            if (!is_streamed(slot)) { continue; }
+            // What empty_tensors() built at prepare (the handler's own array of the side may
+            // still hold a single form's descriptor here: its StagedTensor outlives this).
+            const std::array<int64_t, 2> shape{static_cast<int64_t>(channels[slot]), 0};
+            anira_tensor_init_host(&stem[tensor_of(slot)], nullptr, dtypes[slot], 2, shape.data());
+        }
+        (m_input ? m_handler.m_call_inputs : m_handler.m_call_outputs) =
+            (m_input ? m_handler.m_input_tensors : m_handler.m_output_tensors).data();
+    }
+    StemSide(const StemSide&) = delete;
+    StemSide& operator=(const StemSide&) = delete;
+    StemSide(StemSide&&) = delete;
+    StemSide& operator=(StemSide&&) = delete;
+
+    // The array the stem takes: one tensor per tensor of the model's list.
+    const anira_tensor* array() const noexcept ANIRA_NONBLOCKING { return m_array; }
+
+private:
+    bool is_streamed(uint32_t slot) const noexcept ANIRA_NONBLOCKING {
+        return (m_input ? static_input(m_handler, slot) : static_output(m_handler, slot)) ==
+               nullptr;
+    }
+    uint32_t tensor_of(uint32_t slot) const noexcept ANIRA_NONBLOCKING {
+        return m_input ? m_handler.m_slots.input(slot) : m_handler.m_slots.output(slot);
+    }
+
+    anira_handler& m_handler;
+    bool m_input;
+    const anira_tensor* m_array;
 };
 
 // ==== the status and the count ================================================================
@@ -540,8 +633,10 @@ anira_status pop_tensors_wait_body(anira_handler& handler,
 // ==== prepare's pieces ========================================================================
 
 // What the manager calls once per missed block under ANIRA_MISS_CALLBACK, on the thread that
-// drives the call: it forwards the arrays the copy path was handed, as they are, to the host's
-// function. Nothing is built on a miss. First the non-empty Static output elements are filled
+// drives the call: it forwards the host arrays of the running call, in host numbering and as
+// long as the host's slot lists, to the host's function (without a State spec they are the
+// arrays the copy path was handed, as they are). Nothing is built on a miss. First the
+// non-empty Static output elements are filled
 // with the stored value (the arrays of a single form carry none), so the function finds the
 // latest captured value there and may leave it or write its own; what it writes goes to the
 // caller's memory and never into the store. The host's status decides about the Streamed
@@ -553,6 +648,16 @@ bool miss_hook(void* ctx,
                const anira_tensor* outputs,
                uint32_t num_outputs) noexcept ANIRA_NONBLOCKING {
     auto* handler = static_cast<anira_handler*>(ctx);
+    // With a State spec the manager's arrays are the stems': one tensor per tensor of the
+    // model's lists, longer than the host's. The host's function gets the host arrays of the
+    // running call and the host's counts (StemSide noted them; a pop has no input side, and
+    // its inputs are the handler's own empty tensors).
+    if (!handler->m_slots.m_identity) {
+        inputs = handler->m_call_inputs;
+        num_inputs = handler->m_num_inputs;
+        outputs = handler->m_call_outputs;
+        num_outputs = handler->m_num_outputs;
+    }
     get_static_outputs(*handler, outputs);
     handler->m_miss_fn_ran = true;
     return handler->m_miss_fn(handler,
@@ -892,6 +997,20 @@ std::vector<anira_tensor> empty_tensors(const std::vector<uint32_t>& channels,
     return tensors;
 }
 
+// The stems' array of one side of a model with a State spec: one empty tensor per tensor of
+// the model's list, the host's empty tensor of every host slot at its tensor index. The entry
+// of a State tensor is an empty float32 tensor that nothing ever replaces (the stems read a
+// Streamed tensor only).
+std::vector<anira_tensor> stem_tensors(size_t num_tensors,
+                                       const std::vector<uint32_t>& table,
+                                       const std::vector<anira_tensor>& host) {
+    std::vector<anira_tensor> tensors =
+        empty_tensors(std::vector<uint32_t>(num_tensors, 1U),
+                      std::vector<anira_dtype>(num_tensors, ANIRA_DTYPE_F32));
+    for (size_t slot = 0; slot < table.size(); ++slot) { tensors[table[slot]] = host[slot]; }
+    return tensors;
+}
+
 // anira_handler_prepare's body, step by step; any throw leaves through the caller, which
 // unprepares the handler.
 void prepare_handler(anira_handler& handler, const anira_contract& contract) {
@@ -940,8 +1059,11 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_miss_user_data = hard.m_miss_user_data;
     handler.m_manager->set_miss_hook(hard.m_on_miss == ANIRA_MISS_CALLBACK ? &miss_hook : nullptr,
                                      &handler);
-    // The plan table and the initial selection, on the session before it is prepared.
+    // The plan table and the initial selection, on the session before it is prepared; the
+    // declared state pairs likewise: the session allocates one zeroed buffer per pair in its
+    // prepare, and it is the session's, not a processor's, so it survives set_plan.
     build_plans(handler, model, derived, hard);
+    handler.m_manager->set_state_pairs(anira::capi::make_state_pairs(model));
     handler.m_manager->prepare(host, anira::CustomLatencies{}, ring_dtypes);
     // The session's structs and rings exist now, and no chunk does: the chain binds to them.
     // What a ctx reports for a chunk is the engine and provider of the plan it was stamped with.
@@ -986,6 +1108,20 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_input_tensors = empty_tensors(handler.m_input_channels, handler.m_input_ring_dtypes);
     handler.m_output_tensors =
         empty_tensors(handler.m_output_channels, handler.m_output_ring_dtypes);
+    // With a State spec the stems take longer arrays than the host hands: one empty tensor per
+    // tensor of the model's lists, which StemSide fills per call. Between calls the host arrays
+    // of the miss trampoline are the handler's own empty tensors.
+    handler.m_stem_inputs.clear();
+    handler.m_stem_outputs.clear();
+    if (!handler.m_slots.m_identity) {
+        handler.m_stem_inputs =
+            stem_tensors(model.m_inputs.size(), handler.m_slots.m_inputs, handler.m_input_tensors);
+        handler.m_stem_outputs = stem_tensors(model.m_outputs.size(),
+                                              handler.m_slots.m_outputs,
+                                              handler.m_output_tensors);
+    }
+    handler.m_call_inputs = handler.m_input_tensors.data();
+    handler.m_call_outputs = handler.m_output_tensors.data();
     // ANIRA_WAIT_CONTRACT of the pop twins: wait_ratio x block_max / rate, the block a pop
     // has no input to measure by.
     handler.m_contract_wait = std::chrono::microseconds(static_cast<std::chrono::microseconds::rep>(
@@ -1288,16 +1424,19 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
 
     auto handler = std::make_unique<anira_handler>();
     handler->m_pipeline = anira_pipeline(*pipeline);
-    // The Static store: one zeroed buffer per slot without a ring, in the spec's shape and
-    // dtype (the copy fixes the specs, so it is never resized), and an empty entry per Streamed
-    // slot. From here on the two Static entries work, prepared or not.
+    // The Static store: one zeroed buffer per host-visible tensor without a ring, in the spec's
+    // shape and dtype (the copy fixes the specs, so it is never resized), and an empty entry
+    // per Streamed and per State tensor. From here on the two Static entries work, prepared or
+    // not.
     const anira_model_config& model = handler->m_pipeline.m_variants[0];
     const auto build_side = [](const std::vector<anira_tensor_spec>& specs,
                                const std::vector<anira::capi::DerivedSpec>& rows,
                                std::vector<std::unique_ptr<anira::capi::StaticSlot>>& side) {
         side.resize(specs.size());
         for (size_t i = 0; i < specs.size(); ++i) {
-            if (specs[i].m_role == ANIRA_ROLE_STREAMED) { continue; }
+            // A Streamed tensor has a ring; a State tensor is the session's (it is fed and
+            // captured on the inference thread) and the host never sees it.
+            if (specs[i].m_role == ANIRA_ROLE_STREAMED || !is_host_visible(specs[i])) { continue; }
             side[i] = std::make_unique<anira::capi::StaticSlot>(rows[i].m_dims, specs[i].m_dtype);
         }
     };
@@ -1445,7 +1584,10 @@ anira_status ANIRA_CALL anira_handler_process(anira_handler* handler,
     if (status != ANIRA_OK) { return status; }
     const StagedTensor inputs(handler->m_input_tensors, *in, tensor_index);
     const StagedTensor outputs(handler->m_output_tensors, *out, tensor_index);
-    const size_t* counts = handler->m_manager->process_nowait(inputs.array(), outputs.array());
+    const StemSide stem_inputs(*handler, true, inputs.array());
+    const StemSide stem_outputs(*handler, false, outputs.array());
+    const size_t* counts =
+        handler->m_manager->process_nowait(stem_inputs.array(), stem_outputs.array());
     set_delivered(delivered, counts[handler->m_slots.output(tensor_index)]);
     return block_status(*handler);
 }
@@ -1472,7 +1614,10 @@ anira_status ANIRA_CALL anira_handler_process_multi(anira_handler* handler,
     // The sequence: the Static inputs, the streamed call, the Static outputs.
     set_static_inputs(*handler, inputs);
     handler->m_miss_fn_ran = false;
-    const size_t* counts = handler->m_manager->process_nowait(inputs, outputs);
+    const StemSide stem_inputs(*handler, true, inputs);
+    const StemSide stem_outputs(*handler, false, outputs);
+    const size_t* counts =
+        handler->m_manager->process_nowait(stem_inputs.array(), stem_outputs.array());
     finish_multi(*handler, outputs, counts, delivered);
     return block_status(*handler);
 }
@@ -1489,7 +1634,8 @@ anira_status ANIRA_CALL anira_handler_push_data(anira_handler* handler,
     const anira_status status = slot_tensor_status(*handler, *in, true, tensor_index, __func__);
     if (status != ANIRA_OK) { return status; }
     const StagedTensor inputs(handler->m_input_tensors, *in, tensor_index);
-    handler->m_manager->push_data(inputs.array());
+    const StemSide stem_inputs(*handler, true, inputs.array());
+    handler->m_manager->push_data(stem_inputs.array());
     return ANIRA_OK;
 }
 
@@ -1505,7 +1651,8 @@ anira_status ANIRA_CALL anira_handler_push_data_multi(anira_handler* handler,
     const anira_status status = side_tensors_status(*handler, inputs, true, __func__);
     if (status != ANIRA_OK) { return status; }
     set_static_inputs(*handler, inputs);
-    handler->m_manager->push_data(inputs);
+    const StemSide stem_inputs(*handler, true, inputs);
+    handler->m_manager->push_data(stem_inputs.array());
     return ANIRA_OK;
 }
 
@@ -1522,7 +1669,8 @@ anira_status ANIRA_CALL anira_handler_pop_data(anira_handler* handler,
     const anira_status status = slot_tensor_status(*handler, *out, false, tensor_index, __func__);
     if (status != ANIRA_OK) { return status; }
     const StagedTensor outputs(handler->m_output_tensors, *out, tensor_index);
-    const size_t* counts = handler->m_manager->pop_data(outputs.array());
+    const StemSide stem_outputs(*handler, false, outputs.array());
+    const size_t* counts = handler->m_manager->pop_data(stem_outputs.array());
     set_delivered(delivered, counts[handler->m_slots.output(tensor_index)]);
     return block_status(*handler);
 }
@@ -1543,7 +1691,8 @@ anira_status ANIRA_CALL anira_handler_pop_data_multi(anira_handler* handler,
     const anira_status status = side_tensors_status(*handler, outputs, false, __func__);
     if (status != ANIRA_OK) { return status; }
     handler->m_miss_fn_ran = false;
-    const size_t* counts = handler->m_manager->pop_data(outputs);
+    const StemSide stem_outputs(*handler, false, outputs);
+    const size_t* counts = handler->m_manager->pop_data(stem_outputs.array());
     finish_multi(*handler, outputs, counts, delivered);
     return block_status(*handler);
 }
@@ -1689,10 +1838,12 @@ anira_status ANIRA_CALL anira_handler_process_wait(anira_handler* handler,
     if (status != ANIRA_OK) { return status; }
     const StagedTensor inputs(handler->m_input_tensors, *in, tensor_index);
     const StagedTensor outputs(handler->m_output_tensors, *out, tensor_index);
+    const StemSide stem_inputs(*handler, true, inputs.array());
+    const StemSide stem_outputs(*handler, false, outputs.array());
     const size_t* counts = nullptr;
     status = process_tensors_wait_body(*handler,
-                                       inputs.array(),
-                                       outputs.array(),
+                                       stem_inputs.array(),
+                                       stem_outputs.array(),
                                        timeout_ms,
                                        __func__,
                                        counts);
@@ -1721,8 +1872,15 @@ anira_status ANIRA_CALL anira_handler_process_multi_wait(anira_handler* handler,
     if (status != ANIRA_OK) { return status; }
     set_static_inputs(*handler, inputs);
     handler->m_miss_fn_ran = false;
+    const StemSide stem_inputs(*handler, true, inputs);
+    const StemSide stem_outputs(*handler, false, outputs);
     const size_t* counts = nullptr;
-    status = process_tensors_wait_body(*handler, inputs, outputs, timeout_ms, __func__, counts);
+    status = process_tensors_wait_body(*handler,
+                                       stem_inputs.array(),
+                                       stem_outputs.array(),
+                                       timeout_ms,
+                                       __func__,
+                                       counts);
     finish_multi(*handler, outputs, counts, delivered);
     return status;
 }
@@ -1741,8 +1899,9 @@ anira_status ANIRA_CALL anira_handler_pop_data_wait(anira_handler* handler,
     anira_status status = slot_tensor_status(*handler, *out, false, tensor_index, __func__);
     if (status != ANIRA_OK) { return status; }
     const StagedTensor outputs(handler->m_output_tensors, *out, tensor_index);
+    const StemSide stem_outputs(*handler, false, outputs.array());
     const size_t* counts = nullptr;
-    status = pop_tensors_wait_body(*handler, outputs.array(), timeout_ms, __func__, counts);
+    status = pop_tensors_wait_body(*handler, stem_outputs.array(), timeout_ms, __func__, counts);
     set_delivered(delivered, counts[handler->m_slots.output(tensor_index)]);
     return status;
 }
@@ -1763,8 +1922,9 @@ anira_status ANIRA_CALL anira_handler_pop_data_multi_wait(anira_handler* handler
     anira_status status = side_tensors_status(*handler, outputs, false, __func__);
     if (status != ANIRA_OK) { return status; }
     handler->m_miss_fn_ran = false;
+    const StemSide stem_outputs(*handler, false, outputs);
     const size_t* counts = nullptr;
-    status = pop_tensors_wait_body(*handler, outputs, timeout_ms, __func__, counts);
+    status = pop_tensors_wait_body(*handler, stem_outputs.array(), timeout_ms, __func__, counts);
     finish_multi(*handler, outputs, counts, delivered);
     return status;
 }

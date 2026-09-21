@@ -561,8 +561,10 @@ void StageChainProcessor::pre_process(std::vector<anira::RingBuffer>& input,
         anira::PrePostProcessor::pre_process(input, output, current_inference_backend);
         return;
     }
-    // Every tensor without a ring is materialised ahead of any stage: the whole tensor out of
-    // the handler's Static store, under its slot's latch, into the struct's packed buffer.
+    // Every Static (or Buffer) tensor is materialised ahead of any stage: the whole tensor out
+    // of the handler's Static store, under its slot's latch, into the struct's packed buffer. A
+    // State tensor has no ring and no store either: the session feeds it on the inference
+    // thread, and nothing on this thread touches it.
     for (size_t tensor = 0; tensor < output.size() && tensor < m_input_rings.size(); ++tensor) {
         if (m_input_rings[tensor] != nullptr) { continue; }
         const StaticSlot* slot = m_store.input(tensor);
@@ -617,8 +619,9 @@ void StageChainProcessor::post_process(std::vector<anira::BufferF>& input,
     // so a failed or short phase is topped up with zeros and the stream stays aligned.
     check_output_hops(/*report=*/status == ANIRA_OK);
 
-    // Every tensor without a ring is captured behind the last stage, the whole tensor into the
-    // store under its slot's latch. Not from a chunk that completed as zeros (dropped, failed
+    // Every Static (or Buffer) tensor is captured behind the last stage, the whole tensor into
+    // the store under its slot's latch (a State tensor has no store: the session captured it on
+    // the inference thread). Not from a chunk that completed as zeros (dropped, failed
     // in a stage or in the engine) and not behind a failed post_process: the store holds what
     // the model produced.
     if (status != ANIRA_OK || chunk->m_struct->m_completed_as_zeros) { return; }

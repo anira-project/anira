@@ -61,6 +61,10 @@ void InferenceManager::set_plan_backends(std::vector<InferenceBackend> backends)
     m_session->set_plan_backends(std::move(backends));
 }
 
+void InferenceManager::set_state_pairs(std::vector<StatePair> pairs) {
+    m_session->set_state_pairs(std::move(pairs));
+}
+
 bool InferenceManager::set_plan(uint32_t plan) noexcept {
     return m_session->select_plan(plan);
 }

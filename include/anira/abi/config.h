@@ -187,7 +187,8 @@ typedef struct anira_webgpu_desc {
  *        records, the anchor, error messages); it is never handed to an engine. Unique
  *        across the inputs and outputs of one model config.
  * @param dtype The model's true dtype (section 1).
- * @param role STREAMED, BUFFER or STATIC.
+ * @param role STREAMED, BUFFER, STATIC or STATE (both halves of a declared state pair carry
+ *        STATE).
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL or empty name, an unknown role,
@@ -267,6 +268,36 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_time_ratio(anira_tensor_
  */
 ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spec* spec,
                                                                 int64_t latency) ANIRA_NOEXCEPT;
+
+/**
+ * @brief Declared state passing: pairs a state input with the state output it is fed from on
+ * the next inference. Both halves carry ANIRA_ROLE_STATE; the pairing is stated once, on
+ * the input (JSON: "state_source" on the input spec). anira owns one buffer per pair
+ * (zeroed at prepare), copies it into the input tensor as the first step before the
+ * engine call, ahead of every before_inference stage, and copies the output tensor into
+ * it as the last step after the engine call, behind every after_inference stage; a
+ * failed inference (an engine failure, a non-OK stage) skips the capture, so the state
+ * keeps its last good value. anira_handler_reset re-initialises the state at the first
+ * inference of the new stream; the state survives anira_handler_set_plan. A model with a
+ * pair runs as ANIRA_MODEL_STATEFUL whatever its state says. Validation
+ * (ANIRA_ERROR_CONFIG naming the tensor, at create and at prepare): every state input
+ * names exactly one state output and every state output is named by exactly one state
+ * input; the two halves have equal dtype and shape; a state spec has no Time axis,
+ * window, time ratio or latency, and neither a ring dtype nor the anchor may name it.
+ * ANIRA_ERROR_NOT_SUPPORTED: a state tensor of another dtype than float32, or with a
+ * transposed layout, in this pre-release. A second call replaces the name.
+ * @param spec The spec of a state INPUT (role ANIRA_ROLE_STATE).
+ * @param output_canonical The canonical name of the state output this input is fed from, UTF-8,
+ *        copied; resolved when the model is validated (anira_handler_create,
+ *        anira_handler_prepare), like the anchor's name.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec, a NULL or empty name, or a
+ *         spec whose role is not ANIRA_ROLE_STATE.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_state_source(anira_tensor_spec* spec,
+                                                                     const char* output_canonical) ANIRA_NOEXCEPT;
 
 /**
  * @brief Sets an extension on the spec (section 1b); one slot per kind, a second set replaces
@@ -434,20 +465,20 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract
  * handler, and it is real-time code: no allocation, no lock, no system call. Under clang
  * a function converted to this type must itself be declared ANIRA_NONBLOCKING.
  * @param handler The handler whose block was missed.
- * @param inputs One tensor per input slot, in slot order and covering every slot: the very
- *        arrays the copy path was handed. A slot the call did not carry is an empty
- *        tensor (shape[1] == 0, its memory arm not to be read); a pop passes empty
- *        inputs. The block of a process form is already pushed and still intact in host
- *        memory, in place too.
- * @param num_inputs The handler's number of input slots.
- * @param outputs One tensor per output slot; shape[1] of a Streamed slot is the request, and
- *        the memory is the function's to fill. A slot whose tensor is empty (an extent
- *        of 0) was not requested. A non-empty Static element of a _multi form is the
- *        whole tensor in the spec's shape and already holds the stored value (the
+ * @param inputs One tensor per host input slot, in host slot order and covering every host slot
+ *        (a State spec has none): the arrays of the running call. A slot the call did
+ *        not carry is an empty tensor (shape[1] == 0, its memory arm not to be read); a
+ *        pop passes empty inputs. The block of a process form is already pushed and
+ *        still intact in host memory, in place too.
+ * @param num_inputs The handler's number of host input slots.
+ * @param outputs One tensor per host output slot; shape[1] of a Streamed slot is the request,
+ *        and the memory is the function's to fill. A slot whose tensor is empty (an
+ *        extent of 0) was not requested. A non-empty Static element of a _multi form is
+ *        the whole tensor in the spec's shape and already holds the stored value (the
  *        latest the model produced): leave it, or overwrite it. The descriptors are
  *        const: write through anira_tensor_data, anira_tensor_plane or the handle, by
  *        the tensor's strides.
- * @param num_outputs The handler's number of output slots.
+ * @param num_outputs The handler's number of host output slots.
  * @param user_data The user_data of anira_contract_hard_set_miss_fn.
  * @par Thread contract
  * [driver-thread] ANIRA_NONBLOCKING

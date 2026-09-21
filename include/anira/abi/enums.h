@@ -315,6 +315,18 @@ typedef enum anira_role {
      * No time semantics: conditioning in, scalar or embedding out; one value per job.
      */
     ANIRA_ROLE_STATIC = 2,
+    /**
+     * Declared state: one half of a pair of a state input and a state output with equal dtype
+     * and shape, paired by anira_tensor_spec_set_state_source on the input. anira feeds the
+     * input from the session's state buffer ahead of every before_inference stage and captures
+     * the output into it behind every after_inference stage, on the inference thread; the
+     * buffer is zeroed at prepare and re-initialised by anira_handler_reset. The host never
+     * sees the tensor: it has no host slot number (a host slot number counts the Streamed,
+     * Buffer and Static specs of its side and skips State specs, wherever they stand in the
+     * list); a stage sees it at its tensor index. No Time axis, window, time ratio or latency;
+     * float32 in this pre-release.
+     */
+    ANIRA_ROLE_STATE = 3,
     ANIRA_ROLE_FORCE32 = 0x7fffffff
 } anira_role;
 
@@ -535,7 +547,8 @@ typedef enum anira_probe_rung {
 typedef enum anira_model_state {
     ANIRA_MODEL_STATELESS = 0,  /**< Stateless (default). */
     /**
-     * Stateful: session-exclusive, lanes forced to 1; the v2 session_exclusive_processor.
+     * Stateful: session-exclusive, lanes forced to 1; the v2 session_exclusive_processor. A
+     * model with a declared state pair (ANIRA_ROLE_STATE) runs this way whatever it says here.
      */
     ANIRA_MODEL_STATEFUL = 1,
     ANIRA_MODEL_STATE_FORCE32 = 0x7fffffff

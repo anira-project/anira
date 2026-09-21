@@ -136,6 +136,9 @@ struct anira_tensor_spec {
     int64_t m_ratio_num = 0;
     int64_t m_ratio_den = 0;
     int64_t m_latency = 0;
+    /// A State input only (anira_tensor_spec_set_state_source, the JSON key "state_source"):
+    /// the canonical name of the state output it is fed from. Copied, resolved by validate.
+    std::string m_state_source;
     anira::capi::ExtBag m_ext;
 };
 

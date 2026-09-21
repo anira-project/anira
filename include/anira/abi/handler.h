@@ -83,7 +83,12 @@ extern "C" {
  */
 typedef struct anira_plan_slot {
     uint32_t struct_size;  /**< sizeof(anira_plan_slot) of the caller's header. */
-    uint32_t slot;  /**< The tensor's index in the model's input list (is_input) or output list. */
+    /**
+     * The host slot number: the tensor's position among the host-visible specs (Streamed,
+     * Buffer, Static) of the model's input list (is_input) or output list. A State spec has no
+     * host slot and no row.
+     */
+    uint32_t slot;
     uint32_t is_input;  /**< 1 for an input slot, 0 for an output slot. */
     /**
      * anira_domain: where the data enters the edge (the host's side for an input).
@@ -503,7 +508,13 @@ ANIRA_API uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handle
  * @param out The output block of the slot, described the same way; shape[1] is the number of
  *        samples requested. The descriptor is never written, the memory it names is. The
  *        same tensor as in for in place.
- * @param tensor_index The slot in both lists; a Streamed slot on both sides.
+ * @param tensor_index The host slot in both lists; a Streamed slot on both sides. A host slot
+ *        number counts the host-visible specs of its side (Streamed, Buffer,
+ *        Static) in list order and skips State specs, wherever they stand: it
+ *        equals the tensor's list position in every model without a State spec.
+ *        Every tensor_index and slot of this header, the arrays and delivered
+ *        counts of the _multi forms, the arrays of anira_miss_fn, the latency
+ *        vector and the plan report's slot rows use it.
  * @param delivered Receives the output samples delivered per channel, or NULL. A pure out
  *        parameter, written on every return: shape[1] of out on ANIRA_OK, 0 on
  *        ANIRA_MISSED and on a failure.
@@ -556,12 +567,12 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_process(anira_handler* handler,
  *        shape and dtype, exactly what anira_handler_set_static_input takes, or an empty
  *        tensor. Empty is a rank of 1 or more with an extent of 0 (a spec extent is
  *        never 0); nothing else of it is read. Never written.
- * @param num_inputs The length of inputs; must be the handler's number of input slots.
+ * @param num_inputs The length of inputs; must be the handler's number of host input slots.
  * @param outputs One tensor per output slot, in slot order and covering every slot; shape[1] of
  *        a Streamed element is the request, a Static element is the whole tensor in the
  *        spec's shape and dtype (what anira_handler_get_static_output takes), an empty
  *        tensor leaves its slot untouched. The descriptors are never written.
- * @param num_outputs The length of outputs; must be the handler's number of output slots.
+ * @param num_outputs The length of outputs; must be the handler's number of host output slots.
  * @param delivered An array of num_outputs counts, or NULL. A pure out parameter, written on
  *        every return: zeroed first; then, for a Streamed slot, delivered[i] is
  *        shape[1] of outputs[i] on ANIRA_OK and 0 on ANIRA_MISSED; for a Static slot
@@ -593,7 +604,7 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_process_multi(anira_handler* han
  * streamed input) has no slot this entry takes.
  * @param handler The handler.
  * @param in The input block of the slot, as in anira_handler_process.
- * @param tensor_index The slot in the input list; a Streamed slot.
+ * @param tensor_index The host slot in the input list; a Streamed slot.
  * @return ANIRA_OK, or a failure as in anira_handler_process (the checks of in), recorded in
  *         anira_handler_rt_error.
  * @par Thread contract
@@ -610,7 +621,7 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_push_data(anira_handler* handler
  * planar tensors for the Streamed elements.
  * @param handler The handler.
  * @param inputs One tensor per input slot, as in anira_handler_process_multi.
- * @param num_inputs The length of inputs; must be the handler's number of input slots.
+ * @param num_inputs The length of inputs; must be the handler's number of host input slots.
  * @return ANIRA_OK, or a failure as in anira_handler_process_multi (the checks of inputs),
  *         recorded in anira_handler_rt_error.
  * @par Thread contract
@@ -629,8 +640,8 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_push_data_multi(anira_handler* h
  * @param handler The handler.
  * @param out The output block of the slot, as in anira_handler_process; shape[1] is the
  *        request.
- * @param tensor_index The slot in the output list; a Streamed slot (a Static slot is refused:
- *        its single form is anira_handler_get_static_output).
+ * @param tensor_index The host slot in the output list; a Streamed slot (a Static slot is
+ *        refused: its single form is anira_handler_get_static_output).
  * @param delivered Receives the samples delivered per channel, or NULL; written on every return
  *        as in anira_handler_process.
  * @return ANIRA_OK; ANIRA_MISSED for a missed block; or a failure as in anira_handler_process
@@ -651,7 +662,7 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_pop_data(anira_handler* handler,
  * is empty is left untouched. Accepts planar tensors for the Streamed elements.
  * @param handler The handler.
  * @param outputs One tensor per output slot, as in anira_handler_process_multi.
- * @param num_outputs The length of outputs; must be the handler's number of output slots.
+ * @param num_outputs The length of outputs; must be the handler's number of host output slots.
  * @param delivered An array of num_outputs counts, or NULL; written on every return as in
  *        anira_handler_process_multi.
  * @return ANIRA_OK; ANIRA_MISSED for a missed block; or a failure as in
@@ -680,8 +691,8 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_pop_data_multi(anira_handler* ha
  * thread breaks the tag: the tensor still never tears, but a writer preempted inside the
  * call can make the driver thread wait for it.
  * @param handler The handler; prepared or not.
- * @param slot The slot in the input list; a slot without a ring (a Static spec, or a Buffer
- *        spec under a Hard contract).
+ * @param slot The host slot in the input list; a slot without a ring (a Static spec, or a
+ *        Buffer spec under a Hard contract).
  * @param tensor The whole tensor: a host tensor of exactly the spec's rank, extents and dtype
  *        (any dtype, the spec's; a Channel axis of any extent is one of its axes), over
  *        one block of host memory read by its strides in elements, all-zero strides
@@ -719,8 +730,8 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_set_static_input(anira_handler* 
  * anira_handler_create on.
  * @param handler The handler; prepared or not. Not const: a refusal is recorded in its
  *        rt_error.
- * @param slot The slot in the output list; a slot without a ring (a Static spec, or a Buffer
- *        spec under a Hard contract).
+ * @param slot The host slot in the output list; a slot without a ring (a Static spec, or a
+ *        Buffer spec under a Hard contract).
  * @param out The whole tensor, described as for anira_handler_set_static_input; the descriptor
  *        is never written, the memory it names is, by its strides.
  * @return ANIRA_OK; the failures of anira_handler_set_static_input, and
@@ -741,7 +752,7 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_get_static_output(anira_handler*
  * handler gets the same figure and more on_miss events. A generator counts from its
  * first process or pop after prepare or reset.
  * @param handler A prepared handler.
- * @param tensor_index The slot in the output list.
+ * @param tensor_index The host slot in the output list.
  * @return The latency; 0 for a Static output, a NULL or unprepared handler or an index out of
  *         range.
  * @par Thread contract
@@ -756,8 +767,8 @@ ANIRA_API uint32_t ANIRA_CALL anira_handler_get_latency(const anira_handler* han
  * while anira_handler_prepare runs.
  * @param handler A prepared handler.
  * @param count In: the capacity of out; out: the number of output tensors.
- * @param out Receives one latency per output tensor, index-aligned with the output list (0 for
- *        a Static output), or NULL to ask for the count.
+ * @param out Receives one latency per host output slot, in host slot order (0 for a Static
+ *        output; a State output has no slot and no entry), or NULL to ask for the count.
  * @return ANIRA_OK; ANIRA_INCOMPLETE when out is too short (count holds the total);
  *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or count; ANIRA_ERROR_NOT_PREPARED
  *         before a successful prepare.
@@ -774,7 +785,7 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_get_latencies(const anira_handle
  * each) and reports the samples waiting in the output ring of one channel; right after
  * prepare that is the reported latency.
  * @param handler The handler; not const, the call collects completed inferences.
- * @param tensor_index The slot in the output list.
+ * @param tensor_index The host slot in the output list.
  * @param channel The channel, below the output's channel count.
  * @param out Receives the samples waiting in the output ring of that channel: 0 for a Static
  *        output, and 0 on a failure.
@@ -793,7 +804,11 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_get_available_samples(anira_hand
 /**
  * @brief Wait-free stream reset: the rings return to their post-prepare state (the latency
  * zeros re-seeded), in-flight results are discarded when they complete, the held block
- * of ANIRA_MISS_HOLD_LAST is dropped, the model's internal state is untouched. Clears
+ * of ANIRA_MISS_HOLD_LAST is dropped. Declared state (ANIRA_ROLE_STATE) is
+ * re-initialised to zeros: not by this call, which stays one generation bump, but on the
+ * inference thread at the first inference of the new stream, so an inference still in
+ * flight across the reset can never seed the new stream with its state. State an engine
+ * keeps inside itself is opaque to anira and stays untouched. Clears
  * anira_handler_rt_error and re-arms the real-time latches, logging the count of
  * failures suppressed since the last prepare or reset through the real-time queue.
  * @param handler The handler; NULL is a no-op.
@@ -846,7 +861,7 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_rt_error(const anira_handler* ha
  *        times the duration of this call's block on the anchor, measured by shape[1]
  *        of the anchored tensor (the 2.x blocking_ratio); ANIRA_WAIT_FOREVER, or any
  *        other negative value, without limit.
- * @param tensor_index The slot in both lists.
+ * @param tensor_index The host slot in both lists.
  * @param delivered Receives the output samples delivered per channel, or NULL; written on every
  *        return as in anira_handler_process, except on ANIRA_ERROR_INVALID_STATE,
  *        where it holds what the nonblocking stem delivered.
@@ -868,9 +883,9 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_process_wait(anira_handler* hand
  * anira_handler_process_wait does. Accepts planar tensors.
  * @param handler The handler.
  * @param inputs One tensor per input slot, as in anira_handler_process_multi.
- * @param num_inputs The length of inputs; must be the handler's number of input slots.
+ * @param num_inputs The length of inputs; must be the handler's number of host input slots.
  * @param outputs One tensor per output slot, as in anira_handler_process_multi.
- * @param num_outputs The length of outputs; must be the handler's number of output slots.
+ * @param num_outputs The length of outputs; must be the handler's number of host output slots.
  * @param delivered An array of num_outputs counts, or NULL; written on every return as in
  *        anira_handler_process_multi, except on ANIRA_ERROR_INVALID_STATE, where it
  *        holds what the nonblocking stem delivered.
@@ -901,7 +916,7 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_process_multi_wait(anira_handler
  *        at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio
  *        times the contract's block_max duration (a pop has no input block to
  *        measure); ANIRA_WAIT_FOREVER, or any other negative value, without limit.
- * @param tensor_index The slot in the output list.
+ * @param tensor_index The host slot in the output list.
  * @param delivered Receives the samples delivered per channel, or NULL; written on every return
  *        as in anira_handler_process, except on ANIRA_ERROR_INVALID_STATE, where it
  *        holds what the nonblocking stem delivered.
@@ -922,7 +937,7 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_pop_data_wait(anira_handler* han
  * anira_handler_pop_data_wait does. Accepts planar tensors.
  * @param handler The handler.
  * @param outputs One tensor per output slot, as in anira_handler_process_multi.
- * @param num_outputs The length of outputs; must be the handler's number of output slots.
+ * @param num_outputs The length of outputs; must be the handler's number of host output slots.
  * @param delivered An array of num_outputs counts, or NULL; written on every return as in
  *        anira_handler_process_multi, except on ANIRA_ERROR_INVALID_STATE, where it
  *        holds what the nonblocking stem delivered.

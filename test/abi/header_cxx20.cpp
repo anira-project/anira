@@ -75,6 +75,11 @@ static_assert(std::is_invocable_r_v<anira_status,
                                     anira_handler*,
                                     uint32_t,
                                     const anira::Tensor*>);
+// Declared state reaches a C++ consumer through the C setter on TensorSpec::native() until
+// TensorSpec::state_source arrives: the fourth role, and the pairing stated on the input.
+static_assert(std::is_same_v<anira::Role, decltype(ANIRA_ROLE_STATE)>);
+static_assert(ANIRA_ROLE_STATE == 3);
+static_assert(noexcept(anira_tensor_spec_set_state_source(nullptr, nullptr)));
 
 // The runtime tensor and its token are the C structs with names on them: same size, no member
 // added, trivially copyable, so a Tensor* is an anira_tensor*. The field fills and the reads

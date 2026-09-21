@@ -19,6 +19,21 @@ namespace anira::v3compat {
 
 using anira::capi::translate_exception;
 
+namespace {
+
+// The first State spec of a model, inputs first, or NULL.
+const anira_tensor_spec* first_state_spec(const anira_model_config& model) noexcept {
+    for (const anira_tensor_spec& spec : model.m_inputs) {
+        if (spec.m_role == ANIRA_ROLE_STATE) { return &spec; }
+    }
+    for (const anira_tensor_spec& spec : model.m_outputs) {
+        if (spec.m_role == ANIRA_ROLE_STATE) { return &spec; }
+    }
+    return nullptr;
+}
+
+}  // namespace
+
 anira_status to_inference_config(const anira_model_config* model,
                                  const anira_contract* contract,
                                  const anira_engine* candidates,
@@ -36,6 +51,18 @@ anira_status to_inference_config(const anira_model_config* model,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "candidates is NULL with num_candidates %u",
                        static_cast<unsigned>(num_candidates));
+    // Declared state is fed and captured by a 3.x handler's session. A bare 2.x
+    // InferenceConfig reaches a 2.x InferenceHandler, which runs no feedback: the model would
+    // run on a zero state without a word. The shared translator maps the role (the handler
+    // needs it); this entry refuses it.
+    const anira_tensor_spec* state = first_state_spec(*model);
+    ANIRA_CAPI_REQUIRE(state == nullptr,
+                       err,
+                       ANIRA_ERROR_NOT_SUPPORTED,
+                       "tensor '%s': a State tensor (declared state passing) has no 2.x "
+                       "counterpart: a 2.x InferenceHandler feeds no state back; run the model "
+                       "through a 3.x handler (anira_handler_create)",
+                       state->m_name.c_str());
     // The bridge keeps its engine list: every engine maps to the default provider (a
     // custom engine, ANIRA_ENGINE_NONE, keeps the custom rows as before); NULL stays NULL.
     std::vector<anira_backend_id> ids;

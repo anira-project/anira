@@ -141,6 +141,13 @@ int anira_header_c_probe(void) {
                 anira_handler_get_static_output(NULL, 0u, NULL) == ANIRA_ERROR_INVALID_ARGUMENT ? 1
                                                                                                 : 0;
             checks += anira_plan_report_num_plans(NULL) == 0u ? 1 : 0;
+            /* Declared state: the fourth role, and the setter that pairs the two halves; a
+               NULL spec is refused. */
+            checks += ANIRA_ROLE_STATE == 3 ? 1 : 0;
+            checks += anira_tensor_spec_set_state_source(NULL, "state_out") ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
         }
     }
     {

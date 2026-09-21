@@ -495,6 +495,7 @@ headers:
           - {name: ANIRA_ROLE_STREAMED, value: 0, doc: "Has a Time axis consumed window-wise (inputs and outputs)."}
           - {name: ANIRA_ROLE_BUFFER, value: 1, doc: "The whole submitted buffer is one model tensor, no Time axis (frames, images)."}
           - {name: ANIRA_ROLE_STATIC, value: 2, doc: "No time semantics: conditioning in, scalar or embedding out; one value per job."}
+          - {name: ANIRA_ROLE_STATE, value: 3, doc: "Declared state: one half of a pair of a state input and a state output with equal dtype and shape, paired by anira_tensor_spec_set_state_source on the input. anira feeds the input from the session's state buffer ahead of every before_inference stage and captures the output into it behind every after_inference stage, on the inference thread; the buffer is zeroed at prepare and re-initialised by anira_handler_reset. The host never sees the tensor: it has no host slot number (a host slot number counts the Streamed, Buffer and Static specs of its side and skips State specs, wherever they stand in the list); a stage sees it at its tensor index. No Time axis, window, time ratio or latency; float32 in this pre-release."}
           - {name: ANIRA_ROLE_FORCE32, value: "0x7fffffff"}
       - kind: enum
         name: anira_contract_kind
@@ -659,7 +660,7 @@ headers:
         doc: "Whether a model carries state across inferences."
         values:
           - {name: ANIRA_MODEL_STATELESS, value: 0, doc: "Stateless (default)."}
-          - {name: ANIRA_MODEL_STATEFUL, value: 1, doc: "Stateful: session-exclusive, lanes forced to 1; the v2 session_exclusive_processor."}
+          - {name: ANIRA_MODEL_STATEFUL, value: 1, doc: "Stateful: session-exclusive, lanes forced to 1; the v2 session_exclusive_processor. A model with a declared state pair (ANIRA_ROLE_STATE) runs this way whatever it says here."}
           - {name: ANIRA_MODEL_STATE_FORCE32, value: "0x7fffffff"}
       - kind: enum
         name: anira_bytes_ownership
@@ -1371,7 +1372,7 @@ headers:
         params:
           - {type: const char*, name: name, doc: "The canonical name: your name for this tensor, UTF-8, copied. Every other part of the configuration refers to the tensor by it (the per-entry name and layout records, the anchor, error messages); it is never handed to an engine. Unique across the inputs and outputs of one model config."}
           - {type: anira_dtype, name: dtype, doc: "The model's true dtype (section 1)."}
-          - {type: anira_role, name: role, doc: "STREAMED, BUFFER or STATIC."}
+          - {type: anira_role, name: role, doc: "STREAMED, BUFFER, STATIC or STATE (both halves of a declared state pair carry STATE)."}
           - {type: anira_tensor_spec**, name: out, doc: "Receives the handle on success."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
@@ -1428,6 +1429,17 @@ headers:
         since: "0.1"
         doc: "Outputs only: the model's internal delay along the Time axis, which the reported latency adds."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative latency."
+      - kind: function
+        name: anira_tensor_spec_set_state_source
+        returns: anira_status
+        params:
+          - {type: anira_tensor_spec*, name: spec, doc: "The spec of a state INPUT (role ANIRA_ROLE_STATE)."}
+          - {type: const char*, name: output_canonical, doc: "The canonical name of the state output this input is fed from, UTF-8, copied; resolved when the model is validated (anira_handler_create, anira_handler_prepare), like the anchor's name."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Declared state passing: pairs a state input with the state output it is fed from on the next inference. Both halves carry ANIRA_ROLE_STATE; the pairing is stated once, on the input (JSON: \"state_source\" on the input spec). anira owns one buffer per pair (zeroed at prepare), copies it into the input tensor as the first step before the engine call, ahead of every before_inference stage, and copies the output tensor into it as the last step after the engine call, behind every after_inference stage; a failed inference (an engine failure, a non-OK stage) skips the capture, so the state keeps its last good value. anira_handler_reset re-initialises the state at the first inference of the new stream; the state survives anira_handler_set_plan. A model with a pair runs as ANIRA_MODEL_STATEFUL whatever its state says. Validation (ANIRA_ERROR_CONFIG naming the tensor, at create and at prepare): every state input names exactly one state output and every state output is named by exactly one state input; the two halves have equal dtype and shape; a state spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor the anchor may name it. ANIRA_ERROR_NOT_SUPPORTED: a state tensor of another dtype than float32, or with a transposed layout, in this pre-release. A second call replaces the name."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec, a NULL or empty name, or a spec whose role is not ANIRA_ROLE_STATE."
       - kind: function
         name: anira_tensor_spec_set_ext
         returns: anira_status
@@ -1542,10 +1554,10 @@ headers:
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler whose block was missed."}
-          - {type: const anira_tensor*, name: inputs, doc: "One tensor per input slot, in slot order and covering every slot: the very arrays the copy path was handed. A slot the call did not carry is an empty tensor (shape[1] == 0, its memory arm not to be read); a pop passes empty inputs. The block of a process form is already pushed and still intact in host memory, in place too."}
-          - {type: uint32_t, name: num_inputs, doc: "The handler's number of input slots."}
-          - {type: const anira_tensor*, name: outputs, doc: "One tensor per output slot; shape[1] of a Streamed slot is the request, and the memory is the function's to fill. A slot whose tensor is empty (an extent of 0) was not requested. A non-empty Static element of a _multi form is the whole tensor in the spec's shape and already holds the stored value (the latest the model produced): leave it, or overwrite it. The descriptors are const: write through anira_tensor_data, anira_tensor_plane or the handle, by the tensor's strides."}
-          - {type: uint32_t, name: num_outputs, doc: "The handler's number of output slots."}
+          - {type: const anira_tensor*, name: inputs, doc: "One tensor per host input slot, in host slot order and covering every host slot (a State spec has none): the arrays of the running call. A slot the call did not carry is an empty tensor (shape[1] == 0, its memory arm not to be read); a pop passes empty inputs. The block of a process form is already pushed and still intact in host memory, in place too."}
+          - {type: uint32_t, name: num_inputs, doc: "The handler's number of host input slots."}
+          - {type: const anira_tensor*, name: outputs, doc: "One tensor per host output slot; shape[1] of a Streamed slot is the request, and the memory is the function's to fill. A slot whose tensor is empty (an extent of 0) was not requested. A non-empty Static element of a _multi form is the whole tensor in the spec's shape and already holds the stored value (the latest the model produced): leave it, or overwrite it. The descriptors are const: write through anira_tensor_data, anira_tensor_plane or the handle, by the tensor's strides."}
+          - {type: uint32_t, name: num_outputs, doc: "The handler's number of host output slots."}
           - {type: void*, name: user_data, doc: "The user_data of anira_contract_hard_set_miss_fn."}
         thread: driver-thread
         nonblocking: true
@@ -2928,13 +2940,13 @@ headers:
           - {name: engine, type: uint32_t, doc: "anira_engine of the plan the chunk was submitted under; ANIRA_ENGINE_NONE for a custom engine."}
           - {name: provider, type: uint32_t, doc: "anira_provider of that plan."}
           - {name: variant, type: uint32_t, doc: "The variant of that plan; 0 in this pre-release."}
-          - {name: num_inputs, type: uint32_t, doc: "The tensors of the model's input list: the length of input_rings and model_inputs."}
-          - {name: num_outputs, type: uint32_t, doc: "The tensors of the model's output list: the length of model_outputs and output_rings."}
+          - {name: num_inputs, type: uint32_t, doc: "The tensors of the model's input list, State tensors included: the length of input_rings and model_inputs. A stage indexes by tensor index, the position in the model's list; the host's entries use host slot numbers, which skip State specs."}
+          - {name: num_outputs, type: uint32_t, doc: "The tensors of the model's output list, State tensors included: the length of model_outputs and output_rings."}
           - {name: ticket, type: uint32_t, doc: "The anira_ticket of the submitting job under an Async contract; ANIRA_TICKET_INVALID under a Hard contract."}
           - {name: reserved, type: uint32_t, doc: "Zero."}
           - {name: input_rings, ptr: "anira_ring* const", doc: "ANIRA_PHASE_PRE_PROCESS only, else NULL: one entry per input tensor, the ring of a Streamed tensor and NULL for a tensor of another role."}
-          - {name: model_inputs, ptr: anira_tensor, doc: "ANIRA_PHASE_PRE_PROCESS and ANIRA_PHASE_BEFORE_INFERENCE, else NULL: the model's input tensors in the spec's shape, host memory owned by anira, for the stage to write. In pre_process every Static input is already materialised."}
-          - {name: model_outputs, ptr: anira_tensor, doc: "ANIRA_PHASE_AFTER_INFERENCE and ANIRA_PHASE_POST_PROCESS, else NULL: the model's output tensors in the spec's shape, host memory owned by anira. A chunk that completed without an inference (dropped, failed) reads as zeros."}
+          - {name: model_inputs, ptr: anira_tensor, doc: "ANIRA_PHASE_PRE_PROCESS and ANIRA_PHASE_BEFORE_INFERENCE, else NULL: the model's input tensors in the spec's shape, host memory owned by anira, for the stage to write. In pre_process every Static input is already materialised. In before_inference every State input is already fed from the session's state buffer: a stage may read or alter it, and what it leaves is what the engine gets."}
+          - {name: model_outputs, ptr: anira_tensor, doc: "ANIRA_PHASE_AFTER_INFERENCE and ANIRA_PHASE_POST_PROCESS, else NULL: the model's output tensors in the spec's shape, host memory owned by anira. A chunk that completed without an inference (dropped, failed) reads as zeros. In after_inference a State output is not yet captured: what the last stage leaves in it is what the next inference is fed."}
           - {name: output_rings, ptr: "anira_ring* const", doc: "ANIRA_PHASE_POST_PROCESS only, else NULL: one entry per output tensor, the ring of a Streamed tensor and NULL for a tensor of another role."}
 
       # ---- the callbacks and the descriptor ---------------------------------------
@@ -3085,7 +3097,7 @@ headers:
         doc: "One tensor slot of one plan: the edge the plan takes for it, its cost class, the class an allocate_* handle would have gotten, how a completion on that edge is waited for, and why. Tier 2, struct_size first; enumerated by anira_plan_report_slots at the caller's stride. In this pre-release every slot is a host slot: ANIRA_DOMAIN_HOST on both sides, ANIRA_EDGE_ZERO_COPY, recipe \"host\", no reason."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_plan_slot) of the caller's header."}
-          - {name: slot, type: uint32_t, doc: "The tensor's index in the model's input list (is_input) or output list."}
+          - {name: slot, type: uint32_t, doc: "The host slot number: the tensor's position among the host-visible specs (Streamed, Buffer, Static) of the model's input list (is_input) or output list. A State spec has no host slot and no row."}
           - {name: is_input, type: uint32_t, doc: "1 for an input slot, 0 for an output slot."}
           - {name: domain_in, type: uint32_t, doc: "anira_domain: where the data enters the edge (the host's side for an input)."}
           - {name: domain_out, type: uint32_t, doc: "anira_domain: where the data leaves the edge (the backend's side for an input)."}
@@ -3327,7 +3339,7 @@ headers:
           - {type: anira_handler*, name: handler, doc: "The handler."}
           - {type: const anira_tensor*, name: in, doc: "The input block of the slot: a host tensor of the logical shape [channels, samples] in the slot's dtype, planar, read by strides or packed; shape[1] is the number of samples pushed. Never written."}
           - {type: const anira_tensor*, name: out, doc: "The output block of the slot, described the same way; shape[1] is the number of samples requested. The descriptor is never written, the memory it names is. The same tensor as in for in place."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in both lists; a Streamed slot on both sides."}
+          - {type: uint32_t, name: tensor_index, doc: "The host slot in both lists; a Streamed slot on both sides. A host slot number counts the host-visible specs of its side (Streamed, Buffer, Static) in list order and skips State specs, wherever they stand: it equals the tensor's list position in every model without a State spec. Every tensor_index and slot of this header, the arrays and delivered counts of the _multi forms, the arrays of anira_miss_fn, the latency vector and the plan report's slot rows use it."}
           - {type: size_t*, name: delivered, doc: "Receives the output samples delivered per channel, or NULL. A pure out parameter, written on every return: shape[1] of out on ANIRA_OK, 0 on ANIRA_MISSED and on a failure."}
         thread: driver-thread
         nonblocking: true
@@ -3342,9 +3354,9 @@ headers:
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
           - {type: const anira_tensor*, name: inputs, doc: "One tensor per input slot, in slot order and covering every slot. The element of a Streamed slot is its host block, an empty tensor (shape[1] == 0) leaves the slot out. The element of a Static slot is the whole tensor in the spec's shape and dtype, exactly what anira_handler_set_static_input takes, or an empty tensor. Empty is a rank of 1 or more with an extent of 0 (a spec extent is never 0); nothing else of it is read. Never written."}
-          - {type: uint32_t, name: num_inputs, doc: "The length of inputs; must be the handler's number of input slots."}
+          - {type: uint32_t, name: num_inputs, doc: "The length of inputs; must be the handler's number of host input slots."}
           - {type: const anira_tensor*, name: outputs, doc: "One tensor per output slot, in slot order and covering every slot; shape[1] of a Streamed element is the request, a Static element is the whole tensor in the spec's shape and dtype (what anira_handler_get_static_output takes), an empty tensor leaves its slot untouched. The descriptors are never written."}
-          - {type: uint32_t, name: num_outputs, doc: "The length of outputs; must be the handler's number of output slots."}
+          - {type: uint32_t, name: num_outputs, doc: "The length of outputs; must be the handler's number of host output slots."}
           - {type: size_t*, name: delivered, doc: "An array of num_outputs counts, or NULL. A pure out parameter, written on every return: zeroed first; then, for a Streamed slot, delivered[i] is shape[1] of outputs[i] on ANIRA_OK and 0 on ANIRA_MISSED; for a Static slot it is the tensor's element count when the element is not empty and 0 when it is, on ANIRA_OK and on ANIRA_MISSED alike (the stored value is delivered either way). All 0 on a refusal. It is never read: the request is shape[1] of each Streamed output tensor, so a miss leaves nothing to refill."}
         thread: driver-thread
         nonblocking: true
@@ -3359,7 +3371,7 @@ headers:
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
           - {type: const anira_tensor*, name: in, doc: "The input block of the slot, as in anira_handler_process."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in the input list; a Streamed slot."}
+          - {type: uint32_t, name: tensor_index, doc: "The host slot in the input list; a Streamed slot."}
         thread: driver-thread
         nonblocking: true
         status: promised
@@ -3373,7 +3385,7 @@ headers:
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
           - {type: const anira_tensor*, name: inputs, doc: "One tensor per input slot, as in anira_handler_process_multi."}
-          - {type: uint32_t, name: num_inputs, doc: "The length of inputs; must be the handler's number of input slots."}
+          - {type: uint32_t, name: num_inputs, doc: "The length of inputs; must be the handler's number of host input slots."}
         thread: driver-thread
         nonblocking: true
         status: promised
@@ -3387,7 +3399,7 @@ headers:
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
           - {type: const anira_tensor*, name: out, doc: "The output block of the slot, as in anira_handler_process; shape[1] is the request."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in the output list; a Streamed slot (a Static slot is refused: its single form is anira_handler_get_static_output)."}
+          - {type: uint32_t, name: tensor_index, doc: "The host slot in the output list; a Streamed slot (a Static slot is refused: its single form is anira_handler_get_static_output)."}
           - {type: size_t*, name: delivered, doc: "Receives the samples delivered per channel, or NULL; written on every return as in anira_handler_process."}
         thread: driver-thread
         nonblocking: true
@@ -3402,7 +3414,7 @@ headers:
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
           - {type: const anira_tensor*, name: outputs, doc: "One tensor per output slot, as in anira_handler_process_multi."}
-          - {type: uint32_t, name: num_outputs, doc: "The length of outputs; must be the handler's number of output slots."}
+          - {type: uint32_t, name: num_outputs, doc: "The length of outputs; must be the handler's number of host output slots."}
           - {type: size_t*, name: delivered, doc: "An array of num_outputs counts, or NULL; written on every return as in anira_handler_process_multi."}
         thread: driver-thread
         nonblocking: true
@@ -3418,7 +3430,7 @@ headers:
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler; prepared or not."}
-          - {type: uint32_t, name: slot, doc: "The slot in the input list; a slot without a ring (a Static spec, or a Buffer spec under a Hard contract)."}
+          - {type: uint32_t, name: slot, doc: "The host slot in the input list; a slot without a ring (a Static spec, or a Buffer spec under a Hard contract)."}
           - {type: const anira_tensor*, name: tensor, doc: "The whole tensor: a host tensor of exactly the spec's rank, extents and dtype (any dtype, the spec's; a Channel axis of any extent is one of its axes), over one block of host memory read by its strides in elements, all-zero strides being packed row-major. Never written; release, manager_ctx and acquire are not read, the memory is borrowed until the call returns."}
         thread: driver-thread
         nonblocking: true
@@ -3432,7 +3444,7 @@ headers:
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler; prepared or not. Not const: a refusal is recorded in its rt_error."}
-          - {type: uint32_t, name: slot, doc: "The slot in the output list; a slot without a ring (a Static spec, or a Buffer spec under a Hard contract)."}
+          - {type: uint32_t, name: slot, doc: "The host slot in the output list; a slot without a ring (a Static spec, or a Buffer spec under a Hard contract)."}
           - {type: const anira_tensor*, name: out, doc: "The whole tensor, described as for anira_handler_set_static_input; the descriptor is never written, the memory it names is, by its strides."}
         thread: driver-thread
         nonblocking: true
@@ -3448,7 +3460,7 @@ headers:
         returns: uint32_t
         params:
           - {type: const anira_handler*, name: handler, doc: "A prepared handler."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in the output list."}
+          - {type: uint32_t, name: tensor_index, doc: "The host slot in the output list."}
         thread: thread-safe
         nonblocking: true
         status: promised
@@ -3462,7 +3474,7 @@ headers:
         params:
           - {type: const anira_handler*, name: handler, doc: "A prepared handler."}
           - {type: uint32_t*, name: count, doc: "In: the capacity of out; out: the number of output tensors."}
-          - {type: uint32_t*, name: out, doc: "Receives one latency per output tensor, index-aligned with the output list (0 for a Static output), or NULL to ask for the count."}
+          - {type: uint32_t*, name: out, doc: "Receives one latency per host output slot, in host slot order (0 for a Static output; a State output has no slot and no entry), or NULL to ask for the count."}
         thread: thread-safe
         nonblocking: true
         status: promised
@@ -3475,7 +3487,7 @@ headers:
         returns: anira_status
         params:
           - {type: anira_handler*, name: handler, doc: "The handler; not const, the call collects completed inferences."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in the output list."}
+          - {type: uint32_t, name: tensor_index, doc: "The host slot in the output list."}
           - {type: uint32_t, name: channel, doc: "The channel, below the output's channel count."}
           - {type: size_t*, name: out, doc: "Receives the samples waiting in the output ring of that channel: 0 for a Static output, and 0 on a failure."}
         thread: driver-thread
@@ -3494,7 +3506,7 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "Wait-free stream reset: the rings return to their post-prepare state (the latency zeros re-seeded), in-flight results are discarded when they complete, the held block of ANIRA_MISS_HOLD_LAST is dropped, the model's internal state is untouched. Clears anira_handler_rt_error and re-arms the real-time latches, logging the count of failures suppressed since the last prepare or reset through the real-time queue."
+        doc: "Wait-free stream reset: the rings return to their post-prepare state (the latency zeros re-seeded), in-flight results are discarded when they complete, the held block of ANIRA_MISS_HOLD_LAST is dropped. Declared state (ANIRA_ROLE_STATE) is re-initialised to zeros: not by this call, which stays one generation bump, but on the inference thread at the first inference of the new stream, so an inference still in flight across the reset can never seed the new stream with its state. State an engine keeps inside itself is opaque to anira and stays untouched. Clears anira_handler_rt_error and re-arms the real-time latches, logging the count of failures suppressed since the last prepare or reset through the real-time queue."
 
       - kind: function
         name: anira_handler_rt_error
@@ -3519,7 +3531,7 @@ headers:
           - {type: const anira_tensor*, name: in, doc: "The input block of the slot, as in anira_handler_process."}
           - {type: const anira_tensor*, name: out, doc: "The output block of the slot, as in anira_handler_process; the same tensor as in for in place."}
           - {type: double, name: timeout_ms, doc: "How long to wait for the block's inference: 0 or more milliseconds (a value at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio times the duration of this call's block on the anchor, measured by shape[1] of the anchored tensor (the 2.x blocking_ratio); ANIRA_WAIT_FOREVER, or any other negative value, without limit."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in both lists."}
+          - {type: uint32_t, name: tensor_index, doc: "The host slot in both lists."}
           - {type: size_t*, name: delivered, doc: "Receives the output samples delivered per channel, or NULL; written on every return as in anira_handler_process, except on ANIRA_ERROR_INVALID_STATE, where it holds what the nonblocking stem delivered."}
         thread: any-thread, blocking
         status: promised
@@ -3533,9 +3545,9 @@ headers:
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
           - {type: const anira_tensor*, name: inputs, doc: "One tensor per input slot, as in anira_handler_process_multi."}
-          - {type: uint32_t, name: num_inputs, doc: "The length of inputs; must be the handler's number of input slots."}
+          - {type: uint32_t, name: num_inputs, doc: "The length of inputs; must be the handler's number of host input slots."}
           - {type: const anira_tensor*, name: outputs, doc: "One tensor per output slot, as in anira_handler_process_multi."}
-          - {type: uint32_t, name: num_outputs, doc: "The length of outputs; must be the handler's number of output slots."}
+          - {type: uint32_t, name: num_outputs, doc: "The length of outputs; must be the handler's number of host output slots."}
           - {type: size_t*, name: delivered, doc: "An array of num_outputs counts, or NULL; written on every return as in anira_handler_process_multi, except on ANIRA_ERROR_INVALID_STATE, where it holds what the nonblocking stem delivered."}
           - {type: double, name: timeout_ms, doc: "As in anira_handler_process_wait."}
         thread: any-thread, blocking
@@ -3551,7 +3563,7 @@ headers:
           - {type: anira_handler*, name: handler, doc: "The handler."}
           - {type: const anira_tensor*, name: out, doc: "The output block of the slot, as in anira_handler_process; shape[1] is the request."}
           - {type: double, name: timeout_ms, doc: "How long to wait for the block's inference: 0 or more milliseconds (a value at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio times the contract's block_max duration (a pop has no input block to measure); ANIRA_WAIT_FOREVER, or any other negative value, without limit."}
-          - {type: uint32_t, name: tensor_index, doc: "The slot in the output list."}
+          - {type: uint32_t, name: tensor_index, doc: "The host slot in the output list."}
           - {type: size_t*, name: delivered, doc: "Receives the samples delivered per channel, or NULL; written on every return as in anira_handler_process, except on ANIRA_ERROR_INVALID_STATE, where it holds what the nonblocking stem delivered."}
         thread: any-thread, blocking
         status: promised
@@ -3565,7 +3577,7 @@ headers:
         params:
           - {type: anira_handler*, name: handler, doc: "The handler."}
           - {type: const anira_tensor*, name: outputs, doc: "One tensor per output slot, as in anira_handler_process_multi."}
-          - {type: uint32_t, name: num_outputs, doc: "The length of outputs; must be the handler's number of output slots."}
+          - {type: uint32_t, name: num_outputs, doc: "The length of outputs; must be the handler's number of host output slots."}
           - {type: size_t*, name: delivered, doc: "An array of num_outputs counts, or NULL; written on every return as in anira_handler_process_multi, except on ANIRA_ERROR_INVALID_STATE, where it holds what the nonblocking stem delivered."}
           - {type: double, name: timeout_ms, doc: "As in anira_handler_pop_data_wait."}
         thread: any-thread, blocking

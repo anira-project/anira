@@ -160,10 +160,11 @@ const std::array<std::pair<const char*, anira_dtype>, 10> k_dtypes{{
     {"int64", ANIRA_DTYPE_I64},
     {"bool", ANIRA_DTYPE_BOOL8},
 }};
-const std::array<std::pair<const char*, anira_role>, 3> k_roles{{
+const std::array<std::pair<const char*, anira_role>, 4> k_roles{{
     {"streamed", ANIRA_ROLE_STREAMED},
     {"buffer", ANIRA_ROLE_BUFFER},
     {"static", ANIRA_ROLE_STATIC},
+    {"state", ANIRA_ROLE_STATE},
 }};
 const std::array<std::pair<const char*, anira_axis_tag>, 7> k_axis_tags{{
     {"batch", ANIRA_AXIS_BATCH},
@@ -355,6 +356,15 @@ void load_spec_v3(const Json& node,
             if (!is_output) { fail_json(key_path, "latency is an output key"); }
             spec.m_latency = require_i64(value, key_path);
             if (spec.m_latency < 0) { fail_json(key_path, "must not be negative"); }
+        } else if (key == "state_source") {
+            // The pairing of declared state is stated once, on the input. Whether the name
+            // resolves, and whether this spec is a State one, is validate's question.
+            if (is_output) {
+                fail_json(key_path,
+                          "state_source is an input key: the state input names the state "
+                          "output it is fed from");
+            }
+            spec.m_state_source = require_string(value, key_path);
         } else if (key == "time_ratio") {
             require_array(value, key_path);
             if (value.size() != 2) { fail_json(key_path, "time_ratio is [num, den]"); }
@@ -1290,6 +1300,9 @@ Json spec_to_json(const anira_tensor_spec& spec, bool is_output) {
         object["overlap"] = spec.m_overlap;
     }
     if (is_output && spec.m_latency != 0) { object["latency"] = spec.m_latency; }
+    if (!is_output && !spec.m_state_source.empty()) {
+        object["state_source"] = spec.m_state_source;
+    }
     if (spec.m_ratio_num != 0 || spec.m_ratio_den != 0) {
         object["time_ratio"] = Json::array({spec.m_ratio_num, spec.m_ratio_den});
     }

@@ -85,6 +85,15 @@ The roles are:
   conditioning vector.
 - ``ANIRA_ROLE_BUFFER``: the whole submitted buffer is one tensor, no Time axis (frames,
   images).
+- ``ANIRA_ROLE_STATE``: declared state, one half of a pair of a state input and a state output
+  with equal dtype and shape (an exported recurrent hidden state, a streaming-convolution
+  cache). The input half names the output half it is fed from (``"state_source"`` in a model
+  file, ``anira_tensor_spec_set_state_source`` in C), and anira feeds and captures the state
+  around every inference itself. The host never sees a State tensor: the slot numbers of the
+  handler's entries count the Streamed, Buffer and Static specs of their side and skip State
+  specs, wherever those stand in the list; a stage sees it at its tensor index. No Time axis,
+  window, time ratio or latency; float32 in this pre-release. A model with a pair runs as
+  Stateful whatever its ``state`` says.
 
 The axes are set with ``axis(i, tag, extent)`` by index in the model's memory order, each with
 a tag and an extent; NCHW against NHWC is just a different order of tags. Tags are
@@ -269,8 +278,10 @@ an ``anira::ContractHandle``.
   ``anira_miss_fn``, set with ``anira_contract_hard_set_miss_fn(contract, fn, user_data)``
   (``Hard::miss_fn`` / ``miss_user_data``, ``ContractHandle::hard_miss_fn``). It is called once
   per missed block on the thread that called the entry, for the whole block: ``inputs`` and
-  ``outputs`` are one ``anira_tensor`` per slot, in slot order and covering every slot, the very
-  arrays the entry was handed (section 3.2). A slot the call did not carry is an empty tensor
+  ``outputs`` are one ``anira_tensor`` per host slot, in host slot order and covering every
+  host slot, the arrays the entry was handed (section 3.2; a host slot number counts the
+  Streamed, Buffer and Static specs of its side, a State spec has none). A slot the call did
+  not carry is an empty tensor
   (``shape[1] == 0``), a pop passes empty inputs, and the input block of a process form is
   already pushed and still intact, in place too. The function fills the memory of every output
   whose ``shape[1]`` is above ``0`` and returns ``ANIRA_OK``; any other status makes anira
@@ -403,9 +414,10 @@ document), so a typo never turns into a default.
   channels-last TensorFlow export of a mono model); ``entry`` is the extension that names the
   entry point (section 1.2).
 - ``inputs[]`` / ``outputs[]``: the tensor specs of section 1.1 — ``dtype``, ``role``
-  (``streamed``, ``buffer``, ``static``), tagged ``axes`` (an extent or ``"dynamic"``),
-  ``window`` (``min`` and ``max`` or ``"unbounded"``), ``overlap``, ``latency`` (outputs) and
-  ``time_ratio``.
+  (``streamed``, ``buffer``, ``static``, ``state``), tagged ``axes`` (an extent or
+  ``"dynamic"``), ``window`` (``min`` and ``max`` or ``"unbounded"``), ``overlap``, ``latency``
+  (outputs), ``time_ratio`` and ``state_source`` (the input half of a state pair only: the
+  canonical name of the state output it is fed from).
 - ``anchor`` is the canonical name of the streamed tensor that is the model's clock (section
   1.2); absent means the first streamed input, or the first streamed output of a generator.
 
@@ -1458,4 +1470,4 @@ The call is wait-free and real-time safe for all session configurations, includi
     Until in-flight work finishes (bounded by one inference duration), its internal structures stay captive. If fresh data submitted in that window exhausts the remaining structure pool — likely on session-exclusive configurations, whose pools are small — the affected chunks complete as silence at their correct stream positions; the stream stays time-aligned and recovers by itself.
 
 ..  note::
-    Model-internal state (e.g. a recurrent hidden state inside the backend) is not reset — no anira reset has ever touched it. For stateful models, splice or clear such state via the :cpp:func:`anira::PrePostProcessor::before_inference` / :cpp:func:`anira::PrePostProcessor::after_inference` hooks.
+    State that an engine keeps inside itself (e.g. a recurrent hidden state inside the backend) is opaque to anira and is not reset — no anira reset has ever touched it. For such models, splice or clear the state via the :cpp:func:`anira::PrePostProcessor::before_inference` / :cpp:func:`anira::PrePostProcessor::after_inference` hooks. Declared state is different: a 3.x model whose state is explicit declares the pair with the role ``ANIRA_ROLE_STATE`` (section 1.1), and ``anira_handler_reset`` and ``anira_handler_prepare`` re-initialise it to zeros. The reset stays wait-free: the state is zeroed on the inference thread, at the first inference of the new stream, so an inference still in flight across the reset cannot seed the new stream.

@@ -123,6 +123,14 @@ static_assert(noexcept(anira_handler_process_wait(nullptr, nullptr, nullptr, 0.0
 // output names, never its descriptor); the handler of the getter is not const.
 static_assert(noexcept(anira_handler_set_static_input(nullptr, 0, nullptr)));
 static_assert(noexcept(anira_handler_get_static_output(nullptr, 0, nullptr)));
+// Declared state: the fourth role, appended, and the setter that pairs the two halves, stated
+// once, on the input.
+static_assert(ANIRA_ROLE_STATE == 3);
+static_assert(noexcept(anira_tensor_spec_set_state_source(nullptr, nullptr)));
+static_assert(std::is_invocable_r_v<anira_status,
+                                    decltype(&anira_tensor_spec_set_state_source),
+                                    anira_tensor_spec*,
+                                    const char*>);
 static_assert(std::is_invocable_r_v<anira_status,
                                     decltype(&anira_handler_get_static_output),
                                     anira_handler*,

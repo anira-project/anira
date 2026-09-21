@@ -99,6 +99,18 @@ struct CustomLatencies {
     std::vector<long> m_outputs;  ///< Per output tensor: the latency in samples, or negative
 };
 
+/**
+ * @brief One pair of declared state: a model input that is fed from a model output.
+ *
+ * The two halves of a 3.x state pair (`ANIRA_ROLE_STATE`, `anira_tensor_spec_set_state_source`)
+ * as tensor indices: positions in the input and the output list of the InferenceConfig's
+ * tensor shape. Both tensors have the same element count and are float32.
+ */
+struct StatePair {
+    size_t m_input = 0;   ///< Index of the state input in the model's input list
+    size_t m_output = 0;  ///< Index of the state output in the model's output list
+};
+
 class ANIRA_API SessionElement {
 public:
     /**
@@ -324,6 +336,52 @@ public:
 
     /// The first plan that runs on a backend (the 2.x selection by backend), if any does.
     std::optional<uint32_t> plan_of_backend(InferenceBackend backend) const noexcept;
+
+    /**
+     * @brief Hands the session its declared state pairs (a 3.x handler; a 2.x session has none).
+     *
+     * prepare() allocates one zeroed float buffer per pair, as long as the pair's tensors. The
+     * buffers are the session's and not a processor's, so the state survives a plan switch.
+     *
+     * @param pairs The pairs, as tensor indices of the InferenceConfig's tensor shape.
+     * @throws std::invalid_argument for an index out of range or two tensors of unequal size.
+     * @throws std::logic_error on a prepared session: the table is read without
+     * synchronization on the inference threads, so it is replaced before prepare only.
+     */
+    void set_state_pairs(std::vector<StatePair> pairs);
+
+    /**
+     * @brief Feeds every state input of a chunk from the session's state buffers.
+     *
+     * The first step of an inference, ahead of before_inference. The state carries the
+     * generation it was last fed under: a chunk stamped with another one
+     * (ThreadSafeStruct::m_dispatch_generation; a wait-free reset or a prepare happened) first
+     * zeroes every state buffer and adopts the chunk's generation. The chunk's stamp is
+     * compared, never m_generation: a reset that lands between a chunk's stale check and its
+     * feed must not zero the state for a chunk of the old stream, whose capture would then
+     * seed the new one. Inference thread only, under the session's dispatch gate (a session
+     * with a pair is session-exclusive), which serialises feed, capture and the zeroing. No
+     * allocation, no lock.
+     */
+    void feed_state(ThreadSafeStruct& chunk) noexcept;
+
+    /**
+     * @brief Captures every state output of a chunk into the session's state buffers.
+     *
+     * The last step of a successful inference, behind after_inference; a failed inference
+     * never reaches it, so the state keeps its last good value.
+     */
+    void capture_state(const ThreadSafeStruct& chunk) noexcept;
+
+    /// The declared state pairs; empty for a 2.x session and a model without declared state.
+    std::vector<StatePair> m_state_pairs;
+    /// One buffer per pair, allocated and zeroed by prepare(), never resized afterwards.
+    std::vector<std::vector<float>> m_state;
+    /// No chunk carries this stamp, so the first feed after prepare() re-initialises.
+    static constexpr uint64_t k_no_state_generation = UINT64_MAX;
+    /// The generation the state was last fed under; k_no_state_generation after prepare().
+    /// Plain field: written under the dispatch gate, like the buffers.
+    uint64_t m_state_generation = k_no_state_generation;
 
     unsigned long m_current_queue = 0;         ///< Current position in the inference queue
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
