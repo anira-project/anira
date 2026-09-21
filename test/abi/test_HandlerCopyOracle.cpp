@@ -1,11 +1,40 @@
-// The recording of the host<->ring copy path under the _f32 Hard entries of anira/abi/handler.h:
-// the twin of test/scheduler/test_CopyPathOracle.cpp over anira_handler_process_f32, _inplace
-// and _multi, anira_handler_push_data_f32 and _multi, anira_handler_pop_data_f32 and _multi,
-// compared with the transcripts of handler_copy_oracle_golden.h. The golden transcripts were
-// written by the float copy core as it stood before it was rewritten over anira_tensor, so a
-// core that passes reproduces that one bit for bit under the C entries: the status, the
-// delivered count of a single form, the num_out array of a multi form (written on ANIRA_OK
-// only), anira_handler_rt_error, every float a call wrote and every float it left alone.
+// The recording of the host<->ring copy path under the float face of anira/abi/handler.h,
+// compared with the transcripts of handler_copy_oracle_golden.h: the twin of
+// test/scheduler/test_CopyPathOracle.cpp one level up. The golden transcripts were written by
+// the float copy core as it stood before it was rewritten over anira_tensor, under the twelve
+// anira_handler_*_f32 entries the C ABI carried until they were removed; the file is not
+// re-recorded. Those entries were the tensor entries of the same names over planar float32
+// tensors, so the driver makes every recorded call the way their bodies did: it presents the
+// float blocks through an anira::PlanarFloatAdapter (anira_test::FloatFace, float_face.h) and
+// calls the tensor entry of the same name (anira_handler_process, _multi, push_data, pop_data,
+// their _multi forms and the _wait twins). A core that passes reproduces the recorded one bit
+// for bit under the C entries.
+//
+// What a transcript line holds, and where each word comes from now:
+//
+//   observed from the library, as before
+//     the status the tensor entry returned; rt_error= (anira_handler_rt_error after the
+//     call); the ring fill levels (format_rings over the session); every float the call
+//     delivered and every guard float it left alone (add_block over the caller's memory);
+//     the input memory compared around the call; delivered= of a single form, which is the
+//     size_t the tensor entry wrote (or "unset" / "null" when it was handed none); and the
+//     counts a multi tensor entry wrote into its `delivered` array.
+//
+//   reproduced by the driver
+//     num_out=[..] of a multi form. The removed _f32 multi forms took one array that was the
+//     request going in and the delivered counts coming out, written on ANIRA_OK only and left
+//     at the request on ANIRA_MISSED and on every refusal. The tensor multi entries have no
+//     such array: `delivered` is a pure out parameter. The driver keeps the request array
+//     itself and copies the entry's delivered counts into it on ANIRA_OK and only then
+//     (deliver_num_out), which is the rule the removed bodies applied. So the numbers printed
+//     on an OK line are still the library's; that the array is left alone on a miss is the
+//     driver's doing and pins nothing about the library any more.
+//
+//   labels
+//     the call names a header line prints ("process_f32", "pop_data_f32_multi_wait", ...)
+//     are the recorded labels of the scenario's calls, kept verbatim so that the golden file
+//     stays byte-identical. They no longer name symbols.
+//
 // test/support/copy_oracle.h says what a transcript is and why a scenario is a pure function
 // of its calls.
 
@@ -26,6 +55,7 @@
 #include <vector>
 
 #include "../support/copy_oracle.h"
+#include "float_face.h"
 #include "handler_copy_oracle_golden.h"
 #include "handler_support.h"
 
@@ -153,6 +183,7 @@ public:
         EXPECT_EQ(prepared, ANIRA_OK) << m_handler.m_err.message;
         if (prepared != ANIRA_OK) { return; }
         anira_handler* handler = m_handler.m_handler;
+        m_face = std::make_unique<anira_test::FloatFace>(handler);
         if (backend == Model::ParamRamp) {
             m_gate = std::make_unique<oracle::ParamRampGate>(handler->m_inference_config);
         } else {
@@ -190,7 +221,7 @@ public:
     HandlerRig(const HandlerRig&) = delete;
     HandlerRig& operator=(const HandlerRig&) = delete;
 
-    /// anira_handler_process_f32: one slot, separate memory.
+    /// "process_f32": anira_handler_process, one slot, separate memory.
     void process(size_t num_in, size_t num_out, uint32_t slot = 0, CallOptions options = k_plain) {
         if (m_session == nullptr) { return; }
         const size_t call = ++m_calls;
@@ -199,24 +230,17 @@ public:
         oracle::SlotBlock out(output_channels(slot), num_out);
         size_t delivered = k_unset;
         size_t* const count = options.m_null_delivered ? nullptr : &delivered;
-        anira_handler* const handler = m_handler.m_handler;
         open_gate_for(options);
-        const anira_status status = options.m_wait
-                                        ? anira_handler_process_f32_wait(handler,
-                                                                         in.planes(),
-                                                                         num_in,
-                                                                         out.planes(),
-                                                                         num_out,
-                                                                         ANIRA_WAIT_FOREVER,
-                                                                         slot,
-                                                                         count)
-                                        : anira_handler_process_f32(handler,
-                                                                    in.planes(),
-                                                                    num_in,
-                                                                    out.planes(),
-                                                                    num_out,
-                                                                    slot,
-                                                                    count);
+        const anira_status status =
+            options.m_wait
+                ? m_face->process_wait(in.planes(),
+                                       num_in,
+                                       out.planes(),
+                                       num_out,
+                                       ANIRA_WAIT_FOREVER,
+                                       slot,
+                                       count)
+                : m_face->process(in.planes(), num_in, out.planes(), num_out, slot, count);
         m_gate->m_open.store(false);
         add_header(entry("process_f32", options) + " slot=" + std::to_string(slot) +
                        " in=" + std::to_string(num_in) + " out=" + std::to_string(num_out),
@@ -228,27 +252,21 @@ public:
         if (options.m_settle) { settle(); }
     }
 
-    /// anira_handler_process_f32_inplace: one slot, one memory.
+    /// "process_f32_inplace": anira_handler_process in place, one slot, one memory.
     void process_inplace(size_t num_samples, uint32_t slot = 0, CallOptions options = k_plain) {
         if (m_session == nullptr) { return; }
         const size_t call = ++m_calls;
         oracle::SlotBlock data = input_block(slot, num_samples, call);
         size_t delivered = k_unset;
         size_t* const count = options.m_null_delivered ? nullptr : &delivered;
-        anira_handler* const handler = m_handler.m_handler;
         open_gate_for(options);
-        const anira_status status = options.m_wait
-                                        ? anira_handler_process_f32_inplace_wait(handler,
-                                                                                 data.planes(),
-                                                                                 num_samples,
-                                                                                 ANIRA_WAIT_FOREVER,
-                                                                                 slot,
-                                                                                 count)
-                                        : anira_handler_process_f32_inplace(handler,
-                                                                            data.planes(),
-                                                                            num_samples,
-                                                                            slot,
-                                                                            count);
+        const anira_status status =
+            options.m_wait ? m_face->process_inplace_wait(data.planes(),
+                                                          num_samples,
+                                                          ANIRA_WAIT_FOREVER,
+                                                          slot,
+                                                          count)
+                           : m_face->process_inplace(data.planes(), num_samples, slot, count);
         m_gate->m_open.store(false);
         add_header(entry("process_f32_inplace", options) + " slot=" + std::to_string(slot) +
                        " n=" + std::to_string(num_samples),
@@ -259,7 +277,8 @@ public:
         if (options.m_settle) { settle(); }
     }
 
-    /// anira_handler_process_f32_multi: every slot; num_out is the caller's request array.
+    /// "process_f32_multi": anira_handler_process_multi, every slot. num_out is the request
+    /// array of the removed form, kept by the driver (deliver_num_out).
     void process_multi(const std::vector<size_t>& in_counts,
                        const std::vector<size_t>& out_counts,
                        CallOptions options = k_plain) {
@@ -278,21 +297,21 @@ public:
         std::vector<float* const*> out_planes;
         make_outputs(out_counts, options, inputs, outputs, out_planes);
         std::vector<size_t> num_out = out_counts;
-        anira_handler* const handler = m_handler.m_handler;
+        std::vector<size_t> delivered(out_counts.size(), k_unset);
         open_gate_for(options);
-        const anira_status status = options.m_wait
-                                        ? anira_handler_process_f32_multi_wait(handler,
-                                                                               in_planes.data(),
-                                                                               in_counts.data(),
-                                                                               out_planes.data(),
-                                                                               num_out.data(),
-                                                                               ANIRA_WAIT_FOREVER)
-                                        : anira_handler_process_f32_multi(handler,
-                                                                          in_planes.data(),
-                                                                          in_counts.data(),
-                                                                          out_planes.data(),
-                                                                          num_out.data());
+        const anira_status status = options.m_wait ? m_face->process_multi_wait(in_planes.data(),
+                                                                                in_counts.data(),
+                                                                                out_planes.data(),
+                                                                                out_counts.data(),
+                                                                                ANIRA_WAIT_FOREVER,
+                                                                                delivered.data())
+                                                   : m_face->process_multi(in_planes.data(),
+                                                                           in_counts.data(),
+                                                                           out_planes.data(),
+                                                                           out_counts.data(),
+                                                                           delivered.data());
         m_gate->m_open.store(false);
+        deliver_num_out(status, delivered, num_out);
         std::string what = entry("process_f32_multi", options) +
                            " in=" + oracle::format_counts(in_counts) +
                            " out=" + oracle::format_counts(out_counts);
@@ -304,14 +323,13 @@ public:
         if (options.m_settle) { settle(); }
     }
 
-    /// anira_handler_push_data_f32: one slot.
+    /// "push_data_f32": anira_handler_push_data, one slot.
     void push(size_t num_in, uint32_t slot = 0, CallOptions options = k_plain) {
         if (m_session == nullptr) { return; }
         const size_t call = ++m_calls;
         oracle::SlotBlock in = input_block(slot, num_in, call);
         const std::vector<std::vector<float>> in_before = runs_of(in);
-        const anira_status status =
-            anira_handler_push_data_f32(m_handler.m_handler, in.planes(), num_in, slot);
+        const anira_status status = m_face->push_data(in.planes(), num_in, slot);
         add_header("push_data_f32 slot=" + std::to_string(slot) + " in=" + std::to_string(num_in),
                    status,
                    "",
@@ -320,7 +338,7 @@ public:
         if (options.m_settle) { settle(); }
     }
 
-    /// anira_handler_push_data_f32_multi: every input slot.
+    /// "push_data_f32_multi": anira_handler_push_data_multi, every input slot.
     void push_multi(const std::vector<size_t>& in_counts, CallOptions options = k_plain) {
         if (m_session == nullptr) { return; }
         const size_t call = ++m_calls;
@@ -332,9 +350,7 @@ public:
             const bool unused = options.m_null_unused && in_counts[slot] == 0;
             in_planes.push_back(unused ? nullptr : inputs[slot].planes());
         }
-        const anira_status status = anira_handler_push_data_f32_multi(m_handler.m_handler,
-                                                                      in_planes.data(),
-                                                                      in_counts.data());
+        const anira_status status = m_face->push_data_multi(in_planes.data(), in_counts.data());
         std::string what = "push_data_f32_multi in=" + oracle::format_counts(in_counts);
         if (options.m_null_unused) { what += " null-unused"; }
         add_header(what, status, "", call);
@@ -342,24 +358,18 @@ public:
         if (options.m_settle) { settle(); }
     }
 
-    /// anira_handler_pop_data_f32: one slot.
+    /// "pop_data_f32": anira_handler_pop_data, one slot.
     void pop(size_t num_out, uint32_t slot = 0, CallOptions options = k_plain) {
         if (m_session == nullptr) { return; }
         const size_t call = ++m_calls;
         oracle::SlotBlock out(output_channels(slot), num_out);
         size_t delivered = k_unset;
         size_t* const count = options.m_null_delivered ? nullptr : &delivered;
-        anira_handler* const handler = m_handler.m_handler;
         open_gate_for(options);
         const anira_status status =
             options.m_wait
-                ? anira_handler_pop_data_f32_wait(handler,
-                                                  out.planes(),
-                                                  num_out,
-                                                  ANIRA_WAIT_FOREVER,
-                                                  slot,
-                                                  count)
-                : anira_handler_pop_data_f32(handler, out.planes(), num_out, slot, count);
+                ? m_face->pop_data_wait(out.planes(), num_out, ANIRA_WAIT_FOREVER, slot, count)
+                : m_face->pop_data(out.planes(), num_out, slot, count);
         m_gate->m_open.store(false);
         add_header(entry("pop_data_f32", options) + " slot=" + std::to_string(slot) +
                        " out=" + std::to_string(num_out),
@@ -370,7 +380,7 @@ public:
         if (options.m_settle) { settle(); }
     }
 
-    /// anira_handler_pop_data_f32_multi: every output slot.
+    /// "pop_data_f32_multi": anira_handler_pop_data_multi, every output slot.
     void pop_multi(const std::vector<size_t>& out_counts, CallOptions options = k_plain) {
         if (m_session == nullptr) { return; }
         const size_t call = ++m_calls;
@@ -379,16 +389,17 @@ public:
         std::vector<float* const*> out_planes;
         make_outputs(out_counts, options, no_inputs, outputs, out_planes);
         std::vector<size_t> num_out = out_counts;
-        anira_handler* const handler = m_handler.m_handler;
+        std::vector<size_t> delivered(out_counts.size(), k_unset);
         open_gate_for(options);
         const anira_status status =
             options.m_wait
-                ? anira_handler_pop_data_f32_multi_wait(handler,
-                                                        out_planes.data(),
-                                                        num_out.data(),
-                                                        ANIRA_WAIT_FOREVER)
-                : anira_handler_pop_data_f32_multi(handler, out_planes.data(), num_out.data());
+                ? m_face->pop_data_multi_wait(out_planes.data(),
+                                              out_counts.data(),
+                                              ANIRA_WAIT_FOREVER,
+                                              delivered.data())
+                : m_face->pop_data_multi(out_planes.data(), out_counts.data(), delivered.data());
         m_gate->m_open.store(false);
+        deliver_num_out(status, delivered, num_out);
         std::string what =
             entry("pop_data_f32_multi", options) + " out=" + oracle::format_counts(out_counts);
         if (options.m_null_unused) { what += " null-unused"; }
@@ -419,6 +430,16 @@ private:
     /// behind it with nothing in flight.
     void open_gate_for(const CallOptions& options) {
         if (options.m_wait) { m_gate->m_open.store(true); }
+    }
+
+    /// The count protocol of the removed _f32 multi forms, reproduced here (see the file
+    /// comment): num_out goes in as the request and takes the counts the tensor entry
+    /// delivered on ANIRA_OK only; ANIRA_MISSED and every refusal leave it at the request.
+    static void deliver_num_out(anira_status status,
+                                const std::vector<size_t>& delivered,
+                                std::vector<size_t>& num_out) {
+        if (status != ANIRA_OK) { return; }
+        num_out = delivered;
     }
 
     static std::string entry(const std::string& name, const CallOptions& options) {
@@ -518,6 +539,7 @@ private:
                                                 .provider = ANIRA_PROVIDER_DEFAULT,
                                                 .engine_id = nullptr}};
     anira_test::Handler m_handler;
+    std::unique_ptr<anira_test::FloatFace> m_face;  ///< built after prepare; borrows m_handler
     std::unique_ptr<anira_test::GateBackend> m_gate;
     std::shared_ptr<anira::SessionElement> m_session;
     std::vector<size_t> m_positions;  ///< per input slot, the samples pushed so far

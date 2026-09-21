@@ -7,6 +7,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
 #include <anira/scheduler/Core.h>
 
@@ -167,13 +168,18 @@ void unloadtest_prepare(void* instance) {
 
 void unloadtest_process(void* instance, int num_blocks) {
     auto* i = static_cast<Instance*>(instance);
+    // In place: one planar tensor over the channel pointers, handed over as input and output.
     const std::array<float*, 1> channels{i->m_buffer.data()};
+    const std::array<int64_t, 2> shape{1, static_cast<int64_t>(k_block_size)};
+    anira_tensor io{};
+    anira_tensor_init_host_planar(&io,
+                                  static_cast<const void*>(channels.data()),
+                                  1,
+                                  ANIRA_DTYPE_F32,
+                                  2,
+                                  shape.data());
     for (int block = 0; block < num_blocks; ++block) {
-        static_cast<void>(anira_handler_process_f32_inplace(i->m_handler,
-                                                            channels.data(),
-                                                            k_block_size,
-                                                            0,
-                                                            nullptr));
+        static_cast<void>(anira_handler_process(i->m_handler, &io, &io, 0, nullptr));
     }
 }
 

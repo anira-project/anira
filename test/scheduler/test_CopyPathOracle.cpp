@@ -1,17 +1,29 @@
-// The recording of the host<->ring copy path under the float*** functions of InferenceManager:
-// process_input, process_output and the three miss policies, driven through every public
-// float*** function over engine-free sessions, and compared with the transcripts of
+// The recording of the host<->ring copy path under the float face of InferenceManager:
+// process_input, process_output and the three miss policies, driven with float channel
+// pointers over engine-free sessions, and compared with the transcripts of
 // copy_path_oracle_golden.h. The golden transcripts were written by the float copy core as it
-// stood before it was rewritten over anira_tensor, so a core that passes reproduces that one
-// bit for bit: the delivered counts, the miss flag, every float a call wrote and every float
-// it left alone. test/support/copy_oracle.h says what a transcript is and why a scenario is
-// a pure function of its calls; test/abi/test_HandlerCopyOracle.cpp is the twin over the _f32
-// Hard entries.
+// stood before it was rewritten over anira_tensor, through the seven float*** functions the
+// manager had then, so a core that passes reproduces that one bit for bit: the delivered
+// counts, the miss flag, every float a call wrote and every float it left alone.
+//
+// The manager takes host tensors only now. The float face is anira::PlanarFloatAdapter
+// (src/scheduler/PlanarFloatAdapter.h), which anira::InferenceHandler owns, and the rig drives
+// it the way that class does: the adapter presents the channel pointers, the
+// tensor stem of the same name runs on its tensors (the seven: process, process_nowait,
+// process_wait, push_data, pop_data, its deadline form, pop_data_wait), and deliver_counts()
+// writes the delivered counts into the caller's array. Every word of a transcript's header is
+// read off that call: the count arrays after it, the pointer deliver_counts() returned, the
+// manager's miss flag, the outcome of a wait.
+//
+// test/support/copy_oracle.h says what a transcript is and why a scenario is a pure function
+// of its calls; test/abi/test_HandlerCopyOracle.cpp is the twin one level up, the same kind of
+// recording under the Hard entries of the C ABI, presented through the same adapter.
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/tensor.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/SessionElement.h>
@@ -30,6 +42,7 @@
 #include "../support/copy_oracle.h"
 #include "copy_path_oracle_golden.h"
 #include "gtest/gtest.h"
+#include "scheduler/PlanarFloatAdapter.h"
 
 using namespace anira;
 
@@ -147,6 +160,18 @@ std::unique_ptr<anira_test::GateBackend> make_gate(Model model, InferenceConfig&
     return std::make_unique<anira_test::GateBackend>(config);
 }
 
+/// shape[1] of the first `count` tensors of an array (none for a NULL array): the counts a
+/// side was presented with, as they stand after the call.
+std::vector<size_t> presented_counts(const anira_tensor* tensors, size_t count) {
+    std::vector<size_t> counts;
+    if (tensors == nullptr) { return counts; }
+    counts.reserve(count);
+    for (size_t slot = 0; slot < count; ++slot) {
+        counts.push_back(static_cast<size_t>(tensors[slot].shape[1]));
+    }
+    return counts;
+}
+
 class ManagerRig {
 public:
     ManagerRig(InferenceConfig config,
@@ -161,6 +186,7 @@ public:
         , m_positions(m_config.get_tensor_input_shape().size(), 0) {
         m_manager.set_miss_policy(policy);
         m_manager.prepare(host_config());
+        m_adapter.prepare(m_config);
         for (const std::shared_ptr<SessionElement>& session : Core::get_sessions()) {
             if (session->m_session_id == m_manager.get_session_id()) { m_session = session; }
         }
@@ -223,46 +249,42 @@ public:
             float* const* planes = shared ? inputs[0].planes() : outputs[slot].planes();
             out_planes.push_back(unused ? nullptr : planes);
         }
-        std::vector<size_t> num_in = in_counts;
+        // The adapter takes the input counts as const: the caller's array cannot change. The
+        // transcript's second in= is what the stem was handed, read back after the call from
+        // shape[1] of the tensors the adapter presented. A pop presents no input.
         std::vector<size_t> num_out = out_counts;
         Core::WaitOutcome outcome = Core::WaitOutcome::Done;
-        const size_t* returned = nullptr;
+        const anira_tensor* in_tensors =
+            pops ? nullptr : m_adapter.present_inputs(in_planes.data(), in_counts.data());
+        const anira_tensor* out_tensors =
+            m_adapter.present_outputs(out_planes.data(), num_out.data());
+        const size_t* delivered = nullptr;
         switch (stem) {
-            case Stem::Process:
-                returned = m_manager.process(in_planes.data(),
-                                             num_in.data(),
-                                             out_planes.data(),
-                                             num_out.data());
-                break;
+            case Stem::Process: delivered = m_manager.process(in_tensors, out_tensors); break;
             case Stem::ProcessNowait:
-                returned = m_manager.process_nowait(in_planes.data(),
-                                                    num_in.data(),
-                                                    out_planes.data(),
-                                                    num_out.data());
+                delivered = m_manager.process_nowait(in_tensors, out_tensors);
                 break;
             case Stem::ProcessWait:
-                returned = m_manager.process_wait(in_planes.data(),
-                                                  num_in.data(),
-                                                  out_planes.data(),
-                                                  num_out.data(),
-                                                  std::chrono::steady_clock::duration::max(),
-                                                  outcome);
-                break;
-            case Stem::PopData:
-                returned = m_manager.pop_data(out_planes.data(), num_out.data());
-                break;
-            case Stem::PopDataUntil:
-                returned = m_manager.pop_data(out_planes.data(),
-                                              num_out.data(),
-                                              std::chrono::steady_clock::time_point::max());
-                break;
-            case Stem::PopDataWait:
-                returned = m_manager.pop_data_wait(out_planes.data(),
-                                                   num_out.data(),
+                delivered = m_manager.process_wait(in_tensors,
+                                                   out_tensors,
                                                    std::chrono::steady_clock::duration::max(),
                                                    outcome);
                 break;
+            case Stem::PopData: delivered = m_manager.pop_data(out_tensors); break;
+            case Stem::PopDataUntil:
+                delivered =
+                    m_manager.pop_data(out_tensors, std::chrono::steady_clock::time_point::max());
+                break;
+            case Stem::PopDataWait:
+                delivered = m_manager.pop_data_wait(out_tensors,
+                                                    std::chrono::steady_clock::duration::max(),
+                                                    outcome);
+                break;
         }
+        // The count protocol of the float face: the stem's counts into the caller's array,
+        // and that array back.
+        const size_t* returned = m_adapter.deliver_counts(delivered, num_out.data());
+        const std::vector<size_t> num_in = presented_counts(in_tensors, in_counts.size());
 
         std::string header = "#" + std::to_string(call) + " " + name_of(stem);
         if (!pops) { header += " in=" + oracle::format_counts(in_counts); }
@@ -303,8 +325,10 @@ public:
             const bool unused = options.m_null_unused && in_counts[slot] == 0;
             in_planes.push_back(unused ? nullptr : inputs[slot].planes());
         }
-        std::vector<size_t> num_in = in_counts;
-        m_manager.push_data(in_planes.data(), num_in.data());
+        const anira_tensor* in_tensors =
+            m_adapter.present_inputs(in_planes.data(), in_counts.data());
+        m_manager.push_data(in_tensors);
+        const std::vector<size_t> num_in = presented_counts(in_tensors, in_counts.size());
         std::string header =
             "#" + std::to_string(call) + " push_data in=" + oracle::format_counts(in_counts);
         if (options.m_null_unused) { header += " null-unused"; }
@@ -340,6 +364,7 @@ private:
     PrePostProcessor m_pp_processor;
     std::unique_ptr<anira_test::GateBackend> m_gate;
     InferenceManager m_manager;
+    PlanarFloatAdapter m_adapter;  ///< the float face, sized beside the manager's prepare
     Mode m_mode;
     std::shared_ptr<SessionElement> m_session;
     std::vector<size_t> m_positions;  ///< per input slot, the samples pushed so far

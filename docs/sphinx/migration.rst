@@ -24,7 +24,14 @@ Where the 2.x API stands in this pre-release
   from the 3.x handles (:ref:`migration-bridge`); sections 2 to 5 of the :doc:`usage` guide
   describe it. The 3.x handler over the C ABI is in this pre-release (``anira/abi/handler.h``,
   :doc:`usage` section 3.2); the ``anira::InferenceHandler`` class of ``anira/anira.hpp`` and
-  the removal of the 2.x runtime follow with the cut-over.
+  the removal of the 2.x runtime follow with the cut-over. The class behind both handlers,
+  :cpp:class:`anira::InferenceManager`, is not part of that surface and did change: it takes
+  host tensors only, and its 2.x ``float***`` functions (``process``, ``push_data``,
+  ``pop_data`` and their variants) are gone. Code that drove a manager directly presents one
+  ``anira_tensor`` per slot to the function of the same name, for channel pointers with
+  ``anira_tensor_init_host_planar`` (:doc:`usage` section 3.3); ``anira::InferenceHandler``
+  does exactly that for its callers, and a host of the C ABI does it itself (:doc:`usage`
+  section 3.2).
 - **The bundled models.** The 2.x fixture headers with their ``anira::InferenceConfig`` statics
   (``cnn_config``, ``hybridnn_config``, ``rnn_config``, ``gain_config``, ``stereo_gain_config``,
   ``rave_funk_drum_config`` and the encoder and decoder) are gone. Every bundled model ships a

@@ -108,12 +108,6 @@ struct anira_handler {
     std::atomic<bool> m_prepared{false};  ///< release at the end of a successful prepare;
                                           ///< acquire in every nonblocking entry
     anira::RtLatch m_rt;                  ///< rt_error, the kind bits, the suppressed count
-    // The scratch arrays of the single-tensor forms, sized at prepare, indexed on the driver
-    // thread.
-    std::vector<const float* const*> m_input_ptrs;
-    std::vector<size_t> m_input_num;
-    std::vector<float* const*> m_output_ptrs;
-    std::vector<size_t> m_output_num;
     /// The dtype a host block of the slot must carry, resolved at prepare: the ring dtype of a
     /// Streamed slot (F32 default); float32 for a Static slot, whose values the copy path
     /// moves as float and whose spec dtype is float32 in this pre-release.

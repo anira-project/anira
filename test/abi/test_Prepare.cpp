@@ -16,6 +16,7 @@
 #include <anira/scheduler/Core.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
 #include <chrono>
@@ -34,6 +35,7 @@
 #include "../support/log_record_collector.h"
 #include "../support/v2_documents.h"
 #include "fixtures.h"
+#include "float_face.h"
 #include "handler_support.h"
 
 namespace {
@@ -131,9 +133,10 @@ CreateOutcome try_create(const Context& context,
 void run_waited_block(anira_handler* handler, size_t block_index, size_t n = k_block) {
     std::vector<float> block = ramp(block_index, n);
     const std::array<float*, 1> ptrs{block.data()};
+    const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, n);
     const size_t prev = anira_test::available(handler);
     size_t delivered = 0;
-    EXPECT_EQ(anira_handler_process_f32_inplace(handler, ptrs.data(), n, 0, &delivered), ANIRA_OK)
+    EXPECT_EQ(anira_handler_process(handler, &io, &io, 0, &delivered), ANIRA_OK)
         << "block " << block_index;
     EXPECT_EQ(delivered, n) << "block " << block_index;
     wait_for_block(handler, prev);
@@ -142,8 +145,8 @@ void run_waited_block(anira_handler* handler, size_t block_index, size_t n = k_b
 void expect_unprepared(anira_handler* handler) {
     std::vector<float> block(k_block, 0.5F);
     const std::array<float*, 1> ptrs{block.data()};
-    EXPECT_EQ(anira_handler_process_f32_inplace(handler, ptrs.data(), k_block, 0, nullptr),
-              ANIRA_ERROR_NOT_PREPARED);
+    const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
+    EXPECT_EQ(anira_handler_process(handler, &io, &io, 0, nullptr), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_rt_error(handler), ANIRA_ERROR_NOT_PREPARED);
 }
 
@@ -297,14 +300,16 @@ TEST(AbiPrepare, BypassIsRefusedWhenNoAnchoredInputHasTheOutputsChannelCount) {
 
 namespace {
 
-/// The _f32 forms, and the tensor forms of the same calls: one packed mono block per side
-/// (Tensor), one tensor per slot with the Static gain as [1, 1] (TensorMulti).
+/// The calls of a float host over planar tensors, one pointer per channel (InPlace: one tensor
+/// on both sides, Separate, Multi: one tensor per slot), and the same calls over packed
+/// blocks: one packed mono block per side (Tensor), one tensor per slot with the Static gain
+/// as [1, 1] (TensorMulti).
 enum class Form { InPlace, Separate, Multi, Tensor, TensorMulti };
 
 constexpr float k_backup = 0.5F;  // what the backup function of ANIRA_MISS_CALLBACK writes
 
 /// The backup function: k_backup into every requested value of every output. The outputs are
-/// mono here: one plane under an _f32 form, one packed block under a tensor form. Declared
+/// mono here: one plane under a planar form, one packed block under a packed one. Declared
 /// ANIRA_NONBLOCKING (clang refuses to add the attribute through the conversion to
 /// anira_miss_fn) and free of assertions: it runs on the driver thread.
 anira_status ANIRA_CALL fill_backup(anira_handler* /*handler*/,
@@ -345,24 +350,18 @@ Delivered call(anira_handler* handler,
         case Form::InPlace: {
             out = in;
             const std::array<float*, 1> ch{out.data()};
-            delivered.m_status = anira_handler_process_f32_inplace(handler,
-                                                                   ch.data(),
-                                                                   k_block,
-                                                                   0,
-                                                                   &delivered.m_count);
+            const anira_tensor io = anira_test::planar_f32(ch.data(), 1, k_block);
+            delivered.m_status = anira_handler_process(handler, &io, &io, 0, &delivered.m_count);
             return delivered;
         }
         case Form::Separate: {
             out.assign(k_block, -1.0F);
             const std::array<const float*, 1> i{in.data()};
             const std::array<float*, 1> o{out.data()};
-            delivered.m_status = anira_handler_process_f32(handler,
-                                                           i.data(),
-                                                           k_block,
-                                                           o.data(),
-                                                           k_block,
-                                                           0,
-                                                           &delivered.m_count);
+            const anira_tensor in_tensor = anira_test::planar_f32(i.data(), 1, k_block);
+            const anira_tensor out_tensor = anira_test::planar_f32(o.data(), 1, k_block);
+            delivered.m_status =
+                anira_handler_process(handler, &in_tensor, &out_tensor, 0, &delivered.m_count);
             return delivered;
         }
         case Form::Multi: {
@@ -370,25 +369,24 @@ Delivered call(anira_handler* handler,
             const float gain = 1.0F;
             const std::array<const float*, 1> in_ch{in.data()};
             const std::array<const float*, 1> gain_ch{&gain};
-            const std::array<const float* const*, 2> ins{in_ch.data(), gain_ch.data()};
-            const std::array<size_t, 2> num_in{k_block, 1};
             const std::array<float*, 1> out_ch{out.data()};
             const std::array<float*, 1> gain_out_ch{&gain_out};
-            const std::array<float* const*, 2> outs{out_ch.data(),
-                                                    static_out ? gain_out_ch.data() : nullptr};
-            std::array<size_t, 2> num_out{k_block, static_out ? 1U : 0U};
-            delivered.m_status = anira_handler_process_f32_multi(handler,
-                                                                 ins.data(),
-                                                                 num_in.data(),
-                                                                 outs.data(),
-                                                                 num_out.data());
-            // The multi form writes its request array for a delivered block only; a miss
-            // leaves the requests in place (the status says what the buffers hold).
+            const std::array<anira_tensor, 2> ins{anira_test::planar_f32(in_ch.data(), 1, k_block),
+                                                  anira_test::planar_f32(gain_ch.data(), 1, 1)};
+            // Without static_out the Static output is an empty tensor with no planes.
+            const std::array<anira_tensor, 2> outs{
+                anira_test::planar_f32(out_ch.data(), 1, k_block),
+                static_out ? anira_test::planar_f32(gain_out_ch.data(), 1, 1)
+                           : anira_test::empty_planar_f32(1)};
+            std::array<size_t, 2> counts{7, 7};  // a pure out parameter: written on every return
+            delivered.m_status =
+                anira_handler_process_multi(handler, ins.data(), 2, outs.data(), 2, counts.data());
+            // A missed block delivers 0 on every slot (the status says what the buffers hold).
             if (delivered.m_status == ANIRA_MISSED) {
-                EXPECT_EQ(num_out[0], k_block) << "a miss keeps the request";
-                EXPECT_EQ(num_out[1], static_out ? 1U : 0U) << "a miss keeps the request";
+                EXPECT_EQ(counts[0], 0U) << "a missed block delivers 0";
+                EXPECT_EQ(counts[1], 0U) << "a missed block delivers 0";
             }
-            delivered.m_count = delivered.m_status == ANIRA_OK ? num_out[0] : 0;
+            delivered.m_count = counts[0];
             return delivered;
         }
         case Form::Tensor: {
@@ -525,17 +523,17 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
         gate.m_open.store(false);
         const std::vector<float> in = ramp(6);
         const std::array<const float*, 1> in_ch{in.data()};
-        EXPECT_EQ(anira_handler_push_data_f32(h, in_ch.data(), k_block, 0), ANIRA_OK);
+        const anira_tensor pushed = anira_test::planar_f32(in_ch.data(), 1, k_block);
+        EXPECT_EQ(anira_handler_push_data(h, &pushed, 0), ANIRA_OK);
         std::vector<float> popped(k_block, -1.0F);
         const std::array<float*, 1> popped_ch{popped.data()};
+        const anira_tensor popped_tensor = anira_test::planar_f32(popped_ch.data(), 1, k_block);
         size_t popped_count = 0;
-        EXPECT_EQ(anira_handler_pop_data_f32(h, popped_ch.data(), k_block, 0, &popped_count),
-                  ANIRA_OK);
+        EXPECT_EQ(anira_handler_pop_data(h, &popped_tensor, 0, &popped_count), ANIRA_OK);
         EXPECT_EQ(popped_count, k_block);
         expect_same_block(popped, ramp(5), 6);
         popped.assign(k_block, -1.0F);
-        EXPECT_EQ(anira_handler_pop_data_f32(h, popped_ch.data(), k_block, 0, &popped_count),
-                  ANIRA_MISSED);
+        EXPECT_EQ(anira_handler_pop_data(h, &popped_tensor, 0, &popped_count), ANIRA_MISSED);
         EXPECT_EQ(popped_count, 0U);
         expect_all(popped, 0.0F, "the starved pop");
     }
@@ -570,9 +568,9 @@ TEST(AbiPrepare, TheTensorFormsFollowTheMissPolicies) {
     run_miss_sequence(ANIRA_MISS_ZEROS, Form::TensorMulti, false);
 }
 
-// ANIRA_MISS_CALLBACK: the host's function fills the starved block, under the _f32 forms (it
-// receives planar float32 tensors over the caller's channel pointers) and under the tensor
-// forms (the caller's own tensors); the block still counts as missed and the stream realigns.
+// ANIRA_MISS_CALLBACK: the host's function fills the starved block. It is handed the caller's
+// own tensors, planar ones over channel pointers and packed ones alike; the block still counts
+// as missed and the stream realigns.
 TEST(AbiPrepare, CallbackHandsAStarvedBlockToTheHost) {
     run_miss_sequence(ANIRA_MISS_CALLBACK, Form::InPlace, false);
     run_miss_sequence(ANIRA_MISS_CALLBACK, Form::Separate, false);
@@ -582,10 +580,12 @@ TEST(AbiPrepare, CallbackHandsAStarvedBlockToTheHost) {
     run_miss_sequence(ANIRA_MISS_CALLBACK, Form::TensorMulti, false);
 }
 
-// The multi forms' num_out is the caller's request array. A host that keeps one array
-// across callbacks must still be asking for a block after a miss: a miss that zeroed the
+// The request of a tensor form is shape[1] of its output tensors, which no call writes, and
+// the counts come back through `delivered`, a pure out parameter. A host that builds its
+// tensors once and keeps one delivered array across callbacks must still be asking for a
+// block after a miss: the miss leaves zeros in that array, and an entry that read them back as
 // requests would make every later call a request for nothing, answered ANIRA_OK.
-TEST(AbiPrepare, AReusedRequestArraySurvivesAMiss) {
+TEST(AbiPrepare, TensorsBuiltOnceSurviveAMiss) {
     const Context context;
     const ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
@@ -597,42 +597,52 @@ TEST(AbiPrepare, AReusedRequestArraySurvivesAMiss) {
     ASSERT_NO_FATAL_FAILURE(attach_processor(h, gate));
     const DestroyFirst destroy_first(handler, &gate);
 
-    std::vector<float> in;
+    std::vector<float> in(k_block, 0.0F);
     std::vector<float> out(k_block, -1.0F);
     const float gain = 1.0F;
+    const std::array<const float*, 1> in_ch{in.data()};
     const std::array<const float*, 1> gain_ch{&gain};
     const std::array<float*, 1> out_ch{out.data()};
-    const std::array<float* const*, 2> outs{out_ch.data(), nullptr};
-    const std::array<size_t, 2> num_in{k_block, 1};
-    std::array<size_t, 2> num_out{k_block, 0};  // set once, reused by every call below
+    // Built once, reused by every call below; the Static output is left out (an empty tensor).
+    const std::array<anira_tensor, 2> ins{anira_test::planar_f32(in_ch.data(), 1, k_block),
+                                          anira_test::planar_f32(gain_ch.data(), 1, 1)};
+    const std::array<anira_tensor, 2> outs{anira_test::planar_f32(out_ch.data(), 1, k_block),
+                                           anira_test::empty_planar_f32(1)};
+    // The bytes of the output descriptors, as test_HandlerTensor's bytes_of() takes them.
+    using DescriptorBytes = std::array<unsigned char, sizeof(outs)>;
+    const auto bytes_of_outs = [&outs] {
+        DescriptorBytes bytes{};
+        std::memcpy(bytes.data(), outs.data(), sizeof(outs));
+        return bytes;
+    };
+    const DescriptorBytes outs_before = bytes_of_outs();
+    std::array<size_t, 2> delivered{7, 7};  // never reset by the test
     const auto call_multi = [&](size_t block_index) {
-        in = ramp(block_index);
-        const std::array<const float*, 1> in_ch{in.data()};
-        const std::array<const float* const*, 2> ins{in_ch.data(), gain_ch.data()};
-        return anira_handler_process_f32_multi(h,
-                                               ins.data(),
-                                               num_in.data(),
-                                               outs.data(),
-                                               num_out.data());
+        const std::vector<float> block = ramp(block_index);
+        std::ranges::copy(block, in.begin());
+        return anira_handler_process_multi(h, ins.data(), 2, outs.data(), 2, delivered.data());
     };
 
     const size_t prev = anira_test::available(h);
     EXPECT_EQ(call_multi(1), ANIRA_OK) << "the priming zeros";
-    EXPECT_EQ(num_out[0], k_block);
+    EXPECT_EQ(delivered[0], k_block);
     wait_for_block(h, prev);
     gate.m_open.store(false);
     EXPECT_EQ(call_multi(2), ANIRA_OK);
     expect_same_block(out, ramp(1), 2);
     EXPECT_EQ(call_multi(3), ANIRA_MISSED) << "inference 2 is held at the gate";
-    EXPECT_EQ(num_out[0], k_block) << "the request survives the miss";
-    EXPECT_EQ(num_out[1], 0U);
+    EXPECT_EQ(delivered[0], 0U) << "a missed block delivers 0";
+    EXPECT_EQ(delivered[1], 0U);
+    EXPECT_EQ(bytes_of_outs(), outs_before)
+        << "the request is shape[1] of a descriptor no call writes: it survives the miss";
     expect_all(out, 0.0F, "block 3");
 
-    // The same array, untouched by the test: the next call asks for a whole block again.
+    // The same tensors and the same delivered array, untouched by the test: the zeros the miss
+    // left in it are not read, and the next call asks for a whole block again.
     gate.m_open.store(true);
     wait_for_available(h, 2 * k_block);
     EXPECT_EQ(call_multi(4), ANIRA_OK);
-    EXPECT_EQ(num_out[0], k_block);
+    EXPECT_EQ(delivered[0], k_block);
     expect_same_block(out, ramp(3), 4);
 }
 
@@ -867,8 +877,9 @@ TEST(AbiPrepare, ASecondPrepareReplacesTheSessionWhole) {
     for (size_t k = 1; k <= 2; ++k) {
         std::vector<float> block = ramp(k, 256);
         const std::array<float*, 1> ptrs{block.data()};
+        const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, 256);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_process_f32_inplace(h, ptrs.data(), 256, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, 256U);
     }
     wait_for_available(h, latency);

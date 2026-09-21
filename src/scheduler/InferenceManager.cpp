@@ -129,38 +129,7 @@ void InferenceManager::prepare(HostConfig new_config,
     m_input_counts.assign(num_inputs, 0);
     m_output_counts.assign(num_outputs, 0);
 
-    // The tensors of the float*** adapters, complete but for what a call brings: planar
-    // float32 over the manager's own plane arrays, with no samples yet. A call stores
-    // shape[1] and the caller's channel pointers, nothing else. The inputs of a pop are
-    // empty tensors of the slot's dtype.
-    const auto make_planes = [](const std::vector<SlotCopy>& slots) {
-        std::vector<std::vector<void*>> planes;
-        planes.reserve(slots.size());
-        for (const SlotCopy& slot : slots) { planes.emplace_back(slot.m_channels, nullptr); }
-        return planes;
-    };
-    const auto make_adapters = [](const std::vector<SlotCopy>& slots,
-                                  std::vector<std::vector<void*>>& planes,
-                                  uint32_t flags) {
-        std::vector<anira_tensor> tensors(slots.size());
-        for (size_t i = 0; i < slots.size(); ++i) {
-            const std::array<int64_t, 2> shape{static_cast<int64_t>(slots[i].m_channels), 0};
-            anira_tensor_init_host_planar(&tensors[i],
-                                          static_cast<const void*>(planes[i].data()),
-                                          static_cast<uint32_t>(slots[i].m_channels),
-                                          ANIRA_DTYPE_F32,
-                                          2,
-                                          shape.data());
-            tensors[i].flags |= flags;
-        }
-        return tensors;
-    };
-    m_adapter_input_planes = make_planes(m_input_slots);
-    m_adapter_output_planes = make_planes(m_output_slots);
-    m_adapter_inputs = make_adapters(m_input_slots,
-                                     m_adapter_input_planes,
-                                     static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY));
-    m_adapter_outputs = make_adapters(m_output_slots, m_adapter_output_planes, 0U);
+    // The inputs of a pop: one empty tensor of the slot's dtype per input slot.
     m_empty_inputs.assign(num_inputs, anira_tensor{});
     for (size_t i = 0; i < num_inputs; ++i) {
         const std::array<int64_t, 2> shape{static_cast<int64_t>(m_input_slots[i].m_channels), 0};
@@ -189,136 +158,6 @@ void InferenceManager::prepare(HostConfig new_config,
                 0);
         }
     }
-}
-
-size_t* InferenceManager::process(const float* const* const* input_data,
-                                  size_t* num_input_samples,
-                                  float* const* const* output_data,
-                                  size_t* num_output_samples) {
-    // The 2.x call: with a blocking ratio the block's own duration times the ratio is
-    // waited for on the semaphore, else nothing is waited for.
-    if (m_inference_config.m_blocking_ratio > 0.f) {
-        Core::WaitOutcome ignored = Core::WaitOutcome::Done;
-        return process_wait(input_data,
-                            num_input_samples,
-                            output_data,
-                            num_output_samples,
-                            contract_wait_budget(num_input_samples, num_output_samples),
-                            ignored);
-    }
-    return process_nowait(input_data, num_input_samples, output_data, num_output_samples);
-}
-
-// ---- The float*** functions: float32 planar adapters onto the tensor stems. The caller's
-// channel pointers become the planes of the manager's prepare-filled tensors, the stem runs,
-// and the delivered counts go back into the caller's array, which is what is returned. -------
-
-size_t* InferenceManager::process_nowait(const float* const* const* input_data,
-                                         size_t* num_input_samples,
-                                         float* const* const* output_data,
-                                         size_t* num_output_samples) {
-    present_inputs(input_data, num_input_samples);
-    present_outputs(output_data, num_output_samples);
-    return deliver_counts(process_nowait(m_adapter_inputs.data(), m_adapter_outputs.data()),
-                          num_output_samples);
-}
-
-size_t* InferenceManager::process_wait(const float* const* const* input_data,
-                                       size_t* num_input_samples,
-                                       float* const* const* output_data,
-                                       size_t* num_output_samples,
-                                       std::chrono::steady_clock::duration budget,
-                                       Core::WaitOutcome& outcome) {
-    present_inputs(input_data, num_input_samples);
-    present_outputs(output_data, num_output_samples);
-    return deliver_counts(
-        process_wait(m_adapter_inputs.data(), m_adapter_outputs.data(), budget, outcome),
-        num_output_samples);
-}
-
-size_t* InferenceManager::pop_data_wait(float* const* const* output_data,
-                                        size_t* num_output_samples,
-                                        std::chrono::steady_clock::duration budget,
-                                        Core::WaitOutcome& outcome) {
-    present_outputs(output_data, num_output_samples);
-    return deliver_counts(pop_data_wait(m_adapter_outputs.data(), budget, outcome),
-                          num_output_samples);
-}
-
-void InferenceManager::push_data(const float* const* const* input_data, size_t* num_input_samples) {
-    present_inputs(input_data, num_input_samples);
-    push_data(m_adapter_inputs.data());
-}
-
-size_t* InferenceManager::pop_data(float* const* const* output_data, size_t* num_output_samples) {
-    present_outputs(output_data, num_output_samples);
-    return deliver_counts(pop_data(m_adapter_outputs.data()), num_output_samples);
-}
-
-size_t* InferenceManager::pop_data(float* const* const* output_data,
-                                   size_t* num_output_samples,
-                                   std::chrono::steady_clock::time_point wait_until) {
-    // The 2.x deadline form keeps its own body: the blocking_ratio branch and its record.
-    present_outputs(output_data, num_output_samples);
-    load_counts(m_empty_inputs.data(), m_input_counts);
-    load_counts(m_adapter_outputs.data(), m_output_counts);
-    request_output(m_output_counts.data());
-    if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
-    if (m_inference_config.m_blocking_ratio > 0.f) {
-        Core::new_data_request(m_session, wait_until);
-    } else {
-        ANIRA_LOG_RT_ERROR_ONCE(RtSite::WaitWithoutSemaphore,
-                                log_group::k_scheduler,
-                                "InferenceConfig does not use blocking_ratio and does not use "
-                                "semaphores for data acquisition, cannot wait for data!");
-    }
-
-    return deliver_counts(process_output(m_adapter_outputs.data(),
-                                         m_output_counts.data(),
-                                         m_empty_inputs.data(),
-                                         m_input_counts.data()),
-                          num_output_samples);
-}
-
-void InferenceManager::present_inputs(const float* const* const* input_data,
-                                      const size_t* num_input_samples) noexcept {
-    for (size_t slot = 0; slot < m_adapter_inputs.size(); ++slot) {
-        m_adapter_inputs[slot].shape[1] = static_cast<int64_t>(num_input_samples[slot]);
-        std::vector<void*>& planes = m_adapter_input_planes[slot];
-        // A slot whose count is 0 is an empty tensor: the caller's pointers are not read (the
-        // single-tensor forms of the C handler leave them unset, a caller may pass NULL), and
-        // its planes name no memory, so a miss function never finds the pointers of an earlier
-        // call in a slot this call did not carry.
-        if (num_input_samples[slot] == 0) {
-            std::ranges::fill(planes, nullptr);
-            continue;
-        }
-        for (size_t channel = 0; channel < planes.size(); ++channel) {
-            // The core never writes through an input tensor (ANIRA_TENSOR_READ_ONLY).
-            planes[channel] = const_cast<float*>(input_data[slot][channel]);
-        }
-    }
-}
-
-void InferenceManager::present_outputs(float* const* const* output_data,
-                                       const size_t* num_output_samples) noexcept {
-    for (size_t slot = 0; slot < m_adapter_outputs.size(); ++slot) {
-        m_adapter_outputs[slot].shape[1] = static_cast<int64_t>(num_output_samples[slot]);
-        std::vector<void*>& planes = m_adapter_output_planes[slot];
-        if (num_output_samples[slot] == 0) {
-            std::ranges::fill(planes, nullptr);
-            continue;
-        }
-        for (size_t channel = 0; channel < planes.size(); ++channel) {
-            planes[channel] = output_data[slot][channel];
-        }
-    }
-}
-
-size_t* InferenceManager::deliver_counts(const size_t* delivered,
-                                         size_t* num_output_samples) const noexcept {
-    std::copy_n(delivered, m_output_counts.size(), num_output_samples);
-    return num_output_samples;
 }
 
 // ---- The tensor stems --------------------------------------------------------------------------
@@ -378,12 +217,35 @@ const size_t* InferenceManager::pop_data_wait(const anira_tensor* outputs,
                           m_input_counts.data());
 }
 
-std::chrono::steady_clock::duration InferenceManager::contract_wait_budget(
-    const size_t* num_input_samples,
-    const size_t* num_output_samples) const noexcept {
-    return wait_budget_of(m_session->m_reference.m_is_input
-                              ? num_input_samples[m_session->m_reference.m_index]
-                              : num_output_samples[m_session->m_reference.m_index]);
+const size_t* InferenceManager::process(const anira_tensor* inputs, const anira_tensor* outputs) {
+    // The 2.x call: with a blocking ratio the block's own duration times the ratio is
+    // waited for on the semaphore, else nothing is waited for.
+    if (m_inference_config.m_blocking_ratio > 0.f) {
+        Core::WaitOutcome ignored = Core::WaitOutcome::Done;
+        return process_wait(inputs, outputs, contract_wait_budget(inputs, outputs), ignored);
+    }
+    return process_nowait(inputs, outputs);
+}
+
+const size_t* InferenceManager::pop_data(const anira_tensor* outputs,
+                                         std::chrono::steady_clock::time_point wait_until) {
+    // The 2.x deadline form keeps its own body: the blocking_ratio branch and its record.
+    load_counts(m_empty_inputs.data(), m_input_counts);
+    load_counts(outputs, m_output_counts);
+    request_output(m_output_counts.data());
+    if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
+    if (m_inference_config.m_blocking_ratio > 0.f) {
+        Core::new_data_request(m_session, wait_until);
+    } else {
+        ANIRA_LOG_RT_ERROR_ONCE(RtSite::WaitWithoutSemaphore,
+                                log_group::k_scheduler,
+                                "InferenceConfig does not use blocking_ratio and does not use "
+                                "semaphores for data acquisition, cannot wait for data!");
+    }
+    return process_output(outputs,
+                          m_output_counts.data(),
+                          m_empty_inputs.data(),
+                          m_input_counts.data());
 }
 
 std::chrono::steady_clock::duration InferenceManager::contract_wait_budget(
@@ -477,7 +339,8 @@ bool InferenceManager::has_slot_dtype(const anira_tensor& tensor,
 void InferenceManager::process_input(const anira_tensor* inputs, size_t* num_samples) {
     for (size_t tensor_index = 0; tensor_index < m_input_slots.size(); ++tensor_index) {
         // An input whose count is 0 is not read: the single-tensor forms of the C handler
-        // leave the other slots' pointers unset, and pushing nothing needs no pointer.
+        // hand the other slots over as empty tensors without memory, and pushing nothing
+        // needs no pointer.
         if (num_samples[tensor_index] == 0) { continue; }
         const anira_tensor& input = inputs[tensor_index];
         const SlotCopy& slot = m_input_slots[tensor_index];
@@ -569,7 +432,7 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
     if (enough_samples) {
         for (size_t tensor_index = 0; tensor_index < num_outputs; ++tensor_index) {
             // An output the call did not request: none of its pointers is touched (the
-            // single-tensor forms leave the other slots unset).
+            // single-tensor forms hand the other slots over without memory).
             if (num_samples[tensor_index] == 0) { continue; }
             const anira_tensor& output = outputs[tensor_index];
             const SlotCopy& slot = m_output_slots[tensor_index];

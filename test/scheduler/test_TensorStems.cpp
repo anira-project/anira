@@ -1,5 +1,6 @@
-// The tensor stems of InferenceManager, driven directly with what the float*** adapters cannot
-// express: one block read by strides (interleaved for 1, 2, 3 and 6 channels, contiguous,
+// The tensor stems of InferenceManager, driven directly with what the float face
+// (anira::PlanarFloatAdapter, src/scheduler/PlanarFloatAdapter.h) cannot express: one block read
+// by strides (interleaved for 1, 2, 3 and 6 channels, contiguous,
 // packed), planar memory with a byte offset and with a stride inside each plane, the two
 // descriptions crossed between input and output, the same tensor on both sides, empty and
 // zeroed tensors, a ring that is not float32, and a tensor whose dtype is not its slot's.
@@ -7,8 +8,8 @@
 // Two kinds of proof. (1) The scenarios of test_CopyPathOracle.cpp are replayed through the
 // tensor stems under every description and compared with the transcripts that the float core
 // recorded before it was rewritten (copy_path_oracle_golden.h): an interleaved or an offset
-// planar block has to give, float for float, what the float*** call gave over separate
-// channel pointers, under the three miss policies too. This file never records: it has its
+// planar block has to give, float for float, what the float*** call of the time gave over
+// separate channel pointers, under the three miss policies too. This file never records: it has its
 // own comparison, which ignores ANIRA_COPY_ORACLE_RECORD. (2) Absolute expectations where the
 // recording has no word: channel counts other than 2 and 3, the send ring's content after an
 // interleaved push, an int16 ring, the refusals.
@@ -47,6 +48,7 @@
 #include "../support/copy_oracle.h"
 #include "copy_path_oracle_golden.h"
 #include "gtest/gtest.h"
+#include "scheduler/PlanarFloatAdapter.h"
 #include "scheduler/TensorRun.h"
 
 using namespace anira;
@@ -320,10 +322,11 @@ constexpr CallOptions k_in_place_gate_closed{.m_in_place = true,
 enum class Mode { Clocked, Waiting };
 enum class Model { PassThrough, FanOut, ParamRamp };
 
-/// Which functions of the manager a rig drives.
+/// How a rig hands its blocks to the tensor stems.
 enum class Face {
-    FloatAdapter,  ///< the float*** functions, over separate channel pointers
-    Tensor         ///< the tensor stems, over blocks of the rig's two layouts
+    FloatAdapter,  ///< separate channel pointers, presented by a PlanarFloatAdapter the way
+                   ///< anira::InferenceHandler presents its own
+    Tensor         ///< hand-built tensors over blocks of the rig's two layouts
 };
 
 struct Layouts {
@@ -341,12 +344,10 @@ std::unique_ptr<anira_test::GateBackend> make_gate(Model model, InferenceConfig&
 }
 
 /// The ManagerRig of test_CopyPathOracle.cpp over either face: the same calls, the same
-/// transcript. What the tensor face has no word for is mapped as the adapters map it: the 2.x
-/// dispatcher is process_wait with the contract budget under a blocking ratio and
-/// process_nowait without one; the deadline form of pop_data, which has no tensor stem, is
-/// pop_data_wait without a limit on a waiting session and pop_data at the closed gate, where
-/// neither collects anything. A tensor stem returns the manager's own array of delivered
-/// counts, so "returned=out" says here that an array came back, and "out=" prints it.
+/// transcript, stem for stem (the 2.x dispatcher and the deadline form of pop_data have their
+/// tensor forms). A tensor stem returns the manager's own array of delivered counts, so on the
+/// tensor face "returned=out" says that an array came back, and "out=" prints it; on the float
+/// face both are read off the adapter's deliver_counts().
 class Rig {
 public:
     Rig(InferenceConfig config,
@@ -366,6 +367,7 @@ public:
         , m_positions(m_config.get_tensor_input_shape().size(), 0) {
         m_manager.set_miss_policy(policy);
         m_manager.prepare(host_config(), CustomLatencies{}, ring_dtypes);
+        m_adapter.prepare(m_config);
         for (const std::shared_ptr<SessionElement>& candidate : Core::get_sessions()) {
             if (candidate->m_session_id == m_manager.get_session_id()) { m_session = candidate; }
         }
@@ -400,6 +402,7 @@ public:
     Rig& operator=(const Rig&) = delete;
 
     InferenceManager& manager() { return m_manager; }
+    PlanarFloatAdapter& adapter() { return m_adapter; }
     SessionElement& session() { return *m_session; }
     bool ready() const { return m_session != nullptr; }
     const oracle::Transcript& transcript() const { return m_transcript; }
@@ -453,8 +456,13 @@ public:
                 out_planes.push_back(out_unused[slot] ? nullptr : planes);
             }
             const size_t* counts =
-                call_floats(stem, in_planes, num_in, out_planes, num_out, outcome);
+                call_floats(stem, in_planes, in_counts, out_planes, num_out, outcome);
             returned = counts == num_out.data();
+            // The caller's input counts are const to the adapter; what the stem was handed
+            // is shape[1] of the tensors it presented, read back after the call.
+            for (size_t slot = 0; !pops && slot < num_in.size(); ++slot) {
+                num_in[slot] = static_cast<size_t>(m_adapter.inputs()[slot].shape[1]);
+            }
         } else {
             std::vector<anira_tensor> in_tensors;
             for (size_t slot = 0; slot < in_counts.size(); ++slot) {
@@ -526,14 +534,20 @@ public:
         if (m_session == nullptr) { return; }
         const size_t call_number = ++m_calls;
         std::vector<HostBlock<float>> inputs = make_inputs(in_counts, 0, call_number);
-        std::vector<size_t> num_in = in_counts;
+        // The counts the stem was handed, read back from shape[1] after the call.
+        std::vector<size_t> num_in;
         if (m_face == Face::FloatAdapter) {
             std::vector<const float* const*> in_planes;
             for (size_t slot = 0; slot < in_counts.size(); ++slot) {
                 const bool unused = options.m_null_unused && in_counts[slot] == 0;
                 in_planes.push_back(unused ? nullptr : inputs[slot].planes());
             }
-            m_manager.push_data(in_planes.data(), num_in.data());
+            const anira_tensor* presented =
+                m_adapter.present_inputs(in_planes.data(), in_counts.data());
+            m_manager.push_data(presented);
+            for (size_t slot = 0; slot < in_counts.size(); ++slot) {
+                num_in.push_back(static_cast<size_t>(presented[slot].shape[1]));
+            }
         } else {
             std::vector<anira_tensor> in_tensors;
             for (size_t slot = 0; slot < in_counts.size(); ++slot) {
@@ -543,6 +557,9 @@ public:
                            : inputs[slot].tensor(in_counts[slot], ANIRA_DTYPE_F32, true));
             }
             m_manager.push_data(in_tensors.data());
+            for (const anira_tensor& tensor : in_tensors) {
+                num_in.push_back(static_cast<size_t>(tensor.shape[1]));
+            }
         }
         std::string header =
             "#" + std::to_string(call_number) + " push_data in=" + oracle::format_counts(in_counts);
@@ -603,72 +620,46 @@ private:
         }
     }
 
+    /// The float face: the adapter presents the channel pointers (a pop presents no input),
+    /// the tensor stem runs on its tensors, deliver_counts() writes the counts into num_out
+    /// and returns that array.
     const size_t* call_floats(Stem stem,
-                              std::vector<const float* const*>& in_planes,
-                              std::vector<size_t>& num_in,
-                              std::vector<float* const*>& out_planes,
+                              const std::vector<const float* const*>& in_planes,
+                              const std::vector<size_t>& num_in,
+                              const std::vector<float* const*>& out_planes,
                               std::vector<size_t>& num_out,
                               Core::WaitOutcome& outcome) {
-        constexpr auto k_forever = std::chrono::steady_clock::duration::max();
-        switch (stem) {
-            case Stem::Process:
-                return m_manager.process(in_planes.data(),
-                                         num_in.data(),
-                                         out_planes.data(),
-                                         num_out.data());
-            case Stem::ProcessNowait:
-                return m_manager.process_nowait(in_planes.data(),
-                                                num_in.data(),
-                                                out_planes.data(),
-                                                num_out.data());
-            case Stem::ProcessWait:
-                return m_manager.process_wait(in_planes.data(),
-                                              num_in.data(),
-                                              out_planes.data(),
-                                              num_out.data(),
-                                              k_forever,
-                                              outcome);
-            case Stem::PopData: return m_manager.pop_data(out_planes.data(), num_out.data());
-            case Stem::PopDataUntil:
-                return m_manager.pop_data(out_planes.data(),
-                                          num_out.data(),
-                                          std::chrono::steady_clock::time_point::max());
-            case Stem::PopDataWait:
-                return m_manager.pop_data_wait(out_planes.data(),
-                                               num_out.data(),
-                                               k_forever,
-                                               outcome);
-        }
-        return nullptr;
+        const bool pops =
+            stem == Stem::PopData || stem == Stem::PopDataUntil || stem == Stem::PopDataWait;
+        const anira_tensor* inputs =
+            pops ? nullptr : m_adapter.present_inputs(in_planes.data(), num_in.data());
+        const anira_tensor* outputs = m_adapter.present_outputs(out_planes.data(), num_out.data());
+        const size_t* delivered = call_stem(stem, inputs, outputs, outcome);
+        return delivered == nullptr ? nullptr : m_adapter.deliver_counts(delivered, num_out.data());
     }
 
     const size_t* call_tensors(Stem stem,
                                const std::vector<anira_tensor>& inputs,
                                const std::vector<anira_tensor>& outputs,
                                Core::WaitOutcome& outcome) {
+        return call_stem(stem, inputs.data(), outputs.data(), outcome);
+    }
+
+    /// The tensor stem of each name, over the arrays of either face.
+    const size_t* call_stem(Stem stem,
+                            const anira_tensor* inputs,
+                            const anira_tensor* outputs,
+                            Core::WaitOutcome& outcome) {
         constexpr auto k_forever = std::chrono::steady_clock::duration::max();
-        const bool waits = m_mode == Mode::Waiting;
-        Core::WaitOutcome ignored = Core::WaitOutcome::Done;
         switch (stem) {
-            case Stem::Process:
-                if (m_config.m_blocking_ratio > 0.F) {
-                    return m_manager.process_wait(
-                        inputs.data(),
-                        outputs.data(),
-                        m_manager.contract_wait_budget(inputs.data(), outputs.data()),
-                        ignored);
-                }
-                return m_manager.process_nowait(inputs.data(), outputs.data());
-            case Stem::ProcessNowait:
-                return m_manager.process_nowait(inputs.data(), outputs.data());
+            case Stem::Process: return m_manager.process(inputs, outputs);
+            case Stem::ProcessNowait: return m_manager.process_nowait(inputs, outputs);
             case Stem::ProcessWait:
-                return m_manager.process_wait(inputs.data(), outputs.data(), k_forever, outcome);
-            case Stem::PopData: return m_manager.pop_data(outputs.data());
+                return m_manager.process_wait(inputs, outputs, k_forever, outcome);
+            case Stem::PopData: return m_manager.pop_data(outputs);
             case Stem::PopDataUntil:
-                return waits ? m_manager.pop_data_wait(outputs.data(), k_forever, ignored)
-                             : m_manager.pop_data(outputs.data());
-            case Stem::PopDataWait:
-                return m_manager.pop_data_wait(outputs.data(), k_forever, outcome);
+                return m_manager.pop_data(outputs, std::chrono::steady_clock::time_point::max());
+            case Stem::PopDataWait: return m_manager.pop_data_wait(outputs, k_forever, outcome);
         }
         return nullptr;
     }
@@ -677,6 +668,7 @@ private:
     PrePostProcessor m_pp_processor;
     std::unique_ptr<anira_test::GateBackend> m_gate;
     InferenceManager m_manager;
+    PlanarFloatAdapter m_adapter;  ///< Face::FloatAdapter: sized beside the manager's prepare
     Face m_face;
     Layouts m_layouts;
     Mode m_mode;
@@ -889,9 +881,9 @@ HostBlock<float> ramp_block(Layout layout, size_t channels, size_t count, size_t
 constexpr std::array<size_t, 4> k_channel_counts{1, 2, 3, 6};
 
 // The stems as a driver thread calls them. RealtimeSanitizer looks at what runs inside a
-// nonblocking function, and the float*** adapters under the _f32 entries only ever reach the
-// unit-stride paths; these bring the strided ones into its view. No gtest assertion in here:
-// a failing one allocates.
+// nonblocking function, and a planar float32 block, which is all the float adapter presents,
+// only ever reaches the unit-stride paths; these bring the strided ones into its view. No gtest
+// assertion in here: a failing one allocates.
 const size_t* process_on_the_driver_thread(InferenceManager& manager,
                                            const anira_tensor* inputs,
                                            const anira_tensor* outputs) ANIRA_NONBLOCKING {
@@ -1001,7 +993,8 @@ TEST(TensorStems, GeneratorReproducesTheRecording) {
                      Model::ParamRamp);
 }
 
-// process_wait, pop_data_wait and contract_wait_budget over tensors.
+// process_wait and pop_data_wait over tensors, and the two 2.x forms: the dispatcher (process
+// with contract_wait_budget under the blocking ratio) and the deadline form of pop_data.
 TEST(TensorStems, WaitingStemsReproduceTheRecording) {
     expect_recording(pass_through_config(2, 0.5F),
                      ANIRA_MISS_BYPASS,
@@ -1012,8 +1005,9 @@ TEST(TensorStems, WaitingStemsReproduceTheRecording) {
 
 // ---- (2) the float adapter against the tensor stems, for every channel count -------------------
 
-// The same scenario through the float*** functions and through hand-built tensors gives the
-// same transcript, for 1, 2, 3 and 6 channels, under the three policies.
+// The same scenario through the float adapter (channel pointers presented as planar float32
+// tensors) and through hand-built tensors gives the same transcript, for 1, 2, 3 and 6
+// channels, under the three policies.
 TEST(TensorStems, TheFloatAdapterAndTheTensorStemsAgreeForEveryChannelCount) {
     constexpr std::array<anira_miss_policy, 3> k_policies{ANIRA_MISS_ZEROS,
                                                           ANIRA_MISS_HOLD_LAST,
@@ -1422,10 +1416,10 @@ TEST(TensorStems, ATensorOfAnotherDtypeIsNotCopied) {
     EXPECT_EQ(site.m_suppressed.load(), 1U) << "the input's record, then the output's";
 }
 
-// The float*** functions on a session whose rings are int16: their tensors are float32, so
-// nothing is pushed and nothing popped, the output is zeros and the count 0. Before the
-// rewrite the float face of the ring did nothing there and the call reported a delivered
-// block over memory it had not written.
+// The float adapter on a session whose rings are int16: its tensors are float32, so nothing
+// is pushed and nothing popped, the output is zeros and the count 0. Before the rewrite the
+// float face of the ring did nothing there and the call reported a delivered block over
+// memory it had not written.
 TEST(TensorStems, TheFloatAdapterOnAnInt16RingCopiesNothing) {
     Rig rig(pass_through_config(2),
             ANIRA_MISS_ZEROS,
@@ -1440,16 +1434,16 @@ TEST(TensorStems, TheFloatAdapterOnAnInt16RingCopiesNothing) {
     HostBlock<float> out(Layout::Planar, 2, k_hop, oracle::k_untouched);
     const std::array<const float* const*, 1> in_planes{in.planes()};
     const std::array<float* const*, 1> out_planes{out.planes()};
-    std::array<size_t, 1> num_in{k_hop};
+    const std::array<size_t, 1> num_in{k_hop};
     std::array<size_t, 1> num_out{k_hop};
     const size_t available = rig.session().m_receive_buffer[0].get_available_samples(0);
-    const size_t* delivered = rig.manager().process_nowait(in_planes.data(),
-                                                           num_in.data(),
-                                                           out_planes.data(),
-                                                           num_out.data());
+    const anira_tensor* inputs = rig.adapter().present_inputs(in_planes.data(), num_in.data());
+    const anira_tensor* outputs = rig.adapter().present_outputs(out_planes.data(), num_out.data());
+    const size_t* delivered =
+        rig.adapter().deliver_counts(rig.manager().process_nowait(inputs, outputs), num_out.data());
     EXPECT_EQ(delivered, num_out.data());
     EXPECT_EQ(num_out[0], 0U);
-    EXPECT_EQ(num_in[0], k_hop);
+    EXPECT_EQ(inputs[0].shape[1], static_cast<int64_t>(k_hop)) << "a descriptor is never written";
     EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(0), 0U);
     EXPECT_EQ(rig.session().m_receive_buffer[0].get_available_samples(0), available);
     for (size_t channel = 0; channel < 2; ++channel) {
@@ -1457,6 +1451,85 @@ TEST(TensorStems, TheFloatAdapterOnAnInt16RingCopiesNothing) {
     }
     EXPECT_TRUE(out.slack_untouched());
     EXPECT_EQ(site.m_latched.load(), 1U);
+}
+
+// The adapter alone, without a manager. A slot a call does not carry is an empty tensor whose
+// planes are NULL, whatever an earlier call stored there, and the caller's channel array of
+// that slot is not read (it may be NULL). A miss function (ANIRA_MISS_CALLBACK) is handed
+// these arrays as they are, so a pointer of an earlier call, whose memory may be gone by then,
+// must not survive in a slot the present call left out. Both present forms, both sides; each
+// slot is first shown to hold the caller's pointer, so a NULL afterwards is the adapter's doing.
+TEST(TensorStems, TheFloatAdapterNullsThePlanesOfASlotACallDidNotCarry) {
+    const InferenceConfig config = multi_config();  // a 3-channel stream and 3 Static values
+    PlanarFloatAdapter adapter;
+    adapter.prepare(config);
+
+    std::array<std::vector<float>, 3> stream_in;
+    std::array<std::vector<float>, 3> stream_out;
+    std::array<const float*, 3> stream_in_channels{};
+    std::array<float*, 3> stream_out_channels{};
+    for (size_t channel = 0; channel < 3; ++channel) {
+        stream_in.at(channel).assign(k_hop, 1.F);
+        stream_out.at(channel).assign(k_hop, 0.F);
+        stream_in_channels.at(channel) = stream_in.at(channel).data();
+        stream_out_channels.at(channel) = stream_out.at(channel).data();
+    }
+    const std::array<float, 3> values_in{1.F, 2.F, 3.F};
+    std::array<float, 3> values_out{};
+    const std::array<const float*, 1> values_in_channels{values_in.data()};
+    const std::array<float*, 1> values_out_channels{values_out.data()};
+
+    const std::array<const float* const*, 2> in_both{stream_in_channels.data(),
+                                                     values_in_channels.data()};
+    const std::array<float* const*, 2> out_both{stream_out_channels.data(),
+                                                values_out_channels.data()};
+    const std::array<size_t, 2> count_both{k_hop, 3};
+    const auto plane = [](const anira_tensor& tensor, uint32_t index) {
+        return anira_tensor_plane(&tensor, index, ANIRA_DTYPE_F32);
+    };
+    const auto carry_both = [&] {
+        const anira_tensor* inputs = adapter.present_inputs(in_both.data(), count_both.data());
+        const anira_tensor* outputs = adapter.present_outputs(out_both.data(), count_both.data());
+        // The control: every slot names the caller's memory after a call that carried it.
+        EXPECT_EQ(plane(inputs[0], 2), stream_in[2].data());
+        EXPECT_EQ(plane(inputs[1], 0), values_in.data());
+        EXPECT_EQ(plane(outputs[0], 2), stream_out[2].data());
+        EXPECT_EQ(plane(outputs[1], 0), values_out.data());
+    };
+
+    // The multi forms: the Static slot left out, its channel array NULL and not read.
+    carry_both();
+    {
+        const std::array<const float* const*, 2> in_stream{stream_in_channels.data(), nullptr};
+        const std::array<float* const*, 2> out_stream{stream_out_channels.data(), nullptr};
+        const std::array<size_t, 2> count_stream{k_hop, 0};
+        const anira_tensor* inputs = adapter.present_inputs(in_stream.data(), count_stream.data());
+        const anira_tensor* outputs =
+            adapter.present_outputs(out_stream.data(), count_stream.data());
+        EXPECT_EQ(inputs[1].shape[1], 0);
+        EXPECT_EQ(outputs[1].shape[1], 0);
+        EXPECT_EQ(plane(inputs[1], 0), nullptr) << "a pointer of the earlier call";
+        EXPECT_EQ(plane(outputs[1], 0), nullptr) << "a pointer of the earlier call";
+        EXPECT_EQ(inputs[0].shape[1], static_cast<int64_t>(k_hop)) << "the carried slot";
+        EXPECT_EQ(plane(inputs[0], 2), stream_in[2].data()) << "the carried slot";
+        EXPECT_EQ(plane(outputs[0], 2), stream_out[2].data()) << "the carried slot";
+    }
+
+    // The single forms: slot 1 carried, every plane of slot 0 left out.
+    carry_both();
+    {
+        const anira_tensor* inputs = adapter.present_input(1, values_in_channels.data(), 3);
+        const anira_tensor* outputs = adapter.present_output(1, values_out_channels.data(), 3);
+        EXPECT_EQ(inputs[0].shape[1], 0);
+        EXPECT_EQ(outputs[0].shape[1], 0);
+        for (uint32_t channel = 0; channel < 3; ++channel) {
+            EXPECT_EQ(plane(inputs[0], channel), nullptr) << "input channel " << channel;
+            EXPECT_EQ(plane(outputs[0], channel), nullptr) << "output channel " << channel;
+        }
+        EXPECT_EQ(inputs[1].shape[1], 3) << "the carried slot";
+        EXPECT_EQ(plane(inputs[1], 0), values_in.data()) << "the carried slot";
+        EXPECT_EQ(plane(outputs[1], 0), values_out.data()) << "the carried slot";
+    }
 }
 
 // ---- the run helper and the validator, on int16 data -------------------------------------------
