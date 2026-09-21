@@ -50,6 +50,24 @@ struct Plan {
                                                     ///< string store
 };
 
+/// The host's numbering of a handler's tensors. A host slot number counts the host-visible
+/// specs of its side, in list order: what the host names with `tensor_index` and `slot`, the
+/// position in the arrays of the `_multi` forms and of anira_miss_fn, in the `delivered`
+/// counts, in the latency vector and in the plan report's slot rows. A tensor index is the
+/// position in the model config's list, the order the engine binds and a stage indexes by.
+/// The table maps the first onto the second; it is built once, by anira_handler_create from the
+/// pipeline copy, and read without a lock ever after. Every spec is host-visible today, so
+/// the two numberings are equal and the table is the identity.
+struct HostSlots {
+    std::vector<uint32_t> m_inputs;   ///< host input slot -> index in the model's input list
+    std::vector<uint32_t> m_outputs;  ///< host output slot -> index in the model's output list
+    bool m_identity = true;           ///< every host slot number is its tensor index
+
+    /// The tensor index of a host slot; `slot` is below the side's count.
+    uint32_t input(uint32_t slot) const noexcept { return m_inputs[slot]; }
+    uint32_t output(uint32_t slot) const noexcept { return m_outputs[slot]; }
+};
+
 }  // namespace anira::capi
 
 // The handle bodies carry the C tag names the header forward-declares.
@@ -95,13 +113,17 @@ struct anira_handler {
     anira_contract m_contract;           ///< the snapshot of the last successful prepare (Hard)
     anira::InferenceConfig m_inference_config;  ///< built at prepare; must outlive m_manager
                                                 ///< and m_pp
-    /// The Static store: one typed buffer per Static or Buffer slot of either side, in the
+    /// The Static store: one typed buffer per Static or Buffer tensor of either side, in the
     /// spec's shape and dtype. Built and zeroed by anira_handler_create from the pipeline copy,
     /// never resized, untouched by prepare and by reset (m_pp and m_manager are rebuilt by
     /// every prepare, the values set before one survive it). Its vectors are as long as the
-    /// host's slot lists from create on: the slot bound of the two Static entries, which are
-    /// legal on an unprepared handler. Declared before m_pp, which reads it: destroyed after.
+    /// model's tensor lists and indexed by TENSOR index (the stage chain reads it that way);
+    /// an entry of the handler goes through m_slots first. Declared before m_pp, which reads
+    /// it: destroyed after.
     anira::capi::StaticStore m_static;
+    /// Host slot -> tensor index, built by anira_handler_create beside the store. Its lengths
+    /// are m_num_inputs and m_num_outputs.
+    anira::capi::HostSlots m_slots;
     std::unique_ptr<anira::PrePostProcessor> m_pp;       ///< the StageChainProcessor over
                                                          ///< m_pipeline.m_stages, rebuilt by every
                                                          ///< prepare (needs m_inference_config)
@@ -135,10 +157,13 @@ struct anira_handler {
     // caller's descriptor into its slot of the array, hands the array to the manager, which
     // takes one tensor per slot, and sets that entry back to the empty tensor before it
     // returns. The entry of a Static slot stays empty: a single form never names one.
+    // All of them, the two ring dtype vectors above included, are in HOST slot numbering.
     std::vector<uint32_t> m_input_channels;
     std::vector<uint32_t> m_output_channels;
     std::vector<anira_tensor> m_input_tensors;
     std::vector<anira_tensor> m_output_tensors;
+    /// The host's slot counts: the lengths of m_slots, set by anira_handler_create (the two
+    /// Static entries are legal on an unprepared handler and need their bound).
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
     /// ANIRA_MISS_CALLBACK: the contract's pair, cached at prepare so that the driver thread

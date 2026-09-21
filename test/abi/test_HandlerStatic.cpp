@@ -706,19 +706,24 @@ void typed_round_trip(anira_dtype dtype) {
     const std::vector<int64_t> shape{2, 3};
     handler->m_static.m_inputs.push_back(std::make_unique<anira::capi::StaticSlot>(shape, dtype));
     handler->m_static.m_outputs.push_back(std::make_unique<anira::capi::StaticSlot>(shape, dtype));
+    // What anira_handler_create builds beside the store: the host slot table (one host-visible
+    // tensor per side, so host slot 0 is tensor 0) and the host's slot counts.
+    handler->m_slots.m_inputs = {0U};
+    handler->m_slots.m_outputs = {0U};
+    handler->m_num_inputs = 1;
+    handler->m_num_outputs = 1;
     const std::array<T, 6> values{T{-3}, T{2}, T{32767}, T{-32768}, T{5}, T{6}};
     anira_tensor in{};
     anira_tensor_init_host(&in, const_cast<T*>(values.data()), dtype, 2, shape.data());
     ASSERT_EQ(anira_handler_set_static_input(handler.get(), 0, &in), ANIRA_OK);
     // What the chain does between the two stores, without a session: packed out, packed in.
     const anira::capi::StaticSlot* input_store = handler->m_static.input(0);
-    anira::capi::StaticSlot* output_store = handler->m_static.output(0);
     ASSERT_NE(input_store, nullptr);
-    ASSERT_NE(output_store, nullptr);
+    ASSERT_NE(handler->m_static.output(0), nullptr);
     std::array<T, 6> model{};
     input_store->read_packed(model.data(), sizeof(model));
     EXPECT_EQ(model, values);
-    output_store->write_packed(model.data(), sizeof(model));
+    handler->m_static.output(0)->write_packed(model.data(), sizeof(model));
     std::array<T, 6> out{};
     anira_tensor out_tensor{};
     anira_tensor_init_host(&out_tensor, out.data(), dtype, 2, shape.data());
