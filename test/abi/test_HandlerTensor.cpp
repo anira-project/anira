@@ -1766,7 +1766,17 @@ TEST(AbiHandlerTensor, AnInterleavedBlockMatchesTheTwoPointXHandlerOnEveryPlan) 
                 v2.process(v_in.data(), v_num_in.data(), v_outs.data(), v_num_out.data())[0];
             anira_test::wait_for_block(v2, prev_v);
             ASSERT_EQ(n_v, k_block) << "block " << k;
-            EXPECT_EQ(gain_out.at(0, 0), v_gain_out) << "block " << k;
+            // The Static output is written on every delivered block, and that is all this case
+            // says about it. It is the latest completed value (PrePostProcessor stores it after
+            // the ring push of its inference), so whether a call already sees the result of the
+            // block it pushed is a race that each side runs on its own: compared with each other
+            // the two sides differed once in about 200 local runs, the C side holding the
+            // result of block 4 and the 2.x side that of block 3, with every sample of the
+            // stream bit-equal. What the value is differs per engine, too. The values of a
+            // Static output are compared exactly where the gate makes the order certain:
+            // ProcessMultiCarriesStaticSlotsAndReportsTheClampedCount.
+            EXPECT_NE(gain_out.at(0, 0), k_untouched) << "block " << k;
+            EXPECT_NE(v_gain_out, k_untouched) << "block " << k;
             for (size_t i = 0; i < k_block; ++i) {
                 ASSERT_EQ(c_out.at(0, i), v_left.at(i)) << "block " << k << ", left " << i;
                 ASSERT_EQ(c_out.at(1, i), v_right.at(i)) << "block " << k << ", right " << i;
