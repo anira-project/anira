@@ -1521,6 +1521,9 @@ TEST_F(AbiHandlerTensorMiss, TheFloatEntriesHandOverPlanarFloatTensors) {
     ASSERT_EQ(m_state.m_calls, 1);
     EXPECT_EQ(m_state.m_num_inputs, 2U);
     EXPECT_EQ(m_state.m_num_outputs, 2U);
+    // The arrays the stem was handed: the tensors of the handler's float adapter.
+    EXPECT_EQ(m_state.m_inputs, rig.get()->m_float_adapter.inputs());
+    EXPECT_EQ(m_state.m_outputs, rig.get()->m_float_adapter.outputs());
     const anira_tensor& input = m_state.m_input_copies[0];
     EXPECT_EQ(
         input.flags,

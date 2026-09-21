@@ -1,6 +1,8 @@
 #ifndef ANIRA_INFERENCEHANDLER_H
 #define ANIRA_INFERENCEHANDLER_H
 
+#include <memory>
+
 #include "InferenceConfig.h"
 #include "PrePostProcessor.h"
 #include "anira/abi/export.h"
@@ -8,6 +10,10 @@
 #include "scheduler/InferenceManager.h"
 
 namespace anira {
+
+// Presents float channel pointers to the manager as host tensors. Private to the library
+// (src/scheduler/PlanarFloatAdapter.h), so the handler holds it behind a pointer.
+class PlanarFloatAdapter;
 
 /**
  * @brief Main handler class for neural network inference operations
@@ -473,6 +479,9 @@ private:
     InferenceConfig& m_inference_config;   ///< Reference to the inference configuration
     InferenceManager m_inference_manager;  ///< Internal inference manager handling the processing
                                            ///< pipeline
+    std::unique_ptr<PlanarFloatAdapter> m_float_adapter;  ///< The caller's channel pointers as the
+                                                          ///< host tensors the manager takes;
+                                                          ///< sized at prepare()
 
     const float* const** m_input_tensor_ptrs;
     size_t* m_input_tensor_num_samples;

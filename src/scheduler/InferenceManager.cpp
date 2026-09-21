@@ -195,18 +195,10 @@ size_t* InferenceManager::process(const float* const* const* input_data,
                                   size_t* num_input_samples,
                                   float* const* const* output_data,
                                   size_t* num_output_samples) {
-    // The 2.x call: with a blocking ratio the block's own duration times the ratio is
-    // waited for on the semaphore, else nothing is waited for.
-    if (m_inference_config.m_blocking_ratio > 0.f) {
-        Core::WaitOutcome ignored = Core::WaitOutcome::Done;
-        return process_wait(input_data,
-                            num_input_samples,
-                            output_data,
-                            num_output_samples,
-                            contract_wait_budget(num_input_samples, num_output_samples),
-                            ignored);
-    }
-    return process_nowait(input_data, num_input_samples, output_data, num_output_samples);
+    present_inputs(input_data, num_input_samples);
+    present_outputs(output_data, num_output_samples);
+    return deliver_counts(process(m_adapter_inputs.data(), m_adapter_outputs.data()),
+                          num_output_samples);
 }
 
 // ---- The float*** functions: float32 planar adapters onto the tensor stems. The caller's
@@ -258,26 +250,8 @@ size_t* InferenceManager::pop_data(float* const* const* output_data, size_t* num
 size_t* InferenceManager::pop_data(float* const* const* output_data,
                                    size_t* num_output_samples,
                                    std::chrono::steady_clock::time_point wait_until) {
-    // The 2.x deadline form keeps its own body: the blocking_ratio branch and its record.
     present_outputs(output_data, num_output_samples);
-    load_counts(m_empty_inputs.data(), m_input_counts);
-    load_counts(m_adapter_outputs.data(), m_output_counts);
-    request_output(m_output_counts.data());
-    if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
-    if (m_inference_config.m_blocking_ratio > 0.f) {
-        Core::new_data_request(m_session, wait_until);
-    } else {
-        ANIRA_LOG_RT_ERROR_ONCE(RtSite::WaitWithoutSemaphore,
-                                log_group::k_scheduler,
-                                "InferenceConfig does not use blocking_ratio and does not use "
-                                "semaphores for data acquisition, cannot wait for data!");
-    }
-
-    return deliver_counts(process_output(m_adapter_outputs.data(),
-                                         m_output_counts.data(),
-                                         m_empty_inputs.data(),
-                                         m_input_counts.data()),
-                          num_output_samples);
+    return deliver_counts(pop_data(m_adapter_outputs.data(), wait_until), num_output_samples);
 }
 
 void InferenceManager::present_inputs(const float* const* const* input_data,
@@ -372,6 +346,37 @@ const size_t* InferenceManager::pop_data_wait(const anira_tensor* outputs,
             ? std::chrono::steady_clock::time_point::max()
             : std::chrono::steady_clock::now() + budget;
     outcome = Core::new_data_request(m_session, deadline);
+    return process_output(outputs,
+                          m_output_counts.data(),
+                          m_empty_inputs.data(),
+                          m_input_counts.data());
+}
+
+const size_t* InferenceManager::process(const anira_tensor* inputs, const anira_tensor* outputs) {
+    // The 2.x call: with a blocking ratio the block's own duration times the ratio is
+    // waited for on the semaphore, else nothing is waited for.
+    if (m_inference_config.m_blocking_ratio > 0.f) {
+        Core::WaitOutcome ignored = Core::WaitOutcome::Done;
+        return process_wait(inputs, outputs, contract_wait_budget(inputs, outputs), ignored);
+    }
+    return process_nowait(inputs, outputs);
+}
+
+const size_t* InferenceManager::pop_data(const anira_tensor* outputs,
+                                         std::chrono::steady_clock::time_point wait_until) {
+    // The 2.x deadline form keeps its own body: the blocking_ratio branch and its record.
+    load_counts(m_empty_inputs.data(), m_input_counts);
+    load_counts(outputs, m_output_counts);
+    request_output(m_output_counts.data());
+    if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
+    if (m_inference_config.m_blocking_ratio > 0.f) {
+        Core::new_data_request(m_session, wait_until);
+    } else {
+        ANIRA_LOG_RT_ERROR_ONCE(RtSite::WaitWithoutSemaphore,
+                                log_group::k_scheduler,
+                                "InferenceConfig does not use blocking_ratio and does not use "
+                                "semaphores for data acquisition, cannot wait for data!");
+    }
     return process_output(outputs,
                           m_output_counts.data(),
                           m_empty_inputs.data(),

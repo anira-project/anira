@@ -402,6 +402,43 @@ public:
                                 Core::WaitOutcome& outcome);
 
     /**
+     * @brief The 2.x process call over host tensors: the dispatcher on
+     * InferenceConfig::m_blocking_ratio
+     *
+     * With a blocking ratio above 0 this is process_wait() with the budget of
+     * contract_wait_budget() (the block's own duration times the ratio, waited for on the
+     * semaphore) and the outcome dropped; without one it is process_nowait(). What
+     * anira::InferenceHandler::process() calls; the tensors pass through as they are.
+     *
+     * @param inputs One tensor per input slot (see "The tensor stems")
+     * @param outputs One tensor per output slot; the same tensor as the input for in place
+     * @return The delivered count per output slot (0 on a miss)
+     *
+     * @note Real-time safe without a blocking ratio; with one it waits up to the budget.
+     */
+    const size_t* process(const anira_tensor* inputs, const anira_tensor* outputs);
+
+    /**
+     * @brief The 2.x deadline pop over host tensors
+     *
+     * Registers the output demand (a generator is submitted here), then waits until
+     * `wait_until` for the next result on the session's semaphore and pops. A session without
+     * a blocking ratio has no semaphore to wait on: nothing is waited for and nothing is
+     * collected, the call pops what the receive rings hold, and the site
+     * RtSite::WaitWithoutSemaphore records it once. What
+     * anira::InferenceHandler::pop_data() with a time point calls; pop_data_wait() is the 3.x
+     * form, which waits on either completion primitive and reports how the wait ended.
+     *
+     * @param outputs One tensor per output slot (see "The tensor stems")
+     * @param wait_until Time point until which the call waits for the result
+     * @return The delivered count per output slot (0 on a miss)
+     *
+     * @note Not real-time safe for as long as it waits.
+     */
+    const size_t* pop_data(const anira_tensor* outputs,
+                           std::chrono::steady_clock::time_point wait_until);
+
+    /**
      * @brief contract_wait_budget() of a tensor call: the block is measured by `shape[1]` of
      * the anchored tensor. What a waiting entry computes before it calls process_wait().
      *
