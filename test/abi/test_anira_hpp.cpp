@@ -942,8 +942,10 @@ enum class PrepareMode : uint8_t { Ok, ThrowError, ThrowRuntimeError, ThrowInt, 
 
 /// A stage that overrides all four phase functions and lets the mask decide which of them
 /// anira calls. Each phase counts itself and notes whether the context answered as its phase
-/// promises; pre_process and post_process then call the base class, anira's default body;
-/// post_process scales the model output first.
+/// promises, asking the legal questions of its phase only (a refused one would be recorded,
+/// and the tests read anira_handler_rt_error as ANIRA_OK behind this stage); pre_process and
+/// post_process then call the base class, anira's default body; post_process scales the model
+/// output first.
 class CountingStage : public anira::Stage {
 public:
     CountingStage(std::string_view stage_name, uint32_t mask)
@@ -956,16 +958,19 @@ public:
 
     anira_status pre_process(anira::StageContext& ctx) noexcept override {
         m_pre.fetch_add(1);
+        anira::Role in_role = ANIRA_ROLE_FORCE32;
+        anira::Role out_role = ANIRA_ROLE_FORCE32;
+        anira::RingView ring;
         anira::Tensor tensor{};
         const bool as_promised =
             ctx.phase() == ANIRA_PHASE_PRE_PROCESS && ctx.engine() == ANIRA_ENGINE_NONE &&
             ctx.provider() == ANIRA_PROVIDER_DEFAULT && ctx.variant() == 0 &&
             ctx.num_inputs() == 1 && ctx.num_outputs() == 1 &&
             ctx.ticket() == ANIRA_TICKET_INVALID && ctx.entry() < m_num_entries &&
-            ctx.input_role(0) == ANIRA_ROLE_STREAMED && ctx.output_role(0) == ANIRA_ROLE_STREAMED &&
-            ctx.input_ring(0) && ctx.input_ring(0).dtype() == ANIRA_DTYPE_F32 &&
-            ctx.input_ring(0).num_channels() == 1 && ctx.input_ring(0).available(0) >= k_hop &&
-            !ctx.output_ring(0) && ctx.output_tensor(0, tensor) == ANIRA_ERROR_INVALID_STATE &&
+            ctx.input_role(0, in_role) == ANIRA_OK && in_role == ANIRA_ROLE_STREAMED &&
+            ctx.output_role(0, out_role) == ANIRA_OK && out_role == ANIRA_ROLE_STREAMED &&
+            ctx.input_ring(0, ring) == ANIRA_OK && ring && ring.dtype() == ANIRA_DTYPE_F32 &&
+            ring.num_channels() == 1 && ring.available(0) >= k_hop &&
             ctx.input_tensor(0, tensor) == ANIRA_OK && tensor.num_elements() == k_hop &&
             ctx.native() != nullptr;
         if (!as_promised) { m_broken.fetch_add(1); }
@@ -975,29 +980,27 @@ public:
         m_before.fetch_add(1);
         anira::Tensor tensor{};
         const bool as_promised = ctx.phase() == ANIRA_PHASE_BEFORE_INFERENCE &&
-                                 !ctx.input_ring(0) && !ctx.output_ring(0) &&
                                  ctx.input_tensor(0, tensor) == ANIRA_OK &&
-                                 tensor.data_f32() != nullptr &&
-                                 ctx.output_tensor(0, tensor) == ANIRA_ERROR_INVALID_STATE;
+                                 tensor.data_f32() != nullptr;
         if (!as_promised) { m_broken.fetch_add(1); }
         return ANIRA_OK;
     }
     anira_status after_inference(anira::StageContext& ctx) noexcept override {
         m_after.fetch_add(1);
         anira::Tensor tensor{};
-        const bool as_promised =
-            ctx.phase() == ANIRA_PHASE_AFTER_INFERENCE && !ctx.input_ring(0) &&
-            !ctx.output_ring(0) && ctx.input_tensor(0, tensor) == ANIRA_ERROR_INVALID_STATE &&
-            ctx.output_tensor(0, tensor) == ANIRA_OK && tensor.data_f32() != nullptr;
+        const bool as_promised = ctx.phase() == ANIRA_PHASE_AFTER_INFERENCE &&
+                                 ctx.output_tensor(0, tensor) == ANIRA_OK &&
+                                 tensor.data_f32() != nullptr;
         if (!as_promised) { m_broken.fetch_add(1); }
         return ANIRA_OK;
     }
     anira_status post_process(anira::StageContext& ctx) noexcept override {
         m_post.fetch_add(1);
+        anira::RingView ring;
         anira::Tensor tensor{};
-        const bool as_promised = ctx.phase() == ANIRA_PHASE_POST_PROCESS && !ctx.input_ring(0) &&
-                                 ctx.output_ring(0) && ctx.output_tensor(0, tensor) == ANIRA_OK &&
-                                 tensor.num_elements() == k_hop;
+        const bool as_promised =
+            ctx.phase() == ANIRA_PHASE_POST_PROCESS && ctx.output_ring(0, ring) == ANIRA_OK &&
+            ring && ctx.output_tensor(0, tensor) == ANIRA_OK && tensor.num_elements() == k_hop;
         if (!as_promised) {
             m_broken.fetch_add(1);
             return ANIRA_ERROR_INTERNAL;
@@ -1391,11 +1394,11 @@ public:
         anira::Tensor tensor{};
         const anira_status exposed = ctx.input_tensor(0, tensor);
         if (exposed != ANIRA_OK) { return exposed; }
-        anira::RingView ring = ctx.input_ring(0);
+        anira::RingView ring;
+        const anira_status has_ring = ctx.input_ring(0, ring);
+        if (has_ring != ANIRA_OK) { return has_ring; }
         float* const samples = tensor.data_f32();
-        if (!ring || samples == nullptr || ring.dtype() != ANIRA_DTYPE_I16) {
-            return ANIRA_ERROR_CONFIG;
-        }
+        if (samples == nullptr || ring.dtype() != ANIRA_DTYPE_I16) { return ANIRA_ERROR_CONFIG; }
         if (ring.pop_block(0, std::span<int16_t>(m_scratch)) != k_hop) {
             return ANIRA_ERROR_INTERNAL;
         }

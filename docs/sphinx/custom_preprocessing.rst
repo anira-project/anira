@@ -160,11 +160,12 @@ window in a per-entry scratch sized in ``prepare``:
         }
 
         anira_status pre_process(anira::StageContext& ctx) noexcept override {
-            anira::RingView ring = ctx.input_ring(0);                // the audio input: Streamed, float32
+            anira::RingView ring;                                    // the audio input: Streamed, float32
+            if (const anira_status st = ctx.input_ring(0, ring); st != ANIRA_OK) { return st; }
             anira::Tensor spectrum{};
             if (const anira_status st = ctx.input_tensor(0, spectrum); st != ANIRA_OK) { return st; }
             float* bins = spectrum.data_f32();
-            if (!ring || bins == nullptr) { return ANIRA_ERROR_CONFIG; }
+            if (bins == nullptr) { return ANIRA_ERROR_CONFIG; }
             const std::span<float> window = scratch(ctx.entry());
             // the window: the history first, then the hop, popped exactly once
             ring.peek_past_block(0, window.subspan(0, k_window - k_hop));
@@ -176,11 +177,12 @@ window in a per-entry scratch sized in ``prepare``:
         }
 
         anira_status post_process(anira::StageContext& ctx) noexcept override {
-            anira::RingView ring = ctx.output_ring(0);
+            anira::RingView ring;
+            if (const anira_status st = ctx.output_ring(0, ring); st != ANIRA_OK) { return st; }
             anira::Tensor spectrum{};
             if (const anira_status st = ctx.output_tensor(0, spectrum); st != ANIRA_OK) { return st; }
             const float* bins = spectrum.data_f32();
-            if (!ring || bins == nullptr) { return ANIRA_ERROR_CONFIG; }
+            if (bins == nullptr) { return ANIRA_ERROR_CONFIG; }
             const std::span<float> window = scratch(ctx.entry());
             inverse_transform(bins, k_window, window.data());
             // the stream advances by one hop: push what this frame contributes to it
@@ -246,9 +248,11 @@ alone). The same stage in C, over the descriptor:
     static anira_status ANIRA_CALL spectral_pre_process(const anira_stage_ctx* ctx,
                                                         void* user_data) ANIRA_NONBLOCKING {
         float* window = ((spectral*)user_data)->windows + (size_t)ctx->entry * WINDOW;
-        anira_ring* ring = anira_stage_input_ring(ctx, 0);
+        anira_ring* ring = NULL;
+        anira_status st = anira_stage_input_ring(ctx, 0, &ring);   /* slot 0 is Streamed: the model config says so */
+        if (st != ANIRA_OK) { return st; }
         if (anira_ring_peek_past_block(ring, 0, window, ANIRA_DTYPE_F32, WINDOW - HOP) != WINDOW - HOP) {
-            return ANIRA_ERROR_CONFIG;                      /* no ring here, or not float32 */
+            return ANIRA_ERROR_CONFIG;                      /* not float32 */
         }
         if (anira_ring_pop_block(ring, 0, window + (WINDOW - HOP), ANIRA_DTYPE_F32, HOP) != HOP) {
             return ANIRA_ERROR_INTERNAL;
@@ -288,7 +292,9 @@ alone). The same stage in C, over the descriptor:
     static anira_status ANIRA_CALL spectral_post_process(const anira_stage_ctx* ctx,
                                                          void* user_data) ANIRA_NONBLOCKING {
         const float* window = ((spectral*)user_data)->windows + (size_t)ctx->entry * WINDOW;
-        anira_ring* ring = anira_stage_output_ring(ctx, 0);
+        anira_ring* ring = NULL;
+        anira_status st = anira_stage_output_ring(ctx, 0, &ring);
+        if (st != ANIRA_OK) { return st; }
         if (anira_ring_push_block(ring, 0, window + (WINDOW - HOP), ANIRA_DTYPE_F32, HOP) != HOP) {
             return ANIRA_ERROR_INTERNAL;
         }
@@ -327,8 +333,8 @@ Static and State tensors in a stage
 -----------------------------------
 
 A stage sees every tensor of the model's two lists at its slot, whatever its role, and
-``anira_stage_input_role`` / ``anira_stage_output_role`` (``ctx.input_role(slot)``) say which
-it is. A **Static** input is materialised from the handler's store into the model tensor when
+``anira_stage_input_role`` / ``anira_stage_output_role`` (``ctx.input_role(slot, role)``) say
+which it is. A **Static** input is materialised from the handler's store into the model tensor when
 the chunk is formed, so ``pre_process`` and ``before_inference`` find the value there and may
 read or alter it for that chunk (the store is untouched: only the host and the capture write
 it); a Static output is captured behind ``post_process``, so what ``after_inference`` or
@@ -336,9 +342,12 @@ it); a Static output is captured behind ``post_process``, so what ``after_infere
 return. A **State** input is fed after ``pre_process`` and before ``before_inference``, and a
 State output is captured after ``after_inference`` and before ``post_process``: the two hooks
 see the fed and the produced state and may alter either (a constraint, a decay, a splice),
-while ``pre_process`` and ``post_process`` get ``ANIRA_ERROR_INVALID_STATE`` for a State slot,
-which has no host end. Neither role has a ring; ``anira_stage_input_ring`` answers ``NULL``
-for it in every phase.
+while ``pre_process`` and ``post_process`` have no host end of a State slot to hand out.
+Neither role has a ring. Asking for what a slot does not have is the stage's bug, not an
+answer: the accessor answers ``ANIRA_ERROR_INVALID_STATE`` and latches it into
+``anira_handler_rt_error``, naming the stage, the slot and the phase. A stage written for one
+model knows its slots; a stage that handles every slot of a model it does not know asks the
+role first and takes the ring of a Streamed slot only.
 
 .. note::
     Feeding a recurrent state back is no longer a stage's job: declare the pair with the role

@@ -31,11 +31,14 @@ static void on_record(const anira_log_record* record, void* user_data) {
    descriptor's slots below, so their types are the typedefs' to the letter. */
 static anira_status ANIRA_CALL on_pre_process(const anira_stage_ctx* ctx,
                                               void* user_data) ANIRA_NONBLOCKING {
+    anira_role role = ANIRA_ROLE_FORCE32;
     (void)user_data;
-    if (ctx->num_inputs > 0u && anira_stage_input_role(ctx, 0u) == ANIRA_ROLE_STREAMED) {
-        anira_ring* ring = anira_stage_input_ring(ctx, 0u);
+    if (ctx->num_inputs > 0u && anira_stage_input_role(ctx, 0u, &role) == ANIRA_OK &&
+        role == ANIRA_ROLE_STREAMED) {
+        anira_ring* ring = NULL;
         anira_tensor tensor;
-        if (ring != NULL && anira_stage_input_tensor(ctx, 0u, &tensor) == ANIRA_OK) {
+        if (anira_stage_input_ring(ctx, 0u, &ring) == ANIRA_OK &&
+            anira_stage_input_tensor(ctx, 0u, &tensor) == ANIRA_OK) {
             const anira_dtype dtype = anira_ring_dtype(ring);
             void* data = anira_tensor_data(&tensor, dtype);
             const size_t count = anira_ring_available(ring, 0u);
@@ -214,6 +217,8 @@ int anira_header_c_probe(void) {
         anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
         anira_stage_ctx ctx;
         anira_tensor model_end;
+        anira_role role = ANIRA_ROLE_FORCE32;
+        anira_ring* ring = NULL;
         memset(&ctx, 0, sizeof(ctx));
         ctx.phase = (uint32_t)ANIRA_PHASE_PRE_PROCESS;
         ctx.ticket = ANIRA_TICKET_INVALID;
@@ -245,11 +250,17 @@ int anira_header_c_probe(void) {
             checks +=
                 anira_stage_default_post_process(&ctx) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;
             checks += anira_ring_num_channels(NULL) == 0u ? 1 : 0;
-            /* The six context accessors, as a C host calls them. */
-            checks += anira_stage_input_role(NULL, 0u) == ANIRA_ROLE_FORCE32 ? 1 : 0;
-            checks += anira_stage_output_role(NULL, 0u) == ANIRA_ROLE_FORCE32 ? 1 : 0;
-            checks += anira_stage_input_ring(NULL, 0u) == NULL ? 1 : 0;
-            checks += anira_stage_output_ring(NULL, 0u) == NULL ? 1 : 0;
+            /* The six context accessors, as a C host calls them: a status, and the answer in
+               the out-parameter. */
+            checks +=
+                anira_stage_input_role(NULL, 0u, &role) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;
+            checks +=
+                anira_stage_output_role(NULL, 0u, &role) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;
+            checks +=
+                anira_stage_input_ring(NULL, 0u, &ring) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;
+            checks +=
+                anira_stage_output_ring(NULL, 0u, &ring) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;
+            checks += role == ANIRA_ROLE_FORCE32 && ring == NULL ? 1 : 0;
             checks += anira_stage_input_tensor(NULL, 0u, &model_end) == ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;

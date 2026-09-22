@@ -134,26 +134,31 @@ static anira_status ANIRA_CALL anira_rt_contract_miss(anira_handler* handler,
 }
 
 /* anira/abi/stage.h: a phase callback as a host writes one. It asks the context what each slot
-   is, through all six context accessors. In pre_process it moves one hop of every Streamed
-   input by hand, through every ring accessor a stage has; in post_process it pushes the
-   outputs; anything else is left to the default bodies. */
+   is, through all six context accessors: the role first, then only what the slot has in this
+   phase (asking for more is the stage's bug and is recorded). In pre_process it moves one hop
+   of every Streamed input by hand, through every ring accessor a stage has; in post_process it
+   pushes the outputs; anything else is left to the default bodies. */
 static anira_status ANIRA_CALL anira_rt_contract_stage(const anira_stage_ctx* ctx,
                                                        void* user_data) ANIRA_NONBLOCKING {
     uint32_t slot = 0;
     (void)user_data;
     if (ctx->phase == (uint32_t)ANIRA_PHASE_PRE_PROCESS) {
         for (slot = 0; slot < ctx->num_inputs; ++slot) {
-            anira_ring* ring = anira_stage_input_ring(ctx, slot);
-            const anira_dtype dtype = anira_ring_dtype(ring);
+            anira_role role = ANIRA_ROLE_FORCE32;
+            anira_ring* ring = NULL;
+            anira_dtype dtype = 0;
             anira_tensor tensor;
             void* data = NULL;
             size_t elements = 0;
             uint32_t channel = 0;
-            if (anira_stage_input_role(ctx, slot) != ANIRA_ROLE_STREAMED) { continue; }
+            if (anira_stage_input_role(ctx, slot, &role) != ANIRA_OK) { continue; }
+            if (role != ANIRA_ROLE_STREAMED) { continue; }
+            if (anira_stage_input_ring(ctx, slot, &ring) != ANIRA_OK) { continue; }
             if (anira_stage_input_tensor(ctx, slot, &tensor) != ANIRA_OK) { continue; }
+            dtype = anira_ring_dtype(ring);
             data = anira_tensor_data(&tensor, dtype);
             elements = anira_tensor_num_elements(&tensor);
-            if (ring == NULL || data == NULL) { continue; }
+            if (data == NULL) { continue; }
             for (channel = 0; channel < anira_ring_num_channels(ring); ++channel) {
                 const size_t fresh = anira_ring_available(ring, channel);
                 const size_t past = anira_ring_available_past(ring, channel);
@@ -171,14 +176,18 @@ static anira_status ANIRA_CALL anira_rt_contract_stage(const anira_stage_ctx* ct
     }
     if (ctx->phase == (uint32_t)ANIRA_PHASE_POST_PROCESS) {
         for (slot = 0; slot < ctx->num_outputs; ++slot) {
-            anira_ring* ring = anira_stage_output_ring(ctx, slot);
-            const anira_dtype dtype = anira_ring_dtype(ring);
+            anira_role role = ANIRA_ROLE_FORCE32;
+            anira_ring* ring = NULL;
+            anira_dtype dtype = 0;
             anira_tensor tensor;
             const void* data = NULL;
-            if (anira_stage_output_role(ctx, slot) != ANIRA_ROLE_STREAMED) { continue; }
+            if (anira_stage_output_role(ctx, slot, &role) != ANIRA_OK) { continue; }
+            if (role != ANIRA_ROLE_STREAMED) { continue; }
+            if (anira_stage_output_ring(ctx, slot, &ring) != ANIRA_OK) { continue; }
             if (anira_stage_output_tensor(ctx, slot, &tensor) != ANIRA_OK) { continue; }
+            dtype = anira_ring_dtype(ring);
             data = anira_tensor_data(&tensor, dtype);
-            if (ring == NULL || data == NULL) { continue; }
+            if (data == NULL) { continue; }
             (void)anira_ring_push_block(ring, 0u, data, dtype, 0u);
             (void)anira_ring_push_fill(ring, 0u, data, dtype, 0u);
         }

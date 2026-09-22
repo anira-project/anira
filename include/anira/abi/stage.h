@@ -35,19 +35,26 @@
  * model's input and output lists, the entry the chunk occupies, and an opaque frame. The
  * tensors and the rings are not in the record: a stage asks per slot, the tensor's position in
  * the model configuration's input or output list (the order the engine binds, and the one
- * number every entry of anira_handler uses). anira_stage_input_role and anira_stage_output_role
- * answer what the tensor is (the spec's anira_role); anira_stage_input_ring and
- * anira_stage_output_ring hand out the ring of a Streamed tensor, or NULL when the slot has no
- * ring in this phase, which is an answer and not an error; anira_stage_input_tensor and
- * anira_stage_output_tensor fill a descriptor of the model end of the slot (in pre_process and
- * post_process a State slot has no host end and answers ANIRA_ERROR_INVALID_STATE; in the two
- * hooks every slot answers). That descriptor is built on every call over the memory the tensor
- * has right now (an engine may swap it between two inferences), so nothing about it may be
- * cached across calls. Further accessors may be appended in a later version; the record's
- * layout does not change for them. The rings stay inside anira: a stage moves elements through
- * the ten anira_ring accessors, which state the dtype they believe the ring holds and move
- * nothing when it is another one (nothing converts, in either direction). A NULL phase slot of
- * the descriptor means anira's default body runs for that phase
+ * number every entry of anira_handler uses). Every accessor returns a status and fills an
+ * out-parameter, reset on any status but ANIRA_OK: anira_stage_input_role and
+ * anira_stage_output_role answer what the tensor is (the spec's anira_role);
+ * anira_stage_input_ring and anira_stage_output_ring hand out the ring of a Streamed tensor in
+ * the phase that moves it (pre_process for an input, post_process for an output);
+ * anira_stage_input_tensor and anira_stage_output_tensor fill a descriptor of the model end of
+ * the slot (the inputs in pre_process and before_inference, the outputs in after_inference and
+ * post_process; in pre_process and post_process a State slot has no host end, in the two hooks
+ * every slot answers). A slot always has a role. Asking for a ring or a model tensor the slot
+ * does not have in this phase is a bug in the stage, not an answer: a stage knows what a slot
+ * is, from its model config or by asking the role first, so the accessor answers
+ * ANIRA_ERROR_INVALID_STATE and records it in anira_handler_rt_error with one latched record
+ * per kind naming the entry, the running stage, the slot and the phase, as a slot out of range
+ * is recorded (ANIRA_ERROR_INVALID_ARGUMENT). The descriptor of a model end is built on every
+ * call over the memory the tensor has right now (an engine may swap it between two inferences),
+ * so nothing about it may be cached across calls. Further accessors may be appended in a later
+ * version; the record's layout does not change for them. The rings stay inside anira: a stage
+ * moves elements through the ten anira_ring accessors, which state the dtype they believe the
+ * ring holds and move nothing when it is another one (nothing converts, in either direction). A
+ * NULL phase slot of the descriptor means anira's default body runs for that phase
  * (anira_stage_default_pre_process pops one hop per Streamed input into its model tensor,
  * anira_stage_default_post_process pushes one hop per Streamed output; a Static slot is
  * materialised ahead of pre_process and captured behind post_process by anira itself). A filled
@@ -341,75 +348,96 @@ typedef struct anira_stage_ctx {
 } anira_stage_ctx;
 
 /**
- * @brief What the tensor of an input slot is: the anira_role of its spec, the same answer in
- * all four phases. It is the first question of a stage about a slot: a Streamed tensor
- * has a ring in pre_process (anira_stage_input_ring) and a model end, a Static and a
- * State tensor have their model end only (anira_stage_input_tensor).
+ * @brief Fills out with what the tensor of an input slot is: the anira_role of its spec, the
+ * same answer in all four phases. It is the first question of a stage about a slot it
+ * does not know from its model config: a Streamed tensor has a ring in pre_process
+ * (anira_stage_input_ring) and a model end, a Static and a State tensor have their model
+ * end only (anira_stage_input_tensor). Every context accessor answers the same way: a
+ * status, an out-parameter filled on ANIRA_OK and reset on anything else, and every
+ * status but ANIRA_OK recorded in anira_handler_rt_error with one latched record per
+ * kind naming the entry, the running stage, the slot and the phase, since asking for
+ * what a slot does not have is the stage's bug and not an answer. A NULL ctx and a ctx
+ * without a frame name no handler to record into.
  * @param ctx The context the phase callback received.
  * @param slot The tensor's position in the model config's input list, below num_inputs.
- * @return The role; ANIRA_ROLE_FORCE32, which is no role, for a NULL ctx, a ctx without a
- *         frame, or a slot at or beyond num_inputs. The slot out of range records
- *         ANIRA_ERROR_INVALID_ARGUMENT in anira_handler_rt_error with one latched record naming
- *         the running stage; a NULL ctx and a ctx without a frame name no handler to record
- *         into.
+ * @param out Receives the role; ANIRA_ROLE_FORCE32, which is no role, whenever the status is
+ *        not ANIRA_OK.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL ctx, a ctx without a frame, a NULL
+ *         out, or a slot at or beyond num_inputs (the NULL out and the slot out of range are
+ *         recorded). A slot always has a role: the two role accessors never answer
+ *         ANIRA_ERROR_INVALID_STATE.
  * @par Thread contract
  * [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
  * @since ABI 0.2
  */
-ANIRA_API anira_role ANIRA_CALL anira_stage_input_role(const anira_stage_ctx* ctx,
-                                                       uint32_t slot) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
+ANIRA_API anira_status ANIRA_CALL anira_stage_input_role(const anira_stage_ctx* ctx,
+                                                         uint32_t slot,
+                                                         anira_role* out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
- * @brief What the tensor of an output slot is: the anira_role of its spec, the same answer in
- * all four phases. A Streamed tensor has a ring in post_process
+ * @brief Fills out with what the tensor of an output slot is: the anira_role of its spec, the
+ * same answer in all four phases. A Streamed tensor has a ring in post_process
  * (anira_stage_output_ring) and a model end, a Static and a State tensor have their
  * model end only (anira_stage_output_tensor).
  * @param ctx The context the phase callback received.
  * @param slot The tensor's position in the model config's output list, below num_outputs.
- * @return The role; ANIRA_ROLE_FORCE32 under the refusals of anira_stage_input_role, against
+ * @param out Receives the role; ANIRA_ROLE_FORCE32, which is no role, whenever the status is
+ *        not ANIRA_OK.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT under the refusals of anira_stage_input_role,
+ *         against num_outputs.
+ * @par Thread contract
+ * [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_stage_output_role(const anira_stage_ctx* ctx,
+                                                          uint32_t slot,
+                                                          anira_role* out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
+
+/**
+ * @brief Fills out with the ring of an input slot: the ring of a Streamed tensor in
+ * ANIRA_PHASE_PRE_PROCESS, the one phase that moves the input rings. The pointer is
+ * valid until the callback returns, and the stage advances the ring through the
+ * anira_ring accessors. In every other case the slot has no ring here, and asking for
+ * one is the stage's bug: a tensor of another role has none (ask anira_stage_input_role
+ * first, or know the slot from the model config), and no input ring is handed out in
+ * another phase than pre_process.
+ * @param ctx The context the phase callback received.
+ * @param slot The tensor's position in the model config's input list, below num_inputs.
+ * @param out Receives the ring, for the ten anira_ring accessors; NULL whenever the status is
+ *        not ANIRA_OK.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE, recorded in anira_handler_rt_error with one
+ *         latched record naming the entry, the running stage, the slot and the phase, when the
+ *         slot has no ring here: a Static, State or Buffer tensor in any phase, a Streamed
+ *         tensor outside pre_process. ANIRA_ERROR_INVALID_ARGUMENT under the refusals of
+ *         anira_stage_input_role.
+ * @par Thread contract
+ * [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_stage_input_ring(const anira_stage_ctx* ctx,
+                                                         uint32_t slot,
+                                                         anira_ring** out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
+
+/**
+ * @brief Fills out with the ring of an output slot: the ring of a Streamed tensor in
+ * ANIRA_PHASE_POST_PROCESS, the one phase that moves the output rings; valid until the
+ * callback returns. A tensor of another role has no ring, and no output ring is handed
+ * out in another phase: asking is the stage's bug, as for anira_stage_input_ring.
+ * @param ctx The context the phase callback received.
+ * @param slot The tensor's position in the model config's output list, below num_outputs.
+ * @param out Receives the ring, for the ten anira_ring accessors; NULL whenever the status is
+ *        not ANIRA_OK.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE, recorded, when the slot has no ring here
+ *         (another role than Streamed, or a phase other than post_process);
+ *         ANIRA_ERROR_INVALID_ARGUMENT under the refusals of anira_stage_input_role, against
  *         num_outputs.
  * @par Thread contract
  * [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
  * @since ABI 0.2
  */
-ANIRA_API anira_role ANIRA_CALL anira_stage_output_role(const anira_stage_ctx* ctx,
-                                                        uint32_t slot) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
-
-/**
- * @brief The ring of an input slot, for the ten anira_ring accessors: the ring of a Streamed
- * tensor in ANIRA_PHASE_PRE_PROCESS. NULL is the answer to "has this tensor a ring here"
- * and not an error: a tensor of another role has no ring, and no input ring is handed
- * out in another phase than pre_process. Nothing is recorded for it, and every
- * anira_ring accessor takes a NULL ring. The pointer is valid until the callback
- * returns.
- * @param ctx The context the phase callback received.
- * @param slot The tensor's position in the model config's input list, below num_inputs.
- * @return The ring; NULL when the slot has no ring in this phase. NULL too for a NULL ctx, a
- *         ctx without a frame, or a slot at or beyond num_inputs, the last with
- *         ANIRA_ERROR_INVALID_ARGUMENT recorded in anira_handler_rt_error and one latched
- *         record naming the running stage.
- * @par Thread contract
- * [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
- * @since ABI 0.2
- */
-ANIRA_API anira_ring* ANIRA_CALL anira_stage_input_ring(const anira_stage_ctx* ctx,
-                                                        uint32_t slot) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
-
-/**
- * @brief The ring of an output slot: the ring of a Streamed tensor in ANIRA_PHASE_POST_PROCESS.
- * NULL, with nothing recorded, for a tensor of another role and in every other phase:
- * the answer to "has this tensor a ring here", not an error. The pointer is valid until
- * the callback returns.
- * @param ctx The context the phase callback received.
- * @param slot The tensor's position in the model config's output list, below num_outputs.
- * @return The ring; NULL when the slot has no ring in this phase, and under the refusals of
- *         anira_stage_input_ring, against num_outputs.
- * @par Thread contract
- * [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
- * @since ABI 0.2
- */
-ANIRA_API anira_ring* ANIRA_CALL anira_stage_output_ring(const anira_stage_ctx* ctx,
-                                                         uint32_t slot) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
+ANIRA_API anira_status ANIRA_CALL anira_stage_output_ring(const anira_stage_ctx* ctx,
+                                                          uint32_t slot,
+                                                          anira_ring** out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
  * @brief Fills out with the model end of an input slot: the tensor the engine binds, in the
@@ -417,23 +445,25 @@ ANIRA_API anira_ring* ANIRA_CALL anira_stage_output_ring(const anira_stage_ctx* 
  * descriptor's domain field), for the stage to write. Available in
  * ANIRA_PHASE_PRE_PROCESS for a Streamed and a Static input (every Static input is
  * already materialised there; a State input has no host end and is fed after
- * pre_process, so it answers ANIRA_ERROR_INVALID_STATE), and in
+ * pre_process, so there is no model end to hand out), and in
  * ANIRA_PHASE_BEFORE_INFERENCE for a tensor of every role, State included: there every
  * State input is already fed from the session's state buffer, a stage may read or alter
- * it, and what it leaves is what the engine gets. The descriptor is built by this call
- * over the memory the tensor has right now; an engine may swap that memory between two
- * inferences, so a stage asks again in every callback and keeps neither the descriptor
- * nor its data pointer across calls.
+ * it, and what it leaves is what the engine gets. Asking in after_inference or
+ * post_process, which expose the model's outputs, or for a State input in pre_process,
+ * is the stage's bug. The descriptor is built by this call over the memory the tensor
+ * has right now; an engine may swap that memory between two inferences, so a stage asks
+ * again in every callback and keeps neither the descriptor nor its data pointer across
+ * calls.
  * @param ctx The context the phase callback received.
  * @param slot The tensor's position in the model config's input list, below num_inputs.
  * @param out The caller's record, filled with a borrowed descriptor (release NULL); an all-zero
  *        record, which reads as dtype 0, whenever the status is not ANIRA_OK.
- * @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE in a phase that does not expose the model's
- *         inputs (after_inference, post_process) and for a State input in pre_process, with
- *         nothing recorded: the status is the report. ANIRA_ERROR_INVALID_ARGUMENT for a NULL
- *         ctx, a ctx without a frame, a NULL out, or a slot at or beyond num_inputs; the NULL
- *         out and the slot out of range are recorded in anira_handler_rt_error too, with one
- *         latched record naming the running stage.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE, recorded in anira_handler_rt_error with one
+ *         latched record naming the entry, the running stage, the slot and the phase, in a
+ *         phase that does not expose the model's inputs (after_inference, post_process) and for
+ *         a State input in pre_process. ANIRA_ERROR_INVALID_ARGUMENT for a NULL ctx, a ctx
+ *         without a frame, a NULL out, or a slot at or beyond num_inputs; the NULL out and the
+ *         slot out of range are recorded too.
  * @par Thread contract
  * [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
  * @since ABI 0.2
@@ -448,17 +478,18 @@ ANIRA_API anira_status ANIRA_CALL anira_stage_input_tensor(const anira_stage_ctx
  * ANIRA_PHASE_AFTER_INFERENCE for a tensor of every role, State included (there a State
  * output is not yet captured: what the stage leaves in it is what the next inference is
  * fed), and in ANIRA_PHASE_POST_PROCESS for a Streamed and a Static output (a State
- * output was captured ahead of post_process and has no host end:
- * ANIRA_ERROR_INVALID_STATE). A chunk that completed without an inference (dropped,
- * failed) reads as zeros. The descriptor is built by this call and is not kept across
- * calls, as for anira_stage_input_tensor.
+ * output was captured ahead of post_process and has no host end). Asking in pre_process
+ * or before_inference, or for a State output in post_process, is the stage's bug. A
+ * chunk that completed without an inference (dropped, failed) reads as zeros. The
+ * descriptor is built by this call and is not kept across calls, as for
+ * anira_stage_input_tensor.
  * @param ctx The context the phase callback received.
  * @param slot The tensor's position in the model config's output list, below num_outputs.
  * @param out The caller's record, filled with a borrowed descriptor (release NULL); an all-zero
  *        record, which reads as dtype 0, whenever the status is not ANIRA_OK.
- * @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE in a phase that does not expose the model's
- *         outputs (pre_process, before_inference) and for a State output in post_process, with
- *         nothing recorded; ANIRA_ERROR_INVALID_ARGUMENT under the refusals of
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE, recorded, in a phase that does not expose the
+ *         model's outputs (pre_process, before_inference) and for a State output in
+ *         post_process; ANIRA_ERROR_INVALID_ARGUMENT under the refusals of
  *         anira_stage_input_tensor, against num_outputs.
  * @par Thread contract
  * [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING

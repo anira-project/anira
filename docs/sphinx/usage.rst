@@ -614,25 +614,33 @@ record: a callback asks **per slot**, the tensor's position in the model config'
 side (the one number every entry of section 3.2 uses), through six accessors,
 ``[callback-safe]`` and ``ANIRA_NONBLOCKING``:
 
-- ``anira_stage_input_role(ctx, slot)`` / ``anira_stage_output_role``: what the tensor is,
-  the ``anira_role`` of its spec, the same answer in every phase (``ANIRA_ROLE_FORCE32`` for a
-  slot out of range, recorded in ``anira_handler_rt_error``).
-- ``anira_stage_input_ring(ctx, slot)`` / ``anira_stage_output_ring``: the ring of a
+- ``anira_stage_input_role(ctx, slot, &role)`` / ``anira_stage_output_role``: what the
+  tensor is, the ``anira_role`` of its spec, the same answer in every phase; the first
+  question about a slot the stage does not know from its model config.
+- ``anira_stage_input_ring(ctx, slot, &ring)`` / ``anira_stage_output_ring``: the ring of a
   Streamed tensor in the phase that moves it, ``pre_process`` for an input and
-  ``post_process`` for an output, and ``NULL`` otherwise. ``NULL`` is the answer to "has this
-  tensor a ring here", not an error: nothing is recorded for it, and every ring accessor takes
-  a ``NULL`` ring.
+  ``post_process`` for an output, for the ring accessors below.
 - ``anira_stage_input_tensor(ctx, slot, &tensor)`` / ``anira_stage_output_tensor``: fill a
   borrowed descriptor (section 3.3) of the *model end* of the slot, the tensor the engine
   binds, for the stage to read or write. The inputs answer in ``pre_process`` (Streamed and
-  Static; a State input has no host end there and answers ``ANIRA_ERROR_INVALID_STATE``) and
-  in ``before_inference`` (every role, the State inputs fed); the outputs in
-  ``after_inference`` (every role, the State outputs not yet captured) and in
-  ``post_process`` (Streamed and Static; a State output was captured ahead of it:
-  ``ANIRA_ERROR_INVALID_STATE``). Another phase is ``ANIRA_ERROR_INVALID_STATE`` with an
-  all-zero record and nothing recorded. The descriptor is built by the call over the memory
-  the tensor has right now, which an engine may swap between two inferences: ask again in
-  every callback, and keep neither the descriptor nor its data pointer.
+  Static; a State input has no host end there) and in ``before_inference`` (every role, the
+  State inputs fed); the outputs in ``after_inference`` (every role, the State outputs not
+  yet captured) and in ``post_process`` (Streamed and Static; a State output was captured
+  ahead of it). The descriptor is built by the call over the memory the tensor has right
+  now, which an engine may swap between two inferences: ask again in every callback, and
+  keep neither the descriptor nor its data pointer.
+
+One rule for all six: the accessor returns an ``anira_status`` and fills its out-parameter,
+which it resets on any status but ``ANIRA_OK`` (``ANIRA_ROLE_FORCE32``, ``NULL``, an all-zero
+record). A slot always has a role. Asking for a ring or a model tensor the slot does not have
+in this phase (a ring of a Static or a State tensor, an input ring outside ``pre_process`` or
+an output ring outside ``post_process``, the host end of a State tensor in ``pre_process`` or
+``post_process``, a side outside its phases) is a **bug in the stage, not an answer**: a stage
+knows what a slot is, from its model config or by asking the role first, so the accessor
+answers ``ANIRA_ERROR_INVALID_STATE`` and latches it into ``anira_handler_rt_error`` with one
+record per kind naming the entry, the stage, the slot and the phase, as it latches a slot out
+of range and a ``NULL`` out-parameter (``ANIRA_ERROR_INVALID_ARGUMENT``). Every ring accessor
+still takes a ``NULL`` ring and returns 0 for it.
 
 **The entry.** ``ctx->entry`` is the in-flight entry this chunk occupies, ``0 ..
 anira_handler_num_entries(h) - 1``: the same value in all four phases of one chunk, distinct
@@ -755,14 +763,18 @@ on and under a contract that forms chunks on several threads:
         int16_t* scratch = state->scratch + (size_t)ctx->entry * HOP;
         anira_tensor model;
         float* samples;
-        anira_ring* ring;
+        anira_ring* ring = NULL;
+        anira_role role = ANIRA_ROLE_FORCE32;
         anira_status st;
-        if (anira_stage_input_role(ctx, 0) != ANIRA_ROLE_STREAMED) { return ANIRA_ERROR_CONFIG; }
-        ring = anira_stage_input_ring(ctx, 0);              /* the host's int16 ring */
+        st = anira_stage_input_role(ctx, 0, &role);          /* what slot 0 is */
+        if (st != ANIRA_OK) { return st; }                   /* latched already: the stage's bug */
+        if (role != ANIRA_ROLE_STREAMED) { return ANIRA_ERROR_CONFIG; }
+        st = anira_stage_input_ring(ctx, 0, &ring);          /* the host's int16 ring */
+        if (st != ANIRA_OK) { return st; }
         st = anira_stage_input_tensor(ctx, 0, &model);       /* the float32 model end */
         if (st != ANIRA_OK) { return st; }
         samples = anira_tensor_data_f32(&model);
-        if (ring == NULL || samples == NULL || anira_ring_dtype(ring) != ANIRA_DTYPE_I16) {
+        if (samples == NULL || anira_ring_dtype(ring) != ANIRA_DTYPE_I16) {
             return ANIRA_ERROR_CONFIG;
         }
         for (uint32_t c = 0; c < anira_ring_num_channels(ring); ++c) {
@@ -830,14 +842,15 @@ or handler that carries it; ``release()`` runs once, when that carrier dies.
         }
 
         anira_status pre_process(anira::StageContext& ctx) noexcept override {
-            if (ctx.input_role(0) != ANIRA_ROLE_STREAMED) { return ANIRA_ERROR_CONFIG; }
-            anira::RingView ring = ctx.input_ring(0);
-            anira::Tensor model{};
+            anira::Role role = ANIRA_ROLE_FORCE32;                       // what slot 0 is
+            if (const anira_status st = ctx.input_role(0, role); st != ANIRA_OK) { return st; }
+            if (role != ANIRA_ROLE_STREAMED) { return ANIRA_ERROR_CONFIG; }
+            anira::RingView ring;                                        // the host's int16 ring
+            if (const anira_status st = ctx.input_ring(0, ring); st != ANIRA_OK) { return st; }
+            anira::Tensor model{};                                       // the float32 model end
             if (const anira_status st = ctx.input_tensor(0, model); st != ANIRA_OK) { return st; }
             float* samples = model.data_f32();
-            if (!ring || samples == nullptr || ring.dtype() != ANIRA_DTYPE_I16) {
-                return ANIRA_ERROR_CONFIG;
-            }
+            if (samples == nullptr || ring.dtype() != ANIRA_DTYPE_I16) { return ANIRA_ERROR_CONFIG; }
             const std::span<int16_t> scratch(m_scratch.data() + static_cast<size_t>(ctx.entry()) * k_hop, k_hop);
             for (uint32_t c = 0; c < ring.num_channels(); ++c) {
                 if (ring.pop_block(c, scratch) != k_hop) { return ANIRA_ERROR_INTERNAL; }

@@ -140,8 +140,8 @@ static_assert(std::is_invocable_r_v<anira_status,
 // The stage entries: a ring accessor, a default body and the control-path add.
 static_assert(noexcept(anira_ring_pop_block(nullptr, 0, nullptr, ANIRA_DTYPE_F32, 0)));
 static_assert(noexcept(anira_stage_default_pre_process(nullptr)));
-static_assert(noexcept(anira_stage_input_role(nullptr, 0)));
-static_assert(noexcept(anira_stage_output_ring(nullptr, 0)));
+static_assert(noexcept(anira_stage_input_role(nullptr, 0, nullptr)));
+static_assert(noexcept(anira_stage_output_ring(nullptr, 0, nullptr)));
 static_assert(noexcept(anira_stage_input_tensor(nullptr, 0, nullptr)));
 static_assert(noexcept(anira_pipeline_add_stage(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_handler_num_entries(nullptr)));

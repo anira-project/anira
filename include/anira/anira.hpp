@@ -35,10 +35,12 @@
  * the phases it fills in phases(), because the C descriptor tells a filled phase from a NULL
  * one, and its real-time promise in flags() (anira_stage_desc::flags); StageContext has
  * input_tensor / output_tensor filling a Tensor, the C accessors, in place of model_input /
- * model_output references, and entry() for the chunk's entry; the RingView calls take a
- * std::span; stage::Custom takes no domains and has no single-callable form (a stage works
- * at the host end of every slot and never crosses a domain), and a Pipeline holds at most one
- * of them; the variant of Pipeline is named Pipeline::AnyStage.
+ * model_output references, every accessor returning the C status and filling an out-parameter
+ * (asking for what a slot does not have in a phase is the stage's bug, and is recorded), and
+ * entry() for the chunk's entry; the RingView calls take a std::span; stage::Custom takes no
+ * domains and has no single-callable form (a stage works at the host end of every slot and never
+ * crosses a domain), and a Pipeline holds at most one of them; the variant of Pipeline is named
+ * Pipeline::AnyStage.
  *
  * Requirements: C++20 with exceptions; std::filesystem, which on Apple platforms means a
  * deployment target of macOS 10.15 / iOS 13 or later.
@@ -1649,8 +1651,8 @@ private:
  *
  * Nothing converts: T's dtype must be dtype(). A call with another one moves nothing, returns 0
  * and records ANIRA_ERROR_CONFIG in the handler's anira_handler_rt_error with one latched
- * record, as the C entry does. A view of no ring (the slot has none in this phase) is false, and
- * every call on it returns 0. The view is valid until the callback returns.
+ * record, as the C entry does. A view of no ring (what a refused input_ring / output_ring leaves)
+ * is false, and every call on it returns 0. The view is valid until the callback returns.
  *
  * [driver-thread] [callback-safe], nonblocking: every method is noexcept, allocates nothing and
  * returns the count the C entry returns.
@@ -1756,14 +1758,18 @@ private:
  * tensor's position in the model configuration's input or output list (the number every entry
  * of anira_handler uses). Valid until the callback returns, and never kept beyond it.
  *
- * What a phase exposes: pre_process the input rings and the model's input tensors,
- * before_inference the input tensors, after_inference the output tensors, post_process the
- * output tensors and the output rings. A ring asked for outside its phase, or for a tensor that
- * is not Streamed, is a RingView of no ring, which is an answer and not an error; a tensor asked
- * for outside its phases is ANIRA_ERROR_INVALID_STATE.
+ * What a phase exposes: pre_process the input rings and the model's input tensors (a State
+ * input has no host end there), before_inference the input tensors, after_inference the output
+ * tensors, post_process the output tensors (State outputs excepted) and the output rings. Every
+ * accessor returns a status and fills an out-parameter, reset on any status but ANIRA_OK. A
+ * slot always has a role; asking for a ring or a tensor the slot does not have in this phase is
+ * a bug in the stage, not an answer: a stage knows what a slot is, from its model config or by
+ * asking the role first, so the accessor answers ANIRA_ERROR_INVALID_STATE and records it in
+ * anira_handler_rt_error with one latched record per kind naming the stage, the slot and the
+ * phase, as it records a slot out of range (ANIRA_ERROR_INVALID_ARGUMENT).
  *
  * [driver-thread | inference-thread] [callback-safe], nonblocking: every method is noexcept and
- * allocates nothing.
+ * allocates nothing, one C call per method.
  */
 class StageContext {
 public:
@@ -1794,34 +1800,51 @@ public:
     /// allocation: one entry holds one chunk at a time, however many are in flight.
     uint32_t entry() const noexcept { return m_ctx->entry; }
 
-    /// anira_stage_input_role: what the tensor of an input slot is, the same answer in every
-    /// phase; ANIRA_ROLE_FORCE32, which is no role, for a slot at or beyond num_inputs().
-    Role input_role(uint32_t slot) const noexcept { return anira_stage_input_role(m_ctx, slot); }
-    /// anira_stage_output_role: the output twin, against num_outputs().
-    Role output_role(uint32_t slot) const noexcept { return anira_stage_output_role(m_ctx, slot); }
-    /// anira_stage_input_ring: the ring of a Streamed input in pre_process; a view of no ring
-    /// for a tensor of another role and in every other phase.
-    RingView input_ring(uint32_t slot) const noexcept {
-        return RingView(anira_stage_input_ring(m_ctx, slot));
+    /// anira_stage_input_role: fills out with what the tensor of an input slot is, the same
+    /// answer in every phase; the first question about a slot the stage does not know from its
+    /// model config. @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a slot at or beyond
+    /// num_inputs(), recorded, with out ANIRA_ROLE_FORCE32, which is no role. A slot always has
+    /// a role: never ANIRA_ERROR_INVALID_STATE.
+    anira_status input_role(uint32_t slot, Role& out) const noexcept {
+        return anira_stage_input_role(m_ctx, slot, &out);
     }
-    /// anira_stage_output_ring: the ring of a Streamed output in post_process; a view of no
-    /// ring for a tensor of another role and in every other phase.
-    RingView output_ring(uint32_t slot) const noexcept {
-        return RingView(anira_stage_output_ring(m_ctx, slot));
+    /// anira_stage_output_role: the output twin, against num_outputs().
+    anira_status output_role(uint32_t slot, Role& out) const noexcept {
+        return anira_stage_output_role(m_ctx, slot, &out);
+    }
+    /// anira_stage_input_ring: fills out with a view of the ring of a Streamed input in
+    /// pre_process, the phase that moves the input rings. @return ANIRA_OK;
+    /// ANIRA_ERROR_INVALID_STATE for a tensor of another role and in every other phase, which is
+    /// the stage's bug and is recorded, ANIRA_ERROR_INVALID_ARGUMENT for a slot out of range;
+    /// out is then a view of no ring.
+    anira_status input_ring(uint32_t slot, RingView& out) const noexcept {
+        anira_ring* ring = nullptr;
+        const anira_status status = anira_stage_input_ring(m_ctx, slot, &ring);
+        out = RingView(ring);
+        return status;
+    }
+    /// anira_stage_output_ring: fills out with a view of the ring of a Streamed output in
+    /// post_process, the phase that moves the output rings. @return as input_ring.
+    anira_status output_ring(uint32_t slot, RingView& out) const noexcept {
+        anira_ring* ring = nullptr;
+        const anira_status status = anira_stage_output_ring(m_ctx, slot, &ring);
+        out = RingView(ring);
+        return status;
     }
     /// anira_stage_input_tensor: fills out with the model end of an input slot, the tensor the
-    /// engine binds (before_inference: every slot; pre_process: every slot with a host end, a
-    /// State slot answers ANIRA_ERROR_INVALID_STATE there). Built by this call over the memory
-    /// the tensor has right now: ask again in every callback, keep neither the descriptor nor
-    /// its data pointer. @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE in another phase or for a
-    /// slot without a host end, ANIRA_ERROR_INVALID_ARGUMENT for a slot out of range; out is
-    /// then all-zero.
+    /// engine binds (before_inference: every slot; pre_process: every slot with a host end,
+    /// which a State slot has not). Built by this call over the memory the tensor has right
+    /// now: ask again in every callback, keep neither the descriptor nor its data pointer.
+    /// @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE in a phase that exposes the outputs and for
+    /// a State slot in pre_process, which is the stage's bug and is recorded,
+    /// ANIRA_ERROR_INVALID_ARGUMENT for a slot out of range; out is then all-zero.
     anira_status input_tensor(uint32_t slot, Tensor& out) const noexcept {
         return anira_stage_input_tensor(m_ctx, slot, &out);
     }
     /// anira_stage_output_tensor: fills out with the model end of an output slot, the tensor
     /// the engine wrote (after_inference: every slot; post_process: every slot with a host end,
-    /// a State slot answers ANIRA_ERROR_INVALID_STATE there). @return as input_tensor.
+    /// which a State slot has not). @return as input_tensor, against the phases that expose
+    /// the outputs.
     anira_status output_tensor(uint32_t slot, Tensor& out) const noexcept {
         return anira_stage_output_tensor(m_ctx, slot, &out);
     }

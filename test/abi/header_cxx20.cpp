@@ -102,16 +102,26 @@ static_assert(noexcept(std::declval<const anira::RingView&>().dtype()) &&
               noexcept(std::declval<anira::RingView&>().pop_block(0, std::span<float>{})) &&
               noexcept(std::declval<anira::RingView&>().push_fill(0, 0.0F, 0)));
 static_assert(noexcept(std::declval<const anira::StageContext&>().phase()) &&
-              noexcept(std::declval<const anira::StageContext&>().input_role(0)) &&
-              noexcept(std::declval<const anira::StageContext&>().input_ring(0)) &&
-              noexcept(std::declval<const anira::StageContext&>().output_ring(0)) &&
+              noexcept(std::declval<const anira::StageContext&>()
+                           .input_role(0, std::declval<anira::Role&>())) &&
+              noexcept(std::declval<const anira::StageContext&>()
+                           .input_ring(0, std::declval<anira::RingView&>())) &&
+              noexcept(std::declval<const anira::StageContext&>()
+                           .output_ring(0, std::declval<anira::RingView&>())) &&
               noexcept(std::declval<const anira::StageContext&>()
                            .input_tensor(0, std::declval<anira::Tensor&>())) &&
               noexcept(std::declval<const anira::StageContext&>()
                            .output_tensor(0, std::declval<anira::Tensor&>())));
+// Every context accessor returns the C status and fills an out-parameter; the view is
+// copy-assignable, so a refused ring leaves a view of no ring.
+static_assert(std::is_same_v<decltype(std::declval<const anira::StageContext&>()
+                                          .input_ring(0, std::declval<anira::RingView&>())),
+                             anira_status>);
+static_assert(std::is_same_v<decltype(std::declval<const anira::StageContext&>()
+                                          .output_role(0, std::declval<anira::Role&>())),
+                             anira_status>);
 static_assert(
-    std::is_same_v<decltype(std::declval<const anira::StageContext&>().input_ring(0)),
-                   anira::RingView> &&
+    std::is_nothrow_copy_assignable_v<anira::RingView> &&
     std::is_same_v<decltype(std::declval<const anira::StageContext&>().ticket()), anira_ticket>);
 static_assert(
     noexcept(std::declval<anira::Stage&>().pre_process(std::declval<anira::StageContext&>())) &&
@@ -192,10 +202,12 @@ public:
 
     anira_status pre_process(anira::StageContext& ctx) noexcept override {
         anira::Tensor input{};
-        const anira_status status = ctx.input_tensor(0, input);
-        if (status != ANIRA_OK) { return status; }
-        anira::RingView ring = ctx.input_ring(0);
-        if (!ring || ring.dtype() != ANIRA_DTYPE_I16) { return ANIRA_ERROR_CONFIG; }
+        const anira_status exposed = ctx.input_tensor(0, input);
+        if (exposed != ANIRA_OK) { return exposed; }
+        anira::RingView ring;
+        const anira_status has_ring = ctx.input_ring(0, ring);
+        if (has_ring != ANIRA_OK) { return has_ring; }
+        if (ring.dtype() != ANIRA_DTYPE_I16) { return ANIRA_ERROR_CONFIG; }
         float* const samples = input.data_f32();
         const std::size_t hop = std::min(m_block.size(), input.num_elements());
         const std::size_t popped = ring.pop_block(0, std::span<int16_t>(m_block).first(hop));
@@ -203,9 +215,11 @@ public:
         return ANIRA_OK;
     }
     anira_status after_inference(anira::StageContext& ctx) noexcept override {
+        anira::Role role = ANIRA_ROLE_FORCE32;
         anira::Tensor output{};
-        return ctx.output_role(0) == ANIRA_ROLE_STREAMED ? ctx.output_tensor(0, output)
-                                                         : ANIRA_ERROR_CONFIG;
+        const anira_status asked = ctx.output_role(0, role);
+        if (asked != ANIRA_OK) { return asked; }
+        return role == ANIRA_ROLE_STREAMED ? ctx.output_tensor(0, output) : ANIRA_ERROR_CONFIG;
     }
     anira_status prepare(anira_handler* handler, const anira::PlanReport& report) override {
         return handler != nullptr && report.num_plans() > 0 ? ANIRA_OK : ANIRA_ERROR_CONFIG;
@@ -221,17 +235,23 @@ private:
 std::size_t nonblocking_probe(const anira_stage_ctx* record) noexcept ANIRA_NONBLOCKING {
     const anira::StageContext ctx(record);
     anira::Tensor tensor{};
+    anira::Role role = ANIRA_ROLE_FORCE32;
     std::array<float, 8> block{};
     const float fill = 0.0F;
-    anira::RingView in = ctx.input_ring(0);
-    anira::RingView out = ctx.output_ring(0);
-    std::size_t moved =
-        in.pop_block(0, std::span<float>(block)) + in.peek_past_block(0, std::span<float>(block)) +
-        in.pop_windows(0, std::span<float>(block), 2, 2, 0, 2) + in.discard(0, 1) +
-        out.push_block(0, std::span<const float>(block)) + out.push_fill(0, fill, 1) +
-        in.available(0) + in.available_past(0) + in.num_channels() + in.dtype();
+    anira::RingView in;
+    anira::RingView out;
+    std::size_t moved = ctx.input_ring(0, in) == ANIRA_OK ? 1 : 0;
+    moved += ctx.output_ring(0, out) == ANIRA_OK ? 1 : 0;
+    moved += in.pop_block(0, std::span<float>(block)) +
+             in.peek_past_block(0, std::span<float>(block)) +
+             in.pop_windows(0, std::span<float>(block), 2, 2, 0, 2) + in.discard(0, 1) +
+             out.push_block(0, std::span<const float>(block)) + out.push_fill(0, fill, 1) +
+             in.available(0) + in.available_past(0) + in.num_channels() + in.dtype();
     moved += ctx.num_inputs() + ctx.num_outputs() + ctx.variant() + ctx.ticket() + ctx.phase() +
-             ctx.engine() + ctx.provider() + ctx.input_role(0) + ctx.output_role(0) + ctx.entry();
+             ctx.engine() + ctx.provider() + ctx.entry();
+    moved += ctx.input_role(0, role) == ANIRA_OK ? 1 : 0;
+    moved += ctx.output_role(0, role) == ANIRA_OK ? 1 : 0;
+    moved += role;
     moved += ctx.input_tensor(0, tensor) == ANIRA_OK ? 1 : 0;
     moved += ctx.output_tensor(0, tensor) == ANIRA_OK ? 1 : 0;
     moved += static_cast<bool>(in) && out.native() != nullptr && ctx.native() != nullptr ? 1 : 0;

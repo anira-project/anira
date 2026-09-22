@@ -6,9 +6,12 @@
 // dtype-checked calls onto anira_ring (anira/utils/RingBuffer.h), a refusal records into the
 // latch of the session that owns the ring (anira_ring::owner) and logs one record per kind
 // naming the running stage; the context accessors answer per slot out of the StageFrame the
-// processor fills on the stack next to its anira_stage_ctx, and record into the frame's latch.
-// No handler, no lock, no allocation on any per-call path, whatever the stage's own flags
-// promise: anira's side is real-time regardless.
+// processor fills on the stack next to its anira_stage_ctx, and record every status but
+// ANIRA_OK into the frame's latch (asking for a ring or a model tensor the slot does not have
+// in this phase is the stage's bug, not an answer). The two default bodies read the frame's
+// ports directly and ask the context nothing they could be refused, so a stage-less pipeline
+// records nothing. No handler, no lock, no allocation on any per-call path, whatever the
+// stage's own flags promise: anira's side is real-time regardless.
 #include "stage.h"
 
 #include <anira/InferenceConfig.h>
@@ -159,6 +162,14 @@ bool frame_record(const StageFrame& frame, anira_status status) noexcept ANIRA_N
     return frame.m_stage != nullptr ? frame.m_stage : k_no_stage;
 }
 
+// The ring of a slot as the default bodies read it: its stream port's, or NULL for a slot at or
+// beyond the side's count, a port of another role and a stream port without a ring. A plain
+// read, never a refusal.
+anira_ring* slot_ring(const std::vector<Port>& ports, size_t slot) noexcept ANIRA_NONBLOCKING {
+    const anira::capi::StreamPort* stream = anira::capi::stream_port(ports, slot);
+    return stream != nullptr ? stream->m_ring : nullptr;
+}
+
 // The slot check of every context accessor: the port of the slot on one side, or NULL. A slot
 // at or beyond the side's count is recorded; a NULL ctx and a ctx without a frame name no latch
 // to record into.
@@ -184,28 +195,18 @@ const Port* ctx_port(const anira_stage_ctx* ctx,
     return nullptr;
 }
 
-// The ring of a slot's port in the one phase that hands out the rings of its side; NULL, which
-// is an answer and not a refusal, for a port of another role and in every other phase.
-anira_ring* port_ring(const Port* port, bool ring_phase) noexcept ANIRA_NONBLOCKING {
-    if (port == nullptr || !ring_phase) { return nullptr; }
-    const auto* stream = std::get_if<anira::capi::StreamPort>(port);
-    return stream != nullptr ? stream->m_ring : nullptr;
-}
-
-// The model end of a slot: one descriptor over the memory the struct's buffer holds right now.
-// An engine may swap that memory between two inferences (LibTorchProcessor, TFLiteProcessor),
-// so the descriptor is built per question and nothing of it survives a call. A field fill, no
-// allocation. The frame names the buffers of a side only in the phases that expose it.
-anira_status ctx_tensor(const anira_stage_ctx* ctx,
-                        bool input,
-                        uint32_t slot,
-                        anira_tensor* out,
-                        [[maybe_unused]] const char* entry) noexcept ANIRA_NONBLOCKING {
-    // Every refusal leaves the all-zero record of a refused anira_tensor_init_* factory.
-    if (out != nullptr) { std::memset(out, 0, sizeof(*out)); }
+// The prologue of every context accessor, in this order: a NULL ctx and a ctx without a frame
+// are refused with no latch to record into; a NULL out is recorded; then the slot, through
+// ctx_port. The port of the slot, or NULL when the call is refused with
+// ANIRA_ERROR_INVALID_ARGUMENT (the caller has reset its out-parameter already).
+const Port* ctx_slot(const anira_stage_ctx* ctx,
+                     bool input,
+                     uint32_t slot,
+                     bool null_out,
+                     const char* entry) noexcept ANIRA_NONBLOCKING {
     const StageFrame* frame = frame_of(ctx);
-    if (frame == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if (out == nullptr) {
+    if (frame == nullptr) { return nullptr; }
+    if (null_out) {
         if (frame_record(*frame, ANIRA_ERROR_INVALID_ARGUMENT)) {
             ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
                                    "%s: stage '%s': NULL out for slot %u",
@@ -213,25 +214,90 @@ anira_status ctx_tensor(const anira_stage_ctx* ctx,
                                    running_stage(*frame),
                                    static_cast<unsigned int>(slot));
         }
-        return ANIRA_ERROR_INVALID_ARGUMENT;
+        return nullptr;
     }
-    const Port* port = ctx_port(ctx, input, slot, entry);
+    return ctx_port(ctx, input, slot, entry);
+}
+
+// A representation the slot does not have in this phase: asking for it is the stage's bug and
+// not an answer, so the refusal is recorded into the frame's latch like a slot out of range,
+// one record per kind naming the entry, the running stage, the slot and the phase. The ctx
+// passed the prologue, so it has a frame.
+anira_status no_such(const anira_stage_ctx* ctx,
+                     [[maybe_unused]] uint32_t slot,
+                     [[maybe_unused]] const char* what,
+                     [[maybe_unused]] const char* entry) noexcept ANIRA_NONBLOCKING {
+    const StageFrame& frame = *frame_of(ctx);
+    if (frame_record(frame, ANIRA_ERROR_INVALID_STATE)) {
+        ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
+                               "%s: stage '%s': slot %u has no %s in %s",
+                               entry,
+                               running_stage(frame),
+                               static_cast<unsigned int>(slot),
+                               what,
+                               phase_word(ctx->phase));
+    }
+    return ANIRA_ERROR_INVALID_STATE;
+}
+
+// The role of a slot: its port's arm. A slot always has one, so the only refusals are the
+// prologue's.
+anira_status ctx_role(const anira_stage_ctx* ctx,
+                      bool input,
+                      uint32_t slot,
+                      anira_role* out,
+                      const char* entry) noexcept ANIRA_NONBLOCKING {
+    if (out != nullptr) { *out = ANIRA_ROLE_FORCE32; }
+    const Port* port = ctx_slot(ctx, input, slot, out == nullptr, entry);
     if (port == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    // A State slot has no host end: it is fed behind pre_process and captured ahead of
-    // post_process, so the two host-end phases do not expose it. Not recorded: the status is
-    // the report, as for a side outside its phase.
+    *out = anira::capi::port_role(*port);
+    return ANIRA_OK;
+}
+
+// The ring of a slot: its stream port's, in the one phase that moves the rings of its side.
+// A port of another role, and every other phase, has no ring to hand out.
+anira_status ctx_ring(const anira_stage_ctx* ctx,
+                      bool input,
+                      uint32_t slot,
+                      anira_ring** out,
+                      const char* entry) noexcept ANIRA_NONBLOCKING {
+    if (out != nullptr) { *out = nullptr; }
+    const Port* port = ctx_slot(ctx, input, slot, out == nullptr, entry);
+    if (port == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const auto ring_phase =
+        static_cast<uint32_t>(input ? ANIRA_PHASE_PRE_PROCESS : ANIRA_PHASE_POST_PROCESS);
+    const auto* stream = std::get_if<anira::capi::StreamPort>(port);
+    anira_ring* ring = ctx->phase == ring_phase && stream != nullptr ? stream->m_ring : nullptr;
+    if (ring == nullptr) { return no_such(ctx, slot, "ring", entry); }
+    *out = ring;
+    return ANIRA_OK;
+}
+
+// The model end of a slot: one descriptor over the memory the struct's buffer holds right now.
+// An engine may swap that memory between two inferences (LibTorchProcessor, TFLiteProcessor),
+// so the descriptor is built per question and nothing of it survives a call. A field fill, no
+// allocation. The frame names the buffers of a side only in the phases that expose it, and a
+// State slot has no host end (it is fed behind pre_process and captured ahead of post_process),
+// so the two host-end phases have no model end of it to hand out.
+anira_status ctx_tensor(const anira_stage_ctx* ctx,
+                        bool input,
+                        uint32_t slot,
+                        anira_tensor* out,
+                        const char* entry) noexcept ANIRA_NONBLOCKING {
+    // Every refusal leaves the all-zero record of a refused anira_tensor_init_* factory.
+    if (out != nullptr) { std::memset(out, 0, sizeof(*out)); }
+    const Port* port = ctx_slot(ctx, input, slot, out == nullptr, entry);
+    if (port == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const StageFrame& frame = *frame_of(ctx);
     const bool host_end_phase =
         ctx->phase == ANIRA_PHASE_PRE_PROCESS || ctx->phase == ANIRA_PHASE_POST_PROCESS;
-    if (host_end_phase && std::get_if<anira::capi::StatePort>(port) != nullptr) {
-        return ANIRA_ERROR_INVALID_STATE;
-    }
-    std::vector<anira::BufferF>* buffers = input ? frame->m_model_inputs : frame->m_model_outputs;
+    std::vector<anira::BufferF>* buffers = input ? frame.m_model_inputs : frame.m_model_outputs;
     const std::vector<std::vector<int64_t>>* shapes =
-        input ? frame->m_input_shapes : frame->m_output_shapes;
-    // Not recorded: the status is the report.
-    if (buffers == nullptr || shapes == nullptr || slot >= buffers->size() ||
+        input ? frame.m_input_shapes : frame.m_output_shapes;
+    if ((host_end_phase && std::get_if<anira::capi::StatePort>(port) != nullptr) ||
+        buffers == nullptr || shapes == nullptr || slot >= buffers->size() ||
         slot >= shapes->size()) {
-        return ANIRA_ERROR_INVALID_STATE;
+        return no_such(ctx, slot, "model tensor", entry);
     }
     const std::vector<int64_t>& shape = (*shapes)[slot];
     anira_tensor_init_host(out,
@@ -324,31 +390,34 @@ size_t ANIRA_CALL anira_ring_pop_windows(anira_ring* ring,
 }
 
 // ==== the context accessors ===================================================================
-// A stage asks per slot; nothing is laid out for it up front. A refusal is recorded into the
-// frame's latch, the session's, with one record per kind naming the running stage.
+// A stage asks per slot; nothing is laid out for it up front. Every status but ANIRA_OK is
+// recorded into the frame's latch, the session's, with one record per kind naming the entry,
+// the running stage, the slot and the phase: a slot out of range and a NULL out
+// (INVALID_ARGUMENT), a ring or a model tensor the slot does not have in this phase
+// (INVALID_STATE). A NULL ctx and a ctx without a frame name no latch.
 
-anira_role ANIRA_CALL anira_stage_input_role(const anira_stage_ctx* ctx,
-                                             uint32_t slot) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    const Port* port = ctx_port(ctx, /*input=*/true, slot, __func__);
-    return port != nullptr ? anira::capi::port_role(*port) : ANIRA_ROLE_FORCE32;
+anira_status ANIRA_CALL anira_stage_input_role(const anira_stage_ctx* ctx,
+                                               uint32_t slot,
+                                               anira_role* out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    return ctx_role(ctx, /*input=*/true, slot, out, __func__);
 }
 
-anira_role ANIRA_CALL anira_stage_output_role(const anira_stage_ctx* ctx,
-                                              uint32_t slot) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    const Port* port = ctx_port(ctx, /*input=*/false, slot, __func__);
-    return port != nullptr ? anira::capi::port_role(*port) : ANIRA_ROLE_FORCE32;
+anira_status ANIRA_CALL anira_stage_output_role(const anira_stage_ctx* ctx,
+                                                uint32_t slot,
+                                                anira_role* out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    return ctx_role(ctx, /*input=*/false, slot, out, __func__);
 }
 
-anira_ring* ANIRA_CALL anira_stage_input_ring(const anira_stage_ctx* ctx,
-                                              uint32_t slot) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    const Port* port = ctx_port(ctx, /*input=*/true, slot, __func__);
-    return port_ring(port, ctx != nullptr && ctx->phase == ANIRA_PHASE_PRE_PROCESS);
+anira_status ANIRA_CALL anira_stage_input_ring(const anira_stage_ctx* ctx,
+                                               uint32_t slot,
+                                               anira_ring** out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    return ctx_ring(ctx, /*input=*/true, slot, out, __func__);
 }
 
-anira_ring* ANIRA_CALL anira_stage_output_ring(const anira_stage_ctx* ctx,
-                                               uint32_t slot) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    const Port* port = ctx_port(ctx, /*input=*/false, slot, __func__);
-    return port_ring(port, ctx != nullptr && ctx->phase == ANIRA_PHASE_POST_PROCESS);
+anira_status ANIRA_CALL anira_stage_output_ring(const anira_stage_ctx* ctx,
+                                                uint32_t slot,
+                                                anira_ring** out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    return ctx_ring(ctx, /*input=*/false, slot, out, __func__);
 }
 
 anira_status ANIRA_CALL anira_stage_input_tensor(const anira_stage_ctx* ctx,
@@ -367,10 +436,13 @@ anira_status ANIRA_CALL anira_stage_output_tensor(const anira_stage_ctx* ctx,
 
 // ==== the default bodies ======================================================================
 // The 2.x default processor's streamed branches (PrePostProcessor.cpp) over anira_ring* and
-// anira_tensor, written with the context accessors a stage has: the ring of a slot, then its
-// model end. The tensors are read as packed row-major memory, which is how the chain fills
-// them. The status is returned and never recorded here: a stage that calls the default for the
-// slots it does not handle itself may drop it, and the chain records what a stage returns.
+// anira_tensor: the ring of a slot, then its model end through the tensor accessor. The ring is
+// read off the frame's stream port directly, never asked of the context: a slot without a ring
+// here (another role, a stream port the session gave no ring) is skipped, so a default body is
+// never refused and records nothing, whatever the pipeline's slots are. The tensors are read as
+// packed row-major memory, which is how the chain fills them. The status is returned and never
+// recorded here: a stage that calls the default for the slots it does not handle itself may
+// drop it, and the chain records what a stage returns.
 
 anira_status ANIRA_CALL anira_stage_default_pre_process(const anira_stage_ctx* ctx)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
@@ -378,11 +450,14 @@ anira_status ANIRA_CALL anira_stage_default_pre_process(const anira_stage_ctx* c
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     if (ctx->num_inputs == 0) { return ANIRA_OK; }
-    if (ctx->frame == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const StageFrame* frame = frame_of(ctx);
+    if (frame == nullptr || frame->m_input_ports == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
     anira_status status = ANIRA_OK;
     for (uint32_t slot = 0; slot < ctx->num_inputs; ++slot) {
-        anira_ring* ring = anira_stage_input_ring(ctx, slot);
-        if (ring == nullptr) { continue; }  // not a Streamed tensor
+        anira_ring* ring = slot_ring(*frame->m_input_ports, slot);
+        if (ring == nullptr) { continue; }  // not a Streamed tensor, or no ring here
         anira_tensor tensor;
         const anira_status exposed = anira_stage_input_tensor(ctx, slot, &tensor);
         if (exposed != ANIRA_OK) {
@@ -421,11 +496,14 @@ anira_status ANIRA_CALL anira_stage_default_post_process(const anira_stage_ctx* 
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     if (ctx->num_outputs == 0) { return ANIRA_OK; }
-    if (ctx->frame == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const StageFrame* frame = frame_of(ctx);
+    if (frame == nullptr || frame->m_output_ports == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
     anira_status status = ANIRA_OK;
     for (uint32_t slot = 0; slot < ctx->num_outputs; ++slot) {
-        anira_ring* ring = anira_stage_output_ring(ctx, slot);
-        if (ring == nullptr) { continue; }  // not a Streamed tensor
+        anira_ring* ring = slot_ring(*frame->m_output_ports, slot);
+        if (ring == nullptr) { continue; }  // not a Streamed tensor, or no ring here
         anira_tensor tensor;
         const anira_status exposed = anira_stage_output_tensor(ctx, slot, &tensor);
         if (exposed != ANIRA_OK) {

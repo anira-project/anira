@@ -229,10 +229,12 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
    * - ``pre_process(std::vector<RingBuffer>& input, std::vector<BufferF>& output,
        InferenceBackend backend)``
      - ``pre_process(const anira_stage_ctx* ctx, void* user_data)`` /
-       ``Stage::pre_process(StageContext& ctx)``: per slot ``anira_stage_input_ring`` (the
-       ring, ``ctx.input_ring(slot)``) and ``anira_stage_input_tensor`` (the model tensor,
-       ``ctx.input_tensor(slot, tensor)``); the backend is ``ctx->engine`` and
-       ``ctx->provider`` (``ctx.engine()``, ``ctx.provider()``).
+       ``Stage::pre_process(StageContext& ctx)``: per slot ``anira_stage_input_role`` (what
+       the slot is, ``ctx.input_role(slot, role)``), ``anira_stage_input_ring`` (the ring of
+       a Streamed slot, ``ctx.input_ring(slot, ring)``) and ``anira_stage_input_tensor`` (the
+       model tensor, ``ctx.input_tensor(slot, tensor)``), each a status and an out-parameter;
+       the backend is ``ctx->engine`` and ``ctx->provider`` (``ctx.engine()``,
+       ``ctx.provider()``).
    * - ``post_process(std::vector<BufferF>& input, std::vector<RingBuffer>& output,
        InferenceBackend backend)``
      - ``post_process``: ``anira_stage_output_tensor`` and ``anira_stage_output_ring``.

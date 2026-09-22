@@ -426,14 +426,16 @@ struct SlotProbe {
     std::array<std::atomic<float>, k_capacity> m_data_first{};    ///< input slot 2, element 0
     std::atomic<size_t> m_calls{0};
     std::atomic<uint32_t> m_other_counts{0};  ///< ctxs whose tensor counts were not 3 and 3
-    /// What the context accessors answered in before_inference, per slot: the role of each
-    /// side, the rings that were not NULL and the statuses of the tensor accessors (the last
-    /// call's; every call answers the same).
+    /// What the context accessors answered in before_inference, per slot: the status and the
+    /// role of each side, and the status of the input tensor accessor (the last call's; every
+    /// call answers the same). The probe asks the legal questions of its phase only:
+    /// before_inference exposes the model's inputs, of every role, and no ring, and a refused
+    /// question would be recorded.
+    std::array<std::atomic<int32_t>, 3> m_input_role_status{};
+    std::array<std::atomic<int32_t>, 3> m_output_role_status{};
     std::array<std::atomic<uint32_t>, 3> m_ctx_input_roles{};
     std::array<std::atomic<uint32_t>, 3> m_ctx_output_roles{};
-    std::atomic<uint32_t> m_rings_seen{0};
     std::array<std::atomic<int32_t>, 3> m_input_tensor_status{};
-    std::array<std::atomic<int32_t>, 3> m_output_tensor_status{};
     /// anira_plan_slot::role of every slot of plan 0, as the stage's prepare read them from the
     /// plan report (the control thread: plain members).
     std::array<uint32_t, 3> m_input_roles{ANIRA_ROLE_FORCE32,
@@ -496,15 +498,15 @@ anira_status ANIRA_CALL probe_slots(const anira_stage_ctx* ctx, void* user_data)
         return ANIRA_OK;
     }
     for (uint32_t slot = 0; slot < 3; ++slot) {
-        probe->m_ctx_input_roles.at(slot).store(
-            static_cast<uint32_t>(anira_stage_input_role(ctx, slot)));
-        probe->m_ctx_output_roles.at(slot).store(
-            static_cast<uint32_t>(anira_stage_output_role(ctx, slot)));
-        if (anira_stage_input_ring(ctx, slot) != nullptr) { probe->m_rings_seen.fetch_add(1); }
-        if (anira_stage_output_ring(ctx, slot) != nullptr) { probe->m_rings_seen.fetch_add(1); }
+        anira_role input_role = ANIRA_ROLE_FORCE32;
+        anira_role output_role = ANIRA_ROLE_FORCE32;
+        probe->m_input_role_status.at(slot).store(anira_stage_input_role(ctx, slot, &input_role));
+        probe->m_output_role_status.at(slot).store(
+            anira_stage_output_role(ctx, slot, &output_role));
+        probe->m_ctx_input_roles.at(slot).store(static_cast<uint32_t>(input_role));
+        probe->m_ctx_output_roles.at(slot).store(static_cast<uint32_t>(output_role));
         anira_tensor tensor;
         probe->m_input_tensor_status.at(slot).store(anira_stage_input_tensor(ctx, slot, &tensor));
-        probe->m_output_tensor_status.at(slot).store(anira_stage_output_tensor(ctx, slot, &tensor));
     }
     if (index < SlotProbe::k_capacity) {
         // The slots the host uses: the Static tensor it set at slot 0, the stream it pushed at
@@ -694,9 +696,12 @@ TEST(AbiState, OneSlotSpacePerSide) {
     }
     // A stage asks the ctx what each tensor is, and gets the port's arm: the answer of the plan
     // report's role column, in the same numbering. before_inference exposes the model's inputs,
-    // of every role, and no ring; neither a NULL ring nor a tensor outside its phase is recorded.
+    // of every role: every question the probe asked answered ANIRA_OK, and it asked for no ring
+    // and no output there, so nothing is recorded (anira_handler_rt_error below).
     for (size_t slot = 0; slot < 3; ++slot) {
         SCOPED_TRACE("slot " + std::to_string(slot));
+        EXPECT_EQ(probe.m_input_role_status.at(slot).load(), ANIRA_OK);
+        EXPECT_EQ(probe.m_output_role_status.at(slot).load(), ANIRA_OK);
         EXPECT_EQ(probe.m_ctx_input_roles.at(slot).load(),
                   static_cast<uint32_t>(port_role(h->m_input_ports[slot])));
         EXPECT_EQ(probe.m_ctx_output_roles.at(slot).load(),
@@ -704,9 +709,7 @@ TEST(AbiState, OneSlotSpacePerSide) {
         EXPECT_EQ(probe.m_ctx_input_roles.at(slot).load(), probe.m_input_roles.at(slot));
         EXPECT_EQ(probe.m_ctx_output_roles.at(slot).load(), probe.m_output_roles.at(slot));
         EXPECT_EQ(probe.m_input_tensor_status.at(slot).load(), ANIRA_OK);
-        EXPECT_EQ(probe.m_output_tensor_status.at(slot).load(), ANIRA_ERROR_INVALID_STATE);
     }
-    EXPECT_EQ(probe.m_rings_seen.load(), 0U) << "no ring outside pre_process and post_process";
     std::array<float, 3> captured{};
     const anira_tensor captured_tensor = whole_f32(captured.data(), {1, 3});
     EXPECT_EQ(anira_handler_get_static_output(h, 2, &captured_tensor), ANIRA_OK);
@@ -1203,49 +1206,62 @@ TEST(AbiState, StageSeesAndAltersState) {
 // ---- the host-end phases and a State slot
 // ---------------------------------------------------------------------------
 
-/// What the tensor and ring accessors answered in pre_process and post_process, per slot
-/// (the last call's; every call answers the same). Written on the driving thread.
+/// "Not asked": what a question the stage did not ask leaves in its status slot.
+constexpr int32_t k_not_asked = static_cast<int32_t>(ANIRA_STATUS_FORCE32);
+
+/// What the context accessors answered in pre_process and post_process, per slot (the last
+/// call's; every call answers the same). Written on the driving thread. The stage asks the
+/// role of every slot first. A well-behaved one (m_ask_state false) then asks only what the
+/// slot has, the ring and the model end of the Streamed slot; one that asks anyway
+/// (m_ask_state true) asks the State slot for both in each host-end phase, which is the
+/// stage's bug and is recorded.
 struct HostEndLog {
-    std::array<std::atomic<int32_t>, 2> m_pre_input_status{};
-    std::array<std::atomic<int32_t>, 2> m_post_output_status{};
-    std::array<std::atomic<int>, 2> m_pre_input_rings{};
-    std::array<std::atomic<int>, 2> m_post_output_rings{};
+    bool m_ask_state = false;
+    anira_status m_recorded = ANIRA_OK;  ///< anira_handler_rt_error after the run
+    std::array<std::atomic<uint32_t>, 2> m_pre_roles{};
+    std::array<std::atomic<uint32_t>, 2> m_post_roles{};
+    std::array<std::atomic<int32_t>, 2> m_pre_input_status{k_not_asked, k_not_asked};
+    std::array<std::atomic<int32_t>, 2> m_post_output_status{k_not_asked, k_not_asked};
+    std::array<std::atomic<int32_t>, 2> m_pre_input_rings{k_not_asked, k_not_asked};
+    std::array<std::atomic<int32_t>, 2> m_post_output_rings{k_not_asked, k_not_asked};
     std::atomic<uint32_t> m_pre_dtype_of_state{1};  ///< the record a refused accessor leaves
+    std::atomic<int> m_pre_ring_of_state{1};        ///< 0 when the refused accessor left NULL
 };
 
-/// Asks every slot in the two host-end phases, then runs the default body of the phase.
+/// Asks every slot in the two host-end phases as the log says, then runs the default body of
+/// the phase.
 anira_status ANIRA_CALL ask_host_end(const anira_stage_ctx* ctx,
                                      void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<HostEndLog*>(user_data);
     if (ctx->num_inputs != 2 || ctx->num_outputs != 2) { return ANIRA_ERROR_INTERNAL; }
-    if (ctx->phase == ANIRA_PHASE_PRE_PROCESS) {
-        for (uint32_t slot = 0; slot < 2; ++slot) {
-            anira_tensor tensor;
-            log->m_pre_input_status.at(slot).store(anira_stage_input_tensor(ctx, slot, &tensor));
-            log->m_pre_input_rings.at(slot).store(anira_stage_input_ring(ctx, slot) != nullptr ? 1
-                                                                                               : 0);
-            if (slot == 0) { log->m_pre_dtype_of_state.store(tensor.dtype); }
+    const bool pre = ctx->phase == ANIRA_PHASE_PRE_PROCESS;
+    if (!pre && ctx->phase != ANIRA_PHASE_POST_PROCESS) { return ANIRA_OK; }
+    for (uint32_t slot = 0; slot < 2; ++slot) {
+        anira_role role = ANIRA_ROLE_FORCE32;
+        const anira_status asked = pre ? anira_stage_input_role(ctx, slot, &role)
+                                       : anira_stage_output_role(ctx, slot, &role);
+        if (asked != ANIRA_OK) { return asked; }
+        (pre ? log->m_pre_roles : log->m_post_roles).at(slot).store(static_cast<uint32_t>(role));
+        // A State slot has no host end: a correct stage asks nothing else of it here.
+        if (role == ANIRA_ROLE_STATE && !log->m_ask_state) { continue; }
+        anira_ring* ring = nullptr;
+        anira_tensor tensor;
+        const anira_status has_ring = pre ? anira_stage_input_ring(ctx, slot, &ring)
+                                          : anira_stage_output_ring(ctx, slot, &ring);
+        const anira_status exposed = pre ? anira_stage_input_tensor(ctx, slot, &tensor)
+                                         : anira_stage_output_tensor(ctx, slot, &tensor);
+        (pre ? log->m_pre_input_rings : log->m_post_output_rings).at(slot).store(has_ring);
+        (pre ? log->m_pre_input_status : log->m_post_output_status).at(slot).store(exposed);
+        if (pre && slot == 0) {
+            log->m_pre_dtype_of_state.store(tensor.dtype);
+            log->m_pre_ring_of_state.store(ring != nullptr ? 1 : 0);
         }
-        return anira_stage_default_pre_process(ctx);
     }
-    if (ctx->phase == ANIRA_PHASE_POST_PROCESS) {
-        for (uint32_t slot = 0; slot < 2; ++slot) {
-            anira_tensor tensor;
-            log->m_post_output_status.at(slot).store(anira_stage_output_tensor(ctx, slot, &tensor));
-            log->m_post_output_rings.at(slot).store(
-                anira_stage_output_ring(ctx, slot) != nullptr ? 1 : 0);
-        }
-        return anira_stage_default_post_process(ctx);
-    }
-    return ANIRA_OK;
+    return pre ? anira_stage_default_pre_process(ctx) : anira_stage_default_post_process(ctx);
 }
 
-// A State slot has no host end: it is fed behind pre_process and captured ahead of
-// post_process, so the two host-end phases answer ANIRA_ERROR_INVALID_STATE (an all-zero
-// record, nothing recorded) for it and hand out no ring; the Streamed slot beside it answers
-// as always, and the stream is the closed form since the stage composes the defaults.
-TEST(AbiState, TheHostEndPhasesDoNotExposeAStateSlot) {
-    HostEndLog log;
+/// Runs the accumulator with ask_host_end over `log` for four hops and checks the stream.
+void run_host_end_probe(HostEndLog& log) {
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
     stage.name = "host-end-probe";
     stage.user_data = &log;
@@ -1259,19 +1275,70 @@ TEST(AbiState, TheHostEndPhasesDoNotExposeAStateSlot) {
     size_t position = 0;
     Streams streams;
     ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+    // The stream is the closed form either way: the stage composes the defaults, and a refused
+    // accessor fails no chunk.
     expect_closed_form(streams, latency);
-    EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK) << "nothing is recorded for it";
-    // Input slot 0 is the State half, slot 1 the stream; output slot 0 the stream, slot 1 the
-    // State half.
-    EXPECT_EQ(log.m_pre_input_status.at(0).load(), ANIRA_ERROR_INVALID_STATE);
-    EXPECT_EQ(log.m_pre_dtype_of_state.load(), 0U) << "an all-zero record";
+    // The roles, on both sides: input slot 0 is the State half, slot 1 the stream; output slot
+    // 0 the stream, slot 1 the State half. The Streamed slot answers as always.
+    EXPECT_EQ(log.m_pre_roles.at(0).load(), static_cast<uint32_t>(ANIRA_ROLE_STATE));
+    EXPECT_EQ(log.m_pre_roles.at(1).load(), static_cast<uint32_t>(ANIRA_ROLE_STREAMED));
+    EXPECT_EQ(log.m_post_roles.at(0).load(), static_cast<uint32_t>(ANIRA_ROLE_STREAMED));
+    EXPECT_EQ(log.m_post_roles.at(1).load(), static_cast<uint32_t>(ANIRA_ROLE_STATE));
+    EXPECT_EQ(log.m_pre_input_rings.at(1).load(), ANIRA_OK);
     EXPECT_EQ(log.m_pre_input_status.at(1).load(), ANIRA_OK);
-    EXPECT_EQ(log.m_pre_input_rings.at(0).load(), 0);
-    EXPECT_EQ(log.m_pre_input_rings.at(1).load(), 1);
+    EXPECT_EQ(log.m_post_output_rings.at(0).load(), ANIRA_OK);
     EXPECT_EQ(log.m_post_output_status.at(0).load(), ANIRA_OK);
-    EXPECT_EQ(log.m_post_output_status.at(1).load(), ANIRA_ERROR_INVALID_STATE);
-    EXPECT_EQ(log.m_post_output_rings.at(0).load(), 1);
-    EXPECT_EQ(log.m_post_output_rings.at(1).load(), 0);
+    // What the State slot answered is the caller's to check, beside the latch's word.
+    log.m_recorded = anira_handler_rt_error(rig.get());
+}
+
+// A State slot has no host end: it is fed behind pre_process and captured ahead of
+// post_process. A stage that asks the role first sees ANIRA_ROLE_STATE and asks nothing else of
+// the slot in the two host-end phases, and nothing is recorded. A stage that asks the State
+// slot for its ring or its model end there gets ANIRA_ERROR_INVALID_STATE (no ring, an all-zero
+// record), and its bug is recorded: anira_handler_rt_error, and one latched record per kind
+// naming the entry, the stage, the slot and the phase.
+TEST(AbiState, TheHostEndPhasesDoNotExposeAStateSlot) {
+    anira_drain_log();
+    RecordCollector collector;
+    {
+        HostEndLog log;
+        ASSERT_NO_FATAL_FAILURE(run_host_end_probe(log));
+        EXPECT_EQ(log.m_recorded, ANIRA_OK)
+            << "a stage that asks only what the slot has records nothing";
+        EXPECT_EQ(log.m_pre_input_rings.at(0).load(), k_not_asked);
+        EXPECT_EQ(log.m_pre_input_status.at(0).load(), k_not_asked);
+        EXPECT_EQ(log.m_post_output_rings.at(1).load(), k_not_asked);
+        EXPECT_EQ(log.m_post_output_status.at(1).load(), k_not_asked);
+    }
+    {
+        HostEndLog log;
+        log.m_ask_state = true;
+        ASSERT_NO_FATAL_FAILURE(run_host_end_probe(log));
+        EXPECT_EQ(log.m_recorded, ANIRA_ERROR_INVALID_STATE)
+            << "asking a State slot for a host end is the stage's bug, recorded";
+        EXPECT_EQ(log.m_pre_input_rings.at(0).load(), ANIRA_ERROR_INVALID_STATE);
+        EXPECT_EQ(log.m_pre_ring_of_state.load(), 0) << "no ring";
+        EXPECT_EQ(log.m_pre_input_status.at(0).load(), ANIRA_ERROR_INVALID_STATE);
+        EXPECT_EQ(log.m_pre_dtype_of_state.load(), 0U) << "an all-zero record";
+        EXPECT_EQ(log.m_post_output_rings.at(1).load(), ANIRA_ERROR_INVALID_STATE);
+        EXPECT_EQ(log.m_post_output_status.at(1).load(), ANIRA_ERROR_INVALID_STATE);
+    }
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    // One record per kind: the first refusal, the ring of the State input in pre_process,
+    // naming the entry, the stage, the slot and the phase; the others of the kind are counted.
+    EXPECT_EQ(anira_test::count_records(collector, "has no ring in", "rt"), 1U);
+    const RecordCollector::Record record =
+        anira_test::find_record(collector, "has no ring in", "rt");
+    EXPECT_NE(record.m_message.find("anira_stage_input_ring: stage 'host-end-probe': slot 0 has "
+                                    "no ring in pre_process"),
+              std::string::npos)
+        << record.m_message;
+    EXPECT_EQ(record.m_flags, ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);
+    EXPECT_EQ(anira_test::count_records(collector, "has no model tensor in", "rt"), 0U)
+        << "the same kind: counted, not logged";
+#endif
 }
 
 // ---- the miss function
