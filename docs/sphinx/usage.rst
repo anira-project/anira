@@ -555,8 +555,8 @@ its Hard contract.
 A **stage** is the pre- and post-processing of a pipeline: the code that takes the host's data
 to the model's tensors ahead of an inference and back behind it. It is a descriptor, not a
 class: ``anira_stage_desc`` of ``anira/abi/stage.h`` names up to four phase callbacks, a
-prepare and a release function, one ``user_data`` slot, a name and the stage's real-time
-promise, and ``anira_pipeline_add_stage(pipe, &desc, &err)`` copies it (within
+reset, a prepare, an unprepare and a release function, one ``user_data`` slot and the stage's
+real-time promise, and ``anira_pipeline_add_stage(pipe, &desc, &err)`` copies it (within
 ``struct_size``, with its strings) into a carrier that the pipeline and every handler created
 from it share, so ``release`` fires exactly once, with the last of them. A pipeline holds **at
 most one stage**: a second ``anira_pipeline_add_stage`` is ``ANIRA_ERROR_INVALID_STATE``, and
@@ -721,21 +721,43 @@ nonblocking calls, and an author who wants clang's compile-time check declares t
 ``ANIRA_NONBLOCKING`` themselves (``anira_stage_fn`` carries no attribute, since the promise
 differs per stage).
 
-**Prepare and release.** ``prepare(handler, report, user_data)`` runs on the caller of
-``anira_handler_prepare`` after the plan report is built, once per prepare. It may allocate
-(this is where the per-entry scratch is sized), may call the ``[callback-safe]`` entries, the
-handler's getters and the two Static entries, never ``prepare``, ``destroy`` or a Hard entry,
-and a status other than ``ANIRA_OK`` fails the prepare with it (``the stage refused prepare``);
-what a slot is, it reads from the report's ``anira_plan_slot.role`` rows. ``release(user_data)``
-runs exactly once, when the last carrier of the descriptor dies (``anira_pipeline_destroy`` or
-``anira_handler_destroy``, whichever comes last); no callback runs afterwards.
+**The lifecycle: prepare, prepared, reset, unprepare, release.** One registration serves
+every handler created from the pipeline, and each handler is prepared on its own.
+``prepare(info, user_data, &prepared)`` runs on the caller of ``anira_handler_prepare`` after
+the plan report is built, once per prepare of each handler, with an
+``anira_stage_prepare_info``: the handler, the plan report, ``num_entries``, a template of the
+model end of every slot of either list (the spec's dtype and shape at the pinned window, the
+slot's host domain, all-zero strides, no memory) and the canonical names, valid for the
+duration of the call. It may allocate (this is where the per-entry scratch is sized, by
+``num_entries``), may call the ``[callback-safe]`` entries, the handler's getters and the two
+Static entries, never ``prepare``, ``destroy`` or a Hard entry, and hands a pointer back
+through ``out_prepared``: this handler's ``prepared``, which every phase call
+(``(ctx, prepared, user_data)``), the reset and the unprepare of this handler receive beside
+the registration's ``user_data``. What the stage keeps per handler lives behind ``prepared``,
+never behind ``user_data``, which two handlers of one pipeline share (``NULL`` is a legal
+value). A status other than ``ANIRA_OK`` fails the prepare with it (``the stage refused
+prepare``), and no unprepare follows. ``reset(ctx, prepared, user_data)`` runs for the first
+chunk of a new stream, after prepare and after ``anira_handler_reset``, before that chunk's
+``pre_process`` and on its thread (under a Hard contract the driving thread, which the
+``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` promise covers), never mid-stream, with the chunk's
+context in ``ANIRA_PHASE_RESET``, where the accessors answer the role only: a resampler, an
+overlap buffer or a filter's history the stage keeps between chunks starts over there;
+``NULL`` for a stage whose state is the rings' alone. ``unprepare(prepared, user_data)`` runs
+once per successful prepare, at the next ``anira_handler_prepare`` of the handler (once the
+old session is released, before the new prepare; a prepare that fails earlier undoes the
+previous one too) and at ``anira_handler_destroy``, after the last phase call.
+``release(user_data)`` runs exactly once, when the last carrier of the descriptor dies
+(``anira_pipeline_destroy`` or ``anira_handler_destroy``, whichever comes last), after every
+unprepare; no callback runs afterwards. The same lifecycle, with the same words, is the
+engine descriptor's (:doc:`custom_backends`).
 
 **An example: an int16 stream into a float model.** The host pushes ``int16`` samples
 (``hard_ring_dtype("in", ANIRA_DTYPE_I16)``, section 1.3), the model reads ``float32``.
 Without a stage, prepare refuses the contract; with this one, ``pre_process`` pops the hop as
 ``int16`` and converts, and ``post_process``, left ``NULL``, stays the default push. The
-scratch is sized per entry in ``prepare``, so it is right for a stage whose phases hand data
-on and under a contract that forms chunks on several threads:
+scratch is sized per entry in ``prepare``, per handler, and handed back as the prepared
+pointer, so it is right for a stage whose phases hand data on, under a contract that forms
+chunks on several threads, and for two handlers created from one pipeline:
 
 .. code-block:: c
 
@@ -745,23 +767,27 @@ on and under a contract that forms chunks on several threads:
 
     #define HOP ((size_t)512)
 
-    typedef struct convert_state { int16_t* scratch; uint32_t entries; } convert_state;
+    typedef struct convert_scratch { int16_t* samples; uint32_t entries; } convert_scratch;
 
-    static anira_status ANIRA_CALL convert_prepare(anira_handler* handler,
-                                                   const anira_plan_report* report,
-                                                   void* user_data) {
-        convert_state* state = (convert_state*)user_data;
-        (void)report;
-        state->entries = anira_handler_num_entries(handler);
-        state->scratch = (int16_t*)calloc((size_t)state->entries * HOP, sizeof(int16_t));
-        return state->scratch != NULL ? ANIRA_OK : ANIRA_ERROR_OUT_OF_MEMORY;
+    static anira_status ANIRA_CALL convert_prepare(const anira_stage_prepare_info* info,
+                                                   void* user_data,
+                                                   void** out_prepared) {
+        convert_scratch* scratch = (convert_scratch*)calloc(1, sizeof(convert_scratch));
+        (void)user_data;                                  /* the registration: nothing shared here */
+        if (scratch == NULL) { return ANIRA_ERROR_OUT_OF_MEMORY; }
+        scratch->entries = info->num_entries;             /* one slot per chunk in flight */
+        scratch->samples = (int16_t*)calloc((size_t)scratch->entries * HOP, sizeof(int16_t));
+        if (scratch->samples == NULL) { free(scratch); return ANIRA_ERROR_OUT_OF_MEMORY; }
+        *out_prepared = scratch;                          /* this handler's: every phase gets it back */
+        return ANIRA_OK;
     }
 
     /* Real-time: every anira call below is ANIRA_NONBLOCKING, and so is this body. */
     static anira_status ANIRA_CALL convert_pre_process(const anira_stage_ctx* ctx,
+                                                       void* prepared,
                                                        void* user_data) ANIRA_NONBLOCKING {
-        convert_state* state = (convert_state*)user_data;
-        int16_t* scratch = state->scratch + (size_t)ctx->entry * HOP;
+        int16_t* scratch = ((convert_scratch*)prepared)->samples + (size_t)ctx->entry * HOP;
+        (void)user_data;
         anira_tensor model;
         float* samples;
         anira_ring* ring = NULL;
@@ -789,38 +815,49 @@ on and under a contract that forms chunks on several threads:
         return ANIRA_OK;                                    /* the ring gave up exactly one hop */
     }
 
-    static void ANIRA_CALL convert_release(void* user_data) {
-        free(((convert_state*)user_data)->scratch);
+    /* Once per successful prepare: the next prepare of the handler, or its destroy. */
+    static void ANIRA_CALL convert_unprepare(void* prepared, void* user_data) {
+        convert_scratch* scratch = (convert_scratch*)prepared;
+        (void)user_data;
+        free(scratch->samples);
+        free(scratch);
     }
 
-At setup, beside ``anira_pipeline_add_inference`` of section 3.2:
+At setup, beside ``anira_pipeline_add_inference`` of section 3.2 (``user_data`` and
+``release`` stay ``NULL``: nothing is shared by the handlers, and the scratch dies with each
+prepare):
 
 .. code-block:: c
 
-    static convert_state state;
     anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
-    desc.user_data = &state;
     desc.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;   /* required: pre_process runs on the driving thread */
     desc.pre_process = convert_pre_process;        /* post_process stays NULL: the default push */
-    desc.prepare = convert_prepare;
-    desc.release = convert_release;
+    desc.prepare = convert_prepare;                /* per handler: hands the scratch back */
+    desc.unprepare = convert_unprepare;            /* once per prepare: frees it */
     anira_pipeline_add_stage(pipe, &desc, &err);  /* once per pipeline */
 
 **The same in C++.** :cpp:class:`anira::Stage` of ``anira/anira.hpp`` is the descriptor with
-virtual functions in place of the function pointers: ``phases()`` states the phases the stage
-fills (only those reach the descriptor; the others stay ``NULL``, so a stage of
-``post_process`` alone leaves the default ``pre_process`` running), ``flags()`` is the promise,
-``prepare(handler, report)`` may throw (an ``anira::Error`` fails the prepare with its status,
-``std::bad_alloc`` with ``ANIRA_ERROR_OUT_OF_MEMORY``, anything else with
-``ANIRA_ERROR_INTERNAL``), and the four phase functions take a
-:cpp:class:`anira::StageContext`, the six accessors as methods, with
-:cpp:class:`anira::RingView` as the typed ring (``pop_block<T>`` over a ``std::span``; the
-element type names the dtype, and another type than the ring's moves nothing). The base class
-is the default: ``Stage::pre_process(ctx)`` is ``anira_stage_default_pre_process``,
-``Stage::post_process(ctx)`` the default push. The stage is handed to an
-:cpp:class:`anira::Pipeline` as :cpp:class:`anira::stage::Custom` over a ``std::shared_ptr``,
-which the pipeline's carrier shares, so the object lives at least as long as the last pipeline
-or handler that carries it; ``release()`` runs once, when that carrier dies.
+virtual functions in place of the function pointers, split as the C lifecycle is: the
+registration, ``anira::Stage``, states the phases the stage fills in ``phases()`` (only those
+reach the descriptor; the others stay ``NULL``, so a stage of ``post_process`` alone leaves
+the default ``pre_process`` running) and its promise in ``flags()``, and its
+``prepare(const StagePrepareInfo&)`` (the record as views: ``handler()``, ``report()``,
+``num_entries()``, ``inputs()`` / ``outputs()``, the names) returns a
+``std::unique_ptr<Stage::Prepared>``, the prepared object of that handler, on which the four
+phase functions and ``reset`` are the virtuals, each taking a :cpp:class:`anira::StageContext`
+with the six accessors as methods and :cpp:class:`anira::RingView` as the typed ring
+(``pop_block<T>`` over a ``std::span``; the element type names the dtype, and another type
+than the ring's moves nothing). ``prepare`` may throw (an ``anira::Error`` fails the prepare
+with its status, ``std::bad_alloc`` with ``ANIRA_ERROR_OUT_OF_MEMORY``, anything else with
+``ANIRA_ERROR_INTERNAL``; a null return is ``ANIRA_ERROR_INTERNAL`` too). The base class is
+the default: ``Stage::Prepared::pre_process(ctx)`` is ``anira_stage_default_pre_process``,
+``Stage::Prepared::post_process(ctx)`` the default push, ``reset`` does nothing. Why the two
+ownership spellings: the prepared object is anira's from ``prepare`` on (it is deleted at the
+C unprepare, so a ``std::unique_ptr`` says so), while the registration is shared by the
+pipeline and every handler created from it (a ``std::shared_ptr``). The stage is handed to an
+:cpp:class:`anira::Pipeline` as :cpp:class:`anira::stage::Custom` over that ``std::shared_ptr``,
+which the pipeline's carrier shares, so the registration lives at least as long as the last
+pipeline or handler that carries it; ``release()`` runs once, when that carrier dies.
 
 .. code-block:: cpp
 
@@ -834,10 +871,17 @@ or handler that carries it; ``release()`` runs once, when that carrier dies.
         uint32_t phases() const noexcept override { return k_pre_process; }   // post_process: the default
         uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
 
-        anira_status prepare(anira_handler* handler, const anira::PlanReport& /*report*/) override {
-            m_scratch.resize(static_cast<size_t>(anira_handler_num_entries(handler)) * k_hop);
-            return ANIRA_OK;
+        std::unique_ptr<Prepared> prepare(const anira::StagePrepareInfo& info) override {
+            return std::make_unique<Converter>(info.num_entries());   // one per handler, its own scratch
         }
+
+    private:
+        class Converter;
+    };
+
+    class Int16ToFloat::Converter : public anira::Stage::Prepared {
+    public:
+        explicit Converter(uint32_t entries) : m_scratch(static_cast<size_t>(entries) * k_hop) {}
 
         anira_status pre_process(anira::StageContext& ctx) noexcept override {
             anira::Role role = ANIRA_ROLE_FORCE32;                       // what slot 0 is

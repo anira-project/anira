@@ -11,8 +11,9 @@
  * Scope at this pre-release: the configuration half (tensor specs, model, context and
  * contract configuration, job options), the Context over the core, the pipeline half of
  * section 6 (Pipeline, stage::Inference, stage::Custom and PlanReport), the stages of section 7
- * (Stage, StageContext and RingView over anira/abi/stage.h) and the runtime tensor of section
- * 1: Tensor and SyncToken, the C structs of anira/abi/tensor.h with factories on them. The
+ * (Stage, Stage::Prepared, StagePrepareInfo, StageContext and RingView over anira/abi/stage.h)
+ * and the runtime tensor of section 1: Tensor and SyncToken, the C structs of
+ * anira/abi/tensor.h with factories on them. The
  * InferenceHandler class and the _wait twins arrive with the runtime cut-over; until then a
  * handler is driven through the C entries of anira/abi/handler.h.
  *
@@ -31,9 +32,12 @@
  * memory (typed by the element, which the document does not have); from_metal, from_iosurface,
  * from_ahardwarebuffer and from_d3d12 are not declared and there is no anira_all.hpp (the draft
  * factories have no C++ spelling while unmeasured: call anira_tensor_init_metal(&tensor, ...)
- * on a Tensor); Stage::prepare takes the anira_handler* (no handler class yet); a Stage states
- * the phases it fills in phases(), because the C descriptor tells a filled phase from a NULL
- * one, and its real-time promise in flags() (anira_stage_desc::flags); StageContext has
+ * on a Tensor); Stage is the registration and Stage::Prepared what its prepare returns per
+ * handler, the C lifecycle's prepared pointer as a class on which the phases and reset run and
+ * which anira deletes at unprepare; Stage::prepare takes a StagePrepareInfo, the C record as
+ * views, whose handler is the anira_handler* (no handler class yet); a Stage states the phases
+ * it fills in phases(), because the C descriptor tells a filled phase from a NULL one, and its
+ * real-time promise in flags() (anira_stage_desc::flags); StageContext has
  * input_tensor / output_tensor filling a Tensor, the C accessors, in place of model_input /
  * model_output references, every accessor returning the C status and filling an out-parameter
  * (asking for what a slot does not have in a phase is the stage's bug, and is recorded), and
@@ -1856,9 +1860,65 @@ private:
 };
 
 /**
- * @brief A stage of the pipeline as a class: subclass it, hand it to a Pipeline as
- * stage::Custom(std::make_shared<YourStage>(...)). It is anira_stage_desc with virtual
- * functions in place of the function pointers; the semantics are those of anira/abi/stage.h.
+ * @brief The record a Stage's prepare receives, anira_stage_prepare_info of anira/abi/stage.h as
+ * views. Valid for the duration of prepare: the spans die with the call, the handler and the
+ * report stay valid while the handler stays prepared.
+ */
+class StagePrepareInfo {
+public:
+    explicit StagePrepareInfo(const anira_stage_prepare_info* info) noexcept : m_info(info) {}
+
+    /// The handler being prepared: its getters and the two Static entries are legal, never
+    /// prepare, destroy or a Hard entry.
+    anira_handler* handler() const noexcept { return m_info->handler; }
+    /// This prepare's plan report.
+    PlanReport report() const noexcept { return PlanReport(m_info->report); }
+    /// anira_handler_num_entries of this prepare: the chunks that can be in flight at once, one
+    /// scratch slot per entry (StageContext::entry).
+    uint32_t num_entries() const noexcept { return m_info->num_entries; }
+    /// One template per slot of the model's input list, State tensors included: the model end
+    /// of the slot in the spec's dtype and shape at the pinned window, the slot's host domain,
+    /// all-zero strides, no memory (never dereferenced). What StageContext::input_tensor will
+    /// fill, minus the data. A Tensor is an anira_tensor with names on it (one size, standard
+    /// layout), so the C array reads as one of Tensor.
+    std::span<const Tensor> inputs() const noexcept {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast) a Tensor is the record
+        return {static_cast<const Tensor*>(m_info->inputs), m_info->num_inputs};
+    }
+    /// The output twin.
+    std::span<const Tensor> outputs() const noexcept {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast) a Tensor is the record
+        return {static_cast<const Tensor*>(m_info->outputs), m_info->num_outputs};
+    }
+    /// The canonical names of the input list, in slot order.
+    std::span<const char* const> input_names() const noexcept {
+        return {m_info->input_names, m_info->num_inputs};
+    }
+    /// The canonical names of the output list, in slot order.
+    std::span<const char* const> output_names() const noexcept {
+        return {m_info->output_names, m_info->num_outputs};
+    }
+
+    const anira_stage_prepare_info* native() const noexcept { return m_info; }
+
+private:
+    const anira_stage_prepare_info* m_info;
+};
+
+/**
+ * @brief A stage of the pipeline as a class: the registration. Subclass it, hand it to a Pipeline
+ * as stage::Custom(std::make_shared<YourStage>(...)). It is anira_stage_desc with virtual
+ * functions in place of the function pointers, and the semantics are those of anira/abi/stage.h,
+ * whose lifecycle it follows: the registration is one object shared by the pipeline and every
+ * handler created from it (phases(), flags() and consumed_kinds() are read once, when the stage
+ * is added), and prepare() is called once per anira_handler_prepare of each handler and returns
+ * that handler's Stage::Prepared, the C lifecycle's prepared pointer as a class: the four phases
+ * and reset run on it, so what a stage keeps per handler (its per-entry scratch, sized by
+ * StagePrepareInfo::num_entries) is a member of the Prepared and never of the registration,
+ * which two handlers of one pipeline share. anira owns the Prepared from prepare on and deletes
+ * it at the C unprepare: at the next anira_handler_prepare of that handler, once the old session
+ * is released, and at anira_handler_destroy, after the last phase call; release() runs once, when
+ * the last carrier dies, after every Prepared was deleted.
  *
  * A Pipeline holds at most one stage, and the stage owns every phase it fills for every slot.
  * The phases of one chunk: pre_process takes the host end of every slot (the ring of a
@@ -1867,30 +1927,40 @@ private:
  * thread, anira feeds the State inputs, before_inference runs, anira crosses the edge into the
  * engine's domain, the engine runs, anira crosses back, after_inference runs, anira captures
  * the State outputs; then post_process takes the model tensors back to the host end. A stage
- * never crosses a domain: every phase works in the host domain of the slot.
+ * never crosses a domain: every phase works in the host domain of the slot. reset runs for the
+ * first chunk of a new stream (after prepare, after anira_handler_reset), before that chunk's
+ * pre_process and on its thread, with the chunk's context in ANIRA_PHASE_RESET, where the
+ * accessors answer the role only: what the Prepared keeps between chunks (a resampler, an overlap
+ * buffer, a filter's history) starts over there.
  *
  * A stage states the phases it fills in phases(), which a subclass must define. The C
  * descriptor tells a filled phase from a NULL one: a NULL pre_process or post_process slot
  * means anira's default body runs (the window pop or push of every Streamed slot), a filled
  * slot means this stage owns the phase and composes what it does not handle itself by calling
- * the default through the base class ("call super"): Stage::pre_process(ctx) is
- * anira_stage_default_pre_process, Stage::post_process(ctx) is
+ * the default through the base class ("call super"): Prepared::pre_process(ctx) is
+ * anira_stage_default_pre_process, Prepared::post_process(ctx) is
  * anira_stage_default_post_process. A virtual function is never NULL, so the mask says which
  * of the four this stage takes part in: only those reach the descriptor, the others stay NULL
- * and are never called. phases() is read once, by Pipeline::add, and so is flags().
+ * and are never called; the reset slot is always filled, with a base body that does nothing.
  *
  * flags() is the stage's real-time promise (anira_stage_desc::flags):
- * ANIRA_STAGE_FLAG_REALTIME_PRE_POST says pre_process and post_process allocate nothing, lock
- * nothing and block on nothing, ANIRA_STAGE_FLAG_REALTIME_HOOKS says the same of before_inference
- * and after_inference; the default promises nothing. anira_handler_prepare checks the promise
- * against the placement: under a Hard contract a filled pre_process or post_process runs on the
- * driving thread and requires ANIRA_STAGE_FLAG_REALTIME_PRE_POST, else prepare fails with
- * ANIRA_ERROR_CONFIG naming the flag. The four phase functions are noexcept (an override that
- * throws does not compile without it, and terminates with it) and carry no real-time attribute of
- * their own; everything StageContext, RingView and Tensor offer is nonblocking, so a body that
- * keeps its promise is composed of those calls. A status other than ANIRA_OK fails the chunk: the
- * status goes into anira_handler_rt_error with one latched record naming the phase, and the chunk
- * delivers zeros at its stream position.
+ * ANIRA_STAGE_FLAG_REALTIME_PRE_POST says pre_process, post_process and reset allocate nothing,
+ * lock nothing and block on nothing, ANIRA_STAGE_FLAG_REALTIME_HOOKS says the same of
+ * before_inference and after_inference; the default promises nothing. anira_handler_prepare
+ * checks the promise against the placement: under a Hard contract a filled pre_process or
+ * post_process runs on the driving thread and requires ANIRA_STAGE_FLAG_REALTIME_PRE_POST, else
+ * prepare fails with ANIRA_ERROR_CONFIG naming the flag. The phase functions and reset are
+ * noexcept (an override that throws does not compile without it, and terminates with it) and
+ * carry no real-time attribute of their own; everything StageContext, RingView and Tensor offer
+ * is nonblocking, so a body that keeps its promise is composed of those calls. A status other
+ * than ANIRA_OK fails the chunk: the status goes into anira_handler_rt_error with one latched
+ * record naming the phase, and the chunk delivers zeros at its stream position.
+ *
+ * Why the ownership spelling: the Prepared is polymorphic and lives on the heap; prepare
+ * returns a std::unique_ptr because anira is its one owner from then on (the trampoline
+ * releases it into the C out_prepared on success; a refused prepare destroys nothing that was
+ * not returned); the registration is a std::shared_ptr because it IS shared, by the pipeline
+ * and every handler created from it.
  *
  * A stage has no name: a Pipeline holds one, so a name would identify nothing; every record
  * about it says "the stage", and the consumer column of its anira_plan_ext rows reads "stage".
@@ -1909,6 +1979,49 @@ public:
     static constexpr uint32_t k_all_phases =
         k_pre_process | k_post_process | k_before_inference | k_after_inference;
 
+    /**
+     * @brief One handler's prepared stage: what Stage::prepare returns, the C prepared pointer
+     * as a class. The four phases and reset run on it, for that handler's chunks alone, and what
+     * the stage keeps per handler lives here. Created by prepare on the main thread (it may
+     * allocate there), deleted by anira at the C unprepare (the next anira_handler_prepare of
+     * the handler, once the old session is released, or anira_handler_destroy), after the last
+     * phase call; never copied, never moved.
+     */
+    class Prepared {
+    public:
+        Prepared() = default;
+        virtual ~Prepared() = default;
+        Prepared(const Prepared&) = delete;
+        Prepared& operator=(const Prepared&) = delete;
+        Prepared(Prepared&&) = delete;
+        Prepared& operator=(Prepared&&) = delete;
+
+        /// ANIRA_PHASE_PRE_PROCESS, on the thread where the host end is produced (the driver
+        /// thread under a Hard contract): takes the host end of every slot to its model tensor.
+        /// The base class is the default fill (anira_stage_default_pre_process).
+        virtual anira_status pre_process(StageContext& ctx) noexcept {
+            return anira_stage_default_pre_process(ctx.native());
+        }
+        /// ANIRA_PHASE_POST_PROCESS, on the thread where the host end is consumed: takes the
+        /// model tensor of every output slot back to its host end. The base class is the default
+        /// push (anira_stage_default_post_process).
+        virtual anira_status post_process(StageContext& ctx) noexcept {
+            return anira_stage_default_post_process(ctx.native());
+        }
+        /// ANIRA_PHASE_BEFORE_INFERENCE, on an inference thread behind the State feed and ahead
+        /// of the edge into the engine's domain. The base class does nothing.
+        virtual anira_status before_inference(StageContext& /*ctx*/) noexcept { return ANIRA_OK; }
+        /// ANIRA_PHASE_AFTER_INFERENCE, on an inference thread behind the edge out of the
+        /// engine's domain and ahead of the State capture. The base class does nothing.
+        virtual anira_status after_inference(StageContext& /*ctx*/) noexcept { return ANIRA_OK; }
+        /// ANIRA_PHASE_RESET: the first chunk of a new stream (after prepare, after
+        /// anira_handler_reset), before that chunk's pre_process, on its thread, never
+        /// mid-stream; the context answers the role only (a ring or a tensor asked here is
+        /// refused and recorded). What this object keeps between chunks starts over. The base
+        /// class does nothing.
+        virtual void reset(StageContext& /*ctx*/) noexcept {}
+    };
+
     Stage() = default;
     virtual ~Stage() = default;
     Stage(const Stage&) = delete;
@@ -1918,7 +2031,7 @@ public:
 
     /// The phases this stage fills: an OR of k_pre_process, k_post_process, k_before_inference
     /// and k_after_inference. Read once, when the stage is added to a Pipeline; 0 is a stage of
-    /// prepare and release alone.
+    /// prepare, reset, unprepare and release alone.
     virtual uint32_t phases() const noexcept = 0;
     /// The stage's real-time promise, written into anira_stage_desc::flags by Pipeline::add: an
     /// OR of ANIRA_STAGE_FLAG_REALTIME_PRE_POST and ANIRA_STAGE_FLAG_REALTIME_HOOKS; 0 (the
@@ -1926,94 +2039,98 @@ public:
     /// post_process must promise ANIRA_STAGE_FLAG_REALTIME_PRE_POST, else anira_handler_prepare
     /// refuses it with ANIRA_ERROR_CONFIG. Read once, when the stage is added to a Pipeline.
     virtual uint32_t flags() const noexcept { return 0; }
-
-    /// ANIRA_PHASE_PRE_PROCESS, on the thread where the host end is produced (the driver thread
-    /// under a Hard contract): takes the host end of every slot to its model tensor. The base
-    /// class is the default fill (anira_stage_default_pre_process).
-    virtual anira_status pre_process(StageContext& ctx) noexcept {
-        return anira_stage_default_pre_process(ctx.native());
-    }
-    /// ANIRA_PHASE_POST_PROCESS, on the thread where the host end is consumed: takes the model
-    /// tensor of every output slot back to its host end. The base class is the default push
-    /// (anira_stage_default_post_process).
-    virtual anira_status post_process(StageContext& ctx) noexcept {
-        return anira_stage_default_post_process(ctx.native());
-    }
-    /// ANIRA_PHASE_BEFORE_INFERENCE, on an inference thread behind the State feed and ahead of
-    /// the edge into the engine's domain. The base class does nothing.
-    virtual anira_status before_inference(StageContext& /*ctx*/) noexcept { return ANIRA_OK; }
-    /// ANIRA_PHASE_AFTER_INFERENCE, on an inference thread behind the edge out of the engine's
-    /// domain and ahead of the State capture. The base class does nothing.
-    virtual anira_status after_inference(StageContext& /*ctx*/) noexcept { return ANIRA_OK; }
-
-    /// Called by anira_handler_prepare on its caller's thread after the plan report is built,
-    /// once per prepare ([main-thread]; it may allocate). Of anira it may call
-    /// the [callback-safe] entries, the handler's getters and the two Static entries, never
-    /// prepare, destroy or a Hard entry. A status other than ANIRA_OK fails the prepare with
-    /// it. It may throw: an anira::Error fails the prepare with its status, std::bad_alloc with
-    /// ANIRA_ERROR_OUT_OF_MEMORY, anything else with ANIRA_ERROR_INTERNAL, and what() goes to
-    /// the log (group "anira.hpp"), since the C callback has no error record.
-    virtual anira_status prepare(anira_handler* /*handler*/, const PlanReport& /*report*/) {
-        return ANIRA_OK;
-    }
-    /// Called once per Pipeline::add of this stage, when the last pipeline or handler that
-    /// carries it dies, on the thread of that destroy ([main-thread]); no callback of that
-    /// chain runs afterwards. The object itself lives as long as a shared_ptr to it does.
-    virtual void release() noexcept {}
     /// The extensions the stage reads at prepare, as "<host>:<kind>" strings (hosts:
     /// tensor_spec, model, model_config, context, contract); they join the consumed-or-fail
     /// walk. Read once, when the stage is added; the strings are copied.
     virtual std::span<const char* const> consumed_kinds() const noexcept { return {}; }
+
+    /// Called by anira_handler_prepare on its caller's thread after the plan report is built,
+    /// once per prepare of each handler ([main-thread]; it may allocate): returns the Prepared
+    /// that runs the phases for that handler, sized by the record (its num_entries for a
+    /// per-chunk scratch, its templates for the tensors), which anira owns from then on. Of
+    /// anira it may call the [callback-safe] entries, the handler's getters and the two Static
+    /// entries, never prepare, destroy or a Hard entry. It may throw: an anira::Error fails the
+    /// prepare with its status, std::bad_alloc with ANIRA_ERROR_OUT_OF_MEMORY, anything else
+    /// with ANIRA_ERROR_INTERNAL, and what() goes to the log (group "anira.hpp"), since the C
+    /// callback has no error record; a null return fails it with ANIRA_ERROR_INTERNAL, since
+    /// nothing could run the phases. A refused prepare leaves the handler unprepared and
+    /// deletes nothing that was not returned.
+    virtual std::unique_ptr<Prepared> prepare(const StagePrepareInfo& info) = 0;
+    /// Called once per Pipeline::add of this stage, when the last pipeline or handler that
+    /// carries it dies, on the thread of that destroy ([main-thread]), after every Prepared of
+    /// it was deleted; no callback of that chain runs afterwards. The object itself lives as
+    /// long as a shared_ptr to it does.
+    virtual void release() noexcept {}
 };
 
 namespace detail {
 
 /**
  * @brief The C callbacks of a stage::Custom. user_data is a heap-allocated
- * std::shared_ptr<Stage>, so the control block keeps the object alive for as long as a carrier
- * of the descriptor exists; release deletes it, exactly once.
+ * std::shared_ptr<Stage>, so the control block keeps the registration alive for as long as a
+ * carrier of the descriptor exists; release deletes it, exactly once. prepared is the
+ * Stage::Prepared of one handler, released from prepare's unique_ptr into the C out_prepared and
+ * deleted at unprepare, exactly once per successful prepare.
  */
 struct StageTrampolines {
     static Stage& stage_of(void* user_data) noexcept {
         return **static_cast<std::shared_ptr<Stage>*>(user_data);
     }
+    static Stage::Prepared& prepared_of(void* prepared) noexcept {
+        return *static_cast<Stage::Prepared*>(prepared);
+    }
 
-    // The four phase trampolines carry no real-time attribute, like anira_stage_fn: the promise
-    // is the stage's flags(), not a property of the type. The per-handler prepared pointer of
-    // the C lifecycle is not used yet: the phases run on the registration.
+    // The four phase trampolines and the reset carry no real-time attribute, like the C
+    // typedefs: the promise is the stage's flags(), not a property of the type. They run on the
+    // handler's Prepared; the registration in user_data is not read on a per-chunk path.
     static anira_status ANIRA_CALL pre_process(const anira_stage_ctx* ctx,
-                                               void* /*prepared*/,
-                                               void* user_data) noexcept {
+                                               void* prepared,
+                                               void* /*user_data*/) noexcept {
         StageContext context(ctx);
-        return stage_of(user_data).pre_process(context);
+        return prepared_of(prepared).pre_process(context);
     }
     static anira_status ANIRA_CALL post_process(const anira_stage_ctx* ctx,
-                                                void* /*prepared*/,
-                                                void* user_data) noexcept {
+                                                void* prepared,
+                                                void* /*user_data*/) noexcept {
         StageContext context(ctx);
-        return stage_of(user_data).post_process(context);
+        return prepared_of(prepared).post_process(context);
     }
     static anira_status ANIRA_CALL before_inference(const anira_stage_ctx* ctx,
-                                                    void* /*prepared*/,
-                                                    void* user_data) noexcept {
+                                                    void* prepared,
+                                                    void* /*user_data*/) noexcept {
         StageContext context(ctx);
-        return stage_of(user_data).before_inference(context);
+        return prepared_of(prepared).before_inference(context);
     }
     static anira_status ANIRA_CALL after_inference(const anira_stage_ctx* ctx,
-                                                   void* /*prepared*/,
-                                                   void* user_data) noexcept {
+                                                   void* prepared,
+                                                   void* /*user_data*/) noexcept {
         StageContext context(ctx);
-        return stage_of(user_data).after_inference(context);
+        return prepared_of(prepared).after_inference(context);
+    }
+    static void ANIRA_CALL reset(const anira_stage_ctx* ctx,
+                                 void* prepared,
+                                 void* /*user_data*/) noexcept {
+        StageContext context(ctx);
+        prepared_of(prepared).reset(context);
     }
 
-    /// A throw never crosses the C boundary: it becomes the status, and its text a log line.
-    /// Nothing is handed back through out_prepared: the phases run on the registration.
+    /// A throw never crosses the C boundary: it becomes the status, and its text a log line. On
+    /// success the Prepared leaves the unique_ptr for the C out_prepared, anira's from then on;
+    /// a throw destroys nothing that was not returned, and a null return is ANIRA_ERROR_INTERNAL.
     static anira_status ANIRA_CALL prepare(const anira_stage_prepare_info* info,
                                            void* user_data,
-                                           void** /*out_prepared*/) noexcept {
+                                           void** out_prepared) noexcept {
         Stage& stage = stage_of(user_data);
         try {
-            return stage.prepare(info->handler, PlanReport(info->report));
+            std::unique_ptr<Stage::Prepared> prepared = stage.prepare(StagePrepareInfo(info));
+            if (prepared == nullptr) {
+                anira_log(ANIRA_LOG_ERROR,
+                          "anira.hpp",
+                          "the stage's prepare returned no Prepared: nothing can run the phases");
+                return ANIRA_ERROR_INTERNAL;
+            }
+            *out_prepared = prepared.release();
+            return ANIRA_OK;
         } catch (const Error& error) {
             log_throw(error.what());
             return failed(error.status) ? error.status : ANIRA_ERROR_INTERNAL;
@@ -2027,6 +2144,12 @@ struct StageTrampolines {
             log_throw("an exception that is no std::exception");
             return ANIRA_ERROR_INTERNAL;
         }
+    }
+
+    /// The Prepared of one handler, back from the C lifecycle: deleted here, once.
+    static void ANIRA_CALL unprepare(void* prepared, void* /*user_data*/) noexcept {
+        std::unique_ptr<Stage::Prepared> holder(static_cast<Stage::Prepared*>(prepared));
+        holder.reset();
     }
 
     static void ANIRA_CALL release(void* user_data) noexcept {
@@ -2145,7 +2268,9 @@ public:
     }
     /// Adds one stage of any kind. A stage::Custom is read once, here: its phases(), flags()
     /// and consumed_kinds() fill an anira_stage_desc (anira_pipeline_add_stage), and
-    /// only the phases of the mask reach it; Stage::release answers this add once.
+    /// only the phases of the mask reach it; its prepare runs per handler at
+    /// anira_handler_prepare and the Prepared it returns runs the phases and the reset of
+    /// that handler until the C unprepare deletes it; Stage::release answers this add once.
     /// @throws Error when the C entry refuses it: a second inference stage is
     /// ANIRA_ERROR_CONFIG, a second custom stage ANIRA_ERROR_INVALID_STATE, more than one
     /// variant or a non-default provider ANIRA_ERROR_NOT_SUPPORTED; a null custom stage, a
@@ -2202,7 +2327,12 @@ private:
         if ((phases & Stage::k_after_inference) != 0U) {
             desc.after_inference = &detail::StageTrampolines::after_inference;
         }
+        // The shared lifecycle: reset on the handler's Prepared (always filled, the base body
+        // does nothing), prepare returning it, unprepare deleting it, release for the
+        // registration.
+        desc.reset = &detail::StageTrampolines::reset;
         desc.prepare = &detail::StageTrampolines::prepare;
+        desc.unprepare = &detail::StageTrampolines::unprepare;
         desc.release = &detail::StageTrampolines::release;
         // The carrier owns the copy from a successful add on and deletes it in release; a
         // refused add never calls release, so the copy dies here with the throw.

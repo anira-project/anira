@@ -60,6 +60,9 @@ add_custom_target(breathe-apidocs
     -g class,struct,union -f
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_inference_config_1_1_defaults.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_session_element_1_1_thread_safe_struct.rst
+    # anira::Stage::Prepared is documented inside anira::Stage's page (breathe lists the nested
+    # class there); its own page would declare every member twice.
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1_stage_1_1_prepared.rst
     # Add :allow-dot-graphs: directive to all class and struct files.
     # Using perl -i for portability (BSD sed on macOS uses different -i syntax than GNU sed).
     COMMAND bash -c "find ${SPHINX_SOURCE_DIR}/api/class -name '*.rst' -exec perl -i -pe 's{^(\\.\\.\\s+doxygenclass::.*\\n)}{$1    :allow-dot-graphs:\\n}' {} +"

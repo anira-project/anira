@@ -224,12 +224,19 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
    * - ``class X : public anira::PrePostProcessor``
      - An ``anira_stage_desc`` handed to ``anira_pipeline_add_stage``, or a subclass of
        :cpp:class:`anira::Stage` handed to :cpp:class:`anira::Pipeline` as
-       :cpp:class:`anira::stage::Custom`; at most one per pipeline, named (the name is what the
-       records carry).
+       :cpp:class:`anira::stage::Custom`; at most one per pipeline, the registration every
+       handler of the pipeline shares.
+   * - the members of a processor (a scratch sized in its constructor from the config)
+     - The prepared object of one handler: ``prepare(info, user_data, &prepared)`` hands it back
+       (``Stage::prepare(const StagePrepareInfo&)`` returns the :cpp:class:`anira::Stage::Prepared`),
+       sized by the record's ``num_entries`` and templates; every phase of that handler receives
+       it, ``unprepare`` gets it back (anira deletes the ``Prepared``) at the next prepare or the
+       destroy of the handler, and ``reset`` re-initialises what it keeps at the first chunk of
+       a new stream.
    * - ``pre_process(std::vector<RingBuffer>& input, std::vector<BufferF>& output,
        InferenceBackend backend)``
-     - ``pre_process(const anira_stage_ctx* ctx, void* user_data)`` /
-       ``Stage::pre_process(StageContext& ctx)``: per slot ``anira_stage_input_role`` (what
+     - ``pre_process(const anira_stage_ctx* ctx, void* prepared, void* user_data)`` /
+       ``Stage::Prepared::pre_process(StageContext& ctx)``: per slot ``anira_stage_input_role`` (what
        the slot is, ``ctx.input_role(slot, role)``), ``anira_stage_input_ring`` (the ring of
        a Streamed slot, ``ctx.input_ring(slot, ring)``) and ``anira_stage_input_tensor`` (the
        model tensor, ``ctx.input_tensor(slot, tensor)``), each a status and an out-parameter;
@@ -248,10 +255,10 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
        ``anira_ring_pop_windows`` (the batched windows); :cpp:class:`anira::RingView`
        ``pop_block`` / ``peek_past_block`` / ``pop_windows`` over a ``std::span``. The default
        fill itself is ``anira_stage_default_pre_process`` ("call super",
-       ``Stage::pre_process``).
+       ``Stage::Prepared::pre_process``).
    * - ``push_samples_to_buffer(buffer, ring, n)``
      - ``anira_ring_push_block`` (``RingView::push_block``); the default push is
-       ``anira_stage_default_post_process`` (``Stage::post_process``).
+       ``anira_stage_default_post_process`` (``Stage::Prepared::post_process``).
    * - ``get_input(i, sample)`` inside ``pre_process``, ``set_output(value, i, sample)`` inside
        ``post_process`` (the non-streamable tensors)
      - Nothing: anira materialises a Static input into the model tensor ahead of

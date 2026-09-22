@@ -77,11 +77,30 @@ static_assert(std::is_same_v<anira::Pipeline::AnyStage,
 static_assert(std::is_constructible_v<anira::stage::Custom, std::shared_ptr<anira::Stage>> &&
               std::is_copy_constructible_v<anira::stage::Custom>);
 
-// A stage is a class a consumer subclasses: abstract (phases() is the subclass's statement),
-// never copied or moved (the pipeline's carrier shares it), destroyed through the base.
+// A stage is a class a consumer subclasses: abstract (phases() and prepare() are the
+// subclass's statements), never copied or moved (the pipeline's carrier shares it), destroyed
+// through the base. Its Prepared, what prepare returns per handler, is concrete (every phase
+// has a base body), never copied or moved (anira owns it), destroyed through the base by anira.
 static_assert(std::is_abstract_v<anira::Stage> && std::has_virtual_destructor_v<anira::Stage> &&
               !std::is_copy_constructible_v<anira::Stage> &&
               !std::is_move_constructible_v<anira::Stage>);
+static_assert(!std::is_abstract_v<anira::Stage::Prepared> &&
+              std::has_virtual_destructor_v<anira::Stage::Prepared> &&
+              !std::is_copy_constructible_v<anira::Stage::Prepared> &&
+              !std::is_move_constructible_v<anira::Stage::Prepared>);
+static_assert(std::is_same_v<decltype(std::declval<anira::Stage&>().prepare(
+                                 std::declval<const anira::StagePrepareInfo&>())),
+                             std::unique_ptr<anira::Stage::Prepared>>);
+// The prepare record is a view over the C record: trivially copyable, no default, the
+// templates as a span of Tensor, the report as a PlanReport.
+static_assert(std::is_trivially_copyable_v<anira::StagePrepareInfo> &&
+              !std::is_default_constructible_v<anira::StagePrepareInfo>);
+static_assert(std::is_same_v<decltype(std::declval<const anira::StagePrepareInfo&>().inputs()),
+                             std::span<const anira::Tensor>> &&
+              std::is_same_v<decltype(std::declval<const anira::StagePrepareInfo&>().report()),
+                             anira::PlanReport> &&
+              noexcept(std::declval<const anira::StagePrepareInfo&>().num_entries()) &&
+              noexcept(std::declval<const anira::StagePrepareInfo&>().input_names()));
 static_assert(anira::Stage::k_pre_process == 1U && anira::Stage::k_post_process == 2U &&
               anira::Stage::k_before_inference == 4U && anira::Stage::k_after_inference == 16U &&
               anira::Stage::phase_bit(ANIRA_PHASE_AFTER_INFERENCE) ==
@@ -123,14 +142,23 @@ static_assert(std::is_same_v<decltype(std::declval<const anira::StageContext&>()
 static_assert(
     std::is_nothrow_copy_assignable_v<anira::RingView> &&
     std::is_same_v<decltype(std::declval<const anira::StageContext&>().ticket()), anira_ticket>);
+// Every per-chunk virtual of the Prepared is noexcept, prepare of the registration is not.
 static_assert(
-    noexcept(std::declval<anira::Stage&>().pre_process(std::declval<anira::StageContext&>())) &&
+    noexcept(std::declval<anira::Stage::Prepared&>().pre_process(
+        std::declval<anira::StageContext&>())) &&
+    noexcept(std::declval<anira::Stage::Prepared&>().post_process(
+        std::declval<anira::StageContext&>())) &&
+    noexcept(std::declval<anira::Stage::Prepared&>().before_inference(
+        std::declval<anira::StageContext&>())) &&
+    noexcept(std::declval<anira::Stage::Prepared&>().after_inference(
+        std::declval<anira::StageContext&>())) &&
+    noexcept(std::declval<anira::Stage::Prepared&>().reset(std::declval<anira::StageContext&>())) &&
     noexcept(std::declval<anira::Stage&>().release()) &&
     noexcept(std::declval<const anira::Stage&>().consumed_kinds()) &&
     noexcept(std::declval<const anira::Stage&>().flags()) &&
     noexcept(std::declval<const anira::StageContext&>().entry()) &&
-    !noexcept(std::declval<anira::Stage&>().prepare(nullptr,
-                                                    std::declval<const anira::PlanReport&>())));
+    !noexcept(
+        std::declval<anira::Stage&>().prepare(std::declval<const anira::StagePrepareInfo&>())));
 
 // The contract and job-option values are aggregates, spelled with designated initializers.
 static_assert(std::is_aggregate_v<anira::Hard>);
@@ -190,15 +218,15 @@ static_assert(noexcept(std::declval<anira::SyncToken&>().reset()) &&
 static_assert(std::is_base_of_v<std::runtime_error, anira::Error>);
 static_assert(std::is_same_v<decltype(anira::Error::status), anira_status>);
 
-/// A stage as a consumer writes it: the phases it fills, stated; the overrides noexcept. It
+/// A stage as a consumer writes it: the registration states the phases it fills and its
+/// promise, and prepare returns the Prepared of one handler, whose overrides are noexcept. It
 /// converts an int16 ring into the float model tensor and leaves the push to anira's default.
-class ProbeStage final : public anira::Stage {
+class ProbePrepared final : public anira::Stage::Prepared {
 public:
-    uint32_t phases() const noexcept override { return k_pre_process | k_after_inference; }
-    // The real-time promise a Hard contract requires of a filled pre_process.
-    uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
+    explicit ProbePrepared(uint32_t num_entries) : m_num_entries(num_entries) {}
 
     anira_status pre_process(anira::StageContext& ctx) noexcept override {
+        if (ctx.entry() >= m_num_entries) { return ANIRA_ERROR_INTERNAL; }
         anira::Tensor input{};
         const anira_status exposed = ctx.input_tensor(0, input);
         if (exposed != ANIRA_OK) { return exposed; }
@@ -219,12 +247,27 @@ public:
         if (asked != ANIRA_OK) { return asked; }
         return role == ANIRA_ROLE_STREAMED ? ctx.output_tensor(0, output) : ANIRA_ERROR_CONFIG;
     }
-    anira_status prepare(anira_handler* handler, const anira::PlanReport& report) override {
-        return handler != nullptr && report.num_plans() > 0 ? ANIRA_OK : ANIRA_ERROR_CONFIG;
-    }
+    // The first chunk of a new stream: the block this object keeps starts over.
+    void reset(anira::StageContext& /*ctx*/) noexcept override { m_block.fill(0); }
 
 private:
     std::array<int16_t, 64> m_block{};
+    uint32_t m_num_entries;
+};
+
+class ProbeStage final : public anira::Stage {
+public:
+    uint32_t phases() const noexcept override { return k_pre_process | k_after_inference; }
+    // The real-time promise a Hard contract requires of a filled pre_process.
+    uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
+
+    std::unique_ptr<anira::Stage::Prepared> prepare(const anira::StagePrepareInfo& info) override {
+        if (info.handler() == nullptr || info.report().num_plans() == 0 ||
+            info.inputs().size() != info.input_names().size()) {
+            throw anira::Error(ANIRA_ERROR_CONFIG, "nothing to prepare");
+        }
+        return std::make_unique<ProbePrepared>(info.num_entries());
+    }
 };
 
 /// Every call a phase callback can make on the two views, from a nonblocking function: where

@@ -6,8 +6,10 @@ and post-processing object of a pipeline, four phase callbacks around the engine
 2 of the :doc:`usage` guide is the reference this page builds on: the phases and their
 threads, the context accessors, the rings, the hop rule, the failure rules and the real-time
 promise. In C a stage is an ``anira_stage_desc`` of ``anira/abi/stage.h`` handed to
-``anira_pipeline_add_stage``; in C++ it is a subclass of :cpp:class:`anira::Stage` handed to
-an :cpp:class:`anira::Pipeline` as :cpp:class:`anira::stage::Custom`. Both run on the 3.x
+``anira_pipeline_add_stage``; in C++ it is a subclass of :cpp:class:`anira::Stage`, the
+registration, whose ``prepare`` returns the :cpp:class:`anira::Stage::Prepared` that runs the
+phases for one handler, handed to an :cpp:class:`anira::Pipeline` as
+:cpp:class:`anira::stage::Custom`. Both run on the 3.x
 handler of ``anira/abi/handler.h`` (:doc:`usage` section 3.2). This page walks through the
 cases a stage is for, in the order they come up.
 
@@ -70,8 +72,23 @@ The rules in short
   fills the phase that moves that ring.
 - Ask per slot in every callback and keep nothing: the tensor an accessor fills describes the
   memory the tensor has right now, which an engine may swap between inferences.
-- Per-chunk data lives in a scratch of ``anira_handler_num_entries(handler)`` entries, sized
-  in ``prepare``, indexed by ``ctx->entry`` (``ctx.entry()``).
+- One registration, one prepared object per handler. ``prepare`` receives the record
+  (``anira_stage_prepare_info``, :cpp:class:`anira::StagePrepareInfo`: the handler, the plan
+  report, ``num_entries``, a template of the model end of every slot and the canonical names)
+  and hands back what the phases of that handler run on: the ``prepared`` pointer in C, the
+  :cpp:class:`anira::Stage::Prepared` in C++. What a stage keeps per handler, its per-entry
+  scratch above all, lives there, never in ``user_data`` or in the registration, which every
+  handler of the pipeline shares. anira calls ``unprepare`` (deletes the ``Prepared``) once per
+  successful prepare, at the next prepare of that handler and at its destroy, and ``release``
+  once, with the last carrier.
+- ``reset`` runs for the first chunk of a new stream (after prepare, after
+  ``anira_handler_reset``), before that chunk's ``pre_process`` and on its thread, with the
+  chunk's context in ``ANIRA_PHASE_RESET``, where the accessors answer the role only: what the
+  prepared object keeps between chunks (a resampler, an overlap buffer, a filter's history)
+  starts over there.
+- Per-chunk data lives in a scratch of ``num_entries`` entries (the record's count, what
+  ``anira_handler_num_entries(handler)`` answers), sized in ``prepare``, indexed by
+  ``ctx->entry`` (``ctx.entry()``).
 - A failure is a returned status, never a throw: the status is latched in
   ``anira_handler_rt_error`` and the chunk delivers zeros.
 
@@ -80,11 +97,14 @@ A normalising stage
 
 The smallest useful stage: ``pre_process`` lets the default pop the hop and then scales the
 model input, ``post_process`` scales the model output back and lets the default push it. One
-factor, two phases, one object. ``phases()`` names both, so the descriptor's ``pre_process``
-and ``post_process`` slots are filled and the two hooks stay ``NULL``:
+factor, two phases, one prepared object per handler. The registration names both phases in
+``phases()``, so the descriptor's ``pre_process`` and ``post_process`` slots are filled and
+the two hooks stay ``NULL``, and its ``prepare`` returns the object the phases run on; the
+factor is copied into it, since nothing here is per entry:
 
 .. code-block:: cpp
 
+    #include <memory>
     #include <anira/anira.hpp>
 
     class Normalise : public anira::Stage {
@@ -94,28 +114,40 @@ and ``post_process`` slots are filled and the two hooks stay ``NULL``:
         uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
         uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
 
-        anira_status pre_process(anira::StageContext& ctx) noexcept override {
-            const anira_status st = anira::Stage::pre_process(ctx);   // the default fill, every Streamed input
-            if (st != ANIRA_OK) { return st; }
-            return scale(ctx, 0, m_gain, true);
-        }
-        anira_status post_process(anira::StageContext& ctx) noexcept override {
-            const anira_status st = scale(ctx, 0, 1.0F / m_gain, false);
-            if (st != ANIRA_OK) { return st; }
-            return anira::Stage::post_process(ctx);                    // the default push, every Streamed output
+        std::unique_ptr<Prepared> prepare(const anira::StagePrepareInfo& /*info*/) override {
+            return std::make_unique<Scaler>(m_gain);   // one per handler; anira deletes it at unprepare
         }
 
     private:
-        static anira_status scale(anira::StageContext& ctx, uint32_t slot, float factor,
-                                  bool input) noexcept {
-            anira::Tensor tensor{};
-            const anira_status st = input ? ctx.input_tensor(slot, tensor) : ctx.output_tensor(slot, tensor);
-            if (st != ANIRA_OK) { return st; }
-            float* samples = tensor.data_f32();
-            if (samples == nullptr) { return ANIRA_ERROR_CONFIG; }    // not a float32 host tensor
-            for (size_t n = 0; n < tensor.num_elements(); ++n) { samples[n] *= factor; }
-            return ANIRA_OK;
-        }
+        class Scaler : public anira::Stage::Prepared {
+        public:
+            explicit Scaler(float gain) : m_gain(gain) {}
+
+            anira_status pre_process(anira::StageContext& ctx) noexcept override {
+                const anira_status st = Prepared::pre_process(ctx);   // the default fill, every Streamed input
+                if (st != ANIRA_OK) { return st; }
+                return scale(ctx, 0, m_gain, true);
+            }
+            anira_status post_process(anira::StageContext& ctx) noexcept override {
+                const anira_status st = scale(ctx, 0, 1.0F / m_gain, false);
+                if (st != ANIRA_OK) { return st; }
+                return Prepared::post_process(ctx);                    // the default push, every Streamed output
+            }
+
+        private:
+            static anira_status scale(anira::StageContext& ctx, uint32_t slot, float factor,
+                                      bool input) noexcept {
+                anira::Tensor tensor{};
+                const anira_status st = input ? ctx.input_tensor(slot, tensor) : ctx.output_tensor(slot, tensor);
+                if (st != ANIRA_OK) { return st; }
+                float* samples = tensor.data_f32();
+                if (samples == nullptr) { return ANIRA_ERROR_CONFIG; }    // not a float32 host tensor
+                for (size_t n = 0; n < tensor.num_elements(); ++n) { samples[n] *= factor; }
+                return ANIRA_OK;
+            }
+
+            float m_gain;
+        };
 
         float m_gain;
     };
@@ -134,11 +166,14 @@ model tensor is the spectrum, so the default fill cannot be used: ``pre_process`
 window itself, the history through ``peek_past_block`` and the hop through ``pop_block``, and
 transforms it into the model tensor; ``post_process`` transforms the model output back and
 pushes the hop. The transform runs on the driving thread, as it did in a 2.x processor, so it
-has to be real-time itself: preallocated plans, no allocation in the call. The stage keeps its
-window in a per-entry scratch sized in ``prepare``:
+has to be real-time itself: preallocated plans, no allocation in the call. The prepared object
+of each handler keeps its windows in a per-entry scratch sized by the record's ``num_entries``
+in ``prepare``, and clears them at ``reset``, the first chunk of a new stream:
 
 .. code-block:: cpp
 
+    #include <algorithm>
+    #include <memory>
     #include <span>
     #include <vector>
     #include <anira/anira.hpp>
@@ -152,9 +187,20 @@ window in a per-entry scratch sized in ``prepare``:
         uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
         uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
 
-        anira_status prepare(anira_handler* handler, const anira::PlanReport& /*report*/) override {
-            m_windows.resize(static_cast<size_t>(anira_handler_num_entries(handler)) * k_window);
-            return ANIRA_OK;
+        std::unique_ptr<Prepared> prepare(const anira::StagePrepareInfo& info) override {
+            return std::make_unique<Frames>(info.num_entries());   // this handler's windows
+        }
+
+    private:
+        class Frames;
+    };
+
+    class Spectral::Frames : public anira::Stage::Prepared {
+    public:
+        explicit Frames(uint32_t entries) : m_windows(static_cast<size_t>(entries) * k_window) {}
+
+        void reset(anira::StageContext& /*ctx*/) noexcept override {
+            std::ranges::fill(m_windows, 0.0F);                    // a new stream: no history
         }
 
         anira_status pre_process(anira::StageContext& ctx) noexcept override {
@@ -202,9 +248,9 @@ window in a per-entry scratch sized in ``prepare``:
 
 The example is mono (channel ``0``); a multi-channel stage loops over
 ``ring.num_channels()`` and lays the channels out as the model tensor expects. What an
-overlap-add keeps from one frame to the next is the stage's own business, in a scratch of its
-own; the shape of the stage is the point here: pop the hop once, push the hop once, transform
-in between.
+overlap-add keeps from one frame to the next is the prepared object's own business, in a
+scratch of its own that ``reset`` clears; the shape of the stage is the point here: pop the
+hop once, push the hop once, transform in between.
 
 When the transform is heavy
 ---------------------------
@@ -216,11 +262,15 @@ cheap and real-time; ``before_inference`` transforms the scratch into the model 
 inference thread; ``after_inference`` transforms the model output back into the scratch; and
 ``post_process`` pushes the hop. The two hooks may then use a library that allocates, since
 the descriptor promises nothing for them (``flags`` carries ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``
-alone). The same stage in C, over the descriptor:
+alone). The same stage in C, over the descriptor: ``prepare`` allocates this handler's windows
+and hands them back through ``out_prepared``, every phase finds them in ``prepared``, and
+``unprepare`` frees them, once per successful prepare; ``user_data`` stays ``NULL``, since
+nothing is shared by the handlers of the pipeline:
 
 .. code-block:: c
 
     #include <stdlib.h>
+    #include <string.h>
     #include <anira/abi/config.h>
     #include <anira/abi/handler.h>
 
@@ -231,21 +281,37 @@ alone). The same stage in C, over the descriptor:
     void forward_transform(const float* window, size_t window_size, float* spectrum);
     void inverse_transform(const float* spectrum, size_t window_size, float* samples);
 
-    typedef struct spectral { float* windows; } spectral;
+    typedef struct spectral { float* windows; uint32_t entries; } spectral;   /* one per handler */
 
-    static anira_status ANIRA_CALL spectral_prepare(anira_handler* handler,
-                                                    const anira_plan_report* report,
-                                                    void* user_data) {
-        spectral* s = (spectral*)user_data;
-        (void)report;
-        s->windows = (float*)calloc((size_t)anira_handler_num_entries(handler) * WINDOW, sizeof(float));
-        return s->windows != NULL ? ANIRA_OK : ANIRA_ERROR_OUT_OF_MEMORY;
+    static anira_status ANIRA_CALL spectral_prepare(const anira_stage_prepare_info* info,
+                                                    void* user_data,
+                                                    void** out_prepared) {
+        spectral* s = (spectral*)calloc(1, sizeof(spectral));
+        (void)user_data;                                  /* the registration: nothing shared */
+        if (s == NULL) { return ANIRA_ERROR_OUT_OF_MEMORY; }
+        s->entries = info->num_entries;
+        s->windows = (float*)calloc((size_t)s->entries * WINDOW, sizeof(float));
+        if (s->windows == NULL) { free(s); return ANIRA_ERROR_OUT_OF_MEMORY; }
+        *out_prepared = s;                                /* what every phase of this handler gets */
+        return ANIRA_OK;
+    }
+
+    /* the first chunk of a new stream, on the thread of pre_process: no history */
+    static void ANIRA_CALL spectral_reset(const anira_stage_ctx* ctx,
+                                          void* prepared,
+                                          void* user_data) ANIRA_NONBLOCKING {
+        spectral* s = (spectral*)prepared;
+        (void)ctx;
+        (void)user_data;
+        memset(s->windows, 0, (size_t)s->entries * WINDOW * sizeof(float));
     }
 
     /* driving thread, real-time: the pop alone */
     static anira_status ANIRA_CALL spectral_pre_process(const anira_stage_ctx* ctx,
+                                                        void* prepared,
                                                         void* user_data) ANIRA_NONBLOCKING {
-        float* window = ((spectral*)user_data)->windows + (size_t)ctx->entry * WINDOW;
+        float* window = ((spectral*)prepared)->windows + (size_t)ctx->entry * WINDOW;
+        (void)user_data;
         anira_ring* ring = NULL;
         anira_status st = anira_stage_input_ring(ctx, 0, &ring);   /* slot 0 is Streamed: the model config says so */
         if (st != ANIRA_OK) { return st; }
@@ -260,8 +326,10 @@ alone). The same stage in C, over the descriptor:
 
     /* inference thread: the transform into the model tensor */
     static anira_status ANIRA_CALL spectral_before_inference(const anira_stage_ctx* ctx,
+                                                             void* prepared,
                                                              void* user_data) {
-        const float* window = ((spectral*)user_data)->windows + (size_t)ctx->entry * WINDOW;
+        const float* window = ((spectral*)prepared)->windows + (size_t)ctx->entry * WINDOW;
+        (void)user_data;
         anira_tensor spectrum;
         float* bins;
         anira_status st = anira_stage_input_tensor(ctx, 0, &spectrum);
@@ -274,8 +342,10 @@ alone). The same stage in C, over the descriptor:
 
     /* inference thread: the inverse transform back into the scratch of the same entry */
     static anira_status ANIRA_CALL spectral_after_inference(const anira_stage_ctx* ctx,
+                                                            void* prepared,
                                                             void* user_data) {
-        float* window = ((spectral*)user_data)->windows + (size_t)ctx->entry * WINDOW;
+        float* window = ((spectral*)prepared)->windows + (size_t)ctx->entry * WINDOW;
+        (void)user_data;
         anira_tensor spectrum;
         const float* bins;
         anira_status st = anira_stage_output_tensor(ctx, 0, &spectrum);
@@ -288,8 +358,10 @@ alone). The same stage in C, over the descriptor:
 
     /* driving thread, real-time: the push alone */
     static anira_status ANIRA_CALL spectral_post_process(const anira_stage_ctx* ctx,
+                                                         void* prepared,
                                                          void* user_data) ANIRA_NONBLOCKING {
-        const float* window = ((spectral*)user_data)->windows + (size_t)ctx->entry * WINDOW;
+        const float* window = ((spectral*)prepared)->windows + (size_t)ctx->entry * WINDOW;
+        (void)user_data;
         anira_ring* ring = NULL;
         anira_status st = anira_stage_output_ring(ctx, 0, &ring);
         if (st != ANIRA_OK) { return st; }
@@ -299,32 +371,36 @@ alone). The same stage in C, over the descriptor:
         return ANIRA_OK;
     }
 
-    static void ANIRA_CALL spectral_release(void* user_data) {
-        free(((spectral*)user_data)->windows);
+    /* once per successful prepare: the next prepare of the handler, or its destroy */
+    static void ANIRA_CALL spectral_unprepare(void* prepared, void* user_data) {
+        spectral* s = (spectral*)prepared;
+        (void)user_data;
+        free(s->windows);
+        free(s);
     }
 
-and its descriptor, filled once at setup:
+and its descriptor, filled once at setup (``release`` stays ``NULL``: nothing is shared):
 
 .. code-block:: c
 
-    static spectral s;
     anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
-    desc.user_data = &s;
     desc.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;   /* the hooks promise nothing */
     desc.pre_process = spectral_pre_process;
     desc.before_inference = spectral_before_inference;
     desc.after_inference = spectral_after_inference;
     desc.post_process = spectral_post_process;
+    desc.reset = spectral_reset;
     desc.prepare = spectral_prepare;
-    desc.release = spectral_release;
+    desc.unprepare = spectral_unprepare;
     anira_pipeline_add_stage(pipe, &desc, &err);
 
 The entry is what makes the split correct: chunks of one handler may be in flight on several
 inference threads at once, one entry holds one chunk at a time, and the four phases of one
-chunk see the same ``entry``. ``anira_handler_num_entries`` is fixed by ``anira_handler_prepare``
-for the life of the session and may change with the next prepare, which is why the scratch is
-sized in the stage's ``prepare`` and not in its constructor. A ``pre_process`` that pops
-nothing but the hop, as here, moves exactly what the hop rule expects.
+chunk see the same ``entry``. The entry count is fixed by ``anira_handler_prepare`` for the
+life of the session and may change with the next prepare, which is why the scratch is sized in
+``prepare``, per handler, from the record's ``num_entries``, and handed back as the prepared
+pointer rather than kept in the registration. A ``pre_process`` that pops nothing but the hop,
+as here, moves exactly what the hop rule expects.
 
 Static and State tensors in a stage
 -----------------------------------
@@ -369,9 +445,11 @@ and the handler is created from the pipeline as in section 3.2 of the :doc:`usag
     anira_pipeline_destroy(pipe);                                      /* the handler keeps its copy */
 
 In C++, :cpp:class:`anira::Pipeline` takes the stage as :cpp:class:`anira::stage::Custom` over
-a ``std::shared_ptr``; the pipeline's carrier shares the pointer, so the object lives at least
-until the last pipeline or handler that carries it is destroyed, whatever you do with your own
-pointer, and ``Stage::release()`` runs once at that moment:
+a ``std::shared_ptr``; the pipeline's carrier shares the pointer, so the registration lives at
+least until the last pipeline or handler that carries it is destroyed, whatever you do with
+your own pointer, each handler's ``anira_handler_prepare`` asks it for a ``Prepared`` of its
+own (returned as a ``std::unique_ptr``, since anira is its one owner from then on and deletes
+it at unprepare), and ``Stage::release()`` runs once, when the last carrier dies:
 
 .. code-block:: cpp
 
@@ -387,7 +465,8 @@ pointer, and ``Stage::release()`` runs once at that moment:
 filled ``pre_process`` or ``post_process`` without ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` is
 ``ANIRA_ERROR_CONFIG`` naming the flag, a ring dtype that differs from its spec's is accepted
 only where the stage fills the phase that moves that ring, and the stage's own ``prepare``
-runs last, with the handler and the plan report; a status it returns, or an exception a C++
-``prepare`` throws, fails the prepare (``the stage refused prepare``). The
+runs last, with the record; a status a C ``prepare`` returns, an exception a C++ ``prepare``
+throws or a null ``Prepared`` it returns, fails the prepare (``the stage refused prepare``),
+and no unprepare follows. The
 :cpp:class:`anira::InferenceHandler` class of ``anira/anira.hpp`` arrives with the runtime
 cut-over; until then a stage is driven through the C entries of the handler.
