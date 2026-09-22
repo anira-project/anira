@@ -34,6 +34,7 @@
 #include <anira/abi/export.h>
 #include <anira/abi/stage.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/system/Exports.h>
 #include <anira/utils/Buffer.h>
@@ -98,14 +99,12 @@ struct StageFrame {
     /// ring of a Streamed slot its stream port's.
     const std::vector<Port>* m_input_ports = nullptr;
     const std::vector<Port>* m_output_ports = nullptr;
-    /// The packed buffers of the chunk's struct on the side the phase exposes: the inputs in
-    /// pre_process and before_inference, the outputs in after_inference and post_process. The
-    /// other side stays NULL, and its tensor accessor answers ANIRA_ERROR_INVALID_STATE.
-    std::vector<anira::BufferF>* m_model_inputs = nullptr;
-    std::vector<anira::BufferF>* m_model_outputs = nullptr;
-    /// The spec's extents per slot.
-    const std::vector<std::vector<int64_t>>* m_input_shapes = nullptr;
-    const std::vector<std::vector<int64_t>>* m_output_shapes = nullptr;
+    /// The chunk's descriptors on the side the phase exposes (one anira_tensor per slot over
+    /// the struct's buffer, ThreadSafeStruct::m_input_tensors / m_output_tensors): the inputs
+    /// in pre_process and before_inference, the outputs in after_inference and post_process.
+    /// The other side stays NULL, and its tensor accessor answers ANIRA_ERROR_INVALID_STATE.
+    const std::vector<anira_tensor>* m_input_tensors = nullptr;
+    const std::vector<anira_tensor>* m_output_tensors = nullptr;
     /// The latch a refused accessor records into (the session's); NULL records nothing.
     anira::RtLatch* m_rt = nullptr;
 };
@@ -119,8 +118,10 @@ struct StageFrame {
 /// builds a table of the session's structs, looked up by the address of a struct's input or
 /// output vector (the structs are rebuilt by every session prepare). The position in that
 /// table is the chunk's entry (anira_stage_ctx::entry, anira_handler_num_entries). The struct
-/// carries what the ctx needs: the plan the chunk was stamped with, and the status slot the
-/// scheduler reads after a failed phase.
+/// carries what the ctx needs: the plan the chunk was stamped with (the session's plan table
+/// names its engine and provider), the descriptors of its tensors (what a tensor accessor
+/// hands out, a copy of the struct's), and the status slot the scheduler reads after a
+/// failed phase.
 ///
 /// The processor reads the handler's two port vectors (port.h), indexed by slot: the role of
 /// a slot is its port's arm and the ring of a slot its stream port's, both plain reads. The
@@ -147,12 +148,6 @@ struct StageFrame {
 /// as on the inference thread.
 class ANIRA_API StageProcessor final : public anira::PrePostProcessor {
 public:
-    /// What the ctx reports for a chunk stamped with one plan of the handler's table.
-    struct PlanPair {
-        uint32_t m_engine = ANIRA_ENGINE_NONE;
-        uint32_t m_provider = ANIRA_PROVIDER_DEFAULT;
-    };
-
     /// `config`, `stage` (NULL for a pipeline without one) and the two port vectors must
     /// outlive the processor (the handler owns all four). The ports and the model's tensors
     /// are indexed by slot, the tensor's position in the model config's list of its side: the
@@ -165,8 +160,9 @@ public:
 
     /// Control thread, after the session's prepare and before its first chunk: the struct
     /// table, the ring of every stream port (the session's, at the port's slot) and the count
-    /// check's scratch.
-    void bind(anira::SessionElement& session, std::vector<PlanPair> plans);
+    /// check's scratch. The session's plan table is what a ctx reports the engine and the
+    /// provider of a chunk's plan from.
+    void bind(anira::SessionElement& session);
 
     /// Control thread, after the stage's prepare returned: what it handed back for this
     /// handler, passed to every phase call and the reset from here on. NULL until then, and
@@ -203,13 +199,11 @@ private:
         ANIRA_NONBLOCKING;
     size_t entry_of_outputs(const std::vector<anira::BufferF>& outputs) const noexcept
         ANIRA_NONBLOCKING;
-    /// The frame of one phase call: the ports, the shapes and the latch, and the buffers of
+    /// The frame of one phase call: the ports and the latch, and the chunk's descriptors of
     /// the side the phase exposes (the two _with_ forms).
     StageFrame make_frame() const noexcept ANIRA_NONBLOCKING;
-    StageFrame make_frame_with_inputs(std::vector<anira::BufferF>& inputs) const noexcept
-        ANIRA_NONBLOCKING;
-    StageFrame make_frame_with_outputs(std::vector<anira::BufferF>& outputs) const noexcept
-        ANIRA_NONBLOCKING;
+    StageFrame make_frame_with_inputs(const Chunk& chunk) const noexcept ANIRA_NONBLOCKING;
+    StageFrame make_frame_with_outputs(const Chunk& chunk) const noexcept ANIRA_NONBLOCKING;
     /// The eight scalars of a ctx for the chunk at `entry`, and `frame` as its frame; the
     /// reserved slots stay NULL.
     anira_stage_ctx make_ctx(anira_stage_phase phase,
@@ -267,7 +261,6 @@ private:
     bool m_has_state = false;     ///< a State input exists: the two hooks feed and capture
     anira::SessionElement* m_session = nullptr;  ///< bound by bind(); outlived by the handler's
                                                  ///< manager, which goes first
-    std::vector<PlanPair> m_plans;
     /// What the stage's prepare handed back for this handler (set_prepared); NULL without one.
     void* m_prepared = nullptr;
     /// The dispatch stamp the last pre_process ran under; k_no_generation after construction.

@@ -1,29 +1,12 @@
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 #include <tanh/core/threading/Thread.h>
-
-// IWYU pragma: keep - processor methods are called through SessionElement's shared_ptr members
-#ifdef USE_LIBTORCH
-#include <anira/backends/LibTorchProcessor.h>  // IWYU pragma: keep
-#endif
-#ifdef USE_ONNXRUNTIME
-#include <anira/backends/OnnxRuntimeProcessor.h>  // IWYU pragma: keep
-#endif
-#ifdef USE_TFLITE
-#include <anira/backends/TFLiteProcessor.h>  // IWYU pragma: keep
-#endif
-#ifdef USE_LITERT
-#include <anira/backends/LiteRtProcessor.h>  // IWYU pragma: keep
-#endif
-#ifdef USE_EXECUTORCH
-#include <anira/backends/ExecuTorchProcessor.h>  // IWYU pragma: keep
-#endif
 
 #include <array>
 #include <atomic>
@@ -33,6 +16,8 @@
 #include <memory>
 #include <thread>
 #include <vector>
+
+#include "../backends/Adapter.h"
 
 namespace anira {
 
@@ -366,15 +351,15 @@ void InferenceThread::do_inference(
     const std::shared_ptr<SessionElement>& session,
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
     bool& signalled) {
-    // The backend of the plan the chunk was submitted under (the index stamped in
-    // Core::pre_process), never the session's atomic: the hooks and the engine call below
-    // agree with each other and with the chunk's pre_process and post_process, whatever
-    // select_plan() does meanwhile.
-    InferenceBackend const backend = session->plan_backend(thread_safe_struct->m_plan);
-    // A backend, a custom processor or a before/after hook that throws must not unwind the
-    // pool thread: the failed inference delivers zeros, the done signal is published below
-    // exactly as on success, and the failure is ENGINE on the session's latch (a 3.x
-    // handler's word), logged on its first occurrence since the latch's re-arm.
+    // The plan the chunk was submitted under (the index stamped in Core::pre_process), never
+    // the session's atomic: the hooks and the engine call below agree with each other and
+    // with the chunk's pre_process and post_process, whatever select_plan() does meanwhile.
+    const uint32_t plan = thread_safe_struct->m_plan;
+    InferenceBackend const backend = session->plan_backend(plan);
+    // A 2.x processor or a before/after hook that throws must not unwind the pool thread:
+    // the failed inference delivers zeros, the done signal is published below exactly as on
+    // success, and the failure is ENGINE on the session's latch (a 3.x handler's word),
+    // logged on its first occurrence since the latch's re-arm.
     try {
         // A 3.x stage processor feeds the declared state inside before_inference, ahead of the
         // stage's own hook, and captures it inside after_inference, behind the stage's hook
@@ -384,12 +369,26 @@ void InferenceThread::do_inference(
         // the chunk (it records the failure itself; a 2.x processor never writes the field):
         // the rest is skipped and the chunk delivers zeros.
         if (thread_safe_struct->m_stage_status == ANIRA_OK) {
-            inference(session,
-                      backend,
-                      thread_safe_struct->m_tensor_input_data,
-                      thread_safe_struct->m_tensor_output_data);
-            session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data,
-                                                    backend);
+            const anira_status status = inference(session, plan, *thread_safe_struct);
+            if (status == ANIRA_OK) {
+                session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data,
+                                                        backend);
+            } else {
+                // The engine failed the chunk: zeros at its stream position, no
+                // after_inference (the rule of a failed hook), ENGINE on the latch with the
+                // status the adapter returned.
+                for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+                thread_safe_struct->m_completed_as_zeros = true;
+                if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
+                    ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                                       "inference failed in session %d: the engine of plan %u "
+                                       "returned %d (%s); delivering zeros",
+                                       session->m_session_id,
+                                       plan,
+                                       static_cast<int>(status),
+                                       anira_status_string(status));
+                }
+            }
         }
         if (thread_safe_struct->m_stage_status != ANIRA_OK) {
             for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
@@ -431,81 +430,57 @@ void InferenceThread::do_inference(
     }
 }
 
-void InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
-                                InferenceBackend backend,
-                                std::vector<BufferF>& input,
-                                std::vector<BufferF>& output) {
-    // One value, one case: exactly one processor runs per call. The session's atomic is not
-    // read here (it used to be re-read per engine block, so a switch landing between two
-    // reads ran two engines for one chunk, or none).
-    switch (backend) {
-#ifdef USE_LIBTORCH
-        case LIBTORCH:
-            if (session->m_libtorch_processor != nullptr) {
-                session->m_libtorch_processor->process(input, output, session);
-            } else {
-                session->m_default_processor.process(input, output, session);
-                ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoLibTorchModel,
-                                        log_group::k_scheduler,
-                                        "LibTorch model has not been provided. Using default "
-                                        "processor.");
-            }
-            break;
-#endif
-#ifdef USE_ONNXRUNTIME
-        case ONNX:
-            if (session->m_onnx_processor != nullptr) {
-                session->m_onnx_processor->process(input, output, session);
-            } else {
-                session->m_default_processor.process(input, output, session);
-                ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoOnnxRuntimeModel,
-                                        log_group::k_scheduler,
-                                        "OnnxRuntime model has not been provided. Using default "
-                                        "processor.");
-            }
-            break;
-#endif
-#ifdef USE_TFLITE
-        case TFLITE:
-            if (session->m_tflite_processor != nullptr) {
-                session->m_tflite_processor->process(input, output, session);
-            } else {
-                session->m_default_processor.process(input, output, session);
-                ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoTFLiteModel,
-                                        log_group::k_scheduler,
-                                        "TFLite model has not been provided. Using default "
-                                        "processor.");
-            }
-            break;
-#endif
-#ifdef USE_LITERT
-        case LITERT:
-            if (session->m_litert_processor != nullptr) {
-                session->m_litert_processor->process(input, output, session);
-            } else {
-                session->m_default_processor.process(input, output, session);
-                ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoLiteRtModel,
-                                        log_group::k_scheduler,
-                                        "LiteRT model has not been provided. Using default "
-                                        "processor.");
-            }
-            break;
-#endif
-#ifdef USE_EXECUTORCH
-        case EXECUTORCH:
-            if (session->m_executorch_processor != nullptr) {
-                session->m_executorch_processor->process(input, output, session);
-            } else {
-                session->m_default_processor.process(input, output, session);
-                ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoExecuTorchModel,
-                                        log_group::k_scheduler,
-                                        "ExecuTorch model has not been provided. Using default "
-                                        "processor.");
-            }
-            break;
-#endif
-        case CUSTOM: session->m_custom_processor->process(input, output, session); break;
+anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
+                                        uint32_t plan,
+                                        SessionElement::ThreadSafeStruct& chunk) {
+    // One index, one plan: exactly one prepared model runs per call. The session's atomic is
+    // not read here (it used to be re-read per engine block, so a switch landing between two
+    // reads ran two engines for one chunk, or none). A stamp is always in range; the check
+    // keeps a defect from reading past the table.
+    if (plan >= session->m_plans.size()) { return ANIRA_ERROR_INTERNAL; }
+    const SessionElement::PlanSlot& slot = session->m_plans[plan];
+    if (slot.m_missing_model) {
+        ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoModelForBackend,
+                                log_group::k_scheduler,
+                                "no model for backend %d of plan %u in session %d has been "
+                                "provided; the default processor runs",
+                                static_cast<int>(slot.m_legacy_backend),
+                                plan,
+                                session->m_session_id);
     }
+
+    // The engine context of the chunk, on this stack for the duration of the call: the
+    // struct's descriptor arrays in slot order (State tensors included), the chunk's entry,
+    // no ticket under the Hard contract, no per-call flags; the adapter writes the claimed
+    // instance into its own copy.
+    anira_engine_ctx ctx{};
+    ctx.instance = 0;
+    ctx.entry = chunk.m_entry;
+    ctx.num_inputs = static_cast<uint32_t>(chunk.m_input_tensors.size());
+    ctx.num_outputs = static_cast<uint32_t>(chunk.m_output_tensors.size());
+    ctx.ticket = ANIRA_TICKET_INVALID;
+    ctx.flags = 0;
+    ctx.inputs = chunk.m_input_tensors.data();
+    ctx.outputs = chunk.m_output_tensors.data();
+
+    // The engine's reset boundary, for a session-exclusive session alone (its inferences run
+    // one at a time and in order, so the stamp is this thread's between the gate's acquire
+    // and release): the chunk's dispatch stamp against the one the engine last ran under; a
+    // difference is the first inference of a new stream, and the stamp is adopted. The
+    // chunk's stamp, never the session's atomic: a reset that lands between the stale check
+    // and this read belongs to the next chunk.
+    bool reset_first = false;
+    if (session->m_inference_config.m_session_exclusive_processor &&
+        chunk.m_dispatch_generation != session->m_engine_generation) {
+        session->m_engine_generation = chunk.m_dispatch_generation;
+        reset_first = true;
+    }
+
+    // The struct's 2.x buffers, what a legacy adapter's 2.x virtual takes; an adapter of the
+    // descriptor shape reads the context alone.
+    backend::ChunkBuffers buffers{.m_inputs = &chunk.m_tensor_input_data,
+                                  .m_outputs = &chunk.m_tensor_output_data};
+    return slot.m_adapter->run(ctx, &buffers, reset_first);
 }
 
 }  // namespace anira

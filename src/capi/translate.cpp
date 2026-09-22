@@ -661,6 +661,13 @@ std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcep
     }
 }
 
+std::vector<int64_t> engine_dims_of(const anira_tensor_spec& spec,
+                                    const DerivedSpec& derived,
+                                    const std::vector<uint32_t>& layout) {
+    if (layout.empty()) { return derived.m_dims; }
+    return engine_dims(resolved_spec(spec, derived), layout);
+}
+
 std::string engine_label(const ModelEntry& row) {
     return row.is_custom() ? row.m_engine_id : engine_word(row.m_engine);
 }
@@ -815,12 +822,11 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
             anira::TensorShapeList list;
             for (size_t i = 0; i < specs.size(); ++i) {
                 const auto binding = row.m_tensors.find(specs[i].m_name);
-                if (binding == row.m_tensors.end() || binding->second.m_layout.empty()) {
-                    list.push_back(rows[i].m_dims);
-                } else {
-                    list.push_back(
-                        engine_dims(resolved_spec(specs[i], rows[i]), binding->second.m_layout));
-                }
+                list.push_back(engine_dims_of(specs[i],
+                                              rows[i],
+                                              binding == row.m_tensors.end()
+                                                  ? std::vector<uint32_t>{}
+                                                  : binding->second.m_layout));
             }
             return list;
         };

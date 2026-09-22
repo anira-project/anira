@@ -376,15 +376,20 @@ TEST(AbiRtError, EngineAfterAThrowingInferenceZeroFillsAndKeepsTheThread) {
     for (size_t k = 3; k <= 5; ++k) { waited_block(h, k); }
     anira_drain_log();
 #ifdef ENABLE_LOGGING
+    // The scheduler's record, latched: the engine call failed the chunk with ENGINE (a 2.x
+    // backend's throw is caught by its legacy adapter and returned as that status).
     EXPECT_EQ(count_records(collector, "inference failed in session", "rt"), 1U);
     const RecordCollector::Record record =
         find_record(collector, "inference failed in session", "rt");
-    EXPECT_NE(record.m_message.find("test backend: inference failed"), std::string::npos)
+    EXPECT_NE(record.m_message.find("returned -8 (engine error)"), std::string::npos)
         << record.m_message;
     EXPECT_NE(record.m_message.find("delivering zeros"), std::string::npos) << record.m_message;
     EXPECT_EQ(record.m_flags & ANIRA_LOG_RECORD_CONTRACT_VIOLATION, 0U);
     EXPECT_EQ(record.m_level, static_cast<uint32_t>(ANIRA_LOG_ERROR));
     EXPECT_EQ(record.m_group, "anira.scheduler");
+    // The throw's text travels in the legacy adapter's own record, unlatched (no session
+    // reaches a 2.x backend behind the adapter): one per throw.
+    EXPECT_EQ(count_records(collector, "test backend: inference failed", "rt"), 5U);
 #endif
     // The pool is intact.
     EXPECT_EQ(anira_num_inference_threads(), 2U);

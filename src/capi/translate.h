@@ -73,6 +73,14 @@ struct StageFacts {
 /// (an engine that is not compiled in, a custom engine other than anira.v2.custom).
 ANIRA_API std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcept;
 
+/// The engine's extents of one slot under one row: the spec's derived extents (its dynamic
+/// Time extent resolved) reordered by the row's layout for the slot (layout.h engine_dims), or
+/// those extents themselves for a row without a layout for it. What the row's engine is handed
+/// for the slot.
+ANIRA_API std::vector<int64_t> engine_dims_of(const anira_tensor_spec& spec,
+                                              const DerivedSpec& derived,
+                                              const std::vector<uint32_t>& layout);
+
 /// The lower-case engine name of the JSON vocabulary, or the custom id.
 ANIRA_API std::string engine_label(const ModelEntry& row);
 

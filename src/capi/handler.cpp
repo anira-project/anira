@@ -67,6 +67,8 @@
 #include <variant>
 #include <vector>
 
+#include "../backends/Adapter.h"
+#include "../backends/Adapters.h"
 #include "../scheduler/TensorRun.h"
 #include "capi_internal.h"
 #include "context.h"
@@ -763,10 +765,105 @@ bool names_default_engine(const anira_model_config& model, const anira::capi::Mo
            row.m_engine == model.m_default_engine;
 }
 
-// The plan table: one plan per surviving row, in entry order (the InferenceConfig's
-// m_model_data order); the initial plan is the default engine's when it has one, else 0.
-// The session takes the table and the selection as dense indices, so this runs on the fresh
-// session before it is prepared: no chunk exists that could be stamped from the old table.
+// The 2.x backend of a surviving row. validate kept the rows this build has an adapter for; a
+// row without one here is a defect of that check, not of the configuration.
+anira::InferenceBackend backend_of_row(const anira::capi::ModelEntry& row, size_t row_index) {
+    const std::optional<anira::InferenceBackend> backend = anira::capi::backend_of(row);
+    if (!backend.has_value()) {
+        throw StatusError(ANIRA_ERROR_INTERNAL,
+                          "handler: model entry " + std::to_string(row_index) +
+                              " passed validate without a 2.x adapter");
+    }
+    return *backend;
+}
+
+// The record of one row's model for the engine room (anira::backend::Model): the row's path
+// or its bytes (kept alive through the row's carrier for the adapter's life), the entry of
+// the row's "entry" extension, one TensorInfo per tensor of either side in slot order (the
+// canonical name, the name the slot binds to: the row's tensors record where it names the
+// slot, else the canonical name; the engine's extents under the row's layout; the spec's
+// dtype), the instances and the warm-up of the 2.x configuration, the exclusivity. Everything
+// copied: a pooled adapter never aliases this handler's configuration.
+anira::backend::Model model_of_row(const anira_model_config& model,
+                                   const anira::capi::ModelEntry& row,
+                                   const anira::capi::Derived& derived,
+                                   const anira::InferenceConfig& config) {
+    anira::backend::Model record;
+    record.m_engine = row.m_engine;
+    record.m_engine_id = row.m_engine_id;
+    if (row.has_bytes()) {
+        record.m_bytes = row.m_bytes->data();
+        record.m_num_bytes = row.m_bytes->size();
+        record.m_bytes_owner = std::shared_ptr<const void>(row.m_bytes, row.m_bytes->data());
+    } else {
+        record.m_path = row.m_path;
+    }
+    if (const auto* entry = row.m_ext.payload<anira::capi::EntryPayload>("entry")) {
+        record.m_entry = entry->m_name;
+    }
+    const auto tensors_of = [&row](const std::vector<anira_tensor_spec>& specs,
+                                   const std::vector<anira::capi::DerivedSpec>& rows) {
+        std::vector<anira::backend::TensorInfo> tensors;
+        tensors.reserve(specs.size());
+        for (size_t i = 0; i < specs.size(); ++i) {
+            anira::backend::TensorInfo info;
+            info.m_name = specs[i].m_name;
+            const auto binding = row.m_tensors.find(specs[i].m_name);
+            const bool bound = binding != row.m_tensors.end();
+            info.m_engine_name =
+                bound && !binding->second.m_name.empty() ? binding->second.m_name : specs[i].m_name;
+            info.m_dims = anira::capi::engine_dims_of(
+                specs[i],
+                rows[i],
+                bound ? binding->second.m_layout : std::vector<uint32_t>{});
+            info.m_dtype = specs[i].m_dtype;
+            size_t elements = 1;
+            for (const int64_t extent : info.m_dims) {
+                elements *= extent > 0 ? static_cast<size_t>(extent) : 0U;
+            }
+            info.m_num_elements = elements;
+            tensors.push_back(std::move(info));
+        }
+        return tensors;
+    };
+    record.m_inputs = tensors_of(model.m_inputs, derived.m_inputs);
+    record.m_outputs = tensors_of(model.m_outputs, derived.m_outputs);
+    record.m_instances = config.m_num_parallel_processors;
+    record.m_warm_up = config.m_warm_up;
+    record.m_log_level = anira::get_log_level();
+    record.m_session_exclusive = config.m_session_exclusive_processor;
+    return record;
+}
+
+// The plans of this handler as the core takes them: one request per surviving row, in entry
+// order (the InferenceConfig's m_model_data order). A built-in engine's row asks for its
+// adapter (pooled by the record); the anira.v2.custom row asks for the roundtrip, the C path
+// having no caller's backend (the test rigs replace that plan's adapter on the control thread
+// before the first block). A registered engine's row is refused at create (check_rows) until
+// the engine room runs one.
+std::vector<anira::backend::PlanRequest> plan_requests(const anira_model_config& model,
+                                                       const anira::capi::Derived& derived,
+                                                       const anira::InferenceConfig& config) {
+    std::vector<anira::backend::PlanRequest> requests;
+    requests.reserve(derived.m_rows.size());
+    for (const size_t row_index : derived.m_rows) {
+        const anira::capi::ModelEntry& row = model.m_models[row_index];
+        anira::backend::PlanRequest request;
+        request.m_legacy_backend = backend_of_row(row, row_index);
+        request.m_model = model_of_row(model, row, derived, config);
+        request.m_provider = ANIRA_PROVIDER_DEFAULT;
+        request.m_source = request.m_legacy_backend == anira::InferenceBackend::CUSTOM
+                               ? anira::backend::Source::Roundtrip
+                               : anira::backend::Source::BuiltIn;
+        requests.push_back(std::move(request));
+    }
+    return requests;
+}
+
+// The plan table of the report: one plan per surviving row, in entry order, the same order
+// the session's table was built in from plan_requests (the dense index is the position on
+// both sides); the initial plan is the default engine's when it has one, else 0, selected on
+// the fresh session before it is prepared: no chunk exists that could be stamped with it.
 void build_plans(anira_handler& handler,
                  const anira_model_config& model,
                  const anira::capi::Derived& derived,
@@ -775,20 +872,13 @@ void build_plans(anira_handler& handler,
         const anira::capi::ModelEntry& row = model.m_models[row_index];
         anira::capi::Plan plan;
         plan.m_row = row_index;
-        // validate kept the rows this build has an adapter for; a row without one here is a
-        // defect of that check, not of the configuration.
-        const std::optional<anira::InferenceBackend> backend = anira::capi::backend_of(row);
-        if (!backend.has_value()) {
-            throw StatusError(ANIRA_ERROR_INTERNAL,
-                              "handler: model entry " + std::to_string(row_index) +
-                                  " passed validate without a 2.x adapter");
-        }
-        plan.m_backend = *backend;
+        plan.m_backend = backend_of_row(row, row_index);
         plan.m_info.variant = 0;
         plan.m_info.engine = static_cast<uint32_t>(row.m_engine);
         plan.m_info.provider = ANIRA_PROVIDER_DEFAULT;
         plan.m_info.engine_id = nullptr;
         plan.m_info.budget_ms = hard.m_budget_ms;
+        plan.m_info.engine_flags = 0;  // a built-in engine promises nothing through the flags
         if (row.is_custom()) {
             handler.m_report.m_strings.push_back(row.m_engine_id);
             plan.m_info.engine_id = handler.m_report.m_strings.back().c_str();
@@ -802,10 +892,6 @@ void build_plans(anira_handler& handler,
             break;
         }
     }
-    std::vector<anira::InferenceBackend> backends;
-    backends.reserve(handler.m_plans.size());
-    for (const anira::capi::Plan& plan : handler.m_plans) { backends.push_back(plan.m_backend); }
-    handler.m_manager->set_plan_backends(std::move(backends));
     if (!handler.m_manager->set_plan(initial)) {
         throw StatusError(
             ANIRA_ERROR_INTERNAL,
@@ -1105,13 +1191,16 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         state->m_generation = anira::capi::StatePort::k_no_generation;
     }
 
-    // The session: Core::create_session loads every surviving row's model (the FIXED warm-up
-    // runs there) and throws NO_SUCH_FILE / MODEL_LOAD / ENGINE, which the firewall
-    // classifies. The session records into the handler's latch from its construction.
-    // The one processor the session sees is the stage processor, whether the pipeline has a
-    // stage or not: without one it runs the default bodies, which are the 2.x default
-    // processor's.
+    // The session: Core::create_session prepares every surviving row's model through its
+    // adapter (the FIXED warm-up runs there) and throws NO_SUCH_FILE / MODEL_LOAD / ENGINE,
+    // which the firewall classifies. The session records into the handler's latch from its
+    // construction. The one processor the session sees is the stage processor, whether the
+    // pipeline has a stage or not: without one it runs the default bodies, which are the 2.x
+    // default processor's. The plan table is the session's from its construction: one plan
+    // per surviving row, in entry order, what build_plans reports under the same indices.
     handler.m_inference_config = std::move(config);
+    std::vector<anira::backend::PlanRequest> requests =
+        plan_requests(model, derived, handler.m_inference_config);
     auto processor = std::make_unique<anira::capi::StageProcessor>(handler.m_inference_config,
                                                                    stage,
                                                                    handler.m_input_ports,
@@ -1120,7 +1209,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_pp = std::move(processor);
     handler.m_manager = std::make_unique<anira::InferenceManager>(*handler.m_pp,
                                                                   handler.m_inference_config,
-                                                                  nullptr,
+                                                                  std::move(requests),
                                                                   handler.m_context->m_config,
                                                                   &handler.m_rt);
     handler.m_manager->set_miss_policy(hard.m_on_miss);
@@ -1128,18 +1217,13 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_miss_user_data = hard.m_miss_user_data;
     handler.m_manager->set_miss_hook(hard.m_on_miss == ANIRA_MISS_CALLBACK ? &miss_hook : nullptr,
                                      &handler);
-    // The plan table and the initial selection, on the session before it is prepared.
+    // The report's plan rows and the initial selection, on the session before it is prepared.
     build_plans(handler, model, derived, hard);
     handler.m_manager->prepare(host, anira::CustomLatencies{}, ring_dtypes);
     // The session's structs and rings exist now, and no chunk does: the processor binds to
-    // them, and every stream port gets its ring.
-    // What a ctx reports for a chunk is the engine and provider of the plan it was stamped with.
-    std::vector<anira::capi::StageProcessor::PlanPair> plan_pairs;
-    plan_pairs.reserve(handler.m_plans.size());
-    for (const anira::capi::Plan& plan : handler.m_plans) {
-        plan_pairs.push_back({.m_engine = plan.m_info.engine, .m_provider = plan.m_info.provider});
-    }
-    stage_processor->bind(handler.m_manager->session(), std::move(plan_pairs));
+    // them (the plan table included: what a ctx reports for a chunk is the engine and the
+    // provider of the plan it was stamped with), and every stream port gets its ring.
+    stage_processor->bind(handler.m_manager->session());
     // The entries of the session, what anira_stage_ctx.entry indexes and
     // anira_handler_num_entries answers: the stage's prepare (below) sizes its scratch by it.
     handler.m_num_entries = stage_processor->num_entries();

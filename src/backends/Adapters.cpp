@@ -3,6 +3,21 @@
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/backends/BackendBase.h>
+#ifdef USE_EXECUTORCH
+#include <anira/backends/ExecuTorchProcessor.h>
+#endif
+#ifdef USE_LIBTORCH
+#include <anira/backends/LibTorchProcessor.h>
+#endif
+#ifdef USE_LITERT
+#include <anira/backends/LiteRtProcessor.h>
+#endif
+#ifdef USE_ONNXRUNTIME
+#include <anira/backends/OnnxRuntimeProcessor.h>
+#endif
+#ifdef USE_TFLITE
+#include <anira/backends/TFLiteProcessor.h>
+#endif
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 
@@ -15,6 +30,7 @@
 #include <vector>
 
 #include "Adapter.h"
+#include "LegacyAdapter.h"
 
 namespace anira::backend {
 
@@ -45,12 +61,114 @@ PlanRequest legacy_request(const anira::InferenceConfig& config,
     return request;
 }
 
+// The 2.x backend of a built-in engine; CUSTOM for an engine this build does not carry.
+anira::InferenceBackend backend_of_engine(anira_engine engine) noexcept {
+    switch (engine) {
+#ifdef USE_LIBTORCH
+        case ANIRA_ENGINE_LIBTORCH: return anira::InferenceBackend::LIBTORCH;
+#endif
+#ifdef USE_ONNXRUNTIME
+        case ANIRA_ENGINE_ONNXRUNTIME: return anira::InferenceBackend::ONNX;
+#endif
+#ifdef USE_TFLITE
+        case ANIRA_ENGINE_TFLITE: return anira::InferenceBackend::TFLITE;
+#endif
+#ifdef USE_LITERT
+        case ANIRA_ENGINE_LITERT: return anira::InferenceBackend::LITERT;
+#endif
+#ifdef USE_EXECUTORCH
+        case ANIRA_ENGINE_EXECUTORCH: return anira::InferenceBackend::EXECUTORCH;
+#endif
+        default: return anira::InferenceBackend::CUSTOM;
+    }
+}
+
+// The 2.x processors, one factory each: what a LegacyAdapter of a built-in engine builds at
+// prepare from the record's 2.x configuration.
+#ifdef USE_LIBTORCH
+std::unique_ptr<anira::BackendBase> make_libtorch_processor(anira::InferenceConfig& config) {
+    return std::make_unique<anira::LibtorchProcessor>(config);
+}
+#endif
+#ifdef USE_ONNXRUNTIME
+std::unique_ptr<anira::BackendBase> make_onnxruntime_processor(anira::InferenceConfig& config) {
+    return std::make_unique<anira::OnnxRuntimeProcessor>(config);
+}
+#endif
+#ifdef USE_TFLITE
+std::unique_ptr<anira::BackendBase> make_tflite_processor(anira::InferenceConfig& config) {
+    return std::make_unique<anira::TFLiteProcessor>(config);
+}
+#endif
+#ifdef USE_LITERT
+std::unique_ptr<anira::BackendBase> make_litert_processor(anira::InferenceConfig& config) {
+    return std::make_unique<anira::LiteRtProcessor>(config);
+}
+#endif
+#ifdef USE_EXECUTORCH
+std::unique_ptr<anira::BackendBase> make_executorch_processor(anira::InferenceConfig& config) {
+    return std::make_unique<anira::ExecuTorchProcessor>(config);
+}
+#endif
+
 }  // namespace
 
+anira::InferenceConfig legacy_config_of(const Model& model) {
+    const anira::InferenceBackend backend = backend_of_engine(model.m_engine);
+    std::vector<anira::ModelData> rows;
+    if (model.m_bytes != nullptr) {
+        // Borrowed, as the 2.x binary ModelData always is: the record's owner keeps the
+        // bytes alive for the adapter's life.
+        rows.emplace_back(
+            const_cast<void*>(model.m_bytes),  // NOLINT(cppcoreguidelines-pro-type-const-cast)
+            model.m_num_bytes,
+            backend,
+            model.m_entry,
+            /*is_binary=*/true);
+    } else {
+        rows.emplace_back(model.m_path, backend, model.m_entry);
+    }
+    anira::TensorShapeList inputs;
+    anira::TensorShapeList outputs;
+    for (const TensorInfo& tensor : model.m_inputs) { inputs.push_back(tensor.m_dims); }
+    for (const TensorInfo& tensor : model.m_outputs) { outputs.push_back(tensor.m_dims); }
+    // The budget is not read by a 2.x processor; the constructor refuses zero.
+    constexpr float k_unread_budget_ms = 1.F;
+    return anira::InferenceConfig(
+        std::move(rows),
+        std::vector<anira::TensorShape>{anira::TensorShape(std::move(inputs), std::move(outputs))},
+        anira::ProcessingSpec{},
+        k_unread_budget_ms,
+        model.m_warm_up,
+        model.m_session_exclusive,
+        /*blocking_ratio=*/0.F,
+        model.m_instances);
+}
+
 std::shared_ptr<Adapter> make_builtin_adapter(anira_engine engine) {
-    // No built-in engine has an adapter of the descriptor shape yet.
-    static_cast<void>(engine);
-    return nullptr;
+    // The five 2.x processors, unchanged, behind the legacy adapter: each is built at
+    // prepare from the record's 2.x configuration and owned by its adapter.
+    switch (engine) {
+#ifdef USE_LIBTORCH
+        case ANIRA_ENGINE_LIBTORCH:
+            return std::make_shared<LegacyAdapter>(&make_libtorch_processor);
+#endif
+#ifdef USE_ONNXRUNTIME
+        case ANIRA_ENGINE_ONNXRUNTIME:
+            return std::make_shared<LegacyAdapter>(&make_onnxruntime_processor);
+#endif
+#ifdef USE_TFLITE
+        case ANIRA_ENGINE_TFLITE: return std::make_shared<LegacyAdapter>(&make_tflite_processor);
+#endif
+#ifdef USE_LITERT
+        case ANIRA_ENGINE_LITERT: return std::make_shared<LegacyAdapter>(&make_litert_processor);
+#endif
+#ifdef USE_EXECUTORCH
+        case ANIRA_ENGINE_EXECUTORCH:
+            return std::make_shared<LegacyAdapter>(&make_executorch_processor);
+#endif
+        default: return nullptr;
+    }
 }
 
 anira_engine engine_of(anira::InferenceBackend backend) noexcept {

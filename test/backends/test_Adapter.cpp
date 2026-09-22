@@ -499,7 +499,7 @@ TEST(Adapter, LegacyAdapterPreparesItsBackendAndPassesTheStructsBuffersThrough) 
     anira::InferenceConfig config = custom_only_config();
     RecordingBackend backend(config);
     anira::backend::LegacyAdapter adapter(backend);
-    EXPECT_EQ(&adapter.backend(), &backend);
+    EXPECT_EQ(adapter.backend(), &backend);
     adapter.prepare(gain_model());
     EXPECT_EQ(backend.m_prepares, 1);
 
@@ -645,11 +645,23 @@ TEST(Adapter, LegacyAdapterTakesNoInstanceClaim) {
 }
 
 // ============================================================================================
-// The built-in adapters of this commit
+// The built-in adapters
 // ============================================================================================
 
-TEST(Adapter, NoBuiltInAdapterOfTheDescriptorShapeYet) {
+// Every engine of the build has an adapter (unprepared until prepare loads a model); an engine
+// the build does not carry, and the custom engine, have none.
+TEST(Adapter, MakeBuiltInAdapterAnswersTheEnginesOfTheBuild) {
     EXPECT_EQ(anira::backend::make_builtin_adapter(ANIRA_ENGINE_NONE), nullptr);
-    EXPECT_EQ(anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME), nullptr);
     EXPECT_EQ(anira::backend::engine_of(anira::InferenceBackend::CUSTOM), ANIRA_ENGINE_NONE);
+    for (const anira::InferenceBackend backend : every_backend()) {
+        if (backend == anira::InferenceBackend::CUSTOM) { continue; }
+        const anira_engine engine = anira::backend::engine_of(backend);
+        ASSERT_NE(engine, ANIRA_ENGINE_NONE);
+        const std::shared_ptr<Adapter> adapter = anira::backend::make_builtin_adapter(engine);
+        ASSERT_NE(adapter, nullptr) << "engine " << static_cast<int>(engine);
+        EXPECT_FALSE(adapter->prepared());
+    }
+#ifndef USE_ONNXRUNTIME
+    EXPECT_EQ(anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME), nullptr);
+#endif
 }

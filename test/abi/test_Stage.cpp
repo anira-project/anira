@@ -434,16 +434,23 @@ struct HandBuiltCtx {
         size_t elements = 1;
         for (const int64_t extent : shape) { elements *= static_cast<size_t>(extent); }
         for (size_t slot = 0; slot < m_ports.size(); ++slot) {
-            m_shapes.push_back(shape);
             m_buffers.emplace_back(1, elements);
             m_buffers[slot].clear();
+        }
+        // The chunk's descriptors as the session builds them: the spec's shape, float32, over
+        // the buffer.
+        m_tensors.resize(m_ports.size());
+        for (size_t slot = 0; slot < m_ports.size(); ++slot) {
+            anira_tensor_init_host(&m_tensors[slot],
+                                   m_buffers[slot].data(),
+                                   ANIRA_DTYPE_F32,
+                                   static_cast<uint32_t>(shape.size()),
+                                   shape.data());
         }
         std::get<anira::capi::StreamPort>(m_ports[0]).m_ring = &ring;
         if (with_state) { m_ports[1].emplace<anira::capi::StatePort>(); }
         m_frame.m_input_ports = &m_ports;
         m_frame.m_output_ports = &m_ports;
-        m_frame.m_input_shapes = &m_shapes;
-        m_frame.m_output_shapes = &m_shapes;
         expose(phase);
         m_ctx.num_inputs = static_cast<uint32_t>(m_ports.size());
         m_ctx.num_outputs = static_cast<uint32_t>(m_ports.size());
@@ -455,21 +462,21 @@ struct HandBuiltCtx {
     HandBuiltCtx& operator=(HandBuiltCtx&&) = delete;
     ~HandBuiltCtx() = default;
 
-    /// The phase, and the buffers of the side that phase exposes, as the processor's entry points
-    /// fill them.
+    /// The phase, and the descriptors of the side that phase exposes, as the processor's entry
+    /// points fill them.
     void expose(uint32_t phase) {
         const bool inputs =
             phase == ANIRA_PHASE_PRE_PROCESS || phase == ANIRA_PHASE_BEFORE_INFERENCE;
         m_ctx.phase = phase;
-        m_frame.m_model_inputs = inputs ? &m_buffers : nullptr;
-        m_frame.m_model_outputs = inputs ? nullptr : &m_buffers;
+        m_frame.m_input_tensors = inputs ? &m_tensors : nullptr;
+        m_frame.m_output_tensors = inputs ? nullptr : &m_tensors;
     }
 
     float* data() { return m_buffers[0].get_write_pointer(0); }
 
     std::vector<anira::capi::Port> m_ports;
-    std::vector<std::vector<int64_t>> m_shapes;
     std::vector<anira::BufferF> m_buffers;
+    std::vector<anira_tensor> m_tensors;
     anira::capi::StageFrame m_frame;
     anira_stage_ctx m_ctx{};
 };

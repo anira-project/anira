@@ -316,7 +316,7 @@ public:
             std::make_unique<AccumulatorBackend>(m_handler->m_inference_config, m_positions);
         m_session = anira_test::session_of(m_handler);
         ASSERT_NE(m_session, nullptr);
-        m_session->m_custom_processor = m_backend.get();
+        anira_test::attach_processor(m_handler, *m_backend);
     }
 
     bool ready() const { return m_session != nullptr && m_backend != nullptr; }

@@ -38,6 +38,8 @@
 #include <utility>
 #include <vector>
 
+#include "backends/Adapters.h"
+#include "capi/handles.h"  // IWYU pragma: keep - defines anira_context_config
 #include "gtest/gtest.h"
 
 using namespace anira;
@@ -168,6 +170,31 @@ std::shared_ptr<SessionElement> session_of(const InferenceManager& manager) {
     return nullptr;
 }
 
+// The context config of CoreConfig(2): two inference threads.
+anira_context_config two_threads() {
+    anira_context_config config;
+    config.m_num_threads = 2;
+    return config;
+}
+
+// Two plans on one backend, in the manager's own words: the 2.x table's row for `backend`
+// (the custom backend, or the roundtrip without one) twice. The table is the session's from
+// create, so a test that wants two plans on one backend asks for them there.
+std::vector<backend::PlanRequest> two_plans_on(InferenceConfig& config,
+                                               InferenceBackend backend,
+                                               BackendBase* custom) {
+    const std::vector<backend::PlanRequest> table = backend::legacy_plan_requests(config, custom);
+    std::vector<backend::PlanRequest> requests;
+    for (const backend::PlanRequest& request : table) {
+        if (request.m_legacy_backend == backend) {
+            requests.push_back(request);
+            requests.push_back(request);
+            break;
+        }
+    }
+    return requests;
+}
+
 }  // namespace
 
 TEST(BackendSwitch, AChunkInFlightFinishesOnTheBackendItWasSubmittedUnder) {
@@ -254,8 +281,10 @@ TEST(BackendSwitch, TwoPlansOnOneBackendStayDistinct) {
     RecordingProcessor pp(config);
     CountingBackend custom(config);
     {
-        InferenceManager manager(pp, config, &custom, CoreConfig(2));
-        manager.set_plan_backends({InferenceBackend::CUSTOM, InferenceBackend::CUSTOM});
+        InferenceManager manager(pp,
+                                 config,
+                                 two_plans_on(config, InferenceBackend::CUSTOM, &custom),
+                                 two_threads());
         EXPECT_EQ(manager.get_plan(), 0U) << "a new table selects plan 0";
         manager.prepare(HostConfig(k_block, k_sample_rate));
 
@@ -302,30 +331,39 @@ TEST(BackendSwitch, TwoPlansOnOneBackendStayDistinct) {
 TEST(BackendSwitch, AnIndexOutOfRangeLeavesTheSelection) {
     InferenceConfig config = make_config();
     PrePostProcessor pp(config);
-    InferenceManager manager(pp, config, nullptr, CoreConfig(2));
-    manager.set_plan_backends({InferenceBackend::CUSTOM, InferenceBackend::CUSTOM});
+    InferenceManager manager(pp,
+                             config,
+                             two_plans_on(config, InferenceBackend::CUSTOM, nullptr),
+                             two_threads());
     ASSERT_TRUE(manager.set_plan(1));
     EXPECT_FALSE(manager.set_plan(2));
     EXPECT_EQ(manager.get_plan(), 1U);
-    EXPECT_THROW(manager.set_plan_backends({}), std::invalid_argument);
-    EXPECT_EQ(manager.get_plan(), 1U) << "a refused table changes nothing";
+    // An empty table is refused at create: a session always has a plan.
+    EXPECT_THROW(InferenceManager(pp, config, std::vector<backend::PlanRequest>{}, two_threads()),
+                 std::invalid_argument);
 }
 
-// The table is read without synchronization once chunks exist, so it is replaced before
-// prepare only; a late call is refused, not a race.
-TEST(BackendSwitch, ThePlanTableIsReplacedBeforePrepareOnly) {
+// The table is read without synchronization once chunks exist, so it is the session's from
+// create and never replaced: the plans asked for are the plans the prepared session holds.
+TEST(BackendSwitch, ThePlanTableIsTheSessionsFromCreate) {
     InferenceConfig config = make_config();
     PrePostProcessor pp(config);
     CountingBackend custom(config);
-    InferenceManager manager(pp, config, &custom, CoreConfig(2));
-    manager.set_plan_backends({InferenceBackend::CUSTOM, InferenceBackend::CUSTOM});
+    InferenceManager manager(pp,
+                             config,
+                             two_plans_on(config, InferenceBackend::CUSTOM, &custom),
+                             two_threads());
     ASSERT_TRUE(manager.set_plan(1));
     manager.prepare(HostConfig(k_block, k_sample_rate));
-    EXPECT_THROW(manager.set_plan_backends({InferenceBackend::CUSTOM}), std::logic_error);
-    EXPECT_EQ(manager.get_plan(), 1U) << "a refused table changes nothing";
+    EXPECT_EQ(manager.get_plan(), 1U) << "prepare keeps the selection";
     const std::shared_ptr<SessionElement> session = session_of(manager);
     ASSERT_NE(session, nullptr);
-    EXPECT_EQ(session->m_plan_backends.size(), 2U);
+    ASSERT_EQ(session->m_plans.size(), 2U);
+    EXPECT_EQ(session->m_plans[0].m_legacy_backend, InferenceBackend::CUSTOM);
+    EXPECT_EQ(session->m_plans[1].m_legacy_backend, InferenceBackend::CUSTOM);
+    EXPECT_NE(session->m_plans[0].m_adapter, nullptr);
+    EXPECT_NE(session->m_plans[0].m_adapter, session->m_plans[1].m_adapter)
+        << "a 2.x backend gets a legacy adapter per plan, never pooled";
 }
 
 // The 2.x selection by backend on a table that names no plan for it (a 3.x handler's table
@@ -337,8 +375,8 @@ TEST(BackendSwitch, ABackendWithoutAPlanLeavesTheSelection) {
     }
     InferenceConfig config = make_config();
     PrePostProcessor pp(config);
-    InferenceManager manager(pp, config, nullptr, CoreConfig(2));
-    manager.set_plan_backends({*engine, *engine});  // no row runs on CUSTOM
+    // No row runs on CUSTOM: two plans on the engine's backend (the roundtrip without a model).
+    InferenceManager manager(pp, config, two_plans_on(config, *engine, nullptr), two_threads());
     ASSERT_TRUE(manager.set_plan(1));
     manager.set_backend(InferenceBackend::CUSTOM);
     EXPECT_EQ(manager.get_plan(), 1U) << "no plan runs on CUSTOM: the selection is unchanged";
@@ -356,8 +394,9 @@ TEST(BackendSwitch, TheDefaultTableNamesEveryBackendOfTheBuild) {
     const std::shared_ptr<SessionElement> session = session_of(manager);
     ASSERT_NE(session, nullptr);
 
-    ASSERT_FALSE(session->m_plan_backends.empty());
-    EXPECT_EQ(session->m_plan_backends[0], InferenceBackend::CUSTOM) << "the configured model";
+    ASSERT_FALSE(session->m_plans.empty());
+    EXPECT_EQ(session->m_plans[0].m_legacy_backend, InferenceBackend::CUSTOM)
+        << "the configured model";
     EXPECT_EQ(manager.get_plan(), 0U);
     EXPECT_EQ(manager.get_backend(), InferenceBackend::CUSTOM);
 

@@ -64,9 +64,18 @@ struct PlanRequest {
 };
 
 /// The adapter of a built-in engine of this build, unprepared; NULL for an engine this build
-/// does not carry (and, in this commit, for every engine: no built-in engine has an adapter of
-/// the descriptor shape yet, and nothing calls this until the plan table arrives).
+/// does not carry. Until the built-in engines have adapters of the descriptor shape, this is
+/// a LegacyAdapter over the engine's 2.x processor, built at prepare from the 2.x
+/// configuration of the record (legacy_config_of), exactly as the core built the processor
+/// from the session's configuration before the plan table.
 ANIRA_API std::shared_ptr<Adapter> make_builtin_adapter(anira_engine engine);
+
+/// The 2.x configuration a record describes, what a 2.x processor of a built-in engine reads:
+/// one ModelData row on the engine's backend (the path or the bytes, the entry), one
+/// universal TensorShape of the record's dims (the engine's extents), the processing spec
+/// derived from it, the instances, the warm-up and the exclusivity. Everything else a 2.x
+/// processor never reads.
+ANIRA_API anira::InferenceConfig legacy_config_of(const Model& model);
 
 /// The plan table of a 2.x session: one request per configured model, in m_model_data order
 /// (BuiltIn for an engine of the build, the custom row on `custom` when one is given and the

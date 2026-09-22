@@ -39,6 +39,7 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
+#include "backends/LegacyAdapter.h"
 #include "capi/handler.h"
 
 namespace anira_test {
@@ -356,15 +357,26 @@ inline std::shared_ptr<anira::SessionElement> session_of(const anira_handler* ha
     return found;
 }
 
-/// Control thread, after prepare and before the first block, while the selected plan is the
-/// custom row: the inference thread reads the pointer per inference. The backend must outlive
-/// the handler (an inference thread may be inside its process() until the handler's destroy
-/// has drained the in-flight work), and a stack backend built from h->m_inference_config is
-/// declared after the handler: declare a DestroyFirst right after the attach.
+/// Control thread, after prepare and before the first block: the adapter of the custom row's
+/// plan (the roundtrip the C path asked the core for) is replaced by a legacy adapter over
+/// `backend`, prepared with the record of the plan it replaces. The inference thread reads the
+/// plan table per inference, so the replacement lands while no chunk exists, the discipline
+/// of the raw pointer write it succeeds. The backend must outlive the handler (an inference
+/// thread may be inside its process() until the handler's destroy has drained the in-flight
+/// work), and a stack backend built from h->m_inference_config is declared after the handler:
+/// declare a DestroyFirst right after the attach.
 inline void attach_processor(const anira_handler* handler, anira::BackendBase& backend) {
     const std::shared_ptr<anira::SessionElement> session = session_of(handler);
     ASSERT_NE(session, nullptr);
-    session->m_custom_processor = &backend;
+    for (anira::SessionElement::PlanSlot& slot : session->m_plans) {
+        if (slot.m_engine_id != k_custom) { continue; }
+        ASSERT_NE(slot.m_adapter, nullptr);
+        auto adapter = std::make_shared<anira::backend::LegacyAdapter>(backend);
+        adapter->prepare(slot.m_adapter->model());
+        slot.m_adapter = adapter;
+        return;
+    }
+    FAIL() << "the handler has no plan on the custom row";
 }
 
 /// Lowers the drain summary's interval for the test's lifetime.

@@ -3,22 +3,6 @@
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/backends/BackendBase.h>
-#ifdef USE_EXECUTORCH
-#include <anira/backends/ExecuTorchProcessor.h>
-#endif
-#ifdef USE_LIBTORCH
-#include <anira/backends/LibTorchProcessor.h>
-#endif
-#ifdef USE_LITERT
-#include <anira/backends/LiteRtProcessor.h>
-#endif
-#ifdef USE_ONNXRUNTIME
-#include <anira/backends/OnnxRuntimeProcessor.h>
-#endif
-#ifdef USE_TFLITE
-#include <anira/backends/TFLiteProcessor.h>
-#endif
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
@@ -44,7 +28,11 @@
 #include <utility>
 #include <vector>
 
+#include "../backends/Adapter.h"
+#include "../backends/Adapters.h"
+#include "../backends/LegacyAdapter.h"
 #include "../capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
+#include "../utils/StatusError.h"
 #include "LogDrainLoop.h"
 
 namespace anira {
@@ -56,8 +44,8 @@ namespace anira {
 // Core::release_core_if_idle() (from the unload hook) once nothing uses it.
 struct Core::State {
     std::mutex m_lifecycle_mutex;  ///< Serializes mutation of the shared lifecycle state
-                                   ///< below (registry, thread pool, processor pools,
-                                   ///< configuration) across create_session /
+                                   ///< below (registry, thread pool, the pool of prepared
+                                   ///< models, configuration) across create_session /
                                    ///< release_session / prepare_session / shutdown.
                                    ///< Hosts may drive several sessions' lifecycles
                                    ///< from different threads concurrently. Never taken
@@ -106,30 +94,31 @@ struct Core::State {
                                     k_max_num_instances,
                                     k_max_num_implicit_producers};
 
-#ifdef USE_LIBTORCH
-    std::vector<std::shared_ptr<LibtorchProcessor>> m_libtorch_processors;  ///< Pool of LibTorch
-                                                                            ///< backend processors
-#endif
-#ifdef USE_ONNXRUNTIME
-    std::vector<std::shared_ptr<OnnxRuntimeProcessor>> m_onnx_processors;  ///< Pool of ONNX
-                                                                           ///< Runtime backend
-                                                                           ///< processors
-#endif
-#ifdef USE_TFLITE
-    std::vector<std::shared_ptr<TFLiteProcessor>> m_tflite_processors;  ///< Pool of TensorFlow
-                                                                        ///< Lite backend
-                                                                        ///< processors
-#endif
-#ifdef USE_LITERT
-    std::vector<std::shared_ptr<LiteRtProcessor>> m_litert_processors;  ///< Pool of LiteRT
-                                                                        ///< backend processors
-#endif
-#ifdef USE_EXECUTORCH
-    std::vector<std::shared_ptr<ExecuTorchProcessor>> m_executorch_processors;  ///< Pool of
-                                                                                ///< ExecuTorch
-                                                                                ///< backend
-                                                                                ///< processors
-#endif
+    /**
+     * @brief One prepared model of the pool: the record it was prepared from, the carrier of
+     * a registered engine (NULL for a built-in one) and the adapter itself
+     *
+     * The key is the record and the carrier: two sessions whose plans describe the same
+     * model for the same engine with the same tensors, instances, warm-up and entry share
+     * the entry's adapter (per-slot dims, dtype, the path or the bytes' identity are in the
+     * record, so two handlers with different resolved windows never share); a
+     * session-exclusive model, a 2.x custom backend and the roundtrip are never entered.
+     * prepare runs once per entry; the bytes owner of the record keeps borrowed bytes
+     * alive. An entry stays while the plan table of any registered session holds its
+     * adapter and is erased with the last of them (release_adapters_locked), after which the
+     * adapter dies with its last holder and frees what its prepare loaded.
+     *
+     * The teardown invariant: an adapter is destroyed only when no registered session's
+     * plan table holds it and no inference thread can be inside its run (the session's
+     * release drained its in-flight work first); a shared engine environment, when one
+     * arrives, must outlive every adapter of its engine.
+     */
+    struct PoolEntry {
+        backend::Model m_model;
+        const void* m_carrier = nullptr;
+        std::shared_ptr<backend::Adapter> m_adapter;
+    };
+    std::vector<PoolEntry> m_adapters;  ///< The pool of prepared models
 };
 
 namespace {
@@ -187,38 +176,14 @@ const char* drain_word(anira_log_drain drain) {
     return drain == ANIRA_LOG_DRAIN_MANUAL ? "manual" : "thread";
 }
 
-// The plan table of a 2.x session: one row per configured model, in m_model_data order (the
-// order a 3.x handler numbers its plans in), then every other backend of this build, CUSTOM
-// last. The tail gives every backend a 2.x caller can name a row: selecting one without a
-// model runs the default processor, as it always did.
-std::vector<InferenceBackend> default_plan_backends(const InferenceConfig& inference_config) {
-    const std::vector<InferenceBackend> every_backend = {
-#ifdef USE_LIBTORCH
-        InferenceBackend::LIBTORCH,
-#endif
-#ifdef USE_ONNXRUNTIME
-        InferenceBackend::ONNX,
-#endif
-#ifdef USE_TFLITE
-        InferenceBackend::TFLITE,
-#endif
-#ifdef USE_LITERT
-        InferenceBackend::LITERT,
-#endif
-#ifdef USE_EXECUTORCH
-        InferenceBackend::EXECUTORCH,
-#endif
-        InferenceBackend::CUSTOM,
-    };
-    std::vector<InferenceBackend> backends;
-    backends.reserve(inference_config.m_model_data.size() + every_backend.size());
-    for (const auto& model_data : inference_config.m_model_data) {
-        backends.push_back(model_data.m_backend);
-    }
-    for (const InferenceBackend backend : every_backend) {
-        if (std::ranges::find(backends, backend) == backends.end()) { backends.push_back(backend); }
-    }
-    return backends;
+// Whether the plan table of any session of `sessions` holds `adapter`.
+bool any_plan_holds(const std::vector<std::shared_ptr<SessionElement>>& sessions,
+                    const std::shared_ptr<backend::Adapter>& adapter) {
+    return std::ranges::any_of(sessions, [&adapter](const std::shared_ptr<SessionElement>& s) {
+        return std::ranges::any_of(s->m_plans, [&adapter](const SessionElement::PlanSlot& slot) {
+            return slot.m_adapter == adapter;
+        });
+    });
 }
 
 }  // namespace
@@ -590,38 +555,9 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
         }
     }
 
-    // A pooled processor stays while another registered session shares it — which is
+    // A pooled prepared model stays while another registered session shares it — which is
     // why the session was removed from the registry first.
-#ifdef USE_LIBTORCH
-    release_processor(state,
-                      session->m_inference_config,
-                      state.m_libtorch_processors,
-                      session->m_libtorch_processor);
-#endif
-#ifdef USE_ONNXRUNTIME
-    release_processor(state,
-                      session->m_inference_config,
-                      state.m_onnx_processors,
-                      session->m_onnx_processor);
-#endif
-#ifdef USE_TFLITE
-    release_processor(state,
-                      session->m_inference_config,
-                      state.m_tflite_processors,
-                      session->m_tflite_processor);
-#endif
-#ifdef USE_LITERT
-    release_processor(state,
-                      session->m_inference_config,
-                      state.m_litert_processors,
-                      session->m_litert_processor);
-#endif
-#ifdef USE_EXECUTORCH
-    release_processor(state,
-                      session->m_inference_config,
-                      state.m_executorch_processors,
-                      session->m_executorch_processor);
-#endif
+    release_adapters_locked(state, session);
 
     // The pool policy: inference threads exist exactly while sessions exist. Stopping
     // and joining them here, inside the critical section that emptied the registry,
@@ -632,12 +568,15 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
 
 std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_processor,
                                                      InferenceConfig& inference_config,
-                                                     BackendBase* custom_processor,
+                                                     std::vector<backend::PlanRequest> requests,
                                                      const anira_context_config& context_config,
                                                      RtLatch* rt_latch) {
+    if (requests.empty()) {
+        throw std::invalid_argument("Core::create_session: an empty plan table");
+    }
     State& state = get_state();
     // Whole function locked: applies or reconciles the configuration, hands out shared
-    // backend processors from the pools, builds the thread pool for a first session and
+    // prepared models from the pool, builds the thread pool for a first session and
     // registers the session — one decision, one critical section.
     const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
     const anira_context_config config = sanitize_config(context_config);
@@ -647,7 +586,9 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     int const session_id = state.m_next_id.fetch_add(1) + 1;
 
     // The pool is built at registration (the last step), so clamp against the size it
-    // will have. An empty pool means the caller brings its own threads: no clamp.
+    // will have. An empty pool means the caller brings its own threads: no clamp. The
+    // instance count of every requested model takes the same clamp: no prepared model
+    // runs more calls at once than the pool has threads.
     const size_t pool_size = prospective_pool_size_locked(state, config);
     if (pool_size > 0 && inference_config.m_num_parallel_processors > pool_size) {
         ANIRA_LOG_WARNING(log_group::k_core,
@@ -656,6 +597,14 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
                           "processors.",
                           session_id);
         inference_config.m_num_parallel_processors = static_cast<unsigned int>(pool_size);
+    }
+    for (backend::PlanRequest& request : requests) {
+        if (pool_size > 0 && request.m_model.m_instances > pool_size) {
+            request.m_model.m_instances = static_cast<uint32_t>(pool_size);
+        }
+        // What an engine's environment is created with: the level in effect now that the
+        // configuration is applied.
+        request.m_model.m_log_level = get_log_level();
     }
 
     // Each session owns one explicit producer token for the global inference
@@ -669,95 +618,45 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
                                          moodycamel::ProducerToken(state.m_next_inference),
                                          rt_latch);
 
-    // Everything that can fail — a backend that cannot load its model, a custom
-    // processor's prepare(), the pool build — happens before the session is registered.
-    // On failure, undo the only shared state touched so far (processors attached to the
-    // half-built session) and leave the registry, the pool and the configuration exactly
-    // as they were: nothing leaks, and a later session starts from a clean slate.
+    // Everything that can fail — an engine that cannot load its model, a custom
+    // backend's prepare(), the pool build — happens before the session is registered.
+    // On failure, undo the only shared state touched so far (the prepared models the
+    // half-built session acquired) and leave the registry, the pool and the configuration
+    // exactly as they were: nothing leaks, and a later session starts from a clean slate.
     try {
-        if (custom_processor != nullptr) {
-            custom_processor->prepare();
-            session->m_custom_processor = custom_processor;
+        // The plan table: one plan per request, in order, each on its prepared model.
+        bool has_custom_backend = false;
+        session->m_plans.reserve(requests.size());
+        for (const backend::PlanRequest& request : requests) {
+            SessionElement::PlanSlot slot;
+            slot.m_adapter = acquire_adapter_locked(state, request, inference_config);
+            slot.m_engine = request.m_model.m_engine;
+            slot.m_provider = request.m_provider;
+            slot.m_engine_id = request.m_model.m_engine_id;
+            slot.m_legacy_backend = request.m_legacy_backend;
+            slot.m_missing_model = request.m_missing_model;
+            session->m_plans.push_back(std::move(slot));
+            has_custom_backend = has_custom_backend || request.m_source == backend::Source::Legacy;
         }
 
-#ifdef USE_LIBTORCH
-        set_processor(session,
-                      inference_config,
-                      state.m_libtorch_processors,
-                      InferenceBackend::LIBTORCH);
-#endif
-#ifdef USE_ONNXRUNTIME
-        set_processor(session, inference_config, state.m_onnx_processors, InferenceBackend::ONNX);
-#endif
-#ifdef USE_TFLITE
-        set_processor(session,
-                      inference_config,
-                      state.m_tflite_processors,
-                      InferenceBackend::TFLITE);
-#endif
-#ifdef USE_LITERT
-        set_processor(session,
-                      inference_config,
-                      state.m_litert_processors,
-                      InferenceBackend::LITERT);
-#endif
-#ifdef USE_EXECUTORCH
-        set_processor(session,
-                      inference_config,
-                      state.m_executorch_processors,
-                      InferenceBackend::EXECUTORCH);
-#endif
-
-        // The 2.x plan table; a 3.x handler replaces it with its own plans before it
-        // prepares the session. CUSTOM always has a row, so the lookup below finds one.
-        session->set_plan_backends(default_plan_backends(inference_config));
+        // The initial selection: the CUSTOM row when the table has one (a 2.x table always
+        // has), else plan 0. A 3.x handler selects its own plan afterwards.
         if (const std::optional<uint32_t> custom =
                 session->plan_of_backend(InferenceBackend::CUSTOM)) {
             session->select_plan(*custom);
         }
 
-        // Default the active plan to the first configured model whose processor
-        // is available, instead of the CUSTOM roundtrip. Sessions used to start on
-        // CUSTOM until set_inference_backend() — forgetting that call silently
-        // passed audio through. A caller-provided custom processor keeps CUSTOM
-        // active: running it is why it was passed. Entries whose backend is not
-        // compiled in (or whose processor could not be created) are skipped, so a
-        // config can list backends the build does not provide without selecting an
-        // unrunnable one; when nothing matches, CUSTOM remains, as before.
-        if (custom_processor == nullptr) {
-            // Row i of the table is m_model_data[i] (default_plan_backends).
-            for (uint32_t plan = 0; plan < inference_config.m_model_data.size(); ++plan) {
-                const auto& model_data = inference_config.m_model_data[plan];
-                bool processor_available = false;
-                switch (model_data.m_backend) {
-#ifdef USE_LIBTORCH
-                    case InferenceBackend::LIBTORCH:
-                        processor_available = session->m_libtorch_processor != nullptr;
-                        break;
-#endif
-#ifdef USE_ONNXRUNTIME
-                    case InferenceBackend::ONNX:
-                        processor_available = session->m_onnx_processor != nullptr;
-                        break;
-#endif
-#ifdef USE_TFLITE
-                    case InferenceBackend::TFLITE:
-                        processor_available = session->m_tflite_processor != nullptr;
-                        break;
-#endif
-#ifdef USE_LITERT
-                    case InferenceBackend::LITERT:
-                        processor_available = session->m_litert_processor != nullptr;
-                        break;
-#endif
-#ifdef USE_EXECUTORCH
-                    case InferenceBackend::EXECUTORCH:
-                        processor_available = session->m_executorch_processor != nullptr;
-                        break;
-#endif
-                    default: break;
-                }
-                if (processor_available) {
+        // Default the active plan to the first plan with a prepared model of an engine,
+        // instead of the CUSTOM roundtrip. Sessions used to start on CUSTOM until
+        // set_inference_backend() — forgetting that call silently passed audio through. A
+        // caller-provided custom backend keeps CUSTOM active: running it is why it was
+        // passed. A 2.x row without a model (a backend of the build the configuration names
+        // no model for) is the roundtrip and is skipped; when nothing matches, CUSTOM
+        // remains, as before.
+        if (!has_custom_backend) {
+            for (uint32_t plan = 0; plan < requests.size(); ++plan) {
+                const backend::Source source = requests[plan].m_source;
+                if (source == backend::Source::BuiltIn || source == backend::Source::Registered) {
                     session->select_plan(plan);
                     break;
                 }
@@ -767,42 +666,84 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
         apply_or_compare_config_locked(state, config, /*builds_pool=*/true);
         register_session_locked(state, session);
     } catch (...) {
-        // The session is not registered, so release_processor's "another session shares
-        // this config" check sees only the sessions that really exist.
-#ifdef USE_LIBTORCH
-        release_processor(state,
-                          inference_config,
-                          state.m_libtorch_processors,
-                          session->m_libtorch_processor);
-#endif
-#ifdef USE_ONNXRUNTIME
-        release_processor(state,
-                          inference_config,
-                          state.m_onnx_processors,
-                          session->m_onnx_processor);
-#endif
-#ifdef USE_TFLITE
-        release_processor(state,
-                          inference_config,
-                          state.m_tflite_processors,
-                          session->m_tflite_processor);
-#endif
-#ifdef USE_LITERT
-        release_processor(state,
-                          inference_config,
-                          state.m_litert_processors,
-                          session->m_litert_processor);
-#endif
-#ifdef USE_EXECUTORCH
-        release_processor(state,
-                          inference_config,
-                          state.m_executorch_processors,
-                          session->m_executorch_processor);
-#endif
+        // The session is not registered, so the "another session shares this prepared
+        // model" check sees only the sessions that really exist.
+        release_adapters_locked(state, session);
         throw;
     }
 
     return session;
+}
+
+std::shared_ptr<backend::Adapter> Core::acquire_adapter_locked(State& state,
+                                                               const backend::PlanRequest& request,
+                                                               InferenceConfig& inference_config) {
+    switch (request.m_source) {
+        case backend::Source::Legacy: {
+            // A caller's 2.x backend: this session's alone, prepared through the adapter.
+            if (request.m_backend == nullptr) {
+                throw StatusError(ANIRA_ERROR_INTERNAL,
+                                  "Core::create_session: a Legacy plan request without a "
+                                  "backend");
+            }
+            auto adapter = std::make_shared<backend::LegacyAdapter>(*request.m_backend);
+            adapter->prepare(request.m_model);
+            return adapter;
+        }
+        case backend::Source::Roundtrip: {
+            // The 2.x default processor over this session's configuration: its own.
+            auto adapter = std::make_shared<backend::LegacyAdapter>(inference_config);
+            adapter->prepare(request.m_model);
+            return adapter;
+        }
+        case backend::Source::BuiltIn:
+        case backend::Source::Registered: break;
+    }
+
+    const void* const carrier = request.m_carrier.get();
+    if (!request.m_model.m_session_exclusive) {
+        // Shared: the entry whose record equals the request's on the same carrier.
+        for (const State::PoolEntry& entry : state.m_adapters) {
+            if (entry.m_carrier == carrier && entry.m_model == request.m_model) {
+                return entry.m_adapter;
+            }
+        }
+    }
+    std::shared_ptr<backend::Adapter> adapter;
+    if (request.m_source == backend::Source::BuiltIn) {
+        adapter = backend::make_builtin_adapter(request.m_model.m_engine);
+    }
+    if (adapter == nullptr) {
+        // A registered engine has no adapter in this line yet; a built-in engine this
+        // build does not carry has none either. The C path refuses both at create.
+        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                          std::string("Core::create_session: no adapter runs engine '") +
+                              (request.m_model.m_engine_id.empty()
+                                   ? std::to_string(static_cast<int>(request.m_model.m_engine))
+                                   : request.m_model.m_engine_id) +
+                              "' in this build");
+    }
+    // prepare once per prepared model; a throw leaves the pool untouched.
+    adapter->prepare(request.m_model);
+    if (!request.m_model.m_session_exclusive) {
+        state.m_adapters.push_back(State::PoolEntry{.m_model = request.m_model,
+                                                    .m_carrier = carrier,
+                                                    .m_adapter = adapter});
+    }
+    return adapter;
+}
+
+void Core::release_adapters_locked(State& state, const std::shared_ptr<SessionElement>& session) {
+    for (const SessionElement::PlanSlot& slot : session->m_plans) {
+        if (slot.m_adapter == nullptr) { continue; }
+        // The pool entry stays while the plan table of another registered session holds
+        // the adapter (the releasing session left the registry already, or never entered
+        // it); the check is by pointer identity, never by the record.
+        if (any_plan_holds(state.m_sessions, slot.m_adapter)) { continue; }
+        std::erase_if(state.m_adapters, [&slot](const State::PoolEntry& entry) {
+            return entry.m_adapter == slot.m_adapter;
+        });
+    }
 }
 
 void Core::release_session(const std::shared_ptr<SessionElement>& session) {
@@ -1268,6 +1209,9 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             // tell the first chunk of a new stream, its reset boundary (capi/stage.h).
             session->m_inference_queue[i]->m_dispatch_generation =
                 session->m_generation.load(std::memory_order::relaxed);
+            // The chunk's descriptors follow its buffers' memory of the moment (a 2.x
+            // processor of this line may have swapped it on the struct's last use).
+            session->m_inference_queue[i]->rebind_tensors();
             session->m_pp_processor.pre_process(session->m_send_buffer,
                                                 session->m_inference_queue[i]->m_tensor_input_data,
                                                 session->plan_backend(plan));
@@ -1440,47 +1384,6 @@ int Core::get_num_sessions() {
     return static_cast<int>(state.m_sessions.size());
 }
 
-template <typename T>
-void Core::set_processor(const std::shared_ptr<SessionElement>& session,
-                         InferenceConfig& inference_config,
-                         std::vector<std::shared_ptr<T>>& processors,
-                         anira::InferenceBackend backend) {
-    for (const auto& model_data : inference_config.m_model_data) {
-        if (model_data.m_backend == backend) {
-            if (!inference_config.m_session_exclusive_processor) {
-                for (auto processor : processors) {
-                    if (processor->m_inference_config == inference_config) {
-                        session->set_processor(processor);
-                        return;
-                    }
-                }
-            }
-            processors.emplace_back(std::make_shared<T>(inference_config));
-            processors.back()->prepare();
-            session->set_processor(processors.back());
-        }
-    }
-}
-
-template <typename T>
-void Core::release_processor(State& state,
-                             InferenceConfig& inference_config,
-                             std::vector<std::shared_ptr<T>>& processors,
-                             std::shared_ptr<T>& processor) {
-    if (processor == nullptr) { return; }
-    if (!inference_config.m_session_exclusive_processor) {
-        for (const auto& session : state.m_sessions) {
-            if (session->m_inference_config == inference_config) { return; }
-        }
-    }
-    for (size_t i = 0; i < processors.size(); ++i) {
-        if (processors[i] == processor) {
-            processors.erase(processors.begin() + static_cast<ptrdiff_t>(i));
-            return;
-        }
-    }
-}
-
 void Core::reset_session(const std::shared_ptr<SessionElement>& session) {
     // Wait-free for ALL session types — the public entry point
     // InferenceHandler::reset() is [[clang::nonblocking]].
@@ -1570,64 +1473,4 @@ bool Core::has_inference_threads() {
     return pool_exists || InferenceThread::get_num_active_threads() > 0;
 }
 
-#ifdef USE_LIBTORCH
-template void Core::set_processor<LibtorchProcessor>(
-    const std::shared_ptr<SessionElement>& session,
-    InferenceConfig& inference_config,
-    std::vector<std::shared_ptr<LibtorchProcessor>>& processors,
-    InferenceBackend backend);
-template void Core::release_processor<LibtorchProcessor>(
-    State& state,
-    InferenceConfig& inference_config,
-    std::vector<std::shared_ptr<LibtorchProcessor>>& processors,
-    std::shared_ptr<LibtorchProcessor>& processor);
-#endif
-#ifdef USE_ONNXRUNTIME
-template void Core::set_processor<OnnxRuntimeProcessor>(
-    const std::shared_ptr<SessionElement>& session,
-    InferenceConfig& inference_config,
-    std::vector<std::shared_ptr<OnnxRuntimeProcessor>>& processors,
-    InferenceBackend backend);
-template void Core::release_processor<OnnxRuntimeProcessor>(
-    State& state,
-    InferenceConfig& inference_config,
-    std::vector<std::shared_ptr<OnnxRuntimeProcessor>>& processors,
-    std::shared_ptr<OnnxRuntimeProcessor>& processor);
-#endif
-#ifdef USE_TFLITE
-template void Core::set_processor<TFLiteProcessor>(
-    const std::shared_ptr<SessionElement>& session,
-    InferenceConfig& inference_config,
-    std::vector<std::shared_ptr<TFLiteProcessor>>& processors,
-    InferenceBackend backend);
-template void Core::release_processor<TFLiteProcessor>(
-    State& state,
-    InferenceConfig& inference_config,
-    std::vector<std::shared_ptr<TFLiteProcessor>>& processors,
-    std::shared_ptr<TFLiteProcessor>& processor);
-#endif
-#ifdef USE_LITERT
-template void Core::set_processor<LiteRtProcessor>(
-    const std::shared_ptr<SessionElement>& session,
-    InferenceConfig& inference_config,
-    std::vector<std::shared_ptr<LiteRtProcessor>>& processors,
-    InferenceBackend backend);
-template void Core::release_processor<LiteRtProcessor>(
-    State& state,
-    InferenceConfig& inference_config,
-    std::vector<std::shared_ptr<LiteRtProcessor>>& processors,
-    std::shared_ptr<LiteRtProcessor>& processor);
-#endif
-#ifdef USE_EXECUTORCH
-template void Core::set_processor<ExecuTorchProcessor>(
-    const std::shared_ptr<SessionElement>& session,
-    InferenceConfig& inference_config,
-    std::vector<std::shared_ptr<ExecuTorchProcessor>>& processors,
-    InferenceBackend backend);
-template void Core::release_processor<ExecuTorchProcessor>(
-    State& state,
-    InferenceConfig& inference_config,
-    std::vector<std::shared_ptr<ExecuTorchProcessor>>& processors,
-    std::shared_ptr<ExecuTorchProcessor>& processor);
-#endif
 }  // namespace anira

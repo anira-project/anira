@@ -171,14 +171,15 @@ private:
     /**
      * @brief Performs inference processing for a specific session
      *
-     * Executes the actual neural network inference operation using the provided
-     * session and thread-safe data structures. This method coordinates the
-     * inference execution while maintaining thread safety and real-time constraints.
-     *
-     * A backend, a custom processor or a before/after hook that throws does not unwind the
-     * thread: the failed inference delivers zeros, the done signal is published exactly as
-     * on success, and the failure is recorded as ANIRA_ERROR_ENGINE on the session's latch
-     * (SessionElement::m_rt), logged on the first occurrence since the latch's re-arm.
+     * One chunk on the inference thread: before_inference; when the chunk's stage status is
+     * still ANIRA_OK, the engine call (inference()); when that returned ANIRA_OK,
+     * after_inference. A failed engine call (any other status) zeroes the outputs, marks the
+     * chunk as completed as zeros, records ANIRA_ERROR_ENGINE on the session's latch
+     * (SessionElement::m_rt) with one log line naming the status on the first occurrence
+     * since the latch's re-arm, and skips after_inference, the same rule as a failed hook. A
+     * hook or a 2.x processor that throws does not unwind the thread either: the failed
+     * inference delivers zeros, the done signal is published exactly as on success, and the
+     * failure is ENGINE on the latch.
      *
      * @param session Shared pointer to the SessionElement containing inference configuration
      * @param thread_safe_struct Shared pointer to thread-safe data structures for the session
@@ -191,27 +192,28 @@ private:
                       bool& signalled);
 
     /**
-     * @brief Executes the inference operation itself with input/output buffers
+     * @brief The engine call of one chunk
      *
-     * Performs the actual neural network inference using the session's backend
-     * and the provided input/output buffer arrays. This is the lowest-level
-     * inference method that directly interfaces with the ML backends.
+     * Builds the anira_engine_ctx of the chunk on this stack (instance 0 until the adapter
+     * claims one, the chunk's entry, the two descriptor arrays of the struct in slot order,
+     * ANIRA_TICKET_INVALID under the Hard contract, no flags) and runs the plan's adapter on
+     * it: exactly one prepared model runs per call, the one of @p plan, the index the chunk
+     * was stamped with in Core::pre_process; the session's m_current_plan is not read here.
+     * On a session-exclusive session the chunk's dispatch stamp is compared with the
+     * session's engine generation: a difference is the first inference of a new stream
+     * (after prepare, after a reset), so the adapter resets its engine's own state right
+     * before this call's process and the stamp is adopted. A plan without a model (a 2.x
+     * table's row for a backend of the build the configuration names no model for) runs the
+     * roundtrip and logs RtSite::NoModelForBackend once per prepare.
      *
-     * Exactly one processor runs per call: the one of @p backend, or the session's default
-     * processor when that backend has no processor behind it. The session's
-     * m_current_plan is not read here.
-     *
-     * @param session Shared pointer to the SessionElement containing the inference backend
-     * @param backend The backend of the plan the chunk was submitted under
-     *        (ThreadSafeStruct::m_plan, stamped in Core::pre_process, resolved through
-     *        SessionElement::plan_backend), the same value the hooks around this call get
-     * @param input Vector of input buffers containing the audio data to process
-     * @param output Vector of output buffers to receive the processed results
+     * @param session Shared pointer to the SessionElement containing the plan table
+     * @param plan The plan the chunk was submitted under (ThreadSafeStruct::m_plan)
+     * @param chunk The chunk: its descriptors, its buffers, its stamps
+     * @return What the adapter returned: ANIRA_OK, or the status that fails the chunk
      */
-    void inference(const std::shared_ptr<SessionElement>& session,
-                   InferenceBackend backend,
-                   std::vector<BufferF>& input,
-                   std::vector<BufferF>& output);
+    anira_status inference(const std::shared_ptr<SessionElement>& session,
+                           uint32_t plan,
+                           SessionElement::ThreadSafeStruct& chunk);
 
     /**
      * @brief Implements exponential backoff strategy for CPU optimization
