@@ -12,7 +12,7 @@ promises about exceptions.
     The runtime half of this page is the C handler of ``anira/abi/handler.h`` (:doc:`usage`,
     section 3.2): ``anira_handler_rt_error``, the per-handler latch and the drain summary
     are in effect there. The 2.x :cpp:class:`anira::InferenceHandler` of :doc:`usage`,
-    sections 2 to 5, runs on the same scheduler: its operational real-time conditions are
+    sections 3 to 5, runs on the same scheduler: its operational real-time conditions are
     latched per site the same way and a failed inference delivers zeros, but it has no
     ``rt_error`` word to read.
 
@@ -167,7 +167,13 @@ not its slot's (nothing converts: the input is not pushed, the output is zero-fi
 reports 0 samples), a failed inference. A failed
 inference — an engine exception, a throwing custom processor or hook — zero-fills its output
 (never the previous job's data), sets ``rt_error`` to ``ANIRA_ERROR_ENGINE`` and is one
-latched record; the inference thread survives it. The summary runs on the drain thread and,
+latched record; the inference thread survives it. A stage of the C handler fails differently:
+a phase callback that returns a status other than ``ANIRA_OK`` latches *that* status under the
+stage's name and its chunk delivers zeros, the hop-count guard after ``pre_process`` and
+``post_process`` latches ``ANIRA_ERROR_CONFIG``, and a ring or context accessor refused inside
+a callback latches ``ANIRA_ERROR_CONFIG`` (a dtype that is not the ring's) or
+``ANIRA_ERROR_INVALID_ARGUMENT`` (a slot or a channel out of range), each with one record
+naming the stage (section 2 of the :doc:`usage` guide). The summary runs on the drain thread and,
 under ``ANIRA_LOG_DRAIN_MANUAL`` and on WebAssembly, in ``anira_drain_log``.
 
 Levels

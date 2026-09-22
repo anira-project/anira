@@ -204,7 +204,7 @@ Key Points for Multi-Tensor Processing
     Streamable tensors can not be accessed with the :cpp:func:`anira::PrePostProcessor::set_input` and :cpp:func:`anira::PrePostProcessor::get_output` methods.
 
 .. note::
-    Non-streamable tensors will allways have a single channel and a latency of 0 samples, as they are not time-varying.
+    In the ``float***`` blocks of the 2.x handler a non-streamable tensor is addressed as channel 0 with its values in a row, and it reports a latency of 0 samples, as it is not time-varying. The C handler takes it whole, in the spec's shape (:doc:`usage` section 3.2, *Static tensors*).
 
 .. tip::
     When designing multi-tensor models, consider separating time-varying audio data (streamable) from control parameters (non-streamable).
