@@ -1810,15 +1810,18 @@ public:
         return RingView(anira_stage_output_ring(m_ctx, slot));
     }
     /// anira_stage_input_tensor: fills out with the model end of an input slot, the tensor the
-    /// engine binds (pre_process, before_inference; every role). Built by this call over the
-    /// memory the tensor has right now: ask again in every callback, keep neither the
-    /// descriptor nor its data pointer. @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE in another
-    /// phase, ANIRA_ERROR_INVALID_ARGUMENT for a slot out of range; out is then all-zero.
+    /// engine binds (before_inference: every slot; pre_process: every slot with a host end, a
+    /// State slot answers ANIRA_ERROR_INVALID_STATE there). Built by this call over the memory
+    /// the tensor has right now: ask again in every callback, keep neither the descriptor nor
+    /// its data pointer. @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE in another phase or for a
+    /// slot without a host end, ANIRA_ERROR_INVALID_ARGUMENT for a slot out of range; out is
+    /// then all-zero.
     anira_status input_tensor(uint32_t slot, Tensor& out) const noexcept {
         return anira_stage_input_tensor(m_ctx, slot, &out);
     }
     /// anira_stage_output_tensor: fills out with the model end of an output slot, the tensor
-    /// the engine wrote (after_inference, post_process; every role). @return as input_tensor.
+    /// the engine wrote (after_inference: every slot; post_process: every slot with a host end,
+    /// a State slot answers ANIRA_ERROR_INVALID_STATE there). @return as input_tensor.
     anira_status output_tensor(uint32_t slot, Tensor& out) const noexcept {
         return anira_stage_output_tensor(m_ctx, slot, &out);
     }
@@ -1922,7 +1925,7 @@ public:
     virtual anira_status after_inference(StageContext& /*ctx*/) noexcept { return ANIRA_OK; }
 
     /// Called by anira_handler_prepare on its caller's thread after the plan report is built,
-    /// once per prepare, in chain order ([main-thread]; it may allocate). Of anira it may call
+    /// once per prepare ([main-thread]; it may allocate). Of anira it may call
     /// the [callback-safe] entries, the handler's getters and the two Static entries, never
     /// prepare, destroy or a Hard entry. A status other than ANIRA_OK fails the prepare with
     /// it. It may throw: an anira::Error fails the prepare with its status, std::bad_alloc with

@@ -83,6 +83,7 @@
 #include <anira/abi/status.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/tensor.h>
+#include <anira/abi/version.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -93,9 +94,9 @@ extern "C" {
 /**
  * @brief The element type the ring stores: the ring dtype the host declared for the slot on the
  * Hard contract (anira_contract_hard_set_ring_dtype), ANIRA_DTYPE_F32 when nothing was
- * declared. It is never inferred from the tensor spec's dtype, which may differ when a
- * stage of the chain converts; every data accessor states the dtype it believes it is
- * reading or writing.
+ * declared. It is never inferred from the tensor spec's dtype, which may differ when the
+ * stage converts; every data accessor states the dtype it believes it is reading or
+ * writing.
  * @param ring A ring of the stage context, or NULL.
  * @return The ring's dtype; 0, which is no dtype, for a NULL ring.
  * @par Thread contract

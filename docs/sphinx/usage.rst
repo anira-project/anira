@@ -178,8 +178,9 @@ not here, so one config serves every build.
     read it off: ONNX Runtime uses the graph's input and output names; TFLite and LiteRT the
     signature key (``args_0``, ``output_0``), or the tensor name for a file without
     signatures; LibTorch the method's argument name (inputs only); ExecuTorch the tensor name
-    when the export carries one. With a name the entry binds that tensor by name; a name the
-    engine cannot find fails prepare with what the file has.
+    when the export carries one. The engines of this pre-release still bind by position; the
+    name is stored, and binding by name (a name the engine cannot find then fails prepare with
+    what the file has) arrives with the backend descriptor.
   - ``tensor_layout(i, canonical, axes)``: the order in which the export holds the tensor's
     axes, as spec axis indices (a ``std::span<const uint32_t>``; a ``std::array`` converts):
     ``{0, 2, 1}`` says the file's axis 0 is spec axis 0, its axis 1 is spec axis 2, its axis 2

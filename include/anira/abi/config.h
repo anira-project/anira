@@ -274,8 +274,8 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spe
  * the next inference. Both halves carry ANIRA_ROLE_STATE; the pairing is stated once, on
  * the input (JSON: "state_source" on the input spec). anira owns one buffer per pair
  * (zeroed at prepare), copies it into the input tensor as the first step before the
- * engine call, ahead of every before_inference stage, and copies the output tensor into
- * it as the last step after the engine call, behind every after_inference stage; a
+ * engine call, ahead of the stage's before_inference, and copies the output tensor into
+ * it as the last step after the engine call, behind the stage's after_inference; a
  * failed inference (an engine failure, a non-OK stage) skips the capture, so the state
  * keeps its last good value. anira_handler_reset re-initialises the state at the first
  * inference of the new stream; the state survives anira_handler_set_plan. A model with a

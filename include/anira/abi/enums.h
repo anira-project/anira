@@ -322,8 +322,8 @@ typedef enum anira_role {
     /**
      * Declared state: one half of a pair of a state input and a state output with equal dtype
      * and shape, paired by anira_tensor_spec_set_state_source on the input. anira feeds the
-     * input from the session's state buffer ahead of every before_inference stage and captures
-     * the output into it behind every after_inference stage, on the inference thread; the
+     * input from the session's state buffer ahead of the stage's before_inference and captures
+     * the output into it behind the stage's after_inference, on the inference thread; the
      * buffer is zeroed at prepare and re-initialised by anira_handler_reset. A State spec may
      * stand anywhere in its list and has a slot like every other tensor, its position in the
      * model config's list, but no Hard entry carries it: a single form that names its slot is

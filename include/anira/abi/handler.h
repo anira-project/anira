@@ -44,16 +44,16 @@
  * Channel axis of any extent included. The handler holds its value in a store of its own,
  * zeroed at anira_handler_create and untouched by prepare and by reset:
  * anira_handler_set_static_input writes an input, which every inference submitted afterwards
- * sees whole (it is materialised into the model's input tensor ahead of any stage's
+ * sees whole (it is materialised into the model's input tensor ahead of the stage's
  * pre_process); anira_handler_get_static_output reads the value the latest collected inference
- * produced (captured from the model's output tensor behind the last post_process; a chunk that
- * completed as zeros, dropped or failed, captures nothing). Both work from create on, prepared
- * or not, and a stage's prepare may call them. The _multi forms accept such a tensor as the
- * element of its slot, the whole tensor or an empty one, and are defined as the sequence they
- * abbreviate: set_static_input for every non-empty Static input element, the streamed call over
- * the Streamed elements, get_static_output for every non-empty Static output element. A single
- * form names a Streamed slot only. A slot number is the spec's position in its list. Real-time
- * refusals carry no anira_error: the entry returns the failure status, records it in
+ * produced (captured from the model's output tensor behind the stage's post_process; a chunk
+ * that completed as zeros, dropped or failed, captures nothing). Both work from create on,
+ * prepared or not, and a stage's prepare may call them. The _multi forms accept such a tensor
+ * as the element of its slot, the whole tensor or an empty one, and are defined as the sequence
+ * they abbreviate: set_static_input for every non-empty Static input element, the streamed call
+ * over the Streamed elements, get_static_output for every non-empty Static output element. A
+ * single form names a Streamed slot only. A slot number is the spec's position in its list.
+ * Real-time refusals carry no anira_error: the entry returns the failure status, records it in
  * anira_handler_rt_error and logs once through the real-time queue. A handler counts as a user
  * of the core: anira_shutdown is refused while one lives. In this pre-release every handler is
  * Host-only, one plan per candidate engine of one variant, an Async contract is refused at
@@ -749,7 +749,7 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_pop_data_multi(anira_handler* ha
  * @brief Stores the value of a Static input in the handler: the whole tensor, copied under the
  * slot's latch, so an inference never sees a torn tensor. Every inference submitted
  * after the call sees the new value, materialised into the model's input tensor ahead of
- * any stage's pre_process; a value set between two Hard calls applies from the next
+ * the stage's pre_process; a value set between two Hard calls applies from the next
  * submitted inference on. The store is the handler's, zeroed at anira_handler_create,
  * never resized, untouched by anira_handler_prepare and anira_handler_reset: the entry
  * is legal from create on, a value set before prepare survives it, and a stage's prepare
