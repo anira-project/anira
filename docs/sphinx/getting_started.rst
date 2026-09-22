@@ -157,7 +157,7 @@ arrays of ``num_channels`` pointers, ``control_params`` as four floats and ``con
     anira_handler_set_static_input(handler, 1, &control);
 
     // Step 2: the audio block in and out of slot 0: [channels][samples], planar
-    const int64_t block_shape[2] = {num_channels, num_samples};
+    const int64_t block_shape[2] = {static_cast<int64_t>(num_channels), static_cast<int64_t>(num_samples)};
     anira_tensor in_block;
     anira_tensor out_block;
     anira_tensor_init_host_planar(&in_block, audio_input, num_channels, ANIRA_DTYPE_F32, 2, block_shape);
