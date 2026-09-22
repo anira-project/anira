@@ -322,8 +322,8 @@ _Static_assert(offsetof(anira_stage_ctx, num_outputs) == 20, "anira_stage_ctx.nu
 _Static_assert(sizeof(((const anira_stage_ctx*)0)->num_outputs) == 4, "anira_stage_ctx.num_outputs size");
 _Static_assert(offsetof(anira_stage_ctx, ticket) == 24, "anira_stage_ctx.ticket offset");
 _Static_assert(sizeof(((const anira_stage_ctx*)0)->ticket) == 4, "anira_stage_ctx.ticket size");
-_Static_assert(offsetof(anira_stage_ctx, reserved) == 28, "anira_stage_ctx.reserved offset");
-_Static_assert(sizeof(((const anira_stage_ctx*)0)->reserved) == 4, "anira_stage_ctx.reserved size");
+_Static_assert(offsetof(anira_stage_ctx, entry) == 28, "anira_stage_ctx.entry offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->entry) == 4, "anira_stage_ctx.entry size");
 _Static_assert(offsetof(anira_stage_ctx, frame) == 32, "anira_stage_ctx.frame offset");
 _Static_assert(sizeof(((const anira_stage_ctx*)0)->frame_bits) == 8, "anira_stage_ctx.frame is an 8-byte slot");
 _Static_assert(offsetof(anira_stage_ctx, reserved_ptr0) == 40, "anira_stage_ctx.reserved_ptr0 offset");
@@ -341,11 +341,9 @@ _Static_assert(sizeof(anira_stage_desc) ==
                    sizeof(((const anira_stage_desc*)0)->abi_version) +
                    sizeof(((const anira_stage_desc*)0)->user_data) +
                    sizeof(((const anira_stage_desc*)0)->name) +
-                   sizeof(((const anira_stage_desc*)0)->domain_in) +
-                   sizeof(((const anira_stage_desc*)0)->domain_out) +
                    sizeof(((const anira_stage_desc*)0)->consumed_kinds) +
                    sizeof(((const anira_stage_desc*)0)->num_consumed_kinds) +
-                   sizeof(((const anira_stage_desc*)0)->reserved) +
+                   sizeof(((const anira_stage_desc*)0)->flags) +
                    sizeof(((const anira_stage_desc*)0)->pre_process) +
                    sizeof(((const anira_stage_desc*)0)->post_process) +
                    sizeof(((const anira_stage_desc*)0)->before_inference) +
@@ -452,7 +450,7 @@ int main(void) {
     printf("field anira_stage_ctx.num_inputs offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, num_inputs), (unsigned)sizeof(((const anira_stage_ctx*)0)->num_inputs));
     printf("field anira_stage_ctx.num_outputs offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, num_outputs), (unsigned)sizeof(((const anira_stage_ctx*)0)->num_outputs));
     printf("field anira_stage_ctx.ticket offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, ticket), (unsigned)sizeof(((const anira_stage_ctx*)0)->ticket));
-    printf("field anira_stage_ctx.reserved offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, reserved), (unsigned)sizeof(((const anira_stage_ctx*)0)->reserved));
+    printf("field anira_stage_ctx.entry offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, entry), (unsigned)sizeof(((const anira_stage_ctx*)0)->entry));
     printf("field anira_stage_ctx.frame offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, frame), 8u);
     printf("field anira_stage_ctx.reserved_ptr0 offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, reserved_ptr0), 8u);
     printf("field anira_stage_ctx.reserved_ptr1 offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, reserved_ptr1), 8u);

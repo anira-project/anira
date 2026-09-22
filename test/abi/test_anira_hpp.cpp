@@ -931,6 +931,9 @@ public:
         : anira::Stage(stage_name), m_mask(mask) {}
 
     uint32_t phases() const noexcept override { return m_mask; }
+    /// Both bits by default: every body here allocates nothing and blocks on nothing, and a
+    /// Hard contract takes a filled pre_process or post_process only with the promise.
+    uint32_t flags() const noexcept override { return m_flags; }
 
     anira_status pre_process(anira::StageContext& ctx) noexcept override {
         m_pre.fetch_add(1);
@@ -939,11 +942,11 @@ public:
             ctx.phase() == ANIRA_PHASE_PRE_PROCESS && ctx.engine() == ANIRA_ENGINE_NONE &&
             ctx.provider() == ANIRA_PROVIDER_DEFAULT && ctx.variant() == 0 &&
             ctx.num_inputs() == 1 && ctx.num_outputs() == 1 &&
-            ctx.ticket() == ANIRA_TICKET_INVALID && ctx.input_role(0) == ANIRA_ROLE_STREAMED &&
-            ctx.output_role(0) == ANIRA_ROLE_STREAMED && ctx.input_ring(0) &&
-            ctx.input_ring(0).dtype() == ANIRA_DTYPE_F32 && ctx.input_ring(0).num_channels() == 1 &&
-            ctx.input_ring(0).available(0) >= k_hop && !ctx.output_ring(0) &&
-            ctx.output_tensor(0, tensor) == ANIRA_ERROR_INVALID_STATE &&
+            ctx.ticket() == ANIRA_TICKET_INVALID && ctx.entry() < m_num_entries &&
+            ctx.input_role(0) == ANIRA_ROLE_STREAMED && ctx.output_role(0) == ANIRA_ROLE_STREAMED &&
+            ctx.input_ring(0) && ctx.input_ring(0).dtype() == ANIRA_DTYPE_F32 &&
+            ctx.input_ring(0).num_channels() == 1 && ctx.input_ring(0).available(0) >= k_hop &&
+            !ctx.output_ring(0) && ctx.output_tensor(0, tensor) == ANIRA_ERROR_INVALID_STATE &&
             ctx.input_tensor(0, tensor) == ANIRA_OK && tensor.num_elements() == k_hop &&
             ctx.native() != nullptr;
         if (!as_promised) { m_broken.fetch_add(1); }
@@ -988,6 +991,7 @@ public:
     anira_status prepare(anira_handler* handler, const anira::PlanReport& report) override {
         ++m_prepared;
         m_handler = handler;
+        m_num_entries = anira_handler_num_entries(handler);  // the handler counts as prepared
         m_plans = report.num_plans();
         m_consumers.clear();
         for (const anira_plan_ext& row : report.extensions(0)) {
@@ -1014,6 +1018,8 @@ public:
     static constexpr std::array<const char*, 1> k_kinds{"model:entry"};
 
     uint32_t m_mask;
+    uint32_t m_flags = ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS;
+    uint32_t m_num_entries = 0;  ///< what prepare read; every entry seen is below it
     float m_scale = 1.0F;
     bool m_consumes_entry = false;
     PrepareMode m_mode = PrepareMode::Ok;
@@ -1116,6 +1122,11 @@ TEST(AbiCxx, AStageSubclassRunsItsPhasesThroughACHandler) {
     CHandler handler(context, *pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(stage.use_count(), 2) << "the handler shares the pipeline's carrier";
+    // flags() reached the descriptor, and the name with it.
+    ASSERT_NE(handler.m_handler->m_pipeline.m_stage, nullptr);
+    EXPECT_EQ(handler.m_handler->m_pipeline.m_stage->desc().flags,
+              ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS);
+    EXPECT_STREQ(handler.m_handler->m_pipeline.m_stage->name(), "counting");
     pipe.reset();  // the handler carries the stage alone now
     EXPECT_EQ(stage.use_count(), 2);
     EXPECT_EQ(stage->m_released.load(), 0);
@@ -1278,6 +1289,74 @@ TEST(AbiCxx, OneStageInTwoPipelinesIsReleasedOncePerAdd) {
     EXPECT_EQ(stage.use_count(), 2);
 }
 
+// A pipeline holds one custom stage: the second add throws ANIRA_ERROR_INVALID_STATE, keeps no
+// copy of the refused stage and never calls its release; the first stage is untouched.
+TEST(AbiCxx, ASecondCustomStageIsRefused) {
+    auto first = std::make_shared<CountingStage>("first", anira::Stage::k_post_process);
+    auto second = std::make_shared<CountingStage>("second", anira::Stage::k_after_inference);
+    anira::Pipeline pipe;
+    pipe.add(anira::stage::Custom(first));
+    EXPECT_EQ(first.use_count(), 2);
+    const Thrown refused = thrown_by([&] { pipe.add(anira::stage::Custom(second)); });
+    EXPECT_TRUE(refused.m_thrown);
+    EXPECT_EQ(refused.m_status, ANIRA_ERROR_INVALID_STATE);
+    EXPECT_NE(refused.m_what.find("already has a stage ('first')"), std::string::npos)
+        << refused.m_what;
+    EXPECT_EQ(second.use_count(), 1);
+    EXPECT_EQ(second->m_released.load(), 0);
+    EXPECT_EQ(first.use_count(), 2);
+    EXPECT_EQ(first->m_released.load(), 0);
+}
+
+// flags() is the stage's promise: without ANIRA_STAGE_REALTIME_PRE_POST a stage that fills
+// pre_process is refused at prepare under a Hard contract, by name; a bit the C header does
+// not define is refused at add; with the promise the same stage runs.
+TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
+    const anira_test::Context context;
+    const ModelConfig model = stage_stream_model();
+    auto stage = std::make_shared<CountingStage>("unpromised", anira::Stage::k_pre_process);
+    stage->m_flags = 0;
+    {
+        const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                                   anira::stage::Custom(stage)};
+        CHandler handler(context, pipe);
+        ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+        EXPECT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string_view(handler.m_err.message).find("stage 'unpromised'"),
+                  std::string_view::npos)
+            << handler.m_err.message;
+        EXPECT_NE(std::string_view(handler.m_err.message).find("ANIRA_STAGE_REALTIME_PRE_POST"),
+                  std::string_view::npos)
+            << handler.m_err.message;
+        EXPECT_EQ(stage->m_pre.load(), 0);
+    }
+    stage->m_flags = 4U;
+    {
+        anira::Pipeline pipe;
+        const Thrown bit = thrown_by([&] { pipe.add(anira::stage::Custom(stage)); });
+        EXPECT_TRUE(bit.m_thrown);
+        EXPECT_EQ(bit.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_NE(bit.m_what.find("flags"), std::string::npos) << bit.m_what;
+        EXPECT_EQ(stage.use_count(), 1);
+    }
+    stage->m_flags = ANIRA_STAGE_REALTIME_PRE_POST;  // read again by the next add
+    {
+        const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                                   anira::stage::Custom(stage)};
+        CHandler handler(context, pipe);
+        ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+        ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
+            << handler.m_err.message;
+        std::vector<float> in;
+        std::vector<float> out;
+        drive(handler.m_handler, 2, in, out);
+        ASSERT_FALSE(HasFatalFailure());
+        EXPECT_EQ(stage->m_pre.load(), 2);
+        EXPECT_EQ(stage->m_broken.load(), 0) << "the entry is below the count prepare read";
+        expect_scaled_passthrough(handler.m_handler, in, out, 1.0F);
+    }
+}
+
 namespace {
 
 /// pre_process over an int16 input ring, written with the typed RingView: one hop of int16 out
@@ -1287,6 +1366,7 @@ public:
     Int16InputStage() : anira::Stage("int16-to-float") {}
 
     uint32_t phases() const noexcept override { return k_pre_process; }
+    uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
 
     anira_status pre_process(anira::StageContext& ctx) noexcept override {
         anira::Tensor tensor{};

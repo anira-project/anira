@@ -1200,6 +1200,80 @@ TEST(AbiState, StageSeesAndAltersState) {
     }
 }
 
+// ---- the host-end phases and a State slot
+// ---------------------------------------------------------------------------
+
+/// What the tensor and ring accessors answered in pre_process and post_process, per slot
+/// (the last call's; every call answers the same). Written on the driving thread.
+struct HostEndLog {
+    std::array<std::atomic<int32_t>, 2> m_pre_input_status{};
+    std::array<std::atomic<int32_t>, 2> m_post_output_status{};
+    std::array<std::atomic<int>, 2> m_pre_input_rings{};
+    std::array<std::atomic<int>, 2> m_post_output_rings{};
+    std::atomic<uint32_t> m_pre_dtype_of_state{1};  ///< the record a refused accessor leaves
+};
+
+/// Asks every slot in the two host-end phases, then runs the default body of the phase.
+anira_status ANIRA_CALL ask_host_end(const anira_stage_ctx* ctx,
+                                     void* user_data) ANIRA_NONBLOCKING {
+    auto* log = static_cast<HostEndLog*>(user_data);
+    if (ctx->num_inputs != 2 || ctx->num_outputs != 2) { return ANIRA_ERROR_INTERNAL; }
+    if (ctx->phase == ANIRA_PHASE_PRE_PROCESS) {
+        for (uint32_t slot = 0; slot < 2; ++slot) {
+            anira_tensor tensor;
+            log->m_pre_input_status.at(slot).store(anira_stage_input_tensor(ctx, slot, &tensor));
+            log->m_pre_input_rings.at(slot).store(anira_stage_input_ring(ctx, slot) != nullptr ? 1
+                                                                                               : 0);
+            if (slot == 0) { log->m_pre_dtype_of_state.store(tensor.dtype); }
+        }
+        return anira_stage_default_pre_process(ctx);
+    }
+    if (ctx->phase == ANIRA_PHASE_POST_PROCESS) {
+        for (uint32_t slot = 0; slot < 2; ++slot) {
+            anira_tensor tensor;
+            log->m_post_output_status.at(slot).store(anira_stage_output_tensor(ctx, slot, &tensor));
+            log->m_post_output_rings.at(slot).store(
+                anira_stage_output_ring(ctx, slot) != nullptr ? 1 : 0);
+        }
+        return anira_stage_default_post_process(ctx);
+    }
+    return ANIRA_OK;
+}
+
+// A State slot has no host end: it is fed behind pre_process and captured ahead of
+// post_process, so the two host-end phases answer ANIRA_ERROR_INVALID_STATE (an all-zero
+// record, nothing recorded) for it and hand out no ring; the Streamed slot beside it answers
+// as always, and the stream is the closed form since the stage composes the defaults.
+TEST(AbiState, TheHostEndPhasesDoNotExposeAStateSlot) {
+    HostEndLog log;
+    anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
+    stage.name = "host-end-probe";
+    stage.user_data = &log;
+    stage.flags = ANIRA_STAGE_REALTIME_PRE_POST;
+    stage.pre_process = &ask_host_end;
+    stage.post_process = &ask_host_end;
+    Rig rig(accumulator_model(), k_accumulator, {stage});
+    ASSERT_TRUE(rig.ready());
+    const size_t latency = anira_handler_get_latency(rig.get(), 0);
+    const std::vector<size_t> sizes = hops(4);
+    size_t position = 0;
+    Streams streams;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+    expect_closed_form(streams, latency);
+    EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK) << "nothing is recorded for it";
+    // Input slot 0 is the State half, slot 1 the stream; output slot 0 the stream, slot 1 the
+    // State half.
+    EXPECT_EQ(log.m_pre_input_status.at(0).load(), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(log.m_pre_dtype_of_state.load(), 0U) << "an all-zero record";
+    EXPECT_EQ(log.m_pre_input_status.at(1).load(), ANIRA_OK);
+    EXPECT_EQ(log.m_pre_input_rings.at(0).load(), 0);
+    EXPECT_EQ(log.m_pre_input_rings.at(1).load(), 1);
+    EXPECT_EQ(log.m_post_output_status.at(0).load(), ANIRA_OK);
+    EXPECT_EQ(log.m_post_output_status.at(1).load(), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(log.m_post_output_rings.at(0).load(), 1);
+    EXPECT_EQ(log.m_post_output_rings.at(1).load(), 0);
+}
+
 // ---- the miss function
 // ---------------------------------------------------------------------------
 

@@ -57,6 +57,7 @@ _anira_handler_get_latencies
 _anira_handler_get_latency
 _anira_handler_get_plan
 _anira_handler_get_static_output
+_anira_handler_num_entries
 _anira_handler_plan_report
 _anira_handler_pop_data
 _anira_handler_pop_data_multi

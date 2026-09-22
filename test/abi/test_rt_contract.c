@@ -19,10 +19,12 @@
  * through the [callback-safe] accessors and is handed to anira_contract_hard_set_miss_fn: the
  * conversion to anira_miss_fn is clean only because the function is declared
  * ANIRA_NONBLOCKING itself (clang refuses to add the attribute through a conversion). A
- * fourth one is a phase callback of anira/abi/stage.h: it calls the ten ring accessors and the
- * two default bodies, all [callback-safe], and lands in the four anira_stage_fn slots of a
- * descriptor, which needs the attribute for the same reason. The file grows with the
- * handler's [callback-safe] entries.
+ * fourth one is a phase callback of anira/abi/stage.h: it calls the six context accessors, the
+ * ten ring accessors and the two default bodies, all [callback-safe], and lands in the four
+ * anira_stage_fn slots of a descriptor. That typedef carries no attribute (whether a body is
+ * real-time is the stage's own promise, anira_stage_desc.flags), so the attribute on the
+ * function is the author's own check: clang verifies that everything it calls is nonblocking,
+ * which is the point. The file grows with the handler's [callback-safe] entries.
  */
 #include <anira/abi/config.h>
 #include <anira/abi/draft/tensor_platform.h>
@@ -186,13 +188,15 @@ static anira_status ANIRA_CALL anira_rt_contract_stage(const anira_stage_ctx* ct
 }
 
 /* anira_pipeline_add_stage is [main-thread]: a plain function fills the descriptor. The four
-   phase slots take the nonblocking function as it is. */
+   phase slots take the nonblocking function as it is, and the flags state the promise the
+   attribute checked. */
 /* NOLINTNEXTLINE(misc-use-internal-linkage) */
 anira_status anira_rt_contract_add_stage(anira_pipeline* pipeline, void* user_data);
 anira_status anira_rt_contract_add_stage(anira_pipeline* pipeline, void* user_data) {
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
     stage.user_data = user_data;
     stage.name = "rt-contract";
+    stage.flags = ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS;
     stage.pre_process = anira_rt_contract_stage;
     stage.post_process = anira_rt_contract_stage;
     stage.before_inference = anira_rt_contract_stage;

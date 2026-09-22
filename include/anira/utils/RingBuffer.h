@@ -29,7 +29,7 @@ struct RtLatch;
 struct RingOwner {
     RtLatch* m_rt = nullptr;  ///< The latch a refused accessor records into: the session's
     /// The name of the stage whose pre_process or post_process is running, else nullptr. Written
-    /// by the stage chain around each callback and read by the accessors, both on the thread
+    /// by the stage processor around each callback and read by the accessors, both on the thread
     /// that drives the session, so it is a plain pointer.
     const char* m_stage = nullptr;
 };
@@ -181,7 +181,7 @@ public:
     }
 
     /// Elements per channel one inference moves through this ring: what the default stage
-    /// bodies pop or push, and what the stage chain's count check expects. 0 outside a session.
+    /// bodies pop or push, and what the stage processor's count check expects. 0 outside a session.
     [[nodiscard]] size_t hop() const noexcept { return m_hop; }
 
     /// The owning session's RingOwner, nullptr outside a session.

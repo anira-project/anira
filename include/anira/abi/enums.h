@@ -656,6 +656,23 @@ typedef enum anira_stage_phase {
     ANIRA_STAGE_PHASE_FORCE32 = 0x7fffffff
 } anira_stage_phase;
 
+/**
+ * @brief anira_stage_desc.flags bit: the stage promises that its pre_process and post_process
+ * allocate nothing, lock nothing and block on nothing. Required by anira_handler_prepare
+ * for a filled pre_process or post_process under a Hard contract, where the two phases
+ * run on the driving thread (ANIRA_ERROR_CONFIG naming the stage and the flag without
+ * it); not required under an Async contract.
+ */
+#define ANIRA_STAGE_REALTIME_PRE_POST 1u
+
+/**
+ * @brief anira_stage_desc.flags bit: the stage promises the same of its before_inference and
+ * after_inference. Not required by any contract of this pre-release (the hooks run on an
+ * inference thread); a later contract option that runs them on the driving thread will
+ * require it together with ANIRA_STAGE_REALTIME_PRE_POST.
+ */
+#define ANIRA_STAGE_REALTIME_HOOKS 2u
+
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 #ifdef __cplusplus

@@ -15,13 +15,13 @@
  *
  * The vectors are built once, at anira_handler_create, and never resized; an arm never changes.
  * prepare fills the fields of a StreamPort; every per-call path only reads (std::get_if, which
- * cannot throw). The entries of the handler and the stage chain ask the port: which entry takes
+ * cannot throw). The entries of the handler and the stage processor ask the port: which entry takes
  * a slot, what a multi form's element must be, what the chain materialises and captures.
  * Private to src/capi (and the tests through the src/ include directory): header-inline, not
  * installed, not exported.
  *
  * The Static value: sized and zeroed once, at anira_handler_create, untouched by prepare and by
- * reset: what anira_handler_set_static_input stores and the stage chain materialises into the
+ * reset: what anira_handler_set_static_input stores and the stage processor materialises into the
  * model's input tensors, and what the chain captures from the model's output tensors and
  * anira_handler_get_static_output returns.
  *
@@ -291,7 +291,7 @@ struct StreamPort {
     uint32_t m_channels = 1;                     ///< shape[0] a host block of the slot must have
     anira_dtype m_ring_dtype = ANIRA_DTYPE_F32;  ///< the dtype a host block of the slot must carry
     /// The session's ring (SessionElement::m_send_buffer / m_receive_buffer at the slot), set
-    /// by StageChainProcessor::bind and valid while that session lives; NULL before.
+    /// by StageProcessor::bind and valid while that session lives; NULL before.
     anira_ring* m_ring = nullptr;
 };
 

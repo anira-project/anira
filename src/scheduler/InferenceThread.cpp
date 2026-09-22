@@ -382,7 +382,7 @@ void InferenceThread::do_inference(
         // a prepare): the chunk's stamp, never the session's atomic.
         session->feed_state(*thread_safe_struct);
         session->m_pp_processor.before_inference(thread_safe_struct->m_tensor_input_data, backend);
-        // A stage chain leaves the status of a failed before_inference or after_inference on
+        // A stage processor leaves the status of a failed before_inference or after_inference on
         // the chunk (it records the failure itself; a 2.x processor never writes the field):
         // the rest is skipped and the chunk delivers zeros.
         if (thread_safe_struct->m_stage_status == ANIRA_OK) {

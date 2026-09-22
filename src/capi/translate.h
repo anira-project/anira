@@ -57,17 +57,17 @@ struct Derived {
     size_t m_anchor_index = 0;
 };
 
-/// What a pipeline's stage chain means to the validator (stage_facts() of stage.h builds it
-/// from the carriers; no chain is the default everywhere).
+/// What a pipeline's stage means to the validator (stage_facts() of stage.h builds it from the
+/// carrier; no stage is the default everywhere).
 struct StageFacts {
-    /// A stage fills pre_process: it pops the input rings itself, so the ring dtype of an input
-    /// may differ from its spec's dtype (the stage takes the difference on itself).
+    /// The stage fills pre_process: it pops the input rings itself, so the ring dtype of an
+    /// input may differ from its spec's dtype (the stage takes the difference on itself).
     bool m_fills_pre = false;
-    /// A stage fills post_process: the same for the ring dtype of an output.
+    /// The stage fills post_process: the same for the ring dtype of an output.
     bool m_fills_post = false;
-    /// One consumer per stage that declares consumed kinds, named after the stage (m_name
-    /// points into the carrier, which outlives the facts); they join the consumed-or-fail walk
-    /// behind anira's own adapters.
+    /// The stage as a consumer when it declares consumed kinds, named after it (m_name points
+    /// into the carrier, which outlives the facts); it joins the consumed-or-fail walk behind
+    /// anira's own adapters. Empty otherwise.
     std::vector<ExtConsumer> m_consumers;
 };
 
@@ -89,8 +89,8 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 /// the custom rows of that name; the provider is not read. Throws StatusError with
 /// ANIRA_ERROR_CONFIG for a rule the configuration breaks (no surviving row among them)
 /// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do. `stages` is what the
-/// pipeline's stage chain adds (NULL: no chain, the bridge's case): the ring dtype rule
-/// relaxes for a side whose phase a stage fills, and the stages' consumed kinds join the
+/// pipeline's stage adds (NULL: no stage, the bridge's case): the ring dtype rule
+/// relaxes for a side whose phase the stage fills, and the stage's consumed kinds join the
 /// extension walk.
 ANIRA_API void validate(const anira_model_config& model,
                         const anira_contract* contract,

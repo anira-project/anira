@@ -61,9 +61,13 @@ THREAD_TAGS = {
     "main-thread & !loader-lock",
     "driver-thread",
     "inference-thread",
-    # The one dual tag: a stage callback (and the two stage defaults it may call) runs on the
-    # driving thread under Hard and on an inference thread for before/after_inference and under
-    # Async. The body is real-time on both, so nonblocking is required.
+    # The one dual tag: a stage callback (and the accessors and the two stage defaults it may
+    # call) runs on the driving thread under Hard and on an inference thread for
+    # before/after_inference and under Async. anira's own entries under the tag are real-time
+    # on both, so nonblocking is required of an entry; the callback typedef anira_stage_fn
+    # carries no attribute, since whether a stage body is real-time is the stage's own promise
+    # (anira_stage_desc.flags), which differs per stage and cannot be a property of the shared
+    # type.
     "driver-thread | inference-thread",
     "thread-safe",
     "thread-safe, !audio-thread",
@@ -576,7 +580,10 @@ def validate(reg: dict) -> None:
             if tag not in THREAD_TAGS:
                 err(f"{where}: thread tag {tag!r} is not in the vocabulary {sorted(THREAD_TAGS)}")
             nb = bool(ent.get("nonblocking"))
-            if tag in NONBLOCKING_REQUIRED and not nb:
+            # The dual tag requires the attribute of an entry, not of a callback typedef (the
+            # comment at THREAD_TAGS); a [driver-thread] callback (anira_miss_fn) still needs it.
+            dual_callback = kind == "callback" and tag == "driver-thread | inference-thread"
+            if tag in NONBLOCKING_REQUIRED and not nb and not dual_callback:
                 err(f"{where}: [{tag}] requires nonblocking: true")
             if tag and tag.startswith(NONBLOCKING_FORBIDDEN_PREFIXES) and nb:
                 err(f"{where}: [{tag}] forbids nonblocking")

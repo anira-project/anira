@@ -217,13 +217,15 @@ int anira_header_c_probe(void) {
         memset(&ctx, 0, sizeof(ctx));
         ctx.phase = (uint32_t)ANIRA_PHASE_PRE_PROCESS;
         ctx.ticket = ANIRA_TICKET_INVALID;
+        ctx.entry = 0u;
         ctx.frame = kinds; /* any address: the frame is anira's, this one is never read */
         checks += stage.struct_size == sizeof(anira_stage_desc) && stage.name == NULL ? 1 : 0;
-        checks +=
-            stage.domain_in == (uint32_t)ANIRA_DOMAIN_HOST && stage.pre_process == NULL ? 1 : 0;
+        checks += stage.flags == 0u && stage.pre_process == NULL ? 1 : 0;
         stage.name = "probe";
         stage.consumed_kinds = kinds;
         stage.num_consumed_kinds = 1u;
+        /* The real-time promise of the two host-end phases, as a Hard contract requires it. */
+        stage.flags = ANIRA_STAGE_REALTIME_PRE_POST;
         stage.pre_process = on_pre_process;
         stage.prepare = on_stage_prepare;
         stage.release = on_stage_release;
@@ -234,6 +236,7 @@ int anira_header_c_probe(void) {
             checks += anira_pipeline_add_stage(NULL, &stage, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
+            checks += anira_handler_num_entries(NULL) == 0u ? 1 : 0;
             checks += stage.pre_process(&ctx, NULL) == ANIRA_OK ? 1 : 0;
             checks +=
                 anira_stage_default_post_process(&ctx) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;

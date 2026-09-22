@@ -117,6 +117,8 @@ static_assert(
     noexcept(std::declval<anira::Stage&>().pre_process(std::declval<anira::StageContext&>())) &&
     noexcept(std::declval<anira::Stage&>().release()) &&
     noexcept(std::declval<const anira::Stage&>().consumed_kinds()) &&
+    noexcept(std::declval<const anira::Stage&>().flags()) &&
+    noexcept(std::declval<const anira::StageContext&>().entry()) &&
     !noexcept(std::declval<anira::Stage&>().prepare(nullptr,
                                                     std::declval<const anira::PlanReport&>())));
 
@@ -185,6 +187,8 @@ public:
     ProbeStage() : anira::Stage("probe") {}
 
     uint32_t phases() const noexcept override { return k_pre_process | k_after_inference; }
+    // The real-time promise a Hard contract requires of a filled pre_process.
+    uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
 
     anira_status pre_process(anira::StageContext& ctx) noexcept override {
         anira::Tensor input{};
@@ -227,7 +231,7 @@ std::size_t nonblocking_probe(const anira_stage_ctx* record) noexcept ANIRA_NONB
         out.push_block(0, std::span<const float>(block)) + out.push_fill(0, fill, 1) +
         in.available(0) + in.available_past(0) + in.num_channels() + in.dtype();
     moved += ctx.num_inputs() + ctx.num_outputs() + ctx.variant() + ctx.ticket() + ctx.phase() +
-             ctx.engine() + ctx.provider() + ctx.input_role(0) + ctx.output_role(0);
+             ctx.engine() + ctx.provider() + ctx.input_role(0) + ctx.output_role(0) + ctx.entry();
     moved += ctx.input_tensor(0, tensor) == ANIRA_OK ? 1 : 0;
     moved += ctx.output_tensor(0, tensor) == ANIRA_OK ? 1 : 0;
     moved += static_cast<bool>(in) && out.native() != nullptr && ctx.native() != nullptr ? 1 : 0;
@@ -275,11 +279,13 @@ int anira_header_cxx20_probe() {
         pipe.inference(model, {first});
         const anira::stage::Inference two({std::cref(model), std::cref(model)}, {first});
         pipe.add(two);
-        // A custom stage beside the inference stage, in the initializer list and through add.
+        // A custom stage beside the inference stage, in the initializer list of one pipeline
+        // and through add on another (a pipeline holds at most one).
         const anira::stage::Custom custom(std::make_shared<ProbeStage>());
-        anira::Pipeline staged{anira::stage::Inference(model), custom};
-        staged.add(custom);
-        checks += custom.stage()->name() == "probe" ? 1 : 0;
+        const anira::Pipeline staged{anira::stage::Inference(model), custom};
+        anira::Pipeline other{anira::stage::Inference(model)};
+        other.add(custom);
+        checks += custom.stage()->name() == "probe" && custom.stage()->flags() != 0 ? 1 : 0;
         checks += nonblocking_probe(nullptr) > 0 ? 1 : 0;
         anira::TensorSpec state("state_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
         state.axis(0, ANIRA_AXIS_ANY, 2).state_source("state_out");

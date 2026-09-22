@@ -94,8 +94,8 @@ static_assert(std::is_same_v<decltype(anira_stage_desc::pre_process), anira_stag
     anira_stage_ctx ctx{};
     ctx.ticket = ANIRA_TICKET_INVALID;
     checks += stage.struct_size == sizeof(anira_stage_desc) && stage.name == nullptr ? 1 : 0;
-    checks += stage.domain_out == ANIRA_DOMAIN_HOST && stage.release == nullptr ? 1 : 0;
-    checks += ctx.frame == nullptr && ctx.reserved_ptr2_bits == 0u ? 1 : 0;
+    checks += stage.flags == 0U && stage.release == nullptr ? 1 : 0;
+    checks += ctx.frame == nullptr && ctx.entry == 0U && ctx.reserved_ptr2_bits == 0u ? 1 : 0;
     return checks;
 }
 
@@ -144,6 +144,10 @@ static_assert(noexcept(anira_stage_input_role(nullptr, 0)));
 static_assert(noexcept(anira_stage_output_ring(nullptr, 0)));
 static_assert(noexcept(anira_stage_input_tensor(nullptr, 0, nullptr)));
 static_assert(noexcept(anira_pipeline_add_stage(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_handler_num_entries(nullptr)));
+// The callback typedef carries no real-time attribute: a plain function converts to it.
+static_assert(std::is_same_v<decltype(anira_stage_ctx::entry), uint32_t>);
+static_assert(std::is_same_v<decltype(anira_stage_desc::flags), uint32_t>);
 static_assert(std::is_invocable_r_v<anira_status,
                                     decltype(&anira_handler_push_data),
                                     anira_handler*,

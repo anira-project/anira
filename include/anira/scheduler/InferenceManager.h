@@ -447,7 +447,7 @@ public:
     /**
      * @brief The session behind this manager
      *
-     * For the stage chain of a 3.x handler, which binds to the session's structs and rings
+     * For the stage processor of a 3.x handler, which binds to the session's structs and rings
      * after prepare() (the pre/post virtuals receive a struct's buffers, never the struct).
      * The session lives as long as the manager.
      *

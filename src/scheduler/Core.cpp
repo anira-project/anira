@@ -1258,7 +1258,7 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             // chunk on and never inside this one.
             const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
             session->m_inference_queue[i]->m_plan = plan;
-            // What a stage chain leaves on the chunk (a 2.x processor never writes it).
+            // What a stage processor leaves on the chunk (a 2.x processor never writes it).
             session->m_inference_queue[i]->m_stage_status = ANIRA_OK;
             session->m_inference_queue[i]->m_completed_as_zeros = false;
             session->m_pp_processor.pre_process(session->m_send_buffer,
