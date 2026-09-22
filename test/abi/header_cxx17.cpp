@@ -145,6 +145,7 @@ static_assert(noexcept(anira_stage_output_ring(nullptr, 0)));
 static_assert(noexcept(anira_stage_input_tensor(nullptr, 0, nullptr)));
 static_assert(noexcept(anira_pipeline_add_stage(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_handler_num_entries(nullptr)));
+static_assert(noexcept(anira_contract_set_host_domain(nullptr, nullptr, ANIRA_DOMAIN_HOST)));
 // The callback typedef carries no real-time attribute: a plain function converts to it.
 static_assert(std::is_same_v<decltype(anira_stage_ctx::entry), uint32_t>);
 static_assert(std::is_same_v<decltype(anira_stage_desc::flags), uint32_t>);

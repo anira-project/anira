@@ -60,6 +60,12 @@
  * prepare, and every model tensor is ANIRA_DTYPE_F32: a ring dtype that differs from its spec's
  * dtype is refused at prepare unless the pipeline's stage fills the phase that moves that ring
  * (pre_process for an input, post_process for an output), since nothing in anira converts.
+ * Every tensor of either side has one declared host-end domain (anira_contract_set_host_domain,
+ * default ANIRA_DOMAIN_HOST): the domain anira allocates the ring, the model tensor, the Static
+ * store and the state buffers of the slot in, and the domain all four stage phases work in; the
+ * plan report's slot rows carry it as domain_in of an input and domain_out of an output,
+ * against the engine's domain on the other side. Anything but ANIRA_DOMAIN_HOST is
+ * ANIRA_ERROR_NOT_SUPPORTED at prepare in this pre-release.
  */
 
 #include <stddef.h>

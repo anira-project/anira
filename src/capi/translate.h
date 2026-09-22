@@ -114,6 +114,19 @@ ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config&
 ANIRA_API anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
                                              const anira_model_config& model);
 
+/// The declared host-end domain of every slot (anira_contract_set_host_domain): two vectors
+/// sized to the model's input and output lists, ANIRA_DOMAIN_HOST everywhere, then each entry
+/// of the contract's host domains resolved by tensor name into its slot. What the plan report's
+/// slot rows carry as domain_in of an input and domain_out of an output, against the engine's
+/// domain on the other side. Run validate first: it refuses a name that matches no tensor and,
+/// in this pre-release, any domain but ANIRA_DOMAIN_HOST.
+struct HostDomains {
+    std::vector<anira_domain> m_inputs;
+    std::vector<anira_domain> m_outputs;
+};
+ANIRA_API HostDomains make_host_domains(const anira_contract& contract,
+                                        const anira_model_config& model);
+
 /// The declared state pairs of a model (ANIRA_ROLE_STATE), as tensor indices, in the order of
 /// the State inputs: what the session takes before it is prepared
 /// (SessionElement::set_state_pairs). Empty for a model without State specs. Run validate

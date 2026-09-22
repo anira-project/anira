@@ -1643,6 +1643,18 @@ headers:
         doc: "Plan validation policy for the edges a pipeline uses (section 7); not scheduling."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown value."
       - kind: function
+        name: anira_contract_set_host_domain
+        returns: anira_status
+        params:
+          - {type: anira_contract*, name: contract, doc: "Either contract kind."}
+          - {type: const char*, name: canonical, doc: "The tensor's canonical name (the one its spec was created with): any tensor of either side, Streamed, Buffer, Static and State alike."}
+          - {type: anira_domain, name: domain, doc: "The domain of the tensor's host end; ANIRA_DOMAIN_HOST for every tensor that was never set."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "The host-end domain of one tensor, common to both contract kinds like anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor, the Static store and the state buffers of the slot in, and the domain all four phases of a stage, the feed and the capture work in; the planner joins it to the engine's domain per slot with the edge of the registry's rows (anira_plan_slot.domain_in / domain_out / edge_class / recipe). A tensor declared in the engine's own domain has no edge to cross. The ring, the model tensor and the tensors the context accessors fill share the declared domain, readable from the domain field of any tensor an accessor fills or from the plan row. Set per tensor by canonical name, resolved at anira_handler_prepare: a name that matches no tensor is ANIRA_ERROR_CONFIG there, and in this pre-release any domain but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED there, naming the tensor (the declaration is data; the runtime allocates in host memory only). In a contract file the key is a top-level \"host_domains\": {\"<name>\": \"<domain word>\"}, the words the lower-case suffixes of anira_domain (\"host\", \"host_pinned\", \"cuda\", ...)."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a domain that is no anira_domain value."
+      - kind: function
         name: anira_contract_set_ext
         returns: anira_status
         params:
@@ -2364,7 +2376,7 @@ headers:
         name: anira_contract_from_json
         returns: anira_status
         params:
-          - {type: const char*, name: utf8, doc: "The document text: {\"hard\": {...}} or {\"async\": {...}} with an optional top-level edge_cost, or a v2 document."}
+          - {type: const char*, name: utf8, doc: "The document text: {\"hard\": {...}} or {\"async\": {...}} with an optional top-level edge_cost and an optional top-level host_domains ({\"<name>\": \"<domain word>\"}, anira_contract_set_host_domain), or a v2 document."}
           - {type: size_t, name: len, doc: "Length of utf8 in bytes."}
           - {type: anira_contract**, name: out, doc: "Receives the handle on success."}
           - {type: anira_error*, name: err, doc: "Nullable."}
@@ -2763,7 +2775,8 @@ headers:
       every output slot back to the host end, on the thread where the host end is consumed.
       The edge sits directly before and after the engine and is anira's: a stage never
       crosses a domain, and in this pre-release every host end and every model tensor is
-      host memory (ANIRA_DOMAIN_HOST), the model tensors of ANIRA_DTYPE_F32. One pre_process
+      host memory (ANIRA_DOMAIN_HOST, the host domain a contract declares per tensor with
+      anira_contract_set_host_domain), the model tensors of ANIRA_DTYPE_F32. One pre_process
       call forms exactly one chunk; a host block that holds several hops forms several
       chunks, one call each.
 
@@ -3109,7 +3122,7 @@ headers:
         tier: 2
         callback_descriptor: true
         padding_free: true
-        doc: "The one stage of a pipeline, handed once to anira_pipeline_add_stage and copied within struct_size into a refcounted carrier that the pipeline and every handler created from it share. Tier 2: struct_size first, user_data third (its offset never moves), growth at the tail. A NULL phase slot means anira's default body runs for that phase; a filled slot means the stage owns the phase for every slot with a host end and calls the default itself for what it does not handle. The descriptor carries no domain: the stage works at the host end of every slot, in the host domain of that slot, and never crosses one."
+        doc: "The one stage of a pipeline, handed once to anira_pipeline_add_stage and copied within struct_size into a refcounted carrier that the pipeline and every handler created from it share. Tier 2: struct_size first, user_data third (its offset never moves), growth at the tail. A NULL phase slot means anira's default body runs for that phase; a filled slot means the stage owns the phase for every slot with a host end and calls the default itself for what it does not handle. The descriptor carries no domain: the stage works at the host end of every slot, in the host domain the contract declares for that tensor (anira_contract_set_host_domain), and never crosses one."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_stage_desc) of the caller's header."}
           - {name: abi_version, type: uint32_t, doc: "ANIRA_ABI_VERSION the caller compiled against."}
@@ -3215,7 +3228,13 @@ headers:
       Async contract is refused at prepare, and every model tensor is ANIRA_DTYPE_F32: a ring
       dtype that differs from its spec's dtype is refused at prepare unless the pipeline's
       stage fills the phase that moves that ring (pre_process for an input, post_process for
-      an output), since nothing in anira converts.
+      an output), since nothing in anira converts. Every tensor of either side has one
+      declared host-end domain (anira_contract_set_host_domain, default ANIRA_DOMAIN_HOST):
+      the domain anira allocates the ring, the model tensor, the Static store and the state
+      buffers of the slot in, and the domain all four stage phases work in; the plan report's
+      slot rows carry it as domain_in of an input and domain_out of an output, against the
+      engine's domain on the other side. Anything but ANIRA_DOMAIN_HOST is
+      ANIRA_ERROR_NOT_SUPPORTED at prepare in this pre-release.
     includes: ["<stddef.h>", "<stdint.h>", "export.h", "status.h", "enums.h", "tensor.h", "context.h", "stage.h"]
     entities:
 

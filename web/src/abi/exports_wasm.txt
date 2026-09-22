@@ -48,6 +48,7 @@ _anira_contract_hard_set_warmup
 _anira_contract_set_edge_cost
 _anira_contract_set_ext
 _anira_contract_set_ext_json
+_anira_contract_set_host_domain
 _anira_drain_log
 _anira_enabled_backends
 _anira_handler_create

@@ -1602,6 +1602,24 @@ TEST(AbiState, ARingDtypeOnAStateTensorIsRefusedAtPrepare) {
     EXPECT_NE(message.find("State tensor"), std::string::npos) << message;
 }
 
+// The host-end domain is declared per tensor of either side, a State half included: host
+// memory is accepted on both halves, anything else is refused at prepare naming the half.
+TEST(AbiState, AHostDomainOnAStateTensorResolvesAtPrepare) {
+    const Context context;
+    const ModelConfig model = accumulator_model();
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    anira_test::Handler handler(context, model, candidates);
+    ASSERT_NE(handler.m_handler, nullptr);
+    anira::ContractHandle host = contract_of(ANIRA_MISS_ZEROS);
+    host.host_domain("state_in", ANIRA_DOMAIN_HOST).host_domain("state_out", ANIRA_DOMAIN_HOST);
+    EXPECT_EQ(handler.prepare(host), ANIRA_OK) << handler.m_err.message;
+    anira::ContractHandle device = contract_of(ANIRA_MISS_ZEROS);
+    device.host_domain("state_in", ANIRA_DOMAIN_CUDA);
+    EXPECT_EQ(handler.prepare(device), ANIRA_ERROR_NOT_SUPPORTED);
+    const std::string message = handler.m_err.message;
+    EXPECT_NE(message.find("the host domain of 'state_in'"), std::string::npos) << message;
+}
+
 // anira_tensor_spec_set_state_source: a NULL spec, a NULL or empty name, a spec of another role.
 TEST(AbiState, TheSetterRefusals) {
     TensorSpec half = state("state_in");

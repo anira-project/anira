@@ -494,6 +494,43 @@ TEST(AbiJsonContract, RingDtypesAreReadByTensorName) {
     EXPECT_EQ(hard, nullptr);
 }
 
+// The declared host-end domain per tensor is a top-level key, common to both kinds like
+// edge_cost, the words the lower-case suffixes of anira_domain.
+TEST(AbiJsonContract, HostDomainsAreReadByTensorName) {
+    static constexpr const char* k_hard = R"({ "hard": {
+        "block_min": 512, "block_max": 512, "rate": 48000, "budget": {"ms": 5}
+    }, "host_domains": {"audio_in": "host", "gain": "host_pinned"} })";
+    anira_contract* contract = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_contract_from_json(k_hard, std::strlen(k_hard), &contract, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(contract->m_host_domains.size(), 2u);
+    EXPECT_EQ(contract->m_host_domains.at("audio_in"), ANIRA_DOMAIN_HOST);
+    EXPECT_EQ(contract->m_host_domains.at("gain"), ANIRA_DOMAIN_HOST_PINNED);
+    anira_contract_destroy(contract);
+
+    static constexpr const char* k_async = R"({ "async": {}, "host_domains": {"x": "cuda"} })";
+    contract = nullptr;
+    ASSERT_EQ(anira_contract_from_json(k_async, std::strlen(k_async), &contract, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(contract->m_host_domains.size(), 1u);
+    EXPECT_EQ(contract->m_host_domains.at("x"), ANIRA_DOMAIN_CUDA);
+    anira_contract_destroy(contract);
+
+    static constexpr const char* k_bad = R"({ "hard": {}, "host_domains": {"audio_in": "gpu"} })";
+    contract = nullptr;
+    EXPECT_EQ(anira_contract_from_json(k_bad, std::strlen(k_bad), &contract, &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_NE(std::string(err.message).find("host_domains.audio_in"), std::string::npos)
+        << err.message;
+    EXPECT_EQ(contract, nullptr);
+
+    static constexpr const char* k_not_object = R"({ "hard": {}, "host_domains": "host" })";
+    EXPECT_EQ(anira_contract_from_json(k_not_object, std::strlen(k_not_object), &contract, &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_EQ(contract, nullptr);
+}
+
 TEST(AbiJsonContract, Rejections) {
     const std::vector<std::pair<const char*, const char*>> cases = {
         {R"({"hard": {}, "async": {}})", "exactly one root"},

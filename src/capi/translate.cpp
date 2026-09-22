@@ -332,6 +332,23 @@ void check_contract(const anira_contract& contract,
                          " and converts, anira_pipeline_add_stage)");
         }
     }
+    // The host-end domain rules: every tensor of either side, whatever its role, has one
+    // declared host-end domain (anira_contract_set_host_domain, absent = host memory), the
+    // domain anira allocates the ring, the model tensor, the Static store and the state buffers
+    // of the slot in and every stage phase works in. The name must be a tensor's. The 2.x
+    // runtime allocates in host memory only, so in this pre-release any other domain is refused
+    // here, where the declaration meets the runtime; the declaration itself is data.
+    for (const auto& [name, domain] : contract.m_host_domains) {
+        if (find_spec(model, name, nullptr, nullptr) == nullptr) {
+            config_error("contract: the host domain of '" + name + "' names no tensor");
+        }
+        if (domain != ANIRA_DOMAIN_HOST) {
+            not_supported("contract: the host domain of '" + name + "' is domain " +
+                          std::to_string(static_cast<unsigned int>(domain)) +
+                          ", but every host end is host memory (ANIRA_DOMAIN_HOST) in this "
+                          "pre-release");
+        }
+    }
 }
 
 // ---- declared state ------------------------------------------------------------------------
@@ -714,6 +731,23 @@ anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
         }
     }
     return dtypes;
+}
+
+HostDomains make_host_domains(const anira_contract& contract, const anira_model_config& model) {
+    HostDomains domains;
+    domains.m_inputs.assign(model.m_inputs.size(), ANIRA_DOMAIN_HOST);
+    domains.m_outputs.assign(model.m_outputs.size(), ANIRA_DOMAIN_HOST);
+    for (const auto& [name, domain] : contract.m_host_domains) {
+        bool is_input = true;
+        size_t index = 0;
+        if (find_spec(model, name, &is_input, &index) == nullptr) { continue; }  // validate ran
+        if (is_input) {
+            domains.m_inputs[index] = domain;
+        } else {
+            domains.m_outputs[index] = domain;
+        }
+    }
+    return domains;
 }
 
 std::vector<anira::StatePair> make_state_pairs(const anira_model_config& model) {

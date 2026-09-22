@@ -789,17 +789,22 @@ void build_plans(anira_handler& handler,
     }
 }
 
-// A slot row of the report: host memory on both sides, zero-copy, the wait strategy the
-// core runs.
+// A slot row of the report: the declared host-end domain of the tensor (the contract's,
+// anira_contract_set_host_domain) on the host's side of the row and the engine's domain on
+// the other, an input read from its host end into the engine and an output written from the
+// engine to its host end; zero-copy, since every engine of the 2.x runtime binds host memory
+// and validate refused any other declaration; the wait strategy the core runs.
 anira_plan_slot host_slot(uint32_t slot,
                           bool is_input,
                           anira_wait_strategy wait,
-                          anira_role role) noexcept {
+                          anira_role role,
+                          anira_domain host_domain) noexcept {
+    constexpr auto k_engine_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
     anira_plan_slot row = ANIRA_PLAN_SLOT_INIT;
     row.slot = slot;
     row.is_input = is_input ? 1U : 0U;
-    row.domain_in = ANIRA_DOMAIN_HOST;
-    row.domain_out = ANIRA_DOMAIN_HOST;
+    row.domain_in = is_input ? static_cast<uint32_t>(host_domain) : k_engine_domain;
+    row.domain_out = is_input ? k_engine_domain : static_cast<uint32_t>(host_domain);
     row.edge_class = ANIRA_EDGE_ZERO_COPY;
     row.allocate_class = ANIRA_EDGE_ZERO_COPY;
     row.wait_strategy = static_cast<uint32_t>(wait);
@@ -814,7 +819,8 @@ anira_plan_slot host_slot(uint32_t slot,
 void build_report(anira_handler& handler,
                   const anira_model_config& model,
                   const anira_contract& snapshot,
-                  const anira::capi::StageFacts& stages) {
+                  const anira::capi::StageFacts& stages,
+                  const anira::capi::HostDomains& host_domains) {
     anira_plan_report& report = handler.m_report;
     // The strategy the pool runs, first-wins across users: this session is a user now.
     const anira_wait_strategy wait = anira::Core::get_wait_strategy();
@@ -823,14 +829,20 @@ void build_report(anira_handler& handler,
         std::vector<anira_plan_slot> inputs;
         inputs.reserve(handler.m_num_inputs);
         for (uint32_t i = 0; i < handler.m_num_inputs; ++i) {
-            inputs.push_back(
-                host_slot(i, true, wait, anira::capi::port_role(handler.m_input_ports[i])));
+            inputs.push_back(host_slot(i,
+                                       true,
+                                       wait,
+                                       anira::capi::port_role(handler.m_input_ports[i]),
+                                       host_domains.m_inputs[i]));
         }
         std::vector<anira_plan_slot> outputs;
         outputs.reserve(handler.m_num_outputs);
         for (uint32_t i = 0; i < handler.m_num_outputs; ++i) {
-            outputs.push_back(
-                host_slot(i, false, wait, anira::capi::port_role(handler.m_output_ports[i])));
+            outputs.push_back(host_slot(i,
+                                        false,
+                                        wait,
+                                        anira::capi::port_role(handler.m_output_ports[i]),
+                                        host_domains.m_outputs[i]));
         }
         report.m_inputs.push_back(std::move(inputs));
         report.m_outputs.push_back(std::move(outputs));
@@ -1105,7 +1117,10 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_contract_wait = std::chrono::microseconds(static_cast<std::chrono::microseconds::rep>(
         static_cast<double>(hard.m_block_max) / hard.m_rate * 1e6 * hard.m_wait_ratio));
 
-    build_report(handler, model, snapshot, stages);
+    // The declared host-end domain per slot (validate refused a name that is no tensor's and,
+    // in this pre-release, any domain but host memory): what the slot rows report.
+    const anira::capi::HostDomains host_domains = anira::capi::make_host_domains(snapshot, model);
+    build_report(handler, model, snapshot, stages, host_domains);
     log_report(handler, model);
 
     handler.m_contract = std::move(snapshot);

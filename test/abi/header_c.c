@@ -237,6 +237,10 @@ int anira_header_c_probe(void) {
                           ? 1
                           : 0;
             checks += anira_handler_num_entries(NULL) == 0u ? 1 : 0;
+            checks += anira_contract_set_host_domain(NULL, "in", ANIRA_DOMAIN_HOST) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
             checks += stage.pre_process(&ctx, NULL) == ANIRA_OK ? 1 : 0;
             checks +=
                 anira_stage_default_post_process(&ctx) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;

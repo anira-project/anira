@@ -218,6 +218,23 @@ const std::array<std::pair<const char*, anira_edge_cost>, 2> k_edge_costs{{
     {"permissive", ANIRA_EDGE_COST_PERMISSIVE},
     {"strict", ANIRA_EDGE_COST_STRICT},
 }};
+// The host-end domain of a tensor ("host_domains", anira_contract_set_host_domain): every arm
+// of anira_domain by its lower-case suffix.
+const std::array<std::pair<const char*, anira_domain>, 13> k_domains{{
+    {"host", ANIRA_DOMAIN_HOST},
+    {"host_pinned", ANIRA_DOMAIN_HOST_PINNED},
+    {"cuda", ANIRA_DOMAIN_CUDA},
+    {"gl_buffer", ANIRA_DOMAIN_GL_BUFFER},
+    {"vulkan_buffer", ANIRA_DOMAIN_VULKAN_BUFFER},
+    {"opaque_fd", ANIRA_DOMAIN_OPAQUE_FD},
+    {"metal_buffer", ANIRA_DOMAIN_METAL_BUFFER},
+    {"wgpu_buffer", ANIRA_DOMAIN_WGPU_BUFFER},
+    {"dmabuf", ANIRA_DOMAIN_DMABUF},
+    {"iosurface", ANIRA_DOMAIN_IOSURFACE},
+    {"ahardwarebuffer", ANIRA_DOMAIN_AHARDWAREBUFFER},
+    {"d3d12", ANIRA_DOMAIN_D3D12},
+    {"frame", ANIRA_DOMAIN_FRAME},
+}};
 const std::array<std::pair<const char*, anira_gl_threads>, 2> k_gl_threads{{
     {"caller_thread", ANIRA_GL_CALLER_THREAD},
     {"shared_context", ANIRA_GL_SHARED_CONTEXT},
@@ -824,6 +841,14 @@ void load_contract_v3(const Json& root, anira_contract& contract) {
             contract.m_kind = async_part;
         } else if (key == "edge_cost") {
             contract.m_edge_cost = vocabulary(value, key, k_edge_costs);
+        } else if (key == "host_domains") {
+            // Common to both kinds, like edge_cost: the declared host-end domain per tensor.
+            require_object(value, key);
+            for (const auto& [tensor, word] : value.items()) {
+                if (tensor.empty()) { fail_json(key, "a tensor name must not be empty"); }
+                contract.m_host_domains[tensor] =
+                    vocabulary(word, child(key, tensor.c_str()), k_domains);
+            }
         } else {
             set_ext_from_json(contract.m_ext, key, value, "");
         }

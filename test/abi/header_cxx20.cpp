@@ -267,6 +267,7 @@ int anira_header_cxx20_probe() {
         context.ext(anira::ext::Entry{.name = "forward"});
         loaded.ext(anira::ext::Entry{.name = "forward"});
         loaded.hard_on_miss(ANIRA_MISS_CALLBACK).hard_miss_fn(nullptr, nullptr);
+        loaded.host_domain("x", ANIRA_DOMAIN_HOST);
         job.ext(anira::ext::Entry{.name = "forward"});
         const anira::ContractHandle minted(contract);
         checks += model.upgraded() || context.upgraded() || loaded.upgraded() ? 1 : 0;

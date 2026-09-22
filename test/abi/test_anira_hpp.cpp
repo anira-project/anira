@@ -759,6 +759,25 @@ TEST(AbiCxx, HardRingDtypeLandsInTheHandle) {
     EXPECT_EQ(wrong.m_status, ANIRA_ERROR_WRONG_CONTRACT);
 }
 
+// The host-end domain is common to both kinds: it lands in the handle of either, by name; an
+// empty name and a domain that is no anira_domain value are refused.
+TEST(AbiCxx, HostDomainLandsInTheHandleOfEitherKind) {
+    ContractHandle hard{anira::Hard{}};
+    hard.host_domain("audio_in", ANIRA_DOMAIN_HOST).host_domain("state_in", ANIRA_DOMAIN_CUDA);
+    EXPECT_EQ(hard.native()->m_host_domains.at("audio_in"), ANIRA_DOMAIN_HOST);
+    EXPECT_EQ(hard.native()->m_host_domains.at("state_in"), ANIRA_DOMAIN_CUDA);
+    ContractHandle async_contract{anira::Async{}};
+    async_contract.host_domain("audio_in", ANIRA_DOMAIN_HOST_PINNED);
+    EXPECT_EQ(async_contract.native()->m_host_domains.at("audio_in"), ANIRA_DOMAIN_HOST_PINNED);
+    const Thrown empty = thrown_by([&] { hard.host_domain("", ANIRA_DOMAIN_HOST); });
+    ASSERT_TRUE(empty.m_thrown);
+    EXPECT_EQ(empty.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    const Thrown unknown = thrown_by([&] { hard.host_domain("audio_in", ANIRA_DOMAIN_FORCE32); });
+    ASSERT_TRUE(unknown.m_thrown);
+    EXPECT_EQ(unknown.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(hard.native()->m_host_domains.at("audio_in"), ANIRA_DOMAIN_HOST) << "untouched";
+}
+
 TEST(AbiCxx, TensorLayoutEmptySpanClears) {
     ModelConfig model;
     const uint32_t tflite = model.add_model_path(ANIRA_ENGINE_TFLITE, "m.tflite");

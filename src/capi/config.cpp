@@ -62,6 +62,9 @@ bool valid_delivery(anira_delivery delivery) {
 bool valid_edge_cost(anira_edge_cost cost) {
     return cost == ANIRA_EDGE_COST_PERMISSIVE || cost == ANIRA_EDGE_COST_STRICT;
 }
+bool valid_domain(anira_domain domain) {
+    return domain >= ANIRA_DOMAIN_HOST && domain <= ANIRA_DOMAIN_FRAME;
+}
 bool valid_wait_strategy(anira_wait_strategy wait) {
     return wait == ANIRA_WAIT_SPIN_BACKOFF || wait == ANIRA_WAIT_BLOCKING;
 }
@@ -416,6 +419,17 @@ anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* contract,
                                                      anira_edge_cost cost) ANIRA_NOEXCEPT try {
     if (contract == nullptr || !valid_edge_cost(cost)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     contract->m_edge_cost = cost;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_contract_set_host_domain(anira_contract* contract,
+                                                       const char* canonical,
+                                                       anira_domain domain) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || !non_empty(canonical) || !valid_domain(domain)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    // Common to both kinds, like the edge cost; the name resolves at prepare.
+    contract->m_host_domains[canonical] = domain;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 

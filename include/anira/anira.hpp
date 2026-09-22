@@ -907,6 +907,19 @@ public:
                       "anira_contract_set_edge_cost");
         return *this;
     }
+    /// The host-end domain of one tensor, by canonical name, on either contract kind
+    /// (anira_contract_set_host_domain): the domain anira allocates the ring, the model
+    /// tensor, the Static store and the state buffers of the slot in, and the domain every
+    /// stage phase works in; ANIRA_DOMAIN_HOST for every tensor never set. Any tensor of
+    /// either side, State and Static included. A name that is no tensor is ANIRA_ERROR_CONFIG
+    /// at anira_handler_prepare, and in this pre-release any domain but ANIRA_DOMAIN_HOST is
+    /// ANIRA_ERROR_NOT_SUPPORTED there. In a contract file: the top-level "host_domains".
+    ContractHandle& host_domain(std::string_view canonical, Domain domain) {
+        const std::string name(canonical);
+        detail::check(anira_contract_set_host_domain(m_contract, name.c_str(), domain),
+                      "anira_contract_set_host_domain");
+        return *this;
+    }
     template <class Ext>
     ContractHandle& ext(const Ext& value) {
         const auto native = detail::ExtTraits<Ext>::mint(value);

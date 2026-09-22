@@ -599,6 +599,37 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* c
                                                                anira_edge_cost cost) ANIRA_NOEXCEPT;
 
 /**
+ * @brief The host-end domain of one tensor, common to both contract kinds like
+ * anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor,
+ * the Static store and the state buffers of the slot in, and the domain all four phases
+ * of a stage, the feed and the capture work in; the planner joins it to the engine's
+ * domain per slot with the edge of the registry's rows (anira_plan_slot.domain_in /
+ * domain_out / edge_class / recipe). A tensor declared in the engine's own domain has no
+ * edge to cross. The ring, the model tensor and the tensors the context accessors fill
+ * share the declared domain, readable from the domain field of any tensor an accessor
+ * fills or from the plan row. Set per tensor by canonical name, resolved at
+ * anira_handler_prepare: a name that matches no tensor is ANIRA_ERROR_CONFIG there, and
+ * in this pre-release any domain but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED
+ * there, naming the tensor (the declaration is data; the runtime allocates in host
+ * memory only). In a contract file the key is a top-level "host_domains": {"<name>":
+ * "<domain word>"}, the words the lower-case suffixes of anira_domain ("host",
+ * "host_pinned", "cuda", ...).
+ * @param contract Either contract kind.
+ * @param canonical The tensor's canonical name (the one its spec was created with): any tensor
+ *        of either side, Streamed, Buffer, Static and State alike.
+ * @param domain The domain of the tensor's host end; ANIRA_DOMAIN_HOST for every tensor that
+ *        was never set.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or
+ *         a domain that is no anira_domain value.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_set_host_domain(anira_contract* contract,
+                                                                 const char* canonical,
+                                                                 anira_domain domain) ANIRA_NOEXCEPT;
+
+/**
  * @brief Sets an extension on the contract (section 1b); v3.0.0 registers none for this host.
  * @param contract Either contract kind.
  * @param ext The payload; deep-copied through the registry row.
@@ -1535,7 +1566,8 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_to_json(const anira_conte
  * ANIRA_ERROR_JSON. A version 2 document yields its legacy Hard contract directly
  * (ANIRA_SUCCESS_UPGRADED).
  * @param utf8 The document text: {"hard": {...}} or {"async": {...}} with an optional top-level
- *        edge_cost, or a v2 document.
+ *        edge_cost and an optional top-level host_domains ({"<name>": "<domain word>"},
+ *        anira_contract_set_host_domain), or a v2 document.
  * @param len Length of utf8 in bytes.
  * @param out Receives the handle on success.
  * @param err Nullable.

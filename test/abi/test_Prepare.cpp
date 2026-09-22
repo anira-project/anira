@@ -241,6 +241,61 @@ TEST(AbiPrepare, RingDtypeRulesAreConfigAtPrepare) {
     run_waited_block(handler.m_handler, 1);
 }
 
+// The declared host-end domain of a tensor resolves at prepare: a name that is no tensor is
+// CONFIG, any domain but host memory is NOT_SUPPORTED naming the tensor (the declaration is
+// data in this pre-release), and a Static tensor takes a declaration like a Streamed one. The
+// plan report's slot rows carry the declaration on the host's side of every slot.
+TEST(AbiPrepare, HostDomainRulesAtPrepare) {
+    const Context context;
+    const ModelConfig model = gain_with_custom();
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    Handler handler(context, model, candidates);
+    anira_error err = ANIRA_ERROR_INIT;
+
+    ContractHandle ghost = explicit_contract();
+    ghost.host_domain("ghost", ANIRA_DOMAIN_HOST);
+    EXPECT_EQ(handler.prepare(ghost, &err), ANIRA_ERROR_CONFIG);
+    expect_contains(err.message, "contract: the host domain of 'ghost' names no tensor");
+
+    ContractHandle device = explicit_contract();
+    device.host_domain("audio_in", ANIRA_DOMAIN_CUDA);
+    EXPECT_EQ(handler.prepare(device, &err), ANIRA_ERROR_NOT_SUPPORTED);
+    expect_contains(err.message, "the host domain of 'audio_in'");
+    expect_contains(err.message, "ANIRA_DOMAIN_HOST");
+
+    ContractHandle on_static = explicit_contract();
+    on_static.host_domain("gain", ANIRA_DOMAIN_HOST_PINNED);
+    EXPECT_EQ(handler.prepare(on_static, &err), ANIRA_ERROR_NOT_SUPPORTED);
+    expect_contains(err.message, "the host domain of 'gain'");
+
+    ContractHandle host = explicit_contract();
+    host.host_domain("audio_in", ANIRA_DOMAIN_HOST)
+        .host_domain("gain", ANIRA_DOMAIN_HOST)
+        .host_domain("audio_out", ANIRA_DOMAIN_HOST);
+    ASSERT_EQ(handler.prepare(host, &err), ANIRA_OK) << err.message;
+    const anira_plan_report* report = anira_handler_plan_report(handler.m_handler);
+    ASSERT_NE(report, nullptr);
+    for (const anira_bool inputs : {anira_bool{1}, anira_bool{0}}) {
+        uint32_t count = 0;
+        ASSERT_EQ(
+            anira_plan_report_slots(report, 0, inputs, sizeof(anira_plan_slot), &count, nullptr),
+            ANIRA_OK);
+        std::vector<anira_plan_slot> rows(count, ANIRA_PLAN_SLOT_INIT);
+        ASSERT_EQ(anira_plan_report_slots(report,
+                                          0,
+                                          inputs,
+                                          sizeof(anira_plan_slot),
+                                          &count,
+                                          rows.data()),
+                  ANIRA_OK);
+        for (const anira_plan_slot& row : rows) {
+            EXPECT_EQ(row.domain_in, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+            EXPECT_EQ(row.domain_out, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+        }
+    }
+    run_waited_block(handler.m_handler, 1);
+}
+
 TEST(AbiPrepare, HoldLastAndZerosAreAccepted) {
     const Context context;
     const ModelConfig model = gain_with_custom();

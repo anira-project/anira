@@ -26,8 +26,9 @@
  * the State outputs. Then post_process takes the model tensor of every output slot back to the
  * host end, on the thread where the host end is consumed. The edge sits directly before and
  * after the engine and is anira's: a stage never crosses a domain, and in this pre-release
- * every host end and every model tensor is host memory (ANIRA_DOMAIN_HOST), the model tensors
- * of ANIRA_DTYPE_F32. One pre_process call forms exactly one chunk; a host block that holds
+ * every host end and every model tensor is host memory (ANIRA_DOMAIN_HOST, the host domain a
+ * contract declares per tensor with anira_contract_set_host_domain), the model tensors of
+ * ANIRA_DTYPE_F32. One pre_process call forms exactly one chunk; a host block that holds
  * several hops forms several chunks, one call each. Every phase callback receives an
  * anira_stage_ctx that anira fills on its own stack for the duration of the call: the phase,
  * the engine and provider of the plan the chunk was submitted under, the tensor counts of the
@@ -525,8 +526,8 @@ typedef void (ANIRA_CALL* anira_stage_release_fn)(void* user_data);
  * at the tail. A NULL phase slot means anira's default body runs for that phase; a
  * filled slot means the stage owns the phase for every slot with a host end and calls
  * the default itself for what it does not handle. The descriptor carries no domain: the
- * stage works at the host end of every slot, in the host domain of that slot, and never
- * crosses one.
+ * stage works at the host end of every slot, in the host domain the contract declares
+ * for that tensor (anira_contract_set_host_domain), and never crosses one.
  */
 typedef struct anira_stage_desc {
     uint32_t struct_size;  /**< sizeof(anira_stage_desc) of the caller's header. */
