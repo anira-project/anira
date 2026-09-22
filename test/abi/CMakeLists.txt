@@ -164,6 +164,16 @@ if(NOT _abi_strict_flags MATCHES "/W4")
         target_compile_options(anira_header_cxx20 PRIVATE -Wshadow-field)
     endif()
 endif()
+# What a phase callback of an anira::Stage reaches (RingView, StageContext, the Tensor reads)
+# must be nonblocking: header_cxx20.cpp calls all of it from an ANIRA_NONBLOCKING function, and
+# clang's function-effects analysis turns a method that allocates, locks or calls a function
+# that is not nonblocking into a compiler error. The compilers that have the analysis are those
+# of gate 6 below (upstream clang 20 or later behind the GNU front end).
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+        AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 20
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(anira_header_cxx20 PRIVATE -Werror=function-effects)
+endif()
 
 # ---- gate 6 (seed): the real-time contract in a consumer's compiler -------------------------
 # test_rt_contract.c holds ANIRA_NONBLOCKING functions calling every [callback-safe] entry of
