@@ -388,25 +388,26 @@ bool slot_array(const anira_tensor* tensors, uint32_t count, uint32_t slots) noe
     return count == slots && (tensors != nullptr || slots == 0);
 }
 
-// The array a single-tensor form hands the manager, which takes one tensor per slot: on a side
-// with one slot the caller's descriptor is that array; on a side with more the handler's
-// array of empty tensors with the caller's descriptor copied into its slot (one struct copy,
-// nothing is built). When the call returns the slot is the empty tensor of prepare again,
-// every field of it: a later call that does not carry the slot hands the array to the miss
-// function, which must not find the memory arm, the byte offset, the flags or the release
-// pair of an earlier caller in it (the memory they name may be gone by then).
-class StagedTensor {
+// The per-slot array a single-tensor form hands the manager, with the caller's one tensor
+// staged in its slot. The manager takes one tensor per slot: on a side with one slot the
+// caller's descriptor is that array; on a side with more the handler's array of empty tensors
+// with the caller's descriptor copied into its slot (one struct copy, nothing is built). When
+// the call returns the slot is the empty tensor of prepare again, every field of it: a later
+// call that does not carry the slot hands the array to the miss function, which must not find
+// the memory arm, the byte offset, the flags or the release pair of an earlier caller in it
+// (the memory they name may be gone by then).
+class StagedSlotArray {
 public:
-    StagedTensor(std::vector<anira_tensor>& slots,
-                 const anira_tensor& tensor,
-                 uint32_t slot) noexcept ANIRA_NONBLOCKING : m_array(&tensor) {
+    StagedSlotArray(std::vector<anira_tensor>& slots,
+                    const anira_tensor& tensor,
+                    uint32_t slot) noexcept ANIRA_NONBLOCKING : m_array(&tensor) {
         if (slots.size() > 1) {
             slots[slot] = tensor;
             m_staged = &slots[slot];
             m_array = slots.data();
         }
     }
-    ~StagedTensor() {
+    ~StagedSlotArray() {
         if (m_staged == nullptr) { return; }
         // What empty_tensors() built: the staged descriptor passed the check, so its dtype and
         // shape[0] are the slot's. A field fill (zero, then a few stores), and the factory
@@ -414,10 +415,10 @@ public:
         const std::array<int64_t, 2> shape{m_staged->shape[0], 0};
         anira_tensor_init_host(m_staged, nullptr, m_staged->dtype, 2, shape.data());
     }
-    StagedTensor(const StagedTensor&) = delete;
-    StagedTensor& operator=(const StagedTensor&) = delete;
-    StagedTensor(StagedTensor&&) = delete;
-    StagedTensor& operator=(StagedTensor&&) = delete;
+    StagedSlotArray(const StagedSlotArray&) = delete;
+    StagedSlotArray& operator=(const StagedSlotArray&) = delete;
+    StagedSlotArray(StagedSlotArray&&) = delete;
+    StagedSlotArray& operator=(StagedSlotArray&&) = delete;
 
     const anira_tensor* array() const noexcept ANIRA_NONBLOCKING { return m_array; }
 
@@ -1596,8 +1597,8 @@ anira_status ANIRA_CALL anira_handler_process(anira_handler* handler,
         status = slot_tensor_status(*handler, *out, false, out_slot, __func__);
     }
     if (status != ANIRA_OK) { return status; }
-    const StagedTensor inputs(handler->m_input_tensors, *in, in_slot);
-    const StagedTensor outputs(handler->m_output_tensors, *out, out_slot);
+    const StagedSlotArray inputs(handler->m_input_tensors, *in, in_slot);
+    const StagedSlotArray outputs(handler->m_output_tensors, *out, out_slot);
     const size_t* counts = handler->m_manager->process_nowait(inputs.array(), outputs.array());
     set_delivered(delivered, counts[out_slot]);
     return block_status(*handler);
@@ -1640,7 +1641,7 @@ anira_status ANIRA_CALL anira_handler_push_data(anira_handler* handler,
     }
     const anira_status status = slot_tensor_status(*handler, *in, true, slot, __func__);
     if (status != ANIRA_OK) { return status; }
-    const StagedTensor inputs(handler->m_input_tensors, *in, slot);
+    const StagedSlotArray inputs(handler->m_input_tensors, *in, slot);
     handler->m_manager->push_data(inputs.array());
     return ANIRA_OK;
 }
@@ -1673,7 +1674,7 @@ anira_status ANIRA_CALL anira_handler_pop_data(anira_handler* handler,
     }
     const anira_status status = slot_tensor_status(*handler, *out, false, slot, __func__);
     if (status != ANIRA_OK) { return status; }
-    const StagedTensor outputs(handler->m_output_tensors, *out, slot);
+    const StagedSlotArray outputs(handler->m_output_tensors, *out, slot);
     const size_t* counts = handler->m_manager->pop_data(outputs.array());
     set_delivered(delivered, counts[slot]);
     return block_status(*handler);
@@ -1834,8 +1835,8 @@ anira_status ANIRA_CALL anira_handler_process_wait(anira_handler* handler,
         status = slot_tensor_status(*handler, *out, false, out_slot, __func__);
     }
     if (status != ANIRA_OK) { return status; }
-    const StagedTensor inputs(handler->m_input_tensors, *in, in_slot);
-    const StagedTensor outputs(handler->m_output_tensors, *out, out_slot);
+    const StagedSlotArray inputs(handler->m_input_tensors, *in, in_slot);
+    const StagedSlotArray outputs(handler->m_output_tensors, *out, out_slot);
     const size_t* counts = nullptr;
     status = process_tensors_wait_body(*handler,
                                        inputs.array(),
@@ -1887,7 +1888,7 @@ anira_status ANIRA_CALL anira_handler_pop_data_wait(anira_handler* handler,
     }
     anira_status status = slot_tensor_status(*handler, *out, false, slot, __func__);
     if (status != ANIRA_OK) { return status; }
-    const StagedTensor outputs(handler->m_output_tensors, *out, slot);
+    const StagedSlotArray outputs(handler->m_output_tensors, *out, slot);
     const size_t* counts = nullptr;
     status = pop_tensors_wait_body(*handler, outputs.array(), timeout_ms, __func__, counts);
     set_delivered(delivered, counts[slot]);
