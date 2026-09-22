@@ -5,6 +5,7 @@
 
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/status.h>
 #include <anira/compat/v3_to_v2.h>
 #include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
@@ -14,9 +15,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -26,6 +29,7 @@
 #include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #include "../support/extras_fixtures.h"
 #include "../support/inference_config_eq.h"
+#include "capi/handles.h"
 
 namespace {
 
@@ -209,6 +213,88 @@ TEST(ExtrasFixtures, Gain) {
 }
 TEST(ExtrasFixtures, StereoGain) {
     check_files(k_stereo_gain_model_json, k_stereo_gain_contract_json, gain_oracle(2));
+}
+
+// The bundled StatefulAccumulatorNetwork is a 3.x-only file: the 2.x bridge refuses a State
+// spec, so there is no 2.x oracle, and the file is checked field by field. Rows for the three
+// engines that keep the export's tensor order and none for tflite or litert (the TFLite export
+// orders its outputs [state_out, processed_data], and the engines bind by position until they
+// bind by name), every row's file in the fetched tree, the State pair around the stereo
+// stream, and the contract file's budget and warm-up.
+TEST(ExtrasFixtures, StatefulAccumulator) {
+    const anira::ModelConfig loaded =
+        anira::ModelConfig::from_file(k_stateful_accumulator_model_json);
+    EXPECT_FALSE(loaded.upgraded()) << "a 3.x document";
+    const anira_model_config& cfg = *loaded.native();
+    ASSERT_EQ(cfg.m_models.size(), 3U);
+    EXPECT_EQ(cfg.m_models[0].m_engine, ANIRA_ENGINE_LIBTORCH);
+    EXPECT_EQ(cfg.m_models[1].m_engine, ANIRA_ENGINE_ONNXRUNTIME);
+    EXPECT_EQ(cfg.m_models[2].m_engine, ANIRA_ENGINE_EXECUTORCH);
+    for (const anira::capi::ModelEntry& row : cfg.m_models) {
+        EXPECT_NE(row.m_path.find("StatefulAccumulatorNetwork/models/"
+                                  "stateful_accumulator_network_stereo."),
+                  std::string::npos)
+            << row.m_path;
+        EXPECT_TRUE(std::filesystem::exists(row.m_path)) << row.m_path;
+    }
+
+    ASSERT_EQ(cfg.m_inputs.size(), 2U);
+    ASSERT_EQ(cfg.m_outputs.size(), 2U);
+    const auto expect_axes =
+        [](const anira_tensor_spec& spec, anira_axis_tag last, int64_t extent) {
+            ASSERT_EQ(spec.m_ndim, 3U);
+            EXPECT_EQ(spec.m_axes[0].m_tag, ANIRA_AXIS_BATCH);
+            EXPECT_EQ(spec.m_axes[0].m_extent, 1);
+            EXPECT_EQ(spec.m_axes[1].m_tag, ANIRA_AXIS_CHANNEL);
+            EXPECT_EQ(spec.m_axes[1].m_extent, 2);
+            EXPECT_EQ(spec.m_axes[2].m_tag, last);
+            EXPECT_EQ(spec.m_axes[2].m_extent, extent);
+            EXPECT_EQ(spec.m_dtype, ANIRA_DTYPE_F32);
+        };
+    const auto expect_state =
+        [&](const anira_tensor_spec& spec, const char* name, const char* source) {
+            EXPECT_EQ(spec.m_name, name);
+            EXPECT_EQ(spec.m_role, ANIRA_ROLE_STATE);
+            expect_axes(spec, ANIRA_AXIS_ANY, 2);
+            EXPECT_EQ(spec.m_window_max, 0) << "no window on a State spec";
+            EXPECT_EQ(spec.m_state_source, source);
+        };
+    const auto expect_stream = [&](const anira_tensor_spec& spec, const char* name) {
+        EXPECT_EQ(spec.m_name, name);
+        EXPECT_EQ(spec.m_role, ANIRA_ROLE_STREAMED);
+        expect_axes(spec, ANIRA_AXIS_TIME, 64);
+        EXPECT_EQ(spec.m_window_min, 64);
+        EXPECT_EQ(spec.m_window_max, 64);
+        EXPECT_EQ(spec.m_overlap, 0);
+        EXPECT_TRUE(spec.m_state_source.empty());
+    };
+    expect_state(cfg.m_inputs[0], "state_in", "state_out");
+    expect_stream(cfg.m_inputs[1], "data");
+    expect_stream(cfg.m_outputs[0], "processed_data");
+    expect_state(cfg.m_outputs[1], "state_out", "");
+
+    const anira::ContractHandle contract =
+        anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
+    EXPECT_FALSE(contract.upgraded());
+    const anira::capi::HardContract* hard = contract.native()->hard();
+    ASSERT_NE(hard, nullptr);
+    EXPECT_EQ(hard->m_budget, ANIRA_BUDGET_EXPLICIT);
+    EXPECT_EQ(hard->m_budget_ms, 5.0);
+    EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_FIXED);
+    EXPECT_EQ(hard->m_warmup_iterations, 1U);
+
+    // The bridge refuses the file by the State tensor's name, ahead of any engine question, so
+    // this holds on a build without an engine too.
+    try {
+        [[maybe_unused]] const anira::InferenceConfig refused =
+            anira_test::bridged(k_stateful_accumulator_model_json,
+                                k_stateful_accumulator_contract_json);
+        FAIL() << "the bridge accepted a State spec";
+    } catch (const anira::Error& error) {
+        EXPECT_EQ(error.status, ANIRA_ERROR_NOT_SUPPORTED);
+        EXPECT_NE(std::string_view(error.what()).find("tensor 'state_in'"), std::string_view::npos)
+            << error.what();
+    }
 }
 
 TEST(ExtrasFixtures, RaveFunkDrum) {

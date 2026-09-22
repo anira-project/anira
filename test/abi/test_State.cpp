@@ -11,8 +11,10 @@
 // over from one inference to the next travelled through anira's feed and capture. So the
 // expected stream is a closed form (block k = its input plus the sum of the blocks 0..k-1, the
 // counter reads k + 1), a missing feed or a missing capture is wrong in every block after the
-// first, and integer-valued ramps stay exact in float32. The engine-backed cases share the
-// oracle.
+// first, and integer-valued ramps stay exact in float32. The engine-backed cases at the end of
+// the file run the bundled file of the model itself (stateful_accumulator.model.json, the
+// stereo export at a 64-sample window) on every engine of the build it names, against the
+// same oracle.
 //
 // One slot space: a slot is the tensor's position in the model config's list of its side, the
 // one number the host's entries, a stage, the backend, the latency vector and the plan report's
@@ -49,6 +51,7 @@
 #include <variant>
 #include <vector>
 
+#include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
 #include "capi/port.h"
 #include "float_face.h"
@@ -352,10 +355,11 @@ float input_sample(size_t channel, size_t n) {
 
 /// What the accumulator delivers for it when the state is fed back: the sample plus the sum of
 /// every sample of the hops before its own. `first` is the stream position the state started
-/// over at (0, or where a reset landed).
-float expected_sample(size_t channel, size_t n, size_t first = 0) {
+/// over at (0, or where a reset landed); `hop` the model's window (k_hop for the engine-free
+/// twin, the file's window for the bundled model).
+float expected_sample(size_t channel, size_t n, size_t first = 0, size_t hop = k_hop) {
     float carry = 0.0F;
-    const size_t hop_start = first + (((n - first) / k_hop) * k_hop);
+    const size_t hop_start = first + (((n - first) / hop) * hop);
     for (size_t m = first; m < hop_start; ++m) { carry += input_sample(channel, m); }
     return input_sample(channel, n) + carry;
 }
@@ -367,8 +371,10 @@ struct Streams {
 };
 
 /// Drives `sizes.size()` host blocks of the input stream, continuing at stream position
-/// `position`, and appends both sides to `streams`.
-void drive(Rig& rig, std::span<const size_t> sizes, size_t& position, Streams& streams) {
+/// `position`, and appends both sides to `streams`. A rig is the engine-free Rig or the
+/// EngineRig over the bundled file: both take one block through the two-slot single form.
+template <typename RigType>
+void drive(RigType& rig, std::span<const size_t> sizes, size_t& position, Streams& streams) {
     for (const size_t samples : sizes) {
         std::vector<float> in(static_cast<size_t>(k_channels) * samples);
         std::vector<float> out(in.size(), -1.0F);
@@ -388,15 +394,18 @@ void drive(Rig& rig, std::span<const size_t> sizes, size_t& position, Streams& s
     }
 }
 
-/// The delivered stream is the latency's zeros, then the closed form. `first` as above, in
-/// samples of the delivered stream's model time (the stream restarts there).
-void expect_closed_form(const Streams& streams, size_t latency, size_t first = 0) {
+/// The delivered stream is the latency's zeros, then the closed form. `first` and `hop` as
+/// above, `first` in samples of the delivered stream's model time (the stream restarts there).
+void expect_closed_form(const Streams& streams,
+                        size_t latency,
+                        size_t first = 0,
+                        size_t hop = k_hop) {
     for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
         const std::vector<float>& out = streams.m_out.at(channel);
-        ASSERT_GT(out.size(), latency + k_hop) << "the run is too short to show a fed state";
+        ASSERT_GT(out.size(), latency + hop) << "the run is too short to show a fed state";
         for (size_t n = 0; n < out.size(); ++n) {
             const float expected =
-                n < latency ? 0.0F : expected_sample(channel, n - latency, first);
+                n < latency ? 0.0F : expected_sample(channel, n - latency, first, hop);
             ASSERT_EQ(out[n], expected) << "channel " << channel << ", sample " << n;
         }
     }
@@ -1541,5 +1550,226 @@ TEST(AbiState, TheSetterRefusals) {
     std::string message;
     EXPECT_EQ(create_status(parts.model(), message), ANIRA_OK) << message;
 }
+
+// ---- the bundled model on the engines
+// -------------------------------------------------------------
+
+#if defined(USE_ONNXRUNTIME) || defined(USE_LIBTORCH) || defined(USE_EXECUTORCH)
+
+// stateful_accumulator.model.json: the stereo export of example-models' StatefulAccumulatorNetwork
+// (the model of the twin above, a [1, 2, 2] state around a [1, 2, 64] stream, the state first
+// in the inputs and last in the outputs) with rows for LibTorch, ONNX Runtime and ExecuTorch.
+// TFLite and LiteRT are left out on purpose: the TFLite export orders its outputs [state_out,
+// processed_data] (the README of example-models; the input side keeps the declared order), and
+// the engines bind tensors by position until they bind by name, so on those two the stream
+// would be captured as the state. The three engines here keep the export's order.
+
+constexpr uint32_t k_file_hop = 64;      // the file's window (min = max = 64, no overlap)
+constexpr double k_file_rate = 48000.0;  // the host's rate; a contract file carries none
+
+/// The engines of this build the file names, in the order of anira_enabled_backends.
+std::vector<anira_engine> file_engines() {
+    std::vector<anira_engine> out;
+    for (const anira::BackendId& id : anira::enabled_backends()) {
+        const auto engine = static_cast<anira_engine>(id.engine);
+        if (engine == ANIRA_ENGINE_LIBTORCH || engine == ANIRA_ENGINE_ONNXRUNTIME ||
+            engine == ANIRA_ENGINE_EXECUTORCH) {
+            out.push_back(engine);
+        }
+    }
+    return out;
+}
+
+const char* engine_word(anira_engine engine) {
+    switch (engine) {
+        case ANIRA_ENGINE_LIBTORCH: return "libtorch";
+        case ANIRA_ENGINE_ONNXRUNTIME: return "onnxruntime";
+        case ANIRA_ENGINE_EXECUTORCH: return "executorch";
+        default: return "another engine";
+    }
+}
+
+/// The engine of the plan the handler runs: a case tells that it ran on the engine it asked for.
+uint32_t plan_engine(const anira_handler* handler) {
+    return handler->m_report.m_plans.at(anira_handler_get_plan(handler)).engine;
+}
+
+/// The bundled file on one engine of this build: the handler over the model file with that one
+/// candidate, prepared with the contract file at the host geometry (blocks of 1 to `block_max`
+/// samples at 48 kHz), the two streams driven through the waiting two-slot single form (`data`
+/// is input slot 1 and `processed_data` output slot 0: the file's order).
+class EngineRig {
+public:
+    explicit EngineRig(anira_engine engine, uint32_t block_max = k_file_hop)
+        : m_model(ModelConfig::from_file(k_stateful_accumulator_model_json))
+        , m_candidates{anira_backend_id{.struct_size = sizeof(anira_backend_id),
+                                        .engine = static_cast<uint32_t>(engine),
+                                        .provider = ANIRA_PROVIDER_DEFAULT,
+                                        .engine_id = nullptr}}
+        , m_handler(m_context, m_model, m_candidates)
+        , m_block_max(block_max) {
+        prepare();
+    }
+    ~EngineRig() = default;
+    EngineRig(const EngineRig&) = delete;
+    EngineRig& operator=(const EngineRig&) = delete;
+    EngineRig(EngineRig&&) = delete;
+    EngineRig& operator=(EngineRig&&) = delete;
+
+    void prepare() {
+        anira::ContractHandle contract =
+            anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
+        contract.hard_geometry(1, m_block_max, k_file_rate);
+        ASSERT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
+        m_session = anira_test::session_of(m_handler.m_handler);
+        ASSERT_NE(m_session, nullptr);
+    }
+
+    bool ready() const { return m_session != nullptr; }
+    anira_handler* get() const { return m_handler.m_handler; }
+    anira::SessionElement& session() { return *m_session; }
+    static constexpr uint32_t data_slot() { return 1; }
+    static constexpr uint32_t processed_slot() { return 0; }
+
+    /// One host block of `samples` per channel, each stream at its own slot; the call returns
+    /// with its own inferences collected.
+    anira_status block(std::span<const float> in, std::span<float> out, size_t samples) {
+        const anira_tensor in_tensor =
+            whole_f32(in.data(), {k_channels, static_cast<int64_t>(samples)});
+        const anira_tensor out_tensor =
+            whole_f32(out.data(), {k_channels, static_cast<int64_t>(samples)});
+        return anira_handler_process_wait(get(),
+                                          &in_tensor,
+                                          data_slot(),
+                                          &out_tensor,
+                                          processed_slot(),
+                                          nullptr,
+                                          ANIRA_WAIT_FOREVER);
+    }
+
+    /// Waits until every hop the stream holds has run: the output ring is back at the latency
+    /// (what it held right after prepare), so the state is what the last inference left.
+    void settle() {
+        anira_test::wait_for_available(get(),
+                                       anira_handler_get_latency(get(), processed_slot()),
+                                       processed_slot());
+    }
+
+private:
+    Context m_context{4};
+    ModelConfig m_model;
+    std::array<anira_backend_id, 1> m_candidates;
+    anira_test::Handler m_handler;
+    uint32_t m_block_max;
+    std::shared_ptr<anira::SessionElement> m_session;
+};
+
+// The bundled model on every engine of this build the file names, against the closed form of
+// the engine-free twin: host blocks above and below the hop, the state fed back by anira
+// across the engine's inferences, and the session's buffer left with the sums and the count.
+TEST(AbiState, TheBundledModelFollowsTheClosedFormOnEveryEngine) {
+    for (const anira_engine engine : file_engines()) {
+        SCOPED_TRACE(engine_word(engine));
+        EngineRig rig(engine, 2 * k_file_hop);
+        ASSERT_TRUE(rig.ready());
+        const anira_handler* h = rig.get();
+        ASSERT_EQ(plan_engine(h), static_cast<uint32_t>(engine));
+        const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
+        // Rounds of 704 samples (eleven hops, in blocks of 8 to 128 samples), enough of them to
+        // run eight hops past the latency (ten hops at this geometry).
+        constexpr std::array<size_t, 12> k_round{64, 32, 96, 64, 16, 48, 128, 64, 8, 56, 64, 64};
+        std::vector<size_t> sizes;
+        for (size_t total = 0; total < latency + (size_t{8} * k_file_hop);) {
+            for (const size_t samples : k_round) {
+                sizes.push_back(samples);
+                total += samples;
+            }
+        }
+        size_t position = 0;
+        Streams streams;
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+        expect_closed_form(streams, latency, 0, k_file_hop);
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+
+        // White-box: the session's one buffer holds what the engine's last inference left,
+        // the sum of every sample of the stream and the number of inferences.
+        ASSERT_NO_FATAL_FAILURE(rig.settle());
+        const size_t inferences = position / k_file_hop;
+        ASSERT_EQ(rig.session().m_state.size(), 1U);
+        ASSERT_EQ(rig.session().m_state[0].size(), static_cast<size_t>(k_channels) * k_state_width);
+        for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+            float sum = 0.0F;
+            for (size_t n = 0; n < inferences * k_file_hop; ++n) {
+                sum += input_sample(channel, n);
+            }
+            EXPECT_EQ(rig.session().m_state[0][channel * k_state_width], sum)
+                << "channel " << channel;
+            EXPECT_EQ(rig.session().m_state[0][(channel * k_state_width) + 1],
+                      static_cast<float>(inferences))
+                << "channel " << channel;
+        }
+    }
+}
+
+// anira_handler_reset on the engine: the state starts over at zeros, and the same input yields
+// the first run's samples bit for bit.
+TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
+    for (const anira_engine engine : file_engines()) {
+        SCOPED_TRACE(engine_word(engine));
+        EngineRig rig(engine);
+        ASSERT_TRUE(rig.ready());
+        anira_handler* h = rig.get();
+        const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
+        // Enough hops to see four of them behind the latency's zeros (six at this geometry).
+        const std::vector<size_t> sizes((latency / k_file_hop) + 4, k_file_hop);
+        size_t position = 0;
+        Streams first;
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, first));
+        ASSERT_NO_FATAL_FAILURE(rig.settle());
+        EXPECT_NE(rig.session().m_state[0][0], 0.0F);
+
+        anira_handler_reset(h);
+        position = 0;
+        Streams second;
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, second));
+        EXPECT_EQ(second.m_out, first.m_out);
+        expect_closed_form(second, latency, 0, k_file_hop);
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    }
+}
+
+// The contract file asks for one warm-up inference. At this point of the runtime it runs
+// inside the engine's processor when the processor loads, on the processor's own buffers,
+// ahead of the session's feed and capture, so it reaches neither the state nor the stream:
+// after prepare the state is zeros, the first hop is the identity, and after n hops the
+// counter reads n, not n + 1. The case stands so that a warm-up that runs through the session
+// keeps the property.
+TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
+    for (const anira_engine engine : file_engines()) {
+        SCOPED_TRACE(engine_word(engine));
+        EngineRig rig(engine);
+        ASSERT_TRUE(rig.ready());
+        const anira_handler* h = rig.get();
+        EXPECT_EQ(h->m_inference_config.m_warm_up, 1U) << "the contract file's fixed warm-up";
+        ASSERT_EQ(rig.session().m_state.size(), 1U);
+        for (const float value : rig.session().m_state[0]) { EXPECT_EQ(value, 0.0F); }
+
+        const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
+        // Enough hops to see the first one behind the latency's zeros.
+        const std::vector<size_t> sizes((latency / k_file_hop) + 3, k_file_hop);
+        size_t position = 0;
+        Streams streams;
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+        expect_closed_form(streams, latency, 0, k_file_hop);
+        ASSERT_NO_FATAL_FAILURE(rig.settle());
+        for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+            EXPECT_EQ(rig.session().m_state[0][(channel * k_state_width) + 1],
+                      static_cast<float>(sizes.size()))
+                << "channel " << channel;
+        }
+    }
+}
+
+#endif  // an engine the file names
 
 }  // namespace

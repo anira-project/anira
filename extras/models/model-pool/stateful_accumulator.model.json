@@ -1,0 +1,47 @@
+{
+  "models": [
+    {
+      "engine": "libtorch",
+      "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_stereo.pt"
+    },
+    {
+      "engine": "onnxruntime",
+      "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_stereo.onnx"
+    },
+    {
+      "engine": "executorch",
+      "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_stereo.pte"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "state_in",
+      "dtype": "float32",
+      "role": "state",
+      "axes": [["batch", 1], ["channel", 2], ["any", 2]],
+      "state_source": "state_out"
+    },
+    {
+      "name": "data",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 2], ["time", 64]],
+      "window": { "min": 64, "max": 64 }
+    }
+  ],
+  "outputs": [
+    {
+      "name": "processed_data",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [["batch", 1], ["channel", 2], ["time", 64]],
+      "window": { "min": 64, "max": 64 }
+    },
+    {
+      "name": "state_out",
+      "dtype": "float32",
+      "role": "state",
+      "axes": [["batch", 1], ["channel", 2], ["any", 2]]
+    }
+  ]
+}
