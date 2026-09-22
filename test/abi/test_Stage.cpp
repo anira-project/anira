@@ -32,6 +32,7 @@
 #include <anira/utils/RtLatch.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
 #include <atomic>
@@ -1514,3 +1515,195 @@ TEST(AbiStage, ARingOfAnotherDtypeNeedsAStageThatFillsThePhase) {
         ASSERT_EQ(out_stream.at(n), wanted) << "sample " << n;
     }
 }
+
+// ============================================================================================
+// The stages in front of an engine
+// ============================================================================================
+
+#if defined(USE_ONNXRUNTIME) || defined(USE_LIBTORCH) || defined(USE_EXECUTORCH) || \
+    defined(USE_TFLITE)
+
+namespace {
+
+/// One candidate: the engine, its default provider.
+std::array<anira_backend_id, 1> one_engine(anira_engine engine) {
+    return {anira_backend_id{.struct_size = sizeof(anira_backend_id),
+                             .engine = static_cast<uint32_t>(engine),
+                             .provider = ANIRA_PROVIDER_DEFAULT,
+                             .engine_id = nullptr}};
+}
+
+/// The engine of the plan the handler runs.
+uint32_t plan_engine(const anira_handler* handler) {
+    return handler->m_report.m_plans.at(anira_handler_get_plan(handler)).engine;
+}
+
+/// The Static gain of the bundled gain model, through the handler's store.
+void set_gain(anira_handler* handler, float gain_value) {
+    const std::array<int64_t, 1> gain_shape{1};
+    anira_tensor gain_tensor{};
+    anira_tensor_init_host(&gain_tensor, &gain_value, ANIRA_DTYPE_F32, 1, gain_shape.data());
+    ASSERT_EQ(anira_handler_set_static_input(handler, 1, &gain_tensor), ANIRA_OK);
+}
+
+}  // namespace
+
+// The converting stage of ARingOfAnotherDtypeNeedsAStageThatFillsThePhase in front of a real
+// engine: the bundled gain model on every engine of this build the file runs on, its input
+// ring int16, the host pushing int16 blocks, the stage writing float32 into the model input
+// through the context accessors, the engine applying a gain of one half. Every output sample
+// is exact: the word over 32768, halved.
+TEST(AbiStage, Int16RingWithAConvertingStageOnEveryEngine) {
+    const Context context;
+    for (const anira_engine engine : anira_test::oracle_engines()) {
+        SCOPED_TRACE("engine " + std::to_string(static_cast<unsigned>(engine)));
+        auto scratch = std::make_unique<std::array<int16_t, k_hop>>();
+        anira_stage_desc convert = named_stage("int16-to-float", scratch.get());
+        convert.pre_process = int16_to_float;
+        const std::array<anira_backend_id, 1> candidates = one_engine(engine);
+        const ModelConfig model = ModelConfig::from_file(k_gain_model_json);
+        StagedHandler handler(context, model, {convert}, candidates);
+        ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
+        anira::ContractHandle contract = anira_test::file_contract(k_gain_contract_json, k_hop);
+        contract.hard_ring_dtype("audio_in", ANIRA_DTYPE_I16);
+        // The file's BYPASS needs both rings in one dtype (nothing converts): ZEROS does not.
+        contract.hard_on_miss(ANIRA_MISS_ZEROS);
+        ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
+        anira_handler* h = handler.m_handler;
+        ASSERT_EQ(plan_engine(h), static_cast<uint32_t>(engine));
+        ASSERT_NO_FATAL_FAILURE(set_gain(h, 0.5F));
+        const size_t latency = anira_handler_get_latency(h, 0);
+
+        std::vector<float> out_stream;
+        std::vector<int16_t> in_stream;
+        for (size_t k = 0; k < 4; ++k) {
+            std::array<int16_t, k_hop> in{};
+            for (size_t n = 0; n < k_hop; ++n) {
+                in.at(n) = static_cast<int16_t>(static_cast<int>((k * k_hop) + n) - 1000);
+            }
+            in_stream.insert(in_stream.end(), in.begin(), in.end());
+            std::array<float, k_hop> out{};
+            const std::array<int64_t, 2> shape{1, static_cast<int64_t>(k_hop)};
+            anira_tensor in_tensor{};
+            anira_tensor out_tensor{};
+            anira_tensor_init_host(&in_tensor, in.data(), ANIRA_DTYPE_I16, 2, shape.data());
+            anira_tensor_init_host(&out_tensor, out.data(), ANIRA_DTYPE_F32, 2, shape.data());
+            const size_t prev = anira_test::available(h);
+            size_t delivered = 0;
+            ASSERT_EQ(anira_handler_process(h, &in_tensor, 0, &out_tensor, 0, &delivered),
+                      ANIRA_OK);
+            EXPECT_EQ(delivered, k_hop);
+            anira_test::wait_for_block(h, prev);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            out_stream.insert(out_stream.end(), out.begin(), out.end());
+        }
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+        for (size_t n = 0; n < out_stream.size(); ++n) {
+            const float wanted =
+                n < latency ? 0.0F
+                            : 0.5F * (static_cast<float>(in_stream.at(n - latency)) / 32768.0F);
+            ASSERT_EQ(out_stream.at(n), wanted) << "sample " << n;
+        }
+    }
+}
+
+#endif  // an engine
+
+#ifdef USE_LIBTORCH
+
+namespace {
+
+/// What the stage of TensorsFollowTheStructsMemoryAcrossLibTorchInferences recorded per
+/// chunk: the memory behind model input 0 in pre_process and behind model output 0 in
+/// post_process. Both phases run on the driving thread, in lockstep with the stream, so the
+/// arrays are plain and the test reads them after the run.
+struct Pointers {
+    static constexpr size_t k_capacity = 64;
+    std::array<const void*, k_capacity> m_inputs{};
+    std::array<const void*, k_capacity> m_outputs{};
+    size_t m_pre = 0;
+    size_t m_post = 0;
+};
+
+anira_status ANIRA_CALL record_then_default(const anira_stage_ctx* ctx,
+                                            void* user_data) ANIRA_NONBLOCKING {
+    auto* pointers = static_cast<Pointers*>(user_data);
+    anira_tensor tensor;
+    if (ctx->phase == ANIRA_PHASE_PRE_PROCESS) {
+        if (anira_stage_input_tensor(ctx, 0, &tensor) != ANIRA_OK) { return ANIRA_ERROR_INTERNAL; }
+        if (pointers->m_pre < Pointers::k_capacity) {
+            pointers->m_inputs.at(pointers->m_pre) = tensor.handle.host.ptr;
+        }
+        ++pointers->m_pre;
+        return anira_stage_default_pre_process(ctx);
+    }
+    if (anira_stage_output_tensor(ctx, 0, &tensor) != ANIRA_OK) { return ANIRA_ERROR_INTERNAL; }
+    if (pointers->m_post < Pointers::k_capacity) {
+        pointers->m_outputs.at(pointers->m_post) = tensor.handle.host.ptr;
+    }
+    ++pointers->m_post;
+    return anira_stage_default_post_process(ctx);
+}
+
+}  // namespace
+
+// LibTorch swaps the memory of the struct's input buffer with its own on every inference
+// (LibTorchProcessor.cpp, swap_data), so a struct holds another block each time it comes
+// round. The accessor builds the tensor from the struct's memory of the moment: two uses of
+// one struct (told apart by its output tensor, which is not swapped) return different input
+// pointers, and the default fill through that pointer is what the engine read, since the
+// stream is intact. Nothing about a descriptor may be cached across calls.
+TEST(AbiStage, TensorsFollowTheStructsMemoryAcrossLibTorchInferences) {
+    const Context context;
+    Pointers pointers;
+    anira_stage_desc stage = named_stage("pointers", &pointers);
+    stage.pre_process = record_then_default;
+    stage.post_process = record_then_default;
+    const std::array<anira_backend_id, 1> candidates = one_engine(ANIRA_ENGINE_LIBTORCH);
+    const ModelConfig model = ModelConfig::from_file(k_gain_model_json);
+    StagedHandler handler(context, model, {stage}, candidates);
+    ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
+    ASSERT_EQ(handler.prepare(anira_test::file_contract(k_gain_contract_json, k_hop)), ANIRA_OK)
+        << handler.m_err.message;
+    anira_handler* h = handler.m_handler;
+    ASSERT_EQ(plan_engine(h), static_cast<uint32_t>(ANIRA_ENGINE_LIBTORCH));
+    ASSERT_NO_FATAL_FAILURE(set_gain(h, 1.0F));  // the identity: the stream oracle applies
+    const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(h);
+    ASSERT_NE(session, nullptr);
+    const auto& queue = session->m_inference_queue;
+    const size_t structs = queue.size();
+    ASSERT_GT(structs, 0U);
+    const size_t chunks = (2 * structs) + 2;  // every struct that runs comes round again
+    ASSERT_LE(chunks, Pointers::k_capacity);
+
+    Stream stream(h);
+    stream.blocks(chunks);
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    expect_same_stream(stream.m_out, stream.expected());
+    ASSERT_EQ(pointers.m_pre, chunks);
+    ASSERT_EQ(pointers.m_post, chunks);
+
+    // The struct of every chunk, by the memory of its output tensor; then the input pointer of
+    // a chunk against the previous chunk of the same struct.
+    std::vector<size_t> last_use(structs, SIZE_MAX);
+    size_t pairs = 0;
+    for (size_t chunk = 0; chunk < chunks; ++chunk) {
+        const auto found = std::ranges::find_if(queue, [&](const auto& candidate) {
+            return pointers.m_outputs.at(chunk) ==
+                   candidate->m_tensor_output_data.at(0).get_read_pointer(0);
+        });
+        ASSERT_NE(found, queue.end()) << "chunk " << chunk << " ran on no struct of the session";
+        const auto index = static_cast<size_t>(found - queue.begin());
+        if (last_use.at(index) != SIZE_MAX) {
+            EXPECT_NE(pointers.m_inputs.at(chunk), pointers.m_inputs.at(last_use.at(index)))
+                << "chunks " << last_use.at(index) << " and " << chunk << " on struct " << index
+                << " saw one input block, so the swap was not followed";
+            ++pairs;
+        }
+        last_use.at(index) = chunk;
+    }
+    EXPECT_GE(pairs, chunks - structs) << "every chunk beyond a struct's first use is a pair";
+}
+
+#endif  // USE_LIBTORCH
