@@ -177,10 +177,10 @@ not here, so one config serves every build.
   - ``tensor_name(i, canonical, engine_name)``: the **export's name** for the tensor. Where to
     read it off: ONNX Runtime uses the graph's input and output names; TFLite and LiteRT the
     signature key (``args_0``, ``output_0``), or the tensor name for a file without
-    signatures; LibTorch the method's argument name (inputs only); ExecuTorch the tensor name
-    when the export carries one. The engines of this pre-release still bind by position; the
-    name is stored, and binding by name (a name the engine cannot find then fails prepare with
-    what the file has) arrives with the backend descriptor.
+    signatures; LibTorch the method's argument name (inputs only). A name the engine's side
+    does not have fails prepare with ``ANIRA_ERROR_CONFIG`` and the names the file has; a name
+    on a side the engine binds by position (every ExecuTorch tensor, a LibTorch output) is
+    ``ANIRA_ERROR_NOT_SUPPORTED`` at create, since it would bind nothing.
   - ``tensor_layout(i, canonical, axes)``: the order in which the export holds the tensor's
     axes, as spec axis indices (a ``std::span<const uint32_t>``; a ``std::array`` converts):
     ``{0, 2, 1}`` says the file's axis 0 is spec axis 0, its axis 1 is spec axis 2, its axis 2
@@ -191,11 +191,16 @@ not here, so one config serves every build.
     that moves an axis of another extent is a transpose, refused at prepare in this
     pre-release.
 
-  Without a record, an entry binds the tensor **positionally** (the spec's input ``i`` to the
-  file's input ``i``, in ONNX Runtime's session order or the primary subgraph's order on TFLite
-  and LiteRT) and in the spec's axis order. That is what every 2.x configuration did; a name
-  makes the binding independent of the file's tensor order and turns a mismatch into an error
-  at prepare instead of a silent swap.
+  Without a record, an entry binds the tensor by its **canonical name** where the engine's
+  side has a tensor of that name, and **positionally** otherwise (the spec's input ``i`` to
+  the file's input ``i``: ONNX Runtime's graph order, the signature's index order on TFLite
+  and LiteRT, the method's argument order on LibTorch, the method's order on ExecuTorch), in
+  the spec's axis order. Either way the bound tensor's dtype and every static extent are
+  checked against the spec's engine dims at prepare (a dynamic extent of the file matches
+  anything), a mismatch is ``ANIRA_ERROR_CONFIG`` naming both, and every tensor of the file's
+  side must end up bound exactly once. The plan report tells how each slot was bound
+  (``anira_plan_slot.binding``). Positional binding is what every 2.x configuration did; a
+  name makes the binding independent of the file's tensor order.
 - **Bytes instead of a file.** ``add_model_bytes(engine, bytes, ownership, release, ctx)``
   loads from a ``std::span<const std::byte>``, e.g. a resource compiled into a plugin.
   ``ANIRA_BYTES_COPY`` (the default) copies the bytes into the config; ``ANIRA_BYTES_BORROW``

@@ -343,8 +343,10 @@ decoder with ``samplesPerBlock / 2048.f``).
    * - The tensor specs
      - One universal ``anira::TensorShape`` from the specs' extents (a dynamic Time extent
        resolved to the window), plus one backend-qualified ``TensorShape`` per entry whose
-       ``tensors`` record holds a layout (``engine_dims`` of the spec). A name in the record is
-       accepted and ignored: the 2.x adapters bind positionally.
+       ``tensors`` record holds a layout (``engine_dims`` of the spec). A name in the record
+       does not reach the 2.x ``InferenceConfig``, which has no tensor names: the 2.x path binds
+       by position; the C handler binds by name where the engine's side has names, and refuses a
+       name on a side its engine binds by position (``ANIRA_ERROR_NOT_SUPPORTED``).
    * - ``ANIRA_AXIS_CHANNEL`` extent; window minus overlap; output ``latency``
      - ``preprocess_input_channels`` / ``postprocess_output_channels``;
        ``preprocess_input_size`` / ``postprocess_output_size`` (``0`` for a Static or Buffer

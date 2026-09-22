@@ -29,8 +29,8 @@ class SessionElement;  // Forward declaration as we have a circular dependency
  * header, and a consumer that uses an engine itself links the matching
  * `anira::<engine>` target explicitly. The `anira_header_isolation` CTest enforces it.
  *
- * @see LibtorchProcessor, OnnxRuntimeProcessor, TFLiteProcessor, LiteRtProcessor,
- *      ExecuTorchProcessor, InferenceConfig
+ * @see LibtorchProcessor, TFLiteProcessor, LiteRtProcessor, ExecuTorchProcessor,
+ *      InferenceConfig
  */
 class ANIRA_API BackendBase {
 public:

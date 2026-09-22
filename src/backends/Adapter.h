@@ -27,15 +27,16 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace anira::backend {
 
-/// One tensor of a prepared model as its engine is handed it: the canonical name, the name the
-/// slot binds to on the engine's side (the entry's tensors record where it names the slot, else
-/// the canonical name; empty on the 2.x path, which binds by position), the engine's extents
-/// (the entry's layout applied to the spec's) at the pinned window, the spec's dtype and the
-/// element count.
+/// One tensor of a prepared model as its engine is handed it: the canonical name, the export's
+/// name where the entry's tensors record names the slot (empty otherwise: the slot then binds
+/// by its canonical name where the engine's side has one, else by its position; every name is
+/// empty on the 2.x path), the engine's extents (the entry's layout applied to the spec's) at
+/// the pinned window, the spec's dtype and the element count.
 struct TensorInfo {
     std::string m_name;
     std::string m_engine_name;
@@ -89,6 +90,13 @@ struct ChunkBuffers {
     std::vector<anira::BufferF>* m_outputs = nullptr;
 };
 
+/// How prepare bound every slot of a prepared model to the engine's tensors
+/// (anira_plan_slot.binding of the plan report): one anira_binding per slot of either side.
+struct Bindings {
+    std::vector<anira_binding> m_inputs;
+    std::vector<anira_binding> m_outputs;
+};
+
 /// The interface: the C descriptor's lifecycle as a class. prepare once on the control thread,
 /// run per inference on an inference thread, the destructor frees what prepare loaded.
 class ANIRA_API Adapter {
@@ -124,6 +132,11 @@ public:
     /// Whether prepare succeeded.
     bool prepared() const noexcept { return m_num_instances > 0; }
 
+    /// How prepare bound every slot: ANIRA_BINDING_POSITION for every slot of the record
+    /// unless do_prepare said otherwise (set_bindings); the legacy adapter's 2.x backend binds
+    /// by position. Sized to the record after prepare, empty before.
+    const Bindings& bindings() const noexcept { return m_bindings; }
+
 protected:
     /// Loads the model of the record: the engine's session, its environment, the warm-up.
     /// Throws anira::StatusError (MODEL_LOAD, NO_SUCH_FILE, ENGINE, CONFIG, NOT_SUPPORTED)
@@ -141,12 +154,87 @@ protected:
     /// 2.x custom backend is called as concurrently as the scheduler dispatches, as it always
     /// was.
     virtual bool claims_instances() const noexcept { return true; }
+    /// What do_prepare reports for the slots it bound (bind_slots): one entry per slot of
+    /// either side of the record.
+    void set_bindings(Bindings bindings) noexcept { m_bindings = std::move(bindings); }
 
 private:
     Model m_model;
+    Bindings m_bindings;
     std::vector<std::atomic<bool>> m_busy;  ///< one busy flag per instance, sized at prepare
     uint32_t m_num_instances = 0;           ///< 0 until prepare succeeded
 };
+
+/// How one slot was bound to the engine's tensor on its side: the tensor's index in the
+/// engine's order and the way (bind_slots).
+struct SlotBinding {
+    size_t m_index = 0;
+    anira_binding m_binding = ANIRA_BINDING_POSITION;
+};
+
+/// The binding rule of every built-in engine, one side at a time. `engine_names` are the
+/// engine's tensors of the side in the engine's order (the graph order of ONNX Runtime, the
+/// signature's index order of LiteRT and TFLite, the method's argument order of LibTorch; all
+/// empty strings for a side without names). A slot the entry's tensors record names
+/// (TensorInfo::m_engine_name) binds to the engine tensor of that name, which must exist; a
+/// slot without a record binds to the engine tensor of its canonical name where the side has
+/// one, else to the engine tensor at the slot's own position. Afterwards every engine tensor
+/// below `required` is bound exactly once and none at or above it twice (`required` is the
+/// engine's count, except where trailing engine tensors may stay unbound: a LibTorch argument
+/// with a default value). Throws anira::StatusError(ANIRA_ERROR_CONFIG) naming `engine`, the
+/// side, the slot and the engine's names for a record name the engine lacks, a slot whose
+/// position the engine has no tensor at, a duplicate or an unbound engine tensor. Logs nothing.
+ANIRA_API std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
+                                              const std::vector<std::string>& engine_names,
+                                              size_t required,
+                                              const char* engine,
+                                              const char* side);
+
+/// One tensor of the engine's side as the engine describes it: its name (empty for a side
+/// without names), its extents with a negative extent for a dynamic one, its element type as an
+/// anira_dtype (0 for one anira has no code for) and the engine's own word for that type.
+struct EngineTensor {
+    std::string m_name;
+    std::vector<int64_t> m_dims;
+    anira_dtype m_dtype = 0;
+    std::string m_type_word;
+};
+
+/// How check_engine_tensor reads the engine's extents.
+enum class ExtentRule : uint8_t {
+    /// A static extent must equal the record's; a dynamic (negative) one matches anything.
+    Exact,
+    /// The engine reports the planned upper bound of every axis and marks no axis dynamic
+    /// (ExecuTorch): a record extent at or below the bound matches, one above it does not.
+    UpperBound,
+};
+
+/// The check of the binding rule, whichever way a slot was bound: the engine tensor's element
+/// type must be the record's dtype, the ranks must agree, and every extent per `rule`. Throws
+/// anira::StatusError(ANIRA_ERROR_CONFIG) naming `engine`, the side, the slot and the engine
+/// tensor, with both shapes.
+ANIRA_API void check_engine_tensor(const TensorInfo& slot,
+                                   const EngineTensor& engine_tensor,
+                                   ExtentRule rule,
+                                   const char* engine,
+                                   const char* side);
+
+/// The names of `engine_tensors`, in their order: what bind_slots takes.
+ANIRA_API std::vector<std::string> names_of(const std::vector<EngineTensor>& engine_tensors);
+
+/// One side at prepare, as every built-in adapter does it: bind_slots over the names of
+/// `engine_tensors`, then check_engine_tensor for every slot against the engine tensor it
+/// bound. Throws what they throw.
+ANIRA_API std::vector<SlotBinding> bind_side(const std::vector<TensorInfo>& slots,
+                                             const std::vector<EngineTensor>& engine_tensors,
+                                             size_t required,
+                                             ExtentRule rule,
+                                             const char* engine,
+                                             const char* side);
+
+/// The report of two bound sides: what set_bindings takes.
+ANIRA_API Bindings bindings_of(const std::vector<SlotBinding>& inputs,
+                               const std::vector<SlotBinding>& outputs);
 
 /// A float pointer over the memory of a descriptor a built-in adapter can hand its engine as
 /// one packed block: host memory (pageable or page-locked), float32, not planar, `expected`

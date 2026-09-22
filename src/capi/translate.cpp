@@ -565,6 +565,22 @@ anira_tensor_spec resolved_spec(const anira_tensor_spec& spec, const DerivedSpec
     return copy;
 }
 
+// Whether an engine binds one side of its tensors by position alone, with no name to bind
+// to: ExecuTorch on both sides (its method meta carries no tensor names), LibTorch on the
+// output side (a method's return is a tuple of unnamed tensors); the other engines and the
+// other sides have names (the graph's, the signature's, the method's arguments).
+bool binds_by_position(anira_engine engine, bool is_input) noexcept {
+    switch (engine) {
+        case ANIRA_ENGINE_EXECUTORCH: return true;
+        case ANIRA_ENGINE_LIBTORCH: return !is_input;
+        default: return false;
+    }
+}
+
+// The tensor records of every surviving row: a record must name a tensor of the spec; a name
+// on a side its engine binds by position is refused (the name would bind nothing, and a
+// silently ignored name is what the rule replaces); a layout must fit the spec and move
+// axes of extent 1 alone.
 void check_layouts(const anira_model_config& model, const Derived& derived) {
     for (const size_t index : derived.m_rows) {
         const ModelEntry& row = model.m_models[index];
@@ -576,7 +592,13 @@ void check_layouts(const anira_model_config& model, const Derived& derived) {
                 config_error(at_row(index) + "the tensor record names no tensor '" + canonical +
                              "'");
             }
-            if (binding.m_layout.empty()) { continue; }  // a name alone: bound positionally at M1
+            if (!binding.m_name.empty() && !row.is_custom() &&
+                binds_by_position(row.m_engine, is_input)) {
+                not_supported(at_row(index) + at(*spec) + std::string(engine_word(row.m_engine)) +
+                              " binds its " + (is_input ? "inputs" : "outputs") +
+                              " by position; drop the name, keep the layout");
+            }
+            if (binding.m_layout.empty()) { continue; }  // a name alone binds by that name
             const DerivedSpec& d =
                 is_input ? derived.m_inputs[spec_index] : derived.m_outputs[spec_index];
             std::string why;

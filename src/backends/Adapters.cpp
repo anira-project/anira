@@ -12,9 +12,6 @@
 #ifdef USE_LITERT
 #include <anira/backends/LiteRtProcessor.h>
 #endif
-#ifdef USE_ONNXRUNTIME
-#include <anira/backends/OnnxRuntimeProcessor.h>
-#endif
 #ifdef USE_TFLITE
 #include <anira/backends/TFLiteProcessor.h>
 #endif
@@ -83,16 +80,12 @@ anira::InferenceBackend backend_of_engine(anira_engine engine) noexcept {
     }
 }
 
-// The 2.x processors, one factory each: what a LegacyAdapter of a built-in engine builds at
-// prepare from the record's 2.x configuration.
+// The 2.x processors of the engines without an adapter of the descriptor shape yet, one
+// factory each: what a LegacyAdapter of such an engine builds at prepare from the record's
+// 2.x configuration.
 #ifdef USE_LIBTORCH
 std::unique_ptr<anira::BackendBase> make_libtorch_processor(anira::InferenceConfig& config) {
     return std::make_unique<anira::LibtorchProcessor>(config);
-}
-#endif
-#ifdef USE_ONNXRUNTIME
-std::unique_ptr<anira::BackendBase> make_onnxruntime_processor(anira::InferenceConfig& config) {
-    return std::make_unique<anira::OnnxRuntimeProcessor>(config);
 }
 #endif
 #ifdef USE_TFLITE
@@ -146,16 +139,16 @@ anira::InferenceConfig legacy_config_of(const Model& model) {
 }
 
 std::shared_ptr<Adapter> make_builtin_adapter(anira_engine engine) {
-    // The five 2.x processors, unchanged, behind the legacy adapter: each is built at
-    // prepare from the record's 2.x configuration and owned by its adapter.
+    // The engines without an adapter of the descriptor shape yet ride their 2.x processor,
+    // unchanged, behind the legacy adapter: each is built at prepare from the record's 2.x
+    // configuration and owned by its adapter.
     switch (engine) {
 #ifdef USE_LIBTORCH
         case ANIRA_ENGINE_LIBTORCH:
             return std::make_shared<LegacyAdapter>(&make_libtorch_processor);
 #endif
 #ifdef USE_ONNXRUNTIME
-        case ANIRA_ENGINE_ONNXRUNTIME:
-            return std::make_shared<LegacyAdapter>(&make_onnxruntime_processor);
+        case ANIRA_ENGINE_ONNXRUNTIME: return make_onnxruntime_adapter();
 #endif
 #ifdef USE_TFLITE
         case ANIRA_ENGINE_TFLITE: return std::make_shared<LegacyAdapter>(&make_tflite_processor);

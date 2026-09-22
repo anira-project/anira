@@ -148,8 +148,8 @@ Using an engine directly in a custom backend
 --------------------------------------------
 
 A custom backend may drive one of the bundled inference engines itself — for example to use an
-ONNX Runtime execution provider or session option anira's own :cpp:class:`anira::OnnxRuntimeProcessor`
-does not expose. Two rules keep that safe, and they are the same rules anira's own backends follow.
+ONNX Runtime execution provider or session option anira's own ONNX Runtime adapter
+(``src/backends/OnnxRuntimeAdapter.cpp``, internal) does not expose. Two rules keep that safe, and they are the same rules anira's own backends follow.
 
 **Link the engine target.** ``anira::anira`` carries anira's headers and the ``USE_<ENGINE>``
 definitions, but no engine header: anira links its engines privately. The engine's include

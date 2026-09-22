@@ -64,11 +64,18 @@ struct PlanRequest {
 };
 
 /// The adapter of a built-in engine of this build, unprepared; NULL for an engine this build
-/// does not carry. Until the built-in engines have adapters of the descriptor shape, this is
-/// a LegacyAdapter over the engine's 2.x processor, built at prepare from the 2.x
-/// configuration of the record (legacy_config_of), exactly as the core built the processor
-/// from the session's configuration before the plan table.
+/// does not carry. An engine with an adapter of the descriptor shape gets it (the factories
+/// below); until every engine has one, the others ride behind a LegacyAdapter over the
+/// engine's 2.x processor, built at prepare from the 2.x configuration of the record
+/// (legacy_config_of), exactly as the core built the processor from the session's
+/// configuration before the plan table.
 ANIRA_API std::shared_ptr<Adapter> make_builtin_adapter(anira_engine engine);
+
+/// The built-in adapters of the descriptor shape, one factory each, each defined in its own
+/// translation unit (<Engine>Adapter.cpp) where the engine's headers stay; unprepared.
+#ifdef USE_ONNXRUNTIME
+ANIRA_API std::shared_ptr<Adapter> make_onnxruntime_adapter();
+#endif
 
 /// The 2.x configuration a record describes, what a 2.x processor of a built-in engine reads:
 /// one ModelData row on the engine's backend (the path or the bytes, the entry), one

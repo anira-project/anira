@@ -128,7 +128,7 @@ endif()
 
 if(ANIRA_WITH_ONNXRUNTIME)
     anira_setup_backend(onnxruntime)
-    list(APPEND BACKEND_SOURCES src/backends/OnnxRuntimeProcessor.cpp)
+    list(APPEND BACKEND_SOURCES src/backends/OnnxRuntimeAdapter.cpp)
 endif()
 
 if(ANIRA_WITH_TFLITE)

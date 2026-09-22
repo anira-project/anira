@@ -14,7 +14,7 @@ namespace {
 
 int run() {
     // Resolves through the ONNX Runtime anira links (a mismatched copy would make
-    // anira's OnnxRuntimeProcessor throw at construction).
+    // anira's ONNX Runtime adapter throw at prepare).
     const Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "anira-install-consumer");
     const anira::InferenceConfig config{};  // NOLINT(misc-include-cleaner)
     std::printf("onnxruntime %s, anira tensors %zu\n",

@@ -780,10 +780,11 @@ anira::InferenceBackend backend_of_row(const anira::capi::ModelEntry& row, size_
 // The record of one row's model for the engine room (anira::backend::Model): the row's path
 // or its bytes (kept alive through the row's carrier for the adapter's life), the entry of
 // the row's "entry" extension, one TensorInfo per tensor of either side in slot order (the
-// canonical name, the name the slot binds to: the row's tensors record where it names the
-// slot, else the canonical name; the engine's extents under the row's layout; the spec's
-// dtype), the instances and the warm-up of the 2.x configuration, the exclusivity. Everything
-// copied: a pooled adapter never aliases this handler's configuration.
+// canonical name; the export's name where the row's tensors record names the slot, else
+// empty, so that the adapter binds by the canonical name where its engine has one and by
+// position otherwise; the engine's extents under the row's layout; the spec's dtype), the
+// instances and the warm-up of the 2.x configuration, the exclusivity. Everything copied: a
+// pooled adapter never aliases this handler's configuration.
 anira::backend::Model model_of_row(const anira_model_config& model,
                                    const anira::capi::ModelEntry& row,
                                    const anira::capi::Derived& derived,
@@ -810,8 +811,7 @@ anira::backend::Model model_of_row(const anira_model_config& model,
             info.m_name = specs[i].m_name;
             const auto binding = row.m_tensors.find(specs[i].m_name);
             const bool bound = binding != row.m_tensors.end();
-            info.m_engine_name =
-                bound && !binding->second.m_name.empty() ? binding->second.m_name : specs[i].m_name;
+            if (bound) { info.m_engine_name = binding->second.m_name; }
             info.m_dims = anira::capi::engine_dims_of(
                 specs[i],
                 rows[i],
@@ -903,12 +903,14 @@ void build_plans(anira_handler& handler,
 // anira_contract_set_host_domain) on the host's side of the row and the engine's domain on
 // the other, an input read from its host end into the engine and an output written from the
 // engine to its host end; zero-copy, since every engine of the 2.x runtime binds host memory
-// and validate refused any other declaration; the wait strategy the core runs.
+// and validate refused any other declaration; the wait strategy the core runs; how the plan's
+// adapter bound the slot to the engine's tensor at prepare.
 anira_plan_slot host_slot(uint32_t slot,
                           bool is_input,
                           anira_wait_strategy wait,
                           anira_role role,
-                          anira_domain host_domain) noexcept {
+                          anira_domain host_domain,
+                          anira_binding binding) noexcept {
     constexpr auto k_engine_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
     anira_plan_slot row = ANIRA_PLAN_SLOT_INIT;
     row.slot = slot;
@@ -921,10 +923,28 @@ anira_plan_slot host_slot(uint32_t slot,
     row.recipe = k_host_recipe;
     row.reason = nullptr;
     row.role = static_cast<uint32_t>(role);
+    row.binding = static_cast<uint32_t>(binding);
     return row;
 }
 
-// The plan report: the plan rows, the slots of every plan and the extensions each plan's
+// How the adapter of a plan bound one slot (anira::backend::Adapter::bindings), read off the
+// session's plan table under the plan's dense index; by position for a slot the adapter's
+// report does not cover (a table shorter than the report is anira's own bug and stays
+// visible as such in the rows, never a crash).
+anira_binding binding_of(const anira::SessionElement& session,
+                         size_t plan,
+                         bool is_input,
+                         uint32_t slot) noexcept {
+    if (plan >= session.m_plans.size() || session.m_plans[plan].m_adapter == nullptr) {
+        return ANIRA_BINDING_POSITION;
+    }
+    const anira::backend::Bindings& bindings = session.m_plans[plan].m_adapter->bindings();
+    const std::vector<anira_binding>& side = is_input ? bindings.m_inputs : bindings.m_outputs;
+    return slot < side.size() ? side[slot] : ANIRA_BINDING_POSITION;
+}
+
+// The plan report: the plan rows, the slots of every plan (their binding read off the
+// session's prepared adapters, under the same dense index) and the extensions each plan's
 // candidate consumes; every string the rows point at is copied into the report's store.
 void build_report(anira_handler& handler,
                   const anira_model_config& model,
@@ -932,9 +952,11 @@ void build_report(anira_handler& handler,
                   const anira::capi::StageFacts& stages,
                   const anira::capi::HostDomains& host_domains) {
     anira_plan_report& report = handler.m_report;
+    const anira::SessionElement& session = handler.m_manager->session();
     // The strategy the pool runs, first-wins across users: this session is a user now.
     const anira_wait_strategy wait = anira::Core::get_wait_strategy();
-    for (const anira::capi::Plan& plan : handler.m_plans) {
+    for (size_t index = 0; index < handler.m_plans.size(); ++index) {
+        const anira::capi::Plan& plan = handler.m_plans[index];
         report.m_plans.push_back(plan.m_info);
         std::vector<anira_plan_slot> inputs;
         inputs.reserve(handler.m_num_inputs);
@@ -943,7 +965,8 @@ void build_report(anira_handler& handler,
                                        true,
                                        wait,
                                        anira::capi::port_role(handler.m_input_ports[i]),
-                                       host_domains.m_inputs[i]));
+                                       host_domains.m_inputs[i],
+                                       binding_of(session, index, true, i)));
         }
         std::vector<anira_plan_slot> outputs;
         outputs.reserve(handler.m_num_outputs);
@@ -952,7 +975,8 @@ void build_report(anira_handler& handler,
                                         false,
                                         wait,
                                         anira::capi::port_role(handler.m_output_ports[i]),
-                                        host_domains.m_outputs[i]));
+                                        host_domains.m_outputs[i],
+                                        binding_of(session, index, false, i)));
         }
         report.m_inputs.push_back(std::move(inputs));
         report.m_outputs.push_back(std::move(outputs));
@@ -1027,8 +1051,18 @@ const char* wait_strategy_word(uint32_t wait) {
     return wait == ANIRA_WAIT_BLOCKING ? "blocking" : "spin_backoff";
 }
 
-// One Info record per slot row: the tensor's canonical name beside its slot number, the edge
-// and how a completion on it is waited for; the reason only when the row carries one.
+const char* binding_word(uint32_t binding) {
+    switch (binding) {
+        case ANIRA_BINDING_POSITION: return "position";
+        case ANIRA_BINDING_NAME: return "name";
+        case ANIRA_BINDING_ENGINE: return "the engine";
+        default: return "unknown";
+    }
+}
+
+// One Info record per slot row: the tensor's canonical name beside its slot number, the edge,
+// how a completion on it is waited for and how the plan bound the slot to the engine's
+// tensor; the reason only when the row carries one.
 void log_slots(uint32_t plan,
                const std::vector<anira_plan_slot>& slots,
                const std::vector<anira_tensor_spec>& specs,
@@ -1037,7 +1071,7 @@ void log_slots(uint32_t plan,
         const char* name = slot.slot < specs.size() ? specs[slot.slot].m_name.c_str() : "";
         ANIRA_LOG_INFO(anira::log_group::k_capi,
                        "anira_handler_prepare: plan %u: %s %u '%s': %s -> %s, edge %s (allocate "
-                       "%s), wait %s, recipe %s%s%s",
+                       "%s), wait %s, recipe %s, bound by %s%s%s",
                        plan,
                        side,
                        slot.slot,
@@ -1048,6 +1082,7 @@ void log_slots(uint32_t plan,
                        edge_class_word(slot.allocate_class),
                        wait_strategy_word(slot.wait_strategy),
                        slot.recipe != nullptr ? slot.recipe : "none",
+                       binding_word(slot.binding),
                        slot.reason != nullptr ? ", reason: " : "",
                        slot.reason != nullptr ? slot.reason : "");
     }

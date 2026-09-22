@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "backends/Adapter.h"
@@ -32,9 +33,13 @@
 namespace {
 
 using anira::backend::Adapter;
+using anira::backend::Bindings;
 using anira::backend::ChunkBuffers;
+using anira::backend::EngineTensor;
+using anira::backend::ExtentRule;
 using anira::backend::Model;
 using anira::backend::PlanRequest;
+using anira::backend::SlotBinding;
 using anira::backend::Source;
 using anira::backend::TensorInfo;
 
@@ -48,6 +53,46 @@ TensorInfo f32_tensor(const std::string& name, std::vector<int64_t> dims) {
     size_t elements = 1;
     for (const int64_t extent : tensor.m_dims) { elements *= static_cast<size_t>(extent); }
     tensor.m_num_elements = elements;
+    return tensor;
+}
+
+// A record of one float32 tensor of `dims` that the entry's tensors record names `engine_name`.
+TensorInfo named_tensor(const std::string& name,
+                        const std::string& engine_name,
+                        std::vector<int64_t> dims) {
+    TensorInfo tensor = f32_tensor(name, std::move(dims));
+    tensor.m_engine_name = engine_name;
+    return tensor;
+}
+
+// One float32 tensor of an engine's side.
+EngineTensor engine_f32(const std::string& name, std::vector<int64_t> dims) {
+    EngineTensor tensor;
+    tensor.m_name = name;
+    tensor.m_dims = std::move(dims);
+    tensor.m_dtype = ANIRA_DTYPE_F32;
+    tensor.m_type_word = "float32";
+    return tensor;
+}
+
+// The StatusError a call throws; a failure of the case when it throws nothing else.
+template <typename Call>
+anira::StatusError status_error_of(Call&& call) {
+    try {
+        call();
+    } catch (const anira::StatusError& error) { return error; }
+    ADD_FAILURE() << "no StatusError was thrown";
+    return anira::StatusError(ANIRA_OK, "");
+}
+
+// A descriptor over `data` as the packed float32 block of `dims`.
+anira_tensor descriptor_over(std::vector<float>& data, const std::vector<int64_t>& dims) {
+    anira_tensor tensor{};
+    anira_tensor_init_host(&tensor,
+                           data.data(),
+                           ANIRA_DTYPE_F32,
+                           static_cast<uint32_t>(dims.size()),
+                           dims.data());
     return tensor;
 }
 
@@ -645,6 +690,252 @@ TEST(Adapter, LegacyAdapterTakesNoInstanceClaim) {
 }
 
 // ============================================================================================
+// The binding rule and the check
+// ============================================================================================
+
+// A slot the entry's tensors record names binds to that tensor; a slot without a record binds
+// to the tensor of its canonical name where the side has one, else to the tensor at its own
+// position; the engine's order does not matter to a named slot.
+TEST(Adapter, BindSlotsByRecordNameByCanonicalNameAndByPosition) {
+    const std::vector<TensorInfo> slots{named_tensor("audio_in", "data", {1, 1, k_block}),
+                                        f32_tensor("gain", {1}),
+                                        f32_tensor("extra", {1})};
+    const std::vector<std::string> engine{"data", "gain", "other"};
+    const std::vector<SlotBinding> bindings =
+        anira::backend::bind_slots(slots, engine, engine.size(), "test", "input");
+    ASSERT_EQ(bindings.size(), 3U);
+    EXPECT_EQ(bindings[0].m_index, 0U);
+    EXPECT_EQ(bindings[0].m_binding, ANIRA_BINDING_NAME) << "the record's name";
+    EXPECT_EQ(bindings[1].m_index, 1U);
+    EXPECT_EQ(bindings[1].m_binding, ANIRA_BINDING_NAME) << "the canonical name";
+    EXPECT_EQ(bindings[2].m_index, 2U);
+    EXPECT_EQ(bindings[2].m_binding, ANIRA_BINDING_POSITION) << "neither";
+
+    const std::vector<std::string> reordered{"gain", "data"};
+    const std::vector<TensorInfo> two{named_tensor("audio_in", "data", {1, 1, k_block}),
+                                      f32_tensor("gain", {1})};
+    const std::vector<SlotBinding> by_name =
+        anira::backend::bind_slots(two, reordered, 2, "test", "input");
+    EXPECT_EQ(by_name[0].m_index, 1U);
+    EXPECT_EQ(by_name[1].m_index, 0U);
+
+    // A side without names: every slot by position.
+    const std::vector<std::string> unnamed{"", ""};
+    const std::vector<SlotBinding> positional =
+        anira::backend::bind_slots({f32_tensor("a", {1}), f32_tensor("b", {1})},
+                                   unnamed,
+                                   2,
+                                   "test",
+                                   "output");
+    EXPECT_EQ(positional[0].m_index, 0U);
+    EXPECT_EQ(positional[0].m_binding, ANIRA_BINDING_POSITION);
+    EXPECT_EQ(positional[1].m_index, 1U);
+    EXPECT_EQ(positional[1].m_binding, ANIRA_BINDING_POSITION);
+
+    // The 2.x path: no names on either side.
+    const std::vector<SlotBinding> legacy =
+        anira::backend::bind_slots({f32_tensor("", {1})}, unnamed, 1, "test", "input");
+    EXPECT_EQ(legacy[0].m_index, 0U);
+    EXPECT_EQ(legacy[0].m_binding, ANIRA_BINDING_POSITION);
+}
+
+TEST(Adapter, BindSlotsRefusals) {
+    // A record name the side lacks: CONFIG listing the names.
+    {
+        const anira::StatusError error = status_error_of([] {
+            anira::backend::bind_slots({named_tensor("in", "ghost", {1})},
+                                       {"data", "gain"},
+                                       2,
+                                       "onnxruntime",
+                                       "input");
+        });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        const std::string message = error.what();
+        EXPECT_NE(message.find("onnxruntime: input slot 0 'in'"), std::string::npos) << message;
+        EXPECT_NE(message.find("'ghost'"), std::string::npos) << message;
+        EXPECT_NE(message.find("'data', 'gain'"), std::string::npos) << message;
+    }
+    // A record name on a side without names.
+    {
+        const anira::StatusError error = status_error_of([] {
+            anira::backend::bind_slots({named_tensor("out", "y", {1})},
+                                       {""},
+                                       1,
+                                       "libtorch",
+                                       "output");
+        });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string(error.what()).find("the side binds by position alone"),
+                  std::string::npos)
+            << error.what();
+    }
+    // A position the engine has no tensor at.
+    {
+        const anira::StatusError error = status_error_of([] {
+            anira::backend::bind_slots({f32_tensor("a", {1}), f32_tensor("b", {1})},
+                                       {"x"},
+                                       1,
+                                       "test",
+                                       "input");
+        });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string(error.what()).find("binds by position, and the test model has 1"),
+                  std::string::npos)
+            << error.what();
+    }
+    // An engine tensor no slot binds.
+    {
+        const anira::StatusError error = status_error_of([] {
+            anira::backend::bind_slots({f32_tensor("a", {1})}, {"x", "y"}, 2, "test", "input");
+        });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string(error.what()).find("'y' (index 1) is bound by no slot"),
+                  std::string::npos)
+            << error.what();
+    }
+    // The same engine tensor at or above `required` may stay unbound (a LibTorch argument
+    // with a default value).
+    EXPECT_NO_THROW(
+        anira::backend::bind_slots({f32_tensor("a", {1})}, {"x", "y"}, 1, "test", "input"));
+    // Two slots on one engine tensor: one by name, one by position.
+    {
+        const anira::StatusError error = status_error_of([] {
+            anira::backend::bind_slots({f32_tensor("p", {1}), f32_tensor("x", {1})},
+                                       {"x", "y"},
+                                       2,
+                                       "test",
+                                       "input");
+        });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        const std::string message = error.what();
+        EXPECT_NE(message.find("slots 0 'p' (by position) and 1 'x' (by name) both bind"),
+                  std::string::npos)
+            << message;
+    }
+}
+
+TEST(Adapter, CheckEngineTensorComparesDtypeRankAndEveryStaticExtent) {
+    const TensorInfo slot = f32_tensor("audio_in", {1, 1, k_block});
+    EXPECT_NO_THROW(anira::backend::check_engine_tensor(slot,
+                                                        engine_f32("data", {1, 1, k_block}),
+                                                        ExtentRule::Exact,
+                                                        "test",
+                                                        "input"));
+    EXPECT_NO_THROW(anira::backend::check_engine_tensor(slot,
+                                                        engine_f32("data", {1, 1, -1}),
+                                                        ExtentRule::Exact,
+                                                        "test",
+                                                        "input"))
+        << "a dynamic extent matches anything";
+    {
+        const anira::StatusError error = status_error_of([&slot] {
+            anira::backend::check_engine_tensor(slot,
+                                                engine_f32("data", {1, k_block}),
+                                                ExtentRule::Exact,
+                                                "test",
+                                                "input");
+        });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        const std::string message = error.what();
+        EXPECT_NE(message.find("input tensor 'audio_in' bound to the model's 'data'"),
+                  std::string::npos)
+            << message;
+        EXPECT_NE(message.find("the ranks differ"), std::string::npos) << message;
+    }
+    {
+        const anira::StatusError error = status_error_of([&slot] {
+            anira::backend::check_engine_tensor(slot,
+                                                engine_f32("data", {1, 1, 256}),
+                                                ExtentRule::Exact,
+                                                "test",
+                                                "input");
+        });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        const std::string message = error.what();
+        EXPECT_NE(message.find("[1, 1, 256]"), std::string::npos) << message;
+        EXPECT_NE(message.find("[1, 1, 512]"), std::string::npos) << message;
+        EXPECT_NE(message.find("axis 2: 256 against 512"), std::string::npos) << message;
+    }
+    {
+        EngineTensor int16 = engine_f32("data", {1, 1, k_block});
+        int16.m_dtype = ANIRA_DTYPE_I16;
+        int16.m_type_word = "int16";
+        const anira::StatusError error = status_error_of([&slot, &int16] {
+            anira::backend::check_engine_tensor(slot, int16, ExtentRule::Exact, "test", "input");
+        });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string(error.what()).find("element type is int16"), std::string::npos)
+            << error.what();
+    }
+    // The upper-bound rule of a planned engine: at or below the bound matches, above does not.
+    EXPECT_NO_THROW(anira::backend::check_engine_tensor(slot,
+                                                        engine_f32("", {1, 1, 65536}),
+                                                        ExtentRule::UpperBound,
+                                                        "executorch",
+                                                        "input"));
+    {
+        const anira::StatusError error = status_error_of([&slot] {
+            anira::backend::check_engine_tensor(slot,
+                                                engine_f32("", {1, 1, 256}),
+                                                ExtentRule::UpperBound,
+                                                "executorch",
+                                                "input");
+        });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        const std::string message = error.what();
+        EXPECT_NE(message.find("bound to the model's unnamed input"), std::string::npos) << message;
+        EXPECT_NE(message.find("256 is the planned upper bound of 512"), std::string::npos)
+            << message;
+    }
+    {
+        const anira::StatusError error = status_error_of([&slot] {
+            anira::backend::check_engine_tensor(slot,
+                                                engine_f32("data", {1, 1, 65536}),
+                                                ExtentRule::Exact,
+                                                "test",
+                                                "input");
+        });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG) << "exact means exact";
+    }
+}
+
+TEST(Adapter, BindSideBindsThenChecksAndBindingsOfReports) {
+    const std::vector<TensorInfo> slots{f32_tensor("audio_in", {1, 1, k_block}),
+                                        f32_tensor("gain", {1})};
+    const std::vector<EngineTensor> engine{engine_f32("data", {1, 1, -1}), engine_f32("gain", {1})};
+    const std::vector<SlotBinding> inputs =
+        anira::backend::bind_side(slots, engine, 2, ExtentRule::Exact, "test", "input");
+    EXPECT_EQ(inputs[0].m_binding, ANIRA_BINDING_POSITION);
+    EXPECT_EQ(inputs[1].m_binding, ANIRA_BINDING_NAME);
+    const std::vector<EngineTensor> wrong{engine_f32("data", {1, 1, 256}), engine_f32("gain", {1})};
+    const anira::StatusError error = status_error_of([&slots, &wrong] {
+        anira::backend::bind_side(slots, wrong, 2, ExtentRule::Exact, "test", "input");
+    });
+    EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+    const Bindings report =
+        anira::backend::bindings_of(inputs,
+                                    {SlotBinding{.m_index = 0, .m_binding = ANIRA_BINDING_NAME}});
+    EXPECT_EQ(report.m_inputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_NAME}));
+    EXPECT_EQ(report.m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
+}
+
+// Every slot reports position until the adapter's prepare says otherwise: the legacy adapter's
+// 2.x backend binds by position.
+TEST(Adapter, PrepareReportsPositionForEverySlotUntilTheAdapterSaysOtherwise) {
+    RecordingAdapter adapter;
+    EXPECT_TRUE(adapter.bindings().m_inputs.empty());
+    adapter.prepare(gain_model());
+    EXPECT_EQ(adapter.bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
+    EXPECT_EQ(adapter.bindings().m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
+    anira::InferenceConfig config = custom_only_config();
+    RecordingBackend backend(config);
+    anira::backend::LegacyAdapter legacy(backend);
+    legacy.prepare(gain_model());
+    EXPECT_EQ(legacy.bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
+}
+
+// ============================================================================================
 // The built-in adapters
 // ============================================================================================
 
@@ -665,3 +956,234 @@ TEST(Adapter, MakeBuiltInAdapterAnswersTheEnginesOfTheBuild) {
     EXPECT_EQ(anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME), nullptr);
 #endif
 }
+
+// ============================================================================================
+// ONNX Runtime
+// ============================================================================================
+
+#ifdef USE_ONNXRUNTIME
+
+namespace {
+
+std::string gain_onnx() {
+    return ANIRA_EXTRAS_MODELS_DIR
+        "/model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono.onnx";
+}
+
+std::string accumulator_onnx() {
+    return ANIRA_EXTRAS_MODELS_DIR
+        "/model-pool/example-models/StatefulAccumulatorNetwork/models/"
+        "stateful_accumulator_network_stereo.onnx";
+}
+
+// The bundled gain model as gain.model.json describes it: the canonical names, no records.
+// The graph's names are data / gain / processed_data / peak.
+Model onnx_gain_model(uint32_t warm_up = 1) {
+    Model model;
+    model.m_engine = ANIRA_ENGINE_ONNXRUNTIME;
+    model.m_path = gain_onnx();
+    model.m_inputs.push_back(f32_tensor("audio_in", {1, 1, k_block}));
+    model.m_inputs.push_back(f32_tensor("gain", {1}));
+    model.m_outputs.push_back(f32_tensor("audio_out", {1, 1, k_block}));
+    model.m_outputs.push_back(f32_tensor("gain_out", {1}));
+    model.m_warm_up = warm_up;
+    return model;
+}
+
+// The bundled accumulator as stateful_accumulator.model.json describes it: the canonical names
+// are the graph's (state_in / data / processed_data / state_out).
+Model onnx_accumulator_model() {
+    Model model;
+    model.m_engine = ANIRA_ENGINE_ONNXRUNTIME;
+    model.m_path = accumulator_onnx();
+    model.m_inputs.push_back(f32_tensor("state_in", {1, 2, 2}));
+    model.m_inputs.push_back(f32_tensor("data", {1, 2, 64}));
+    model.m_outputs.push_back(f32_tensor("processed_data", {1, 2, 64}));
+    model.m_outputs.push_back(f32_tensor("state_out", {1, 2, 2}));
+    model.m_warm_up = 1;
+    return model;
+}
+
+}  // namespace
+
+// The gain: audio_in and the two outputs bind by position (the graph names them data,
+// processed_data and peak), the gain input by its canonical name; the check passes on the
+// graph's [1, 1, -1] and [1]; the run applies the gain over the descriptors' memory, in place.
+TEST(AdapterOnnxRuntime, TheGainBindsByPositionAndByNameAndRunsOverTheDescriptors) {
+    const std::shared_ptr<Adapter> adapter =
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+    ASSERT_NE(adapter, nullptr);
+    adapter->prepare(onnx_gain_model());
+    ASSERT_TRUE(adapter->prepared());
+    EXPECT_EQ(adapter->bindings().m_inputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_NAME}));
+    EXPECT_EQ(adapter->bindings().m_outputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
+
+    std::vector<float> audio_in(k_block);
+    for (size_t n = 0; n < k_block; ++n) { audio_in[n] = static_cast<float>(n) / k_block; }
+    std::vector<float> gain{0.5F};
+    std::vector<float> audio_out(k_block, -1.F);
+    std::vector<float> gain_out{-1.F};
+    const std::vector<anira_tensor> inputs{descriptor_over(audio_in, {1, 1, k_block}),
+                                           descriptor_over(gain, {1})};
+    std::vector<anira_tensor> outputs{descriptor_over(audio_out, {1, 1, k_block}),
+                                      descriptor_over(gain_out, {1})};
+    for (int run = 0; run < 2; ++run) {
+        ASSERT_EQ(adapter->run(context_of(inputs, outputs), nullptr, false), ANIRA_OK);
+        for (size_t n = 0; n < k_block; ++n) {
+            ASSERT_EQ(audio_out[n], 0.5F * audio_in[n]) << "sample " << n;
+        }
+        EXPECT_GT(gain_out[0], 0.F) << "the peak landed in the caller's memory";
+    }
+}
+
+// The accumulator's canonical names are the graph's: every slot binds by name, whatever order
+// the slots are declared in, and the closed form of one block holds on a zero state.
+TEST(AdapterOnnxRuntime, TheAccumulatorBindsByNameOnEverySlotInAnyOrder) {
+    Model model = onnx_accumulator_model();
+    std::swap(model.m_inputs[0], model.m_inputs[1]);    // data first, state_in second
+    std::swap(model.m_outputs[0], model.m_outputs[1]);  // state_out first
+    const std::shared_ptr<Adapter> adapter =
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+    adapter->prepare(model);
+    EXPECT_EQ(adapter->bindings().m_inputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_NAME, ANIRA_BINDING_NAME}));
+    EXPECT_EQ(adapter->bindings().m_outputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_NAME, ANIRA_BINDING_NAME}));
+
+    std::vector<float> data(128);
+    for (size_t n = 0; n < data.size(); ++n) { data[n] = static_cast<float>(n % 7); }
+    std::vector<float> state_in(4, 0.F);
+    std::vector<float> state_out(4, -1.F);
+    std::vector<float> processed(128, -1.F);
+    const std::vector<anira_tensor> inputs{descriptor_over(data, {1, 2, 64}),
+                                           descriptor_over(state_in, {1, 2, 2})};
+    std::vector<anira_tensor> outputs{descriptor_over(state_out, {1, 2, 2}),
+                                      descriptor_over(processed, {1, 2, 64})};
+    ASSERT_EQ(adapter->run(context_of(inputs, outputs), nullptr, false), ANIRA_OK);
+    for (size_t n = 0; n < data.size(); ++n) { ASSERT_EQ(processed[n], data[n]) << "sample " << n; }
+    float sum0 = 0.F;
+    float sum1 = 0.F;
+    for (size_t n = 0; n < 64; ++n) {
+        sum0 += data[n];
+        sum1 += data[64 + n];
+    }
+    EXPECT_EQ(state_out[0], sum0);
+    EXPECT_EQ(state_out[1], 1.F);
+    EXPECT_EQ(state_out[2], sum1);
+    EXPECT_EQ(state_out[3], 1.F);
+}
+
+TEST(AdapterOnnxRuntime, PrepareRefusals) {
+    // A record naming a tensor the graph lacks: CONFIG listing the graph's names.
+    {
+        Model model = onnx_gain_model();
+        model.m_inputs[0].m_engine_name = "ghost";
+        const std::shared_ptr<Adapter> adapter =
+            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        const std::string message = error.what();
+        EXPECT_NE(message.find("onnxruntime: input slot 0 'audio_in'"), std::string::npos)
+            << message;
+        EXPECT_NE(message.find("'ghost'"), std::string::npos) << message;
+        EXPECT_NE(message.find("'data', 'gain'"), std::string::npos) << message;
+        EXPECT_FALSE(adapter->prepared());
+    }
+    // A shape the graph does not have: CONFIG naming the slot, the graph tensor and both shapes.
+    {
+        Model model = onnx_gain_model();
+        model.m_inputs[1] = f32_tensor("gain", {2});
+        const std::shared_ptr<Adapter> adapter =
+            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        const std::string message = error.what();
+        EXPECT_NE(message.find("input tensor 'gain' bound to the model's 'gain'"),
+                  std::string::npos)
+            << message;
+        EXPECT_NE(message.find("axis 0: 1 against 2"), std::string::npos) << message;
+    }
+    // A rank the graph does not have.
+    {
+        Model model = onnx_gain_model();
+        model.m_outputs[0] = f32_tensor("audio_out", {k_block});
+        const std::shared_ptr<Adapter> adapter =
+            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string(error.what()).find("the ranks differ"), std::string::npos)
+            << error.what();
+    }
+    // Bytes ONNX Runtime cannot parse: MODEL_LOAD with its text and the location.
+    {
+        const std::string junk = "definitely not a model";
+        Model model = onnx_gain_model();
+        model.m_path.clear();
+        model.m_bytes = junk.data();
+        model.m_num_bytes = junk.size();
+        const std::shared_ptr<Adapter> adapter =
+            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_MODEL_LOAD);
+        EXPECT_NE(std::string(error.what()).find("onnxruntime: memory: "), std::string::npos)
+            << error.what();
+    }
+    // A missing file: NO_SUCH_FILE, before ONNX Runtime sees the path.
+    {
+        Model model = onnx_gain_model();
+        model.m_path = "this/model/does/not/exist.onnx";
+        const std::shared_ptr<Adapter> adapter =
+            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_NO_SUCH_FILE);
+    }
+    // An int16 record: CONFIG naming the engine and the tensor, before the file is opened.
+    {
+        Model model = onnx_gain_model();
+        model.m_path = "this/model/does/not/exist.onnx";
+        model.m_inputs[0].m_dtype = ANIRA_DTYPE_I16;
+        const std::shared_ptr<Adapter> adapter =
+            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string(error.what()).find("onnxruntime: input tensor 'audio_in'"),
+                  std::string::npos)
+            << error.what();
+    }
+}
+
+// A descriptor the adapter cannot hand the engine fails the call with INVALID_ARGUMENT, and
+// nothing is written; a shorter or a foreign-typed block are the cases.
+TEST(AdapterOnnxRuntime, ADescriptorTheAdapterCannotBindFailsTheCall) {
+    const std::shared_ptr<Adapter> adapter =
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+    adapter->prepare(onnx_gain_model(0));
+    std::vector<float> audio_in(k_block, 0.25F);
+    std::vector<float> gain{0.5F};
+    std::vector<float> audio_out(k_block, -1.F);
+    std::vector<float> gain_out{-1.F};
+    std::vector<anira_tensor> inputs{descriptor_over(audio_in, {1, 1, k_block / 2}),
+                                     descriptor_over(gain, {1})};
+    std::vector<anira_tensor> outputs{descriptor_over(audio_out, {1, 1, k_block}),
+                                      descriptor_over(gain_out, {1})};
+    EXPECT_EQ(adapter->run(context_of(inputs, outputs), nullptr, false),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "half the elements";
+    EXPECT_EQ(audio_out[0], -1.F) << "nothing ran";
+    inputs[0] = descriptor_over(audio_in, {1, 1, k_block});
+    inputs[0].dtype = ANIRA_DTYPE_I16;
+    EXPECT_EQ(adapter->run(context_of(inputs, outputs), nullptr, false),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "not float32";
+    inputs[0].dtype = ANIRA_DTYPE_F32;
+    anira_engine_ctx short_ctx = context_of(inputs, outputs);
+    short_ctx.num_inputs = 1;
+    EXPECT_EQ(adapter->run(short_ctx, nullptr, false), ANIRA_ERROR_INVALID_ARGUMENT)
+        << "a context of another slot count";
+    EXPECT_EQ(adapter->run(context_of(inputs, outputs), nullptr, false), ANIRA_OK);
+    EXPECT_EQ(audio_out[0], 0.125F);
+}
+
+#endif  // USE_ONNXRUNTIME
