@@ -948,8 +948,7 @@ enum class PrepareMode : uint8_t { Ok, ThrowError, ThrowRuntimeError, ThrowInt, 
 /// output first.
 class CountingStage : public anira::Stage {
 public:
-    CountingStage(std::string_view stage_name, uint32_t mask)
-        : anira::Stage(stage_name), m_mask(mask) {}
+    explicit CountingStage(uint32_t mask) : m_mask(mask) {}
 
     uint32_t phases() const noexcept override { return m_mask; }
     /// Both bits by default: every body here allocates nothing and blocks on nothing, and a
@@ -1119,13 +1118,13 @@ void expect_scaled_passthrough(anira_handler* h,
 
 // A Stage subclass end to end through a C-created handler: every phase of the mask runs once
 // per chunk with the context its phase promises, "call super" is anira's default body, prepare
-// sees the handler and the report, consumed_kinds joins the walk under the stage's name, and the
+// sees the handler and the report, consumed_kinds joins the walk as the consumer "stage", and the
 // shared_ptr the pipeline took is given back exactly once, when the last carrier dies.
 TEST(AbiCxx, AStageSubclassRunsItsPhasesThroughACHandler) {
     const anira_test::Context context;
     ModelConfig model = stage_stream_model();
     model.model_ext(0, anira::ext::Entry{"forward"});  // consumed by the stage alone
-    auto stage = std::make_shared<CountingStage>("counting", anira::Stage::k_all_phases);
+    auto stage = std::make_shared<CountingStage>(anira::Stage::k_all_phases);
     stage->m_consumes_entry = true;
     stage->m_scale = 0.5F;
     EXPECT_EQ(stage.use_count(), 1);
@@ -1144,11 +1143,10 @@ TEST(AbiCxx, AStageSubclassRunsItsPhasesThroughACHandler) {
     CHandler handler(context, *pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(stage.use_count(), 2) << "the handler shares the pipeline's carrier";
-    // flags() reached the descriptor, and the name with it.
+    // flags() reached the descriptor.
     ASSERT_NE(handler.m_handler->m_pipeline.m_stage, nullptr);
     EXPECT_EQ(handler.m_handler->m_pipeline.m_stage->desc().flags,
               ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS);
-    EXPECT_STREQ(handler.m_handler->m_pipeline.m_stage->name(), "counting");
     pipe.reset();  // the handler carries the stage alone now
     EXPECT_EQ(stage.use_count(), 2);
     EXPECT_EQ(stage->m_released.load(), 0);
@@ -1158,7 +1156,7 @@ TEST(AbiCxx, AStageSubclassRunsItsPhasesThroughACHandler) {
     EXPECT_EQ(stage->m_handler, handler.m_handler);
     EXPECT_EQ(stage->m_plans, 1U);
     ASSERT_EQ(stage->m_consumers.size(), 1U);
-    EXPECT_EQ(stage->m_consumers[0], "counting");
+    EXPECT_EQ(stage->m_consumers[0], "stage");
 
     std::vector<float> in;
     std::vector<float> out;
@@ -1183,7 +1181,7 @@ TEST(AbiCxx, AStageSubclassRunsItsPhasesThroughACHandler) {
 TEST(AbiCxx, APostOnlyStageLeavesTheDefaultPreProcessRunning) {
     const anira_test::Context context;
     const ModelConfig model = stage_stream_model();
-    auto stage = std::make_shared<CountingStage>("post-only", anira::Stage::k_post_process);
+    auto stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
     stage->m_scale = 2.0F;
     const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
                                anira::stage::Custom(stage)};
@@ -1204,7 +1202,7 @@ TEST(AbiCxx, APostOnlyStageLeavesTheDefaultPreProcessRunning) {
     expect_scaled_passthrough(handler.m_handler, in, out, 2.0F);
 
     // A stage of no phase at all is one of prepare and release: both defaults keep running.
-    auto silent = std::make_shared<CountingStage>("", 0U);
+    auto silent = std::make_shared<CountingStage>(0U);
     const anira::Pipeline quiet{anira::stage::Inference(model, {custom_row()}),
                                 anira::stage::Custom(silent)};
     CHandler plain(context, quiet);
@@ -1227,8 +1225,7 @@ TEST(AbiCxx, AddRefusesANullStageAndAnUnknownPhaseBit) {
     EXPECT_TRUE(null_stage.m_thrown);
     EXPECT_EQ(null_stage.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
 
-    auto stage = std::make_shared<CountingStage>("inference-bit",
-                                                 anira::Stage::phase_bit(ANIRA_PHASE_INFERENCE));
+    auto stage = std::make_shared<CountingStage>(anira::Stage::phase_bit(ANIRA_PHASE_INFERENCE));
     const Thrown bit = thrown_by([&] { pipe.add(anira::stage::Custom(stage)); });
     EXPECT_TRUE(bit.m_thrown);
     EXPECT_EQ(bit.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
@@ -1259,7 +1256,7 @@ TEST(AbiCxx, AThrowingStagePrepareFailsTheHandlersPrepare) {
     const anira_test::Context context;
     anira_test::RecordCollector collector;
     const ModelConfig model = stage_stream_model();
-    auto stage = std::make_shared<CountingStage>("moody", anira::Stage::k_post_process);
+    auto stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
     const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
                                anira::stage::Custom(stage)};
     CHandler handler(context, pipe);
@@ -1268,7 +1265,8 @@ TEST(AbiCxx, AThrowingStagePrepareFailsTheHandlersPrepare) {
 
     stage->m_mode = PrepareMode::ThrowError;
     EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
-    EXPECT_NE(std::string_view(handler.m_err.message).find("stage 'moody'"), std::string_view::npos)
+    EXPECT_NE(std::string_view(handler.m_err.message).find("the stage refused prepare"),
+              std::string_view::npos)
         << handler.m_err.message;
     EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
 
@@ -1279,8 +1277,7 @@ TEST(AbiCxx, AThrowingStagePrepareFailsTheHandlersPrepare) {
     stage->m_mode = PrepareMode::ReturnBudget;
     EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_BUDGET);
 #ifdef ENABLE_LOGGING
-    EXPECT_TRUE(
-        collector.has("stage 'moody': prepare threw: the stage refuses this plan", "native"));
+    EXPECT_TRUE(collector.has("the stage's prepare threw: the stage refuses this plan", "native"));
     EXPECT_TRUE(collector.has("prepare threw: the stage ran out of luck", "native"));
     EXPECT_TRUE(collector.has("an exception that is no std::exception", "native"));
 #endif
@@ -1297,7 +1294,7 @@ TEST(AbiCxx, AThrowingStagePrepareFailsTheHandlersPrepare) {
 
 // Two pipelines that take one stage: a copy and a release per add.
 TEST(AbiCxx, OneStageInTwoPipelinesIsReleasedOncePerAdd) {
-    auto stage = std::make_shared<CountingStage>("shared", anira::Stage::k_after_inference);
+    auto stage = std::make_shared<CountingStage>(anira::Stage::k_after_inference);
     const anira::stage::Custom custom(stage);
     {
         anira::Pipeline first;
@@ -1314,16 +1311,15 @@ TEST(AbiCxx, OneStageInTwoPipelinesIsReleasedOncePerAdd) {
 // A pipeline holds one custom stage: the second add throws ANIRA_ERROR_INVALID_STATE, keeps no
 // copy of the refused stage and never calls its release; the first stage is untouched.
 TEST(AbiCxx, ASecondCustomStageIsRefused) {
-    auto first = std::make_shared<CountingStage>("first", anira::Stage::k_post_process);
-    auto second = std::make_shared<CountingStage>("second", anira::Stage::k_after_inference);
+    auto first = std::make_shared<CountingStage>(anira::Stage::k_post_process);
+    auto second = std::make_shared<CountingStage>(anira::Stage::k_after_inference);
     anira::Pipeline pipe;
     pipe.add(anira::stage::Custom(first));
     EXPECT_EQ(first.use_count(), 2);
     const Thrown refused = thrown_by([&] { pipe.add(anira::stage::Custom(second)); });
     EXPECT_TRUE(refused.m_thrown);
     EXPECT_EQ(refused.m_status, ANIRA_ERROR_INVALID_STATE);
-    EXPECT_NE(refused.m_what.find("already has a stage ('first')"), std::string::npos)
-        << refused.m_what;
+    EXPECT_NE(refused.m_what.find("already has a stage"), std::string::npos) << refused.m_what;
     EXPECT_EQ(second.use_count(), 1);
     EXPECT_EQ(second->m_released.load(), 0);
     EXPECT_EQ(first.use_count(), 2);
@@ -1336,7 +1332,7 @@ TEST(AbiCxx, ASecondCustomStageIsRefused) {
 TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
     const anira_test::Context context;
     const ModelConfig model = stage_stream_model();
-    auto stage = std::make_shared<CountingStage>("unpromised", anira::Stage::k_pre_process);
+    auto stage = std::make_shared<CountingStage>(anira::Stage::k_pre_process);
     stage->m_flags = 0;
     {
         const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
@@ -1344,7 +1340,7 @@ TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
         CHandler handler(context, pipe);
         ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
         EXPECT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_ERROR_CONFIG);
-        EXPECT_NE(std::string_view(handler.m_err.message).find("stage 'unpromised'"),
+        EXPECT_NE(std::string_view(handler.m_err.message).find("the stage: pre_process is filled"),
                   std::string_view::npos)
             << handler.m_err.message;
         EXPECT_NE(std::string_view(handler.m_err.message).find("ANIRA_STAGE_REALTIME_PRE_POST"),
@@ -1385,8 +1381,6 @@ namespace {
 /// of the ring, float32 into the model tensor. Nothing in anira converts.
 class Int16InputStage : public anira::Stage {
 public:
-    Int16InputStage() : anira::Stage("int16-to-float") {}
-
     uint32_t phases() const noexcept override { return k_pre_process; }
     uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
 

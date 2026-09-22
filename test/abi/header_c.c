@@ -224,9 +224,8 @@ int anira_header_c_probe(void) {
         ctx.ticket = ANIRA_TICKET_INVALID;
         ctx.entry = 0u;
         ctx.frame = kinds; /* any address: the frame is anira's, this one is never read */
-        checks += stage.struct_size == sizeof(anira_stage_desc) && stage.name == NULL ? 1 : 0;
+        checks += stage.struct_size == sizeof(anira_stage_desc) && stage.user_data == NULL ? 1 : 0;
         checks += stage.flags == 0u && stage.pre_process == NULL ? 1 : 0;
-        stage.name = "probe";
         stage.consumed_kinds = kinds;
         stage.num_consumed_kinds = 1u;
         /* The real-time promise of the two host-end phases, as a Hard contract requires it. */

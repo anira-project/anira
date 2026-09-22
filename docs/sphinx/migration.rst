@@ -269,7 +269,7 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
    * - a virtual that throws
      - A returned status: the callbacks are ``noexcept``, a status other than ``ANIRA_OK``
        fails the chunk (zeros at its stream position) and is latched in
-       ``anira_handler_rt_error`` under the stage's name.
+       ``anira_handler_rt_error``.
    * - the audio-thread rule of ``pre_process`` / ``post_process``
      - The flags: ``ANIRA_STAGE_REALTIME_PRE_POST`` is required under a Hard contract
        (``Stage::flags()``), ``ANIRA_STAGE_REALTIME_HOOKS`` is the promise for the two hooks.

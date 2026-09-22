@@ -51,11 +51,16 @@ namespace anira::capi {
 /// The one stage of a pipeline: the descriptor copied by anira_pipeline_add_stage, with the
 /// strings it names owned here. The pipeline and every handler created from it share the
 /// carrier (anira_handler_create copies the pipeline); release fires once, when the last of
-/// them dies.
+/// them dies. The stage has no name: a pipeline holds one, so every record about it says "the
+/// stage" and its consumer rows read k_stage_consumer.
 class ANIRA_API StageCarrier {
 public:
+    /// What the plan report's anira_plan_ext rows name as the consumer of the kinds the stage
+    /// declares.
+    static constexpr const char* k_stage_consumer = "stage";
+
     /// `desc` is already the library's own record (copied within the caller's struct_size over
-    /// ANIRA_STAGE_DESC_INIT and checked); a stage without a name is named "stage".
+    /// ANIRA_STAGE_DESC_INIT and checked).
     explicit StageCarrier(const anira_stage_desc& desc);
     ~StageCarrier();
     StageCarrier(const StageCarrier&) = delete;
@@ -63,22 +68,19 @@ public:
     StageCarrier(StageCarrier&&) = delete;
     StageCarrier& operator=(StageCarrier&&) = delete;
 
-    /// The descriptor; name and consumed_kinds point into this carrier.
+    /// The descriptor; consumed_kinds points into this carrier.
     const anira_stage_desc& desc() const noexcept { return m_desc; }
-    /// Never NULL, never empty.
-    const char* name() const noexcept { return m_name.c_str(); }
     const std::vector<std::string>& consumed_kinds() const noexcept { return m_kinds; }
 
 private:
     anira_stage_desc m_desc;
-    std::string m_name;
     std::vector<std::string> m_kinds;
     std::vector<const char*> m_kind_pointers;
 };
 
 /// What a pipeline's stage means to the validator: which ring-moving phases it fills, and the
-/// extension kinds it declares, as a consumer named after it. NULL is a pipeline without a
-/// stage: the defaults everywhere.
+/// extension kinds it declares, as the consumer StageCarrier::k_stage_consumer. NULL is a
+/// pipeline without a stage: the defaults everywhere.
 ANIRA_API StageFacts stage_facts(const StageCarrier* stage);
 
 /// What anira_stage_ctx::frame names: what the six context accessors of anira/abi/stage.h
@@ -102,10 +104,6 @@ struct StageFrame {
     const std::vector<std::vector<int64_t>>* m_output_shapes = nullptr;
     /// The latch a refused accessor records into (the session's); NULL records nothing.
     anira::RtLatch* m_rt = nullptr;
-    /// The stage whose callback is running, for that record; NULL outside one. It is here and
-    /// not read from the session's RingOwner because before_inference and after_inference run
-    /// on the inference threads, several at a time.
-    const char* m_stage = nullptr;
 };
 
 /// The one PrePostProcessor the session of a C-created handler sees: it fills an
@@ -177,22 +175,24 @@ private:
         ANIRA_NONBLOCKING;
     size_t entry_of_outputs(const std::vector<anira::BufferF>& outputs) const noexcept
         ANIRA_NONBLOCKING;
-    /// The frame of one phase call: the ports, the shapes and the latch. The entry point adds
-    /// the buffers of the side its phase exposes.
+    /// The frame of one phase call: the ports, the shapes and the latch, and the buffers of
+    /// the side the phase exposes (the two _with_ forms).
     StageFrame make_frame() const noexcept ANIRA_NONBLOCKING;
+    StageFrame make_frame_with_inputs(std::vector<anira::BufferF>& inputs) const noexcept
+        ANIRA_NONBLOCKING;
+    StageFrame make_frame_with_outputs(std::vector<anira::BufferF>& outputs) const noexcept
+        ANIRA_NONBLOCKING;
     /// The eight scalars of a ctx for the chunk at `entry`, and `frame` as its frame; the
     /// reserved slots stay NULL.
     anira_stage_ctx make_ctx(anira_stage_phase phase,
                              size_t entry,
                              const StageFrame& frame) const noexcept ANIRA_NONBLOCKING;
     /// Runs the stage's slot of one phase (the caller checked that it is filled); a status
-    /// that is not ANIRA_OK is recorded with the stage's name and returned. `frame` is the one
-    /// `ctx` names: it carries the running stage's name around the callback.
-    anira_status run_phase(const anira_stage_ctx& ctx,
-                           StageFrame& frame,
-                           bool on_driver) noexcept ANIRA_NONBLOCKING;
-    /// Records a failed phase: last-wins into rt_error, one record per kind naming the stage.
-    void fail(const char* stage, uint32_t phase, anira_status status) noexcept ANIRA_NONBLOCKING;
+    /// that is not ANIRA_OK is recorded and returned.
+    anira_status run_phase(const anira_stage_ctx& ctx) noexcept ANIRA_NONBLOCKING;
+    /// Records a failed phase: last-wins into rt_error, one record per kind naming the phase
+    /// and `who` ran it (k_the_stage, k_the_default).
+    void fail(const char* who, uint32_t phase, anira_status status) noexcept ANIRA_NONBLOCKING;
     /// The count check around the two ring-moving phases, over the stream ports of one side:
     /// snapshot() reads available() of every channel ahead of the phase; the check behind it
     /// repairs a shortfall (an input ring discards to its hop, an output ring is topped up with
@@ -206,9 +206,14 @@ private:
                     size_t channel,
                     size_t expected,
                     size_t moved) noexcept ANIRA_NONBLOCKING;
-    /// The name the count check reports for a ring-moving phase: the stage's when it fills the
-    /// phase, "(default)" when the default body ran.
+    /// Who the count check reports for a ring-moving phase: k_the_stage when the stage fills
+    /// the phase, k_the_default when the default body ran.
     const char* mover(uint32_t phase) const noexcept ANIRA_NONBLOCKING;
+
+    /// The words a record about a phase opens with: the stage's callback ran, or the default
+    /// body did.
+    static constexpr const char* k_the_stage = "the stage";
+    static constexpr const char* k_the_default = "the default body";
 
     const StageCarrier* m_stage;  ///< NULL: the defaults everywhere
     /// The handler's ports. bind() sets the stream ports' rings; pre_process reads the static

@@ -204,7 +204,6 @@ anira_status anira_rt_contract_add_stage(anira_pipeline* pipeline, void* user_da
 anira_status anira_rt_contract_add_stage(anira_pipeline* pipeline, void* user_data) {
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
     stage.user_data = user_data;
-    stage.name = "rt-contract";
     stage.flags = ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS;
     stage.pre_process = anira_rt_contract_stage;
     stage.post_process = anira_rt_contract_stage;

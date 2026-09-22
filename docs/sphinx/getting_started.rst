@@ -61,16 +61,32 @@ Anira supports multiple backends that can be selected at runtime. Use the :cpp:f
 Multi Tensor Processing Example
 -------------------------------
 
-Some neural network models require multiple input tensors or produce multiple output tensors. For example, a model might need both audio data and control parameters as inputs, or output both processed audio and confidence scores. Anira provides flexible methods to handle such models through its multi-tensor processing capabilities.
+Some neural network models take several input tensors or produce several output tensors: audio
+and a control vector in, processed audio and a confidence score out, or a hidden state that the
+model returns and expects back on its next call. Every tensor of the model file has a **role**,
+and the role says how the tensor travels between your code and the model:
 
-An important distinction in multi-tensor processing is between **streamable** and **non-streamable** tensors:
+- **Streamed** (``"role": "streamed"``, the default): data that varies over time, with exactly
+  one Time axis. You hand the handler blocks of samples of any size; anira buffers them, forms
+  the model's window (hop plus context) and hands the result back the same way. A Channel axis
+  of any extent maps onto the ring's channels: a stereo stream is one tensor of two channels.
+- **Static** (``"role": "static"``): one whole value per inference, no Time axis. Control
+  parameters, an embedding, a class vector, a confidence score. You set an input whole, in the
+  spec's shape and dtype, and read an output whole; a Channel axis is just an axis of that shape
+  and may have any extent. The value set last is the one every later inference sees, and the
+  value read is the one the latest completed inference produced.
+- **State** (``"role": "state"``): a pair, an output the model expects back in one of its inputs
+  on the next inference (a recurrent network's hidden state, a streaming convolution's cache).
+  The input names the output it is fed from (``"state_source"``); anira feeds and captures the
+  pair itself, and your code never sees it. Section 3.4 of the :doc:`usage` guide has the
+  bundled ``StatefulAccumulatorNetwork`` as the worked example.
+- **Buffer** (``"role": "buffer"``): a whole submitted buffer is one model tensor, with no
+  windowing: an image, a whole utterance. This is the tensor of the *Async* contract; under a
+  *Hard* contract, the real-time contract this page uses, a Buffer spec is refused at prepare in
+  this pre-release.
 
-- **Streamable tensors**: Contain data that varies over time (e.g., audio samples, time-series data). They can have multiple channels.
-- **Non-streamable tensors**: Contain static parameters or metadata (e.g., control parameters, configuration values, global settings). They have the shape the model file gives them and travel whole; a Channel axis is one of that shape's axes and may have any extent.
-
-Here's how to configure and process multi-tensor models with anira. The model file names
-every tensor and gives the two control tensors the ``static`` role (one value per inference,
-no time axis); the streamed tensors carry a window:
+The model file below names every tensor and gives the two control tensors the ``static``
+role; the two streamed tensors carry a window:
 
 .. code-block:: json
     :caption: multi_tensor.model.json
@@ -89,125 +105,109 @@ no time axis); the streamed tensors carry a window:
       ]
     }
 
+A tensor is addressed by its **slot**: its position in the model file's ``inputs`` list or
+``outputs`` list, counted from 0, whatever its role. Here ``audio_in`` is input slot 0,
+``control`` input slot 1, ``audio_out`` output slot 0 and ``confidence`` output slot 1. The
+configuration is built with the C++ builders of ``anira/anira.hpp`` and the model runs on the C
+handler of ``anira/abi/handler.h``, the 3.x runtime of this pre-release:
+
 .. code-block:: cpp
     :linenos:
 
-    #include <anira/anira.h>
     #include <anira/anira.hpp>
-    #include <anira/compat/v3_to_v2.h>
 
-    // The model file, and a Hard contract with a 10 ms budget written in code
+    #include <chrono>
+
+    // The model file, a Hard contract with a 10 ms budget, the context and the pipeline
     anira::ModelConfig model_config = anira::ModelConfig::from_file("multi_tensor.model.json");
     anira::ContractHandle contract{anira::Hard{
         .budget = ANIRA_BUDGET_EXPLICIT, .budget_value = std::chrono::milliseconds(10),
         .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2}};
+    anira::ContextConfig context_config;
+    anira::Context context(context_config);
+    anira::Pipeline pipeline{anira::stage::Inference(model_config)};   // every engine of the build
 
-    // The runtime of this pre-release takes the 2.x InferenceConfig; the bridge builds it
-    // from the files, over the engines of this build
-    anira::InferenceConfig multi_tensor_config = anira::v3compat::to_inference_config(
-        model_config, contract, anira::v3compat::enabled_engines());
-
-    // Create pre- and post-processor and inference handler
-    anira::PrePostProcessor pp_processor(multi_tensor_config);
-    anira::InferenceHandler inference_handler(pp_processor, multi_tensor_config);
-
-    // Prepare for processing: the host geometry completes the contract
+    // The handler, prepared with the host geometry: block size and sample rate complete the contract
+    anira_handler* handler = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    if (ANIRA_FAILED(anira_handler_create(context.native(), pipeline.native(), &handler, &err))) {
+        /* err.message says why */
+    }
     contract.hard_geometry(buffer_size, buffer_size, sample_rate);
-    inference_handler.prepare(anira::v3compat::to_host_config(contract, model_config));
-    inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
-
-    // Optionally get the latency of the inference process in samples
-    std::vector<unsigned int> all_latencies = inference_handler.get_latency_vector();
-
-Next step is the real-time processing of audio data and control parameters. The following examples demonstrate how to set inputs, process the data, and retrieve outputs. We have the following inputs and outputs:
-    - ``audio_input``: A pointer to a pointer of floats (``float**``) with shape [num_channels][num_samples].
-    - ``audio_output``: A pointer to a pointer of floats (``float**``) with shape [num_channels][num_samples].
-    - ``control_params``: A pointer to float (``float*``) containing 4 control values.
-    - ``confidence_output``: A pointer to float (``float*``) used to receive the confidence score.
-    - ``num_samples``: The number of audio samples to process.
-
-Method 1: Individual Tensor Processing
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: cpp
-    :linenos:
-    
-    // Step 1: Set non-streamable control parameters (tensor index 1)
-    for (size_t i = 0; i < 4; ++i) {
-        pp_processor.set_input(control_params[i], 1, i);  // tensor_index=1, sample_index=i
+    if (ANIRA_FAILED(anira_handler_prepare(handler, contract.native(), &err))) {
+        /* err.message names the tensor and the rule */
     }
 
-    // Step 2: Process streamable audio data (tensor index 0)
-    inference_handler.process(audio_input, num_samples, 0); // Process audio data in tensor 0
-    // audio_input now contains processed audio data
+    // Optionally the latency of the stream in samples (a Static output reports 0)
+    const uint32_t latency = anira_handler_get_latency(handler, 0);
 
-    // Step 3: Retrieve non-streamable confidence output (tensor index 1)
-    *confidence_output = pp_processor.get_output(1, 0);  // Get confidence from tensor 1, sample 0
-
-Method 2: Multi-Tensor Processing
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In the real-time callback every value crosses as an ``anira_tensor``, a plain descriptor of
+your memory: the audio blocks as planar tensors over the host's channel pointers, the Static
+values whole, in the spec's shape. With ``audio_input`` and ``audio_output`` as ``float**``
+arrays of ``num_channels`` pointers, ``control_params`` as four floats and ``confidence`` as one:
 
 .. code-block:: cpp
     :linenos:
 
-    // Allocate memory for input data and output data (not in the real-time callback)
-    const float* const* const* input_data = new const float* const*[2];
-    float* const* const* output_data = new float* const*[2];
+    // Step 1: the control vector, whole, in the spec's shape [1][1][4]. Every inference
+    // submitted from now on sees it; set it again whenever it changes.
+    const int64_t control_shape[3] = {1, 1, 4};
+    anira_tensor control;
+    anira_tensor_init_host(&control, control_params, ANIRA_DTYPE_F32, 3, control_shape);
+    anira_handler_set_static_input(handler, 1, &control);
 
-    // Prepare input data structure: [tensor_index][channel][sample]
-    input_data[0] = audio_input;                            // Tensor 0: streamable audio data
-    input_data[1] = (const float* const*) &control_params;  // Tensor 1: non-streamable control params
+    // Step 2: the audio block in and out of slot 0: [channels][samples], planar
+    const int64_t block_shape[2] = {num_channels, num_samples};
+    anira_tensor in_block;
+    anira_tensor out_block;
+    anira_tensor_init_host_planar(&in_block, audio_input, num_channels, ANIRA_DTYPE_F32, 2, block_shape);
+    anira_tensor_init_host_planar(&out_block, audio_output, num_channels, ANIRA_DTYPE_F32, 2, block_shape);
+    size_t delivered = 0;
+    anira_handler_process(handler, &in_block, 0, &out_block, 0, &delivered);
+    // audio_output holds delivered samples per channel (zeros for the first latency samples)
 
-    // Prepare output data structure: [tensor_index][channel][sample]  
-    output_data[0] = audio_output;                          // Tensor 0: processed audio output
-    output_data[1] = (float* const*) &confidence_output;    // Tensor 1: confidence score output
-
-    // Specify number of samples for each tensor
-    size_t input_samples[2] = {num_samples, 4};             // Audio: num_samples, Control: 4 values
-    size_t output_samples[2] = {num_samples, 1};            // Audio: num_samples, Confidence: 1 value
-
-    // Process all tensors in one call
-    size_t* processed_samples = inference_handler.process(
-        input_data, input_samples, output_data, output_samples);
-
-    // Clean up the allocated memory after processing
-    delete[] input_data;
-    delete[] output_data;
+    // Step 3: the confidence the latest completed inference produced, whole, shape [1][1][1]
+    const int64_t confidence_shape[3] = {1, 1, 1};
+    anira_tensor confidence;
+    anira_tensor_init_host(&confidence, &confidence_value, ANIRA_DTYPE_F32, 3, confidence_shape);
+    anira_handler_get_static_output(handler, 1, &confidence);
 
 Key Points for Multi-Tensor Processing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Tensor Organization and Indexing**
+**One slot space**
 
-- **Tensor indexing**: Tensors are indexed starting from 0, following the order of ``inputs`` and ``outputs`` in the model file (or of the ``input`` / ``output`` calls on the builder)
-- **Data structure**: Multi-tensor data uses a 3D array structure: ``[tensor_index][channel][sample]``
+- A slot is the tensor's position in the model file's ``inputs`` or ``outputs`` list, from 0,
+  State tensors included; every handler entry, the latency vector and the plan report use it.
+- The role decides which entries take a slot: a Streamed slot the block calls, a Static slot
+  the two Static entries, a State slot none (anira owns it), a Buffer slot the Async contract's.
 
-**Streamable vs Non-Streamable Tensors**
+**Streamed tensors**
 
-- **Streamable tensors**: Time-varying data (audio, time-series) that flows continuously through the processing pipeline
-- **Non-streamable tensors**: Static parameters or metadata that is updated asynchronously
-- **Configuration**: Give a non-streamable tensor the ``static`` role (``"role": "static"`` in the model file, ``ANIRA_ROLE_STATIC`` on the builder)
+- ``anira_handler_process(h, &in, in_slot, &out, out_slot, &delivered)`` moves one block in
+  and one block out, any block size, one Streamed slot per side; ``anira_handler_push_data`` and
+  ``anira_handler_pop_data`` split the two halves for hosts that produce and consume at
+  different rates; the ``_multi`` forms take one tensor per slot of a side in one call.
+- A block is ``[channels][samples]``, planar over the host's channel pointers or one packed
+  block; the dtype is the ring's, float32 unless the contract declares another.
 
-**Processing Methods**
+**Static tensors**
 
-- **Individual tensor processing**: Use the tensor index parameter in :cpp:func:`anira::InferenceHandler::process` for processing specific tensors separately
-- **Simultaneous processing**: Pass all tensors at once using the multi-tensor version of :cpp:func:`anira::InferenceHandler::process`
-- **Push/Pop workflow**: Use :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::InferenceHandler::pop_data` for granular control over data flow
+- ``anira_handler_set_static_input(h, slot, &tensor)`` and
+  ``anira_handler_get_static_output(h, slot, &tensor)`` take the whole tensor in the spec's
+  shape and dtype; "fits" is a check, never a clamp. Both are real-time safe and legal from
+  create on, so a value can be set before prepare.
+- A Static tensor reports a latency of 0: it is not time-varying.
 
-**Non-Streamable Data Access**
+**State tensors**
 
-- **Setting inputs**: Use :cpp:func:`anira::PrePostProcessor::set_input` to provide non-streamable input data
-- **Getting outputs**: Use :cpp:func:`anira::PrePostProcessor::get_output` to retrieve non-streamable output data
-- **Real-time safety**: These methods are designed for real-time use with pre-allocated internal buffers
+- Declared in the model file, run by anira: fed ahead of the inference, captured behind it, kept
+  across a plan switch, re-initialised by ``anira_handler_reset``. Nothing to call.
 
 .. note::
-    Streamable tensors can not be accessed with the :cpp:func:`anira::PrePostProcessor::set_input` and :cpp:func:`anira::PrePostProcessor::get_output` methods.
-
-.. note::
-    In the ``float***`` blocks of the 2.x handler a non-streamable tensor is addressed as channel 0 with its values in a row, and it reports a latency of 0 samples, as it is not time-varying. The C handler takes it whole, in the spec's shape (:doc:`usage` section 3.2, *Static tensors*).
-
-.. tip::
-    When designing multi-tensor models, consider separating time-varying audio data (streamable) from control parameters (non-streamable).
+    The 2.x handler of the sections above addresses a non-streamable tensor as channel 0 of a
+    ``float***`` block; the C handler takes it whole, in the spec's shape (:doc:`usage`
+    section 3.2, *Static tensors*). The :doc:`migration` page maps the 2.x calls onto the C entries.
 
 Next Steps
 ----------

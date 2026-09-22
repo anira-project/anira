@@ -4,8 +4,8 @@
 //
 // Everything a phase callback can reach is ANIRA_NONBLOCKING: the ring accessors are thin
 // dtype-checked calls onto anira_ring (anira/utils/RingBuffer.h), a refusal records into the
-// latch of the session that owns the ring (anira_ring::owner) and logs one record per kind
-// naming the running stage; the context accessors answer per slot out of the StageFrame the
+// latch of the session that owns the ring (anira_ring::owner) and logs one record per kind;
+// the context accessors answer per slot out of the StageFrame the
 // processor fills on the stack next to its anira_stage_ctx, and record every status but
 // ANIRA_OK into the frame's latch (asking for a ring or a model tensor the slot does not have
 // in this phase is the stage's bug, not an answer). The two default bodies read the frame's
@@ -51,15 +51,6 @@
 
 namespace {
 
-// What a record says when an accessor is refused outside a pre_process or post_process
-// callback of the stage (a ring pointer kept across calls, which the contract forbids).
-constexpr const char* k_no_stage = "(none running)";
-
-[[maybe_unused]] const char* running_stage(const anira_ring& ring) noexcept ANIRA_NONBLOCKING {
-    const anira::RingOwner* owner = ring.owner();
-    return owner != nullptr && owner->m_stage != nullptr ? owner->m_stage : k_no_stage;
-}
-
 // Records a refusal into the latch of the session that owns the ring. True on the kind's first
 // occurrence since the latch was re-armed: log it. A ring outside a session records nothing.
 bool ring_record(const anira_ring& ring, anira_status status) noexcept ANIRA_NONBLOCKING {
@@ -77,9 +68,8 @@ bool ring_channel(const anira_ring* ring,
     if (channel < channels) { return true; }
     if (ring_record(*ring, ANIRA_ERROR_INVALID_ARGUMENT)) {
         ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                               "%s: stage '%s': channel %u is out of range, the ring has %zu",
+                               "%s: the stage: channel %u is out of range, the ring has %zu",
                                entry,
-                               running_stage(*ring),
                                static_cast<unsigned int>(channel),
                                channels);
     }
@@ -98,9 +88,8 @@ bool ring_transfer(const anira_ring* ring,
     if (memory == nullptr && count > 0) {
         if (ring_record(*ring, ANIRA_ERROR_INVALID_ARGUMENT)) {
             ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                                   "%s: stage '%s': NULL memory for %zu elements",
+                                   "%s: the stage: NULL memory for %zu elements",
                                    entry,
-                                   running_stage(*ring),
                                    count);
         }
         return false;
@@ -108,10 +97,9 @@ bool ring_transfer(const anira_ring* ring,
     if (dtype == ring->dtype()) { return true; }
     if (ring_record(*ring, ANIRA_ERROR_CONFIG)) {
         ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                               "%s: stage '%s': dtype 0x%x is not the ring's 0x%x; nothing "
+                               "%s: the stage: dtype 0x%x is not the ring's 0x%x; nothing "
                                "converts",
                                entry,
-                               running_stage(*ring),
                                static_cast<unsigned int>(dtype),
                                static_cast<unsigned int>(ring->dtype()));
     }
@@ -158,10 +146,6 @@ bool frame_record(const StageFrame& frame, anira_status status) noexcept ANIRA_N
     return frame.m_rt != nullptr && frame.m_rt->record(status);
 }
 
-[[maybe_unused]] const char* running_stage(const StageFrame& frame) noexcept ANIRA_NONBLOCKING {
-    return frame.m_stage != nullptr ? frame.m_stage : k_no_stage;
-}
-
 // The ring of a slot as the default bodies read it: its stream port's, or NULL for a slot at or
 // beyond the side's count, a port of another role and a stream port without a ring. A plain
 // read, never a refusal.
@@ -184,10 +168,9 @@ const Port* ctx_port(const anira_stage_ctx* ctx,
     if (slot < ports->size()) { return &(*ports)[slot]; }
     if (frame_record(*frame, ANIRA_ERROR_INVALID_ARGUMENT)) {
         ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                               "%s: stage '%s': slot %u is out of range, the model has %zu %s "
+                               "%s: the stage: slot %u is out of range, the model has %zu %s "
                                "tensors",
                                entry,
-                               running_stage(*frame),
                                static_cast<unsigned int>(slot),
                                ports->size(),
                                input ? "input" : "output");
@@ -209,9 +192,8 @@ const Port* ctx_slot(const anira_stage_ctx* ctx,
     if (null_out) {
         if (frame_record(*frame, ANIRA_ERROR_INVALID_ARGUMENT)) {
             ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                                   "%s: stage '%s': NULL out for slot %u",
+                                   "%s: the stage: NULL out for slot %u",
                                    entry,
-                                   running_stage(*frame),
                                    static_cast<unsigned int>(slot));
         }
         return nullptr;
@@ -221,8 +203,8 @@ const Port* ctx_slot(const anira_stage_ctx* ctx,
 
 // A representation the slot does not have in this phase: asking for it is the stage's bug and
 // not an answer, so the refusal is recorded into the frame's latch like a slot out of range,
-// one record per kind naming the entry, the running stage, the slot and the phase. The ctx
-// passed the prologue, so it has a frame.
+// one record per kind naming the entry, the slot and the phase. The ctx passed the prologue,
+// so it has a frame.
 anira_status no_such(const anira_stage_ctx* ctx,
                      [[maybe_unused]] uint32_t slot,
                      [[maybe_unused]] const char* what,
@@ -230,9 +212,8 @@ anira_status no_such(const anira_stage_ctx* ctx,
     const StageFrame& frame = *frame_of(ctx);
     if (frame_record(frame, ANIRA_ERROR_INVALID_STATE)) {
         ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                               "%s: stage '%s': slot %u has no %s in %s",
+                               "%s: the stage: slot %u has no %s in %s",
                                entry,
-                               running_stage(frame),
                                static_cast<unsigned int>(slot),
                                what,
                                phase_word(ctx->phase));
@@ -392,7 +373,7 @@ size_t ANIRA_CALL anira_ring_pop_windows(anira_ring* ring,
 // ==== the context accessors ===================================================================
 // A stage asks per slot; nothing is laid out for it up front. Every status but ANIRA_OK is
 // recorded into the frame's latch, the session's, with one record per kind naming the entry,
-// the running stage, the slot and the phase: a slot out of range and a NULL out
+// the slot and the phase: a slot out of range and a NULL out
 // (INVALID_ARGUMENT), a ring or a model tensor the slot does not have in this phase
 // (INVALID_STATE). A NULL ctx and a ctx without a frame name no latch.
 
@@ -531,7 +512,6 @@ anira_status ANIRA_CALL anira_stage_default_post_process(const anira_stage_ctx* 
 namespace anira::capi {
 
 StageCarrier::StageCarrier(const anira_stage_desc& desc) : m_desc(desc) {
-    m_name = desc.name != nullptr && desc.name[0] != '\0' ? desc.name : "stage";
     m_kinds.reserve(desc.num_consumed_kinds);
     for (uint32_t i = 0; i < desc.num_consumed_kinds; ++i) {
         m_kinds.emplace_back(desc.consumed_kinds[i]);
@@ -539,7 +519,6 @@ StageCarrier::StageCarrier(const anira_stage_desc& desc) : m_desc(desc) {
     m_kind_pointers.reserve(m_kinds.size());
     for (const std::string& kind : m_kinds) { m_kind_pointers.push_back(kind.c_str()); }
     // The descriptor names this carrier's strings from here on: the caller's may die.
-    m_desc.name = m_name.c_str();
     m_desc.consumed_kinds = m_kind_pointers.empty() ? nullptr : m_kind_pointers.data();
 }
 
@@ -554,7 +533,7 @@ StageFacts stage_facts(const StageCarrier* stage) {
     facts.m_fills_pre = stage->desc().pre_process != nullptr;
     facts.m_fills_post = stage->desc().post_process != nullptr;
     if (!stage->consumed_kinds().empty()) {
-        facts.m_consumers.push_back(ExtConsumer{.m_name = stage->name(),
+        facts.m_consumers.push_back(ExtConsumer{.m_name = StageCarrier::k_stage_consumer,
                                                 .m_engine = ANIRA_ENGINE_NONE,
                                                 .m_consumed = stage->consumed_kinds()});
     }
@@ -638,6 +617,20 @@ StageFrame StageProcessor::make_frame() const noexcept ANIRA_NONBLOCKING {
     return frame;
 }
 
+StageFrame StageProcessor::make_frame_with_inputs(
+    std::vector<anira::BufferF>& inputs) const noexcept ANIRA_NONBLOCKING {
+    StageFrame frame = make_frame();
+    frame.m_model_inputs = &inputs;
+    return frame;
+}
+
+StageFrame StageProcessor::make_frame_with_outputs(
+    std::vector<anira::BufferF>& outputs) const noexcept ANIRA_NONBLOCKING {
+    StageFrame frame = make_frame();
+    frame.m_model_outputs = &outputs;
+    return frame;
+}
+
 anira_stage_ctx StageProcessor::make_ctx(anira_stage_phase phase,
                                          size_t entry,
                                          const StageFrame& frame) const noexcept ANIRA_NONBLOCKING {
@@ -658,32 +651,22 @@ anira_stage_ctx StageProcessor::make_ctx(anira_stage_phase phase,
     return ctx;
 }
 
-void StageProcessor::fail([[maybe_unused]] const char* stage,
+void StageProcessor::fail([[maybe_unused]] const char* who,
                           [[maybe_unused]] uint32_t phase,
                           anira_status status) noexcept ANIRA_NONBLOCKING {
     if (!m_session->m_rt->record_any(status)) { return; }
     ANIRA_LOG_RT_ERROR(anira::log_group::k_capi,
-                       "stage '%s': %s returned %d (%s); the chunk delivers zeros",
-                       stage,
+                       "%s: %s returned %d (%s); the chunk delivers zeros",
+                       who,
                        phase_word(phase),
                        static_cast<int>(status),
                        anira_status_string(status));
 }
 
-anira_status StageProcessor::run_phase(const anira_stage_ctx& ctx,
-                                       StageFrame& frame,
-                                       bool on_driver) noexcept ANIRA_NONBLOCKING {
+anira_status StageProcessor::run_phase(const anira_stage_ctx& ctx) noexcept ANIRA_NONBLOCKING {
     const anira_stage_fn callback = phase_slot(m_stage->desc(), ctx.phase);
-    // A refused accessor names the stage that made the call: a context accessor through the
-    // frame of this call, a ring accessor through the session's ring owner. The rings are
-    // reachable in the two driver-thread phases only, and the owner is one per session, so
-    // the inference threads never write it.
-    frame.m_stage = m_stage->name();
-    if (on_driver) { m_session->m_ring_owner.m_stage = m_stage->name(); }
     const anira_status status = callback(&ctx, m_stage->desc().user_data);
-    if (on_driver) { m_session->m_ring_owner.m_stage = nullptr; }
-    frame.m_stage = nullptr;
-    if (status != ANIRA_OK) { fail(m_stage->name(), ctx.phase, status); }
+    if (status != ANIRA_OK) { fail(k_the_stage, ctx.phase, status); }
     return status;
 }
 
@@ -702,7 +685,7 @@ void StageProcessor::snapshot(const std::vector<Port>& ports) noexcept ANIRA_NON
 
 const char* StageProcessor::mover(uint32_t phase) const noexcept ANIRA_NONBLOCKING {
     const bool filled = phase == ANIRA_PHASE_PRE_PROCESS ? m_fills_pre : m_fills_post;
-    return filled ? m_stage->name() : "(default)";
+    return filled ? k_the_stage : k_the_default;
 }
 
 void StageProcessor::report_hop([[maybe_unused]] uint32_t phase,
@@ -718,8 +701,8 @@ void StageProcessor::report_hop([[maybe_unused]] uint32_t phase,
         moved > expected ? "the stream has shifted"
                          : (pre ? "the rest was discarded" : "the rest is zeros");
     ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                           "stage '%s': %s moved %s tensor %zu, channel %zu by %zu elements, "
-                           "the hop is %zu; %s",
+                           "%s: %s moved %s tensor %zu, channel %zu by %zu elements, the hop "
+                           "is %zu; %s",
                            mover(phase),
                            phase_word(phase),
                            pre ? "input" : "output",
@@ -797,18 +780,17 @@ void StageProcessor::pre_process(std::vector<anira::RingBuffer>& input,
             output[tensor].get_write_pointer(0),
             m_inference_config.get_tensor_input_size()[tensor] * sizeof(float));
     }
-    StageFrame frame = make_frame();
-    frame.m_model_inputs = &output;
+    const StageFrame frame = make_frame_with_inputs(output);
     const anira_stage_ctx ctx = make_ctx(ANIRA_PHASE_PRE_PROCESS, entry, frame);
 
     snapshot(m_input_ports);
     anira_status status = ANIRA_OK;
     if (m_fills_pre) {
-        status = run_phase(ctx, frame, /*on_driver=*/true);
+        status = run_phase(ctx);
     } else {
         // The slot is NULL (or there is no stage): the default body, once per chunk.
         status = anira_stage_default_pre_process(&ctx);
-        if (status != ANIRA_OK) { fail("(default)", ctx.phase, status); }
+        if (status != ANIRA_OK) { fail(k_the_default, ctx.phase, status); }
     }
     // Every Streamed input ring has given up exactly its hop, whatever the stage did: a
     // shortfall is discarded so that the stream stays aligned. A failed phase is already
@@ -827,17 +809,16 @@ void StageProcessor::post_process(std::vector<anira::BufferF>& input,
         return;
     }
     const Chunk& chunk = *m_chunks[entry];
-    StageFrame frame = make_frame();
-    frame.m_model_outputs = &input;
+    const StageFrame frame = make_frame_with_outputs(input);
     const anira_stage_ctx ctx = make_ctx(ANIRA_PHASE_POST_PROCESS, entry, frame);
 
     snapshot(m_output_ports);
     anira_status status = ANIRA_OK;
     if (m_fills_post) {
-        status = run_phase(ctx, frame, /*on_driver=*/true);
+        status = run_phase(ctx);
     } else {
         status = anira_stage_default_post_process(&ctx);
-        if (status != ANIRA_OK) { fail("(default)", ctx.phase, status); }
+        if (status != ANIRA_OK) { fail(k_the_default, ctx.phase, status); }
     }
     // Every Streamed output ring has gained exactly its hop: a ring cannot take a push back,
     // so a failed or short phase is topped up with zeros and the stream stays aligned.
@@ -864,12 +845,11 @@ void StageProcessor::before_inference(
     if (!m_fills_before) { return; }
     const size_t entry = entry_of_inputs(input);
     if (entry == k_no_entry) { return; }
-    StageFrame frame = make_frame();
-    frame.m_model_inputs = &input;
+    const StageFrame frame = make_frame_with_inputs(input);
     const anira_stage_ctx ctx = make_ctx(ANIRA_PHASE_BEFORE_INFERENCE, entry, frame);
     // InferenceThread::do_inference reads it: a failure skips the engine call and
     // after_inference, and the chunk delivers zeros.
-    m_chunks[entry]->m_stage_status = run_phase(ctx, frame, /*on_driver=*/false);
+    m_chunks[entry]->m_stage_status = run_phase(ctx);
 }
 
 void StageProcessor::after_inference(
@@ -878,11 +858,10 @@ void StageProcessor::after_inference(
     if (!m_fills_after) { return; }
     const size_t entry = entry_of_outputs(output);
     if (entry == k_no_entry) { return; }
-    StageFrame frame = make_frame();
-    frame.m_model_outputs = &output;
+    const StageFrame frame = make_frame_with_outputs(output);
     const anira_stage_ctx ctx = make_ctx(ANIRA_PHASE_AFTER_INFERENCE, entry, frame);
     // do_inference zeroes the outputs of a chunk whose after_inference failed.
-    m_chunks[entry]->m_stage_status = run_phase(ctx, frame, /*on_driver=*/false);
+    m_chunks[entry]->m_stage_status = run_phase(ctx);
 }
 
 }  // namespace anira::capi

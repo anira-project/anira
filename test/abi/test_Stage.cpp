@@ -138,13 +138,12 @@ struct StagedHandler {
     anira_error m_err = ANIRA_ERROR_INIT;
 };
 
-/// A descriptor with the name, the user_data and both real-time bits: every phase body of this
-/// file allocates nothing and blocks on nothing (the file comment), so the descriptors promise
-/// it, and a Hard contract takes a filled pre_process or post_process only with the promise. A
+/// A descriptor with the user_data and both real-time bits: every phase body of this file
+/// allocates nothing and blocks on nothing (the file comment), so the descriptors promise it,
+/// and a Hard contract takes a filled pre_process or post_process only with the promise. A
 /// case about the promise itself clears the bits.
-anira_stage_desc named_stage(const char* name, void* user_data) {
+anira_stage_desc promising_stage(void* user_data) {
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
-    stage.name = name;
     stage.user_data = user_data;
     stage.flags = ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS;
     return stage;
@@ -457,7 +456,7 @@ TEST(AbiStage, AddStageRefusals) {
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
     Lifetime lifetime;
-    anira_stage_desc stage = named_stage("refused", &lifetime);
+    anira_stage_desc stage = promising_stage(&lifetime);
     stage.release = on_release;
 
     EXPECT_EQ(anira_pipeline_add_stage(nullptr, &stage, &err), ANIRA_ERROR_INVALID_ARGUMENT);
@@ -500,15 +499,15 @@ TEST(AbiStage, ASecondStageIsRefused) {
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
     Lifetime first;
-    anira_stage_desc stage = named_stage("first", &first);
+    anira_stage_desc stage = promising_stage(&first);
     stage.release = on_release;
     ASSERT_EQ(anira_pipeline_add_stage(pipeline, &stage, &err), ANIRA_OK) << err.message;
 
     Lifetime second;
-    anira_stage_desc other = named_stage("second", &second);
+    anira_stage_desc other = promising_stage(&second);
     other.release = on_release;
     EXPECT_EQ(anira_pipeline_add_stage(pipeline, &other, &err), ANIRA_ERROR_INVALID_STATE);
-    EXPECT_NE(std::strstr(err.message, "already has a stage ('first')"), nullptr) << err.message;
+    EXPECT_NE(std::strstr(err.message, "already has a stage"), nullptr) << err.message;
     // The same descriptor a second time is a second stage as well.
     EXPECT_EQ(anira_pipeline_add_stage(pipeline, &stage, &err), ANIRA_ERROR_INVALID_STATE);
     // A malformed descriptor is reported as such, not as a second stage.
@@ -522,11 +521,11 @@ TEST(AbiStage, ASecondStageIsRefused) {
 }
 
 // A caller compiled against a shorter header hands over the three leading slots only: the
-// rest reads as ANIRA_STAGE_DESC_INIT, so the stage has no callback and no name.
+// rest reads as ANIRA_STAGE_DESC_INIT, so the stage has no callback and no flags.
 TEST(AbiStage, AShortDescriptorReadsAsTheDefaults) {
     const Context context;
     Lifetime lifetime;
-    anira_stage_desc stage = named_stage("never read", &lifetime);
+    anira_stage_desc stage = promising_stage(&lifetime);
     stage.prepare = on_prepare;  // beyond the struct_size below: not read
     stage.struct_size =
         static_cast<uint32_t>(offsetof(anira_stage_desc, user_data) + sizeof(void*));
@@ -535,8 +534,8 @@ TEST(AbiStage, AShortDescriptorReadsAsTheDefaults) {
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(lifetime.m_prepared, 0);
     ASSERT_NE(handler.m_handler->m_pipeline.m_stage, nullptr);
-    EXPECT_STREQ(handler.m_handler->m_pipeline.m_stage->name(), "stage");
     EXPECT_EQ(handler.m_handler->m_pipeline.m_stage->desc().flags, 0U);
+    EXPECT_EQ(handler.m_handler->m_pipeline.m_stage->desc().prepare, nullptr);
 }
 
 // ============================================================================================
@@ -555,13 +554,11 @@ TEST(AbiStage, PrepareSeesTheReportReleaseFiresOnce) {
               ANIRA_OK)
         << err.message;
     {
-        // The name and the descriptor die with this scope: the carrier copied both.
-        std::string name = "lifetime";
-        anira_stage_desc stage = named_stage(name.c_str(), &lifetime);
+        // The descriptor dies with this scope: the carrier copied it.
+        anira_stage_desc stage = promising_stage(&lifetime);
         stage.prepare = on_prepare;
         stage.release = on_release;
         ASSERT_EQ(anira_pipeline_add_stage(pipeline, &stage, &err), ANIRA_OK) << err.message;
-        name.assign(name.size(), 'x');
     }
 
     // Two handlers and the pipeline share one carrier.
@@ -571,7 +568,7 @@ TEST(AbiStage, PrepareSeesTheReportReleaseFiresOnce) {
         << err.message;
     ASSERT_EQ(anira_handler_create(context.m_context, pipeline, &second, &err), ANIRA_OK)
         << err.message;
-    EXPECT_STREQ(first->m_pipeline.m_stage->name(), "lifetime");
+    ASSERT_NE(first->m_pipeline.m_stage, nullptr);
     EXPECT_EQ(first->m_pipeline.m_stage.get(), second->m_pipeline.m_stage.get());
     EXPECT_EQ(lifetime.m_prepared, 0) << "prepare belongs to anira_handler_prepare";
 
@@ -586,11 +583,11 @@ TEST(AbiStage, PrepareSeesTheReportReleaseFiresOnce) {
     ASSERT_EQ(anira_handler_prepare(first, contract.native(), &err), ANIRA_OK) << err.message;
     EXPECT_EQ(lifetime.m_prepared, 2) << "once per prepare";
 
-    // A stage that refuses fails the prepare with its status, by name, and the handler is
-    // unprepared afterwards.
+    // A stage that refuses fails the prepare with its status, and the handler is unprepared
+    // afterwards.
     lifetime.m_return = ANIRA_ERROR_MODEL_LOAD;
     EXPECT_EQ(anira_handler_prepare(first, contract.native(), &err), ANIRA_ERROR_MODEL_LOAD);
-    EXPECT_NE(std::strstr(err.message, "stage 'lifetime'"), nullptr) << err.message;
+    EXPECT_NE(std::strstr(err.message, "the stage refused prepare"), nullptr) << err.message;
     EXPECT_EQ(anira_handler_plan_report(first), nullptr);
     lifetime.m_return = ANIRA_OK;
 
@@ -610,7 +607,7 @@ TEST(AbiStage, CtxPerPhase) {
     const Context context;
     Probe probe;
     probe.m_defaults = 1;  // the stage owns pre_process and post_process and calls the defaults
-    anira_stage_desc stage = named_stage("probe", &probe);
+    anira_stage_desc stage = promising_stage(&probe);
     stage.pre_process = probe_phase;
     stage.post_process = probe_phase;
     stage.before_inference = probe_phase;
@@ -772,7 +769,7 @@ TEST(AbiStage, ASlotBeyondTheCountIsRecordedWithTheStagesName) {
     anira_drain_log();
     RecordCollector collector;
     Beyond beyond;
-    anira_stage_desc stage = named_stage("asks-beyond", &beyond);
+    anira_stage_desc stage = promising_stage(&beyond);
     stage.before_inference = ask_beyond;
     StagedHandler handler(context, stream_model(), {stage});
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
@@ -792,8 +789,8 @@ TEST(AbiStage, ASlotBeyondTheCountIsRecordedWithTheStagesName) {
     EXPECT_EQ(anira_test::count_records(collector, "is out of range", "rt"), 1U);
     const RecordCollector::Record record =
         anira_test::find_record(collector, "is out of range", "rt");
-    EXPECT_NE(record.m_message.find("anira_stage_input_role: stage 'asks-beyond': slot 1 is out "
-                                    "of range, the model has 1 input tensors"),
+    EXPECT_NE(record.m_message.find("anira_stage_input_role: the stage: slot 1 is out of range, "
+                                    "the model has 1 input tensors"),
               std::string::npos)
         << record.m_message;
 #endif
@@ -826,7 +823,7 @@ TEST(AbiStage, AStagesPrepareMaySetAStaticInput) {
     const Context context;
     Probe probe;
     probe.m_defaults = 1;
-    anira_stage_desc stage = named_stage("sets-gain", &probe);
+    anira_stage_desc stage = promising_stage(&probe);
     stage.pre_process = probe_phase;
     stage.prepare = set_gain_in_prepare;
     const std::vector<anira_backend_id> candidates = anira_test::custom_candidates();
@@ -853,7 +850,6 @@ TEST(AbiStage, RingAccessorsF32AndI16) {
     anira::RtLatch latch;
     anira::RingOwner owner;
     owner.m_rt = &latch;
-    owner.m_stage = "accessor-test";
 
     // A float32 ring: push, pop, history, fill, discard.
     anira::RingBuffer f32;
@@ -933,12 +929,11 @@ TEST(AbiStage, RingAccessorsF32AndI16) {
 
     anira_drain_log();
 #ifdef ENABLE_LOGGING
-    // One record per kind, naming the entry and the running stage.
+    // One record per kind, naming the entry.
     EXPECT_EQ(anira_test::count_records(collector, "nothing converts", "rt"), 1U);
     const RecordCollector::Record record =
         anira_test::find_record(collector, "nothing converts", "rt");
-    EXPECT_NE(record.m_message.find("anira_ring_push_block: stage 'accessor-test'"),
-              std::string::npos)
+    EXPECT_NE(record.m_message.find("anira_ring_push_block: the stage: dtype"), std::string::npos)
         << record.m_message;
     EXPECT_EQ(record.m_flags, ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);
     EXPECT_EQ(anira_test::count_records(collector, "is out of range", "rt"), 1U);
@@ -997,7 +992,7 @@ TEST(AbiStage, PopWindowsEqualsTheBatchedPop) {
 // ANIRA_OK with the role, the ring or the descriptor. A ring or a model tensor the slot does not
 // have in this phase is the stage's bug, not an answer: ANIRA_ERROR_INVALID_STATE with the
 // out-parameter reset, recorded into the latch with one record per kind naming the entry, the
-// running stage, the slot and the phase (the first of a kind is logged, the others counted).
+// slot and the phase (the first of a kind is logged, the others counted).
 // A slot out of range and a NULL out are ANIRA_ERROR_INVALID_ARGUMENT, recorded the same way; a
 // NULL ctx and a ctx without a frame are refused with nothing to record into. The default
 // bodies over the same slots ask nothing a slot lacks and record nothing.
@@ -1012,7 +1007,6 @@ TEST(AbiStage, ContextAccessorsAnswerAndRefuse) {
     // Slot 0 Streamed over `ring`, slot 1 a State tensor, on both sides.
     HandBuiltCtx built(ANIRA_PHASE_PRE_PROCESS, ring, {1, 1, 4}, /*with_state=*/true);
     built.m_frame.m_rt = &latch;
-    built.m_frame.m_stage = "asker";
     const anira_stage_ctx& ctx = built.m_ctx;
     anira_role role = ANIRA_ROLE_FORCE32;
     anira_ring* out_ring = nullptr;
@@ -1184,28 +1178,28 @@ TEST(AbiStage, ContextAccessorsAnswerAndRefuse) {
     anira_drain_log();
 #ifdef ENABLE_LOGGING
     // One record per kind and re-arm, the first refusal of the kind, naming the entry, the
-    // running stage, the slot and the phase. The INVALID_STATE kind was re-armed per phase: the
+    // slot and the phase. The INVALID_STATE kind was re-armed per phase: the
     // ring's refusal came first in three phases, the model tensor's in after_inference.
     EXPECT_EQ(anira_test::count_records(collector, "has no ring in", "rt"), 3U);
     const RecordCollector::Record no_ring =
         anira_test::find_record(collector, "has no ring in", "rt");
     EXPECT_NE(no_ring.m_message.find(
-                  "anira_stage_output_ring: stage 'asker': slot 0 has no ring in pre_process"),
+                  "anira_stage_output_ring: the stage: slot 0 has no ring in pre_process"),
               std::string::npos)
         << no_ring.m_message;
     EXPECT_EQ(no_ring.m_flags, ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);
     EXPECT_EQ(anira_test::count_records(collector, "has no model tensor in", "rt"), 1U);
     const RecordCollector::Record no_tensor =
         anira_test::find_record(collector, "has no model tensor in", "rt");
-    EXPECT_NE(no_tensor.m_message.find("anira_stage_input_tensor: stage 'asker': slot 0 has no "
+    EXPECT_NE(no_tensor.m_message.find("anira_stage_input_tensor: the stage: slot 0 has no "
                                        "model tensor in after_inference"),
               std::string::npos)
         << no_tensor.m_message;
     EXPECT_EQ(anira_test::count_records(collector, "is out of range", "rt"), 1U);
     const RecordCollector::Record out_of_range =
         anira_test::find_record(collector, "is out of range", "rt");
-    EXPECT_NE(out_of_range.m_message.find("anira_stage_input_role: stage 'asker': slot 2 is out "
-                                          "of range, the model has 2 input tensors"),
+    EXPECT_NE(out_of_range.m_message.find("anira_stage_input_role: the stage: slot 2 is out of "
+                                          "range, the model has 2 input tensors"),
               std::string::npos)
         << out_of_range.m_message;
     EXPECT_EQ(out_of_range.m_flags,
@@ -1306,7 +1300,7 @@ TEST(AbiStage, TheDefaultBodyRunsIffTheSlotIsNull) {
     const Context context;
     {
         Probe probe;
-        anira_stage_desc stage = named_stage("hooks-only", &probe);
+        anira_stage_desc stage = promising_stage(&probe);
         stage.before_inference = probe_phase;
         StagedHandler handler(context, stream_model(), {stage});
         ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
@@ -1321,7 +1315,7 @@ TEST(AbiStage, TheDefaultBodyRunsIffTheSlotIsNull) {
     {
         Probe probe;
         probe.m_defaults = 1;
-        anira_stage_desc stage = named_stage("owner", &probe);
+        anira_stage_desc stage = promising_stage(&probe);
         stage.pre_process = probe_phase;
         stage.post_process = probe_phase;
         StagedHandler handler(context, stream_model(), {stage});
@@ -1344,7 +1338,7 @@ TEST(AbiStage, OneStageComposesTheDefaultBehindItsOwnWork) {
     Probe probe;
     probe.m_scale = 2.0F;  // works on the tensor ...
     probe.m_defaults = 1;  // ... then pushes it through the default
-    anira_stage_desc stage = named_stage("scale-then-push", &probe);
+    anira_stage_desc stage = promising_stage(&probe);
     stage.post_process = probe_phase;
     StagedHandler handler(context, stream_model(), {stage});
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
@@ -1369,7 +1363,7 @@ TEST(AbiStage, APreProcessThatPopsNothingIsRepairedAndRecorded) {
     anira_drain_log();
     RecordCollector collector;
     Probe probe;  // fills pre_process, calls no default
-    anira_stage_desc stage = named_stage("idle-pre", &probe);
+    anira_stage_desc stage = promising_stage(&probe);
     stage.pre_process = probe_phase;
     StagedHandler handler(context, stream_model(), {stage});
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
@@ -1387,7 +1381,8 @@ TEST(AbiStage, APreProcessThatPopsNothingIsRepairedAndRecorded) {
     EXPECT_EQ(anira_test::count_records(collector, "pre_process moved", "rt"), 1U);
     const RecordCollector::Record record =
         anira_test::find_record(collector, "pre_process moved", "rt");
-    EXPECT_NE(record.m_message.find("stage 'idle-pre'"), std::string::npos) << record.m_message;
+    EXPECT_NE(record.m_message.find("the stage: pre_process moved"), std::string::npos)
+        << record.m_message;
     EXPECT_NE(record.m_message.find("input tensor 0, channel 0 by 0 elements, the hop is 512"),
               std::string::npos)
         << record.m_message;
@@ -1404,7 +1399,7 @@ TEST(AbiStage, APreProcessThatPopsTwiceShiftsTheStreamAndIsRecorded) {
     RecordCollector collector;
     Probe probe;
     probe.m_defaults = 2;  // two pops of one chunk
-    anira_stage_desc stage = named_stage("pop-twice", &probe);
+    anira_stage_desc stage = promising_stage(&probe);
     stage.pre_process = probe_phase;
     StagedHandler handler(context, stream_model(), {stage});
     // Two hops per block: the ring holds both when the first chunk is formed.
@@ -1423,7 +1418,8 @@ TEST(AbiStage, APreProcessThatPopsTwiceShiftsTheStreamAndIsRecorded) {
 #ifdef ENABLE_LOGGING
     const RecordCollector::Record record =
         anira_test::find_record(collector, "pre_process moved", "rt");
-    EXPECT_NE(record.m_message.find("stage 'pop-twice'"), std::string::npos) << record.m_message;
+    EXPECT_NE(record.m_message.find("the stage: pre_process moved"), std::string::npos)
+        << record.m_message;
     EXPECT_NE(record.m_message.find("by 1024 elements, the hop is 512"), std::string::npos)
         << record.m_message;
     EXPECT_NE(record.m_message.find("the stream has shifted"), std::string::npos)
@@ -1439,7 +1435,7 @@ TEST(AbiStage, APostProcessThatPushesTheWrongCountIsRecorded) {
         anira_drain_log();
         RecordCollector collector;
         Probe probe;  // fills post_process, calls no default
-        anira_stage_desc stage = named_stage("idle-post", &probe);
+        anira_stage_desc stage = promising_stage(&probe);
         stage.post_process = probe_phase;
         StagedHandler handler(context, stream_model(), {stage});
         ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
@@ -1452,7 +1448,7 @@ TEST(AbiStage, APostProcessThatPushesTheWrongCountIsRecorded) {
 #ifdef ENABLE_LOGGING
         const RecordCollector::Record record =
             anira_test::find_record(collector, "post_process moved", "rt");
-        EXPECT_NE(record.m_message.find("stage 'idle-post'"), std::string::npos)
+        EXPECT_NE(record.m_message.find("the stage: post_process moved"), std::string::npos)
             << record.m_message;
         EXPECT_NE(record.m_message.find("output tensor 0, channel 0 by 0 elements"),
                   std::string::npos)
@@ -1464,7 +1460,7 @@ TEST(AbiStage, APostProcessThatPushesTheWrongCountIsRecorded) {
     {
         Probe probe;
         probe.m_defaults = 2;  // two pushes of one chunk
-        anira_stage_desc stage = named_stage("double-post", &probe);
+        anira_stage_desc stage = promising_stage(&probe);
         stage.post_process = probe_phase;
         StagedHandler handler(context, stream_model(), {stage});
         ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
@@ -1488,7 +1484,7 @@ TEST(AbiStage, FailingPreProcessDeliversZerosAtTheStreamPosition) {
     probe.m_fail_phase = ANIRA_PHASE_PRE_PROCESS;
     probe.m_fail_call = 2;                            // the third chunk, before it pops anything
     probe.m_fail_status = ANIRA_ERROR_OUT_OF_MEMORY;  // a status without a kind bit of its own
-    anira_stage_desc stage = named_stage("failing-pre", &probe);
+    anira_stage_desc stage = promising_stage(&probe);
     stage.pre_process = probe_phase;
     stage.before_inference = probe_phase;
     StagedHandler handler(context, stream_model(), {stage});
@@ -1505,9 +1501,7 @@ TEST(AbiStage, FailingPreProcessDeliversZerosAtTheStreamPosition) {
         << "the failed chunk was never submitted";
     anira_drain_log();
 #ifdef ENABLE_LOGGING
-    EXPECT_EQ(
-        anira_test::count_records(collector, "stage 'failing-pre': pre_process returned", "rt"),
-        1U);
+    EXPECT_EQ(anira_test::count_records(collector, "the stage: pre_process returned", "rt"), 1U);
     EXPECT_EQ(anira_test::count_records(collector, "the hop is", "rt"), 0U)
         << "the repair of a failed phase is silent";
 #endif
@@ -1522,7 +1516,7 @@ TEST(AbiStage, FailingHooksDeliverZeros) {
         probe.m_fail_phase = phase;
         probe.m_fail_call = 1;
         probe.m_fail_status = ANIRA_ERROR_ENGINE;
-        anira_stage_desc stage = named_stage("failing-hook", &probe);
+        anira_stage_desc stage = promising_stage(&probe);
         stage.before_inference = probe_phase;
         stage.after_inference = probe_phase;
         StagedHandler handler(context, stream_model(), {stage});
@@ -1545,7 +1539,7 @@ TEST(AbiStage, FailingPostProcessKeepsTheStreamAligned) {
     probe.m_fail_phase = ANIRA_PHASE_POST_PROCESS;
     probe.m_fail_call = 1;  // fails before it pushes: anira tops the ring up with zeros
     probe.m_fail_status = ANIRA_ERROR_INVALID_STATE;
-    anira_stage_desc stage = named_stage("failing-post", &probe);
+    anira_stage_desc stage = promising_stage(&probe);
     stage.post_process = probe_phase;
     StagedHandler handler(context, stream_model(), {stage});
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
@@ -1561,8 +1555,8 @@ TEST(AbiStage, FailingPostProcessKeepsTheStreamAligned) {
 // ============================================================================================
 
 // Under a Hard contract a filled pre_process or post_process runs on the driving thread: the
-// stage must promise ANIRA_STAGE_REALTIME_PRE_POST, else prepare is CONFIG naming the stage and
-// the flag, and the handler stays unprepared. The hooks need no promise (an inference thread),
+// stage must promise ANIRA_STAGE_REALTIME_PRE_POST, else prepare is CONFIG naming the flag, and
+// the handler stays unprepared. The hooks need no promise (an inference thread),
 // and the promise alone, without the hooks' bit, suffices for the two host-end phases.
 TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
     const Context context;
@@ -1570,13 +1564,13 @@ TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
     {
         Probe probe;
         probe.m_defaults = 1;
-        anira_stage_desc stage = named_stage("unpromised", &probe);
+        anira_stage_desc stage = promising_stage(&probe);
         stage.flags = 0;
         stage.pre_process = probe_phase;
         StagedHandler handler(context, stream_model(), {stage});
         ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
         EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
-        EXPECT_NE(std::strstr(handler.m_err.message, "stage 'unpromised'"), nullptr)
+        EXPECT_NE(std::strstr(handler.m_err.message, "the stage: pre_process is filled"), nullptr)
             << handler.m_err.message;
         EXPECT_NE(std::strstr(handler.m_err.message, "pre_process"), nullptr)
             << handler.m_err.message;
@@ -1589,7 +1583,7 @@ TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
         // post_process alone, with the hooks' bit only: the wrong promise.
         Probe probe;
         probe.m_defaults = 1;
-        anira_stage_desc stage = named_stage("hooks-promised", &probe);
+        anira_stage_desc stage = promising_stage(&probe);
         stage.flags = ANIRA_STAGE_REALTIME_HOOKS;
         stage.post_process = probe_phase;
         StagedHandler handler(context, stream_model(), {stage});
@@ -1600,7 +1594,7 @@ TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
     {
         // The hooks alone promise nothing and run: the promise is about the driving thread.
         Probe probe;
-        anira_stage_desc stage = named_stage("hooks-only", &probe);
+        anira_stage_desc stage = promising_stage(&probe);
         stage.flags = 0;
         stage.before_inference = probe_phase;
         stage.after_inference = probe_phase;
@@ -1615,7 +1609,7 @@ TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
     {
         Probe probe;
         probe.m_defaults = 1;
-        anira_stage_desc stage = named_stage("promised", &probe);
+        anira_stage_desc stage = promising_stage(&probe);
         stage.flags = ANIRA_STAGE_REALTIME_PRE_POST;
         stage.pre_process = probe_phase;
         stage.post_process = probe_phase;
@@ -1741,7 +1735,7 @@ TEST(AbiStage, TheEntryIsStableWithinAChunkAndDistinctAcrossChunksInFlight) {
     const Context context(4);
     EntryLog log;
     std::unique_ptr<anira_test::GateBackend> gate;  // outlives the handler: declared first
-    anira_stage_desc stage = named_stage("entries", &log);
+    anira_stage_desc stage = promising_stage(&log);
     stage.prepare = log_entry_prepare;
     stage.pre_process = log_entry;
     stage.post_process = log_entry;
@@ -1831,7 +1825,7 @@ TEST(AbiStage, TheEntryIsStableWithinAChunkAndDistinctAcrossChunksInFlight) {
 TEST(AbiStage, PerChunkScratchByEntry) {
     const Context context;
     Scratch scratch;
-    anira_stage_desc stage = named_stage("scratch", &scratch);
+    anira_stage_desc stage = promising_stage(&scratch);
     stage.prepare = scratch_prepare;
     stage.pre_process = scratch_phase;
     stage.before_inference = scratch_phase;
@@ -1904,7 +1898,8 @@ TEST(AbiStage, NoStageEqualsTheV2Default) {
 // ============================================================================================
 
 // A stage that declares "model:entry" consumes the entry extension of the custom row, which no
-// adapter of anira reads: the handler is created, and the plan's extension row names the stage.
+// adapter of anira reads: the handler is created, and the plan's extension row's consumer reads
+// "stage".
 TEST(AbiStage, ConsumedKindsJoinTheWalk) {
     const Context context;
     ModelConfig model = stream_model();
@@ -1915,7 +1910,7 @@ TEST(AbiStage, ConsumedKindsJoinTheWalk) {
             << refused.m_err.message;
     }
     const std::array<const char*, 1> kinds{"model:entry"};
-    anira_stage_desc stage = named_stage("entry-reader", nullptr);
+    anira_stage_desc stage = promising_stage(nullptr);
     stage.consumed_kinds = kinds.data();
     stage.num_consumed_kinds = 1;
     StagedHandler handler(context, model, {stage});
@@ -1929,7 +1924,7 @@ TEST(AbiStage, ConsumedKindsJoinTheWalk) {
     anira_plan_ext row = ANIRA_PLAN_EXT_INIT;
     ASSERT_EQ(anira_plan_report_exts(report, 0, sizeof(anira_plan_ext), &count, &row), ANIRA_OK);
     EXPECT_STREQ(row.kind, "entry");
-    EXPECT_STREQ(row.consumer, "entry-reader");
+    EXPECT_STREQ(row.consumer, "stage");
     EXPECT_STREQ(row.host, "model 0");
 }
 
@@ -1948,13 +1943,13 @@ TEST(AbiStage, ARingOfAnotherDtypeNeedsAStageThatFillsThePhase) {
     // A stage on the other side does not help: post_process moves the output rings.
     Probe probe;
     probe.m_defaults = 1;
-    anira_stage_desc post_only = named_stage("post-only", &probe);
+    anira_stage_desc post_only = promising_stage(&probe);
     post_only.post_process = probe_phase;
     StagedHandler wrong_side(context, stream_model(), {post_only});
     EXPECT_EQ(wrong_side.prepare(contract), ANIRA_ERROR_CONFIG);
 
     auto scratch = std::make_unique<std::array<int16_t, k_hop>>();
-    anira_stage_desc convert = named_stage("int16-to-float", scratch.get());
+    anira_stage_desc convert = promising_stage(scratch.get());
     convert.pre_process = int16_to_float;
     StagedHandler handler(context, stream_model(), {convert});
     ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
@@ -2038,7 +2033,7 @@ TEST(AbiStage, Int16RingWithAConvertingStageOnEveryEngine) {
         if (engine == ANIRA_ENGINE_TFLITE) { continue; }
         SCOPED_TRACE("engine " + std::to_string(static_cast<unsigned>(engine)));
         auto scratch = std::make_unique<std::array<int16_t, k_hop>>();
-        anira_stage_desc convert = named_stage("int16-to-float", scratch.get());
+        anira_stage_desc convert = promising_stage(scratch.get());
         convert.pre_process = int16_to_float;
         const std::array<anira_backend_id, 1> candidates = one_engine(engine);
         const ModelConfig model = ModelConfig::from_file(k_gain_model_json);
@@ -2136,7 +2131,7 @@ anira_status ANIRA_CALL record_then_default(const anira_stage_ctx* ctx,
 TEST(AbiStage, TensorsFollowTheStructsMemoryAcrossLibTorchInferences) {
     const Context context;
     Pointers pointers;
-    anira_stage_desc stage = named_stage("pointers", &pointers);
+    anira_stage_desc stage = promising_stage(&pointers);
     stage.pre_process = record_then_default;
     stage.post_process = record_then_default;
     const std::array<anira_backend_id, 1> candidates = one_engine(ANIRA_ENGINE_LIBTORCH);

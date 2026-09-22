@@ -532,7 +532,6 @@ TEST(AbiState, OneSlotSpacePerSide) {
     RecordCollector collector;
     SlotProbe probe;
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
-    stage.name = "slot-probe";
     stage.user_data = &probe;
     stage.prepare = &probe_roles;
     stage.before_inference = &probe_slots;
@@ -1173,7 +1172,6 @@ anira_status ANIRA_CALL alter_after(const anira_stage_ctx* ctx, void* user_data)
 TEST(AbiState, StageSeesAndAltersState) {
     StageLog log;
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
-    stage.name = "state-probe";
     stage.user_data = &log;
     stage.before_inference = &alter_before;
     stage.after_inference = &alter_after;
@@ -1263,7 +1261,6 @@ anira_status ANIRA_CALL ask_host_end(const anira_stage_ctx* ctx,
 /// Runs the accumulator with ask_host_end over `log` for four hops and checks the stream.
 void run_host_end_probe(HostEndLog& log) {
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
-    stage.name = "host-end-probe";
     stage.user_data = &log;
     stage.flags = ANIRA_STAGE_REALTIME_PRE_POST;
     stage.pre_process = &ask_host_end;
@@ -1327,12 +1324,12 @@ TEST(AbiState, TheHostEndPhasesDoNotExposeAStateSlot) {
     anira_drain_log();
 #ifdef ENABLE_LOGGING
     // One record per kind: the first refusal, the ring of the State input in pre_process,
-    // naming the entry, the stage, the slot and the phase; the others of the kind are counted.
+    // naming the entry, the slot and the phase; the others of the kind are counted.
     EXPECT_EQ(anira_test::count_records(collector, "has no ring in", "rt"), 1U);
     const RecordCollector::Record record =
         anira_test::find_record(collector, "has no ring in", "rt");
-    EXPECT_NE(record.m_message.find("anira_stage_input_ring: stage 'host-end-probe': slot 0 has "
-                                    "no ring in pre_process"),
+    EXPECT_NE(record.m_message.find("anira_stage_input_ring: the stage: slot 0 has no ring in "
+                                    "pre_process"),
               std::string::npos)
         << record.m_message;
     EXPECT_EQ(record.m_flags, ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);

@@ -22,16 +22,12 @@ struct RtLatch;
  * @brief What the rings of one session know about the session that owns them.
  *
  * The C ring accessors of `abi/stage.h` receive an `anira_ring*` and nothing else, yet a
- * refused call has to land in `anira_handler_rt_error` and name the stage that made it. Every
- * ring of a prepared session therefore points at the session's one RingOwner
- * (SessionElement::m_ring_owner). A ring built outside a session has none and records nothing.
+ * refused call has to land in `anira_handler_rt_error`. Every ring of a prepared session
+ * therefore points at the session's one RingOwner (SessionElement::m_ring_owner). A ring built
+ * outside a session has none and records nothing.
  */
 struct RingOwner {
     RtLatch* m_rt = nullptr;  ///< The latch a refused accessor records into: the session's
-    /// The name of the stage whose pre_process or post_process is running, else nullptr. Written
-    /// by the stage processor around each callback and read by the accessors, both on the thread
-    /// that drives the session, so it is a plain pointer.
-    const char* m_stage = nullptr;
 };
 
 }  // namespace anira
@@ -459,7 +455,7 @@ private:
 
     Storage m_storage;  ///< Default-constructed: the float32 arm, no capacity
     size_t m_hop = 0;   ///< Elements per channel per inference; set by the owning session
-    const anira::RingOwner* m_owner = nullptr;  ///< The owning session's latch and running stage
+    const anira::RingOwner* m_owner = nullptr;  ///< The owning session's latch
 };
 // NOLINTEND(readability-identifier-naming)
 

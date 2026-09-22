@@ -559,10 +559,11 @@ prepare and a release function, one ``user_data`` slot, a name and the stage's r
 promise, and ``anira_pipeline_add_stage(pipe, &desc, &err)`` copies it (within
 ``struct_size``, with its strings) into a carrier that the pipeline and every handler created
 from it share, so ``release`` fires exactly once, with the last of them. A pipeline holds **at
-most one stage**: a second ``anira_pipeline_add_stage`` is ``ANIRA_ERROR_INVALID_STATE``,
-naming the stage the pipeline has, and the order relative to ``anira_pipeline_add_inference``
-means nothing. Without a stage anira runs its default bodies, the windowing of a streamed
-model, which is all that most models need. A stage is for a model whose host data is not its
+most one stage**: a second ``anira_pipeline_add_stage`` is ``ANIRA_ERROR_INVALID_STATE``, and
+the order relative to ``anira_pipeline_add_inference`` means nothing. The stage has no name:
+with one per pipeline a name would identify nothing, so every record about it says ``the
+stage``. Without a stage anira runs its default bodies, the windowing of a streamed model,
+which is all that most models need. A stage is for a model whose host data is not its
 model tensor as it stands: an integer stream a model reads as ``float32``, a spectrogram
 model, a batched sliding-window layout, a value normalised on the way in and denormalised on
 the way out. In C++ the same descriptor is a subclass of :cpp:class:`anira::Stage` (below);
@@ -638,8 +639,8 @@ an output ring outside ``post_process``, the host end of a State tensor in ``pre
 ``post_process``, a side outside its phases) is a **bug in the stage, not an answer**: a stage
 knows what a slot is, from its model config or by asking the role first, so the accessor
 answers ``ANIRA_ERROR_INVALID_STATE`` and latches it into ``anira_handler_rt_error`` with one
-record per kind naming the entry, the stage, the slot and the phase, as it latches a slot out
-of range and a ``NULL`` out-parameter (``ANIRA_ERROR_INVALID_ARGUMENT``). Every ring accessor
+record per kind naming the entry, the slot and the phase, as it latches a slot out of range
+and a ``NULL`` out-parameter (``ANIRA_ERROR_INVALID_ARGUMENT``). Every ring accessor
 still takes a ``NULL`` ring and returns 0 for it.
 
 **The entry.** ``ctx->entry`` is the in-flight entry this chunk occupies, ``0 ..
@@ -676,19 +677,19 @@ given up exactly the slot's hop per channel, and after ``post_process`` every St
 ring must have gained exactly its hop. A shortfall is repaired so the stream stays aligned
 (the missing elements are discarded from an input ring, an output ring is topped up with
 zeros); an excess cannot be undone. Either way ``anira_handler_rt_error`` reads
-``ANIRA_ERROR_CONFIG`` and one latched record names the stage, the phase, the tensor and both
-counts. It is the guard of a stage that moves the wrong amount, not a policy.
+``ANIRA_ERROR_CONFIG`` and one latched record names the phase, the tensor and both counts. It
+is the guard of a stage that moves the wrong amount, not a policy.
 
 **Failure.** A phase callback returns ``ANIRA_OK``, or any other status to fail its chunk: the
-status goes into ``anira_handler_rt_error`` with one latched record naming the stage, and the
+status goes into ``anira_handler_rt_error`` with one latched record naming the phase, and the
 chunk delivers zeros at its stream position. A failed ``pre_process`` is not submitted to an
 engine; a failed ``before_inference`` or ``after_inference`` skips the rest and zeroes the
 model outputs (the State outputs are not captured, so the state keeps its last good value);
 after a failed ``post_process`` anira tops every Streamed output ring up to the chunk's hop
-with zeros, because a ring cannot take a push back. The records carry the stage's ``name``
-(``NULL`` or empty reads ``stage``), as does a prepare failure the stage causes and the
-consumer column of the ``anira_plan_ext`` rows of the extensions it lists in
-``consumed_kinds`` (``"<host>:<kind>"`` strings that join the consumed-or-fail walk).
+with zeros, because a ring cannot take a push back. A prepare the stage refuses fails with
+``the stage refused prepare`` and its status. The consumer column of the ``anira_plan_ext``
+rows of the extensions the stage lists in ``consumed_kinds`` (``"<host>:<kind>"`` strings
+that join the consumed-or-fail walk) reads ``stage``.
 
 **Static and State slots in the phases.** A Static input is a per-chunk snapshot: anira
 materialises the value of the handler's store (``anira_handler_set_static_input``, section
@@ -711,7 +712,7 @@ says ``pre_process`` and ``post_process`` allocate nothing, lock nothing and blo
 ``0``, the value of ``ANIRA_STAGE_DESC_INIT``, promises nothing. ``anira_handler_prepare``
 checks the promise against the placement: under a Hard contract a filled ``pre_process`` or
 ``post_process`` runs on the driving thread and requires ``ANIRA_STAGE_REALTIME_PRE_POST``,
-else prepare fails with ``ANIRA_ERROR_CONFIG`` naming the stage and the flag; under an Async
+else prepare fails with ``ANIRA_ERROR_CONFIG`` naming the flag; under an Async
 contract everything runs on an inference thread and no bit is required; a bit the header does
 not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at ``anira_pipeline_add_stage``. anira's own
 side is real-time whatever the flags say: the ring accessors, the six context accessors and
@@ -724,7 +725,7 @@ differs per stage).
 ``anira_handler_prepare`` after the plan report is built, once per prepare. It may allocate
 (this is where the per-entry scratch is sized), may call the ``[callback-safe]`` entries, the
 handler's getters and the two Static entries, never ``prepare``, ``destroy`` or a Hard entry,
-and a status other than ``ANIRA_OK`` fails the prepare with it, the message naming the stage;
+and a status other than ``ANIRA_OK`` fails the prepare with it (``the stage refused prepare``);
 what a slot is, it reads from the report's ``anira_plan_slot.role`` rows. ``release(user_data)``
 runs exactly once, when the last carrier of the descriptor dies (``anira_pipeline_destroy`` or
 ``anira_handler_destroy``, whichever comes last); no callback runs afterwards.
@@ -798,7 +799,6 @@ At setup, beside ``anira_pipeline_add_inference`` of section 3.2:
 
     static convert_state state;
     anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
-    desc.name = "int16-to-float";
     desc.user_data = &state;
     desc.flags = ANIRA_STAGE_REALTIME_PRE_POST;   /* required: pre_process runs on the driving thread */
     desc.pre_process = convert_pre_process;        /* post_process stays NULL: the default push */
@@ -831,8 +831,6 @@ or handler that carries it; ``release()`` runs once, when that carrier dies.
 
     class Int16ToFloat : public anira::Stage {
     public:
-        Int16ToFloat() : anira::Stage("int16-to-float") {}
-
         uint32_t phases() const noexcept override { return k_pre_process; }   // post_process: the default
         uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
 
@@ -1007,7 +1005,7 @@ and the host domains by canonical name, the stage's real-time promise against it
 loads the model of every candidate that has an entry, sizes the rings for the block range and
 the latency, selects the plan of the variant's default engine (else plan 0), builds the plan
 report and, last, calls the stage's prepare function when the pipeline has a stage with one
-(a status other than ``ANIRA_OK`` fails the prepare with it, the message naming the stage); a
+(a status other than ``ANIRA_OK`` fails the prepare with it); a
 second prepare replaces the session whole, a failed one leaves the handler unprepared.
 ``anira_handler_num_entries(h)`` then says how many chunks may be in flight at once, the size
 of a stage's per-entry scratch (section 2). ``anira_handler_destroy`` releases the session and, with the last

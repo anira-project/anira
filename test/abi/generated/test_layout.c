@@ -340,7 +340,6 @@ _Static_assert(sizeof(anira_stage_desc) ==
                    sizeof(((const anira_stage_desc*)0)->struct_size) +
                    sizeof(((const anira_stage_desc*)0)->abi_version) +
                    sizeof(((const anira_stage_desc*)0)->user_data) +
-                   sizeof(((const anira_stage_desc*)0)->name) +
                    sizeof(((const anira_stage_desc*)0)->consumed_kinds) +
                    sizeof(((const anira_stage_desc*)0)->num_consumed_kinds) +
                    sizeof(((const anira_stage_desc*)0)->flags) +

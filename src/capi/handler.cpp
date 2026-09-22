@@ -724,8 +724,8 @@ void check_stage_flags(const anira::capi::StageCarrier* stage) {
     const bool fills_pre_or_post = desc.pre_process != nullptr || desc.post_process != nullptr;
     if (!fills_pre_or_post || (desc.flags & ANIRA_STAGE_REALTIME_PRE_POST) != 0) { return; }
     throw StatusError(ANIRA_ERROR_CONFIG,
-                      std::string("stage '") + stage->name() +
-                          "': " + (desc.pre_process != nullptr ? "pre_process" : "post_process") +
+                      std::string("the stage: ") +
+                          (desc.pre_process != nullptr ? "pre_process" : "post_process") +
                           " is filled and runs on the driving thread under a Hard contract, "
                           "which requires ANIRA_STAGE_REALTIME_PRE_POST in anira_stage_desc."
                           "flags (the stage's promise that pre_process and post_process "
@@ -1144,7 +1144,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     const anira_status status = desc.prepare(&handler, &handler.m_report, desc.user_data);
     if (status != ANIRA_OK) {
         throw StatusError(status,
-                          std::string("stage '") + stage->name() + "': prepare returned " +
+                          std::string("the stage refused prepare: it returned ") +
                               std::to_string(static_cast<int>(status)) + " (" +
                               anira_status_string(status) + ")");
     }
@@ -1371,10 +1371,9 @@ anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipeline,
     ANIRA_CAPI_REQUIRE(pipeline->m_stage == nullptr,
                        err,
                        ANIRA_ERROR_INVALID_STATE,
-                       "pipeline: the pipeline already has a stage ('%s'); a pipeline holds "
-                       "at most one, which composes the default bodies itself",
-                       pipeline->m_stage->name());
-    // The carrier copies the name and the kinds; a stage without a name is named "stage".
+                       "pipeline: the pipeline already has a stage; a pipeline holds at most "
+                       "one, which composes the default bodies itself");
+    // The carrier copies the kinds.
     pipeline->m_stage = std::make_shared<anira::capi::StageCarrier>(value);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }

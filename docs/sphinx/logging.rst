@@ -168,12 +168,12 @@ reports 0 samples), a failed inference. A failed
 inference — an engine exception, a throwing custom processor or hook — zero-fills its output
 (never the previous job's data), sets ``rt_error`` to ``ANIRA_ERROR_ENGINE`` and is one
 latched record; the inference thread survives it. A stage of the C handler fails differently:
-a phase callback that returns a status other than ``ANIRA_OK`` latches *that* status under the
-stage's name and its chunk delivers zeros, the hop-count guard after ``pre_process`` and
+a phase callback that returns a status other than ``ANIRA_OK`` latches *that* status and its
+chunk delivers zeros, the hop-count guard after ``pre_process`` and
 ``post_process`` latches ``ANIRA_ERROR_CONFIG``, and a ring or context accessor refused inside
 a callback latches ``ANIRA_ERROR_CONFIG`` (a dtype that is not the ring's) or
 ``ANIRA_ERROR_INVALID_ARGUMENT`` (a slot or a channel out of range), each with one record
-naming the stage (section 2 of the :doc:`usage` guide). The summary runs on the drain thread and,
+naming the entry and the slot or channel (section 2 of the :doc:`usage` guide). The summary runs on the drain thread and,
 under ``ANIRA_LOG_DRAIN_MANUAL`` and on WebAssembly, in ``anira_drain_log``.
 
 Levels

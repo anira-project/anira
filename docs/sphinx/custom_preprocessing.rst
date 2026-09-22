@@ -73,7 +73,7 @@ The rules in short
 - Per-chunk data lives in a scratch of ``anira_handler_num_entries(handler)`` entries, sized
   in ``prepare``, indexed by ``ctx->entry`` (``ctx.entry()``).
 - A failure is a returned status, never a throw: the status is latched in
-  ``anira_handler_rt_error`` under the stage's name and the chunk delivers zeros.
+  ``anira_handler_rt_error`` and the chunk delivers zeros.
 
 A normalising stage
 -------------------
@@ -89,7 +89,7 @@ and ``post_process`` slots are filled and the two hooks stay ``NULL``:
 
     class Normalise : public anira::Stage {
     public:
-        explicit Normalise(float gain) : anira::Stage("normalise"), m_gain(gain) {}
+        explicit Normalise(float gain) : m_gain(gain) {}
 
         uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
         uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
@@ -149,8 +149,6 @@ window in a per-entry scratch sized in ``prepare``:
 
     class Spectral : public anira::Stage {
     public:
-        Spectral() : anira::Stage("spectral") {}
-
         uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
         uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
 
@@ -311,7 +309,6 @@ and its descriptor, filled once at setup:
 
     static spectral s;
     anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
-    desc.name = "spectral";
     desc.user_data = &s;
     desc.flags = ANIRA_STAGE_REALTIME_PRE_POST;   /* the hooks promise nothing */
     desc.pre_process = spectral_pre_process;
@@ -345,7 +342,7 @@ see the fed and the produced state and may alter either (a constraint, a decay, 
 while ``pre_process`` and ``post_process`` have no host end of a State slot to hand out.
 Neither role has a ring. Asking for what a slot does not have is the stage's bug, not an
 answer: the accessor answers ``ANIRA_ERROR_INVALID_STATE`` and latches it into
-``anira_handler_rt_error``, naming the stage, the slot and the phase. A stage written for one
+``anira_handler_rt_error``, naming the entry, the slot and the phase. A stage written for one
 model knows its slots; a stage that handles every slot of a model it does not know asks the
 role first and takes the ring of a Streamed slot only.
 
@@ -388,9 +385,9 @@ pointer, and ``Stage::release()`` runs once at that moment:
 
 ``anira_handler_prepare`` then validates the stage with the rest: under a Hard contract a
 filled ``pre_process`` or ``post_process`` without ``ANIRA_STAGE_REALTIME_PRE_POST`` is
-``ANIRA_ERROR_CONFIG`` naming the stage and the flag, a ring dtype that differs from its spec's
-is accepted only where the stage fills the phase that moves that ring, and the stage's own
-``prepare`` runs last, with the handler and the plan report; a status it returns, or an
-exception a C++ ``prepare`` throws, fails the prepare by the stage's name. The
+``ANIRA_ERROR_CONFIG`` naming the flag, a ring dtype that differs from its spec's is accepted
+only where the stage fills the phase that moves that ring, and the stage's own ``prepare``
+runs last, with the handler and the plan report; a status it returns, or an exception a C++
+``prepare`` throws, fails the prepare (``the stage refused prepare``). The
 :cpp:class:`anira::InferenceHandler` class of ``anira/anira.hpp`` arrives with the runtime
 cut-over; until then a stage is driven through the C entries of the handler.

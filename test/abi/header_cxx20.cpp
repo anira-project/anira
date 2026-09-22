@@ -194,8 +194,6 @@ static_assert(std::is_same_v<decltype(anira::Error::status), anira_status>);
 /// converts an int16 ring into the float model tensor and leaves the push to anira's default.
 class ProbeStage final : public anira::Stage {
 public:
-    ProbeStage() : anira::Stage("probe") {}
-
     uint32_t phases() const noexcept override { return k_pre_process | k_after_inference; }
     // The real-time promise a Hard contract requires of a filled pre_process.
     uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
@@ -306,7 +304,7 @@ int anira_header_cxx20_probe() {
         const anira::Pipeline staged{anira::stage::Inference(model), custom};
         anira::Pipeline other{anira::stage::Inference(model)};
         other.add(custom);
-        checks += custom.stage()->name() == "probe" && custom.stage()->flags() != 0 ? 1 : 0;
+        checks += custom.stage() != nullptr && custom.stage()->flags() != 0 ? 1 : 0;
         checks += nonblocking_probe(nullptr) > 0 ? 1 : 0;
         anira::TensorSpec state("state_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
         state.axis(0, ANIRA_AXIS_ANY, 2).state_source("state_out");

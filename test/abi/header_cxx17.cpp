@@ -93,7 +93,7 @@ static_assert(std::is_same_v<decltype(anira_stage_desc::pre_process), anira_stag
     const anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;  // the initializer as C++17 braces it
     anira_stage_ctx ctx{};
     ctx.ticket = ANIRA_TICKET_INVALID;
-    checks += stage.struct_size == sizeof(anira_stage_desc) && stage.name == nullptr ? 1 : 0;
+    checks += stage.struct_size == sizeof(anira_stage_desc) && stage.user_data == nullptr ? 1 : 0;
     checks += stage.flags == 0U && stage.release == nullptr ? 1 : 0;
     checks += ctx.frame == nullptr && ctx.entry == 0U && ctx.reserved_ptr2_bits == 0u ? 1 : 0;
     return checks;

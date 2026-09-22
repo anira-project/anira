@@ -160,7 +160,10 @@ typedef struct anira_plan_ext {
      */
     const char* host;
     const char* kind;  /**< The extension kind (its registered reverse-URI name). */
-    const char* consumer;  /**< The name of the stage or adapter that consumes it. */
+    /**
+     * Who consumes it: "stage" for the pipeline's stage, else the adapter's name.
+     */
+    const char* consumer;
 } anira_plan_ext;
 /**
  * @brief No extension.
@@ -262,9 +265,8 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* p
  * never calls release.
  * @param pipeline The pipeline.
  * @param desc The stage; min(struct_size, sizeof(anira_stage_desc)) bytes are copied, with the
- *        name and the consumed kinds, so the record and its strings may die when the call
- *        returns. The slots a shorter struct_size does not cover read as in
- *        ANIRA_STAGE_DESC_INIT.
+ *        consumed kinds, so the record and its strings may die when the call returns. The
+ *        slots a shorter struct_size does not cover read as in ANIRA_STAGE_DESC_INIT.
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE when the pipeline already has a stage;
  *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline or desc, a struct_size below the
@@ -347,19 +349,18 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * per consumed extension) re-arms the real-time latches, logging the count of failures
  * suppressed since the last prepare or reset, and last calls the stage's prepare
  * function, when the pipeline has a stage with one, with the handler and the report (a
- * status other than ANIRA_OK fails this call with it, the message naming the stage). A
- * second prepare replaces the previous session whole. A failed prepare leaves the
- * handler unprepared. Refused in this pre-release: an Async contract,
- * ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an
- * explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an
- * output or when a streamed output's channel count or ring dtype differs from the
- * anchored input's, ANIRA_MISS_CALLBACK without a function
- * (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor, or one
- * that differs from its spec's dtype while the stage does not fill the phase that moves
- * that ring (ANIRA_ERROR_CONFIG naming the field), and a stage whose filled pre_process
- * or post_process carries no ANIRA_STAGE_REALTIME_PRE_POST in its flags, since under a
- * Hard contract those two phases run on the driving thread (ANIRA_ERROR_CONFIG naming
- * the stage and the flag).
+ * status other than ANIRA_OK fails this call with it). A second prepare replaces the
+ * previous session whole. A failed prepare leaves the handler unprepared. Refused in
+ * this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
+ * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED
+ * or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed
+ * output's channel count or ring dtype differs from the anchored input's,
+ * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype
+ * that names no Streamed tensor, or one that differs from its spec's dtype while the
+ * stage does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the
+ * field), and a stage whose filled pre_process or post_process carries no
+ * ANIRA_STAGE_REALTIME_PRE_POST in its flags, since under a Hard contract those two
+ * phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
  * @param handler The handler.
  * @param contract A Hard contract, copied; the handle may be destroyed when the call returns.
  * @param err Nullable.

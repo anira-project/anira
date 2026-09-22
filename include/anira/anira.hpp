@@ -1765,7 +1765,7 @@ private:
  * slot always has a role; asking for a ring or a tensor the slot does not have in this phase is
  * a bug in the stage, not an answer: a stage knows what a slot is, from its model config or by
  * asking the role first, so the accessor answers ANIRA_ERROR_INVALID_STATE and records it in
- * anira_handler_rt_error with one latched record per kind naming the stage, the slot and the
+ * anira_handler_rt_error with one latched record per kind naming the entry, the slot and the
  * phase, as it records a slot out of range (ANIRA_ERROR_INVALID_ARGUMENT).
  *
  * [driver-thread | inference-thread] [callback-safe], nonblocking: every method is noexcept and
@@ -1884,13 +1884,16 @@ private:
  * ANIRA_STAGE_REALTIME_HOOKS says the same of before_inference and after_inference; the default
  * promises nothing. anira_handler_prepare checks the promise against the placement: under a
  * Hard contract a filled pre_process or post_process runs on the driving thread and requires
- * ANIRA_STAGE_REALTIME_PRE_POST, else prepare fails with ANIRA_ERROR_CONFIG naming the stage
- * and the flag. The four phase functions are noexcept (an override that throws does not
- * compile without it, and terminates with it) and carry no real-time attribute of their own;
- * everything StageContext, RingView and Tensor offer is nonblocking, so a body that keeps its
- * promise is composed of those calls. A status other than ANIRA_OK fails the chunk: the status
- * goes into anira_handler_rt_error with one latched record naming the stage, and the chunk
- * delivers zeros at its stream position.
+ * ANIRA_STAGE_REALTIME_PRE_POST, else prepare fails with ANIRA_ERROR_CONFIG naming the flag.
+ * The four phase functions are noexcept (an override that throws does not compile without it,
+ * and terminates with it) and carry no real-time attribute of their own; everything
+ * StageContext, RingView and Tensor offer is nonblocking, so a body that keeps its promise is
+ * composed of those calls. A status other than ANIRA_OK fails the chunk: the status goes into
+ * anira_handler_rt_error with one latched record naming the phase, and the chunk delivers
+ * zeros at its stream position.
+ *
+ * A stage has no name: a Pipeline holds one, so a name would identify nothing; every record
+ * about it says "the stage", and the consumer column of its anira_plan_ext rows reads "stage".
  */
 class Stage {
 public:
@@ -1906,16 +1909,12 @@ public:
     static constexpr uint32_t k_all_phases =
         k_pre_process | k_post_process | k_before_inference | k_after_inference;
 
-    /// The stage's name: every latched record about the stage, a prepare failure it causes and
-    /// the consumer column of its anira_plan_ext rows carry it. Empty reads "stage".
-    explicit Stage(std::string_view stage_name = {}) : m_name(stage_name) {}
+    Stage() = default;
     virtual ~Stage() = default;
     Stage(const Stage&) = delete;
     Stage& operator=(const Stage&) = delete;
     Stage(Stage&&) = delete;
     Stage& operator=(Stage&&) = delete;
-
-    const std::string& name() const noexcept { return m_name; }
 
     /// The phases this stage fills: an OR of k_pre_process, k_post_process, k_before_inference
     /// and k_after_inference. Read once, when the stage is added to a Pipeline; 0 is a stage of
@@ -1965,9 +1964,6 @@ public:
     /// tensor_spec, model, model_config, context, contract); they join the consumed-or-fail
     /// walk. Read once, when the stage is added; the strings are copied.
     virtual std::span<const char* const> consumed_kinds() const noexcept { return {}; }
-
-private:
-    std::string m_name;
 };
 
 namespace detail {
@@ -2013,16 +2009,16 @@ struct StageTrampolines {
         try {
             return stage.prepare(handler, PlanReport(report));
         } catch (const Error& error) {
-            log_throw(stage, error.what());
+            log_throw(error.what());
             return failed(error.status) ? error.status : ANIRA_ERROR_INTERNAL;
         } catch (const std::bad_alloc& error) {
-            log_throw(stage, error.what());
+            log_throw(error.what());
             return ANIRA_ERROR_OUT_OF_MEMORY;
         } catch (const std::exception& error) {
-            log_throw(stage, error.what());
+            log_throw(error.what());
             return ANIRA_ERROR_INTERNAL;
         } catch (...) {
-            log_throw(stage, "an exception that is no std::exception");
+            log_throw("an exception that is no std::exception");
             return ANIRA_ERROR_INTERNAL;
         }
     }
@@ -2035,13 +2031,9 @@ struct StageTrampolines {
 
 private:
     /// Formats into a fixed buffer: nothing here may throw inside the handler of a throw.
-    static void log_throw(const Stage& stage, const char* what) noexcept {
+    static void log_throw(const char* what) noexcept {
         std::array<char, ANIRA_ERROR_MESSAGE_CAPACITY> text{};
-        std::snprintf(text.data(),
-                      text.size(),
-                      "stage '%s': prepare threw: %s",
-                      stage.name().c_str(),
-                      what);
+        std::snprintf(text.data(), text.size(), "the stage's prepare threw: %s", what);
         anira_log(ANIRA_LOG_ERROR, "anira.hpp", text.data());
     }
 };
@@ -2145,8 +2137,8 @@ public:
                         std::initializer_list<BackendId> candidates = {}) {
         return add(stage::Inference(model, candidates));
     }
-    /// Adds one stage of any kind. A stage::Custom is read once, here: its name, phases(),
-    /// flags() and consumed_kinds() fill an anira_stage_desc (anira_pipeline_add_stage), and
+    /// Adds one stage of any kind. A stage::Custom is read once, here: its phases(), flags()
+    /// and consumed_kinds() fill an anira_stage_desc (anira_pipeline_add_stage), and
     /// only the phases of the mask reach it; Stage::release answers this add once.
     /// @throws Error when the C entry refuses it: a second inference stage is
     /// ANIRA_ERROR_CONFIG, a second custom stage ANIRA_ERROR_INVALID_STATE, more than one
@@ -2187,7 +2179,6 @@ private:
         }
         const std::span<const char* const> kinds = implementation->consumed_kinds();
         anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
-        desc.name = implementation->name().c_str();
         desc.consumed_kinds = kinds.empty() ? nullptr : kinds.data();
         desc.num_consumed_kinds = static_cast<uint32_t>(kinds.size());
         desc.flags = implementation->flags();  // the C entry refuses a bit it does not define
