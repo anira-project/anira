@@ -280,6 +280,9 @@ target_sources(${PROJECT_NAME}
 
         # Backend
         src/backends/BackendBase.cpp
+        src/backends/Adapter.cpp
+        src/backends/Adapters.cpp
+        src/backends/LegacyAdapter.cpp
         ${BACKEND_SOURCES}
 
         # Scheduler

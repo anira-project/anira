@@ -91,11 +91,14 @@ anira_add_test_binary(test_scheduler
 target_include_directories(test_scheduler PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_backends
+	backends/test_Adapter.cpp
 	backends/test_BackendBase.cpp
 	backends/test_ExecuTorchModelFunction.cpp
 	backends/test_ExecuTorchProcessor.cpp
 	backends/test_LibTorchProcessor.cpp
 )
+# The engine room (src/backends/Adapter.h and the adapters) for test_Adapter.
+target_include_directories(test_backends PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_handler
 	contracts/test_BackendLinkage.cpp
