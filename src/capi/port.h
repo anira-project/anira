@@ -8,8 +8,11 @@
  *   Streamed -> StreamPort: the session's ring, and what a host block of the slot must carry.
  *   Static   -> StaticPort: the stored whole-tensor value (StaticSlot), in the spec's shape and
  *               dtype.
- *   State    -> StatePort: the slot of the other half of the pair. The session feeds and
- *               captures the tensor on the inference thread; no Hard entry carries it.
+ *   State    -> StatePort: the input half holds the state, a StaticSlot in the spec's shape
+ *               and dtype, and the generation it was last fed under; the output half names
+ *               the input slot it feeds (m_partner). The stage processor feeds the value into
+ *               the model input ahead of before_inference and captures the model output into
+ *               it behind after_inference, on the inference thread; no Hard entry carries it.
  *   Buffer   -> BufferPort: nothing. A Buffer tensor is a per-job payload of the Async
  *               contract and is refused under a Hard one at prepare.
  *
@@ -23,7 +26,9 @@
  * The Static value: sized and zeroed once, at anira_handler_create, untouched by prepare and by
  * reset: what anira_handler_set_static_input stores and the stage processor materialises into the
  * model's input tensors, and what the chain captures from the model's output tensors and
- * anira_handler_get_static_output returns.
+ * anira_handler_get_static_output returns. The State value is the same slot with another life:
+ * zeroed at create and at every prepare, re-initialised at the first inference of a new
+ * generation (a reset), written by the capture of every successful inference.
  *
  * The latch is a sequence counter per slot with one writer: the counter is odd while a write
  * runs, a reader copies and takes the copy only when the counter was even and is unchanged
@@ -50,6 +55,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -170,6 +176,14 @@ public:
     void write_packed(const void* source, size_t num_bytes) noexcept {
         begin_write();
         store_bytes(0, static_cast<const unsigned char*>(source), std::min(num_bytes, m_num_bytes));
+        end_write();
+    }
+
+    /// The writer of all-zero bits, the zero of every dtype: the re-initialisation of a State
+    /// value (a Static value starts that way and is never zeroed again).
+    void zero() noexcept {
+        begin_write();
+        for (std::atomic<uint64_t>& word : m_words) { word.store(0, std::memory_order_relaxed); }
         end_write();
     }
 
@@ -302,10 +316,31 @@ struct StaticPort {
     StaticSlot m_value;
 };
 
-/// One half of a declared state pair: `m_partner` is the slot of the other half, on the other
-/// side.
+/// One half of a declared state pair. The INPUT half holds the state: its value in the spec's
+/// shape and dtype, what the stage processor feeds into the model input ahead of
+/// before_inference and what its capture behind after_inference writes, and the generation the
+/// value was last fed under (a chunk stamped with another one is the first of a new stream: the
+/// value starts over at zeros). The OUTPUT half holds no value: its `m_partner` names the input
+/// slot the capture writes into. On both halves `m_partner` is the slot of the other half, on
+/// the other side. Constructed in place (an atomic does not move). The value and the generation
+/// are the inference thread's, under the session's dispatch gate (a pair makes the session
+/// exclusive), except at prepare, which zeroes them while no chunk exists; a reader of the
+/// value on another thread takes it under the slot's latch, never torn.
 struct StatePort {
-    uint32_t m_partner = 0;
+    /// The input half: the value, all-zero bits, in `shape` and `dtype` (the spec's).
+    StatePort(std::vector<int64_t> shape, anira_dtype dtype)
+        : m_value(std::in_place, std::move(shape), dtype) {}
+    /// The output half: no value.
+    StatePort() = default;
+
+    /// No chunk carries this stamp: the first feed after a prepare re-initialises.
+    static constexpr uint64_t k_no_generation = UINT64_MAX;
+
+    std::optional<StaticSlot> m_value;  ///< engaged on the input half only
+    uint32_t m_partner = 0;             ///< the slot of the other half, on the other side
+    /// The generation the value was last fed under; k_no_generation after prepare. Plain field:
+    /// the inference thread's, under the dispatch gate, like the value.
+    uint64_t m_generation = k_no_generation;
 };
 
 /// A Buffer tensor holds nothing: prepare refuses the spec under a Hard contract, so no

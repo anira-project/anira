@@ -448,7 +448,7 @@ ANIRA_API anira_status ANIRA_CALL anira_stage_output_ring(const anira_stage_ctx*
  * already materialised there; a State input has no host end and is fed after
  * pre_process, so there is no model end to hand out), and in
  * ANIRA_PHASE_BEFORE_INFERENCE for a tensor of every role, State included: there every
- * State input is already fed from the session's state buffer, a stage may read or alter
+ * State input is already fed from the handler's state value, a stage may read or alter
  * it, and what it leaves is what the engine gets. Asking in after_inference or
  * post_process, which expose the model's outputs, or for a State input in pre_process,
  * is the stage's bug. The descriptor is built by this call over the memory the tensor

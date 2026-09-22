@@ -321,15 +321,18 @@ typedef enum anira_role {
     ANIRA_ROLE_STATIC = 2,
     /**
      * Declared state: one half of a pair of a state input and a state output with equal dtype
-     * and shape, paired by anira_tensor_spec_set_state_source on the input. anira feeds the
-     * input from the session's state buffer ahead of the stage's before_inference and captures
-     * the output into it behind the stage's after_inference, on the inference thread; the
-     * buffer is zeroed at prepare and re-initialised by anira_handler_reset. A State spec may
-     * stand anywhere in its list and has a slot like every other tensor, its position in the
-     * model config's list, but no Hard entry carries it: a single form that names its slot is
-     * ANIRA_ERROR_INVALID_ARGUMENT, and its position in an array of a _multi form must be the
-     * empty tensor (a rank of 1 or more with an extent of 0). A stage sees it at the same slot.
-     * No Time axis, window, time ratio or latency; float32 in this pre-release.
+     * and shape, paired by anira_tensor_spec_set_state_source on the input. anira keeps the
+     * state in the handler, on the port of the state input, in the spec's shape and dtype (the
+     * store of a Static tensor with another life), feeds it into the model input ahead of the
+     * stage's before_inference and captures the model output into it behind the stage's
+     * after_inference, on the inference thread; the value is zeroed at create and at prepare
+     * and re-initialised by anira_handler_reset. A State spec may stand anywhere in its list
+     * and has a slot like every other tensor, its position in the model config's list, but no
+     * Hard entry carries it: a single form that names its slot is ANIRA_ERROR_INVALID_ARGUMENT,
+     * and its position in an array of a _multi form must be the empty tensor (a rank of 1 or
+     * more with an extent of 0). A stage sees it at the same slot. No Time axis, window, time
+     * ratio or latency; the value takes the spec's dtype, float32 in this pre-release like
+     * every model tensor.
      */
     ANIRA_ROLE_STATE = 3,
     ANIRA_ROLE_FORCE32 = 0x7fffffff

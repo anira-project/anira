@@ -99,12 +99,14 @@ struct anira_handler {
     /// like everything else of the handler and the stage processor, and a variant of what the
     /// tensor is in here (port.h): a stream port (what a host block must carry, the session's
     /// ring), a static port (the stored whole-tensor value, in the spec's shape and dtype), a
-    /// state port (the slot of the pair's other half), a buffer port (nothing: refused under a
-    /// Hard contract). Built by anira_handler_create from the pipeline copy, the Static values
-    /// zeroed, and never resized; an arm never changes. prepare fills the stream ports' fields
-    /// and leaves the Static values alone, and so does reset (m_pp and m_manager are rebuilt
-    /// by every prepare, the values set before one survive it). Declared before m_pp, which
-    /// reads and writes them: destroyed after.
+    /// state port (the input half: the state's value in the spec's shape and dtype and the
+    /// generation it was last fed under; the output half: the input slot it feeds), a buffer
+    /// port (nothing: refused under a Hard contract). Built by anira_handler_create from the
+    /// pipeline copy, the Static and State values zeroed, and never resized; an arm never
+    /// changes. prepare fills the stream ports' fields, zeroes the State values (a new session
+    /// starts on a fresh state) and leaves the Static values alone, and so does reset (m_pp and
+    /// m_manager are rebuilt by every prepare, the Static values set before one survive it).
+    /// Declared before m_pp, which reads and writes them: destroyed after.
     std::vector<anira::capi::Port> m_input_ports;
     std::vector<anira::capi::Port> m_output_ports;
     std::unique_ptr<anira::PrePostProcessor> m_pp;       ///< the StageProcessor over

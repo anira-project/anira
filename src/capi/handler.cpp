@@ -1043,6 +1043,15 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
 
     // Quiescence: the previous session is released before the new one is built.
     unprepare(handler);
+    // Declared state: the port survives the re-prepare, its value does not. Every State value
+    // starts the new session at zeros and forgets the generation it was last fed under (no
+    // chunk of the old session can touch it any more; the Static values stay).
+    for (anira::capi::Port& port : handler.m_input_ports) {
+        auto* state = std::get_if<anira::capi::StatePort>(&port);
+        if (state == nullptr || !state->m_value.has_value()) { continue; }
+        state->m_value->zero();
+        state->m_generation = anira::capi::StatePort::k_no_generation;
+    }
 
     // The session: Core::create_session loads every surviving row's model (the FIXED warm-up
     // runs there) and throws NO_SUCH_FILE / MODEL_LOAD / ENGINE, which the firewall
@@ -1067,11 +1076,8 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_miss_user_data = hard.m_miss_user_data;
     handler.m_manager->set_miss_hook(hard.m_on_miss == ANIRA_MISS_CALLBACK ? &miss_hook : nullptr,
                                      &handler);
-    // The plan table and the initial selection, on the session before it is prepared; the
-    // declared state pairs likewise: the session allocates one zeroed buffer per pair in its
-    // prepare, and it is the session's, not a processor's, so it survives set_plan.
+    // The plan table and the initial selection, on the session before it is prepared.
     build_plans(handler, model, derived, hard);
-    handler.m_manager->set_state_pairs(anira::capi::make_state_pairs(model));
     handler.m_manager->prepare(host, anira::CustomLatencies{}, ring_dtypes);
     // The session's structs and rings exist now, and no chunk does: the processor binds to
     // them, and every stream port gets its ring.
@@ -1422,13 +1428,15 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
     // specs, so the vectors are never resized and no arm ever changes). A static port holds
     // its zeroed value in the spec's shape and dtype, built in place (an atomic does not
     // move): from here on the two Static entries work, prepared or not. A stream port gets
-    // its fields at prepare. A State tensor is the session's (it is fed and captured on the
-    // inference thread) and no entry of the handler carries it; a Buffer tensor is a per-job
+    // its fields at prepare. A State input holds the state the same way, the value the stage
+    // processor feeds and captures on the inference thread, and a State output names the
+    // input it feeds; no entry of the handler carries either. A Buffer tensor is a per-job
     // payload of the Async contract, and prepare refuses it under a Hard one
     // (check_buffer_specs), so its port holds nothing.
     const anira_model_config& model = handler->m_pipeline.m_variants[0];
     const auto build_side = [](const std::vector<anira_tensor_spec>& specs,
                                const std::vector<anira::capi::DerivedSpec>& rows,
+                               bool inputs,
                                std::vector<anira::capi::Port>& side) {
         side = std::vector<anira::capi::Port>(specs.size());  // stream ports
         for (size_t i = 0; i < specs.size(); ++i) {
@@ -1436,20 +1444,27 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
                 case ANIRA_ROLE_STATIC:
                     side[i].emplace<anira::capi::StaticPort>(rows[i].m_dims, specs[i].m_dtype);
                     break;
-                case ANIRA_ROLE_STATE: side[i].emplace<anira::capi::StatePort>(); break;
+                case ANIRA_ROLE_STATE:
+                    if (inputs) {
+                        side[i].emplace<anira::capi::StatePort>(rows[i].m_dims, specs[i].m_dtype);
+                    } else {
+                        side[i].emplace<anira::capi::StatePort>();
+                    }
+                    break;
                 case ANIRA_ROLE_BUFFER: side[i].emplace<anira::capi::BufferPort>(); break;
                 default: break;  // ANIRA_ROLE_STREAMED
             }
         }
     };
-    build_side(model.m_inputs, derived.m_inputs, handler->m_input_ports);
-    build_side(model.m_outputs, derived.m_outputs, handler->m_output_ports);
-    // The two halves of a declared state pair name each other (validate resolved the pairs).
-    for (const anira::StatePair& pair : anira::capi::make_state_pairs(model)) {
-        auto* input = std::get_if<anira::capi::StatePort>(&handler->m_input_ports[pair.m_input]);
-        auto* output = std::get_if<anira::capi::StatePort>(&handler->m_output_ports[pair.m_output]);
-        if (input != nullptr) { input->m_partner = static_cast<uint32_t>(pair.m_output); }
-        if (output != nullptr) { output->m_partner = static_cast<uint32_t>(pair.m_input); }
+    build_side(model.m_inputs, derived.m_inputs, /*inputs=*/true, handler->m_input_ports);
+    build_side(model.m_outputs, derived.m_outputs, /*inputs=*/false, handler->m_output_ports);
+    // The two halves of a declared state pair name each other (validate resolved the pairs):
+    // the capture reaches the input's value through the output's partner.
+    for (const anira::capi::StateLink& link : anira::capi::state_links(model)) {
+        auto* input = std::get_if<anira::capi::StatePort>(&handler->m_input_ports[link.m_input]);
+        auto* output = std::get_if<anira::capi::StatePort>(&handler->m_output_ports[link.m_output]);
+        if (input != nullptr) { input->m_partner = static_cast<uint32_t>(link.m_output); }
+        if (output != nullptr) { output->m_partner = static_cast<uint32_t>(link.m_input); }
     }
     // The slot counts, the lengths of the model config's two lists: the bound of every entry
     // that names a slot, the two Static entries on an unprepared handler included.

@@ -149,6 +149,19 @@ constexpr Positions k_wide{.m_state_in = 1,
                            .m_values_in = 0,
                            .m_values_out = 2};
 
+/// The value of the State input at `slot`, read off the handler's port (the input half of a
+/// pair holds it; the session has no buffer of its own): what the last capture left, zeros after
+/// a prepare or at a new generation. Empty for a slot that is no State input.
+std::vector<float> state_values(const anira_handler* handler, size_t slot) {
+    const auto* port = slot < handler->m_input_ports.size()
+                           ? std::get_if<anira::capi::StatePort>(&handler->m_input_ports[slot])
+                           : nullptr;
+    if (port == nullptr || !port->m_value.has_value()) { return {}; }
+    std::vector<float> values(port->m_value->num_elements());
+    port->m_value->read_packed(values.data(), values.size() * sizeof(float));
+    return values;
+}
+
 // ---- the backend
 // -----------------------------------------------------------------------------------
 
@@ -552,8 +565,9 @@ TEST(AbiState, OneSlotSpacePerSide) {
     EXPECT_EQ(rig.data_slot(), 2U);
     EXPECT_EQ(rig.processed_slot(), 1U);
     // One port per tensor, indexed by slot, the arm by the spec's role. The two halves of the
-    // pair name each other; they hold no value: no entry of the handler carries them, and the
-    // chain's materialisation never touches them.
+    // pair name each other; the input half holds the value, in the spec's shape and dtype, the
+    // output half none: no entry of the handler carries them, and the chain's materialisation
+    // never touches them.
     using anira::capi::port_role;
     ASSERT_EQ(h->m_input_ports.size(), 3U);
     ASSERT_EQ(h->m_output_ports.size(), 3U);
@@ -569,6 +583,14 @@ TEST(AbiState, OneSlotSpacePerSide) {
     ASSERT_NE(state_out, nullptr);
     EXPECT_EQ(state_in->m_partner, 0U);
     EXPECT_EQ(state_out->m_partner, 1U);
+    const anira::capi::StaticSlot* value =
+        state_in->m_value.has_value() ? &*state_in->m_value : nullptr;
+    ASSERT_NE(value, nullptr);
+    EXPECT_FALSE(state_out->m_value.has_value());
+    EXPECT_EQ(value->dtype(), static_cast<anira_dtype>(ANIRA_DTYPE_F32));
+    EXPECT_EQ(value->shape(),
+              (std::vector<int64_t>{1, k_channels, static_cast<int64_t>(k_state_width)}));
+    EXPECT_EQ(state_in->m_generation, anira::capi::StatePort::k_no_generation) << "not fed yet";
     EXPECT_EQ(anira::capi::static_slot(h->m_input_ports, 1), nullptr);
     EXPECT_EQ(anira::capi::static_slot(h->m_output_ports, 0), nullptr);
     EXPECT_NE(anira::capi::static_slot(h->m_input_ports, 0), nullptr);
@@ -689,6 +711,20 @@ TEST(AbiState, OneSlotSpacePerSide) {
     expect_closed_form(streams, latencies[1]);
     ASSERT_EQ(probe.m_calls.load(), 4U);
     EXPECT_EQ(probe.m_other_counts.load(), 0U) << "three tensors per side, State included";
+    // The capture went from output slot 0 into input slot 1, the partner the output names: the
+    // input half's value holds the sums of the four hops and the counter, which no adjacent
+    // numbering could have found (the pair stands at different positions of the two lists).
+    {
+        const std::vector<float> state = state_values(h, 1);
+        ASSERT_EQ(state.size(), static_cast<size_t>(k_channels) * k_state_width);
+        for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+            float sum = 0.0F;
+            for (size_t n = 0; n < size_t{4} * k_hop; ++n) { sum += input_sample(channel, n); }
+            EXPECT_EQ(state[channel * k_state_width], sum) << "channel " << channel;
+            EXPECT_EQ(state[(channel * k_state_width) + 1], 4.0F) << "channel " << channel;
+        }
+        EXPECT_NE(state_in->m_generation, anira::capi::StatePort::k_no_generation) << "fed";
+    }
     for (size_t hop = 0; hop < 4; ++hop) {
         EXPECT_EQ(probe.m_static_first.at(hop).load(), 9.0F) << "hop " << hop;
         EXPECT_EQ(probe.m_data_first.at(hop).load(), input_sample(0, hop * k_hop)) << "hop " << hop;
@@ -929,20 +965,19 @@ TEST(AbiState, StateFeedsBack) {
     ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
     expect_closed_form(streams, latency);
 
-    // White-box: the session's one buffer holds what the last inference left.
+    // White-box: the port of the State input holds what the last inference left.
     const int calls = rig.backend().m_calls.load();
     ASSERT_GT(calls, 10);
-    ASSERT_EQ(rig.session().m_state.size(), 1U);
-    ASSERT_EQ(rig.session().m_state[0].size(), static_cast<size_t>(k_channels) * k_state_width);
+    const std::vector<float> state = state_values(rig.get(), k_accumulator.m_state_in);
+    ASSERT_EQ(state.size(), static_cast<size_t>(k_channels) * k_state_width);
     for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
-        EXPECT_EQ(rig.session().m_state[0][(channel * k_state_width) + 1],
-                  static_cast<float>(calls))
+        EXPECT_EQ(state[(channel * k_state_width) + 1], static_cast<float>(calls))
             << "the counter reads k + 1 after inference k";
         float sum = 0.0F;
         for (size_t n = 0; n < static_cast<size_t>(calls) * k_hop; ++n) {
             sum += input_sample(channel, n);
         }
-        EXPECT_EQ(rig.session().m_state[0][channel * k_state_width], sum);
+        EXPECT_EQ(state[channel * k_state_width], sum);
     }
 }
 
@@ -991,7 +1026,7 @@ TEST(AbiState, ResetReinitialisesState) {
     size_t position = 0;
     Streams first;
     ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, first));
-    EXPECT_NE(rig.session().m_state[0][0], 0.0F);
+    EXPECT_NE(state_values(rig.get(), k_accumulator.m_state_in).at(0), 0.0F);
 
     anira_handler_reset(rig.get());
     position = 0;
@@ -1040,7 +1075,10 @@ TEST(AbiState, AResetAcrossAnInferenceInFlightNeverSeedsTheNewStream) {
     expect_closed_form(second, anira_handler_get_latency(h, 0));
 }
 
-// A second prepare builds a new session: a zeroed state, the first run's samples again.
+// A second prepare builds a new session and zeroes the state: the port of the State input is
+// the same object (the handler's, built at create; nothing but prepare and the capture writes
+// its value), the value is zeros again and the port has forgotten the generation it was last
+// fed under; the first run's samples again.
 TEST(AbiState, PrepareReinitialisesState) {
     Rig rig(accumulator_model());
     ASSERT_TRUE(rig.ready());
@@ -1048,9 +1086,22 @@ TEST(AbiState, PrepareReinitialisesState) {
     size_t position = 0;
     Streams first;
     ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, first));
+    const auto* port =
+        std::get_if<anira::capi::StatePort>(&rig.get()->m_input_ports[k_accumulator.m_state_in]);
+    ASSERT_NE(port, nullptr);
+    ASSERT_TRUE(port->m_value.has_value());
+    EXPECT_NE(port->m_generation, anira::capi::StatePort::k_no_generation) << "fed";
+    EXPECT_NE(state_values(rig.get(), k_accumulator.m_state_in).at(0), 0.0F);
     ASSERT_NO_FATAL_FAILURE(rig.prepare());
     ASSERT_TRUE(rig.ready());
-    for (const float value : rig.session().m_state[0]) { EXPECT_EQ(value, 0.0F); }
+    EXPECT_EQ(
+        std::get_if<anira::capi::StatePort>(&rig.get()->m_input_ports[k_accumulator.m_state_in]),
+        port)
+        << "the port survives the re-prepare";
+    EXPECT_EQ(port->m_generation, anira::capi::StatePort::k_no_generation);
+    const std::vector<float> zeros = state_values(rig.get(), k_accumulator.m_state_in);
+    ASSERT_EQ(zeros.size(), static_cast<size_t>(k_channels) * k_state_width);
+    for (const float value : zeros) { EXPECT_EQ(value, 0.0F); }
     position = 0;
     Streams second;
     ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, second));
@@ -1093,7 +1144,8 @@ TEST(AbiState, FailedInferenceKeepsState) {
             if (hop != k_failed) { carry += sum; }
         }
     }
-    EXPECT_EQ(rig.session().m_state[0][1], 6.0F) << "the counter skipped the failed inference";
+    EXPECT_EQ(state_values(rig.get(), k_accumulator.m_state_in).at(1), 6.0F)
+        << "the counter skipped the failed inference";
 }
 
 // ---- forced Stateful
@@ -1786,6 +1838,7 @@ public:
     anira::SessionElement& session() { return *m_session; }
     static constexpr uint32_t data_slot() { return 1; }
     static constexpr uint32_t processed_slot() { return 0; }
+    static constexpr uint32_t state_slot() { return 0; }  ///< the State input, first in the file
 
     /// One host block of `samples` per channel, each stream at its own slot; the call returns
     /// with its own inferences collected.
@@ -1822,7 +1875,7 @@ private:
 
 // The bundled model on every engine of this build the file names, against the closed form of
 // the engine-free twin: host blocks above and below the hop, the state fed back by anira
-// across the engine's inferences, and the session's buffer left with the sums and the count.
+// across the engine's inferences, and the port's value left with the sums and the count.
 TEST(AbiState, TheBundledModelFollowsTheClosedFormOnEveryEngine) {
     for (const anira_engine engine : file_engines()) {
         SCOPED_TRACE(engine_word(engine));
@@ -1847,21 +1900,19 @@ TEST(AbiState, TheBundledModelFollowsTheClosedFormOnEveryEngine) {
         expect_closed_form(streams, latency, 0, k_file_hop);
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
 
-        // White-box: the session's one buffer holds what the engine's last inference left,
+        // White-box: the port of the State input holds what the engine's last inference left,
         // the sum of every sample of the stream and the number of inferences.
         ASSERT_NO_FATAL_FAILURE(rig.settle());
         const size_t inferences = position / k_file_hop;
-        ASSERT_EQ(rig.session().m_state.size(), 1U);
-        ASSERT_EQ(rig.session().m_state[0].size(), static_cast<size_t>(k_channels) * k_state_width);
+        const std::vector<float> state = state_values(h, EngineRig::state_slot());
+        ASSERT_EQ(state.size(), static_cast<size_t>(k_channels) * k_state_width);
         for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
             float sum = 0.0F;
             for (size_t n = 0; n < inferences * k_file_hop; ++n) {
                 sum += input_sample(channel, n);
             }
-            EXPECT_EQ(rig.session().m_state[0][channel * k_state_width], sum)
-                << "channel " << channel;
-            EXPECT_EQ(rig.session().m_state[0][(channel * k_state_width) + 1],
-                      static_cast<float>(inferences))
+            EXPECT_EQ(state[channel * k_state_width], sum) << "channel " << channel;
+            EXPECT_EQ(state[(channel * k_state_width) + 1], static_cast<float>(inferences))
                 << "channel " << channel;
         }
     }
@@ -1882,7 +1933,7 @@ TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
         Streams first;
         ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, first));
         ASSERT_NO_FATAL_FAILURE(rig.settle());
-        EXPECT_NE(rig.session().m_state[0][0], 0.0F);
+        EXPECT_NE(state_values(h, EngineRig::state_slot()).at(0), 0.0F);
 
         anira_handler_reset(h);
         position = 0;
@@ -1896,7 +1947,7 @@ TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
 
 // The contract file asks for one warm-up inference. At this point of the runtime it runs
 // inside the engine's processor when the processor loads, on the processor's own buffers,
-// ahead of the session's feed and capture, so it reaches neither the state nor the stream:
+// ahead of anira's feed and capture, so it reaches neither the state nor the stream:
 // after prepare the state is zeros, the first hop is the identity, and after n hops the
 // counter reads n, not n + 1. The case stands so that a warm-up that runs through the session
 // keeps the property.
@@ -1907,8 +1958,9 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
         ASSERT_TRUE(rig.ready());
         const anira_handler* h = rig.get();
         EXPECT_EQ(h->m_inference_config.m_warm_up, 1U) << "the contract file's fixed warm-up";
-        ASSERT_EQ(rig.session().m_state.size(), 1U);
-        for (const float value : rig.session().m_state[0]) { EXPECT_EQ(value, 0.0F); }
+        const std::vector<float> fresh = state_values(h, EngineRig::state_slot());
+        ASSERT_EQ(fresh.size(), static_cast<size_t>(k_channels) * k_state_width);
+        for (const float value : fresh) { EXPECT_EQ(value, 0.0F); }
 
         const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
         // Enough hops to see the first one behind the latency's zeros.
@@ -1918,9 +1970,10 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
         ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
         expect_closed_form(streams, latency, 0, k_file_hop);
         ASSERT_NO_FATAL_FAILURE(rig.settle());
+        const std::vector<float> state = state_values(h, EngineRig::state_slot());
+        ASSERT_EQ(state.size(), static_cast<size_t>(k_channels) * k_state_width);
         for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
-            EXPECT_EQ(rig.session().m_state[0][(channel * k_state_width) + 1],
-                      static_cast<float>(sizes.size()))
+            EXPECT_EQ(state[(channel * k_state_width) + 1], static_cast<float>(sizes.size()))
                 << "channel " << channel;
         }
     }

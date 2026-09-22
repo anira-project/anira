@@ -376,11 +376,9 @@ void InferenceThread::do_inference(
     // exactly as on success, and the failure is ENGINE on the session's latch (a 3.x
     // handler's word), logged on its first occurrence since the latch's re-arm.
     try {
-        // Declared state, anira's own first step: every state input is fed from the session's
-        // buffers ahead of the hooks, which may read or alter it. The buffers start over when
-        // the chunk's generation stamp differs from the one they were last fed under (a reset,
-        // a prepare): the chunk's stamp, never the session's atomic.
-        session->feed_state(*thread_safe_struct);
+        // A 3.x stage processor feeds the declared state inside before_inference, ahead of the
+        // stage's own hook, and captures it inside after_inference, behind the stage's hook
+        // (capi/stage.h): the session knows nothing of it.
         session->m_pp_processor.before_inference(thread_safe_struct->m_tensor_input_data, backend);
         // A stage processor leaves the status of a failed before_inference or after_inference on
         // the chunk (it records the failure itself; a 2.x processor never writes the field):
@@ -392,12 +390,6 @@ void InferenceThread::do_inference(
                       thread_safe_struct->m_tensor_output_data);
             session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data,
                                                     backend);
-            // Declared state, anira's own last step: the capture, behind every hook. A failed
-            // after_inference skips it, a throw never reaches it, and a failed
-            // before_inference never came here: the state keeps its last good value.
-            if (thread_safe_struct->m_stage_status == ANIRA_OK) {
-                session->capture_state(*thread_safe_struct);
-            }
         }
         if (thread_safe_struct->m_stage_status != ANIRA_OK) {
             for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }

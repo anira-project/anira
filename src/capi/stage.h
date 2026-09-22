@@ -124,7 +124,14 @@ struct StageFrame {
 /// materialised into the model's input ahead of pre_process and captured from the model's
 /// output behind post_process, each under its slot's latch. A chunk that completed as zeros
 /// (dropped, or failed in a stage or in the engine) captures nothing: the port holds what the
-/// model produced. The float atomics this class inherits from the 2.x processor are not used.
+/// model produced. The declared state travels through its state ports the same way, on the
+/// inference thread: the value of every State input is fed into the model's input as the first
+/// step of before_inference, ahead of the stage's hook (zeroed first when the chunk's generation
+/// stamp is not the one the value was last fed under: a reset, a prepare), and the model's
+/// output of every State output is captured into the value of the input it feeds (the port's
+/// partner) as the last step of after_inference, behind the stage's hook, unless the chunk
+/// failed: the state keeps its last good value. The float atomics this class inherits from the
+/// 2.x processor are not used.
 class ANIRA_API StageProcessor final : public anira::PrePostProcessor {
 public:
     /// What the ctx reports for a chunk stamped with one plan of the handler's table.
@@ -193,6 +200,12 @@ private:
     /// Records a failed phase: last-wins into rt_error, one record per kind naming the phase
     /// and `who` ran it (k_the_stage, k_the_default).
     void fail(const char* who, uint32_t phase, anira_status status) noexcept ANIRA_NONBLOCKING;
+    /// The declared state around the engine call, on the inference thread (the class comment):
+    /// the feed of every State input of `chunk` out of its port's value into `inputs`, and the
+    /// capture of every State output out of `outputs` into the value of the input it feeds.
+    void feed_state(const Chunk& chunk,
+                    std::vector<anira::BufferF>& inputs) noexcept ANIRA_NONBLOCKING;
+    void capture_state(std::vector<anira::BufferF>& outputs) noexcept ANIRA_NONBLOCKING;
     /// The count check around the two ring-moving phases, over the stream ports of one side:
     /// snapshot() reads available() of every channel ahead of the phase; the check behind it
     /// repairs a shortfall (an input ring discards to its hop, an output ring is topped up with
@@ -224,6 +237,7 @@ private:
     bool m_fills_post = false;    ///< the same for post_process
     bool m_fills_before = false;  ///< the stage fills before_inference; else the hook returns
     bool m_fills_after = false;   ///< the same for after_inference
+    bool m_has_state = false;     ///< a State input exists: the two hooks feed and capture
     anira::SessionElement* m_session = nullptr;  ///< bound by bind(); outlived by the handler's
                                                  ///< manager, which goes first
     std::vector<PlanPair> m_plans;

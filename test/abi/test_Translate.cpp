@@ -10,7 +10,6 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/compat/v3_to_v2.h>
-#include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
@@ -262,8 +261,8 @@ TEST(AbiTranslate, AChannelAxisOfAnyExtentOnANonStreamedSpec) {
     EXPECT_EQ(cfg.get_tensor_output_size(), (std::vector<size_t>{1024, 10, 12}));
 }
 
-// Declared state in the shared translator, which the handler configures its session with (the
-// bridge entry refuses the role: test_Bridge): a State spec rides the 2.x configuration like a
+// Declared state in the shared translator, which the handler pairs its ports by (the bridge
+// entry refuses the role: test_Bridge): a State spec rides the 2.x configuration like a
 // Static one, at its own position of the list (size 0, one channel, its dims in the tensor
 // shape, a Channel axis of any extent), and a pair forces the session-exclusive processor.
 TEST(AbiTranslate, AStatePairKeepsItsListPositionsAndForcesStateful) {
@@ -290,10 +289,10 @@ TEST(AbiTranslate, AStatePairKeepsItsListPositionsAndForcesStateful) {
     EXPECT_EQ(cfg.get_tensor_output_shape(), (anira::TensorShapeList{{1, 2, 512}, {1, 2, 2}}));
     EXPECT_TRUE(cfg.m_session_exclusive_processor) << "a pair forces Stateful";
 
-    const std::vector<anira::StatePair> pairs = anira::capi::make_state_pairs(*model.native());
-    ASSERT_EQ(pairs.size(), 1U);
-    EXPECT_EQ(pairs[0].m_input, 0U);
-    EXPECT_EQ(pairs[0].m_output, 1U);
+    const std::vector<anira::capi::StateLink> links = anira::capi::state_links(*model.native());
+    ASSERT_EQ(links.size(), 1U);
+    EXPECT_EQ(links[0].m_input, 0U);
+    EXPECT_EQ(links[0].m_output, 1U);
 
     // The same model without the pair keeps what it says.
     const anira::InferenceConfig plain =
@@ -302,7 +301,7 @@ TEST(AbiTranslate, AStatePairKeepsItsListPositionsAndForcesStateful) {
                                            nullptr,
                                            0);
     EXPECT_FALSE(plain.m_session_exclusive_processor);
-    EXPECT_TRUE(anira::capi::make_state_pairs(*minimal().native()).empty());
+    EXPECT_TRUE(anira::capi::state_links(*minimal().native()).empty());
 
     const Outcome outcome = bridge(model);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);

@@ -1549,17 +1549,20 @@ engine:
       ]
     }
 
-**What anira does.** The session owns one zeroed buffer per pair, allocated at prepare. On the
-inference thread the state is copied into the input tensor as the first step of every
-inference, ahead of the stage's ``before_inference``, and copied out of the output tensor as
-the last step, behind the stage's ``after_inference``; both are anira's own steps, without an
-allocation, and ``ANIRA_PHASE_INFERENCE`` stays the engine call alone. A failed inference (an
-engine failure, a hook that returns a failure) skips the capture, so the state keeps its last
-good value; a dropped chunk never runs and does not advance it; a missed block does not affect
-it, since its inference still runs and only its delivery is late. The state is the session's,
-not a processor's, so it survives ``anira_handler_set_plan`` between two engines.
+**What anira does.** The handler owns the state: one value per pair, on the port of the State
+input, in the spec's shape and dtype, the same kind of store a Static tensor has (section
+3.2), zeroed at ``anira_handler_create`` and at every ``anira_handler_prepare``. On the
+inference thread the value is copied into the model input as the first step of every
+inference, ahead of the stage's ``before_inference``, and the model output is copied into the
+value of the input it feeds as the last step, behind the stage's ``after_inference``; both are
+anira's own steps, without an allocation, wait-free and never torn (the Static store's latch),
+and ``ANIRA_PHASE_INFERENCE`` stays the engine call alone. A failed inference (an engine
+failure, a hook that returns a failure) skips the capture, so the state keeps its last good
+value; a dropped chunk never runs and does not advance it; a missed block does not affect it,
+since its inference still runs and only its delivery is late. The state is the handler's, not
+a session's or a processor's, so it survives ``anira_handler_set_plan`` between two engines.
 ``anira_handler_reset`` and ``anira_handler_prepare`` re-initialise it to zeros; the reset
-stays wait-free, since the state is zeroed on the inference thread at the first inference of
+stays wait-free, since the value is zeroed on the inference thread at the first inference of
 the new stream, keyed on the chunk's dispatch generation, so an inference still in flight
 across the reset can never seed the new stream with its capture (section 5.5). A model with a
 pair runs as ``ANIRA_MODEL_STATEFUL`` whatever its ``state`` says: a session-exclusive
@@ -1593,7 +1596,8 @@ the latter with ``ANIRA_ERROR_INVALID_ARGUMENT`` and the loader ``state_source``
 with ``ANIRA_ERROR_JSON``); two halves of unequal dtype or shape; a Time axis, a window, a time
 ratio or a latency on a State spec; a ring dtype or the anchor naming one.
 ``ANIRA_ERROR_NOT_SUPPORTED`` in this pre-release: a State tensor of another dtype than
-``float32``, and a transposed layout on one (a view layout prepares). A Channel axis of any
+``float32``, as every model tensor (the value takes the spec's dtype; the role has no rule of
+its own), and a transposed layout on one (a view layout prepares). A Channel axis of any
 extent is legal, as on every non-Streamed spec.
 
 .. note::

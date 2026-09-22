@@ -78,48 +78,6 @@ void SessionElement::set_plan_backends(std::vector<InferenceBackend> backends) {
     m_current_plan.store(0, std::memory_order_relaxed);
 }
 
-void SessionElement::set_state_pairs(std::vector<StatePair> pairs) {
-    // The table and the buffers are read without synchronization by the inference threads, so
-    // they may only be replaced while no chunk of the session can exist.
-    if (m_initialized.load(std::memory_order::seq_cst)) {
-        throw std::logic_error(
-            "SessionElement::set_state_pairs: the session is prepared; the state pairs are "
-            "set before prepare only");
-    }
-    const std::vector<size_t> input_sizes = m_inference_config.get_tensor_input_size();
-    const std::vector<size_t> output_sizes = m_inference_config.get_tensor_output_size();
-    for (const StatePair& pair : pairs) {
-        if (pair.m_input >= input_sizes.size() || pair.m_output >= output_sizes.size() ||
-            input_sizes[pair.m_input] != output_sizes[pair.m_output]) {
-            throw std::invalid_argument(
-                "SessionElement::set_state_pairs: a pair names a tensor out of range, or two "
-                "tensors of unequal size");
-        }
-    }
-    m_state_pairs = std::move(pairs);
-}
-
-void SessionElement::feed_state(ThreadSafeStruct& chunk) noexcept {
-    if (m_state_pairs.empty()) { return; }
-    if (m_state_generation != chunk.m_dispatch_generation) {
-        // The first inference of a new stream (a reset, a prepare): the state starts over.
-        for (std::vector<float>& state : m_state) { std::ranges::fill(state, 0.0F); }
-        m_state_generation = chunk.m_dispatch_generation;
-    }
-    for (size_t i = 0; i < m_state_pairs.size(); ++i) {
-        std::ranges::copy(m_state[i],
-                          chunk.m_tensor_input_data[m_state_pairs[i].m_input].get_write_pointer(0));
-    }
-}
-
-void SessionElement::capture_state(const ThreadSafeStruct& chunk) noexcept {
-    for (size_t i = 0; i < m_state_pairs.size(); ++i) {
-        const float* source =
-            chunk.m_tensor_output_data[m_state_pairs[i].m_output].get_read_pointer(0);
-        std::copy_n(source, m_state[i].size(), m_state[i].begin());
-    }
-}
-
 bool SessionElement::select_plan(uint32_t plan) noexcept {
     if (plan >= m_plan_backends.size()) { return false; }
     m_current_plan.store(plan, std::memory_order_relaxed);
@@ -493,15 +451,6 @@ void SessionElement::prepare(const HostConfig& host_config,
         m_inference_queue.emplace_back(
             std::make_unique<ThreadSafeStruct>(tensor_input_size, tensor_output_size));
     }
-
-    // Declared state: one zeroed buffer per pair, as long as the pair's tensors; no chunk
-    // carries the generation it is left with, so the first feed adopts its chunk's.
-    m_state.clear();
-    m_state.reserve(m_state_pairs.size());
-    for (const StatePair& pair : m_state_pairs) {
-        m_state.emplace_back(tensor_input_size[pair.m_input], 0.0F);
-    }
-    m_state_generation = k_no_state_generation;
 
     m_time_stamps.clear();
     m_time_stamps.reserve(m_num_structs);

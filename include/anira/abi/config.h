@@ -272,8 +272,9 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spe
 /**
  * @brief Declared state passing: pairs a state input with the state output it is fed from on
  * the next inference. Both halves carry ANIRA_ROLE_STATE; the pairing is stated once, on
- * the input (JSON: "state_source" on the input spec). anira owns one buffer per pair
- * (zeroed at prepare), copies it into the input tensor as the first step before the
+ * the input (JSON: "state_source" on the input spec). anira keeps one value per pair in
+ * the handler, on the port of the state input, in the spec's shape and dtype (zeroed at
+ * create and at prepare), copies it into the input tensor as the first step before the
  * engine call, ahead of the stage's before_inference, and copies the output tensor into
  * it as the last step after the engine call, behind the stage's after_inference; a
  * failed inference (an engine failure, a non-OK stage) skips the capture, so the state
@@ -284,8 +285,9 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spe
  * names exactly one state output and every state output is named by exactly one state
  * input; the two halves have equal dtype and shape; a state spec has no Time axis,
  * window, time ratio or latency, and neither a ring dtype nor the anchor may name it.
- * ANIRA_ERROR_NOT_SUPPORTED: a state tensor of another dtype than float32, or with a
- * transposed layout, in this pre-release. A second call replaces the name.
+ * ANIRA_ERROR_NOT_SUPPORTED: a state tensor of another dtype than float32 (as every
+ * model tensor of this pre-release; the value takes the spec's dtype), or with a
+ * transposed layout. A second call replaces the name.
  * @param spec The spec of a state INPUT (role ANIRA_ROLE_STATE).
  * @param output_canonical The canonical name of the state output this input is fed from, UTF-8,
  *        copied; resolved when the model is validated (anira_handler_create,

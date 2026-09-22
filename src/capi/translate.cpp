@@ -241,10 +241,8 @@ void check_spec(const anira_tensor_spec& spec,
         config_error(where + "latency must not be negative (got " + std::to_string(spec.m_latency) +
                      ")");
     }
-    if (spec.m_role == ANIRA_ROLE_STATE && spec.m_dtype != ANIRA_DTYPE_F32) {
-        not_supported(where + "a State tensor of dtype " + hex_dtype(spec.m_dtype) +
-                      ": declared state is float32 in this pre-release");
-    }
+    // Every model tensor of this pre-release is float32, a State tensor included: its value
+    // takes the spec's dtype (port.h), so no rule of its own stands here.
     if (spec.m_dtype != ANIRA_DTYPE_F32) {
         not_supported(where + "dtype " + hex_dtype(spec.m_dtype) +
                       ": the 2.x runtime streams float32 only");
@@ -380,11 +378,12 @@ const anira_tensor_spec& state_output_of(const anira_model_config& model,
 
 // The pairing of declared state (ANIRA_ROLE_STATE): every State input names exactly one State
 // output (state_source, stated once, on the input), every State output is named by exactly one
-// State input, and the two halves have the same dtype, rank and extents, because the session
-// keeps one buffer per pair and copies it both ways. It runs on the raw specs, ahead of
-// check_spec, so that an unequal dtype is this rule's CONFIG and not the float32 rule's
-// NOT_SUPPORTED; what a State spec may not carry (a Time axis, a window, a time ratio, a
-// latency) is check_spec's, a ring dtype or the anchor naming one is the rule of those two.
+// State input, and the two halves have the same dtype, rank and extents, because the handler
+// keeps one value per pair, on the input half's port, and copies it both ways. It runs on the
+// raw specs, ahead of check_spec, so that an unequal dtype is this rule's CONFIG and not the
+// float32 rule's NOT_SUPPORTED; what a State spec may not carry (a Time axis, a window, a time
+// ratio, a latency) is check_spec's, a ring dtype or the anchor naming one is the rule of those
+// two.
 void check_state(const anira_model_config& model) {
     for (const anira_tensor_spec& spec : model.m_outputs) {
         if (!spec.m_state_source.empty()) {
@@ -750,8 +749,8 @@ HostDomains make_host_domains(const anira_contract& contract, const anira_model_
     return domains;
 }
 
-std::vector<anira::StatePair> make_state_pairs(const anira_model_config& model) {
-    std::vector<anira::StatePair> pairs;
+std::vector<StateLink> state_links(const anira_model_config& model) {
+    std::vector<StateLink> links;
     for (size_t i = 0; i < model.m_inputs.size(); ++i) {
         if (model.m_inputs[i].m_role != ANIRA_ROLE_STATE) { continue; }
         bool is_input = true;
@@ -760,9 +759,9 @@ std::vector<anira::StatePair> make_state_pairs(const anira_model_config& model) 
         if (find_spec(model, model.m_inputs[i].m_state_source, &is_input, &output) == nullptr) {
             continue;
         }
-        pairs.push_back({.m_input = i, .m_output = output});
+        links.push_back({.m_input = i, .m_output = output});
     }
-    return pairs;
+    return links;
 }
 
 anira::InferenceConfig make_inference_config(const anira_model_config& model,
@@ -857,7 +856,7 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
     // A model with a declared state pair is Stateful whatever it says: the state of inference
     // k is the input of inference k + 1, so the inferences of a session run one at a time and
     // in order (the session-exclusive processor and its dispatch gate), which is also what
-    // serialises the session's feed, capture and re-initialisation of the state.
+    // serialises the stage processor's feed, capture and re-initialisation of the state.
     const auto is_state = [](const anira_tensor_spec& spec) {
         return spec.m_role == ANIRA_ROLE_STATE;
     };
