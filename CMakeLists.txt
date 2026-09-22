@@ -123,7 +123,7 @@ include(cmake/backends.cmake)
 
 if(ANIRA_WITH_LIBTORCH)
     anira_setup_backend(libtorch)
-    list(APPEND BACKEND_SOURCES src/backends/LibTorchProcessor.cpp)
+    list(APPEND BACKEND_SOURCES src/backends/LibTorchAdapter.cpp)
 endif()
 
 if(ANIRA_WITH_ONNXRUNTIME)
@@ -143,7 +143,7 @@ endif()
 
 if(ANIRA_WITH_EXECUTORCH)
     anira_setup_backend(executorch)
-    list(APPEND BACKEND_SOURCES src/backends/ExecuTorchProcessor.cpp)
+    list(APPEND BACKEND_SOURCES src/backends/ExecuTorchAdapter.cpp)
 endif()
 
 ## ==============================================================================

@@ -76,6 +76,12 @@ ANIRA_API std::shared_ptr<Adapter> make_builtin_adapter(anira_engine engine);
 #ifdef USE_ONNXRUNTIME
 ANIRA_API std::shared_ptr<Adapter> make_onnxruntime_adapter();
 #endif
+#ifdef USE_LIBTORCH
+ANIRA_API std::shared_ptr<Adapter> make_libtorch_adapter();
+#endif
+#ifdef USE_EXECUTORCH
+ANIRA_API std::shared_ptr<Adapter> make_executorch_adapter();
+#endif
 
 /// The 2.x configuration a record describes, what a 2.x processor of a built-in engine reads:
 /// one ModelData row on the engine's backend (the path or the bytes, the entry), one

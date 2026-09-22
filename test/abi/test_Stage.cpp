@@ -2517,7 +2517,7 @@ TEST(AbiStage, Int16RingWithAConvertingStageOnEveryEngine) {
 
 namespace {
 
-/// What the stage of TensorsFollowTheStructsMemoryAcrossLibTorchInferences recorded per
+/// What the stage of TensorsKeepTheStructsMemoryAcrossLibTorchInferences recorded per
 /// chunk: the memory behind model input 0 in pre_process and behind model output 0 in
 /// post_process. Both phases run on the driving thread, in lockstep with the stream, so the
 /// arrays are plain and the test reads them after the run.
@@ -2552,13 +2552,13 @@ anira_status ANIRA_CALL record_then_default(const anira_stage_ctx* ctx,
 
 }  // namespace
 
-// LibTorch swaps the memory of the struct's input buffer with its own on every inference
-// (LibTorchProcessor.cpp, swap_data), so a struct holds another block each time it comes
-// round. The accessor builds the tensor from the struct's memory of the moment: two uses of
-// one struct (told apart by its output tensor, which is not swapped) return different input
-// pointers, and the default fill through that pointer is what the engine read, since the
-// stream is intact. Nothing about a descriptor may be cached across calls.
-TEST(AbiStage, TensorsFollowTheStructsMemoryAcrossLibTorchInferences) {
+// The LibTorch adapter binds the struct's memory through the descriptors (a from_blob view
+// per call, LibTorchAdapter.cpp) and swaps nothing, so a struct holds one input block for its
+// whole life: two uses of one struct (told apart by its output tensor) return the same input
+// pointer, and the default fill through that pointer is what the engine read, since the stream
+// is intact. The accessor still builds the tensor from the struct's descriptor of the moment,
+// so a descriptor that did move would be followed.
+TEST(AbiStage, TensorsKeepTheStructsMemoryAcrossLibTorchInferences) {
     const Context context;
     Pointers pointers;
     anira_stage_desc stage = promising_stage(&pointers);
@@ -2601,9 +2601,9 @@ TEST(AbiStage, TensorsFollowTheStructsMemoryAcrossLibTorchInferences) {
         ASSERT_NE(found, queue.end()) << "chunk " << chunk << " ran on no struct of the session";
         const auto index = static_cast<size_t>(found - queue.begin());
         if (last_use.at(index) != SIZE_MAX) {
-            EXPECT_NE(pointers.m_inputs.at(chunk), pointers.m_inputs.at(last_use.at(index)))
+            EXPECT_EQ(pointers.m_inputs.at(chunk), pointers.m_inputs.at(last_use.at(index)))
                 << "chunks " << last_use.at(index) << " and " << chunk << " on struct " << index
-                << " saw one input block, so the swap was not followed";
+                << " saw two input blocks: the struct's memory was swapped away";
             ++pairs;
         }
         last_use.at(index) = chunk;

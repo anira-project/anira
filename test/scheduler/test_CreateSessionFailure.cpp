@@ -143,7 +143,7 @@ TEST(CreateSessionFailureTest, FailureBesideLiveSessionKeepsItsPool) {
 
 #ifdef USE_ONNXRUNTIME
 // The reproduction from the issue: a file ONNX Runtime cannot parse throws from the
-// OnnxRuntimeProcessor constructor, i.e. from inside create_session()'s processor
+// ONNX Runtime adapter's prepare, i.e. from inside create_session()'s adapter
 // setup — the same path as the custom processor above, but through a real backend.
 TEST(CreateSessionFailureTest, UnloadableOnnxModelLeaksNothing) {
     ASSERT_EQ(Core::get_num_sessions(), 0);

@@ -218,8 +218,9 @@ public:
          *
          * A field fill on the driving thread at every claim of the struct
          * (Core::pre_process): a 2.x processor of this line may swap a buffer's memory with
-         * its own during an inference (LibTorchProcessor, TFLiteProcessor), so a struct holds
-         * another block each time it comes round; the descriptors follow. Goes with the swap.
+         * its own during an inference (TFLiteProcessor, until its adapter binds the
+         * descriptors), so a struct holds another block each time it comes round; the
+         * descriptors follow. Goes with the swap.
          */
         void rebind_tensors() noexcept;
 

@@ -3,12 +3,6 @@
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/backends/BackendBase.h>
-#ifdef USE_EXECUTORCH
-#include <anira/backends/ExecuTorchProcessor.h>
-#endif
-#ifdef USE_LIBTORCH
-#include <anira/backends/LibTorchProcessor.h>
-#endif
 #ifdef USE_LITERT
 #include <anira/backends/LiteRtProcessor.h>
 #endif
@@ -83,11 +77,6 @@ anira::InferenceBackend backend_of_engine(anira_engine engine) noexcept {
 // The 2.x processors of the engines without an adapter of the descriptor shape yet, one
 // factory each: what a LegacyAdapter of such an engine builds at prepare from the record's
 // 2.x configuration.
-#ifdef USE_LIBTORCH
-std::unique_ptr<anira::BackendBase> make_libtorch_processor(anira::InferenceConfig& config) {
-    return std::make_unique<anira::LibtorchProcessor>(config);
-}
-#endif
 #ifdef USE_TFLITE
 std::unique_ptr<anira::BackendBase> make_tflite_processor(anira::InferenceConfig& config) {
     return std::make_unique<anira::TFLiteProcessor>(config);
@@ -96,11 +85,6 @@ std::unique_ptr<anira::BackendBase> make_tflite_processor(anira::InferenceConfig
 #ifdef USE_LITERT
 std::unique_ptr<anira::BackendBase> make_litert_processor(anira::InferenceConfig& config) {
     return std::make_unique<anira::LiteRtProcessor>(config);
-}
-#endif
-#ifdef USE_EXECUTORCH
-std::unique_ptr<anira::BackendBase> make_executorch_processor(anira::InferenceConfig& config) {
-    return std::make_unique<anira::ExecuTorchProcessor>(config);
 }
 #endif
 
@@ -144,8 +128,7 @@ std::shared_ptr<Adapter> make_builtin_adapter(anira_engine engine) {
     // configuration and owned by its adapter.
     switch (engine) {
 #ifdef USE_LIBTORCH
-        case ANIRA_ENGINE_LIBTORCH:
-            return std::make_shared<LegacyAdapter>(&make_libtorch_processor);
+        case ANIRA_ENGINE_LIBTORCH: return make_libtorch_adapter();
 #endif
 #ifdef USE_ONNXRUNTIME
         case ANIRA_ENGINE_ONNXRUNTIME: return make_onnxruntime_adapter();
@@ -157,8 +140,7 @@ std::shared_ptr<Adapter> make_builtin_adapter(anira_engine engine) {
         case ANIRA_ENGINE_LITERT: return std::make_shared<LegacyAdapter>(&make_litert_processor);
 #endif
 #ifdef USE_EXECUTORCH
-        case ANIRA_ENGINE_EXECUTORCH:
-            return std::make_shared<LegacyAdapter>(&make_executorch_processor);
+        case ANIRA_ENGINE_EXECUTORCH: return make_executorch_adapter();
 #endif
         default: return nullptr;
     }

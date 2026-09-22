@@ -1,28 +1,39 @@
-// The ExecuTorchProcessor paths test_ExecuTorchModelFunction.cpp does not take:
-// a program handed over as bytes rather than a path, and a program that cannot
-// be loaded at all. Driven directly, without a Context — the way
-// test_BackendBase.cpp drives BackendBase.
+// The ExecuTorch adapter, driven directly through the engine room's interface (the built-in
+// adapter of the engine, the record of a 2.x configuration, one run over a context built by
+// hand: no Context, no threads), on the paths test_ExecuTorchModelFunction.cpp does not take:
+// a program handed over as bytes rather than a path, a program that cannot be loaded at all,
+// a method the program lacks, and the check against the method meta's planned bounds.
 
 #ifdef USE_EXECUTORCH
 
 #include <anira/InferenceConfig.h>
-#include <anira/backends/ExecuTorchProcessor.h>
+#include <anira/abi/engine.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/status.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "backend_test_support.h"
+#include "backends/Adapter.h"
+#include "backends/Adapters.h"
 #include "gtest/gtest.h"
+#include "utils/StatusError.h"
 
 namespace {
 
 constexpr size_t k_size = 64;
 
+using anira::backend::Adapter;
+using anira::backend::Model;
+using anira_test::context_of;
+using anira_test::descriptors_of;
 using anira_test::filled_buffers;
 using anira_test::read_model_file;
 
@@ -32,11 +43,23 @@ std::string multifunction_model_path() {
            "/simple_gain_network_multifunction.pte";
 }
 
+std::string gain_model_path() {
+    return ANIRA_EXTRAS_MODELS_DIR
+        "/model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono.pte";
+}
+
+std::shared_ptr<Adapter> executorch_adapter() {
+    std::shared_ptr<Adapter> adapter =
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_EXECUTORCH);
+    EXPECT_NE(adapter, nullptr);
+    return adapter;
+}
+
 }  // namespace
 
-// A .pte supplied as bytes loads through the BufferDataLoader branch and runs
-// the same named method as the same program supplied as a path. "gain2"
-// multiplies by two, so the output identifies which program ran.
+// A .pte supplied as bytes loads through the BufferDataLoader branch and runs the same named
+// method as the same program supplied as a path. "gain2" multiplies by two, so the output
+// identifies which program ran.
 TEST(ExecuTorchProcessor, BinaryModelDataLoadsFromMemory) {
     const std::vector<char> bytes = read_model_file(multifunction_model_path());
     ASSERT_FALSE(bytes.empty()) << "fixture missing: " << multifunction_model_path();
@@ -52,21 +75,26 @@ TEST(ExecuTorchProcessor, BinaryModelDataLoadsFromMemory) {
                                   /*warm_up=*/1,
                                   /*session_exclusive_processor=*/true);
     ASSERT_TRUE(config.is_model_binary(anira::InferenceBackend::EXECUTORCH));
+    const Model model = anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH);
+    ASSERT_NE(model.m_bytes, nullptr);
+    ASSERT_EQ(model.m_entry, "gain2");
 
-    anira::ExecuTorchProcessor processor(config);
-    processor.prepare();
+    const std::shared_ptr<Adapter> adapter = executorch_adapter();
+    adapter->prepare(model);
+    EXPECT_EQ(adapter->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
+    EXPECT_EQ(adapter->bindings().m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
 
     std::vector<anira::BufferF> input = filled_buffers({k_size}, 0.25F);
     std::vector<anira::BufferF> output = filled_buffers({k_size}, 0.F);
-
-    processor.process(input, output, nullptr);
-
+    const std::vector<anira_tensor> input_tensors = descriptors_of(input, model.m_inputs);
+    std::vector<anira_tensor> output_tensors = descriptors_of(output, model.m_outputs);
+    EXPECT_EQ(adapter->run(context_of(input_tensors, output_tensors), nullptr, false), ANIRA_OK);
     for (size_t i = 0; i < k_size; ++i) {
         EXPECT_FLOAT_EQ(output[0].get_sample(0, i), 0.5F) << "sample " << i;
     }
 }
 
-// The contract create_session() rolls back on.
+// The contract create_session() rolls back on: a StatusError, which is a std::runtime_error.
 TEST(ExecuTorchProcessor, UnloadableModelThrowsRuntimeError) {
     anira::InferenceConfig config(
         {anira::ModelData("this/model/does/not/exist.pte", anira::InferenceBackend::EXECUTORCH)},
@@ -75,12 +103,15 @@ TEST(ExecuTorchProcessor, UnloadableModelThrowsRuntimeError) {
         5.0F,
         /*warm_up=*/0,
         /*session_exclusive_processor=*/true);
-
-    EXPECT_THROW({ const anira::ExecuTorchProcessor processor(config); }, std::runtime_error);
+    const std::shared_ptr<Adapter> adapter = executorch_adapter();
+    EXPECT_THROW(
+        adapter->prepare(anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH)),
+        std::runtime_error);
+    EXPECT_FALSE(adapter->prepared());
 }
 
-// A method name the program does not carry must fail the same way rather than
-// silently falling back to forward().
+// A method name the program does not carry must fail the same way rather than silently
+// falling back to forward().
 TEST(ExecuTorchProcessor, UnknownModelFunctionThrowsRuntimeError) {
     anira::InferenceConfig config({anira::ModelData(multifunction_model_path(),
                                                     anira::InferenceBackend::EXECUTORCH,
@@ -90,8 +121,57 @@ TEST(ExecuTorchProcessor, UnknownModelFunctionThrowsRuntimeError) {
                                   5.0F,
                                   /*warm_up=*/0,
                                   /*session_exclusive_processor=*/true);
+    const std::shared_ptr<Adapter> adapter = executorch_adapter();
+    try {
+        adapter->prepare(anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH));
+        FAIL() << "a missing method loaded";
+    } catch (const anira::StatusError& error) {
+        EXPECT_EQ(error.status(), ANIRA_ERROR_MODEL_LOAD);
+        EXPECT_NE(std::string(error.what()).find("no_such_method"), std::string::npos)
+            << error.what();
+    }
+}
 
-    EXPECT_THROW({ const anira::ExecuTorchProcessor processor(config); }, std::runtime_error);
+// The method meta reports the planned upper bound of every axis and marks no axis dynamic:
+// the bundled gain program plans [1, 1, 65536] for its block, so a record of 512 binds and one
+// above the bound, or of another rank, is CONFIG at prepare naming both shapes.
+TEST(ExecuTorchProcessor, TheMethodMetasPlannedBoundsAreTheCheck) {
+    const auto config_of = [](std::vector<int64_t> block) {
+        return anira::InferenceConfig(
+            {anira::ModelData(gain_model_path(), anira::InferenceBackend::EXECUTORCH)},
+            {anira::TensorShape({block, {1}}, {block, {1}})},
+            5.0F,
+            /*warm_up=*/0,
+            /*session_exclusive_processor=*/true);
+    };
+    const std::shared_ptr<Adapter> adapter = executorch_adapter();
+    adapter->prepare(
+        anira::backend::model_of(config_of({1, 1, 512}), anira::InferenceBackend::EXECUTORCH));
+    EXPECT_TRUE(adapter->prepared());
+    EXPECT_EQ(adapter->bindings().m_inputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
+
+    try {
+        executorch_adapter()->prepare(
+            anira::backend::model_of(config_of({1, 1, 70000}),
+                                     anira::InferenceBackend::EXECUTORCH));
+        FAIL() << "a block above the planned bound bound";
+    } catch (const anira::StatusError& error) {
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        const std::string message = error.what();
+        EXPECT_NE(message.find("executorch: input tensor"), std::string::npos) << message;
+        EXPECT_NE(message.find("65536 is the planned upper bound of 70000"), std::string::npos)
+            << message;
+    }
+    try {
+        executorch_adapter()->prepare(
+            anira::backend::model_of(config_of({1, 512}), anira::InferenceBackend::EXECUTORCH));
+        FAIL() << "a block of another rank bound";
+    } catch (const anira::StatusError& error) {
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string(error.what()).find("the ranks differ"), std::string::npos)
+            << error.what();
+    }
 }
 
 #endif  // USE_EXECUTORCH

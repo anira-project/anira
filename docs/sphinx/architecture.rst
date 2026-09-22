@@ -109,7 +109,7 @@ Backend Processors
 
 Backend-specific implementations for different inference engines.
 
-* :cpp:class:`anira::LibtorchProcessor` - PyTorch C++ API integration
+* The LibTorch adapter (``src/backends/LibTorchAdapter.cpp``, internal) - PyTorch C++ API integration
 * The ONNX Runtime adapter (``src/backends/OnnxRuntimeAdapter.cpp``, internal) - ONNX Runtime integration
 * :cpp:class:`anira::TFLiteProcessor` - TensorFlow Lite integration
 * :cpp:class:`anira::BackendBase` - For inheritance for custom inference engines
