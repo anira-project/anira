@@ -360,3 +360,22 @@ export const anira_stage_ctx = {
     reserved_ptr2: { offset: 56, size: 8, ptr: true },
   },
 } as const
+
+export const anira_engine_ctx = {
+  size: 64,
+  align: 8,
+  fields: {
+    instance: { offset: 0, size: 4 },
+    entry: { offset: 4, size: 4 },
+    num_inputs: { offset: 8, size: 4 },
+    num_outputs: { offset: 12, size: 4 },
+    ticket: { offset: 16, size: 4 },
+    flags: { offset: 20, size: 4 },
+    reserved0: { offset: 24, size: 4 },
+    reserved1: { offset: 28, size: 4 },
+    inputs: { offset: 32, size: 8, ptr: true },
+    outputs: { offset: 40, size: 8, ptr: true },
+    reserved_ptr0: { offset: 48, size: 8, ptr: true },
+    reserved_ptr1: { offset: 56, size: 8, ptr: true },
+  },
+} as const

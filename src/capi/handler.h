@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 
+#include "engine.h"
 #include "handles.h"
 #include "port.h"
 #include "stage.h"
@@ -65,6 +66,11 @@ struct anira_pipeline {
     /// null. The carrier is shared with every copy of the pipeline (anira_handler_create's), so
     /// the stage's release fires once, when the last of them dies.
     std::shared_ptr<anira::capi::StageCarrier> m_stage;
+    /// The custom engines registered on the pipeline (anira_pipeline_register_engine), in
+    /// registration order, one carrier per id (a second registration of an id is refused).
+    /// Shared with every copy of the pipeline like the stage's carrier, so an engine's release
+    /// fires once, when the last of them dies.
+    std::vector<std::shared_ptr<const anira::capi::EngineCarrier>> m_engines;
 
     /// The candidate view a translate/ext call takes (pointers into the strings); control
     /// thread only. Never empty after add_inference.
@@ -147,6 +153,14 @@ struct anira_handler {
     /// reports as the chunk's entry): set by prepare from the processor's table, 0 while
     /// unprepared. anira_handler_num_entries reads it.
     uint32_t m_num_entries = 0;
+    /// What the stage's prepare handed back for this handler (the out_prepared of
+    /// anira_stage_prepare_fn; NULL is a legal value): the `prepared` pointer every phase call,
+    /// the reset and the unprepare of this handler receive beside the registration's user_data.
+    /// Held here for the unprepare and on the stage processor, which passes it per call.
+    void* m_stage_prepared = nullptr;
+    /// A successful stage prepare is outstanding: its unprepare is owed, once, when the session
+    /// is released (the next prepare, a failed prepare, destroy). A refused prepare never sets it.
+    bool m_stage_unprepare_owed = false;
     /// ANIRA_MISS_CALLBACK: the contract's pair, cached at prepare so that the driver thread
     /// reads two plain members and not the contract's variant.
     anira_miss_fn m_miss_fn = nullptr;

@@ -1261,16 +1261,18 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             // What a stage processor leaves on the chunk (a 2.x processor never writes it).
             session->m_inference_queue[i]->m_stage_status = ANIRA_OK;
             session->m_inference_queue[i]->m_completed_as_zeros = false;
+            // Stamp the generation this dispatch belongs to, so a wait-free reset that
+            // bumps the generation afterwards can identify and discard it (see
+            // reset_session / new_data_request generation guard). Stamped ahead of the
+            // pre_process virtual, on this thread: a 3.x stage processor reads it there to
+            // tell the first chunk of a new stream, its reset boundary (capi/stage.h).
+            session->m_inference_queue[i]->m_dispatch_generation =
+                session->m_generation.load(std::memory_order::relaxed);
             session->m_pp_processor.pre_process(session->m_send_buffer,
                                                 session->m_inference_queue[i]->m_tensor_input_data,
                                                 session->plan_backend(plan));
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
-            // Stamp the generation this dispatch belongs to, so a wait-free reset that
-            // bumps the generation afterwards can identify and discard it (see
-            // reset_session / new_data_request generation guard).
-            session->m_inference_queue[i]->m_dispatch_generation =
-                session->m_generation.load(std::memory_order::relaxed);
             if (session->m_inference_queue[i]->m_stage_status != ANIRA_OK) {
                 // A stage's pre_process failed (the chain recorded it and kept the input
                 // rings aligned): no model input exists for this chunk. It keeps its struct

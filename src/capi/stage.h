@@ -7,7 +7,11 @@
  *
  * The phases of one chunk, in the order they run, with the library's own steps between them:
  *
- *   host end -> [pre_process]      driving thread under Hard: the ring of a Streamed slot to
+ *   host end -> [reset]            the first chunk of a new stream only (after prepare, after
+ *                                   anira_handler_reset), on the thread of pre_process: the
+ *                                   stage's own state starts over; the accessors answer the
+ *                                   role alone
+ *            -> [pre_process]      driving thread under Hard: the ring of a Streamed slot to
  *                                   the model tensor, chunking and conversion
  *            -> feed State inputs   inference thread, the library's
  *            -> [before_inference]  inference thread
@@ -132,6 +136,15 @@ struct StageFrame {
 /// partner) as the last step of after_inference, behind the stage's hook, unless the chunk
 /// failed: the state keeps its last good value. The float atomics this class inherits from the
 /// 2.x processor are not used.
+///
+/// The registration is shared by every handler of the pipeline, the prepared pointer is this
+/// handler's: what the stage's prepare handed back (set_prepared, after it returned) reaches
+/// every phase call and the reset beside the registration's user_data. The stage's reset
+/// boundary is here, on the thread that runs pre_process: a chunk whose dispatch stamp is not
+/// the one the last pre_process ran under is the first of a new stream (after prepare, after
+/// anira_handler_reset), and the stage's reset slot runs for it, with the chunk's context in
+/// ANIRA_PHASE_RESET, before its pre_process. The chunk's stamp, never the session's atomic,
+/// as on the inference thread.
 class ANIRA_API StageProcessor final : public anira::PrePostProcessor {
 public:
     /// What the ctx reports for a chunk stamped with one plan of the handler's table.
@@ -155,6 +168,11 @@ public:
     /// check's scratch.
     void bind(anira::SessionElement& session, std::vector<PlanPair> plans);
 
+    /// Control thread, after the stage's prepare returned: what it handed back for this
+    /// handler, passed to every phase call and the reset from here on. NULL until then, and
+    /// for a stage without a prepare.
+    void set_prepared(void* prepared) noexcept { m_prepared = prepared; }
+
     /// The entries of the bound session: the size of the struct table, what
     /// anira_handler_num_entries answers. 0 before bind().
     uint32_t num_entries() const noexcept { return static_cast<uint32_t>(m_chunks.size()); }
@@ -176,6 +194,9 @@ private:
     /// "No entry": what entry_of_inputs / entry_of_outputs answer for a vector that is no
     /// struct's of the bound session.
     static constexpr size_t k_no_entry = static_cast<size_t>(-1);
+    /// No chunk carries this dispatch stamp: the first pre_process after construction (every
+    /// prepare rebuilds the processor) finds a new stream.
+    static constexpr uint64_t k_no_generation = UINT64_MAX;
 
     /// The entry of the bound session's struct that owns the vector, or k_no_entry.
     size_t entry_of_inputs(const std::vector<anira::BufferF>& inputs) const noexcept
@@ -194,9 +215,15 @@ private:
     anira_stage_ctx make_ctx(anira_stage_phase phase,
                              size_t entry,
                              const StageFrame& frame) const noexcept ANIRA_NONBLOCKING;
-    /// Runs the stage's slot of one phase (the caller checked that it is filled); a status
-    /// that is not ANIRA_OK is recorded and returned.
+    /// Runs the stage's slot of one phase (the caller checked that it is filled) with the
+    /// prepared pointer; a status that is not ANIRA_OK is recorded and returned.
     anira_status run_phase(const anira_stage_ctx& ctx) noexcept ANIRA_NONBLOCKING;
+    /// The stage's reset boundary: when the dispatch stamp of `chunk` is not the one the last
+    /// pre_process ran under, it is the first chunk of a new stream (after prepare, after
+    /// anira_handler_reset), so the stage's reset slot runs for it, when filled, with the
+    /// chunk's context in ANIRA_PHASE_RESET over a frame without buffers (the accessors answer
+    /// the role alone). The stamp is adopted either way.
+    void reset_if_new_stream(const Chunk& chunk, size_t entry) noexcept ANIRA_NONBLOCKING;
     /// Records a failed phase: last-wins into rt_error, one record per kind naming the phase
     /// and `who` ran it (k_the_stage, k_the_default).
     void fail(const char* who, uint32_t phase, anira_status status) noexcept ANIRA_NONBLOCKING;
@@ -241,6 +268,11 @@ private:
     anira::SessionElement* m_session = nullptr;  ///< bound by bind(); outlived by the handler's
                                                  ///< manager, which goes first
     std::vector<PlanPair> m_plans;
+    /// What the stage's prepare handed back for this handler (set_prepared); NULL without one.
+    void* m_prepared = nullptr;
+    /// The dispatch stamp the last pre_process ran under; k_no_generation after construction.
+    /// Written and read on the thread that runs pre_process alone.
+    uint64_t m_pre_generation = k_no_generation;
     std::vector<std::vector<int64_t>> m_input_shapes;   ///< the spec's extents per tensor
     std::vector<std::vector<int64_t>> m_output_shapes;  ///< the spec's extents per tensor
     std::vector<Chunk*> m_chunks;  ///< the structs of the bound session, by entry

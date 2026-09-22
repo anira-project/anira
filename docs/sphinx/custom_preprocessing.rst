@@ -58,10 +58,10 @@ The rules in short
   for ``pre_process`` and ``post_process``, and that the stage takes no part in a hook, which
   has no default.
 - ``pre_process`` and ``post_process`` run on the thread that drives the Hard entries; under a
-  Hard contract they need ``ANIRA_STAGE_REALTIME_PRE_POST`` in the flags, and the body must
+  Hard contract they need ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` in the flags, and the body must
   keep the promise: no allocation, no lock, no system call, only the ``[callback-safe]``
   entries of anira. ``before_inference`` and ``after_inference`` run on an inference thread;
-  ``ANIRA_STAGE_REALTIME_HOOKS`` is a promise, not a requirement, in this pre-release.
+  ``ANIRA_STAGE_FLAG_REALTIME_HOOKS`` is a promise, not a requirement, in this pre-release.
 - After ``pre_process`` every Streamed input ring has given up exactly one hop per channel,
   after ``post_process`` every Streamed output ring has gained one: anira checks and records
   a deviation as ``ANIRA_ERROR_CONFIG``.
@@ -92,7 +92,7 @@ and ``post_process`` slots are filled and the two hooks stay ``NULL``:
         explicit Normalise(float gain) : m_gain(gain) {}
 
         uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
-        uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
+        uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
 
         anira_status pre_process(anira::StageContext& ctx) noexcept override {
             const anira_status st = anira::Stage::pre_process(ctx);   // the default fill, every Streamed input
@@ -150,7 +150,7 @@ window in a per-entry scratch sized in ``prepare``:
     class Spectral : public anira::Stage {
     public:
         uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
-        uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
+        uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
 
         anira_status prepare(anira_handler* handler, const anira::PlanReport& /*report*/) override {
             m_windows.resize(static_cast<size_t>(anira_handler_num_entries(handler)) * k_window);
@@ -215,7 +215,7 @@ uses the entry: ``pre_process`` only pops the window into the per-entry scratch,
 cheap and real-time; ``before_inference`` transforms the scratch into the model tensor on the
 inference thread; ``after_inference`` transforms the model output back into the scratch; and
 ``post_process`` pushes the hop. The two hooks may then use a library that allocates, since
-the descriptor promises nothing for them (``flags`` carries ``ANIRA_STAGE_REALTIME_PRE_POST``
+the descriptor promises nothing for them (``flags`` carries ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``
 alone). The same stage in C, over the descriptor:
 
 .. code-block:: c
@@ -310,7 +310,7 @@ and its descriptor, filled once at setup:
     static spectral s;
     anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
     desc.user_data = &s;
-    desc.flags = ANIRA_STAGE_REALTIME_PRE_POST;   /* the hooks promise nothing */
+    desc.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;   /* the hooks promise nothing */
     desc.pre_process = spectral_pre_process;
     desc.before_inference = spectral_before_inference;
     desc.after_inference = spectral_after_inference;
@@ -384,7 +384,7 @@ pointer, and ``Stage::release()`` runs once at that moment:
     }
 
 ``anira_handler_prepare`` then validates the stage with the rest: under a Hard contract a
-filled ``pre_process`` or ``post_process`` without ``ANIRA_STAGE_REALTIME_PRE_POST`` is
+filled ``pre_process`` or ``post_process`` without ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` is
 ``ANIRA_ERROR_CONFIG`` naming the flag, a ring dtype that differs from its spec's is accepted
 only where the stage fills the phase that moves that ring, and the stage's own ``prepare``
 runs last, with the handler and the plan report; a status it returns, or an exception a C++

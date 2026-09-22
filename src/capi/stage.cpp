@@ -112,6 +112,7 @@ bool ring_transfer(const anira_ring* ring,
         case ANIRA_PHASE_POST_PROCESS: return "post_process";
         case ANIRA_PHASE_BEFORE_INFERENCE: return "before_inference";
         case ANIRA_PHASE_AFTER_INFERENCE: return "after_inference";
+        case ANIRA_PHASE_RESET: return "reset";
         default: return "unknown phase";
     }
 }
@@ -668,9 +669,25 @@ void StageProcessor::fail([[maybe_unused]] const char* who,
 
 anira_status StageProcessor::run_phase(const anira_stage_ctx& ctx) noexcept ANIRA_NONBLOCKING {
     const anira_stage_fn callback = phase_slot(m_stage->desc(), ctx.phase);
-    const anira_status status = callback(&ctx, m_stage->desc().user_data);
+    const anira_status status = callback(&ctx, m_prepared, m_stage->desc().user_data);
     if (status != ANIRA_OK) { fail(k_the_stage, ctx.phase, status); }
     return status;
+}
+
+void StageProcessor::reset_if_new_stream(const Chunk& chunk,
+                                         size_t entry) noexcept ANIRA_NONBLOCKING {
+    if (chunk.m_dispatch_generation == m_pre_generation) { return; }
+    // The first chunk of a new stream. The stamp is adopted whether the stage resets or not,
+    // so that the next chunk of this stream is no first one; the chunk's stamp, never the
+    // session's atomic (a reset that lands between Core::pre_process's stamp and this read
+    // belongs to the next chunk).
+    m_pre_generation = chunk.m_dispatch_generation;
+    if (m_stage == nullptr || m_stage->desc().reset == nullptr) { return; }
+    // The chunk's context in ANIRA_PHASE_RESET over a frame without buffers: the roles answer,
+    // a ring or a model tensor is refused and recorded, the stage's bug.
+    const StageFrame frame = make_frame();
+    const anira_stage_ctx ctx = make_ctx(ANIRA_PHASE_RESET, entry, frame);
+    m_stage->desc().reset(&ctx, m_prepared, m_stage->desc().user_data);
 }
 
 void StageProcessor::snapshot(const std::vector<Port>& ports) noexcept ANIRA_NONBLOCKING {
@@ -772,6 +789,9 @@ void StageProcessor::pre_process(std::vector<anira::RingBuffer>& input,
         return;
     }
     Chunk& chunk = *m_chunks[entry];
+    // The stage's reset boundary: the first chunk of a new stream resets the stage's own state
+    // before anything of the chunk is formed.
+    reset_if_new_stream(chunk, entry);
     // Every Static tensor is materialised ahead of the stage: the whole tensor out of its
     // static port, under the slot's latch, into the struct's packed buffer. A State tensor has
     // no ring and is not fed here: before_inference feeds it on the inference thread, and

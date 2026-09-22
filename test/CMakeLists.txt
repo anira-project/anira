@@ -132,6 +132,7 @@ anira_add_test_binary(test_abi
 	abi/test_Prepare.cpp
 	abi/test_RtError.cpp
 	abi/test_Stage.cpp
+	abi/test_Engine.cpp
 	abi/test_State.cpp
 	abi/test_Tensor.cpp
 )

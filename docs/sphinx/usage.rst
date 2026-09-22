@@ -706,12 +706,12 @@ engine will get) and produced (an output: what the next inference will be fed), 
 may read or alter either.
 
 **The real-time promise.** Whether a stage body is real-time is the stage's own promise,
-``anira_stage_desc.flags``, not a property of the callback type: ``ANIRA_STAGE_REALTIME_PRE_POST``
+``anira_stage_desc.flags``, not a property of the callback type: ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``
 says ``pre_process`` and ``post_process`` allocate nothing, lock nothing and block on nothing;
-``ANIRA_STAGE_REALTIME_HOOKS`` says the same of ``before_inference`` and ``after_inference``;
+``ANIRA_STAGE_FLAG_REALTIME_HOOKS`` says the same of ``before_inference`` and ``after_inference``;
 ``0``, the value of ``ANIRA_STAGE_DESC_INIT``, promises nothing. ``anira_handler_prepare``
 checks the promise against the placement: under a Hard contract a filled ``pre_process`` or
-``post_process`` runs on the driving thread and requires ``ANIRA_STAGE_REALTIME_PRE_POST``,
+``post_process`` runs on the driving thread and requires ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``,
 else prepare fails with ``ANIRA_ERROR_CONFIG`` naming the flag; under an Async
 contract everything runs on an inference thread and no bit is required; a bit the header does
 not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at ``anira_pipeline_add_stage``. anira's own
@@ -800,7 +800,7 @@ At setup, beside ``anira_pipeline_add_inference`` of section 3.2:
     static convert_state state;
     anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
     desc.user_data = &state;
-    desc.flags = ANIRA_STAGE_REALTIME_PRE_POST;   /* required: pre_process runs on the driving thread */
+    desc.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;   /* required: pre_process runs on the driving thread */
     desc.pre_process = convert_pre_process;        /* post_process stays NULL: the default push */
     desc.prepare = convert_prepare;
     desc.release = convert_release;
@@ -832,7 +832,7 @@ or handler that carries it; ``release()`` runs once, when that carrier dies.
     class Int16ToFloat : public anira::Stage {
     public:
         uint32_t phases() const noexcept override { return k_pre_process; }   // post_process: the default
-        uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
+        uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
 
         anira_status prepare(anira_handler* handler, const anira::PlanReport& /*report*/) override {
             m_scratch.resize(static_cast<size_t>(anira_handler_num_entries(handler)) * k_hop);

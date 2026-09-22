@@ -130,6 +130,7 @@ _anira_pipeline_add_inference
 _anira_pipeline_add_stage
 _anira_pipeline_create
 _anira_pipeline_destroy
+_anira_pipeline_register_engine
 _anira_plan_report_exts
 _anira_plan_report_num_plans
 _anira_plan_report_plans

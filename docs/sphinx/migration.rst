@@ -271,8 +271,8 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
        fails the chunk (zeros at its stream position) and is latched in
        ``anira_handler_rt_error``.
    * - the audio-thread rule of ``pre_process`` / ``post_process``
-     - The flags: ``ANIRA_STAGE_REALTIME_PRE_POST`` is required under a Hard contract
-       (``Stage::flags()``), ``ANIRA_STAGE_REALTIME_HOOKS`` is the promise for the two hooks.
+     - The flags: ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` is required under a Hard contract
+       (``Stage::flags()``), ``ANIRA_STAGE_FLAG_REALTIME_HOOKS`` is the promise for the two hooks.
    * - the hidden-state splice in the hooks (the ``StatefulPrePostProcessor`` pattern)
      - Declared state: ``"role": "state"`` on both halves and ``"state_source"`` on the input;
        anira feeds and captures it, no hook needed. The hooks still see the fed and the

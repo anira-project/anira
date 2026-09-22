@@ -1039,7 +1039,7 @@ public:
     static constexpr std::array<const char*, 1> k_kinds{"model:entry"};
 
     uint32_t m_mask;
-    uint32_t m_flags = ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS;
+    uint32_t m_flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS;
     uint32_t m_num_entries = 0;  ///< what prepare read; every entry seen is below it
     float m_scale = 1.0F;
     bool m_consumes_entry = false;
@@ -1146,7 +1146,7 @@ TEST(AbiCxx, AStageSubclassRunsItsPhasesThroughACHandler) {
     // flags() reached the descriptor.
     ASSERT_NE(handler.m_handler->m_pipeline.m_stage, nullptr);
     EXPECT_EQ(handler.m_handler->m_pipeline.m_stage->desc().flags,
-              ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS);
+              ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS);
     pipe.reset();  // the handler carries the stage alone now
     EXPECT_EQ(stage.use_count(), 2);
     EXPECT_EQ(stage->m_released.load(), 0);
@@ -1326,7 +1326,7 @@ TEST(AbiCxx, ASecondCustomStageIsRefused) {
     EXPECT_EQ(first->m_released.load(), 0);
 }
 
-// flags() is the stage's promise: without ANIRA_STAGE_REALTIME_PRE_POST a stage that fills
+// flags() is the stage's promise: without ANIRA_STAGE_FLAG_REALTIME_PRE_POST a stage that fills
 // pre_process is refused at prepare under a Hard contract, by name; a bit the C header does
 // not define is refused at add; with the promise the same stage runs.
 TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
@@ -1343,8 +1343,9 @@ TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
         EXPECT_NE(std::string_view(handler.m_err.message).find("the stage: pre_process is filled"),
                   std::string_view::npos)
             << handler.m_err.message;
-        EXPECT_NE(std::string_view(handler.m_err.message).find("ANIRA_STAGE_REALTIME_PRE_POST"),
-                  std::string_view::npos)
+        EXPECT_NE(
+            std::string_view(handler.m_err.message).find("ANIRA_STAGE_FLAG_REALTIME_PRE_POST"),
+            std::string_view::npos)
             << handler.m_err.message;
         EXPECT_EQ(stage->m_pre.load(), 0);
     }
@@ -1357,7 +1358,7 @@ TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
         EXPECT_NE(bit.m_what.find("flags"), std::string::npos) << bit.m_what;
         EXPECT_EQ(stage.use_count(), 1);
     }
-    stage->m_flags = ANIRA_STAGE_REALTIME_PRE_POST;  // read again by the next add
+    stage->m_flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;  // read again by the next add
     {
         const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
                                    anira::stage::Custom(stage)};
@@ -1382,7 +1383,7 @@ namespace {
 class Int16InputStage : public anira::Stage {
 public:
     uint32_t phases() const noexcept override { return k_pre_process; }
-    uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
+    uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
 
     anira_status pre_process(anira::StageContext& ctx) noexcept override {
         anira::Tensor tensor{};

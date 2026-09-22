@@ -461,11 +461,12 @@ struct SlotProbe {
 };
 
 // A stage asks what each tensor is before it runs: the role of every slot, from the report its
-// prepare receives.
-anira_status ANIRA_CALL probe_roles(anira_handler* /*handler*/,
-                                    const anira_plan_report* report,
-                                    void* user_data) {
+// prepare record carries.
+anira_status ANIRA_CALL probe_roles(const anira_stage_prepare_info* info,
+                                    void* user_data,
+                                    void** /*out_prepared*/) {
     auto* probe = static_cast<SlotProbe*>(user_data);
+    const anira_plan_report* const report = info->report;
     for (const anira_bool inputs : {anira_bool{1}, anira_bool{0}}) {
         std::array<anira_plan_slot, 3> slots{ANIRA_PLAN_SLOT_INIT,
                                              ANIRA_PLAN_SLOT_INIT,
@@ -503,7 +504,9 @@ struct PlanSlotWithoutRole {
 // NOLINTEND(readability-identifier-naming)
 static_assert(sizeof(PlanSlotWithoutRole) == offsetof(anira_plan_slot, role));
 
-anira_status ANIRA_CALL probe_slots(const anira_stage_ctx* ctx, void* user_data) ANIRA_NONBLOCKING {
+anira_status ANIRA_CALL probe_slots(const anira_stage_ctx* ctx,
+                                    void* /*prepared*/,
+                                    void* user_data) ANIRA_NONBLOCKING {
     auto* probe = static_cast<SlotProbe*>(user_data);
     const size_t index = probe->m_calls.fetch_add(1);
     if (ctx->num_inputs != 3 || ctx->num_outputs != 3) {
@@ -1192,6 +1195,7 @@ struct StageLog {
 constexpr float k_offset = 1000.0F;
 
 anira_status ANIRA_CALL alter_before(const anira_stage_ctx* ctx,
+                                     void* /*prepared*/,
                                      void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<StageLog*>(user_data);
     // Input slot 0 is the State tensor, for the stage as for the host (whose `data` is slot 1).
@@ -1205,7 +1209,9 @@ anira_status ANIRA_CALL alter_before(const anira_stage_ctx* ctx,
     return ANIRA_OK;
 }
 
-anira_status ANIRA_CALL alter_after(const anira_stage_ctx* ctx, void* user_data) ANIRA_NONBLOCKING {
+anira_status ANIRA_CALL alter_after(const anira_stage_ctx* ctx,
+                                    void* /*prepared*/,
+                                    void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<StageLog*>(user_data);
     // Output slot 1 is the State tensor, not yet captured.
     anira_tensor tensor;
@@ -1281,6 +1287,7 @@ struct HostEndLog {
 /// Asks every slot in the two host-end phases as the log says, then runs the default body of
 /// the phase.
 anira_status ANIRA_CALL ask_host_end(const anira_stage_ctx* ctx,
+                                     void* /*prepared*/,
                                      void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<HostEndLog*>(user_data);
     if (ctx->num_inputs != 2 || ctx->num_outputs != 2) { return ANIRA_ERROR_INTERNAL; }
@@ -1314,7 +1321,7 @@ anira_status ANIRA_CALL ask_host_end(const anira_stage_ctx* ctx,
 void run_host_end_probe(HostEndLog& log) {
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
     stage.user_data = &log;
-    stage.flags = ANIRA_STAGE_REALTIME_PRE_POST;
+    stage.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;
     stage.pre_process = &ask_host_end;
     stage.post_process = &ask_host_end;
     Rig rig(accumulator_model(), k_accumulator, {stage});

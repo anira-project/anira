@@ -4,6 +4,7 @@
 // NOLINTBEGIN(misc-include-cleaner)
 #include <anira/abi/config.h>
 #include <anira/abi/draft/tensor_platform.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
@@ -43,6 +44,9 @@ static_assert(ANIRA_PHASE_BEFORE_INFERENCE == 2 && ANIRA_PHASE_INFERENCE == 3 &&
                   ANIRA_PHASE_AFTER_INFERENCE == 4,
               "before < inference < after");
 static_assert(ANIRA_PHASE_PREPARE == 5 && ANIRA_PHASE_RELEASE == 6, "the lifecycle phases");
+// The two phases of the shared lifecycle, appended: the stage's reset slot and its unprepare.
+static_assert(ANIRA_PHASE_RESET == 7 && ANIRA_PHASE_UNPREPARE == 8,
+              "the phases of the shared lifecycle");
 // anira/abi/stage.h: the stage context is frozen at 64 bytes, eight scalars and four pointer
 // slots (the frame and three reserved ones), and travels by value like the tensor.
 static_assert(sizeof(anira_stage_ctx) == 64 && alignof(anira_stage_ctx) == 8,
@@ -58,11 +62,39 @@ static_assert(std::is_same_v<decltype(anira_stage_ctx::frame), const void*>,
               "frame is an opaque pointer to const");
 static_assert(std::is_same_v<decltype(anira_stage_desc::consumed_kinds), const char* const*>,
               "consumed_kinds is an array of const strings");
-// The descriptor's callback slots are the named typedefs.
+// The descriptor's callback slots are the named typedefs, the shared lifecycle's included.
 static_assert(std::is_same_v<decltype(anira_stage_desc::pre_process), anira_stage_fn> &&
+                  std::is_same_v<decltype(anira_stage_desc::reset), anira_stage_reset_fn> &&
                   std::is_same_v<decltype(anira_stage_desc::prepare), anira_stage_prepare_fn> &&
+                  std::is_same_v<decltype(anira_stage_desc::unprepare), anira_stage_unprepare_fn> &&
                   std::is_same_v<decltype(anira_stage_desc::release), anira_stage_release_fn>,
               "the slots of anira_stage_desc");
+// anira/abi/engine.h: the engine context is frozen like the stage context, eight scalars and
+// four pointer slots (the two tensor arrays and two reserved ones); the inputs are read and
+// the outputs written; the descriptor's slots are the named typedefs, listed as the stage's.
+static_assert(sizeof(anira_engine_ctx) == 64 && alignof(anira_engine_ctx) == 8,
+              "anira_engine_ctx is frozen");
+static_assert(offsetof(anira_engine_ctx, inputs) == 32 &&
+                  offsetof(anira_engine_ctx, outputs) == 40 &&
+                  offsetof(anira_engine_ctx, reserved_ptr1) == 56,
+              "the four pointer slots follow the eight scalars");
+static_assert(std::is_trivially_copyable_v<anira_engine_ctx> &&
+                  std::is_standard_layout_v<anira_engine_ctx>,
+              "anira_engine_ctx is a POD");
+static_assert(std::is_same_v<decltype(anira_engine_ctx::inputs), const anira_tensor*> &&
+                  std::is_same_v<decltype(anira_engine_ctx::outputs), anira_tensor*>,
+              "the inputs are read, the outputs written");
+static_assert(
+    std::is_same_v<decltype(anira_engine_desc::process), anira_engine_process_fn> &&
+        std::is_same_v<decltype(anira_engine_desc::reset), anira_engine_reset_fn> &&
+        std::is_same_v<decltype(anira_engine_desc::prepare), anira_engine_prepare_fn> &&
+        std::is_same_v<decltype(anira_engine_desc::unprepare), anira_engine_unprepare_fn> &&
+        std::is_same_v<decltype(anira_engine_desc::release), anira_engine_release_fn>,
+    "the slots of anira_engine_desc");
+// The two tail fields of the plan records.
+static_assert(std::is_same_v<decltype(anira_plan_slot::binding), uint32_t> &&
+                  std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
+              "the tail fields are anira_binding and the engine flags, as uint32_t");
 
 [[maybe_unused]] int anira_header_cxx17_probe() {
     const anira_error err = ANIRA_ERROR_INIT;
@@ -91,11 +123,31 @@ static_assert(std::is_same_v<decltype(anira_stage_desc::pre_process), anira_stag
     checks += tensor.release == nullptr && tensor.ndim == 0u ? 1 : 0;
     checks += d3d12.device == nullptr && webgpu.exec == ANIRA_EXEC_WORKER ? 1 : 0;
     const anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;  // the initializer as C++17 braces it
+    const anira_stage_prepare_info info = ANIRA_STAGE_PREPARE_INFO_INIT;
     anira_stage_ctx ctx{};
     ctx.ticket = ANIRA_TICKET_INVALID;
     checks += stage.struct_size == sizeof(anira_stage_desc) && stage.user_data == nullptr ? 1 : 0;
     checks += stage.flags == 0U && stage.release == nullptr ? 1 : 0;
+    checks += stage.reset == nullptr && stage.unprepare == nullptr ? 1 : 0;
+    checks += info.struct_size == sizeof(anira_stage_prepare_info) && info.handler == nullptr &&
+                      info.num_entries == 0U
+                  ? 1
+                  : 0;
     checks += ctx.frame == nullptr && ctx.entry == 0U && ctx.reserved_ptr2_bits == 0u ? 1 : 0;
+    // anira/abi/engine.h: the two initializers as C++17 braces them, and the context.
+    const anira_engine_desc engine = ANIRA_ENGINE_DESC_INIT;
+    const anira_engine_prepare_info engine_info = ANIRA_ENGINE_PREPARE_INFO_INIT;
+    anira_engine_ctx engine_ctx{};
+    engine_ctx.ticket = ANIRA_TICKET_INVALID;
+    checks += engine.struct_size == sizeof(anira_engine_desc) && engine.process == nullptr &&
+                      engine.flags == 0U
+                  ? 1
+                  : 0;
+    checks +=
+        engine_info.struct_size == sizeof(anira_engine_prepare_info) && engine_info.instances == 0U
+            ? 1
+            : 0;
+    checks += engine_ctx.inputs == nullptr && engine_ctx.outputs_bits == 0u ? 1 : 0;
     return checks;
 }
 
@@ -144,6 +196,7 @@ static_assert(noexcept(anira_stage_input_role(nullptr, 0, nullptr)));
 static_assert(noexcept(anira_stage_output_ring(nullptr, 0, nullptr)));
 static_assert(noexcept(anira_stage_input_tensor(nullptr, 0, nullptr)));
 static_assert(noexcept(anira_pipeline_add_stage(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_pipeline_register_engine(nullptr, nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_handler_num_entries(nullptr)));
 static_assert(noexcept(anira_contract_set_host_domain(nullptr, nullptr, ANIRA_DOMAIN_HOST)));
 // The callback typedef carries no real-time attribute: a plain function converts to it.

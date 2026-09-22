@@ -196,7 +196,7 @@ class ProbeStage final : public anira::Stage {
 public:
     uint32_t phases() const noexcept override { return k_pre_process | k_after_inference; }
     // The real-time promise a Hard contract requires of a filled pre_process.
-    uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
+    uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
 
     anira_status pre_process(anira::StageContext& ctx) noexcept override {
         anira::Tensor input{};

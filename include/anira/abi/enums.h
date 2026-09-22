@@ -211,10 +211,10 @@ typedef enum anira_tensor_flags {
 } anira_tensor_flags;
 
 /**
- * @brief Identifies a record for anira_sizeof (M2): the six Tier-1 PODs and the enumerated
+ * @brief Identifies a record for anira_sizeof (M2): the seven Tier-1 PODs and the enumerated
  * Tier-2 records. Ids 0x0001xxxx are reserved for extension payloads, 0x0004xxxx for
  * Emscripten-only structs. The document pins 1..3 and 7..11; 4..6 follow its Tier-1
- * table order.
+ * table order, and 12 is the engine context that arrived with anira/abi/engine.h.
  */
 typedef enum anira_struct_id {
     ANIRA_STRUCT_TENSOR = 1,  /**< anira_tensor (216 bytes). */
@@ -228,6 +228,7 @@ typedef enum anira_struct_id {
     ANIRA_STRUCT_PLAN_EXT = 9,  /**< anira_plan_ext (Tier 2). */
     ANIRA_STRUCT_PLAN_INFO = 10,  /**< anira_plan_info (Tier 2). */
     ANIRA_STRUCT_BACKEND_ID = 11,  /**< anira_backend_id (Tier 2). */
+    ANIRA_STRUCT_ENGINE_CTX = 12,  /**< anira_engine_ctx (64 bytes). */
     ANIRA_STRUCT_ID_FORCE32 = 0x7fffffff
 } anira_struct_id;
 
@@ -609,9 +610,11 @@ typedef enum anira_pad_policy {
 #define ANIRA_TICKET_INVALID 0u
 
 /**
- * @brief Inference engine, one of the two independent backend axes. Values 6..0x0fff are
- * reserved for later anira engines; a registered custom engine is assigned a value from
- * 0x1000 up at prepare, scoped to its pipeline.
+ * @brief Inference engine, one of the two independent backend axes. Values 6 and up are
+ * reserved for later anira engines. A registered custom engine
+ * (anira_pipeline_register_engine) has no value of its own: wherever the pair travels it
+ * is ANIRA_ENGINE_NONE with its engine_id (anira_backend_id, anira_plan_info,
+ * anira_stage_ctx).
  */
 typedef enum anira_engine {
     ANIRA_ENGINE_NONE = 0,  /**< No engine; as a default engine it means models[0]. */
@@ -641,7 +644,8 @@ typedef enum anira_provider {
 /**
  * @brief The phase a stage callback runs in, and the engine call between two of them
  * (abi/stage.h, M2); pinned now. The three inference-thread phases are numbered in the
- * order they run.
+ * order they run; the two phases of the shared lifecycle, reset and unprepare, are
+ * appended behind the lifecycle pair.
  */
 typedef enum anira_stage_phase {
     ANIRA_PHASE_PRE_PROCESS = 0,  /**< Before the model inputs are formed. */
@@ -656,25 +660,85 @@ typedef enum anira_stage_phase {
     ANIRA_PHASE_AFTER_INFERENCE = 4,  /**< On the inference thread, after the engine call. */
     ANIRA_PHASE_PREPARE = 5,  /**< At anira_handler_prepare. */
     ANIRA_PHASE_RELEASE = 6,  /**< When the last carrier dies. */
+    /**
+     * The first chunk of a new stream (after prepare, after anira_handler_reset), before its
+     * pre_process, on the thread that runs pre_process: the stage's reset slot
+     * (anira_stage_reset_fn), with that chunk's context, where the accessors answer the role
+     * only.
+     */
+    ANIRA_PHASE_RESET = 7,
+    /**
+     * At the next anira_handler_prepare and at anira_handler_destroy, after the last phase call
+     * of the handler: the stage's unprepare slot (anira_stage_unprepare_fn).
+     */
+    ANIRA_PHASE_UNPREPARE = 8,
     ANIRA_STAGE_PHASE_FORCE32 = 0x7fffffff
 } anira_stage_phase;
 
 /**
  * @brief anira_stage_desc.flags bit: the stage promises that its pre_process and post_process
- * allocate nothing, lock nothing and block on nothing. Required by anira_handler_prepare
- * for a filled pre_process or post_process under a Hard contract, where the two phases
- * run on the driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not
- * required under an Async contract.
+ * allocate nothing, lock nothing and block on nothing (its reset runs on the same thread
+ * and is covered by the same promise). Required by anira_handler_prepare for a filled
+ * pre_process or post_process under a Hard contract, where the two phases run on the
+ * driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not required under an
+ * Async contract.
  */
-#define ANIRA_STAGE_REALTIME_PRE_POST 1u
+#define ANIRA_STAGE_FLAG_REALTIME_PRE_POST 1u
 
 /**
  * @brief anira_stage_desc.flags bit: the stage promises the same of its before_inference and
  * after_inference. Not required by any contract of this pre-release (the hooks run on an
  * inference thread); a later contract option that runs them on the driving thread will
- * require it together with ANIRA_STAGE_REALTIME_PRE_POST.
+ * require it together with ANIRA_STAGE_FLAG_REALTIME_PRE_POST.
  */
-#define ANIRA_STAGE_REALTIME_HOOKS 2u
+#define ANIRA_STAGE_FLAG_REALTIME_HOOKS 2u
+
+/**
+ * @brief anira_engine_desc.flags bit: a model entry of this engine may have no source, neither
+ * a path nor bytes. Declared and reported (anira_plan_info.engine_flags) in this
+ * pre-release; consumed when a source-less entry can be built, in a later one.
+ */
+#define ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL 1u
+
+/**
+ * @brief anira_engine_desc.flags bit: the engine promises that its process allocates nothing,
+ * takes no lock and makes no system call after prepare. Reported in
+ * anira_plan_info.engine_flags and consumed by a later contract option; no built-in
+ * engine sets it.
+ */
+#define ANIRA_ENGINE_FLAG_REALTIME_SAFE 2u
+
+/**
+ * @brief anira_engine_desc.flags bit: the engine's process accepts a Time extent that varies
+ * per call, at or below the template's of its prepare record; a Time extent below the
+ * template is legal only under this bit. Reported in anira_plan_info.engine_flags; no
+ * built-in engine sets it.
+ */
+#define ANIRA_ENGINE_FLAG_DYNAMIC_TIME 4u
+
+/**
+ * @brief How a plan bound a slot to the engine's tensor (anira_plan_slot.binding): by name
+ * where the engine's side has names, by position otherwise, checked against the spec's
+ * shape and dtype at prepare either way; a registered engine received the names in its
+ * prepare record and bound itself.
+ */
+typedef enum anira_binding {
+    /**
+     * The slot's position: in the signature's order where the engine runs one, in the graph or
+     * method order elsewhere.
+     */
+    ANIRA_BINDING_POSITION = 0,
+    /**
+     * The engine tensor of that name: the entry's tensors record, else the canonical name.
+     */
+    ANIRA_BINDING_NAME = 1,
+    /**
+     * A registered engine: it received the names in its anira_engine_prepare_info and bound
+     * itself.
+     */
+    ANIRA_BINDING_ENGINE = 2,
+    ANIRA_BINDING_FORCE32 = 0x7fffffff
+} anira_binding;
 
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 

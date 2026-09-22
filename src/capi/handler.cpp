@@ -35,6 +35,7 @@
 
 #include <anira/InferenceConfig.h>
 #include <anira/abi/context.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
@@ -69,6 +70,7 @@
 #include "../scheduler/TensorRun.h"
 #include "capi_internal.h"
 #include "context.h"
+#include "engine.h"
 #include "ext_registry.h"
 #include "handles.h"
 #include "port.h"
@@ -90,8 +92,17 @@ constexpr uint32_t k_plan_ext_head = 2 * sizeof(uint32_t);
 constexpr uint32_t k_backend_id_head = 3 * sizeof(uint32_t);
 // The three leading slots of a callback descriptor: struct_size, abi_version, user_data.
 constexpr uint32_t k_stage_desc_head = offsetof(anira_stage_desc, user_data) + sizeof(void*);
+constexpr uint32_t k_engine_desc_head = offsetof(anira_engine_desc, user_data) + sizeof(void*);
 /// Every flags bit anira/abi/stage.h defines: a stage's real-time promise.
-constexpr uint32_t k_stage_flags = ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS;
+constexpr uint32_t k_stage_flags =
+    ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS;
+/// Every flags bit anira/abi/engine.h defines: an engine's promises.
+constexpr uint32_t k_engine_flags = ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL |
+                                    ANIRA_ENGINE_FLAG_REALTIME_SAFE |
+                                    ANIRA_ENGINE_FLAG_DYNAMIC_TIME;
+/// The prefix of the engine ids anira keeps for itself (anira.v2.custom among them): a
+/// registration under it is refused.
+constexpr const char* k_anira_id_prefix = "anira.";
 // A timeout at or above this many milliseconds (about 31 years) waits without limit: the
 // double -> int64 nanosecond conversion and now() + budget would overflow.
 constexpr double k_max_wait_ms = 1e12;
@@ -609,13 +620,23 @@ void clear_report(anira_plan_report& report) noexcept {
 
 // Releases the session and everything prepare built; the handler is unprepared afterwards.
 // The session goes first (Core::release_session drains the in-flight work and joins the pool
-// with the last session), then the processor, the report and the plan table; the
-// InferenceConfig stays until the next prepare replaces it or destroy frees it. The rings die
-// with the session: no stream port names one while the handler is unprepared.
+// with the last session), then the processor, the stage's unprepare, the report and the plan
+// table; the InferenceConfig stays until the next prepare replaces it or destroy frees it. The
+// rings die with the session: no stream port names one while the handler is unprepared.
 void unprepare(anira_handler& handler) noexcept {
     handler.m_prepared.store(false, std::memory_order_release);
     handler.m_manager.reset();
     handler.m_pp.reset();
+    // The stage's unprepare, once per successful prepare, now that no phase call of this
+    // handler can run any more: what its prepare handed back for this handler goes back to it.
+    if (handler.m_stage_unprepare_owed) {
+        handler.m_stage_unprepare_owed = false;
+        const anira::capi::StageCarrier* const stage = handler.m_pipeline.m_stage.get();
+        if (stage != nullptr && stage->desc().unprepare != nullptr) {
+            stage->desc().unprepare(handler.m_stage_prepared, stage->desc().user_data);
+        }
+        handler.m_stage_prepared = nullptr;
+    }
     for (auto* ports : {&handler.m_input_ports, &handler.m_output_ports}) {
         for (anira::capi::Port& port : *ports) {
             if (auto* stream = std::get_if<anira::capi::StreamPort>(&port)) {
@@ -714,22 +735,24 @@ void check_buffer_specs(const anira_model_config& model) {
 // The real-time rule of prepare: the stage's flags are its promise, checked against where its
 // phases run. Under a Hard contract (the only contract of this pre-release) a filled
 // pre_process or post_process runs on the driving thread, so the stage must promise
-// ANIRA_STAGE_REALTIME_PRE_POST for them; the two hooks run on an inference thread and need no
-// promise here (a later contract option that puts them on the driving thread requires
-// ANIRA_STAGE_REALTIME_HOOKS too). The default bodies are real-time by construction, so a NULL
-// slot needs nothing. anira's own side stays real-time whatever the flags say.
+// ANIRA_STAGE_FLAG_REALTIME_PRE_POST for them (the reset runs on that thread too, under the
+// same promise); the two hooks run on an inference thread and need no promise here (a later
+// contract option that puts them on the driving thread requires ANIRA_STAGE_FLAG_REALTIME_HOOKS
+// too). The default bodies are real-time by construction, so a NULL slot needs nothing. anira's
+// own side stays real-time whatever the flags say.
 void check_stage_flags(const anira::capi::StageCarrier* stage) {
     if (stage == nullptr) { return; }
     const anira_stage_desc& desc = stage->desc();
     const bool fills_pre_or_post = desc.pre_process != nullptr || desc.post_process != nullptr;
-    if (!fills_pre_or_post || (desc.flags & ANIRA_STAGE_REALTIME_PRE_POST) != 0) { return; }
+    if (!fills_pre_or_post || (desc.flags & ANIRA_STAGE_FLAG_REALTIME_PRE_POST) != 0) { return; }
     throw StatusError(ANIRA_ERROR_CONFIG,
                       std::string("the stage: ") +
                           (desc.pre_process != nullptr ? "pre_process" : "post_process") +
                           " is filled and runs on the driving thread under a Hard contract, "
-                          "which requires ANIRA_STAGE_REALTIME_PRE_POST in anira_stage_desc."
-                          "flags (the stage's promise that pre_process and post_process "
-                          "allocate nothing, lock nothing and block on nothing)");
+                          "which requires ANIRA_STAGE_FLAG_REALTIME_PRE_POST in "
+                          "anira_stage_desc.flags (the stage's promise that pre_process, "
+                          "post_process and reset allocate nothing, lock nothing and block on "
+                          "nothing)");
 }
 
 // Whether a model entry is the variant's default engine (by id for a custom engine, by
@@ -1014,6 +1037,35 @@ std::vector<anira_tensor> empty_tensors(const std::vector<anira::capi::Port>& po
     return tensors;
 }
 
+// The template of the model end of every slot of one side, for the stage's prepare record: the
+// spec's dtype and the shape the InferenceConfig pinned (what anira_stage_input_tensor fills at
+// run time, over the struct's memory), all-zero strides, the slot's declared host domain, no
+// memory. State slots included: one template per tensor of the list.
+std::vector<anira_tensor> model_end_templates(const std::vector<std::vector<int64_t>>& shapes,
+                                              const std::vector<anira_tensor_spec>& specs,
+                                              const std::vector<anira_domain>& domains) {
+    std::vector<anira_tensor> templates(specs.size());
+    for (size_t slot = 0; slot < specs.size(); ++slot) {
+        const bool has_shape = slot < shapes.size();
+        const uint32_t ndim = has_shape ? static_cast<uint32_t>(shapes[slot].size()) : 0U;
+        const int64_t* extents = has_shape ? shapes[slot].data() : nullptr;
+        anira_tensor_init_host(&templates[slot], nullptr, specs[slot].m_dtype, ndim, extents);
+        if (slot < domains.size()) {
+            templates[slot].domain = static_cast<uint32_t>(domains[slot]);
+        }
+    }
+    return templates;
+}
+
+// The canonical names of one side in slot order, pointing into the handler's model copy, which
+// outlives the call.
+std::vector<const char*> canonical_names(const std::vector<anira_tensor_spec>& specs) {
+    std::vector<const char*> names;
+    names.reserve(specs.size());
+    for (const anira_tensor_spec& spec : specs) { names.push_back(spec.m_name.c_str()); }
+    return names;
+}
+
 // anira_handler_prepare's body, step by step; any throw leaves through the caller, which
 // unprepares the handler.
 void prepare_handler(anira_handler& handler, const anira_contract& contract) {
@@ -1141,19 +1193,49 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     }
     handler.m_prepared.store(true, std::memory_order_release);
 
-    // Last, the stage's prepare function, when it has one, with the report that now exists.
-    // The handler counts as prepared while it runs, so its getters answer (the entry count
-    // among them); no driver thread runs (prepare overlaps no other entry). A status other
-    // than ANIRA_OK fails this prepare with it, and the caller unprepares the handler.
+    // Last, the stage's prepare function, when it has one, with the record: the handler, the
+    // report that now exists, the entry count, a template of the model end of every slot and
+    // the canonical names, valid for the duration of the call. The handler counts as prepared
+    // while it runs, so its getters answer (the entry count among them); no driver thread runs
+    // (prepare overlaps no other entry). A status other than ANIRA_OK fails this prepare with
+    // it, and the caller unprepares the handler; the stage's unprepare is not owed for a
+    // refused prepare.
     if (stage == nullptr || stage->desc().prepare == nullptr) { return; }
     const anira_stage_desc& desc = stage->desc();
-    const anira_status status = desc.prepare(&handler, &handler.m_report, desc.user_data);
+    const std::vector<anira_tensor> input_templates =
+        model_end_templates(prepared.get_tensor_input_shape(),
+                            model.m_inputs,
+                            host_domains.m_inputs);
+    const std::vector<anira_tensor> output_templates =
+        model_end_templates(prepared.get_tensor_output_shape(),
+                            model.m_outputs,
+                            host_domains.m_outputs);
+    const std::vector<const char*> input_names = canonical_names(model.m_inputs);
+    const std::vector<const char*> output_names = canonical_names(model.m_outputs);
+    anira_stage_prepare_info info = ANIRA_STAGE_PREPARE_INFO_INIT;
+    info.num_entries = handler.m_num_entries;
+    info.handler = &handler;
+    info.report = &handler.m_report;
+    info.inputs = input_templates.data();
+    info.outputs = output_templates.data();
+    info.input_names = input_names.data();
+    info.output_names = output_names.data();
+    info.num_inputs = static_cast<uint32_t>(input_templates.size());
+    info.num_outputs = static_cast<uint32_t>(output_templates.size());
+    void* stage_prepared = nullptr;
+    const anira_status status = desc.prepare(&info, desc.user_data, &stage_prepared);
     if (status != ANIRA_OK) {
         throw StatusError(status,
                           std::string("the stage refused prepare: it returned ") +
                               std::to_string(static_cast<int>(status)) + " (" +
                               anira_status_string(status) + ")");
     }
+    // What the stage handed back for this handler: every phase call and the reset receive it
+    // beside user_data from here on, and the unprepare gets it back once, when the session is
+    // released.
+    handler.m_stage_prepared = stage_prepared;
+    handler.m_stage_unprepare_owed = true;
+    stage_processor->set_prepared(stage_prepared);
 }
 
 // ==== the report enumerators ==================================================================
@@ -1221,7 +1303,8 @@ std::vector<anira_backend_id> anira_pipeline::candidate_ids() const {
 anira_pipeline::anira_pipeline(const anira_pipeline& other)
     : m_candidates(other.m_candidates)
     , m_has_inference(other.m_has_inference)
-    , m_stage(other.m_stage) {  // the carrier is shared, never cloned
+    , m_stage(other.m_stage)  // the carriers are shared, never cloned
+    , m_engines(other.m_engines) {
     m_variants.reserve(other.m_variants.size());
     for (const anira_model_config& variant : other.m_variants) {
         m_variants.push_back(anira::capi::clone_model_config(variant));
@@ -1356,7 +1439,7 @@ anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipeline,
         err,
         ANIRA_ERROR_INVALID_ARGUMENT,
         "pipeline: the stage's flags 0x%x carry a bit this library does not "
-        "define (ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS is 0x%x)",
+        "define (ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS is 0x%x)",
         value.flags,
         k_stage_flags);
     ANIRA_CAPI_REQUIRE(value.consumed_kinds != nullptr || value.num_consumed_kinds == 0,
@@ -1381,6 +1464,89 @@ anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipeline,
                        "one, which composes the default bodies itself");
     // The carrier copies the kinds.
     pipeline->m_stage = std::make_shared<anira::capi::StageCarrier>(value);
+    return ANIRA_OK;
+} catch (...) { return translate_exception(err, __func__); }
+
+anira_status ANIRA_CALL anira_pipeline_register_engine(anira_pipeline* pipeline,
+                                                       const char* engine_id,
+                                                       const anira_engine_desc* desc,
+                                                       anira_error* err) ANIRA_NOEXCEPT try {
+    ANIRA_CAPI_REQUIRE(pipeline != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: NULL pipeline");
+    ANIRA_CAPI_REQUIRE(engine_id != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: NULL engine_id");
+    ANIRA_CAPI_REQUIRE(desc != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "pipeline: NULL desc");
+    // A reverse-URI id that is not one of anira's own.
+    ANIRA_CAPI_REQUIRE(std::strchr(engine_id, '.') != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: the engine id '%s' is no reverse-URI name (it must contain a "
+                       "'.')",
+                       engine_id);
+    ANIRA_CAPI_REQUIRE(
+        std::strncmp(engine_id, k_anira_id_prefix, std::strlen(k_anira_id_prefix)) != 0,
+        err,
+        ANIRA_ERROR_INVALID_ARGUMENT,
+        "pipeline: the engine id '%s' carries the prefix \"%s\", which is anira's own",
+        engine_id,
+        k_anira_id_prefix);
+    ANIRA_CAPI_REQUIRE(desc->struct_size >= k_engine_desc_head,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: the engine's struct_size %u is below the three leading slots "
+                       "{struct_size, abi_version, user_data}",
+                       desc->struct_size);
+    // Within the caller's struct_size, over the defaults: a slot an older header lacks reads
+    // as in ANIRA_ENGINE_DESC_INIT.
+    anira_engine_desc value = ANIRA_ENGINE_DESC_INIT;
+    std::memcpy(&value, desc, std::min<size_t>(desc->struct_size, sizeof(anira_engine_desc)));
+    value.struct_size = sizeof(anira_engine_desc);
+    ANIRA_CAPI_REQUIRE(!ANIRA_FAILED(anira_check_abi(value.abi_version)),
+                       err,
+                       ANIRA_ERROR_ABI_VERSION,
+                       "pipeline: the engine was compiled against ABI 0x%08x, which this library "
+                       "does not serve",
+                       value.abi_version);
+    ANIRA_CAPI_REQUIRE((value.flags & ~k_engine_flags) == 0,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: the engine's flags 0x%x carry a bit this library does not "
+                       "define (ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL | ANIRA_ENGINE_FLAG_REALTIME_SAFE "
+                       "| ANIRA_ENGINE_FLAG_DYNAMIC_TIME is 0x%x)",
+                       value.flags,
+                       k_engine_flags);
+    ANIRA_CAPI_REQUIRE(value.process != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: the engine's process is NULL; the engine call is the one "
+                       "required slot of anira_engine_desc");
+    ANIRA_CAPI_REQUIRE(value.consumed_kinds != nullptr || value.num_consumed_kinds == 0,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: the engine's consumed_kinds is NULL with a count of %u",
+                       value.num_consumed_kinds);
+    for (uint32_t i = 0; i < value.num_consumed_kinds; ++i) {
+        ANIRA_CAPI_REQUIRE(value.consumed_kinds[i] != nullptr,
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "pipeline: the engine's consumed_kinds[%u] is NULL",
+                           i);
+    }
+    // One carrier per id. Checked last, so that a malformed descriptor is reported as such
+    // whatever the pipeline holds (the second-stage precedent of anira_pipeline_add_stage).
+    for (const std::shared_ptr<const anira::capi::EngineCarrier>& engine : pipeline->m_engines) {
+        ANIRA_CAPI_REQUIRE(engine->id() != engine_id,
+                           err,
+                           ANIRA_ERROR_INVALID_STATE,
+                           "pipeline: the pipeline already has an engine registered as '%s'",
+                           engine_id);
+    }
+    // The carrier copies the id and the kinds.
+    pipeline->m_engines.push_back(std::make_shared<anira::capi::EngineCarrier>(engine_id, value));
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 

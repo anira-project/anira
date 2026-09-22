@@ -1879,18 +1879,18 @@ private:
  * of the four this stage takes part in: only those reach the descriptor, the others stay NULL
  * and are never called. phases() is read once, by Pipeline::add, and so is flags().
  *
- * flags() is the stage's real-time promise (anira_stage_desc::flags): ANIRA_STAGE_REALTIME_PRE_POST
- * says pre_process and post_process allocate nothing, lock nothing and block on nothing,
- * ANIRA_STAGE_REALTIME_HOOKS says the same of before_inference and after_inference; the default
- * promises nothing. anira_handler_prepare checks the promise against the placement: under a
- * Hard contract a filled pre_process or post_process runs on the driving thread and requires
- * ANIRA_STAGE_REALTIME_PRE_POST, else prepare fails with ANIRA_ERROR_CONFIG naming the flag.
- * The four phase functions are noexcept (an override that throws does not compile without it,
- * and terminates with it) and carry no real-time attribute of their own; everything
- * StageContext, RingView and Tensor offer is nonblocking, so a body that keeps its promise is
- * composed of those calls. A status other than ANIRA_OK fails the chunk: the status goes into
- * anira_handler_rt_error with one latched record naming the phase, and the chunk delivers
- * zeros at its stream position.
+ * flags() is the stage's real-time promise (anira_stage_desc::flags):
+ * ANIRA_STAGE_FLAG_REALTIME_PRE_POST says pre_process and post_process allocate nothing, lock
+ * nothing and block on nothing, ANIRA_STAGE_FLAG_REALTIME_HOOKS says the same of before_inference
+ * and after_inference; the default promises nothing. anira_handler_prepare checks the promise
+ * against the placement: under a Hard contract a filled pre_process or post_process runs on the
+ * driving thread and requires ANIRA_STAGE_FLAG_REALTIME_PRE_POST, else prepare fails with
+ * ANIRA_ERROR_CONFIG naming the flag. The four phase functions are noexcept (an override that
+ * throws does not compile without it, and terminates with it) and carry no real-time attribute of
+ * their own; everything StageContext, RingView and Tensor offer is nonblocking, so a body that
+ * keeps its promise is composed of those calls. A status other than ANIRA_OK fails the chunk: the
+ * status goes into anira_handler_rt_error with one latched record naming the phase, and the chunk
+ * delivers zeros at its stream position.
  *
  * A stage has no name: a Pipeline holds one, so a name would identify nothing; every record
  * about it says "the stage", and the consumer column of its anira_plan_ext rows reads "stage".
@@ -1921,10 +1921,10 @@ public:
     /// prepare and release alone.
     virtual uint32_t phases() const noexcept = 0;
     /// The stage's real-time promise, written into anira_stage_desc::flags by Pipeline::add: an
-    /// OR of ANIRA_STAGE_REALTIME_PRE_POST and ANIRA_STAGE_REALTIME_HOOKS; 0 (the default)
-    /// promises nothing. Under a Hard contract a stage that fills pre_process or post_process
-    /// must promise ANIRA_STAGE_REALTIME_PRE_POST, else anira_handler_prepare refuses it with
-    /// ANIRA_ERROR_CONFIG. Read once, when the stage is added to a Pipeline.
+    /// OR of ANIRA_STAGE_FLAG_REALTIME_PRE_POST and ANIRA_STAGE_FLAG_REALTIME_HOOKS; 0 (the
+    /// default) promises nothing. Under a Hard contract a stage that fills pre_process or
+    /// post_process must promise ANIRA_STAGE_FLAG_REALTIME_PRE_POST, else anira_handler_prepare
+    /// refuses it with ANIRA_ERROR_CONFIG. Read once, when the stage is added to a Pipeline.
     virtual uint32_t flags() const noexcept { return 0; }
 
     /// ANIRA_PHASE_PRE_PROCESS, on the thread where the host end is produced (the driver thread
@@ -1979,35 +1979,41 @@ struct StageTrampolines {
     }
 
     // The four phase trampolines carry no real-time attribute, like anira_stage_fn: the promise
-    // is the stage's flags(), not a property of the type.
+    // is the stage's flags(), not a property of the type. The per-handler prepared pointer of
+    // the C lifecycle is not used yet: the phases run on the registration.
     static anira_status ANIRA_CALL pre_process(const anira_stage_ctx* ctx,
+                                               void* /*prepared*/,
                                                void* user_data) noexcept {
         StageContext context(ctx);
         return stage_of(user_data).pre_process(context);
     }
     static anira_status ANIRA_CALL post_process(const anira_stage_ctx* ctx,
+                                                void* /*prepared*/,
                                                 void* user_data) noexcept {
         StageContext context(ctx);
         return stage_of(user_data).post_process(context);
     }
     static anira_status ANIRA_CALL before_inference(const anira_stage_ctx* ctx,
+                                                    void* /*prepared*/,
                                                     void* user_data) noexcept {
         StageContext context(ctx);
         return stage_of(user_data).before_inference(context);
     }
     static anira_status ANIRA_CALL after_inference(const anira_stage_ctx* ctx,
+                                                   void* /*prepared*/,
                                                    void* user_data) noexcept {
         StageContext context(ctx);
         return stage_of(user_data).after_inference(context);
     }
 
     /// A throw never crosses the C boundary: it becomes the status, and its text a log line.
-    static anira_status ANIRA_CALL prepare(anira_handler* handler,
-                                           const anira_plan_report* report,
-                                           void* user_data) noexcept {
+    /// Nothing is handed back through out_prepared: the phases run on the registration.
+    static anira_status ANIRA_CALL prepare(const anira_stage_prepare_info* info,
+                                           void* user_data,
+                                           void** /*out_prepared*/) noexcept {
         Stage& stage = stage_of(user_data);
         try {
-            return stage.prepare(handler, PlanReport(report));
+            return stage.prepare(info->handler, PlanReport(info->report));
         } catch (const Error& error) {
             log_throw(error.what());
             return failed(error.status) ? error.status : ANIRA_ERROR_INTERNAL;

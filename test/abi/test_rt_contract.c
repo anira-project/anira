@@ -24,10 +24,17 @@
  * anira_stage_fn slots of a descriptor. That typedef carries no attribute (whether a body is
  * real-time is the stage's own promise, anira_stage_desc.flags), so the attribute on the
  * function is the author's own check: clang verifies that everything it calls is nonblocking,
- * which is the point. The file grows with the handler's [callback-safe] entries.
+ * which is the point. A fifth is the stage's reset slot, which runs on the thread of
+ * pre_process under the same promise. A sixth is an engine's process of anira/abi/engine.h,
+ * declared ANIRA_NONBLOCKING by its author as the ANIRA_ENGINE_FLAG_REALTIME_SAFE promise
+ * checked at compile time (the typedef carries no attribute; the flag is the promise): it
+ * reads its tensors through the context and the [callback-safe] accessors, and a
+ * [main-thread] function registers it. The file grows with the handler's [callback-safe]
+ * entries.
  */
 #include <anira/abi/config.h>
 #include <anira/abi/draft/tensor_platform.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
@@ -139,8 +146,10 @@ static anira_status ANIRA_CALL anira_rt_contract_miss(anira_handler* handler,
    of every Streamed input by hand, through every ring accessor a stage has; in post_process it
    pushes the outputs; anything else is left to the default bodies. */
 static anira_status ANIRA_CALL anira_rt_contract_stage(const anira_stage_ctx* ctx,
+                                                       void* prepared,
                                                        void* user_data) ANIRA_NONBLOCKING {
     uint32_t slot = 0;
+    (void)prepared;
     (void)user_data;
     if (ctx->phase == (uint32_t)ANIRA_PHASE_PRE_PROCESS) {
         for (slot = 0; slot < ctx->num_inputs; ++slot) {
@@ -196,20 +205,77 @@ static anira_status ANIRA_CALL anira_rt_contract_stage(const anira_stage_ctx* ct
     return ANIRA_OK;
 }
 
+/* The stage's reset slot: the first chunk of a new stream, on the thread of pre_process, so
+   a real-time body like the phases'. It asks the role of every input slot, the one question
+   the context answers in ANIRA_PHASE_RESET. */
+static void ANIRA_CALL anira_rt_contract_stage_reset(const anira_stage_ctx* ctx,
+                                                     void* prepared,
+                                                     void* user_data) ANIRA_NONBLOCKING {
+    uint32_t slot = 0;
+    (void)prepared;
+    (void)user_data;
+    for (slot = 0; slot < ctx->num_inputs; ++slot) {
+        anira_role role = ANIRA_ROLE_FORCE32;
+        (void)anira_stage_input_role(ctx, slot, &role);
+    }
+}
+
 /* anira_pipeline_add_stage is [main-thread]: a plain function fills the descriptor. The four
-   phase slots take the nonblocking function as it is, and the flags state the promise the
-   attribute checked. */
+   phase slots and the reset take the nonblocking functions as they are, and the flags state
+   the promise the attribute checked. */
 /* NOLINTNEXTLINE(misc-use-internal-linkage) */
 anira_status anira_rt_contract_add_stage(anira_pipeline* pipeline, void* user_data);
 anira_status anira_rt_contract_add_stage(anira_pipeline* pipeline, void* user_data) {
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
     stage.user_data = user_data;
-    stage.flags = ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS;
+    stage.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS;
     stage.pre_process = anira_rt_contract_stage;
     stage.post_process = anira_rt_contract_stage;
     stage.before_inference = anira_rt_contract_stage;
     stage.after_inference = anira_rt_contract_stage;
+    stage.reset = anira_rt_contract_stage_reset;
     return anira_pipeline_add_stage(pipeline, &stage, NULL);
+}
+
+/* anira/abi/engine.h: an engine's process as its author checks the
+   ANIRA_ENGINE_FLAG_REALTIME_SAFE promise: declared ANIRA_NONBLOCKING (the typedef carries no
+   attribute; the flag is the promise), it reads every extent and every pointer from the
+   tensors of this call through the [callback-safe] accessors, and copies the first input
+   into the first output. */
+static anira_status ANIRA_CALL anira_rt_contract_engine(const anira_engine_ctx* ctx,
+                                                        void* prepared,
+                                                        void* user_data) ANIRA_NONBLOCKING {
+    uint32_t slot = 0;
+    size_t total = 0;
+    (void)prepared;
+    (void)user_data;
+    for (slot = 0; slot < ctx->num_inputs; ++slot) {
+        total += anira_tensor_num_elements(&ctx->inputs[slot]);
+        total += anira_tensor_extent(&ctx->inputs[slot], 0u);
+    }
+    if (ctx->num_inputs > 0u && ctx->num_outputs > 0u) {
+        const float* in = anira_tensor_data_f32(&ctx->inputs[0]);
+        float* out = anira_tensor_data_f32(&ctx->outputs[0]);
+        const size_t count = anira_tensor_num_elements(&ctx->outputs[0]);
+        size_t i = 0;
+        if (in == NULL || out == NULL || anira_tensor_num_elements(&ctx->inputs[0]) < count) {
+            return ANIRA_ERROR_ENGINE;
+        }
+        for (i = 0; i < count; ++i) { out[i] = in[i]; }
+    }
+    return total > 0u || ctx->num_inputs == 0u ? ANIRA_OK : ANIRA_ERROR_ENGINE;
+}
+
+/* anira_pipeline_register_engine is [main-thread]: a plain function fills the descriptor and
+   states the promise the attribute checked. */
+/* NOLINTNEXTLINE(misc-use-internal-linkage) */
+anira_status anira_rt_contract_register_engine(anira_pipeline* pipeline, void* user_data);
+anira_status anira_rt_contract_register_engine(anira_pipeline* pipeline, void* user_data) {
+    anira_engine_desc engine = ANIRA_ENGINE_DESC_INIT;
+    engine.user_data = user_data;
+    engine.flags = ANIRA_ENGINE_FLAG_REALTIME_SAFE;
+    engine.process = anira_rt_contract_engine;
+    return anira_pipeline_register_engine(pipeline, "org.example.rt", &engine, NULL);
 }
 
 /* The setter is [main-thread]: a plain function hands the pair over. */
