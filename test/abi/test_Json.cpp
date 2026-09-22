@@ -151,6 +151,70 @@ TEST(AbiJsonModel, BufferProtocol) {
               ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
+// Declared state: "role": "state" on both halves of a pair, "state_source" on the input half
+// only. The document's order is the model's: the state first on the input side, last on the
+// output side.
+TEST(AbiJsonModel, AStatePairRoundTrips) {
+    constexpr const char* k_text = R"({
+        "models": [{"engine": "anira.v2.custom", "path": "custom-processor"}],
+        "inputs": [
+            {"name": "h_in", "dtype": "float32", "role": "state",
+             "axes": [["batch", 1], ["feature", 64]], "state_source": "h_out"},
+            {"name": "audio_in", "dtype": "float32", "role": "streamed",
+             "axes": [["batch", 1], ["time", 512]], "window": {"min": 512, "max": 512}}
+        ],
+        "outputs": [
+            {"name": "audio_out", "dtype": "float32", "role": "streamed",
+             "axes": [["batch", 1], ["time", 512]], "window": {"min": 512, "max": 512}},
+            {"name": "h_out", "dtype": "float32", "role": "state",
+             "axes": [["batch", 1], ["feature", 64]]}
+        ]
+    })";
+    const Loaded first(k_text);
+    ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
+    ASSERT_EQ(first.m_config->m_inputs.size(), 2U);
+    EXPECT_EQ(first.m_config->m_inputs[0].m_role, ANIRA_ROLE_STATE);
+    EXPECT_EQ(first.m_config->m_inputs[0].m_state_source, "h_out");
+    EXPECT_EQ(first.m_config->m_outputs[1].m_role, ANIRA_ROLE_STATE);
+    EXPECT_TRUE(first.m_config->m_outputs[1].m_state_source.empty());
+
+    const std::string once = model_text(first.m_config);
+    EXPECT_NE(once.find("\"role\": \"state\""), std::string::npos) << once;
+    EXPECT_NE(once.find("\"state_source\": \"h_out\""), std::string::npos) << once;
+    EXPECT_EQ(once.find("\"state_source\""), once.rfind("\"state_source\""))
+        << "written once, on the input half:\n"
+        << once;
+    const Loaded second(once.c_str());
+    ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
+    EXPECT_EQ(second.m_config->m_inputs[0].m_state_source, "h_out");
+    EXPECT_EQ(model_text(second.m_config), once);
+
+    // A source set from C is the same member.
+    anira_tensor_spec* spec = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_tensor_spec_create("h_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE, &spec, &err),
+              ANIRA_OK);
+    EXPECT_EQ(anira_tensor_spec_set_state_source(spec, "h_out"), ANIRA_OK);
+    EXPECT_EQ(spec->m_state_source, "h_out");
+    anira_tensor_spec_destroy(spec);
+}
+
+TEST(AbiJsonModel, StateSourceRejectionsNameTheKeyPath) {
+    // The pairing is stated on the input: the key on an output spec is refused where it stands.
+    EXPECT_EQ(load_fails(R"({"outputs": [{"name": "h_out", "role": "state",
+                                          "state_source": "h_out"}]})",
+                         "outputs[0].state_source"),
+              ANIRA_ERROR_JSON);
+    // The name is a string.
+    EXPECT_EQ(load_fails(R"({"inputs": [{"name": "h_in", "role": "state", "state_source": 3}]})",
+                         "inputs[0].state_source"),
+              ANIRA_ERROR_JSON);
+    EXPECT_EQ(
+        load_fails(R"({"inputs": [{"name": "h_in", "role": "state", "state_source": ["h_out"]}]})",
+                   "inputs[0].state_source"),
+        ANIRA_ERROR_JSON);
+}
+
 TEST(AbiJsonModel, RejectionsNameTheKeyPath) {
     EXPECT_EQ(load_fails(R"({"models": [{"engine": "foo", "path": "x"}]})", "models[0].engine"),
               ANIRA_ERROR_JSON);
@@ -428,6 +492,43 @@ TEST(AbiJsonContract, RingDtypesAreReadByTensorName) {
     EXPECT_NE(std::string(err.message).find("hard.ring_dtypes.audio_in"), std::string::npos)
         << err.message;
     EXPECT_EQ(hard, nullptr);
+}
+
+// The declared host-end domain per tensor is a top-level key, common to both kinds like
+// edge_cost, the words the lower-case suffixes of anira_domain.
+TEST(AbiJsonContract, HostDomainsAreReadByTensorName) {
+    static constexpr const char* k_hard = R"({ "hard": {
+        "block_min": 512, "block_max": 512, "rate": 48000, "budget": {"ms": 5}
+    }, "host_domains": {"audio_in": "host", "gain": "host_pinned"} })";
+    anira_contract* contract = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_contract_from_json(k_hard, std::strlen(k_hard), &contract, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(contract->m_host_domains.size(), 2u);
+    EXPECT_EQ(contract->m_host_domains.at("audio_in"), ANIRA_DOMAIN_HOST);
+    EXPECT_EQ(contract->m_host_domains.at("gain"), ANIRA_DOMAIN_HOST_PINNED);
+    anira_contract_destroy(contract);
+
+    static constexpr const char* k_async = R"({ "async": {}, "host_domains": {"x": "cuda"} })";
+    contract = nullptr;
+    ASSERT_EQ(anira_contract_from_json(k_async, std::strlen(k_async), &contract, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(contract->m_host_domains.size(), 1u);
+    EXPECT_EQ(contract->m_host_domains.at("x"), ANIRA_DOMAIN_CUDA);
+    anira_contract_destroy(contract);
+
+    static constexpr const char* k_bad = R"({ "hard": {}, "host_domains": {"audio_in": "gpu"} })";
+    contract = nullptr;
+    EXPECT_EQ(anira_contract_from_json(k_bad, std::strlen(k_bad), &contract, &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_NE(std::string(err.message).find("host_domains.audio_in"), std::string::npos)
+        << err.message;
+    EXPECT_EQ(contract, nullptr);
+
+    static constexpr const char* k_not_object = R"({ "hard": {}, "host_domains": "host" })";
+    EXPECT_EQ(anira_contract_from_json(k_not_object, std::strlen(k_not_object), &contract, &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_EQ(contract, nullptr);
 }
 
 TEST(AbiJsonContract, Rejections) {

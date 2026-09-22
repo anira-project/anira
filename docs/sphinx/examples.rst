@@ -20,8 +20,10 @@ model's exports per engine with paths relative to the file, the tensor specs, th
 geometry is patched in at prepare). ``extras/models/model_files.h`` names them for the examples
 and the tests. Covered are the steerable-nafx CNN in three sizes (``cnn/``), GuitarLSTM
 (``hybrid-nn/``), the stateful LSTM (``stateful-rnn/``), SimpleGainNetwork in mono and stereo
-(``model-pool/``) and RAVE funk drum as the whole model, its encoder and its decoder
-(``third-party/ircam-acids/``, LibTorch only).
+and the stereo StatefulAccumulatorNetwork with its declared State pair (``model-pool/``; the
+accumulator names no TFLite or LiteRT row, since that export orders its outputs differently and
+the engines bind tensors by position) and RAVE funk drum as the whole model, its encoder and its
+decoder (``third-party/ircam-acids/``, LibTorch only).
 
 Every example loads a model the same way, in three lines, and the runtime takes it from there:
 

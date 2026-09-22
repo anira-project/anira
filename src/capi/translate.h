@@ -37,7 +37,8 @@ namespace anira::capi {
 /// What the validator derives for one tensor spec.
 struct DerivedSpec {
     std::vector<int64_t> m_dims;        ///< the spec's extents, a dynamic Time extent resolved
-    int64_t m_channels = 1;             ///< the Channel axis extent, 1 without one
+    int64_t m_channels = 1;             ///< Streamed: the Channel axis extent, 1 without one;
+                                        ///< Static and Buffer: 1 (the tag names an axis there)
     int64_t m_window_used = 0;          ///< Streamed only: the window pinned for this contract
     int64_t m_hop = 0;                  ///< Streamed: window_used - context; Static and Buffer: 0
     std::optional<size_t> m_time_axis;  ///< the Time axis, when the spec has one
@@ -52,6 +53,20 @@ struct Derived {
                                   ///< Streamed output (2.x k_first_streamable)
     bool m_anchor_is_input = true;
     size_t m_anchor_index = 0;
+};
+
+/// What a pipeline's stage means to the validator (stage_facts() of stage.h builds it from the
+/// carrier; no stage is the default everywhere).
+struct StageFacts {
+    /// The stage fills pre_process: it pops the input rings itself, so the ring dtype of an
+    /// input may differ from its spec's dtype (the stage takes the difference on itself).
+    bool m_fills_pre = false;
+    /// The stage fills post_process: the same for the ring dtype of an output.
+    bool m_fills_post = false;
+    /// The stage as a consumer when it declares consumed kinds, named after it (m_name points
+    /// into the carrier, which outlives the facts); it joins the consumed-or-fail walk behind
+    /// anira's own adapters. Empty otherwise.
+    std::vector<ExtConsumer> m_consumers;
 };
 
 /// The 2.x backend a model row maps to, or nullopt when this build has no adapter for it
@@ -71,25 +86,58 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 /// {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps the custom rows, a non-NULL engine_id keeps
 /// the custom rows of that name; the provider is not read. Throws StatusError with
 /// ANIRA_ERROR_CONFIG for a rule the configuration breaks (no surviving row among them)
-/// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do.
+/// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do. `stages` is what the
+/// pipeline's stage adds (NULL: no stage, the bridge's case): the ring dtype rule
+/// relaxes for a side whose phase the stage fills, and the stage's consumed kinds join the
+/// extension walk.
 ANIRA_API void validate(const anira_model_config& model,
                         const anira_contract* contract,
                         const anira_backend_id* candidates,
                         uint32_t num_candidates,
-                        Derived& out);
+                        Derived& out,
+                        const StageFacts* stages = nullptr);
 
 /// The 2.x InferenceConfig of a model config under a Hard contract (validate, then map).
 ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                                        const anira_contract& contract,
                                                        const anira_backend_id* candidates,
-                                                       uint32_t num_candidates);
+                                                       uint32_t num_candidates,
+                                                       const StageFacts* stages = nullptr);
 
 /// The ring dtype of every slot: two vectors sized to the model's input and output lists,
 /// ANIRA_DTYPE_F32 everywhere, then each entry of the Hard contract's ring dtypes resolved
 /// by tensor name into its slot. Run validate first: it refuses a name that matches no
-/// tensor, a non-Streamed tensor, and a dtype other than the spec's (nothing converts).
+/// tensor, a non-Streamed tensor, and a dtype other than the spec's (nothing converts) unless
+/// a stage fills the phase that moves that ring.
 ANIRA_API anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
                                              const anira_model_config& model);
+
+/// The declared host-end domain of every slot (anira_contract_set_host_domain): two vectors
+/// sized to the model's input and output lists, ANIRA_DOMAIN_HOST everywhere, then each entry
+/// of the contract's host domains resolved by tensor name into its slot. What the plan report's
+/// slot rows carry as domain_in of an input and domain_out of an output, against the engine's
+/// domain on the other side. Run validate first: it refuses a name that matches no tensor and,
+/// in this pre-release, any domain but ANIRA_DOMAIN_HOST.
+struct HostDomains {
+    std::vector<anira_domain> m_inputs;
+    std::vector<anira_domain> m_outputs;
+};
+ANIRA_API HostDomains make_host_domains(const anira_contract& contract,
+                                        const anira_model_config& model);
+
+/// One declared state pair (ANIRA_ROLE_STATE) as slots: the State input and the State output
+/// it is fed from, each the tensor's position in the model config's list of its side.
+struct StateLink {
+    size_t m_input = 0;
+    size_t m_output = 0;
+};
+
+/// The declared state pairs of a model, in the order of the State inputs: what the handler
+/// pairs its two port vectors by at anira_handler_create (the two halves name each other).
+/// Empty for a model without State specs. Run validate first: it refuses a State input without
+/// a source, a source that names no State output, a State output named by no input or by two,
+/// and two halves of unequal dtype or shape.
+ANIRA_API std::vector<StateLink> state_links(const anira_model_config& model);
 
 /// The 2.x CoreConfig of a context config: threads, wait strategy and the log scalars, after
 /// check_context_extensions. Kept for the bridge (anira::v3compat::to_core_config); the core

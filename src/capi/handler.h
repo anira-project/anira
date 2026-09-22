@@ -25,6 +25,8 @@
 #include <vector>
 
 #include "handles.h"
+#include "port.h"
+#include "stage.h"
 
 namespace anira::capi {
 
@@ -59,6 +61,10 @@ struct anira_pipeline {
     std::vector<anira::capi::Candidate> m_candidates;  ///< never empty after add_inference: the
                                                        ///< caller's list, or the default set
     bool m_has_inference = false;
+    /// The one stage of the pipeline (anira_pipeline_add_stage; a second call is refused), or
+    /// null. The carrier is shared with every copy of the pipeline (anira_handler_create's), so
+    /// the stage's release fires once, when the last of them dies.
+    std::shared_ptr<anira::capi::StageCarrier> m_stage;
 
     /// The candidate view a translate/ext call takes (pointers into the strings); control
     /// thread only. Never empty after add_inference.
@@ -87,10 +93,25 @@ struct anira_handler {
     anira_context* m_context = nullptr;  ///< add-ref'd at create, released at destroy
     anira_pipeline m_pipeline;           ///< the copy
     anira_contract m_contract;           ///< the snapshot of the last successful prepare (Hard)
-    anira::InferenceConfig m_inference_config;      ///< built at prepare; must outlive m_manager
-                                                    ///< and m_pp
-    std::unique_ptr<anira::PrePostProcessor> m_pp;  ///< the default 2.x processor until the
-                                                    ///< stages arrive (needs m_inference_config)
+    anira::InferenceConfig m_inference_config;  ///< built at prepare; must outlive m_manager
+                                                ///< and m_pp
+    /// The ports: per side one entry per tensor of the model config's list, indexed by slot
+    /// like everything else of the handler and the stage processor, and a variant of what the
+    /// tensor is in here (port.h): a stream port (what a host block must carry, the session's
+    /// ring), a static port (the stored whole-tensor value, in the spec's shape and dtype), a
+    /// state port (the input half: the state's value in the spec's shape and dtype and the
+    /// generation it was last fed under; the output half: the input slot it feeds), a buffer
+    /// port (nothing: refused under a Hard contract). Built by anira_handler_create from the
+    /// pipeline copy, the Static and State values zeroed, and never resized; an arm never
+    /// changes. prepare fills the stream ports' fields, zeroes the State values (a new session
+    /// starts on a fresh state) and leaves the Static values alone, and so does reset (m_pp and
+    /// m_manager are rebuilt by every prepare, the Static values set before one survive it).
+    /// Declared before m_pp, which reads and writes them: destroyed after.
+    std::vector<anira::capi::Port> m_input_ports;
+    std::vector<anira::capi::Port> m_output_ports;
+    std::unique_ptr<anira::PrePostProcessor> m_pp;       ///< the StageProcessor over
+                                                         ///< m_pipeline.m_stage, rebuilt by every
+                                                         ///< prepare (needs m_inference_config)
     std::unique_ptr<anira::InferenceManager> m_manager;  ///< the session; null while
                                                          ///< unprepared (declared after m_pp:
                                                          ///< destroyed first)
@@ -108,27 +129,33 @@ struct anira_handler {
     std::atomic<bool> m_prepared{false};  ///< release at the end of a successful prepare;
                                           ///< acquire in every nonblocking entry
     anira::RtLatch m_rt;                  ///< rt_error, the kind bits, the suppressed count
-    /// The dtype a host block of the slot must carry, resolved at prepare: the ring dtype of a
-    /// Streamed slot (F32 default); float32 for a Static slot, whose values the copy path
-    /// moves as float and whose spec dtype is float32 in this pre-release.
-    std::vector<anira_dtype> m_input_ring_dtypes;
-    std::vector<anira_dtype> m_output_ring_dtypes;
-    // What the tensor forms know per slot, filled at prepare: the channel count a host block
-    // must have in shape[0] (1 for a Static slot), and one array of empty tensors per side
-    // (rank 2, shape {channels, 0}, the slot's dtype, host memory, no pointer). A
-    // single-tensor form on a side with several slots copies the caller's descriptor into its
-    // slot of the array, hands the array to the manager, which takes one tensor per slot, and
-    // sets shape[1] of that entry back to 0 before it returns.
-    std::vector<uint32_t> m_input_channels;
-    std::vector<uint32_t> m_output_channels;
+    // One array of empty tensors per side, built at prepare from the ports (rank 2, shape
+    // {channels, 0}, the slot's dtype, host memory, no pointer; the channel count and the dtype
+    // are the stream port's, 1 and the spec's dtype for a Static slot, which has no host
+    // block). A single-tensor form on a side with several slots copies the caller's descriptor
+    // into its slot of the array, hands the array to the manager, which takes one tensor per
+    // slot, and sets that entry back to the empty tensor before it returns. The entry of a
+    // Static or a State slot stays empty: a single form never names one. Indexed by slot, like
+    // the ports: the tensor's position in the model config's list of its side.
     std::vector<anira_tensor> m_input_tensors;
     std::vector<anira_tensor> m_output_tensors;
+    /// The lengths of the model config's two tensor lists, set by anira_handler_create (the
+    /// two Static entries are legal on an unprepared handler and need their bound).
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
+    /// The entries of the prepared session (the structs of its pool, what a stage context
+    /// reports as the chunk's entry): set by prepare from the processor's table, 0 while
+    /// unprepared. anira_handler_num_entries reads it.
+    uint32_t m_num_entries = 0;
     /// ANIRA_MISS_CALLBACK: the contract's pair, cached at prepare so that the driver thread
     /// reads two plain members and not the contract's variant.
     anira_miss_fn m_miss_fn = nullptr;
     void* m_miss_user_data = nullptr;
+    /// Set by the trampoline of ANIRA_MISS_CALLBACK when it ran for the block of the running
+    /// call: it filled the Static output elements ahead of the host's function, which may have
+    /// overwritten them, so the entry skips its own get step for that block. Cleared by every
+    /// multi form before its stem. Driving thread only.
+    bool m_miss_fn_ran = false;
 };
 
 // NOLINTEND(readability-identifier-naming)

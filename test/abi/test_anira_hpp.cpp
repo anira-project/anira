@@ -8,11 +8,13 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
+#include <anira/utils/RingBuffer.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +23,7 @@
 #include <functional>
 #include <ios>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -31,6 +34,7 @@
 #include <utility>
 #include <vector>
 
+#include "../support/log_record_collector.h"
 #include "capi/ext_registry.h"
 #include "capi/handles.h"
 #include "dlpack_producer.h"
@@ -755,6 +759,25 @@ TEST(AbiCxx, HardRingDtypeLandsInTheHandle) {
     EXPECT_EQ(wrong.m_status, ANIRA_ERROR_WRONG_CONTRACT);
 }
 
+// The host-end domain is common to both kinds: it lands in the handle of either, by name; an
+// empty name and a domain that is no anira_domain value are refused.
+TEST(AbiCxx, HostDomainLandsInTheHandleOfEitherKind) {
+    ContractHandle hard{anira::Hard{}};
+    hard.host_domain("audio_in", ANIRA_DOMAIN_HOST).host_domain("state_in", ANIRA_DOMAIN_CUDA);
+    EXPECT_EQ(hard.native()->m_host_domains.at("audio_in"), ANIRA_DOMAIN_HOST);
+    EXPECT_EQ(hard.native()->m_host_domains.at("state_in"), ANIRA_DOMAIN_CUDA);
+    ContractHandle async_contract{anira::Async{}};
+    async_contract.host_domain("audio_in", ANIRA_DOMAIN_HOST_PINNED);
+    EXPECT_EQ(async_contract.native()->m_host_domains.at("audio_in"), ANIRA_DOMAIN_HOST_PINNED);
+    const Thrown empty = thrown_by([&] { hard.host_domain("", ANIRA_DOMAIN_HOST); });
+    ASSERT_TRUE(empty.m_thrown);
+    EXPECT_EQ(empty.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    const Thrown unknown = thrown_by([&] { hard.host_domain("audio_in", ANIRA_DOMAIN_FORCE32); });
+    ASSERT_TRUE(unknown.m_thrown);
+    EXPECT_EQ(unknown.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(hard.native()->m_host_domains.at("audio_in"), ANIRA_DOMAIN_HOST) << "untouched";
+}
+
 TEST(AbiCxx, TensorLayoutEmptySpanClears) {
     ModelConfig model;
     const uint32_t tflite = model.add_model_path(ANIRA_ENGINE_TFLITE, "m.tflite");
@@ -884,6 +907,643 @@ TEST(AbiCxx, PlanReportRoundTripsOverAPreparedHandler) {
         << null_report.m_what;
 
     anira_handler_destroy(h);
+}
+
+// ---- stages ------------------------------------------------------------------------------------
+//
+// A phase function of a Stage runs inside an ANIRA_NONBLOCKING entry or on an inference thread:
+// the test stages hold no gtest assertion there (a failing EXPECT allocates, which under
+// RealtimeSanitizer aborts the process), allocate nothing and write atomics the test reads once
+// the block's inference was collected. The streams run in lockstep, one block and then the wait.
+
+namespace {
+
+constexpr size_t k_hop = anira_test::k_block;
+
+/// A mono stream through the engine-free custom row, one hop in and one hop out: BackendBase's
+/// process is an exact pass-through, so the output stream is the input behind the latency.
+ModelConfig stage_stream_model() {
+    ModelConfig model;
+    model.add_model_path(anira_test::k_custom, "custom-processor");
+    model.input(streamed("in", static_cast<int64_t>(k_hop)));
+    model.output(streamed("out", static_cast<int64_t>(k_hop)));
+    return model;
+}
+
+anira::BackendId custom_row() {
+    return anira::BackendId{.struct_size = sizeof(anira::BackendId),
+                            .engine = ANIRA_ENGINE_NONE,
+                            .provider = ANIRA_PROVIDER_DEFAULT,
+                            .engine_id = nullptr};
+}
+
+/// What prepare of a CountingStage does.
+enum class PrepareMode : uint8_t { Ok, ThrowError, ThrowRuntimeError, ThrowInt, ReturnBudget };
+
+/// A stage that overrides all four phase functions and lets the mask decide which of them
+/// anira calls. Each phase counts itself and notes whether the context answered as its phase
+/// promises, asking the legal questions of its phase only (a refused one would be recorded,
+/// and the tests read anira_handler_rt_error as ANIRA_OK behind this stage); pre_process and
+/// post_process then call the base class, anira's default body; post_process scales the model
+/// output first.
+class CountingStage : public anira::Stage {
+public:
+    explicit CountingStage(uint32_t mask) : m_mask(mask) {}
+
+    uint32_t phases() const noexcept override { return m_mask; }
+    /// Both bits by default: every body here allocates nothing and blocks on nothing, and a
+    /// Hard contract takes a filled pre_process or post_process only with the promise.
+    uint32_t flags() const noexcept override { return m_flags; }
+
+    anira_status pre_process(anira::StageContext& ctx) noexcept override {
+        m_pre.fetch_add(1);
+        anira::Role in_role = ANIRA_ROLE_FORCE32;
+        anira::Role out_role = ANIRA_ROLE_FORCE32;
+        anira::RingView ring;
+        anira::Tensor tensor{};
+        const bool as_promised =
+            ctx.phase() == ANIRA_PHASE_PRE_PROCESS && ctx.engine() == ANIRA_ENGINE_NONE &&
+            ctx.provider() == ANIRA_PROVIDER_DEFAULT && ctx.variant() == 0 &&
+            ctx.num_inputs() == 1 && ctx.num_outputs() == 1 &&
+            ctx.ticket() == ANIRA_TICKET_INVALID && ctx.entry() < m_num_entries &&
+            ctx.input_role(0, in_role) == ANIRA_OK && in_role == ANIRA_ROLE_STREAMED &&
+            ctx.output_role(0, out_role) == ANIRA_OK && out_role == ANIRA_ROLE_STREAMED &&
+            ctx.input_ring(0, ring) == ANIRA_OK && ring && ring.dtype() == ANIRA_DTYPE_F32 &&
+            ring.num_channels() == 1 && ring.available(0) >= k_hop &&
+            ctx.input_tensor(0, tensor) == ANIRA_OK && tensor.num_elements() == k_hop &&
+            ctx.native() != nullptr;
+        if (!as_promised) { m_broken.fetch_add(1); }
+        return anira::Stage::pre_process(ctx);
+    }
+    anira_status before_inference(anira::StageContext& ctx) noexcept override {
+        m_before.fetch_add(1);
+        anira::Tensor tensor{};
+        const bool as_promised = ctx.phase() == ANIRA_PHASE_BEFORE_INFERENCE &&
+                                 ctx.input_tensor(0, tensor) == ANIRA_OK &&
+                                 tensor.data_f32() != nullptr;
+        if (!as_promised) { m_broken.fetch_add(1); }
+        return ANIRA_OK;
+    }
+    anira_status after_inference(anira::StageContext& ctx) noexcept override {
+        m_after.fetch_add(1);
+        anira::Tensor tensor{};
+        const bool as_promised = ctx.phase() == ANIRA_PHASE_AFTER_INFERENCE &&
+                                 ctx.output_tensor(0, tensor) == ANIRA_OK &&
+                                 tensor.data_f32() != nullptr;
+        if (!as_promised) { m_broken.fetch_add(1); }
+        return ANIRA_OK;
+    }
+    anira_status post_process(anira::StageContext& ctx) noexcept override {
+        m_post.fetch_add(1);
+        anira::RingView ring;
+        anira::Tensor tensor{};
+        const bool as_promised =
+            ctx.phase() == ANIRA_PHASE_POST_PROCESS && ctx.output_ring(0, ring) == ANIRA_OK &&
+            ring && ctx.output_tensor(0, tensor) == ANIRA_OK && tensor.num_elements() == k_hop;
+        if (!as_promised) {
+            m_broken.fetch_add(1);
+            return ANIRA_ERROR_INTERNAL;
+        }
+        float* const samples = tensor.data_f32();
+        for (size_t n = 0; n < k_hop; ++n) { samples[n] *= m_scale; }
+        return anira::Stage::post_process(ctx);
+    }
+
+    anira_status prepare(anira_handler* handler, const anira::PlanReport& report) override {
+        ++m_prepared;
+        m_handler = handler;
+        m_num_entries = anira_handler_num_entries(handler);  // the handler counts as prepared
+        m_plans = report.num_plans();
+        m_consumers.clear();
+        for (const anira_plan_ext& row : report.extensions(0)) {
+            m_consumers.emplace_back(row.consumer);
+        }
+        switch (m_mode) {
+            case PrepareMode::ThrowError:
+                throw anira::Error(ANIRA_ERROR_CONFIG, "the stage refuses this plan");
+            case PrepareMode::ThrowRuntimeError:
+                throw std::runtime_error("the stage ran out of luck");
+            case PrepareMode::ThrowInt:
+                throw 7;  // no std::exception: what the trampoline must survive too
+            case PrepareMode::ReturnBudget: return ANIRA_ERROR_BUDGET;
+            case PrepareMode::Ok: break;
+        }
+        return ANIRA_OK;
+    }
+    void release() noexcept override { m_released.fetch_add(1); }
+    std::span<const char* const> consumed_kinds() const noexcept override {
+        return m_consumes_entry ? std::span<const char* const>(k_kinds)
+                                : std::span<const char* const>{};
+    }
+
+    static constexpr std::array<const char*, 1> k_kinds{"model:entry"};
+
+    uint32_t m_mask;
+    uint32_t m_flags = ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS;
+    uint32_t m_num_entries = 0;  ///< what prepare read; every entry seen is below it
+    float m_scale = 1.0F;
+    bool m_consumes_entry = false;
+    PrepareMode m_mode = PrepareMode::Ok;
+    std::atomic<int> m_pre{0};
+    std::atomic<int> m_before{0};
+    std::atomic<int> m_after{0};
+    std::atomic<int> m_post{0};
+    std::atomic<int> m_broken{0};
+    std::atomic<int> m_released{0};
+    int m_prepared = 0;
+    uint32_t m_plans = 0;
+    anira_handler* m_handler = nullptr;
+    std::vector<std::string> m_consumers;
+};
+
+/// A handler created through the C entry over a C++ pipeline, destroyed with the scope.
+struct CHandler {
+    CHandler(const anira_test::Context& context, const anira::Pipeline& pipe) {
+        m_status = anira_handler_create(context.m_context, pipe.native(), &m_handler, &m_err);
+    }
+    ~CHandler() { anira_handler_destroy(m_handler); }
+    CHandler(const CHandler&) = delete;
+    CHandler& operator=(const CHandler&) = delete;
+    CHandler(CHandler&&) = delete;
+    CHandler& operator=(CHandler&&) = delete;
+
+    anira_status prepare(const anira::ContractHandle& contract) {
+        m_err = ANIRA_ERROR_INIT;
+        return anira_handler_prepare(m_handler, contract.native(), &m_err);
+    }
+    void destroy() {
+        anira_handler_destroy(m_handler);
+        m_handler = nullptr;
+    }
+
+    anira_handler* m_handler = nullptr;
+    anira_status m_status = ANIRA_OK;
+    anira_error m_err = ANIRA_ERROR_INIT;
+};
+
+/// Drives `blocks` blocks of the ramp through a prepared mono float handler in lockstep and
+/// appends both streams.
+void drive(anira_handler* h, size_t blocks, std::vector<float>& in, std::vector<float>& out) {
+    const std::array<int64_t, 2> extents{1, static_cast<int64_t>(k_hop)};
+    for (size_t k = 0; k < blocks; ++k) {
+        std::vector<float> block = anira_test::ramp(k + 1, k_hop);
+        std::vector<float> result(k_hop, -1.0F);
+        in.insert(in.end(), block.begin(), block.end());
+        const Tensor source = Tensor::from_host(block.data(), ANIRA_DTYPE_F32, extents);
+        const Tensor sink = Tensor::from_host(result.data(), ANIRA_DTYPE_F32, extents);
+        const size_t prev = anira_test::available(h);
+        size_t delivered = 0;
+        ASSERT_EQ(anira_handler_process(h, &source, 0, &sink, 0, &delivered), ANIRA_OK);
+        ASSERT_EQ(delivered, k_hop);
+        anira_test::wait_for_block(h, prev);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        out.insert(out.end(), result.begin(), result.end());
+    }
+}
+
+/// The output stream is the input behind the latency, times `scale`.
+void expect_scaled_passthrough(anira_handler* h,
+                               const std::vector<float>& in,
+                               const std::vector<float>& out,
+                               float scale) {
+    const size_t latency = anira_handler_get_latency(h, 0);
+    ASSERT_EQ(in.size(), out.size());
+    for (size_t n = 0; n < out.size(); ++n) {
+        const float wanted = n < latency ? 0.0F : scale * in[n - latency];
+        ASSERT_EQ(out[n], wanted) << "sample " << n;
+    }
+}
+
+}  // namespace
+
+// A Stage subclass end to end through a C-created handler: every phase of the mask runs once
+// per chunk with the context its phase promises, "call super" is anira's default body, prepare
+// sees the handler and the report, consumed_kinds joins the walk as the consumer "stage", and the
+// shared_ptr the pipeline took is given back exactly once, when the last carrier dies.
+TEST(AbiCxx, AStageSubclassRunsItsPhasesThroughACHandler) {
+    const anira_test::Context context;
+    ModelConfig model = stage_stream_model();
+    model.model_ext(0, anira::ext::Entry{"forward"});  // consumed by the stage alone
+    auto stage = std::make_shared<CountingStage>(anira::Stage::k_all_phases);
+    stage->m_consumes_entry = true;
+    stage->m_scale = 0.5F;
+    EXPECT_EQ(stage.use_count(), 1);
+
+    std::optional<anira::Pipeline> pipe;
+    pipe.emplace();
+    pipe->inference(model, {custom_row()});
+    {
+        const anira::stage::Custom custom(stage);
+        EXPECT_EQ(stage.use_count(), 2);
+        pipe->add(custom);
+        EXPECT_EQ(stage.use_count(), 3) << "the pipeline's carrier holds its own copy";
+    }
+    EXPECT_EQ(stage.use_count(), 2);
+
+    CHandler handler(context, *pipe);
+    ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(stage.use_count(), 2) << "the handler shares the pipeline's carrier";
+    // flags() reached the descriptor.
+    ASSERT_NE(handler.m_handler->m_pipeline.m_stage, nullptr);
+    EXPECT_EQ(handler.m_handler->m_pipeline.m_stage->desc().flags,
+              ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS);
+    pipe.reset();  // the handler carries the stage alone now
+    EXPECT_EQ(stage.use_count(), 2);
+    EXPECT_EQ(stage->m_released.load(), 0);
+
+    ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(stage->m_prepared, 1);
+    EXPECT_EQ(stage->m_handler, handler.m_handler);
+    EXPECT_EQ(stage->m_plans, 1U);
+    ASSERT_EQ(stage->m_consumers.size(), 1U);
+    EXPECT_EQ(stage->m_consumers[0], "stage");
+
+    std::vector<float> in;
+    std::vector<float> out;
+    drive(handler.m_handler, 3, in, out);
+    ASSERT_FALSE(HasFatalFailure());
+    EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
+    EXPECT_EQ(stage->m_pre.load(), 3);
+    EXPECT_EQ(stage->m_before.load(), 3);
+    EXPECT_EQ(stage->m_after.load(), 3);
+    EXPECT_EQ(stage->m_post.load(), 3);
+    EXPECT_EQ(stage->m_broken.load(), 0) << "a phase saw another context than its phase promises";
+    expect_scaled_passthrough(handler.m_handler, in, out, 0.5F);
+
+    handler.destroy();
+    EXPECT_EQ(stage->m_released.load(), 1);
+    EXPECT_EQ(stage.use_count(), 1) << "release deleted the carrier's copy";
+}
+
+// The mask decides, not the overrides: a stage of post_process alone leaves pre_process NULL
+// in the descriptor, so anira's default pre_process keeps running (the stream arrives) and the
+// stage's own pre_process, before_inference and after_inference are never called.
+TEST(AbiCxx, APostOnlyStageLeavesTheDefaultPreProcessRunning) {
+    const anira_test::Context context;
+    const ModelConfig model = stage_stream_model();
+    auto stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
+    stage->m_scale = 2.0F;
+    const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                               anira::stage::Custom(stage)};
+    CHandler handler(context, pipe);
+    ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+    ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK) << handler.m_err.message;
+
+    std::vector<float> in;
+    std::vector<float> out;
+    drive(handler.m_handler, 3, in, out);
+    ASSERT_FALSE(HasFatalFailure());
+    EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
+    EXPECT_EQ(stage->m_pre.load(), 0);
+    EXPECT_EQ(stage->m_before.load(), 0);
+    EXPECT_EQ(stage->m_after.load(), 0);
+    EXPECT_EQ(stage->m_post.load(), 3);
+    EXPECT_EQ(stage->m_broken.load(), 0);
+    expect_scaled_passthrough(handler.m_handler, in, out, 2.0F);
+
+    // A stage of no phase at all is one of prepare and release: both defaults keep running.
+    auto silent = std::make_shared<CountingStage>(0U);
+    const anira::Pipeline quiet{anira::stage::Inference(model, {custom_row()}),
+                                anira::stage::Custom(silent)};
+    CHandler plain(context, quiet);
+    ASSERT_EQ(plain.m_status, ANIRA_OK) << plain.m_err.message;
+    ASSERT_EQ(plain.prepare(anira_test::explicit_contract()), ANIRA_OK) << plain.m_err.message;
+    EXPECT_EQ(silent->m_prepared, 1);
+    std::vector<float> plain_in;
+    std::vector<float> plain_out;
+    drive(plain.m_handler, 2, plain_in, plain_out);
+    ASSERT_FALSE(HasFatalFailure());
+    EXPECT_EQ(silent->m_pre.load() + silent->m_post.load(), 0);
+    expect_scaled_passthrough(plain.m_handler, plain_in, plain_out, 1.0F);
+}
+
+// Pipeline::add refuses what it cannot describe, and a refused add keeps no copy of the stage.
+TEST(AbiCxx, AddRefusesANullStageAndAnUnknownPhaseBit) {
+    anira::Pipeline pipe;
+    const Thrown null_stage =
+        thrown_by([&] { pipe.add(anira::stage::Custom(std::shared_ptr<anira::Stage>())); });
+    EXPECT_TRUE(null_stage.m_thrown);
+    EXPECT_EQ(null_stage.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+
+    auto stage = std::make_shared<CountingStage>(anira::Stage::phase_bit(ANIRA_PHASE_INFERENCE));
+    const Thrown bit = thrown_by([&] { pipe.add(anira::stage::Custom(stage)); });
+    EXPECT_TRUE(bit.m_thrown);
+    EXPECT_EQ(bit.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(bit.m_what.find("phases"), std::string::npos) << bit.m_what;
+    EXPECT_EQ(stage.use_count(), 1);
+    EXPECT_EQ(stage->m_released.load(), 0);
+
+    // The C entry's own refusal: the copy made for the carrier dies with the throw, and
+    // release is not called for an add that never happened.
+    anira::Pipeline moved_from;
+    const anira::Pipeline taken = std::move(moved_from);
+    stage->m_mask = anira::Stage::k_pre_process;
+    // A moved-from pipeline is a NULL anira_pipeline: the C entry refuses it.
+    // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move) the point of the test
+    const Thrown refused = thrown_by([&] { moved_from.add(anira::stage::Custom(stage)); });
+    EXPECT_TRUE(refused.m_thrown);
+    EXPECT_EQ(refused.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(refused.m_what.find("NULL pipeline"), std::string::npos) << refused.m_what;
+    EXPECT_EQ(stage.use_count(), 1);
+    EXPECT_EQ(stage->m_released.load(), 0);
+    EXPECT_NE(taken.native(), nullptr);
+}
+
+// A throw never crosses the C boundary: prepare of the handler fails with the status of an
+// anira::Error, with ANIRA_ERROR_INTERNAL for anything else, the message names the stage, and
+// what() reaches the log. A returned status travels as it is.
+TEST(AbiCxx, AThrowingStagePrepareFailsTheHandlersPrepare) {
+    const anira_test::Context context;
+    anira_test::RecordCollector collector;
+    const ModelConfig model = stage_stream_model();
+    auto stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
+    const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                               anira::stage::Custom(stage)};
+    CHandler handler(context, pipe);
+    ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+    const anira::ContractHandle contract = anira_test::explicit_contract();
+
+    stage->m_mode = PrepareMode::ThrowError;
+    EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
+    EXPECT_NE(std::string_view(handler.m_err.message).find("the stage refused prepare"),
+              std::string_view::npos)
+        << handler.m_err.message;
+    EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
+
+    stage->m_mode = PrepareMode::ThrowRuntimeError;
+    EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_INTERNAL);
+    stage->m_mode = PrepareMode::ThrowInt;
+    EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_INTERNAL);
+    stage->m_mode = PrepareMode::ReturnBudget;
+    EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_BUDGET);
+#ifdef ENABLE_LOGGING
+    EXPECT_TRUE(collector.has("the stage's prepare threw: the stage refuses this plan", "native"));
+    EXPECT_TRUE(collector.has("prepare threw: the stage ran out of luck", "native"));
+    EXPECT_TRUE(collector.has("an exception that is no std::exception", "native"));
+#endif
+
+    stage->m_mode = PrepareMode::Ok;
+    ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(stage->m_prepared, 5);
+    std::vector<float> in;
+    std::vector<float> out;
+    drive(handler.m_handler, 2, in, out);
+    ASSERT_FALSE(HasFatalFailure());
+    expect_scaled_passthrough(handler.m_handler, in, out, 1.0F);
+}
+
+// Two pipelines that take one stage: a copy and a release per add.
+TEST(AbiCxx, OneStageInTwoPipelinesIsReleasedOncePerAdd) {
+    auto stage = std::make_shared<CountingStage>(anira::Stage::k_after_inference);
+    const anira::stage::Custom custom(stage);
+    {
+        anira::Pipeline first;
+        anira::Pipeline second;
+        first.add(custom);
+        second.add(custom);
+        EXPECT_EQ(stage.use_count(), 4);
+        EXPECT_EQ(stage->m_released.load(), 0);
+    }
+    EXPECT_EQ(stage->m_released.load(), 2);
+    EXPECT_EQ(stage.use_count(), 2);
+}
+
+// A pipeline holds one custom stage: the second add throws ANIRA_ERROR_INVALID_STATE, keeps no
+// copy of the refused stage and never calls its release; the first stage is untouched.
+TEST(AbiCxx, ASecondCustomStageIsRefused) {
+    auto first = std::make_shared<CountingStage>(anira::Stage::k_post_process);
+    auto second = std::make_shared<CountingStage>(anira::Stage::k_after_inference);
+    anira::Pipeline pipe;
+    pipe.add(anira::stage::Custom(first));
+    EXPECT_EQ(first.use_count(), 2);
+    const Thrown refused = thrown_by([&] { pipe.add(anira::stage::Custom(second)); });
+    EXPECT_TRUE(refused.m_thrown);
+    EXPECT_EQ(refused.m_status, ANIRA_ERROR_INVALID_STATE);
+    EXPECT_NE(refused.m_what.find("already has a stage"), std::string::npos) << refused.m_what;
+    EXPECT_EQ(second.use_count(), 1);
+    EXPECT_EQ(second->m_released.load(), 0);
+    EXPECT_EQ(first.use_count(), 2);
+    EXPECT_EQ(first->m_released.load(), 0);
+}
+
+// flags() is the stage's promise: without ANIRA_STAGE_REALTIME_PRE_POST a stage that fills
+// pre_process is refused at prepare under a Hard contract, by name; a bit the C header does
+// not define is refused at add; with the promise the same stage runs.
+TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
+    const anira_test::Context context;
+    const ModelConfig model = stage_stream_model();
+    auto stage = std::make_shared<CountingStage>(anira::Stage::k_pre_process);
+    stage->m_flags = 0;
+    {
+        const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                                   anira::stage::Custom(stage)};
+        CHandler handler(context, pipe);
+        ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+        EXPECT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string_view(handler.m_err.message).find("the stage: pre_process is filled"),
+                  std::string_view::npos)
+            << handler.m_err.message;
+        EXPECT_NE(std::string_view(handler.m_err.message).find("ANIRA_STAGE_REALTIME_PRE_POST"),
+                  std::string_view::npos)
+            << handler.m_err.message;
+        EXPECT_EQ(stage->m_pre.load(), 0);
+    }
+    stage->m_flags = 4U;
+    {
+        anira::Pipeline pipe;
+        const Thrown bit = thrown_by([&] { pipe.add(anira::stage::Custom(stage)); });
+        EXPECT_TRUE(bit.m_thrown);
+        EXPECT_EQ(bit.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_NE(bit.m_what.find("flags"), std::string::npos) << bit.m_what;
+        EXPECT_EQ(stage.use_count(), 1);
+    }
+    stage->m_flags = ANIRA_STAGE_REALTIME_PRE_POST;  // read again by the next add
+    {
+        const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                                   anira::stage::Custom(stage)};
+        CHandler handler(context, pipe);
+        ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+        ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
+            << handler.m_err.message;
+        std::vector<float> in;
+        std::vector<float> out;
+        drive(handler.m_handler, 2, in, out);
+        ASSERT_FALSE(HasFatalFailure());
+        EXPECT_EQ(stage->m_pre.load(), 2);
+        EXPECT_EQ(stage->m_broken.load(), 0) << "the entry is below the count prepare read";
+        expect_scaled_passthrough(handler.m_handler, in, out, 1.0F);
+    }
+}
+
+namespace {
+
+/// pre_process over an int16 input ring, written with the typed RingView: one hop of int16 out
+/// of the ring, float32 into the model tensor. Nothing in anira converts.
+class Int16InputStage : public anira::Stage {
+public:
+    uint32_t phases() const noexcept override { return k_pre_process; }
+    uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
+
+    anira_status pre_process(anira::StageContext& ctx) noexcept override {
+        anira::Tensor tensor{};
+        const anira_status exposed = ctx.input_tensor(0, tensor);
+        if (exposed != ANIRA_OK) { return exposed; }
+        anira::RingView ring;
+        const anira_status has_ring = ctx.input_ring(0, ring);
+        if (has_ring != ANIRA_OK) { return has_ring; }
+        float* const samples = tensor.data_f32();
+        if (samples == nullptr || ring.dtype() != ANIRA_DTYPE_I16) { return ANIRA_ERROR_CONFIG; }
+        if (ring.pop_block(0, std::span<int16_t>(m_scratch)) != k_hop) {
+            return ANIRA_ERROR_INTERNAL;
+        }
+        for (size_t n = 0; n < k_hop; ++n) {
+            samples[n] = static_cast<float>(m_scratch[n]) / 32768.0F;
+        }
+        return ANIRA_OK;
+    }
+
+private:
+    std::array<int16_t, k_hop> m_scratch{};
+};
+
+}  // namespace
+
+// The typed RingView calls on an int16 ring: the element type is the dtype the C entry is told,
+// so int16_t moves and float is refused (0, nothing moved); a span too short for the windows
+// of pop_windows is refused by the view; a view of no ring answers 0 to everything.
+TEST(AbiCxx, RingViewIsTypedByItsElement) {
+    anira::RingBuffer words;
+    ASSERT_TRUE(words.initialize_with_positions(1, 16, ANIRA_DTYPE_I16));
+    anira::RingView ring(&words);
+    ASSERT_TRUE(ring);
+    EXPECT_EQ(ring.native(), &words);
+    EXPECT_EQ(ring.dtype(), ANIRA_DTYPE_I16);
+    EXPECT_EQ(ring.num_channels(), 1U);
+
+    const std::array<int16_t, 4> in{-3, 7, 32767, -32768};
+    EXPECT_EQ(ring.push_block(0, std::span<const int16_t>(in)), 4U);
+    EXPECT_EQ(ring.available(0), 4U);
+    std::array<int16_t, 4> out{};
+    EXPECT_EQ(ring.pop_block(0, std::span<int16_t>(out).first(2)), 2U);
+    EXPECT_EQ(out[0], -3);
+    EXPECT_EQ(out[1], 7);
+    EXPECT_EQ(ring.available_past(0), 2U);
+    EXPECT_EQ(ring.peek_past_block(0, std::span<int16_t>(out).first(2)), 2U);
+    EXPECT_EQ(out[1], 7) << "the element popped last is the last of the history";
+
+    // Two windows of [1 old, 1 new] behind an offset of 1: {7, 32767} and {32767, -32768}.
+    std::array<int16_t, 5> windows{};
+    EXPECT_EQ(ring.pop_windows(0, std::span<int16_t>(windows).first(4), 1, 1, 1, 2), 0U)
+        << "a span too short for offset + num_batches * (num_new + num_old)";
+    EXPECT_EQ(ring.available(0), 2U) << "a refused pop pops nothing";
+    EXPECT_EQ(ring.pop_windows(0, std::span<int16_t>(windows), 1, 1, 1, 2), 4U);
+    EXPECT_EQ(windows, (std::array<int16_t, 5>{0, 7, 32767, 32767, -32768}));
+
+    const int16_t fill = -5;
+    EXPECT_EQ(ring.push_fill(0, fill, 3), 3U);
+    EXPECT_EQ(ring.discard(0, 1), 1U);
+    EXPECT_EQ(ring.pop_block(0, std::span<int16_t>(out).first(2)), 2U);
+    EXPECT_EQ(out[0], -5);
+
+    // Nothing converts: a float call on the int16 ring moves nothing, in either direction.
+    std::array<float, 4> floats{-1.0F, -1.0F, -1.0F, -1.0F};
+    EXPECT_EQ(ring.push_fill(0, fill, 4), 4U);
+    EXPECT_EQ(ring.pop_block(0, std::span<float>(floats)), 0U);
+    EXPECT_EQ(ring.peek_past_block(0, std::span<float>(floats)), 0U);
+    EXPECT_EQ(ring.push_block(0, std::span<const float>(floats)), 0U);
+    EXPECT_EQ(ring.push_fill(0, 1.0F, 4), 0U);
+    EXPECT_EQ(floats[0], -1.0F);
+    EXPECT_EQ(ring.available(0), 4U);
+
+    anira::RingView none;
+    EXPECT_FALSE(none);
+    EXPECT_EQ(none.native(), nullptr);
+    EXPECT_EQ(none.dtype(), 0U);
+    EXPECT_EQ(none.num_channels(), 0U);
+    EXPECT_EQ(none.available(0) + none.available_past(0) + none.discard(0, 1), 0U);
+    EXPECT_EQ(none.pop_block(0, std::span<int16_t>(out)), 0U);
+    EXPECT_EQ(none.push_block(0, std::span<const int16_t>(in)), 0U);
+}
+
+// The same view inside a stage, end to end: an int16 ring declared on the contract needs a stage
+// that fills pre_process, and the C++ stage's mask is what satisfies prepare.
+TEST(AbiCxx, AnInt16RingThroughAConvertingStage) {
+    const anira_test::Context context;
+    const ModelConfig model = stage_stream_model();
+    // ZEROS: BYPASS would copy the int16 input ring into the float32 output ring.
+    anira::ContractHandle contract =
+        anira_test::explicit_contract(anira_test::k_block, anira_test::k_rate, ANIRA_MISS_ZEROS);
+    contract.hard_ring_dtype("in", ANIRA_DTYPE_I16);
+
+    const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                               anira::stage::Custom(std::make_shared<Int16InputStage>())};
+    CHandler handler(context, pipe);
+    ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+    ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
+    anira_handler* h = handler.m_handler;
+    const size_t latency = anira_handler_get_latency(h, 0);
+
+    std::vector<int16_t> in_stream;
+    std::vector<float> out_stream;
+    const std::array<int64_t, 2> extents{1, static_cast<int64_t>(k_hop)};
+    for (size_t k = 0; k < 3; ++k) {
+        std::array<int16_t, k_hop> in{};
+        for (size_t n = 0; n < k_hop; ++n) {
+            in.at(n) = static_cast<int16_t>(static_cast<int>((k * k_hop) + n) - 700);
+        }
+        in_stream.insert(in_stream.end(), in.begin(), in.end());
+        std::array<float, k_hop> out{};
+        const Tensor source = Tensor::from_host(in.data(), ANIRA_DTYPE_I16, extents);
+        const Tensor sink = Tensor::from_host(out.data(), ANIRA_DTYPE_F32, extents);
+        const size_t prev = anira_test::available(h);
+        size_t delivered = 0;
+        ASSERT_EQ(anira_handler_process(h, &source, 0, &sink, 0, &delivered), ANIRA_OK);
+        anira_test::wait_for_block(h, prev);
+        ASSERT_FALSE(HasFatalFailure());
+        out_stream.insert(out_stream.end(), out.begin(), out.end());
+    }
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    for (size_t n = 0; n < out_stream.size(); ++n) {
+        const float wanted =
+            n < latency ? 0.0F : static_cast<float>(in_stream.at(n - latency)) / 32768.0F;
+        ASSERT_EQ(out_stream.at(n), wanted) << "sample " << n;
+    }
+}
+
+// TensorSpec::state_source is the C setter: the pairing lands in the model's JSON on the input
+// spec alone and survives the round trip byte for byte; the setter's refusals throw.
+TEST(AbiCxx, StateSourceRoundTripsThroughToJson) {
+    ModelConfig model;
+    model.add_model_path(anira_test::k_custom, "custom-processor");
+    model.input(streamed("in"));
+    model.input(TensorSpec("state_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE)
+                    .axis(0, ANIRA_AXIS_ANY, 2)
+                    .state_source("state_out"));
+    model.output(streamed("out"));
+    model.output(
+        TensorSpec("state_out", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE).axis(0, ANIRA_AXIS_ANY, 2));
+
+    const std::string text = model.to_json();
+    EXPECT_NE(text.find("\"state_source\": \"state_out\""), std::string::npos) << text;
+    EXPECT_EQ(text.find("\"state_source\""), text.rfind("\"state_source\""))
+        << "stated once, on the input";
+    EXPECT_EQ(ModelConfig::from_json(text).to_json(), text);
+
+    // A second call replaces the name.
+    TensorSpec spec("state_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+    spec.state_source("first").state_source("second");
+    ModelConfig renamed;
+    renamed.input(spec);
+    EXPECT_NE(renamed.to_json().find("\"state_source\": \"second\""), std::string::npos);
+
+    const Thrown empty = thrown_by([&] { spec.state_source(""); });
+    EXPECT_TRUE(empty.m_thrown);
+    EXPECT_EQ(empty.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(empty.m_what.find("anira_tensor_spec_set_state_source"), std::string::npos)
+        << empty.m_what;
+    const Thrown role = thrown_by([] { streamed("in").state_source("state_out"); });
+    EXPECT_TRUE(role.m_thrown);
+    EXPECT_EQ(role.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
 // ---- runtime tensors -------------------------------------------------------------------------

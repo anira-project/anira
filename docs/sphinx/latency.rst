@@ -117,7 +117,7 @@ Latency synchronization
 
 When several output tensors are present, the integer latencies are raised to a common whole number of hops, :math:`\lceil \max_i L_i / P_i \rceil \cdot P_i`, so that the outputs stay coherent.
 
-The latency vector returned by :cpp:func:`anira::InferenceHandler::get_latency_vector` is index-aligned with the output tensor list. Non-streamable outputs (``postprocess_output_size == 0``) carry no stream latency and always report ``0``. ``anira_handler_get_latencies`` is the same vector as a C array indexed by slot, and ``anira_handler_get_latency(h, i)`` one entry of it.
+The latency vector returned by :cpp:func:`anira::InferenceHandler::get_latency_vector` is index-aligned with the output tensor list. Non-streamable outputs (``postprocess_output_size == 0``) carry no stream latency and always report ``0``. ``anira_handler_get_latencies`` is the same vector as a C array indexed by slot, one entry per output tensor of the model config's list (``0`` for a Static or a State output), and ``anira_handler_get_latency(h, slot)`` one entry of it.
 
 Ring buffer sizes
 -----------------

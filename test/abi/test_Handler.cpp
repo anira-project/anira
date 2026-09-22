@@ -159,7 +159,9 @@ struct Oracle {
     }
 
     /// One block on both sides; c and v receive the outputs, n_c and n_v the counts. The
-    /// static gain slot travels through the multi forms with one value, 1.0F.
+    /// static gain slot travels through the multi forms with one value, 1.0F: on the C side as
+    /// the whole tensor in the spec's shape (FloatFace presents a carried Static slot that way),
+    /// on the 2.x side as a count of values inside the float*** block.
     void run_block(size_t k,
                    size_t block,
                    Form form,
@@ -380,10 +382,10 @@ TEST(AbiHandler, NullArgumentsAreRefused) {
     const anira_tensor in = anira_test::planar_f32(in_ptrs.data(), 1, k_block);
     uint32_t count = 0;
     size_t delivered = 7;
-    EXPECT_EQ(anira_handler_process(nullptr, &io, &io, 0, &delivered),
+    EXPECT_EQ(anira_handler_process(nullptr, &io, 0, &io, 0, &delivered),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(delivered, 0U) << "a refusal writes 0 to the caller's count";
-    EXPECT_EQ(anira_handler_process(nullptr, &io, &io, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT)
+    EXPECT_EQ(anira_handler_process(nullptr, &io, 0, &io, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT)
         << "the count is optional";
     EXPECT_EQ(anira_handler_push_data(nullptr, &in, 0), ANIRA_ERROR_INVALID_ARGUMENT);
     delivered = 7;
@@ -438,7 +440,7 @@ TEST(AbiHandler, UnpreparedEntriesRecordNotPrepared) {
     const anira_tensor in = anira_test::planar_f32(in_ptrs.data(), 1, k_block);
 
     size_t delivered = 7;
-    EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_ERROR_NOT_PREPARED);
+    EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(delivered, 0U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(anira_handler_push_data(h, &in, 0), ANIRA_ERROR_NOT_PREPARED);
@@ -453,7 +455,7 @@ TEST(AbiHandler, UnpreparedEntriesRecordNotPrepared) {
               ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(multi_delivered[0], 0U) << "a refused multi form zeroes its counts";
     delivered = 7;
-    EXPECT_EQ(anira_handler_process_wait(h, &io, &io, ANIRA_WAIT_FOREVER, 0, &delivered),
+    EXPECT_EQ(anira_handler_process_wait(h, &io, 0, &io, 0, &delivered, ANIRA_WAIT_FOREVER),
               ANIRA_ERROR_NOT_PREPARED);
     EXPECT_EQ(delivered, 0U);
     delivered = 7;
@@ -689,7 +691,7 @@ TEST(AbiHandler, AvailableSamplesTracksTheOutputRing) {
         const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
         const size_t prev = anira_test::available(h);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_block);
         wait_for_block(h, prev);
     }
@@ -759,7 +761,7 @@ TEST(AbiHandler, ResetReSeedsTheStreamAndClearsRtError) {
     std::vector<float> block = ramp(99);
     const std::array<float*, 1> ptrs{block.data()};
     const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
-    EXPECT_EQ(anira_handler_process(h, &io, &io, 99, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_process(h, &io, 99, &io, 99, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
     oracle.reset();
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
@@ -821,7 +823,7 @@ TEST(AbiHandler, PlanReportRows) {
         const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
         const size_t prev = anira_test::available(h);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_block);
         wait_for_block(h, prev);
     }
@@ -849,7 +851,7 @@ TEST(AbiHandler, PlanReportRows) {
     EXPECT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), nullptr, rows.data()),
               ANIRA_ERROR_INVALID_ARGUMENT);
 
-    // Slots: two inputs, two outputs, every one a host slot.
+    // Slots: two inputs, two outputs, every one in host memory.
     std::array<anira_plan_slot, 2> slots{ANIRA_PLAN_SLOT_INIT, ANIRA_PLAN_SLOT_INIT};
     count = 2;
     EXPECT_EQ(anira_plan_report_slots(report, 0, 1, sizeof(anira_plan_slot), &count, slots.data()),
@@ -969,7 +971,7 @@ TEST(AbiHandler, ConfigsAreCopiedAndDestroyableRightAfterCreate) {
         const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
         const size_t prev = anira_test::available(h);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_process(h, &io, &io, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_OK);
         EXPECT_EQ(delivered, k_block);
         wait_for_block(h, prev);
         if (k == 1) {
@@ -1002,7 +1004,7 @@ TEST(AbiHandler, HandlerDestroyJoinsThePoolWithTheLastSession) {
     EXPECT_EQ(anira_shutdown(), ANIRA_OK) << "nothing lives";
 }
 
-TEST(AbiHandler, GeneratorPushIsANoOpAndPopPulls) {
+TEST(AbiHandler, GeneratorSetsItsStaticInputAndPopPulls) {
     constexpr size_t k_hop = 2048;
     const Context context;
     const anira::ModelConfig model = anira_test::generator_model();
@@ -1020,11 +1022,10 @@ TEST(AbiHandler, GeneratorPushIsANoOpAndPopPulls) {
     const DestroyFirst destroy_first(handler);
     EXPECT_EQ(anira_handler_get_latency(h, 0), k_hop) << "a generator counts from its first pull";
 
-    // A push on a generator's static input submits nothing.
+    // Setting a generator's Static input submits nothing: the pulls drive the inferences.
     const std::array<float, 4> params{3.0F, 0.0F, 0.0F, 0.0F};
-    const std::array<const float*, 1> param_ch{params.data()};
-    const anira_tensor param = anira_test::planar_f32(param_ch.data(), 1, 4);  // [1, values]
-    EXPECT_EQ(anira_handler_push_data(h, &param, 0), ANIRA_OK);
+    const anira_tensor param = anira_test::whole_f32(params.data(), {1, 4});  // the spec's shape
+    EXPECT_EQ(anira_handler_set_static_input(h, 0, &param), ANIRA_OK);
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     EXPECT_EQ(backend.m_calls.load(), 0);
 
@@ -1042,4 +1043,12 @@ TEST(AbiHandler, GeneratorPushIsANoOpAndPopPulls) {
         expect_all(out, call == 0 ? 0.0F : 3.0F, call == 0 ? "the priming zeros" : "the fill");
     }
     EXPECT_EQ(anira_handler_get_latency(h, 0), k_hop);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+
+    // A generator has no slot the single push form takes: input 0 is Static, and the single
+    // form of a Static slot is anira_handler_set_static_input.
+    const int calls = backend.m_calls.load();
+    EXPECT_EQ(anira_handler_push_data(h, &param, 0), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(backend.m_calls.load(), calls) << "a refused call submits nothing";
 }

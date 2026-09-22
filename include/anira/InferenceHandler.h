@@ -14,6 +14,10 @@ namespace anira {
 // Presents float channel pointers to the manager as host tensors. Private to the library
 // (src/scheduler/PlanarFloatAdapter.h), so the handler holds it behind a pointer.
 class PlanarFloatAdapter;
+// Routes the non-streamable tensors of a block between the caller's memory and the
+// PrePostProcessor, around the manager's tensor stems, which move streamed tensors. Private to
+// the library (src/scheduler/NonStreamableRouter.h), held behind a pointer likewise.
+class NonStreamableRouter;
 
 /**
  * @brief Main handler class for neural network inference operations
@@ -482,6 +486,10 @@ private:
     std::unique_ptr<PlanarFloatAdapter> m_float_adapter;  ///< The caller's channel pointers as the
                                                           ///< host tensors the manager takes;
                                                           ///< sized at prepare()
+    std::unique_ptr<NonStreamableRouter> m_router;  ///< The non-streamable tensors of a block:
+                                                    ///< stored in and read back from the
+                                                    ///< PrePostProcessor around every stem call;
+                                                    ///< sized at prepare()
 
     const float* const** m_input_tensor_ptrs;
     size_t* m_input_tensor_num_samples;

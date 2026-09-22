@@ -49,6 +49,7 @@ const char* role_word(anira_role role) {
         case ANIRA_ROLE_STREAMED: return "Streamed";
         case ANIRA_ROLE_BUFFER: return "Buffer";
         case ANIRA_ROLE_STATIC: return "Static";
+        case ANIRA_ROLE_STATE: return "State";
         default: return "unknown";
     }
 }
@@ -183,6 +184,11 @@ void check_spec(const anira_tensor_spec& spec,
                      "a Static tensor has no Time axis (a whole-buffer tensor with "
                      "time semantics is the Buffer role)");
     }
+    if (spec.m_role == ANIRA_ROLE_STATE && time_axis.has_value()) {
+        config_error(where +
+                     "a State tensor has no Time axis: it is fed back whole, once per "
+                     "inference");
+    }
     for (size_t i = 0; i < spec.m_ndim; ++i) {
         const int64_t extent = out.m_dims[i];
         if (extent == ANIRA_DYNAMIC) {
@@ -223,18 +229,20 @@ void check_spec(const anira_tensor_spec& spec,
         }
     }
 
-    out.m_channels = channel_axis.has_value() ? out.m_dims[*channel_axis] : 1;
-    if (!streamed && out.m_channels != 1) {
-        config_error(where + std::string("a ") + role +
-                     " tensor's Channel axis must have extent 1 (got " +
-                     std::to_string(out.m_channels) +
-                     "): the 2.x runtime carries one channel for a non-streamed tensor");
+    // The Channel tag maps onto ring channels on a Streamed tensor only. A non-Streamed tensor
+    // has the spec's shape, a Channel axis of any extent being one of its axes, and moves as the
+    // product of its extents: the 2.x runtime carries it as one channel.
+    out.m_channels = streamed && channel_axis.has_value() ? out.m_dims[*channel_axis] : 1;
+    if (spec.m_role == ANIRA_ROLE_STATE && spec.m_latency != 0) {
+        config_error(where + "a State tensor has no latency: it never reaches a stream");
     }
     if (is_input && spec.m_latency != 0) { config_error(where + "latency is an output property"); }
     if (spec.m_latency < 0) {
         config_error(where + "latency must not be negative (got " + std::to_string(spec.m_latency) +
                      ")");
     }
+    // Every model tensor of this pre-release is float32, a State tensor included: its value
+    // takes the spec's dtype (port.h), so no rule of its own stands here.
     if (spec.m_dtype != ANIRA_DTYPE_F32) {
         not_supported(where + "dtype " + hex_dtype(spec.m_dtype) +
                       ": the 2.x runtime streams float32 only");
@@ -265,7 +273,9 @@ void check_spec(const anira_tensor_spec& spec,
     }
 }
 
-void check_contract(const anira_contract& contract, const anira_model_config& model) {
+void check_contract(const anira_contract& contract,
+                    const anira_model_config& model,
+                    const StageFacts* stages) {
     const HardContract* hard = contract.hard();
     if (hard == nullptr) {
         not_supported(
@@ -296,9 +306,13 @@ void check_contract(const anira_contract& contract, const anira_model_config& mo
                      std::to_string(hard->m_wait_ratio) + ")");
     }
     // The ring dtype rules: a ring exists on a Streamed tensor only, and it holds the
-    // spec's dtype as is (nothing in anira converts).
+    // spec's dtype as is (nothing in anira converts), unless a stage of the pipeline fills the
+    // phase that moves that ring (pre_process pops the input rings, post_process pushes the
+    // output rings) and so takes the difference on itself. The default bodies still refuse
+    // such a slot at run time.
     for (const auto& [name, dtype] : hard->m_ring_dtypes) {
-        const anira_tensor_spec* spec = find_spec(model, name, nullptr, nullptr);
+        bool is_input = true;
+        const anira_tensor_spec* spec = find_spec(model, name, &is_input, nullptr);
         if (spec == nullptr) {
             config_error("contract: the ring dtype of '" + name + "' names no tensor");
         }
@@ -306,11 +320,113 @@ void check_contract(const anira_contract& contract, const anira_model_config& mo
             config_error("contract: the ring dtype of '" + name + "' is set on a " +
                          role_word(spec->m_role) + " tensor; only a Streamed tensor has a ring");
         }
-        if (dtype != spec->m_dtype) {
+        const bool stage_moves_ring =
+            stages != nullptr && (is_input ? stages->m_fills_pre : stages->m_fills_post);
+        if (dtype != spec->m_dtype && !stage_moves_ring) {
             config_error("contract: the ring dtype of '" + name + "' is " + hex_dtype(dtype) +
                          " but its spec's dtype is " + hex_dtype(spec->m_dtype) +
-                         "; nothing converts (a stage that consumes the difference arrives "
-                         "with a later pre-release)");
+                         "; nothing converts (add a stage that fills " +
+                         (is_input ? "pre_process" : "post_process") +
+                         " and converts, anira_pipeline_add_stage)");
+        }
+    }
+    // The host-end domain rules: every tensor of either side, whatever its role, has one
+    // declared host-end domain (anira_contract_set_host_domain, absent = host memory), the
+    // domain anira allocates the ring, the model tensor, the Static store and the state buffers
+    // of the slot in and every stage phase works in. The name must be a tensor's. The 2.x
+    // runtime allocates in host memory only, so in this pre-release any other domain is refused
+    // here, where the declaration meets the runtime; the declaration itself is data.
+    for (const auto& [name, domain] : contract.m_host_domains) {
+        if (find_spec(model, name, nullptr, nullptr) == nullptr) {
+            config_error("contract: the host domain of '" + name + "' names no tensor");
+        }
+        if (domain != ANIRA_DOMAIN_HOST) {
+            not_supported("contract: the host domain of '" + name + "' is domain " +
+                          std::to_string(static_cast<unsigned int>(domain)) +
+                          ", but every host end is host memory (ANIRA_DOMAIN_HOST) in this "
+                          "pre-release");
+        }
+    }
+}
+
+// ---- declared state ------------------------------------------------------------------------
+
+// The State output a State input names, with its index in the output list. CONFIG naming the
+// input: no source, a source that names no output, or an output of another role.
+const anira_tensor_spec& state_output_of(const anira_model_config& model,
+                                         const anira_tensor_spec& input,
+                                         size_t& index) {
+    if (input.m_state_source.empty()) {
+        config_error(at(input) +
+                     "a State input needs a state_source: the canonical name of the State "
+                     "output it is fed from (anira_tensor_spec_set_state_source, the JSON key "
+                     "\"state_source\")");
+    }
+    bool is_input = true;
+    const anira_tensor_spec* output = find_spec(model, input.m_state_source, &is_input, &index);
+    if (output == nullptr || is_input) {
+        config_error(at(input) + "state_source '" + input.m_state_source +
+                     "' names no output tensor");
+    }
+    if (output->m_role != ANIRA_ROLE_STATE) {
+        config_error(at(input) + "state_source '" + input.m_state_source + "' is a " +
+                     role_word(output->m_role) +
+                     " output; a State input is fed from a State output");
+    }
+    return *output;
+}
+
+// The pairing of declared state (ANIRA_ROLE_STATE): every State input names exactly one State
+// output (state_source, stated once, on the input), every State output is named by exactly one
+// State input, and the two halves have the same dtype, rank and extents, because the handler
+// keeps one value per pair, on the input half's port, and copies it both ways. It runs on the
+// raw specs, ahead of check_spec, so that an unequal dtype is this rule's CONFIG and not the
+// float32 rule's NOT_SUPPORTED; what a State spec may not carry (a Time axis, a window, a time
+// ratio, a latency) is check_spec's, a ring dtype or the anchor naming one is the rule of those
+// two.
+void check_state(const anira_model_config& model) {
+    for (const anira_tensor_spec& spec : model.m_outputs) {
+        if (!spec.m_state_source.empty()) {
+            config_error(at(spec) +
+                         "state_source is set on an output; the pairing is stated on the State "
+                         "input, which names the State output it is fed from");
+        }
+    }
+    std::vector<uint32_t> named(model.m_outputs.size(), 0);
+    for (const anira_tensor_spec& input : model.m_inputs) {
+        if (input.m_role != ANIRA_ROLE_STATE) {
+            if (!input.m_state_source.empty()) {
+                config_error(at(input) + "state_source is set on a " + role_word(input.m_role) +
+                             " tensor; only a State input has one");
+            }
+            continue;
+        }
+        size_t index = 0;
+        const anira_tensor_spec& output = state_output_of(model, input, index);
+        if (++named[index] > 1) {
+            config_error(at(output) +
+                         "is the state_source of more than one State input (the second is '" +
+                         input.m_name + "'); a State output feeds exactly one State input");
+        }
+        if (output.m_dtype != input.m_dtype) {
+            config_error(at(input) + "dtype " + hex_dtype(input.m_dtype) +
+                         " differs from the dtype " + hex_dtype(output.m_dtype) +
+                         " of its state_source '" + output.m_name +
+                         "'; the two halves of a state pair have one dtype");
+        }
+        bool same_shape = output.m_ndim == input.m_ndim;
+        for (uint32_t axis = 0; same_shape && axis < input.m_ndim; ++axis) {
+            same_shape = output.m_axes[axis].m_extent == input.m_axes[axis].m_extent;
+        }
+        if (!same_shape) {
+            config_error(at(input) + "its shape differs from the shape of its state_source '" +
+                         output.m_name + "'; the two halves of a state pair have one shape");
+        }
+    }
+    for (size_t i = 0; i < model.m_outputs.size(); ++i) {
+        if (model.m_outputs[i].m_role == ANIRA_ROLE_STATE && named[i] == 0) {
+            config_error(at(model.m_outputs[i]) +
+                         "a State output that no State input names as its state_source");
         }
     }
 }
@@ -483,10 +599,17 @@ void check_extensions(const anira_model_config& model,
                       const anira_context_config* config,
                       const anira_contract* contract,
                       const anira_backend_id* candidates,
-                      uint32_t num_candidates) {
+                      uint32_t num_candidates,
+                      const StageFacts* stages = nullptr) {
     anira_error local = ANIRA_ERROR_INIT;
     const anira_status status =
-        ext_check_consumed(model, config, contract, candidates, num_candidates, &local);
+        ext_check_consumed(model,
+                           config,
+                           contract,
+                           candidates,
+                           num_candidates,
+                           &local,
+                           stages != nullptr ? &stages->m_consumers : nullptr);
     if (ANIRA_FAILED(status)) { refuse(status, local.message); }
 }
 
@@ -566,12 +689,14 @@ void validate(const anira_model_config& model,
               const anira_contract* contract,
               const anira_backend_id* candidates,
               uint32_t num_candidates,
-              Derived& out) {
+              Derived& out,
+              const StageFacts* stages) {
     out = Derived{};
     if (model.m_inputs.empty()) { config_error("no input tensor"); }
     if (model.m_outputs.empty()) { config_error("no output tensor"); }
-    if (contract != nullptr) { check_contract(*contract, model); }
+    if (contract != nullptr) { check_contract(*contract, model, stages); }
     const HardContract* hard = contract != nullptr ? contract->hard() : nullptr;
+    check_state(model);
     out.m_inputs.resize(model.m_inputs.size());
     out.m_outputs.resize(model.m_outputs.size());
     for (size_t i = 0; i < model.m_inputs.size(); ++i) {
@@ -584,7 +709,7 @@ void validate(const anira_model_config& model,
     check_ratios(model, out);
     check_rows(model, candidates, num_candidates, out);
     check_layouts(model, out);
-    check_extensions(model, nullptr, contract, candidates, num_candidates);
+    check_extensions(model, nullptr, contract, candidates, num_candidates, stages);
 }
 
 anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
@@ -607,12 +732,45 @@ anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
     return dtypes;
 }
 
+HostDomains make_host_domains(const anira_contract& contract, const anira_model_config& model) {
+    HostDomains domains;
+    domains.m_inputs.assign(model.m_inputs.size(), ANIRA_DOMAIN_HOST);
+    domains.m_outputs.assign(model.m_outputs.size(), ANIRA_DOMAIN_HOST);
+    for (const auto& [name, domain] : contract.m_host_domains) {
+        bool is_input = true;
+        size_t index = 0;
+        if (find_spec(model, name, &is_input, &index) == nullptr) { continue; }  // validate ran
+        if (is_input) {
+            domains.m_inputs[index] = domain;
+        } else {
+            domains.m_outputs[index] = domain;
+        }
+    }
+    return domains;
+}
+
+std::vector<StateLink> state_links(const anira_model_config& model) {
+    std::vector<StateLink> links;
+    for (size_t i = 0; i < model.m_inputs.size(); ++i) {
+        if (model.m_inputs[i].m_role != ANIRA_ROLE_STATE) { continue; }
+        bool is_input = true;
+        size_t output = 0;
+        // validate ran: the source names a State output.
+        if (find_spec(model, model.m_inputs[i].m_state_source, &is_input, &output) == nullptr) {
+            continue;
+        }
+        links.push_back({.m_input = i, .m_output = output});
+    }
+    return links;
+}
+
 anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                              const anira_contract& contract,
                                              const anira_backend_id* candidates,
-                                             uint32_t num_candidates) {
+                                             uint32_t num_candidates,
+                                             const StageFacts* stages) {
     Derived derived;
-    validate(model, &contract, candidates, num_candidates, derived);
+    validate(model, &contract, candidates, num_candidates, derived, stages);
     const HardContract& hard = *contract.hard();
 
     std::vector<anira::ModelData> model_data;
@@ -695,12 +853,20 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
 
     const unsigned int warm_up =
         hard.m_warmup == ANIRA_WARMUP_FIXED ? hard.m_warmup_iterations : 0U;
+    // A model with a declared state pair is Stateful whatever it says: the state of inference
+    // k is the input of inference k + 1, so the inferences of a session run one at a time and
+    // in order (the session-exclusive processor and its dispatch gate), which is also what
+    // serialises the stage processor's feed, capture and re-initialisation of the state.
+    const auto is_state = [](const anira_tensor_spec& spec) {
+        return spec.m_role == ANIRA_ROLE_STATE;
+    };
+    const bool has_state_pair = std::ranges::any_of(model.m_inputs, is_state);
     return {std::move(model_data),
             std::move(shapes),
             std::move(processing_spec),
             static_cast<float>(hard.m_budget_ms),
             warm_up,
-            model.m_state == ANIRA_MODEL_STATEFUL,
+            model.m_state == ANIRA_MODEL_STATEFUL || has_state_pair,
             static_cast<float>(hard.m_wait_ratio),
             model.m_max_instances};
 }

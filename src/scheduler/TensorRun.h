@@ -179,7 +179,8 @@ inline void zero_run(void* dst, int64_t step, size_t count, size_t element_size)
     }
 }
 
-/// Value `index` of a float32 run (a Static slot's values), whatever the alignment.
+/// Value `index` of a float32 run (a non-streamable tensor's values under the 2.x face,
+/// NonStreamableRouter.h), whatever the alignment.
 inline float load_f32(const Run& run, size_t index) noexcept {
     float value = 0.F;
     std::memcpy(&value, sample_of(run, index, sizeof(float)), sizeof(float));
@@ -192,8 +193,9 @@ inline void store_f32(const Run& run, size_t index, float value) noexcept {
 }
 
 /**
- * @brief Whether `tensor` is a well-formed host block of one slot: what channel_run() and
- * InferenceManager's tensor stems take on trust.
+ * @brief Whether `tensor` is a well-formed host block of one Streamed slot: what channel_run()
+ * and InferenceManager's tensor stems take on trust. A Static tensor is no host block: it
+ * travels whole, in the spec's shape, and has its own check (src/capi/port.h).
  *
  * A status only: no allocation, no log. The checks run in a fixed order (the rank, the domain,
  * the flags, the shape, the dtype, then the memory and the strides), so a tensor that is wrong
@@ -202,8 +204,8 @@ inline void store_f32(const Run& run, size_t index, float value) noexcept {
  * has rank 0 and is refused.
  *
  * @param tensor The tensor of the slot
- * @param expected The slot's dtype: the ring dtype of a Streamed slot, float32 for a Static one
- * @param channels The slot's channel count, 1 for a Static slot
+ * @param expected The slot's dtype: its ring dtype
+ * @param channels The slot's channel count
  * @param output Whether anira writes the memory (ANIRA_TENSOR_READ_ONLY is refused then)
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a rank other than 2, a domain other than
  * ANIRA_DOMAIN_HOST and ANIRA_DOMAIN_HOST_PINNED, a read-only output, shape[0] other than

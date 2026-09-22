@@ -14,6 +14,24 @@
 
 #include "Buffer.h"
 
+namespace anira {
+
+struct RtLatch;
+
+/**
+ * @brief What the rings of one session know about the session that owns them.
+ *
+ * The C ring accessors of `abi/stage.h` receive an `anira_ring*` and nothing else, yet a
+ * refused call has to land in `anira_handler_rt_error`. Every ring of a prepared session
+ * therefore points at the session's one RingOwner (SessionElement::m_ring_owner). A ring built
+ * outside a session has none and records nothing.
+ */
+struct RingOwner {
+    RtLatch* m_rt = nullptr;  ///< The latch a refused accessor records into: the session's
+};
+
+}  // namespace anira
+
 // NOLINTBEGIN(readability-identifier-naming)
 // The C tag: anira_ring is the type the 3.x ring accessors take (abi/stage.h), so it lives
 // outside namespace anira like the other handle types; its members follow anira's C++ names.
@@ -147,6 +165,23 @@ public:
             [channel](const auto& ring) { return ring.get_available_past_samples(channel); },
             m_storage);
     }
+
+    // ---- What a session tells its rings (SessionElement::prepare); a ring built elsewhere has
+    // a hop of 0 and no owner. ------------------------------------------------------------------
+
+    /// Sets the hop (the elements per channel one inference consumes from, or produces into,
+    /// this ring) and the owning session's RingOwner.
+    void set_owner(size_t hop, const anira::RingOwner* owner) noexcept {
+        m_hop = hop;
+        m_owner = owner;
+    }
+
+    /// Elements per channel one inference moves through this ring: what the default stage
+    /// bodies pop or push, and what the stage processor's count check expects. 0 outside a session.
+    [[nodiscard]] size_t hop() const noexcept { return m_hop; }
+
+    /// The owning session's RingOwner, nullptr outside a session.
+    [[nodiscard]] const anira::RingOwner* owner() const noexcept { return m_owner; }
 
     // ---- The block API: dtype-checked, never converting. Every call returns the number of
     // elements it moved, and 0 with nothing written when `dtype` is not the ring's own. -------
@@ -419,6 +454,8 @@ private:
     const thl::core::RingBuffer<float>* f32() const noexcept { return std::get_if<0>(&m_storage); }
 
     Storage m_storage;  ///< Default-constructed: the float32 arm, no capacity
+    size_t m_hop = 0;   ///< Elements per channel per inference; set by the owning session
+    const anira::RingOwner* m_owner = nullptr;  ///< The owning session's latch
 };
 // NOLINTEND(readability-identifier-naming)
 

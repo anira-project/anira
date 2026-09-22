@@ -12,6 +12,7 @@
 
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
+#include "../abi/status.h"
 #include "../backends/BackendBase.h"
 #include "../utils/Buffer.h"
 #include "../utils/HostConfig.h"
@@ -258,6 +259,22 @@ public:
         // Plain field: written on the driving thread at dispatch, stable for the dispatch's
         // lifetime, synced by the queue handoffs like the two stamps above.
         uint32_t m_plan{0};
+        // What a stage left on the chunk (a 3.x handler's StageProcessor; a 2.x
+        // processor never writes it): ANIRA_OK, or the status of the phase callback that
+        // failed. Core::pre_process resets it, then completes the chunk as zeros without
+        // enqueueing it when pre_process failed; InferenceThread::do_inference reads it around
+        // the hooks and skips the engine call, or zeroes the outputs, on a failure. Plain
+        // field: written by the thread that holds the struct, synced by the queue handoffs
+        // like the stamps above.
+        anira_status m_stage_status{ANIRA_OK};
+        // Whether the chunk completed as zeros: dropped (SessionElement::complete_with_zeros:
+        // a full queue, a failed pre_process, a stale or unclaimable task) or failed on the
+        // inference thread (a throw, a failed before_inference or after_inference), its output
+        // buffers cleared. Core::pre_process resets it. A 3.x stage processor reads it in
+        // post_process: such a chunk does not overwrite the handler's Static output store.
+        // Plain field, synced by the queue handoffs like the stamps above (written before the
+        // done signal, read after it).
+        bool m_completed_as_zeros{false};
         std::vector<BufferF> m_tensor_input_data;   ///< Input tensor data buffers
         std::vector<BufferF> m_tensor_output_data;  ///< Output tensor data buffers
     };
@@ -431,6 +448,9 @@ public:
                        ///< thread): the 3.x handler's own (anira_handler_rt_error reads it),
                        ///< else &m_rt_own. Set by the constructor and published by the
                        ///< lifecycle lock that registers the session; never null
+    // What every ring of this session points at (anira_ring::owner), set by prepare(): m_rt,
+    // and the name of the stage a 3.x handler's chain is running on the driving thread.
+    RingOwner m_ring_owner;
 
     // Written by InferenceManager::set_non_realtime() -- typically from a control/UI
     // thread, e.g. a host toggling offline bounce/render mode -- and read on the

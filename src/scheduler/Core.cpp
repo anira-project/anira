@@ -1258,6 +1258,9 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             // chunk on and never inside this one.
             const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
             session->m_inference_queue[i]->m_plan = plan;
+            // What a stage processor leaves on the chunk (a 2.x processor never writes it).
+            session->m_inference_queue[i]->m_stage_status = ANIRA_OK;
+            session->m_inference_queue[i]->m_completed_as_zeros = false;
             session->m_pp_processor.pre_process(session->m_send_buffer,
                                                 session->m_inference_queue[i]->m_tensor_input_data,
                                                 session->plan_backend(plan));
@@ -1268,7 +1271,14 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             // reset_session / new_data_request generation guard).
             session->m_inference_queue[i]->m_dispatch_generation =
                 session->m_generation.load(std::memory_order::relaxed);
-            if (session->m_inference_config.m_session_exclusive_processor) {
+            if (session->m_inference_queue[i]->m_stage_status != ANIRA_OK) {
+                // A stage's pre_process failed (the chain recorded it and kept the input
+                // rings aligned): no model input exists for this chunk. It keeps its struct
+                // and timestamp and completes as zeros at its stream position without being
+                // enqueued, the path a full queue takes, so exactly one chunk was consumed and
+                // exactly one (silent) chunk will be produced.
+                session->complete_with_zeros(session->m_inference_queue[i]);
+            } else if (session->m_inference_config.m_session_exclusive_processor) {
                 // A session-exclusive processor carries its state across calls, so
                 // its tasks must execute strictly in order and never concurrently.
                 // Defer dispatch so at most one of this session's tasks is ever in

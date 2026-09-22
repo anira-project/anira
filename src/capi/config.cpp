@@ -29,7 +29,8 @@ namespace {
 // ---- value checks -----------------------------------------------------------------------
 
 bool valid_role(anira_role role) {
-    return role == ANIRA_ROLE_STREAMED || role == ANIRA_ROLE_BUFFER || role == ANIRA_ROLE_STATIC;
+    return role == ANIRA_ROLE_STREAMED || role == ANIRA_ROLE_BUFFER || role == ANIRA_ROLE_STATIC ||
+           role == ANIRA_ROLE_STATE;
 }
 bool valid_axis_tag(anira_axis_tag tag) {
     return tag >= ANIRA_AXIS_BATCH && tag <= ANIRA_AXIS_ANY;
@@ -60,6 +61,9 @@ bool valid_delivery(anira_delivery delivery) {
 }
 bool valid_edge_cost(anira_edge_cost cost) {
     return cost == ANIRA_EDGE_COST_PERMISSIVE || cost == ANIRA_EDGE_COST_STRICT;
+}
+bool valid_domain(anira_domain domain) {
+    return domain >= ANIRA_DOMAIN_HOST && domain <= ANIRA_DOMAIN_FRAME;
 }
 bool valid_wait_strategy(anira_wait_strategy wait) {
     return wait == ANIRA_WAIT_SPIN_BACKOFF || wait == ANIRA_WAIT_BLOCKING;
@@ -217,6 +221,20 @@ anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spec* spec,
                                                       int64_t latency) ANIRA_NOEXCEPT try {
     if (spec == nullptr || latency < 0) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     spec->m_latency = latency;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+// The pairing of declared state, stated once, on the input. Whether the spec is an input, and
+// whether the name resolves to a State output of equal dtype and shape, is validate's question
+// (capi::validate, check_state): a spec does not know its side or its model here.
+anira_status ANIRA_CALL anira_tensor_spec_set_state_source(anira_tensor_spec* spec,
+                                                           const char* output_canonical)
+    ANIRA_NOEXCEPT try {
+    if (spec == nullptr || output_canonical == nullptr || output_canonical[0] == '\0' ||
+        spec->m_role != ANIRA_ROLE_STATE) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    spec->m_state_source = output_canonical;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
@@ -401,6 +419,17 @@ anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* contract,
                                                      anira_edge_cost cost) ANIRA_NOEXCEPT try {
     if (contract == nullptr || !valid_edge_cost(cost)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     contract->m_edge_cost = cost;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_contract_set_host_domain(anira_contract* contract,
+                                                       const char* canonical,
+                                                       anira_domain domain) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || !non_empty(canonical) || !valid_domain(domain)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    // Common to both kinds, like the edge cost; the name resolves at prepare.
+    contract->m_host_domains[canonical] = domain;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 

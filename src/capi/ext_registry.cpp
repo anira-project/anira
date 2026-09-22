@@ -5,6 +5,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <new>
@@ -371,8 +372,24 @@ const char* consumer_of(std::string_view host,
     return nullptr;
 }
 
+// The stages of a pipeline's chain that declare "<host>:<kind>", in chain order. A stage reads
+// a slot wherever it sits: no engine, no candidate filter.
+std::vector<const char*> stage_consumers_of(std::string_view host,
+                                            std::string_view kind,
+                                            const std::vector<ExtConsumer>* stages) {
+    std::vector<const char*> names;
+    if (stages == nullptr) { return names; }
+    const std::string wanted = std::string(host) + ":" + std::string(kind);
+    for (const ExtConsumer& stage : *stages) {
+        if (std::ranges::find(stage.m_consumed, wanted) != stage.m_consumed.end()) {
+            names.push_back(stage.m_name);
+        }
+    }
+    return names;
+}
+
 // One host's bag: every slot known and consumed, else the failure names it. With rows, each
-// consumed slot is recorded as one plan row.
+// consumed slot is recorded as one plan row per consumer: anira's own adapter, then the stages.
 anira_status check_bag(const ExtBag& bag,
                        std::string_view host,
                        const std::string& where,
@@ -380,7 +397,8 @@ anira_status check_bag(const ExtBag& bag,
                        const anira_backend_id* candidates,
                        uint32_t num_candidates,
                        anira_error* err,
-                       std::vector<ExtPlanRow>* rows) {
+                       std::vector<ExtPlanRow>* rows,
+                       const std::vector<ExtConsumer>* stages) {
     for (const ExtSlot& slot : bag.slots()) {
         if (!slot.known()) {
             fail(err,
@@ -394,7 +412,9 @@ anira_status check_bag(const ExtBag& bag,
         }
         const char* consumer =
             consumer_of(host, slot.kind(), entry_engine, candidates, num_candidates);
-        if (consumer == nullptr) {
+        const std::vector<const char*> stage_consumers =
+            stage_consumers_of(host, slot.kind(), stages);
+        if (consumer == nullptr && stage_consumers.empty()) {
             fail(err,
                  ANIRA_ERROR_EXTENSION_UNCONSUMED,
                  nullptr,
@@ -407,8 +427,14 @@ anira_status check_bag(const ExtBag& bag,
         if (rows != nullptr) {
             std::string at = host_name(host);
             if (!where.empty()) { at += " " + where; }
-            rows->push_back(
-                ExtPlanRow{.m_host = std::move(at), .m_kind = slot.kind(), .m_consumer = consumer});
+            if (consumer != nullptr) {
+                rows->push_back(
+                    ExtPlanRow{.m_host = at, .m_kind = slot.kind(), .m_consumer = consumer});
+            }
+            for (const char* stage : stage_consumers) {
+                rows->push_back(
+                    ExtPlanRow{.m_host = at, .m_kind = slot.kind(), .m_consumer = stage});
+            }
         }
     }
     return ANIRA_OK;
@@ -422,7 +448,8 @@ anira_status walk_bags(const anira_model_config& model,
                        const anira_backend_id* candidates,
                        uint32_t num_candidates,
                        anira_error* err,
-                       std::vector<ExtPlanRow>* rows) {
+                       std::vector<ExtPlanRow>* rows,
+                       const std::vector<ExtConsumer>* stages) {
     for (const anira_tensor_spec& spec : model.m_inputs) {
         const anira_status status = check_bag(spec.m_ext,
                                               "tensor_spec",
@@ -431,7 +458,8 @@ anira_status walk_bags(const anira_model_config& model,
                                               candidates,
                                               num_candidates,
                                               err,
-                                              rows);
+                                              rows,
+                                              stages);
         if (ANIRA_FAILED(status)) { return status; }
     }
     for (const anira_tensor_spec& spec : model.m_outputs) {
@@ -442,7 +470,8 @@ anira_status walk_bags(const anira_model_config& model,
                                               candidates,
                                               num_candidates,
                                               err,
-                                              rows);
+                                              rows,
+                                              stages);
         if (ANIRA_FAILED(status)) { return status; }
     }
     for (size_t i = 0; i < model.m_models.size(); ++i) {
@@ -457,7 +486,8 @@ anira_status walk_bags(const anira_model_config& model,
                                               candidates,
                                               num_candidates,
                                               err,
-                                              rows);
+                                              rows,
+                                              stages);
         if (ANIRA_FAILED(status)) { return status; }
     }
     const anira_status status = check_bag(model.m_ext,
@@ -467,7 +497,8 @@ anira_status walk_bags(const anira_model_config& model,
                                           candidates,
                                           num_candidates,
                                           err,
-                                          rows);
+                                          rows,
+                                          stages);
     if (ANIRA_FAILED(status)) { return status; }
     if (config != nullptr) {
         const anira_status context_status = check_bag(config->m_ext,
@@ -477,7 +508,8 @@ anira_status walk_bags(const anira_model_config& model,
                                                       candidates,
                                                       num_candidates,
                                                       err,
-                                                      rows);
+                                                      rows,
+                                                      stages);
         if (ANIRA_FAILED(context_status)) { return context_status; }
     }
     if (contract != nullptr) {
@@ -488,7 +520,8 @@ anira_status walk_bags(const anira_model_config& model,
                                                        candidates,
                                                        num_candidates,
                                                        err,
-                                                       rows);
+                                                       rows,
+                                                       stages);
         if (ANIRA_FAILED(contract_status)) { return contract_status; }
     }
     return ANIRA_OK;
@@ -501,18 +534,20 @@ anira_status ext_check_consumed(const anira_model_config& model,
                                 const anira_contract* contract,
                                 const anira_backend_id* candidates,
                                 uint32_t num_candidates,
-                                anira_error* err) {
-    return walk_bags(model, config, contract, candidates, num_candidates, err, nullptr);
+                                anira_error* err,
+                                const std::vector<ExtConsumer>* stages) {
+    return walk_bags(model, config, contract, candidates, num_candidates, err, nullptr, stages);
 }
 
 std::vector<ExtPlanRow> ext_consumed_rows(const anira_model_config& model,
                                           const anira_contract* contract,
                                           const anira_backend_id* candidates,
-                                          uint32_t num_candidates) {
+                                          uint32_t num_candidates,
+                                          const std::vector<ExtConsumer>* stages) {
     std::vector<ExtPlanRow> rows;
     anira_error ignored = ANIRA_ERROR_INIT;
     static_cast<void>(
-        walk_bags(model, nullptr, contract, candidates, num_candidates, &ignored, &rows));
+        walk_bags(model, nullptr, contract, candidates, num_candidates, &ignored, &rows, stages));
     return rows;
 }
 

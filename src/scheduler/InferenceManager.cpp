@@ -47,7 +47,6 @@ InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
                                    const anira_context_config& context_config,
                                    anira::RtLatch* rt_latch)
     : m_inference_config(inference_config)
-    , m_pp_processor(pp_processor)
     , m_session(Core::create_session(pp_processor,
                                      inference_config,
                                      custom_processor,
@@ -107,8 +106,8 @@ void InferenceManager::prepare(HostConfig new_config,
     m_missing_samples.resize(num_outputs, 0);
 
     // What the copy path knows about every slot: a streamed slot has its ring's element type
-    // and the config's channel count; a non-streamable slot has no ring, is float32 (its
-    // values live in the PrePostProcessor's float atomics) and is one run.
+    // and the config's channel count; a non-streamable slot has no ring and is not the copy
+    // path's (m_streamed stays false: the stems leave its tensor alone).
     const size_t num_inputs = m_inference_config.get_tensor_input_shape().size();
     m_input_slots.assign(num_inputs, SlotCopy{});
     for (size_t i = 0; i < num_inputs; ++i) {
@@ -163,17 +162,20 @@ void InferenceManager::prepare(HostConfig new_config,
 // ---- The tensor stems --------------------------------------------------------------------------
 
 void InferenceManager::load_counts(const anira_tensor* tensors,
+                                   const std::vector<SlotCopy>& slots,
                                    std::vector<size_t>& counts) noexcept {
     for (size_t slot = 0; slot < counts.size(); ++slot) {
-        const int64_t request = tensors[slot].shape[1];
+        // A non-streamable slot is never carried: its tensor, whatever it holds (a whole
+        // Static tensor of any rank in a multi form of the C handler), is not read.
+        const int64_t request = slots[slot].m_streamed ? tensors[slot].shape[1] : 0;
         counts[slot] = request > 0 ? static_cast<size_t>(request) : 0;
     }
 }
 
 const size_t* InferenceManager::process_nowait(const anira_tensor* inputs,
                                                const anira_tensor* outputs) {
-    load_counts(inputs, m_input_counts);
-    load_counts(outputs, m_output_counts);
+    load_counts(inputs, m_input_slots, m_input_counts);
+    load_counts(outputs, m_output_slots, m_output_counts);
     process_input(inputs, m_input_counts.data());
     request_output(m_output_counts.data());
     Core::new_data_submitted(m_session);
@@ -185,8 +187,8 @@ const size_t* InferenceManager::process_wait(const anira_tensor* inputs,
                                              const anira_tensor* outputs,
                                              std::chrono::steady_clock::duration budget,
                                              Core::WaitOutcome& outcome) {
-    load_counts(inputs, m_input_counts);
-    load_counts(outputs, m_output_counts);
+    load_counts(inputs, m_input_slots, m_input_counts);
+    load_counts(outputs, m_output_slots, m_output_counts);
     process_input(inputs, m_input_counts.data());
     request_output(m_output_counts.data());
     Core::new_data_submitted(m_session);
@@ -202,8 +204,8 @@ const size_t* InferenceManager::process_wait(const anira_tensor* inputs,
 const size_t* InferenceManager::pop_data_wait(const anira_tensor* outputs,
                                               std::chrono::steady_clock::duration budget,
                                               Core::WaitOutcome& outcome) {
-    load_counts(m_empty_inputs.data(), m_input_counts);
-    load_counts(outputs, m_output_counts);
+    load_counts(m_empty_inputs.data(), m_input_slots, m_input_counts);
+    load_counts(outputs, m_output_slots, m_output_counts);
     request_output(m_output_counts.data());
     if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
     const std::chrono::steady_clock::time_point deadline =
@@ -230,8 +232,8 @@ const size_t* InferenceManager::process(const anira_tensor* inputs, const anira_
 const size_t* InferenceManager::pop_data(const anira_tensor* outputs,
                                          std::chrono::steady_clock::time_point wait_until) {
     // The 2.x deadline form keeps its own body: the blocking_ratio branch and its record.
-    load_counts(m_empty_inputs.data(), m_input_counts);
-    load_counts(outputs, m_output_counts);
+    load_counts(m_empty_inputs.data(), m_input_slots, m_input_counts);
+    load_counts(outputs, m_output_slots, m_output_counts);
     request_output(m_output_counts.data());
     if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
     if (m_inference_config.m_blocking_ratio > 0.f) {
@@ -268,7 +270,7 @@ std::chrono::steady_clock::duration InferenceManager::wait_budget_of(
 }
 
 void InferenceManager::push_data(const anira_tensor* inputs) {
-    load_counts(inputs, m_input_counts);
+    load_counts(inputs, m_input_slots, m_input_counts);
     process_input(inputs, m_input_counts.data());
     // Collect finished inferences before claiming a struct for this chunk (issue #99): a
     // push-only host -- an analyser reading its non-streamable outputs -- would otherwise
@@ -303,8 +305,8 @@ void InferenceManager::collect_nonblocking() {
 }
 
 const size_t* InferenceManager::pop_data(const anira_tensor* outputs) {
-    load_counts(m_empty_inputs.data(), m_input_counts);
-    load_counts(outputs, m_output_counts);
+    load_counts(m_empty_inputs.data(), m_input_slots, m_input_counts);
+    load_counts(outputs, m_output_slots, m_output_counts);
     request_output(m_output_counts.data());
     if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
     collect_nonblocking();
@@ -348,26 +350,14 @@ void InferenceManager::process_input(const anira_tensor* inputs, size_t* num_sam
             num_samples[tensor_index] = 0;
             continue;
         }
-        if (slot.m_streamed) {
-            for (size_t channel = 0; channel < slot.m_channels; ++channel) {
-                const tensor_run::Run run =
-                    tensor_run::channel_run(input, channel, slot.m_element_size);
-                m_session->m_send_buffer[tensor_index].push_block(channel,
-                                                                  run.m_data,
-                                                                  slot.m_dtype,
-                                                                  num_samples[tensor_index],
-                                                                  static_cast<size_t>(run.m_step));
-            }
-        } else {
-            // Non-streamable parameters are one run; the sample count is a value count,
-            // clamped to the tensor so a stream-sized count cannot write past it.
-            size_t const num_values =
-                std::min(num_samples[tensor_index],
-                         m_inference_config.get_tensor_input_size()[tensor_index]);
-            const tensor_run::Run run = tensor_run::channel_run(input, 0, sizeof(float));
-            for (size_t sample = 0; sample < num_values; ++sample) {
-                m_pp_processor.set_input(tensor_run::load_f32(run, sample), tensor_index, sample);
-            }
+        for (size_t channel = 0; channel < slot.m_channels; ++channel) {
+            const tensor_run::Run run =
+                tensor_run::channel_run(input, channel, slot.m_element_size);
+            m_session->m_send_buffer[tensor_index].push_block(channel,
+                                                              run.m_data,
+                                                              slot.m_dtype,
+                                                              num_samples[tensor_index],
+                                                              static_cast<size_t>(run.m_step));
         }
     }
 }
@@ -436,43 +426,29 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
             if (num_samples[tensor_index] == 0) { continue; }
             const anira_tensor& output = outputs[tensor_index];
             const SlotCopy& slot = m_output_slots[tensor_index];
-            if (slot.m_streamed) {
-                for (size_t channel = 0; channel < slot.m_channels; ++channel) {
-                    const tensor_run::Run run =
-                        tensor_run::channel_run(output, channel, slot.m_element_size);
-                    m_session->m_receive_buffer[tensor_index].pop_block(
-                        channel,
+            for (size_t channel = 0; channel < slot.m_channels; ++channel) {
+                const tensor_run::Run run =
+                    tensor_run::channel_run(output, channel, slot.m_element_size);
+                m_session->m_receive_buffer[tensor_index].pop_block(
+                    channel,
+                    run.m_data,
+                    slot.m_dtype,
+                    num_samples[tensor_index],
+                    static_cast<size_t>(run.m_step));
+                if (m_on_miss == ANIRA_MISS_HOLD_LAST) {
+                    // Keep the latest delivered block of every channel for a later miss: its
+                    // head, read back from the host memory it was delivered into.
+                    const size_t held =
+                        std::min(num_samples[tensor_index], m_hold_capacity[tensor_index]);
+                    tensor_run::copy_run(
+                        m_hold[tensor_index].data() +
+                            (channel * m_hold_capacity[tensor_index] * slot.m_element_size),
+                        1,
                         run.m_data,
-                        slot.m_dtype,
-                        num_samples[tensor_index],
-                        static_cast<size_t>(run.m_step));
-                    if (m_on_miss == ANIRA_MISS_HOLD_LAST) {
-                        // Keep the latest delivered block of every channel for a later miss:
-                        // its head, read back from the host memory it was delivered into.
-                        const size_t held =
-                            std::min(num_samples[tensor_index], m_hold_capacity[tensor_index]);
-                        tensor_run::copy_run(
-                            m_hold[tensor_index].data() +
-                                (channel * m_hold_capacity[tensor_index] * slot.m_element_size),
-                            1,
-                            run.m_data,
-                            run.m_step,
-                            held,
-                            slot.m_element_size);
-                        m_hold_len[tensor_index] = held;
-                    }
-                }
-            } else {
-                // Non-streamable outputs are one run; the sample count is a value count,
-                // clamped to the tensor (and reported back clamped).
-                num_samples[tensor_index] =
-                    std::min(num_samples[tensor_index],
-                             m_inference_config.get_tensor_output_size()[tensor_index]);
-                const tensor_run::Run run = tensor_run::channel_run(output, 0, sizeof(float));
-                for (size_t sample = 0; sample < num_samples[tensor_index]; ++sample) {
-                    tensor_run::store_f32(run,
-                                          sample,
-                                          m_pp_processor.get_output(tensor_index, sample));
+                        run.m_step,
+                        held,
+                        slot.m_element_size);
+                    m_hold_len[tensor_index] = held;
                 }
             }
         }
@@ -498,32 +474,16 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
                                          static_cast<uint32_t>(m_input_slots.size()),
                                          outputs,
                                          static_cast<uint32_t>(num_outputs));
+    // A requested output is a streamed one: load_counts() leaves every other slot at 0.
     for (size_t i = 0; i < num_outputs; ++i) {
         const bool streamed = m_output_slots[i].m_streamed;
         if (num_samples[i] > 0 && !host_filled) {
             switch (m_on_miss) {
-                case ANIRA_MISS_HOLD_LAST:
-                    if (streamed) {
-                        hold_output(outputs[i], num_samples[i], i);
-                    } else {
-                        // "Repeat the last output": the latest completed value.
-                        const size_t num_values =
-                            std::min(num_samples[i],
-                                     m_inference_config.get_tensor_output_size()[i]);
-                        const tensor_run::Run run =
-                            tensor_run::channel_run(outputs[i], 0, sizeof(float));
-                        for (size_t sample = 0; sample < num_values; ++sample) {
-                            tensor_run::store_f32(run,
-                                                  sample,
-                                                  m_pp_processor.get_output(i, sample));
-                        }
-                    }
-                    break;
+                case ANIRA_MISS_HOLD_LAST: hold_output(outputs[i], num_samples[i], i); break;
                 case ANIRA_MISS_BYPASS:
                     // Host memory to host memory, so the two dtypes must be one (nothing
                     // converts); both are their slots' by now.
-                    if (streamed && bypass_ready &&
-                        bypass_inputs[reference].dtype == outputs[i].dtype) {
+                    if (bypass_ready && bypass_inputs[reference].dtype == outputs[i].dtype) {
                         bypass_output(outputs[i],
                                       num_samples[i],
                                       i,
@@ -609,7 +569,6 @@ void InferenceManager::bypass_output(const anira_tensor& output,
 void InferenceManager::clear_output(const anira_tensor& output,
                                     size_t num_samples,
                                     size_t tensor_index) {
-    // A non-streamable output is one run, and its request is zeroed as it came: not clamped.
     const SlotCopy& slot = m_output_slots[tensor_index];
     for (size_t channel = 0; channel < slot.m_channels; ++channel) {
         const tensor_run::Run run = tensor_run::channel_run(output, channel, slot.m_element_size);

@@ -35,7 +35,7 @@ if(TANH_OPERATING_SYSTEM STREQUAL "Emscripten")
     return()
 endif()
 
-set(_abi_headers export status version enums log tensor config context core thread handler draft/tensor_platform)
+set(_abi_headers export status version enums log tensor config context core thread stage handler draft/tensor_platform)
 set(_abi_include_dirs "${anira_SOURCE_DIR}/include" "${ANIRA_GENERATED_INCLUDE_DIR}")
 if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     set(_abi_on_device TRUE)
@@ -163,6 +163,16 @@ if(NOT _abi_strict_flags MATCHES "/W4")
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_compile_options(anira_header_cxx20 PRIVATE -Wshadow-field)
     endif()
+endif()
+# What a phase callback of an anira::Stage reaches (RingView, StageContext, the Tensor reads)
+# must be nonblocking: header_cxx20.cpp calls all of it from an ANIRA_NONBLOCKING function, and
+# clang's function-effects analysis turns a method that allocates, locks or calls a function
+# that is not nonblocking into a compiler error. The compilers that have the analysis are those
+# of gate 6 below (upstream clang 20 or later behind the GNU front end).
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+        AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 20
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(anira_header_cxx20 PRIVATE -Werror=function-effects)
 endif()
 
 # ---- gate 6 (seed): the real-time contract in a consumer's compiler -------------------------

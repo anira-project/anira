@@ -10,8 +10,9 @@
  *
  * Scope at this pre-release: the configuration half (tensor specs, model, context and
  * contract configuration, job options), the Context over the core, the pipeline half of
- * section 6 (Pipeline, stage::Inference and PlanReport) and the runtime tensor of section 1:
- * Tensor and SyncToken, the C structs of anira/abi/tensor.h with factories on them. The
+ * section 6 (Pipeline, stage::Inference, stage::Custom and PlanReport), the stages of section 7
+ * (Stage, StageContext and RingView over anira/abi/stage.h) and the runtime tensor of section
+ * 1: Tensor and SyncToken, the C structs of anira/abi/tensor.h with factories on them. The
  * InferenceHandler class and the _wait twins arrive with the runtime cut-over; until then a
  * handler is driven through the C entries of anira/abi/handler.h.
  *
@@ -30,17 +31,28 @@
  * memory (typed by the element, which the document does not have); from_metal, from_iosurface,
  * from_ahardwarebuffer and from_d3d12 are not declared and there is no anira_all.hpp (the draft
  * factories have no C++ spelling while unmeasured: call anira_tensor_init_metal(&tensor, ...)
- * on a Tensor).
+ * on a Tensor); Stage::prepare takes the anira_handler* (no handler class yet); a Stage states
+ * the phases it fills in phases(), because the C descriptor tells a filled phase from a NULL
+ * one, and its real-time promise in flags() (anira_stage_desc::flags); StageContext has
+ * input_tensor / output_tensor filling a Tensor, the C accessors, in place of model_input /
+ * model_output references, every accessor returning the C status and filling an out-parameter
+ * (asking for what a slot does not have in a phase is the stage's bug, and is recorded), and
+ * entry() for the chunk's entry; the RingView calls take a std::span; stage::Custom takes no
+ * domains and has no single-callable form (a stage works at the host end of every slot and never
+ * crosses a domain), and a Pipeline holds at most one of them; the variant of Pipeline is named
+ * Pipeline::AnyStage.
  *
  * Requirements: C++20 with exceptions; std::filesystem, which on Apple platforms means a
  * deployment target of macOS 10.15 / iOS 13 or later.
  *
  * Every entry is [main-thread] and may allocate, except the Tensor factories and accessors,
  * which are the [thread-safe] [callback-safe] real-time field fills and reads of
- * anira/abi/tensor.h (noexcept; only Tensor::from_dlpack is [main-thread] and throws), and
- * SyncToken::reset / dup, which are [thread-safe, !audio-thread]. The ABI is checked once per
- * process on the first handle created (anira_check_abi against ANIRA_ABI_VERSION); a Tensor
- * is no handle and checks nothing.
+ * anira/abi/tensor.h (noexcept; only Tensor::from_dlpack is [main-thread] and throws),
+ * SyncToken::reset / dup, which are [thread-safe, !audio-thread], and everything a phase
+ * callback of a Stage reaches: RingView and StageContext are [callback-safe] and nonblocking
+ * (noexcept, no allocation; a status or a count is returned, never thrown). The ABI is checked
+ * once per process on the first handle created (anira_check_abi against ANIRA_ABI_VERSION); a
+ * Tensor, a RingView and a StageContext are no handles and check nothing.
  */
 #ifndef ANIRA_HPP
 #define ANIRA_HPP
@@ -68,15 +80,19 @@
 #include <anira/abi/export.h>  // IWYU pragma: keep - the umbrella of the C headers
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
+#include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
 #include <anira/abi/version.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -84,6 +100,7 @@
 #include <ios>
 #include <iterator>
 #include <memory>
+#include <new>
 #include <optional>
 #include <ratio>
 #include <span>
@@ -604,6 +621,17 @@ public:
                       "anira_tensor_spec_set_latency");
         return *this;
     }
+    /// State inputs only (role ANIRA_ROLE_STATE): the canonical name of the state output this
+    /// input is fed from on the next inference (anira_tensor_spec_set_state_source). Both
+    /// halves of the pair carry the role, the pairing is stated here, once; the name is
+    /// resolved when the model is validated. @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} for
+    /// an empty name or a spec of another role.
+    TensorSpec& state_source(std::string_view output_canonical) {
+        detail::check(
+            anira_tensor_spec_set_state_source(m_spec, std::string(output_canonical).c_str()),
+            "anira_tensor_spec_set_state_source");
+        return *this;
+    }
     /// An extension record (section 1b); copied.
     template <class Ext>
     TensorSpec& ext(const Ext& value) {
@@ -812,8 +840,9 @@ public:
     /// The ring dtype of one tensor under this Hard contract, by canonical name: the element
     /// type the tensor forms of the Hard entries carry across the ABI and the ring holds as is;
     /// F32 for every tensor never set. Nothing
-    /// converts: a name that is not a Streamed tensor, or a ring dtype that differs from the spec's
-    /// dtype, is ANIRA_ERROR_CONFIG at anira_handler_prepare.
+    /// converts: a name that is not a Streamed tensor is ANIRA_ERROR_CONFIG at
+    /// anira_handler_prepare, and so is a ring dtype that differs from the spec's dtype unless a
+    /// stage of the pipeline fills the phase that moves that ring (anira_pipeline_add_stage).
     ContractHandle& hard_ring_dtype(std::string_view canonical, DType dtype) {
         const std::string name(canonical);
         detail::check(anira_contract_hard_set_ring_dtype(m_contract, name.c_str(), dtype),
@@ -878,6 +907,19 @@ public:
     ContractHandle& edge_cost(anira_edge_cost cost) {
         detail::check(anira_contract_set_edge_cost(m_contract, cost),
                       "anira_contract_set_edge_cost");
+        return *this;
+    }
+    /// The host-end domain of one tensor, by canonical name, on either contract kind
+    /// (anira_contract_set_host_domain): the domain anira allocates the ring, the model
+    /// tensor, the Static store and the state buffers of the slot in, and the domain every
+    /// stage phase works in; ANIRA_DOMAIN_HOST for every tensor never set. Any tensor of
+    /// either side, State and Static included. A name that is no tensor is ANIRA_ERROR_CONFIG
+    /// at anira_handler_prepare, and in this pre-release any domain but ANIRA_DOMAIN_HOST is
+    /// ANIRA_ERROR_NOT_SUPPORTED there. In a contract file: the top-level "host_domains".
+    ContractHandle& host_domain(std::string_view canonical, Domain domain) {
+        const std::string name(canonical);
+        detail::check(anira_contract_set_host_domain(m_contract, name.c_str(), domain),
+                      "anira_contract_set_host_domain");
         return *this;
     }
     template <class Ext>
@@ -1547,111 +1589,7 @@ inline bool has_core() noexcept {
     return anira_has_core() != 0U;
 }
 
-// ---- pipeline and plan report (section 6) --------------------------------------------------
-
-namespace stage {
-
-/**
- * @brief The inference stage of a Pipeline: the model configuration(s) it may run and the
- * candidate backends (empty = the default set: every engine this build carries, on
- * ANIRA_PROVIDER_DEFAULT, plus the custom entries). Holds pointers into the ModelConfigs,
- * which must outlive the Pipeline's construction; the pipeline copies them
- * (anira_pipeline_add_inference). One variant in this pre-release.
- */
-class Inference {
-public:
-    /// One model with its candidate backends (empty = the default set).
-    Inference(const ModelConfig& model, std::initializer_list<BackendId> candidates = {})
-        : m_variants{model.native()}, m_candidates(candidates) {}
-    /// Several variants of one stage; the C entry refuses more than one with
-    /// ANIRA_ERROR_NOT_SUPPORTED until plan sets land.
-    Inference(std::initializer_list<std::reference_wrapper<const ModelConfig>> variants,
-              std::initializer_list<BackendId> candidates)
-        : m_candidates(candidates) {
-        m_variants.reserve(variants.size());
-        for (const ModelConfig& variant : variants) { m_variants.push_back(variant.native()); }
-    }
-
-    /// The variants' native configs, in the order given.
-    std::span<const anira_model_config* const> variants() const noexcept { return m_variants; }
-    /// The candidate backends, in the order given; empty for the default set.
-    std::span<const BackendId> candidates() const noexcept { return m_candidates; }
-
-private:
-    std::vector<const anira_model_config*> m_variants;
-    std::vector<BackendId> m_candidates;
-};
-
-}  // namespace stage
-
-/**
- * @brief An anira_pipeline with its lifetime: the stages a handler runs, exactly one
- * stage::Inference in this pre-release (stage::Custom widens the variant in a later
- * pre-release). A custom engine is no stage: it is part of the inference stage, one more
- * implementation its candidates resolve to, and arrives as stage::Inference::engine and
- * Pipeline::register_engine over anira_pipeline_register_engine. Move-only; copied by the
- * handler that takes it.
- */
-class Pipeline {
-public:
-    using Stage = std::variant<stage::Inference>;
-
-    /// @throws Error when a C entry refuses the call; the status says why.
-    Pipeline() {
-        detail::abi_check_once();
-        anira_error err{};
-        detail::check(anira_pipeline_create(&m_pipeline, &err), err);
-    }
-    /// Creates the pipeline and adds every stage in order.
-    /// @throws Error as add does.
-    Pipeline(std::initializer_list<Stage> stages) : Pipeline() {
-        for (const Stage& stage : stages) { add(stage); }
-    }
-    ~Pipeline() { anira_pipeline_destroy(m_pipeline); }
-    Pipeline(const Pipeline&) = delete;
-    Pipeline& operator=(const Pipeline&) = delete;
-    Pipeline(Pipeline&& other) noexcept : m_pipeline(std::exchange(other.m_pipeline, nullptr)) {}
-    Pipeline& operator=(Pipeline&& other) noexcept {
-        if (this != &other) {
-            anira_pipeline_destroy(m_pipeline);
-            m_pipeline = std::exchange(other.m_pipeline, nullptr);
-        }
-        return *this;
-    }
-
-    /// Adds the inference stage (anira_pipeline_add_inference).
-    Pipeline& inference(const ModelConfig& model,
-                        std::initializer_list<BackendId> candidates = {}) {
-        return add(stage::Inference(model, candidates));
-    }
-    /// Adds one stage of any kind.
-    /// @throws Error when the C entry refuses it: a second inference stage is
-    /// ANIRA_ERROR_CONFIG, more than one variant or a non-default provider
-    /// ANIRA_ERROR_NOT_SUPPORTED.
-    Pipeline& add(const Stage& stage) {
-        std::visit([this](const auto& value) { add_stage(value); }, stage);
-        return *this;
-    }
-
-    const anira_pipeline* native() const noexcept { return m_pipeline; }
-    anira_pipeline* native() noexcept { return m_pipeline; }
-
-private:
-    void add_stage(const stage::Inference& stage) {
-        anira_error err{};
-        const std::span<const anira_model_config* const> variants = stage.variants();
-        const std::span<const BackendId> candidates = stage.candidates();
-        detail::check(anira_pipeline_add_inference(m_pipeline,
-                                                   variants.data(),
-                                                   static_cast<uint32_t>(variants.size()),
-                                                   candidates.empty() ? nullptr : candidates.data(),
-                                                   static_cast<uint32_t>(candidates.size()),
-                                                   &err),
-                      err);
-    }
-
-    anira_pipeline* m_pipeline = nullptr;
-};
+// ---- plan report (section 6) ---------------------------------------------------------------
 
 /**
  * @brief A view of a handler's anira_plan_report (valid until its next prepare or destroy):
@@ -1700,6 +1638,576 @@ public:
 
 private:
     const anira_plan_report* m_report;
+};
+
+// ---- stages (section 7) --------------------------------------------------------------------
+
+/**
+ * @brief A non-owning view of an anira_ring, the ring of a Streamed tensor as a phase callback
+ * of a Stage gets it from StageContext::input_ring / output_ring: the anira_ring accessors of
+ * anira/abi/stage.h, one C call per method, the element type T mapped onto its anira_dtype at
+ * compile time (float, double, bool and the fixed-width integers; anything else is a compiler
+ * error).
+ *
+ * Nothing converts: T's dtype must be dtype(). A call with another one moves nothing, returns 0
+ * and records ANIRA_ERROR_CONFIG in the handler's anira_handler_rt_error with one latched
+ * record, as the C entry does. A view of no ring (what a refused input_ring / output_ring leaves)
+ * is false, and every call on it returns 0. The view is valid until the callback returns.
+ *
+ * [driver-thread] [callback-safe], nonblocking: every method is noexcept, allocates nothing and
+ * returns the count the C entry returns.
+ */
+class RingView {
+public:
+    /// A view of no ring.
+    RingView() noexcept = default;
+    /// Wraps a ring of the stage context; NULL is a view of no ring.
+    explicit RingView(anira_ring* ring) noexcept : m_ring(ring) {}
+
+    /// Whether the slot has a ring in this phase.
+    explicit operator bool() const noexcept { return m_ring != nullptr; }
+
+    /// anira_ring_dtype: the element type the ring stores, the ring dtype of the Hard contract
+    /// (ANIRA_DTYPE_F32 when none was declared); 0 for a view of no ring.
+    DType dtype() const noexcept { return anira_ring_dtype(m_ring); }
+    /// anira_ring_num_channels: the extent of the tensor's Channel axis, 1 without one.
+    uint32_t num_channels() const noexcept { return anira_ring_num_channels(m_ring); }
+    /// anira_ring_available: the unread elements of one channel.
+    std::size_t available(uint32_t channel) const noexcept {
+        return anira_ring_available(m_ring, channel);
+    }
+    /// anira_ring_available_past: the consumed elements of one channel the ring still holds as
+    /// history, what peek_past_block can address.
+    std::size_t available_past(uint32_t channel) const noexcept {
+        return anira_ring_available_past(m_ring, channel);
+    }
+
+    /// anira_ring_pop_block: pops out.size() elements of one channel, oldest first; elements
+    /// beyond the available ones are zero. @return out.size(), or 0 with nothing popped.
+    template <class T>
+    std::size_t pop_block(uint32_t channel, std::span<T> out) noexcept {
+        static_assert(!std::is_const_v<T>, "pop_block writes its span");
+        return anira_ring_pop_block(m_ring, channel, out.data(), detail::dtype_of<T>(), out.size());
+    }
+    /// anira_ring_peek_past_block: copies the out.size() most recently consumed elements of one
+    /// channel without popping, oldest first (the receptive field of a window longer than its
+    /// hop). @return out.size(), or 0 with nothing written.
+    template <class T>
+    std::size_t peek_past_block(uint32_t channel, std::span<T> out) const noexcept {
+        static_assert(!std::is_const_v<T>, "peek_past_block writes its span");
+        return anira_ring_peek_past_block(m_ring,
+                                          channel,
+                                          out.data(),
+                                          detail::dtype_of<T>(),
+                                          out.size());
+    }
+    /// anira_ring_push_block: pushes in.size() elements into one channel. @return in.size(), or
+    /// 0 with nothing pushed.
+    template <class T>
+    std::size_t push_block(uint32_t channel, std::span<T> in) noexcept {
+        return anira_ring_push_block(m_ring, channel, in.data(), detail::dtype_of<T>(), in.size());
+    }
+    /// anira_ring_push_fill: pushes count copies of one element into one channel. @return
+    /// count, or 0 with nothing pushed.
+    template <class T>
+    std::size_t push_fill(uint32_t channel, const T& value, std::size_t count) noexcept {
+        return anira_ring_push_fill(m_ring, channel, &value, detail::dtype_of<T>(), count);
+    }
+    /// anira_ring_discard: drops up to count unread elements of one channel (they become
+    /// history); no element crosses the call, so it takes no element type. @return the
+    /// elements dropped.
+    std::size_t discard(uint32_t channel, std::size_t count) noexcept {
+        return anira_ring_discard(m_ring, channel, count);
+    }
+    /// anira_ring_pop_windows: pops num_batches overlapping windows of one channel, window b
+    /// at out[offset + b * (num_new + num_old)], each num_old elements of history followed by
+    /// num_new freshly popped ones. The span is the whole destination: one too short for
+    /// offset + num_batches * (num_new + num_old) elements is refused here (0, nothing popped,
+    /// nothing recorded). @return the elements written, or 0.
+    template <class T>
+    std::size_t pop_windows(uint32_t channel,
+                            std::span<T> out,
+                            std::size_t num_new,
+                            std::size_t num_old,
+                            std::size_t offset,
+                            uint32_t num_batches) noexcept {
+        static_assert(!std::is_const_v<T>, "pop_windows writes its span");
+        const std::size_t needed =
+            offset + static_cast<std::size_t>(num_batches) * (num_new + num_old);
+        if (out.size() < needed) { return 0; }
+        return anira_ring_pop_windows(m_ring,
+                                      channel,
+                                      out.data(),
+                                      detail::dtype_of<T>(),
+                                      num_new,
+                                      num_old,
+                                      offset,
+                                      num_batches);
+    }
+
+    anira_ring* native() const noexcept { return m_ring; }
+
+private:
+    anira_ring* m_ring = nullptr;
+};
+
+/**
+ * @brief What a phase callback of a Stage sees: a view of the anira_stage_ctx anira fills on
+ * its own stack for the call, with the six context accessors of anira/abi/stage.h on it, one C
+ * call per method. The tensors and the rings are not in the record: a stage asks per slot, the
+ * tensor's position in the model configuration's input or output list (the number every entry
+ * of anira_handler uses). Valid until the callback returns, and never kept beyond it.
+ *
+ * What a phase exposes: pre_process the input rings and the model's input tensors (a State
+ * input has no host end there), before_inference the input tensors, after_inference the output
+ * tensors, post_process the output tensors (State outputs excepted) and the output rings. Every
+ * accessor returns a status and fills an out-parameter, reset on any status but ANIRA_OK. A
+ * slot always has a role; asking for a ring or a tensor the slot does not have in this phase is
+ * a bug in the stage, not an answer: a stage knows what a slot is, from its model config or by
+ * asking the role first, so the accessor answers ANIRA_ERROR_INVALID_STATE and records it in
+ * anira_handler_rt_error with one latched record per kind naming the entry, the slot and the
+ * phase, as it records a slot out of range (ANIRA_ERROR_INVALID_ARGUMENT).
+ *
+ * [driver-thread | inference-thread] [callback-safe], nonblocking: every method is noexcept and
+ * allocates nothing, one C call per method.
+ */
+class StageContext {
+public:
+    /// Wraps the record a phase callback received; never NULL (anira hands out none).
+    explicit StageContext(const anira_stage_ctx* ctx) noexcept : m_ctx(ctx) {}
+
+    /// The phase this call runs in.
+    anira_stage_phase phase() const noexcept {
+        return static_cast<anira_stage_phase>(m_ctx->phase);
+    }
+    /// The engine of the plan the chunk was submitted under; ANIRA_ENGINE_NONE for a custom one.
+    Engine engine() const noexcept { return static_cast<Engine>(m_ctx->engine); }
+    /// The provider of that plan.
+    Provider provider() const noexcept { return static_cast<Provider>(m_ctx->provider); }
+    /// The variant of that plan; 0 in this pre-release.
+    uint32_t variant() const noexcept { return m_ctx->variant; }
+    /// The tensors of the model's input list, State tensors included: the input slots.
+    uint32_t num_inputs() const noexcept { return m_ctx->num_inputs; }
+    /// The tensors of the model's output list, State tensors included: the output slots.
+    uint32_t num_outputs() const noexcept { return m_ctx->num_outputs; }
+    /// The ticket of the submitting job under an Async contract; ANIRA_TICKET_INVALID under a
+    /// Hard one.
+    anira_ticket ticket() const noexcept { return m_ctx->ticket; }
+    /// The entry this chunk occupies, 0 .. anira_handler_num_entries() - 1: the same value in
+    /// all four phases of the chunk, reused by a later chunk once this one has completed. The
+    /// index of a per-chunk scratch a stage sized in its prepare (one slot per entry), so that
+    /// what pre_process pops or computes is found again by before_inference, without an
+    /// allocation: one entry holds one chunk at a time, however many are in flight.
+    uint32_t entry() const noexcept { return m_ctx->entry; }
+
+    /// anira_stage_input_role: fills out with what the tensor of an input slot is, the same
+    /// answer in every phase; the first question about a slot the stage does not know from its
+    /// model config. @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a slot at or beyond
+    /// num_inputs(), recorded, with out ANIRA_ROLE_FORCE32, which is no role. A slot always has
+    /// a role: never ANIRA_ERROR_INVALID_STATE.
+    anira_status input_role(uint32_t slot, Role& out) const noexcept {
+        return anira_stage_input_role(m_ctx, slot, &out);
+    }
+    /// anira_stage_output_role: the output twin, against num_outputs().
+    anira_status output_role(uint32_t slot, Role& out) const noexcept {
+        return anira_stage_output_role(m_ctx, slot, &out);
+    }
+    /// anira_stage_input_ring: fills out with a view of the ring of a Streamed input in
+    /// pre_process, the phase that moves the input rings. @return ANIRA_OK;
+    /// ANIRA_ERROR_INVALID_STATE for a tensor of another role and in every other phase, which is
+    /// the stage's bug and is recorded, ANIRA_ERROR_INVALID_ARGUMENT for a slot out of range;
+    /// out is then a view of no ring.
+    anira_status input_ring(uint32_t slot, RingView& out) const noexcept {
+        anira_ring* ring = nullptr;
+        const anira_status status = anira_stage_input_ring(m_ctx, slot, &ring);
+        out = RingView(ring);
+        return status;
+    }
+    /// anira_stage_output_ring: fills out with a view of the ring of a Streamed output in
+    /// post_process, the phase that moves the output rings. @return as input_ring.
+    anira_status output_ring(uint32_t slot, RingView& out) const noexcept {
+        anira_ring* ring = nullptr;
+        const anira_status status = anira_stage_output_ring(m_ctx, slot, &ring);
+        out = RingView(ring);
+        return status;
+    }
+    /// anira_stage_input_tensor: fills out with the model end of an input slot, the tensor the
+    /// engine binds (before_inference: every slot; pre_process: every slot with a host end,
+    /// which a State slot has not). Built by this call over the memory the tensor has right
+    /// now: ask again in every callback, keep neither the descriptor nor its data pointer.
+    /// @return ANIRA_OK; ANIRA_ERROR_INVALID_STATE in a phase that exposes the outputs and for
+    /// a State slot in pre_process, which is the stage's bug and is recorded,
+    /// ANIRA_ERROR_INVALID_ARGUMENT for a slot out of range; out is then all-zero.
+    anira_status input_tensor(uint32_t slot, Tensor& out) const noexcept {
+        return anira_stage_input_tensor(m_ctx, slot, &out);
+    }
+    /// anira_stage_output_tensor: fills out with the model end of an output slot, the tensor
+    /// the engine wrote (after_inference: every slot; post_process: every slot with a host end,
+    /// which a State slot has not). @return as input_tensor, against the phases that expose
+    /// the outputs.
+    anira_status output_tensor(uint32_t slot, Tensor& out) const noexcept {
+        return anira_stage_output_tensor(m_ctx, slot, &out);
+    }
+
+    const anira_stage_ctx* native() const noexcept { return m_ctx; }
+
+private:
+    const anira_stage_ctx* m_ctx;
+};
+
+/**
+ * @brief A stage of the pipeline as a class: subclass it, hand it to a Pipeline as
+ * stage::Custom(std::make_shared<YourStage>(...)). It is anira_stage_desc with virtual
+ * functions in place of the function pointers; the semantics are those of anira/abi/stage.h.
+ *
+ * A Pipeline holds at most one stage, and the stage owns every phase it fills for every slot.
+ * The phases of one chunk: pre_process takes the host end of every slot (the ring of a
+ * Streamed tensor) to the model tensor, the chunking and every conversion, on the thread where
+ * the host end is produced (the thread that drives the Hard entries); then, on an inference
+ * thread, anira feeds the State inputs, before_inference runs, anira crosses the edge into the
+ * engine's domain, the engine runs, anira crosses back, after_inference runs, anira captures
+ * the State outputs; then post_process takes the model tensors back to the host end. A stage
+ * never crosses a domain: every phase works in the host domain of the slot.
+ *
+ * A stage states the phases it fills in phases(), which a subclass must define. The C
+ * descriptor tells a filled phase from a NULL one: a NULL pre_process or post_process slot
+ * means anira's default body runs (the window pop or push of every Streamed slot), a filled
+ * slot means this stage owns the phase and composes what it does not handle itself by calling
+ * the default through the base class ("call super"): Stage::pre_process(ctx) is
+ * anira_stage_default_pre_process, Stage::post_process(ctx) is
+ * anira_stage_default_post_process. A virtual function is never NULL, so the mask says which
+ * of the four this stage takes part in: only those reach the descriptor, the others stay NULL
+ * and are never called. phases() is read once, by Pipeline::add, and so is flags().
+ *
+ * flags() is the stage's real-time promise (anira_stage_desc::flags): ANIRA_STAGE_REALTIME_PRE_POST
+ * says pre_process and post_process allocate nothing, lock nothing and block on nothing,
+ * ANIRA_STAGE_REALTIME_HOOKS says the same of before_inference and after_inference; the default
+ * promises nothing. anira_handler_prepare checks the promise against the placement: under a
+ * Hard contract a filled pre_process or post_process runs on the driving thread and requires
+ * ANIRA_STAGE_REALTIME_PRE_POST, else prepare fails with ANIRA_ERROR_CONFIG naming the flag.
+ * The four phase functions are noexcept (an override that throws does not compile without it,
+ * and terminates with it) and carry no real-time attribute of their own; everything
+ * StageContext, RingView and Tensor offer is nonblocking, so a body that keeps its promise is
+ * composed of those calls. A status other than ANIRA_OK fails the chunk: the status goes into
+ * anira_handler_rt_error with one latched record naming the phase, and the chunk delivers
+ * zeros at its stream position.
+ *
+ * A stage has no name: a Pipeline holds one, so a name would identify nothing; every record
+ * about it says "the stage", and the consumer column of its anira_plan_ext rows reads "stage".
+ */
+class Stage {
+public:
+    /// The bit of one phase in phases().
+    static constexpr uint32_t phase_bit(anira_stage_phase stage_phase) noexcept {
+        return uint32_t{1} << static_cast<uint32_t>(stage_phase);
+    }
+    static constexpr uint32_t k_pre_process = uint32_t{1} << ANIRA_PHASE_PRE_PROCESS;
+    static constexpr uint32_t k_post_process = uint32_t{1} << ANIRA_PHASE_POST_PROCESS;
+    static constexpr uint32_t k_before_inference = uint32_t{1} << ANIRA_PHASE_BEFORE_INFERENCE;
+    static constexpr uint32_t k_after_inference = uint32_t{1} << ANIRA_PHASE_AFTER_INFERENCE;
+    /// Every bit phases() may carry.
+    static constexpr uint32_t k_all_phases =
+        k_pre_process | k_post_process | k_before_inference | k_after_inference;
+
+    Stage() = default;
+    virtual ~Stage() = default;
+    Stage(const Stage&) = delete;
+    Stage& operator=(const Stage&) = delete;
+    Stage(Stage&&) = delete;
+    Stage& operator=(Stage&&) = delete;
+
+    /// The phases this stage fills: an OR of k_pre_process, k_post_process, k_before_inference
+    /// and k_after_inference. Read once, when the stage is added to a Pipeline; 0 is a stage of
+    /// prepare and release alone.
+    virtual uint32_t phases() const noexcept = 0;
+    /// The stage's real-time promise, written into anira_stage_desc::flags by Pipeline::add: an
+    /// OR of ANIRA_STAGE_REALTIME_PRE_POST and ANIRA_STAGE_REALTIME_HOOKS; 0 (the default)
+    /// promises nothing. Under a Hard contract a stage that fills pre_process or post_process
+    /// must promise ANIRA_STAGE_REALTIME_PRE_POST, else anira_handler_prepare refuses it with
+    /// ANIRA_ERROR_CONFIG. Read once, when the stage is added to a Pipeline.
+    virtual uint32_t flags() const noexcept { return 0; }
+
+    /// ANIRA_PHASE_PRE_PROCESS, on the thread where the host end is produced (the driver thread
+    /// under a Hard contract): takes the host end of every slot to its model tensor. The base
+    /// class is the default fill (anira_stage_default_pre_process).
+    virtual anira_status pre_process(StageContext& ctx) noexcept {
+        return anira_stage_default_pre_process(ctx.native());
+    }
+    /// ANIRA_PHASE_POST_PROCESS, on the thread where the host end is consumed: takes the model
+    /// tensor of every output slot back to its host end. The base class is the default push
+    /// (anira_stage_default_post_process).
+    virtual anira_status post_process(StageContext& ctx) noexcept {
+        return anira_stage_default_post_process(ctx.native());
+    }
+    /// ANIRA_PHASE_BEFORE_INFERENCE, on an inference thread behind the State feed and ahead of
+    /// the edge into the engine's domain. The base class does nothing.
+    virtual anira_status before_inference(StageContext& /*ctx*/) noexcept { return ANIRA_OK; }
+    /// ANIRA_PHASE_AFTER_INFERENCE, on an inference thread behind the edge out of the engine's
+    /// domain and ahead of the State capture. The base class does nothing.
+    virtual anira_status after_inference(StageContext& /*ctx*/) noexcept { return ANIRA_OK; }
+
+    /// Called by anira_handler_prepare on its caller's thread after the plan report is built,
+    /// once per prepare ([main-thread]; it may allocate). Of anira it may call
+    /// the [callback-safe] entries, the handler's getters and the two Static entries, never
+    /// prepare, destroy or a Hard entry. A status other than ANIRA_OK fails the prepare with
+    /// it. It may throw: an anira::Error fails the prepare with its status, std::bad_alloc with
+    /// ANIRA_ERROR_OUT_OF_MEMORY, anything else with ANIRA_ERROR_INTERNAL, and what() goes to
+    /// the log (group "anira.hpp"), since the C callback has no error record.
+    virtual anira_status prepare(anira_handler* /*handler*/, const PlanReport& /*report*/) {
+        return ANIRA_OK;
+    }
+    /// Called once per Pipeline::add of this stage, when the last pipeline or handler that
+    /// carries it dies, on the thread of that destroy ([main-thread]); no callback of that
+    /// chain runs afterwards. The object itself lives as long as a shared_ptr to it does.
+    virtual void release() noexcept {}
+    /// The extensions the stage reads at prepare, as "<host>:<kind>" strings (hosts:
+    /// tensor_spec, model, model_config, context, contract); they join the consumed-or-fail
+    /// walk. Read once, when the stage is added; the strings are copied.
+    virtual std::span<const char* const> consumed_kinds() const noexcept { return {}; }
+};
+
+namespace detail {
+
+/**
+ * @brief The C callbacks of a stage::Custom. user_data is a heap-allocated
+ * std::shared_ptr<Stage>, so the control block keeps the object alive for as long as a carrier
+ * of the descriptor exists; release deletes it, exactly once.
+ */
+struct StageTrampolines {
+    static Stage& stage_of(void* user_data) noexcept {
+        return **static_cast<std::shared_ptr<Stage>*>(user_data);
+    }
+
+    // The four phase trampolines carry no real-time attribute, like anira_stage_fn: the promise
+    // is the stage's flags(), not a property of the type.
+    static anira_status ANIRA_CALL pre_process(const anira_stage_ctx* ctx,
+                                               void* user_data) noexcept {
+        StageContext context(ctx);
+        return stage_of(user_data).pre_process(context);
+    }
+    static anira_status ANIRA_CALL post_process(const anira_stage_ctx* ctx,
+                                                void* user_data) noexcept {
+        StageContext context(ctx);
+        return stage_of(user_data).post_process(context);
+    }
+    static anira_status ANIRA_CALL before_inference(const anira_stage_ctx* ctx,
+                                                    void* user_data) noexcept {
+        StageContext context(ctx);
+        return stage_of(user_data).before_inference(context);
+    }
+    static anira_status ANIRA_CALL after_inference(const anira_stage_ctx* ctx,
+                                                   void* user_data) noexcept {
+        StageContext context(ctx);
+        return stage_of(user_data).after_inference(context);
+    }
+
+    /// A throw never crosses the C boundary: it becomes the status, and its text a log line.
+    static anira_status ANIRA_CALL prepare(anira_handler* handler,
+                                           const anira_plan_report* report,
+                                           void* user_data) noexcept {
+        Stage& stage = stage_of(user_data);
+        try {
+            return stage.prepare(handler, PlanReport(report));
+        } catch (const Error& error) {
+            log_throw(error.what());
+            return failed(error.status) ? error.status : ANIRA_ERROR_INTERNAL;
+        } catch (const std::bad_alloc& error) {
+            log_throw(error.what());
+            return ANIRA_ERROR_OUT_OF_MEMORY;
+        } catch (const std::exception& error) {
+            log_throw(error.what());
+            return ANIRA_ERROR_INTERNAL;
+        } catch (...) {
+            log_throw("an exception that is no std::exception");
+            return ANIRA_ERROR_INTERNAL;
+        }
+    }
+
+    static void ANIRA_CALL release(void* user_data) noexcept {
+        const std::unique_ptr<std::shared_ptr<Stage>> holder(
+            static_cast<std::shared_ptr<Stage>*>(user_data));
+        (*holder)->release();
+    }
+
+private:
+    /// Formats into a fixed buffer: nothing here may throw inside the handler of a throw.
+    static void log_throw(const char* what) noexcept {
+        std::array<char, ANIRA_ERROR_MESSAGE_CAPACITY> text{};
+        std::snprintf(text.data(), text.size(), "the stage's prepare threw: %s", what);
+        anira_log(ANIRA_LOG_ERROR, "anira.hpp", text.data());
+    }
+};
+
+}  // namespace detail
+
+// ---- pipeline (section 6) ------------------------------------------------------------------
+
+namespace stage {
+
+/**
+ * @brief The inference stage of a Pipeline: the model configuration(s) it may run and the
+ * candidate backends (empty = the default set: every engine this build carries, on
+ * ANIRA_PROVIDER_DEFAULT, plus the custom entries). Holds pointers into the ModelConfigs,
+ * which must outlive the Pipeline's construction; the pipeline copies them
+ * (anira_pipeline_add_inference). One variant in this pre-release.
+ */
+class Inference {
+public:
+    /// One model with its candidate backends (empty = the default set).
+    Inference(const ModelConfig& model, std::initializer_list<BackendId> candidates = {})
+        : m_variants{model.native()}, m_candidates(candidates) {}
+    /// Several variants of one stage; the C entry refuses more than one with
+    /// ANIRA_ERROR_NOT_SUPPORTED until plan sets land.
+    Inference(std::initializer_list<std::reference_wrapper<const ModelConfig>> variants,
+              std::initializer_list<BackendId> candidates)
+        : m_candidates(candidates) {
+        m_variants.reserve(variants.size());
+        for (const ModelConfig& variant : variants) { m_variants.push_back(variant.native()); }
+    }
+
+    /// The variants' native configs, in the order given.
+    std::span<const anira_model_config* const> variants() const noexcept { return m_variants; }
+    /// The candidate backends, in the order given; empty for the default set.
+    std::span<const BackendId> candidates() const noexcept { return m_candidates; }
+
+private:
+    std::vector<const anira_model_config*> m_variants;
+    std::vector<BackendId> m_candidates;
+};
+
+/**
+ * @brief A Stage subclass as the one custom stage of a Pipeline: the pre- and post-processing
+ * around the inference stage. Holds the shared_ptr; Pipeline::add copies it into the
+ * pipeline's carrier (anira_pipeline_add_stage), which the pipeline and every handler created
+ * from it share, so the object lives at least until the last of them is destroyed, whatever
+ * the caller does with its own pointer. A pipeline holds at most one (a second add throws
+ * ANIRA_ERROR_INVALID_STATE); the position relative to the inference stage means nothing.
+ */
+class Custom {
+public:
+    explicit Custom(std::shared_ptr<Stage> implementation) noexcept
+        : m_stage(std::move(implementation)) {}
+
+    /// The stage; Pipeline::add refuses a null one with ANIRA_ERROR_INVALID_ARGUMENT.
+    const std::shared_ptr<Stage>& stage() const noexcept { return m_stage; }
+
+private:
+    std::shared_ptr<Stage> m_stage;
+};
+
+}  // namespace stage
+
+/**
+ * @brief An anira_pipeline with its lifetime: the stages a handler runs, exactly one
+ * stage::Inference and at most one stage::Custom around it. A custom engine is no stage: it
+ * is part of the inference stage, one more implementation its candidates resolve to, and
+ * arrives as stage::Inference::engine and Pipeline::register_engine over
+ * anira_pipeline_register_engine. Move-only; copied by the handler that takes it.
+ */
+class Pipeline {
+public:
+    /// One stage of any kind. (Not named Stage: that is the base class of a custom stage.)
+    using AnyStage = std::variant<stage::Inference, stage::Custom>;
+
+    /// @throws Error when a C entry refuses the call; the status says why.
+    Pipeline() {
+        detail::abi_check_once();
+        anira_error err{};
+        detail::check(anira_pipeline_create(&m_pipeline, &err), err);
+    }
+    /// Creates the pipeline and adds every stage in order.
+    /// @throws Error as add does.
+    Pipeline(std::initializer_list<AnyStage> stages) : Pipeline() {
+        for (const AnyStage& any_stage : stages) { add(any_stage); }
+    }
+    ~Pipeline() { anira_pipeline_destroy(m_pipeline); }
+    Pipeline(const Pipeline&) = delete;
+    Pipeline& operator=(const Pipeline&) = delete;
+    Pipeline(Pipeline&& other) noexcept : m_pipeline(std::exchange(other.m_pipeline, nullptr)) {}
+    Pipeline& operator=(Pipeline&& other) noexcept {
+        if (this != &other) {
+            anira_pipeline_destroy(m_pipeline);
+            m_pipeline = std::exchange(other.m_pipeline, nullptr);
+        }
+        return *this;
+    }
+
+    /// Adds the inference stage (anira_pipeline_add_inference).
+    Pipeline& inference(const ModelConfig& model,
+                        std::initializer_list<BackendId> candidates = {}) {
+        return add(stage::Inference(model, candidates));
+    }
+    /// Adds one stage of any kind. A stage::Custom is read once, here: its phases(), flags()
+    /// and consumed_kinds() fill an anira_stage_desc (anira_pipeline_add_stage), and
+    /// only the phases of the mask reach it; Stage::release answers this add once.
+    /// @throws Error when the C entry refuses it: a second inference stage is
+    /// ANIRA_ERROR_CONFIG, a second custom stage ANIRA_ERROR_INVALID_STATE, more than one
+    /// variant or a non-default provider ANIRA_ERROR_NOT_SUPPORTED; a null custom stage, a
+    /// phases() bit that names none of the four phases, or a flags() bit anira/abi/stage.h
+    /// does not define, is ANIRA_ERROR_INVALID_ARGUMENT.
+    Pipeline& add(const AnyStage& any_stage) {
+        std::visit([this](const auto& value) { add_stage(value); }, any_stage);
+        return *this;
+    }
+
+    const anira_pipeline* native() const noexcept { return m_pipeline; }
+    anira_pipeline* native() noexcept { return m_pipeline; }
+
+private:
+    void add_stage(const stage::Inference& stage) {
+        anira_error err{};
+        const std::span<const anira_model_config* const> variants = stage.variants();
+        const std::span<const BackendId> candidates = stage.candidates();
+        detail::check(anira_pipeline_add_inference(m_pipeline,
+                                                   variants.data(),
+                                                   static_cast<uint32_t>(variants.size()),
+                                                   candidates.empty() ? nullptr : candidates.data(),
+                                                   static_cast<uint32_t>(candidates.size()),
+                                                   &err),
+                      err);
+    }
+
+    void add_stage(const stage::Custom& custom) {
+        const std::shared_ptr<Stage>& implementation = custom.stage();
+        if (implementation == nullptr) {
+            throw Error(ANIRA_ERROR_INVALID_ARGUMENT, "anira::stage::Custom: a null stage");
+        }
+        const uint32_t phases = implementation->phases();
+        if ((phases & ~Stage::k_all_phases) != 0U) {
+            throw Error(ANIRA_ERROR_INVALID_ARGUMENT,
+                        "anira::Stage::phases: a bit that names none of the four phases");
+        }
+        const std::span<const char* const> kinds = implementation->consumed_kinds();
+        anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
+        desc.consumed_kinds = kinds.empty() ? nullptr : kinds.data();
+        desc.num_consumed_kinds = static_cast<uint32_t>(kinds.size());
+        desc.flags = implementation->flags();  // the C entry refuses a bit it does not define
+        // A NULL phase slot means "not taking part": only the phases of the mask are filled, so
+        // that a stage of other phases leaves anira's default pre_process / post_process running.
+        if ((phases & Stage::k_pre_process) != 0U) {
+            desc.pre_process = &detail::StageTrampolines::pre_process;
+        }
+        if ((phases & Stage::k_post_process) != 0U) {
+            desc.post_process = &detail::StageTrampolines::post_process;
+        }
+        if ((phases & Stage::k_before_inference) != 0U) {
+            desc.before_inference = &detail::StageTrampolines::before_inference;
+        }
+        if ((phases & Stage::k_after_inference) != 0U) {
+            desc.after_inference = &detail::StageTrampolines::after_inference;
+        }
+        desc.prepare = &detail::StageTrampolines::prepare;
+        desc.release = &detail::StageTrampolines::release;
+        // The carrier owns the copy from a successful add on and deletes it in release; a
+        // refused add never calls release, so the copy dies here with the throw.
+        auto holder = std::make_unique<std::shared_ptr<Stage>>(implementation);
+        desc.user_data = holder.get();
+        anira_error err{};
+        detail::check(anira_pipeline_add_stage(m_pipeline, &desc, &err), err);
+        [[maybe_unused]] const std::shared_ptr<Stage>* const carried = holder.release();
+    }
+
+    anira_pipeline* m_pipeline = nullptr;
 };
 
 // ---- job options (section 6) ---------------------------------------------------------------

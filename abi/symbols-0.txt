@@ -46,6 +46,7 @@ anira_contract_hard_set_warmup
 anira_contract_set_edge_cost
 anira_contract_set_ext
 anira_contract_set_ext_json
+anira_contract_set_host_domain
 anira_drain_log
 anira_enabled_backends
 anira_handler_create
@@ -54,6 +55,8 @@ anira_handler_get_available_samples
 anira_handler_get_latencies
 anira_handler_get_latency
 anira_handler_get_plan
+anira_handler_get_static_output
+anira_handler_num_entries
 anira_handler_plan_report
 anira_handler_pop_data
 anira_handler_pop_data_multi
@@ -69,6 +72,7 @@ anira_handler_push_data_multi
 anira_handler_reset
 anira_handler_rt_error
 anira_handler_set_plan
+anira_handler_set_static_input
 anira_has_core
 anira_inference_thread_create
 anira_inference_thread_destroy
@@ -121,6 +125,7 @@ anira_now_ms
 anira_now_ns
 anira_num_inference_threads
 anira_pipeline_add_inference
+anira_pipeline_add_stage
 anira_pipeline_create
 anira_pipeline_destroy
 anira_plan_report_exts
@@ -129,8 +134,26 @@ anira_plan_report_plans
 anira_plan_report_slots
 anira_registered_ext_kinds
 anira_release_core_if_idle
+anira_ring_available
+anira_ring_available_past
+anira_ring_discard
+anira_ring_dtype
+anira_ring_num_channels
+anira_ring_peek_past_block
+anira_ring_pop_block
+anira_ring_pop_windows
+anira_ring_push_block
+anira_ring_push_fill
 anira_shutdown
 anira_sizeof
+anira_stage_default_post_process
+anira_stage_default_pre_process
+anira_stage_input_ring
+anira_stage_input_role
+anira_stage_input_tensor
+anira_stage_output_ring
+anira_stage_output_role
+anira_stage_output_tensor
 anira_status_string
 anira_sync_token_dup
 anira_sync_token_reset
@@ -155,6 +178,7 @@ anira_tensor_spec_set_axis
 anira_tensor_spec_set_ext
 anira_tensor_spec_set_ext_json
 anira_tensor_spec_set_latency
+anira_tensor_spec_set_state_source
 anira_tensor_spec_set_time_ratio
 anira_tensor_spec_set_window
 anira_version

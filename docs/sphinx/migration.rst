@@ -21,7 +21,7 @@ Where the 2.x API stands in this pre-release
 - **The runtime** (:cpp:class:`anira::InferenceHandler`, :cpp:class:`anira::PrePostProcessor`,
   ``prepare`` and ``process``) is unchanged in this pre-release and still takes the 2.x
   configuration classes, which the transitional bridge ``<anira/compat/v3_to_v2.h>`` builds
-  from the 3.x handles (:ref:`migration-bridge`); sections 2 to 5 of the :doc:`usage` guide
+  from the 3.x handles (:ref:`migration-bridge`); sections 3 to 5 of the :doc:`usage` guide
   describe it. The 3.x handler over the C ABI is in this pre-release (``anira/abi/handler.h``,
   :doc:`usage` section 3.2); the ``anira::InferenceHandler`` class of ``anira/anira.hpp`` and
   the removal of the 2.x runtime follow with the cut-over. The class behind both handlers,
@@ -31,7 +31,9 @@ Where the 2.x API stands in this pre-release
   ``anira_tensor`` per slot to the function of the same name, for channel pointers with
   ``anira_tensor_init_host_planar`` (:doc:`usage` section 3.3); ``anira::InferenceHandler``
   does exactly that for its callers, and a host of the C ABI does it itself (:doc:`usage`
-  section 3.2).
+  section 3.2). A custom :cpp:class:`anira::PrePostProcessor` stays with the 2.x handler; its
+  3.x form is the *stage* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`),
+  which runs on the C handler: :ref:`migration-runtime` maps one onto the other.
 - **The bundled models.** The 2.x fixture headers with their ``anira::InferenceConfig`` statics
   (``cnn_config``, ``hybridnn_config``, ``rnn_config``, ``gain_config``, ``stereo_gain_config``,
   ``rave_funk_drum_config`` and the encoder and decoder) are gone. Every bundled model ships a
@@ -146,6 +148,140 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
      - ``cfg.default_engine(engine)`` (``anira_model_config_set_default_engine``) selects the
        starting plan; switching at run time is ``anira_handler_set_plan`` over the plan report
        (``set_inference_backend`` on the 2.x handler).
+
+.. _migration-runtime:
+
+The handler entries and the stage
+---------------------------------
+
+The 3.x runtime of this pre-release is the C handler of ``anira/abi/handler.h`` (:doc:`usage`
+section 3.2) with the stage of ``anira/abi/stage.h`` (:doc:`usage` section 2); the 2.x
+:cpp:class:`anira::InferenceHandler` and :cpp:class:`anira::PrePostProcessor` stay as they are
+until the cut-over. What each 2.x call becomes on the C handler (``h`` is the ``anira_handler``,
+a block is an ``anira_tensor`` of :doc:`usage` section 3.3):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - anira 2.x
+     - anira 3.x
+   * - ``process(data, n)`` / ``process(data, n, tensor_index)`` (in place)
+     - ``anira_handler_process(h, &block, slot, &block, slot, &delivered)``: one
+       ``anira_tensor`` over the channel pointers (``anira_tensor_init_host_planar``, built
+       once, ``shape[1]`` stored before each call), the same tensor on both sides, one slot per
+       side.
+   * - ``process(in, n_in, out, n_out)`` and the multi-tensor ``float***`` forms
+     - Two tensors, or ``anira_handler_process_multi(h, inputs, num_inputs, outputs,
+       num_outputs, delivered)`` with one tensor per tensor of the model config's lists: an
+       empty one (an extent of ``0``) for a slot the call leaves out, the whole Static tensor
+       for a Static slot, the empty tensor at a State position. The request is ``shape[1]`` of
+       each output tensor.
+   * - the ``tensor_index`` argument
+     - ``slot``: the tensor's position in the model config's list of its side, State tensors
+       included, one number everywhere (the ``_multi`` arrays and their ``delivered`` counts,
+       the latencies, the plan report's rows, a stage's accessors); the 2.x index counted the
+       same list. A model whose stream sits at another position on each side names both:
+       ``in_slot`` and ``out_slot``.
+   * - ``push_data(...)`` / ``pop_data(...)``
+     - ``anira_handler_push_data(h, &in, slot)`` / ``anira_handler_pop_data(h, &out, slot,
+       &delivered)`` and their ``_multi`` forms.
+   * - ``pop_data(out, n, wait_until)``, ``set_non_realtime(true)``, the wait inside ``process``
+       under ``blocking_ratio``
+     - The ``_wait`` twins, each its bare form with ``double timeout_ms`` appended as the last
+       parameter: ``anira_handler_pop_data_wait(h, &out, slot, &delivered, timeout_ms)`` with
+       an explicit timeout or ``ANIRA_WAIT_FOREVER``, ``anira_handler_process_wait(h, &in,
+       in_slot, &out, out_slot, &delivered, ANIRA_WAIT_CONTRACT)`` for the contract's
+       ``wait_ratio`` times the block duration, and the two ``_multi_wait`` forms.
+   * - the returned sample count
+     - ``delivered``, a nullable pure out parameter written on every return; the status says
+       what happened: ``ANIRA_OK``, ``ANIRA_MISSED`` for a block the miss policy filled, or a
+       failure recorded in ``anira_handler_rt_error``.
+   * - ``pp_processor.set_input(value, tensor_index, sample)``
+     - ``anira_handler_set_static_input(h, slot, &tensor)``: the whole tensor in the spec's
+       shape and dtype, no per-element write and no clamp; or the element of that slot in a
+       ``_multi`` form. ``[driver-thread]``, not any-thread.
+   * - ``pp_processor.get_output(tensor_index, sample)``
+     - ``anira_handler_get_static_output(h, slot, &out)``: the whole tensor of the latest
+       collected inference.
+   * - ``get_latency()`` / ``get_latency_vector()``
+     - ``anira_handler_get_latency(h, slot)`` / ``anira_handler_get_latencies(h, &count,
+       out)``: one entry per output tensor of the list, ``0`` for a Static or a State output.
+   * - ``reset()``
+     - ``anira_handler_reset(h)``; it also re-initialises declared state.
+   * - ``set_inference_backend(backend)``
+     - ``anira_handler_set_plan(h, plan)`` over the plan report (``anira_handler_get_plan``).
+
+What each virtual and helper of a custom :cpp:class:`anira::PrePostProcessor` becomes on the
+stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C++):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - anira 2.x
+     - anira 3.x
+   * - ``class X : public anira::PrePostProcessor``
+     - An ``anira_stage_desc`` handed to ``anira_pipeline_add_stage``, or a subclass of
+       :cpp:class:`anira::Stage` handed to :cpp:class:`anira::Pipeline` as
+       :cpp:class:`anira::stage::Custom`; at most one per pipeline, named (the name is what the
+       records carry).
+   * - ``pre_process(std::vector<RingBuffer>& input, std::vector<BufferF>& output,
+       InferenceBackend backend)``
+     - ``pre_process(const anira_stage_ctx* ctx, void* user_data)`` /
+       ``Stage::pre_process(StageContext& ctx)``: per slot ``anira_stage_input_role`` (what
+       the slot is, ``ctx.input_role(slot, role)``), ``anira_stage_input_ring`` (the ring of
+       a Streamed slot, ``ctx.input_ring(slot, ring)``) and ``anira_stage_input_tensor`` (the
+       model tensor, ``ctx.input_tensor(slot, tensor)``), each a status and an out-parameter;
+       the backend is ``ctx->engine`` and ``ctx->provider`` (``ctx.engine()``,
+       ``ctx.provider()``).
+   * - ``post_process(std::vector<BufferF>& input, std::vector<RingBuffer>& output,
+       InferenceBackend backend)``
+     - ``post_process``: ``anira_stage_output_tensor`` and ``anira_stage_output_ring``.
+   * - ``before_inference(std::vector<BufferF>& input, ...)`` /
+       ``after_inference(std::vector<BufferF>& output, ...)``
+     - ``before_inference`` / ``after_inference``, one to one, on the inference thread:
+       ``anira_stage_input_tensor`` / ``anira_stage_output_tensor`` for every slot, State
+       tensors included.
+   * - ``pop_samples_from_buffer(ring, buffer, n)`` and its windowing overloads
+     - ``anira_ring_pop_block``, ``anira_ring_peek_past_block`` (the history) and
+       ``anira_ring_pop_windows`` (the batched windows); :cpp:class:`anira::RingView`
+       ``pop_block`` / ``peek_past_block`` / ``pop_windows`` over a ``std::span``. The default
+       fill itself is ``anira_stage_default_pre_process`` ("call super",
+       ``Stage::pre_process``).
+   * - ``push_samples_to_buffer(buffer, ring, n)``
+     - ``anira_ring_push_block`` (``RingView::push_block``); the default push is
+       ``anira_stage_default_post_process`` (``Stage::post_process``).
+   * - ``get_input(i, sample)`` inside ``pre_process``, ``set_output(value, i, sample)`` inside
+       ``post_process`` (the non-streamable tensors)
+     - Nothing: anira materialises a Static input into the model tensor ahead of
+       ``pre_process`` and captures a Static output from it behind ``post_process``; a stage
+       reads or alters the value through ``anira_stage_input_tensor`` /
+       ``anira_stage_output_tensor``.
+   * - the sizes of ``m_inference_config`` (``get_preprocess_input_size()``, the tensor sizes)
+     - The ``anira_tensor`` an accessor fills (``shape``, ``ndim``,
+       ``anira_tensor_num_elements``) and ``anira_ring_num_channels``; the hop is what the
+       default body moves and what anira checks after the phase.
+   * - the ``float`` helpers on a ring of another dtype (which did nothing)
+     - The ring accessors state the dtype: another one than the ring's moves nothing, returns
+       ``0`` and records ``ANIRA_ERROR_CONFIG``; a ring dtype that differs from the spec's is
+       legal when the stage fills the phase that moves that ring.
+   * - a virtual that throws
+     - A returned status: the callbacks are ``noexcept``, a status other than ``ANIRA_OK``
+       fails the chunk (zeros at its stream position) and is latched in
+       ``anira_handler_rt_error``.
+   * - the audio-thread rule of ``pre_process`` / ``post_process``
+     - The flags: ``ANIRA_STAGE_REALTIME_PRE_POST`` is required under a Hard contract
+       (``Stage::flags()``), ``ANIRA_STAGE_REALTIME_HOOKS`` is the promise for the two hooks.
+   * - the hidden-state splice in the hooks (the ``StatefulPrePostProcessor`` pattern)
+     - Declared state: ``"role": "state"`` on both halves and ``"state_source"`` on the input;
+       anira feeds and captures it, no hook needed. The hooks still see the fed and the
+       produced state.
+   * - the FFT of a spectrogram processor
+     - Stays in ``pre_process`` with the promise, as in 2.x; or moves to ``before_inference``
+       on the inference thread, with the window popped into a per-entry scratch
+       (``anira_stage_ctx.entry``, ``anira_handler_num_entries``) in ``pre_process``
+       (:doc:`custom_preprocessing`).
 
 .. _migration-bridge:
 

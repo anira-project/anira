@@ -284,6 +284,7 @@ void SessionElement::complete_with_zeros(
     // the output side consumes the task at its correct position like any other
     // and frees the struct, it just yields silence for this chunk.
     for (auto& output_data : thread_safe_struct->m_tensor_output_data) { output_data.clear(); }
+    thread_safe_struct->m_completed_as_zeros = true;  // before the done signal
     if (m_inference_config.m_blocking_ratio > 0.f) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
@@ -409,6 +410,18 @@ void SessionElement::prepare(const HostConfig& host_config,
         } else {
             m_receive_buffer[i].clear_with_positions();
         }
+    }
+
+    // What the C ring accessors and the default stage bodies need of a ring: its hop, and the
+    // way back to this session's latch (abi/stage.h). A non-streamable slot has no ring to move.
+    m_ring_owner.m_rt = m_rt;
+    for (size_t i = 0; i < m_send_buffer.size(); ++i) {
+        m_send_buffer[i].set_owner(m_inference_config.get_preprocess_input_size()[i],
+                                   &m_ring_owner);
+    }
+    for (size_t i = 0; i < m_receive_buffer.size(); ++i) {
+        m_receive_buffer[i].set_owner(m_inference_config.get_postprocess_output_size()[i],
+                                      &m_ring_owner);
     }
 
     // Prime the latency with zeros of the ring's own element type

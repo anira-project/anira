@@ -150,6 +150,7 @@ export const anira_role = {
   ANIRA_ROLE_STREAMED: 0,
   ANIRA_ROLE_BUFFER: 1,
   ANIRA_ROLE_STATIC: 2,
+  ANIRA_ROLE_STATE: 3,
 } as const
 export type anira_role = (typeof anira_role)[keyof typeof anira_role]
 
@@ -346,5 +347,7 @@ export const ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK = 1
 export const ANIRA_LOG_FLAG_TRACE_FAILURES = 2
 export const ANIRA_AXIS_INSERT = 4294967295
 export const ANIRA_TICKET_INVALID = 0
+export const ANIRA_STAGE_REALTIME_PRE_POST = 1
+export const ANIRA_STAGE_REALTIME_HOOKS = 2
 export const ANIRA_LOG_RECORD_REALTIME = 1
 export const ANIRA_LOG_RECORD_CONTRACT_VIOLATION = 2

@@ -136,6 +136,7 @@ typedef struct anira_capabilities anira_capabilities;
 typedef struct anira_inference_thread anira_inference_thread;
 typedef struct anira_handler anira_handler;
 typedef struct anira_plan_report anira_plan_report;
+typedef struct anira_ring anira_ring;
 
 /**
  * @brief Caller-owned error record, filled by the callee on failure: the status and a

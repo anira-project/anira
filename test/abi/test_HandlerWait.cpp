@@ -61,9 +61,9 @@ Pull pull(anira_handler* handler, float param, std::vector<float>& out, double t
     const size_t n = out.size();
     const std::array<float, 4> params{param, 0.0F, 0.0F, 0.0F};
     std::ranges::fill(out, -1.0F);
-    const std::array<const float*, 1> param_ch{params.data()};
     const std::array<float*, 1> out_ch{out.data()};
-    const anira_tensor in = anira_test::planar_f32(param_ch.data(), 1, 4);
+    // The Static input of a multi form is the whole tensor in the spec's shape, [1, 4].
+    const anira_tensor in = anira_test::whole_f32(params.data(), {1, 4});
     const anira_tensor outs = anira_test::planar_f32(out_ch.data(), 1, n);
     std::array<size_t, 1> delivered{7};
     Pull result;
@@ -268,20 +268,18 @@ TEST(AbiHandlerWait, TheTensorTwinsMissAtTheDeadlineAndDeliverWithoutLimit) {
     EXPECT_GE(elapsed, std::chrono::milliseconds(20));
     EXPECT_LT(elapsed, std::chrono::milliseconds(500)) << "the deadline, not the stall";
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    // A generator's single forms: input 0 is Static, so the parameter goes through
+    // anira_handler_set_static_input and the pull is the pop twin.
     delivered = 7;
-    EXPECT_EQ(anira_handler_process_wait(h,
-                                         &param_tensor,
-                                         &out_tensor,
-                                         ANIRA_WAIT_FOREVER,
-                                         0,
-                                         &delivered),
+    EXPECT_EQ(anira_handler_set_static_input(h, 0, &param_tensor), ANIRA_OK);
+    EXPECT_EQ(anira_handler_pop_data_wait(h, &out_tensor, 0, &delivered, ANIRA_WAIT_FOREVER),
               ANIRA_OK);
     EXPECT_EQ(delivered, k_hop);
 
     // The pop twins from a re-seeded stream: the priming block, then the stalled one.
     anira_handler_reset(h);
     delivered = 7;
-    EXPECT_EQ(anira_handler_pop_data_wait(h, &out_tensor, 20.0, 0, &delivered), ANIRA_OK);
+    EXPECT_EQ(anira_handler_pop_data_wait(h, &out_tensor, 0, &delivered, 20.0), ANIRA_OK);
     EXPECT_EQ(delivered, k_hop);
     delivered = 7;
     start = std::chrono::steady_clock::now();
@@ -291,7 +289,7 @@ TEST(AbiHandlerWait, TheTensorTwinsMissAtTheDeadlineAndDeliverWithoutLimit) {
     EXPECT_GE(elapsed, std::chrono::milliseconds(20));
     EXPECT_LT(elapsed, std::chrono::milliseconds(500));
     delivered = 7;
-    EXPECT_EQ(anira_handler_pop_data_wait(h, &out_tensor, ANIRA_WAIT_FOREVER, 0, &delivered),
+    EXPECT_EQ(anira_handler_pop_data_wait(h, &out_tensor, 0, &delivered, ANIRA_WAIT_FOREVER),
               ANIRA_OK);
     EXPECT_EQ(delivered, k_hop);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
@@ -338,10 +336,10 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
         const std::array<float*, 1> out_ch{out.data()};
         const anira_tensor popped = anira_test::planar_f32(out_ch.data(), 1, k_hop);
         size_t delivered = 0;
-        EXPECT_EQ(anira_handler_pop_data_wait(h, &popped, 20.0, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(anira_handler_pop_data_wait(h, &popped, 0, &delivered, 20.0), ANIRA_OK);
         EXPECT_EQ(delivered, k_hop);
         const auto start = std::chrono::steady_clock::now();
-        EXPECT_EQ(anira_handler_pop_data_wait(h, &popped, 20.0, 0, &delivered), ANIRA_MISSED);
+        EXPECT_EQ(anira_handler_pop_data_wait(h, &popped, 0, &delivered, 20.0), ANIRA_MISSED);
         EXPECT_EQ(delivered, 0U);
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start);
@@ -372,13 +370,13 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
         const anira_tensor popped = anira_test::planar_f32(out_ch.data(), 1, k_hop);
         size_t delivered = 0;
         if (anira_handler_get_latency(h, 0) > 0) {
-            EXPECT_EQ(anira_handler_pop_data_wait(h, &popped, ANIRA_WAIT_CONTRACT, 0, &delivered),
+            EXPECT_EQ(anira_handler_pop_data_wait(h, &popped, 0, &delivered, ANIRA_WAIT_CONTRACT),
                       ANIRA_OK)
                 << "the priming block";
             EXPECT_EQ(delivered, k_hop) << "the priming block";
         }
         const auto start = std::chrono::steady_clock::now();
-        EXPECT_EQ(anira_handler_pop_data_wait(h, &popped, ANIRA_WAIT_CONTRACT, 0, &delivered),
+        EXPECT_EQ(anira_handler_pop_data_wait(h, &popped, 0, &delivered, ANIRA_WAIT_CONTRACT),
                   ANIRA_MISSED);
         EXPECT_EQ(delivered, 0U);
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -427,15 +425,13 @@ TEST_P(AbiHandlerWaitRatio, InvalidStateWithoutAnActiveThread) {
     const Pull second = pull(h, 2.0F, out, ANIRA_WAIT_FOREVER);
     EXPECT_EQ(second.m_status, ANIRA_ERROR_INVALID_STATE);
     expect_stem_count(second.m_delivered, "the multi twin's second stem");
-    // The single-tensor twins refuse the same way, and their count is the stem's too.
+    // The single-tensor pop twin refuses the same way, and its count is the stem's too. (A
+    // generator has no single process form: its input slot 0 is Static, whose single form is
+    // anira_handler_set_static_input.)
     const std::array<float*, 1> out_ch{out.data()};
     const anira_tensor io = anira_test::planar_f32(out_ch.data(), 1, k_hop);
     size_t delivered = 7;
-    EXPECT_EQ(anira_handler_process_wait(h, &io, &io, ANIRA_WAIT_FOREVER, 0, &delivered),
-              ANIRA_ERROR_INVALID_STATE);
-    expect_stem_count(delivered, "the in-place twin's stem");
-    delivered = 7;
-    EXPECT_EQ(anira_handler_pop_data_wait(h, &io, ANIRA_WAIT_CONTRACT, 0, &delivered),
+    EXPECT_EQ(anira_handler_pop_data_wait(h, &io, 0, &delivered, ANIRA_WAIT_CONTRACT),
               ANIRA_ERROR_INVALID_STATE);
     expect_stem_count(delivered, "the pop twin's stem");
     anira_drain_log();

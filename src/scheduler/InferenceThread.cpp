@@ -376,14 +376,28 @@ void InferenceThread::do_inference(
     // exactly as on success, and the failure is ENGINE on the session's latch (a 3.x
     // handler's word), logged on its first occurrence since the latch's re-arm.
     try {
+        // A 3.x stage processor feeds the declared state inside before_inference, ahead of the
+        // stage's own hook, and captures it inside after_inference, behind the stage's hook
+        // (capi/stage.h): the session knows nothing of it.
         session->m_pp_processor.before_inference(thread_safe_struct->m_tensor_input_data, backend);
-        inference(session,
-                  backend,
-                  thread_safe_struct->m_tensor_input_data,
-                  thread_safe_struct->m_tensor_output_data);
-        session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data, backend);
+        // A stage processor leaves the status of a failed before_inference or after_inference on
+        // the chunk (it records the failure itself; a 2.x processor never writes the field):
+        // the rest is skipped and the chunk delivers zeros.
+        if (thread_safe_struct->m_stage_status == ANIRA_OK) {
+            inference(session,
+                      backend,
+                      thread_safe_struct->m_tensor_input_data,
+                      thread_safe_struct->m_tensor_output_data);
+            session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data,
+                                                    backend);
+        }
+        if (thread_safe_struct->m_stage_status != ANIRA_OK) {
+            for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+            thread_safe_struct->m_completed_as_zeros = true;
+        }
     } catch (const std::exception& e) {
         for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        thread_safe_struct->m_completed_as_zeros = true;
         if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
             ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
                                "inference failed in session %d: %s; delivering zeros",
@@ -392,6 +406,7 @@ void InferenceThread::do_inference(
         }
     } catch (...) {
         for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        thread_safe_struct->m_completed_as_zeros = true;
         if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
             ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
                                "inference failed in session %d: non-std exception; delivering "

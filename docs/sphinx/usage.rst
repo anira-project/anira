@@ -29,10 +29,13 @@ of section 1.5 are their file form.
    * - ``anira::ContextConfig``
      - The process: the inference thread pool, logging, the devices anira may use. Lives on
        the box; its file form is the context file.
-   * - :cpp:class:`anira::InferenceHandler`, :cpp:class:`anira::PrePostProcessor`
+   * - ``anira_handler`` with its ``anira_pipeline`` (:cpp:class:`anira::Pipeline`,
+       :cpp:class:`anira::Stage`)
      - The runtime: offloads inference to the thread pool and returns the processed audio to
-       the real-time thread, with optional custom pre- and post-processing. In this
-       pre-release the runtime still takes the 2.x configuration classes (sections 2 to 5).
+       the real-time thread, with the pipeline's one *stage* as custom pre- and
+       post-processing (section 2). The 3.x handler is the C handler of section 3.2; the 2.x
+       :cpp:class:`anira::InferenceHandler` of sections 3 to 5 still takes the 2.x
+       configuration classes in this pre-release.
 
 1. Configuration
 ----------------------------------------
@@ -84,14 +87,31 @@ The roles are:
 - ``ANIRA_ROLE_STATIC``: no time semantics, one value per run, such as a gain or a
   conditioning vector.
 - ``ANIRA_ROLE_BUFFER``: the whole submitted buffer is one tensor, no Time axis (frames,
-  images).
+  images). A Buffer tensor is a per-job payload and arrives with the Async contract: the spec
+  is valid in a model config and a model file, and ``anira_handler_prepare`` refuses it under
+  a Hard contract with ``ANIRA_ERROR_NOT_SUPPORTED``, naming the tensor. A persistent side
+  input under a Hard contract is ``ANIRA_ROLE_STATIC``.
+- ``ANIRA_ROLE_STATE``: declared state, one half of a pair of a state input and a state output
+  with equal dtype and shape (an exported recurrent hidden state, a streaming-convolution
+  cache). The input half names the output half it is fed from (``"state_source"`` in a model
+  file, ``anira_tensor_spec_set_state_source`` in C), and anira feeds and captures the state
+  around every inference itself (section 3.4). A State spec may stand anywhere in its list and has a slot
+  like every other tensor (its position in the list, the number a stage sees it at too), but
+  no Hard entry carries it: a single form that names its slot is
+  ``ANIRA_ERROR_INVALID_ARGUMENT``, and its position in an array of a ``_multi`` form must
+  hold the empty tensor. No Time axis, window, time ratio or latency; float32 in this
+  pre-release. A model with a pair runs as
+  Stateful whatever its ``state`` says.
 
 The axes are set with ``axis(i, tag, extent)`` by index in the model's memory order, each with
 a tag and an extent; NCHW against NHWC is just a different order of tags. Tags are
 ``ANIRA_AXIS_BATCH``, ``ANIRA_AXIS_CHANNEL``, ``ANIRA_AXIS_TIME``, ``ANIRA_AXIS_HEIGHT``,
 ``ANIRA_AXIS_WIDTH``, ``ANIRA_AXIS_FEATURE`` and ``ANIRA_AXIS_ANY`` (no semantics). The extent
 of the Time axis of a streamed spec may be ``ANIRA_DYNAMIC`` when the model accepts any
-length; a streamed spec has exactly one Time axis and at most one Channel axis.
+length; a streamed spec has exactly one Time axis and at most one Channel axis. The Channel
+tag maps onto ring channels on a streamed tensor only. A Static or a Buffer tensor has the
+spec's shape: it may carry a Channel axis of any extent (at most one), the tag describes that
+axis and nothing more, and the tensor moves as the product of its extents.
 
 A streamed spec also carries its **window**, ``window(window_min, window_max, overlap)``: how
 many elements along the Time axis one inference consumes (``window_min`` and ``window_max``,
@@ -158,8 +178,9 @@ not here, so one config serves every build.
     read it off: ONNX Runtime uses the graph's input and output names; TFLite and LiteRT the
     signature key (``args_0``, ``output_0``), or the tensor name for a file without
     signatures; LibTorch the method's argument name (inputs only); ExecuTorch the tensor name
-    when the export carries one. With a name the entry binds that tensor by name; a name the
-    engine cannot find fails prepare with what the file has.
+    when the export carries one. The engines of this pre-release still bind by position; the
+    name is stored, and binding by name (a name the engine cannot find then fails prepare with
+    what the file has) arrives with the backend descriptor.
   - ``tensor_layout(i, canonical, axes)``: the order in which the export holds the tensor's
     axes, as spec axis indices (a ``std::span<const uint32_t>``; a ``std::array`` converts):
     ``{0, 2, 1}`` says the file's axis 0 is spec axis 0, its axis 1 is spec axis 2, its axis 2
@@ -198,7 +219,8 @@ not here, so one config serves every build.
   ``default_engine("de.tu-berlin.coreml")``.
 - **State.** ``state(ANIRA_MODEL_STATEFUL)`` declares a model that carries state across
   inferences (RNNs, LSTMs, RAVE): its inferences then run strictly in submission order and
-  never concurrently.
+  never concurrently. A model with a declared State pair (section 1.1) runs this way whatever
+  it says here.
 - **Instances.** ``max_instances(n)`` is the ceiling within which the planner allocates
   parallel instances of a stateless model (default 1).
 - **Anchor.** ``anchor(canonical)`` names the streamed tensor that is the model's clock: the
@@ -255,7 +277,10 @@ an ``anira::ContractHandle``.
   anchor) or when the channel counts differ, ``prepare`` refuses it with
   ``ANIRA_ERROR_CONFIG`` naming ``on_miss``.
   ``ANIRA_MISS_HOLD_LAST`` repeats the last block the output delivered (one block-sized buffer
-  per output channel, allocated at prepare) and the latest value of a Static output.
+  per output channel, allocated at prepare).
+  The policies speak about Streamed outputs. They define nothing for a Static output, which is
+  the handler's stored value, the latest the model produced, on a delivered block and on a
+  missed one alike (section 3.2, *Static tensors*).
   ``ANIRA_MISS_ZEROS`` delivers silence, what the 2.x runtime did: the contract a 2.x document
   upgrades to carries it, and so do the bundled RAVE encoder and decoder files (one audio
   channel against four latents). Every other bundled contract file keeps the default.
@@ -263,9 +288,11 @@ an ``anira::ContractHandle``.
   ``anira_miss_fn``, set with ``anira_contract_hard_set_miss_fn(contract, fn, user_data)``
   (``Hard::miss_fn`` / ``miss_user_data``, ``ContractHandle::hard_miss_fn``). It is called once
   per missed block on the thread that called the entry, for the whole block: ``inputs`` and
-  ``outputs`` are one ``anira_tensor`` per slot, in slot order and covering every slot, the very
-  arrays the entry was handed (section 3.2). A slot the call did not carry is an empty tensor
-  (``shape[1] == 0``), a pop passes empty inputs, and the input block of a process form is
+  ``outputs`` are one ``anira_tensor`` per slot, in slot order and covering every slot, the
+  arrays the entry was handed, the caller's own under a ``_multi`` form (section 3.2; a slot
+  is the tensor's position in the model config's list of its side, State tensors included).
+  A slot the call did not carry, and the position of a State tensor always, is an empty
+  tensor (``shape[1] == 0``), a pop passes empty inputs, and the input block of a process form is
   already pushed and still intact, in place too. The function fills the memory of every output
   whose ``shape[1]`` is above ``0`` and returns ``ANIRA_OK``; any other status makes anira
   zero-fill them. The entry still returns ``ANIRA_MISSED`` with a count of ``0``. The function
@@ -302,16 +329,35 @@ an ``anira::ContractHandle``.
   entries (section 3.2; they take the ``anira_tensor`` of section 3.3) carry it across the
   ABI as is. Per tensor, so an
   input and an output may differ; every tensor never set uses ``ANIRA_DTYPE_F32``. Nothing
-  in anira converts: a name that is not a Streamed tensor, and a ring dtype that differs
-  from the spec's dtype (the model's), are ``ANIRA_ERROR_CONFIG`` at prepare (a stage that
-  consumes the difference arrives with a later pre-release).
+  in anira converts: a name that is not a Streamed tensor is ``ANIRA_ERROR_CONFIG`` at
+  prepare, and so is a ring dtype that differs from the spec's dtype (the model's), unless the
+  pipeline's stage fills the phase that moves that ring (``pre_process`` for an input,
+  ``post_process`` for an output; section 2) and so takes the conversion on itself: the ring
+  then holds the host's element type, the model tensor the spec's, and the stage moves
+  between the two.
+- **Host domain.** ``contract.host_domain("audio_in", ANIRA_DOMAIN_HOST)``
+  (``anira_contract_set_host_domain``; ``"host_domains": {"audio_in": "host"}`` in the
+  contract file, the words being the lower-case suffixes of ``anira_domain``) declares where
+  the *host end* of one tensor lives, by canonical name, for any tensor of either side,
+  Streamed, Buffer, Static and State alike; every tensor never set is ``ANIRA_DOMAIN_HOST``.
+  It is common to both contract kinds, like ``edge_cost``. The declared domain is where anira
+  allocates the slot's ring, its model tensor, the Static store and the state buffers, and
+  where all four phases of the stage, the state feed and the capture work (section 2); the
+  planner joins it to the engine's domain per slot with an edge (the plan report's slot rows
+  carry it as ``domain_in`` of an input and ``domain_out`` of an output, the engine's domain
+  on the other side), which is nothing where the two coincide, so a tensor declared in the
+  engine's own domain crosses no edge. Resolved at prepare: a name that matches no tensor is
+  ``ANIRA_ERROR_CONFIG``, and in this pre-release any domain but ``ANIRA_DOMAIN_HOST`` is
+  ``ANIRA_ERROR_NOT_SUPPORTED`` naming the tensor: the declaration is data, and the runtime
+  allocates in host memory only.
 
 An **Async** contract (the ``anira::Async`` aggregate: an optional ``deadline``, ``on_late``,
 ``priority``, ``lanes``, ``max_in_flight``, ``delivery``) describes jobs without a real-time
 deadline, the offline posture; ``anira::Contract`` is the ``std::variant`` of the two, and the
 handle is minted from either. ``contract.kind()`` tells the two apart, and a Hard setter on an
 Async contract throws ``anira::Error`` with ``ANIRA_ERROR_WRONG_CONTRACT``. ``edge_cost``, on
-both aggregates, is the plan-validation policy for pipelines and does not affect scheduling.
+both aggregates, is the plan-validation policy for pipelines and does not affect scheduling;
+``host_domain`` on the handle (above) is common to both kinds the same way.
 
 1.4. Context configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -395,9 +441,10 @@ document), so a typo never turns into a default.
   channels-last TensorFlow export of a mono model); ``entry`` is the extension that names the
   entry point (section 1.2).
 - ``inputs[]`` / ``outputs[]``: the tensor specs of section 1.1 — ``dtype``, ``role``
-  (``streamed``, ``buffer``, ``static``), tagged ``axes`` (an extent or ``"dynamic"``),
-  ``window`` (``min`` and ``max`` or ``"unbounded"``), ``overlap``, ``latency`` (outputs) and
-  ``time_ratio``.
+  (``streamed``, ``buffer``, ``static``, ``state``), tagged ``axes`` (an extent or
+  ``"dynamic"``), ``window`` (``min`` and ``max`` or ``"unbounded"``), ``overlap``, ``latency``
+  (outputs), ``time_ratio`` and ``state_source`` (the input half of a state pair only: the
+  canonical name of the state output it is fed from).
 - ``anchor`` is the canonical name of the streamed tensor that is the model's clock (section
   1.2); absent means the first streamed input, or the first streamed output of a generator.
 
@@ -412,7 +459,8 @@ root, ``{"hard": {...}}`` or ``{"async": {...}}``, with ``budget`` as ``"measure
 the function is set in code), ``wait_ratio`` as a number, the
 geometry keys ``block_min`` / ``block_max`` / ``rate`` (optional; a plugin patches them from
 the host with ``hard_geometry``), ``ring_dtypes`` as ``{"audio_in": "int16"}`` (optional,
-by canonical name), and an optional top-level ``edge_cost``.
+by canonical name), and the optional top-level keys ``edge_cost`` and ``host_domains``
+(``{"audio_in": "host"}``, section 1.3), which stand beside either root.
 
 .. code-block:: cpp
 
@@ -481,7 +529,7 @@ returns ``ANIRA_SUCCESS_UPGRADED`` and ``anira_model_config_take_legacy_contract
 its Hard contract.
 
 .. note::
-    In this pre-release the runtime, sections 2 to 5, still takes the 2.x configuration
+    In this pre-release the 2.x C++ runtime, sections 3 to 5, still takes the 2.x configuration
     classes :cpp:struct:`anira::InferenceConfig`, :cpp:struct:`anira::CoreConfig` and
     :cpp:struct:`anira::HostConfig`. The transitional bridge ``<anira/compat/v3_to_v2.h>``
     builds them from the handles above, so the configuration is written once, in the 3.x API:
@@ -501,22 +549,336 @@ its Hard contract.
     breaks a rule of section 1.1, naming the tensor. :ref:`migration-bridge` lists what
     becomes what, the lifetime rules and the candidate filter.
 
-2. Pre and Post Processing
---------------------------
+2. Stages
+---------
 
-For most use cases, you can use the default :cpp:class:`anira::PrePostProcessor` without modification. This is suitable when your model operates in the time domain with straightforward input/output tensor shapes.
+A **stage** is the pre- and post-processing of a pipeline: the code that takes the host's data
+to the model's tensors ahead of an inference and back behind it. It is a descriptor, not a
+class: ``anira_stage_desc`` of ``anira/abi/stage.h`` names up to four phase callbacks, a
+prepare and a release function, one ``user_data`` slot, a name and the stage's real-time
+promise, and ``anira_pipeline_add_stage(pipe, &desc, &err)`` copies it (within
+``struct_size``, with its strings) into a carrier that the pipeline and every handler created
+from it share, so ``release`` fires exactly once, with the last of them. A pipeline holds **at
+most one stage**: a second ``anira_pipeline_add_stage`` is ``ANIRA_ERROR_INVALID_STATE``, and
+the order relative to ``anira_pipeline_add_inference`` means nothing. The stage has no name:
+with one per pipeline a name would identify nothing, so every record about it says ``the
+stage``. Without a stage anira runs its default bodies, the windowing of a streamed model,
+which is all that most models need. A stage is for a model whose host data is not its
+model tensor as it stands: an integer stream a model reads as ``float32``, a spectrogram
+model, a batched sliding-window layout, a value normalised on the way in and denormalised on
+the way out. In C++ the same descriptor is a subclass of :cpp:class:`anira::Stage` (below);
+:doc:`custom_preprocessing` walks through the cases.
+
+**The phases of one chunk.** A chunk is one inference's worth of data, one hop of every
+Streamed tensor. Its four phases run in this order:
+
+1. ``pre_process``, on the thread where the host end is produced: the thread that drives the
+   Hard entries of section 3.2 (under an Async contract, an inference thread). It takes the
+   host end of every input slot, the ring of a Streamed tensor, to the *model tensor* of that
+   slot: the chunking and every conversion, a spectrogram model's FFT included. One call forms
+   exactly one chunk; a host block that holds several hops forms several chunks, one call
+   each.
+2. On an inference thread: anira feeds the State inputs (section 3.4), ``before_inference``
+   runs, anira crosses the edge into the engine's domain, the engine runs, anira crosses the
+   edge back, ``after_inference`` runs, anira captures the State outputs.
+3. ``post_process``, on the thread where the host end is consumed: it takes the model tensor
+   of every output slot back to the host end, the output ring.
+
+The edge sits directly before and after the engine and is anira's: a stage never crosses a
+domain. Every phase works at the host end of every slot, in the domain the contract declares
+for that tensor (``host_domain``, section 1.3; host memory, the only domain this pre-release
+accepts), and the descriptor carries no domain of its own. In this pre-release every model
+tensor is ``ANIRA_DTYPE_F32``.
+
+**NULL and filled slots.** A phase slot left ``NULL`` means anira's default body runs:
+``anira_stage_default_pre_process`` pops one hop per channel of every Streamed input from its
+ring into the model tensor (with the ring's history ahead of it where the window is longer
+than the hop, the receptive-field fill; channel ``c`` of a tensor of ``n`` elements per
+channel starts at element ``c * n``), ``anira_stage_default_post_process`` pushes one hop per
+channel of every Streamed output from the model tensor into its ring; a Static slot is
+materialised ahead of ``pre_process`` and captured behind ``post_process`` by anira itself,
+and the two hooks have no default. A filled slot means the stage **owns the phase for every
+slot with a host end**: what it does not handle itself it hands to the default body,
+explicitly, by calling ``anira_stage_default_pre_process(ctx)`` or
+``anira_stage_default_post_process(ctx)`` from its own code ("call super"). The defaults are
+real-time by construction, never touch a tensor of another role than Streamed, and return
+``ANIRA_ERROR_CONFIG`` for a slot whose ring dtype is not its tensor's, leaving that slot
+untouched.
+
+**What a callback sees.** Every phase callback receives an ``anira_stage_ctx``, 64 bytes that
+anira fills on its own stack for the duration of the call: ``phase``, the ``engine`` and
+``provider`` of the plan the chunk was submitted under, ``variant``, ``num_inputs`` and
+``num_outputs`` (the lengths of the model config's two lists, State tensors included),
+``ticket`` (``ANIRA_TICKET_INVALID`` under a Hard contract), ``entry`` (below) and an opaque
+``frame`` that is anira's and is never dereferenced. The tensors and the rings are not in the
+record: a callback asks **per slot**, the tensor's position in the model config's list of its
+side (the one number every entry of section 3.2 uses), through six accessors,
+``[callback-safe]`` and ``ANIRA_NONBLOCKING``:
+
+- ``anira_stage_input_role(ctx, slot, &role)`` / ``anira_stage_output_role``: what the
+  tensor is, the ``anira_role`` of its spec, the same answer in every phase; the first
+  question about a slot the stage does not know from its model config.
+- ``anira_stage_input_ring(ctx, slot, &ring)`` / ``anira_stage_output_ring``: the ring of a
+  Streamed tensor in the phase that moves it, ``pre_process`` for an input and
+  ``post_process`` for an output, for the ring accessors below.
+- ``anira_stage_input_tensor(ctx, slot, &tensor)`` / ``anira_stage_output_tensor``: fill a
+  borrowed descriptor (section 3.3) of the *model end* of the slot, the tensor the engine
+  binds, for the stage to read or write. The inputs answer in ``pre_process`` (Streamed and
+  Static; a State input has no host end there) and in ``before_inference`` (every role, the
+  State inputs fed); the outputs in ``after_inference`` (every role, the State outputs not
+  yet captured) and in ``post_process`` (Streamed and Static; a State output was captured
+  ahead of it). The descriptor is built by the call over the memory the tensor has right
+  now, which an engine may swap between two inferences: ask again in every callback, and
+  keep neither the descriptor nor its data pointer.
+
+One rule for all six: the accessor returns an ``anira_status`` and fills its out-parameter,
+which it resets on any status but ``ANIRA_OK`` (``ANIRA_ROLE_FORCE32``, ``NULL``, an all-zero
+record). A slot always has a role. Asking for a ring or a model tensor the slot does not have
+in this phase (a ring of a Static or a State tensor, an input ring outside ``pre_process`` or
+an output ring outside ``post_process``, the host end of a State tensor in ``pre_process`` or
+``post_process``, a side outside its phases) is a **bug in the stage, not an answer**: a stage
+knows what a slot is, from its model config or by asking the role first, so the accessor
+answers ``ANIRA_ERROR_INVALID_STATE`` and latches it into ``anira_handler_rt_error`` with one
+record per kind naming the entry, the slot and the phase, as it latches a slot out of range
+and a ``NULL`` out-parameter (``ANIRA_ERROR_INVALID_ARGUMENT``). Every ring accessor
+still takes a ``NULL`` ring and returns 0 for it.
+
+**The entry.** ``ctx->entry`` is the in-flight entry this chunk occupies, ``0 ..
+anira_handler_num_entries(h) - 1``: the same value in all four phases of one chunk, distinct
+across the chunks in flight at once, reused once the chunk has completed. It is the index of a
+**per-chunk scratch** a stage sizes in its prepare function, where
+``anira_handler_num_entries`` already answers (the handler counts as prepared there), so that
+what ``pre_process`` pops or computes is found again by ``before_inference`` on another
+thread, and what ``before_inference`` keeps by ``after_inference``, without an allocation: the
+phases of an STFT that the inverse transform needs, or a window popped on the driving thread
+and transformed on the inference thread when the transform is too heavy for the audio
+callback.
+
+**The rings.** The rings stay inside anira; a stage moves elements through the ten
+``anira_ring`` accessors, ``[callback-safe]`` and ``ANIRA_NONBLOCKING``: ``anira_ring_dtype``
+and ``anira_ring_num_channels``, a ring's two facts; ``anira_ring_available`` and
+``anira_ring_available_past``, the unread elements of one channel and the consumed ones the
+ring still retains as history; ``anira_ring_pop_block`` and ``anira_ring_peek_past_block``,
+oldest first, the history being the receptive field of a model whose window is longer than its
+hop; ``anira_ring_push_block`` and ``anira_ring_push_fill``; ``anira_ring_discard``; and
+``anira_ring_pop_windows``, the batched sliding-window layout of ``num_batches`` windows, each
+``num_old`` elements of history followed by ``num_new`` fresh ones. Every data accessor states
+the dtype it believes the ring holds; when it is another one the call returns ``0``, moves
+nothing and records ``ANIRA_ERROR_CONFIG``, since **nothing in anira converts**, in either
+direction (a channel out of range: ``0`` and ``ANIRA_ERROR_INVALID_ARGUMENT``; a ``NULL``
+ring: ``0``; ``discard`` takes no dtype). A ring holds the ring dtype the contract declares
+for its tensor (``hard_ring_dtype``, section 1.3; ``ANIRA_DTYPE_F32`` unless declared), which
+may differ from the spec's dtype exactly when the stage fills the phase that moves that ring:
+prepare refuses the difference otherwise, and the default body refuses such a slot at run
+time. The channel count has no such exception, and neither has the domain.
+
+**The hop rule.** anira counts: after ``pre_process`` every Streamed input ring must have
+given up exactly the slot's hop per channel, and after ``post_process`` every Streamed output
+ring must have gained exactly its hop. A shortfall is repaired so the stream stays aligned
+(the missing elements are discarded from an input ring, an output ring is topped up with
+zeros); an excess cannot be undone. Either way ``anira_handler_rt_error`` reads
+``ANIRA_ERROR_CONFIG`` and one latched record names the phase, the tensor and both counts. It
+is the guard of a stage that moves the wrong amount, not a policy.
+
+**Failure.** A phase callback returns ``ANIRA_OK``, or any other status to fail its chunk: the
+status goes into ``anira_handler_rt_error`` with one latched record naming the phase, and the
+chunk delivers zeros at its stream position. A failed ``pre_process`` is not submitted to an
+engine; a failed ``before_inference`` or ``after_inference`` skips the rest and zeroes the
+model outputs (the State outputs are not captured, so the state keeps its last good value);
+after a failed ``post_process`` anira tops every Streamed output ring up to the chunk's hop
+with zeros, because a ring cannot take a push back. A prepare the stage refuses fails with
+``the stage refused prepare`` and its status. The consumer column of the ``anira_plan_ext``
+rows of the extensions the stage lists in ``consumed_kinds`` (``"<host>:<kind>"`` strings
+that join the consumed-or-fail walk) reads ``stage``.
+
+**Static and State slots in the phases.** A Static input is a per-chunk snapshot: anira
+materialises the value of the handler's store (``anira_handler_set_static_input``, section
+3.2) into the model tensor when the chunk is formed, ahead of ``pre_process``, where
+``anira_stage_input_tensor`` reads it; a Static output is captured from the model tensor
+behind ``post_process``. The write order of one chunk is therefore: materialise,
+``pre_process``, feed the State inputs, ``before_inference``, the engine, ``after_inference``,
+capture the State outputs, ``post_process``, capture the Static outputs. Whoever writes last
+wins, and the store itself is written only by the host and by the capture, so a stage that
+overwrites a Static input's model tensor changes that chunk and nothing else. A State slot
+(section 3.4) has no host end: ``pre_process`` and ``post_process`` get
+``ANIRA_ERROR_INVALID_STATE`` for it, while the two hooks see it fed (an input: what the
+engine will get) and produced (an output: what the next inference will be fed), and a stage
+may read or alter either.
+
+**The real-time promise.** Whether a stage body is real-time is the stage's own promise,
+``anira_stage_desc.flags``, not a property of the callback type: ``ANIRA_STAGE_REALTIME_PRE_POST``
+says ``pre_process`` and ``post_process`` allocate nothing, lock nothing and block on nothing;
+``ANIRA_STAGE_REALTIME_HOOKS`` says the same of ``before_inference`` and ``after_inference``;
+``0``, the value of ``ANIRA_STAGE_DESC_INIT``, promises nothing. ``anira_handler_prepare``
+checks the promise against the placement: under a Hard contract a filled ``pre_process`` or
+``post_process`` runs on the driving thread and requires ``ANIRA_STAGE_REALTIME_PRE_POST``,
+else prepare fails with ``ANIRA_ERROR_CONFIG`` naming the flag; under an Async
+contract everything runs on an inference thread and no bit is required; a bit the header does
+not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at ``anira_pipeline_add_stage``. anira's own
+side is real-time whatever the flags say: the ring accessors, the six context accessors and
+the two default bodies are ``ANIRA_NONBLOCKING``, so a real-time body is composed of
+nonblocking calls, and an author who wants clang's compile-time check declares the callback
+``ANIRA_NONBLOCKING`` themselves (``anira_stage_fn`` carries no attribute, since the promise
+differs per stage).
+
+**Prepare and release.** ``prepare(handler, report, user_data)`` runs on the caller of
+``anira_handler_prepare`` after the plan report is built, once per prepare. It may allocate
+(this is where the per-entry scratch is sized), may call the ``[callback-safe]`` entries, the
+handler's getters and the two Static entries, never ``prepare``, ``destroy`` or a Hard entry,
+and a status other than ``ANIRA_OK`` fails the prepare with it (``the stage refused prepare``);
+what a slot is, it reads from the report's ``anira_plan_slot.role`` rows. ``release(user_data)``
+runs exactly once, when the last carrier of the descriptor dies (``anira_pipeline_destroy`` or
+``anira_handler_destroy``, whichever comes last); no callback runs afterwards.
+
+**An example: an int16 stream into a float model.** The host pushes ``int16`` samples
+(``hard_ring_dtype("in", ANIRA_DTYPE_I16)``, section 1.3), the model reads ``float32``.
+Without a stage, prepare refuses the contract; with this one, ``pre_process`` pops the hop as
+``int16`` and converts, and ``post_process``, left ``NULL``, stays the default push. The
+scratch is sized per entry in ``prepare``, so it is right for a stage whose phases hand data
+on and under a contract that forms chunks on several threads:
+
+.. code-block:: c
+
+    #include <stdlib.h>
+    #include <anira/abi/config.h>
+    #include <anira/abi/handler.h>   /* includes anira/abi/stage.h */
+
+    #define HOP ((size_t)512)
+
+    typedef struct convert_state { int16_t* scratch; uint32_t entries; } convert_state;
+
+    static anira_status ANIRA_CALL convert_prepare(anira_handler* handler,
+                                                   const anira_plan_report* report,
+                                                   void* user_data) {
+        convert_state* state = (convert_state*)user_data;
+        (void)report;
+        state->entries = anira_handler_num_entries(handler);
+        state->scratch = (int16_t*)calloc((size_t)state->entries * HOP, sizeof(int16_t));
+        return state->scratch != NULL ? ANIRA_OK : ANIRA_ERROR_OUT_OF_MEMORY;
+    }
+
+    /* Real-time: every anira call below is ANIRA_NONBLOCKING, and so is this body. */
+    static anira_status ANIRA_CALL convert_pre_process(const anira_stage_ctx* ctx,
+                                                       void* user_data) ANIRA_NONBLOCKING {
+        convert_state* state = (convert_state*)user_data;
+        int16_t* scratch = state->scratch + (size_t)ctx->entry * HOP;
+        anira_tensor model;
+        float* samples;
+        anira_ring* ring = NULL;
+        anira_role role = ANIRA_ROLE_FORCE32;
+        anira_status st;
+        st = anira_stage_input_role(ctx, 0, &role);          /* what slot 0 is */
+        if (st != ANIRA_OK) { return st; }                   /* latched already: the stage's bug */
+        if (role != ANIRA_ROLE_STREAMED) { return ANIRA_ERROR_CONFIG; }
+        st = anira_stage_input_ring(ctx, 0, &ring);          /* the host's int16 ring */
+        if (st != ANIRA_OK) { return st; }
+        st = anira_stage_input_tensor(ctx, 0, &model);       /* the float32 model end */
+        if (st != ANIRA_OK) { return st; }
+        samples = anira_tensor_data_f32(&model);
+        if (samples == NULL || anira_ring_dtype(ring) != ANIRA_DTYPE_I16) {
+            return ANIRA_ERROR_CONFIG;
+        }
+        for (uint32_t c = 0; c < anira_ring_num_channels(ring); ++c) {
+            if (anira_ring_pop_block(ring, c, scratch, ANIRA_DTYPE_I16, HOP) != HOP) {
+                return ANIRA_ERROR_INTERNAL;                /* latched; the chunk delivers zeros */
+            }
+            for (size_t n = 0; n < HOP; ++n) {              /* channel c starts at c * HOP */
+                samples[c * HOP + n] = (float)scratch[n] / 32768.0f;
+            }
+        }
+        return ANIRA_OK;                                    /* the ring gave up exactly one hop */
+    }
+
+    static void ANIRA_CALL convert_release(void* user_data) {
+        free(((convert_state*)user_data)->scratch);
+    }
+
+At setup, beside ``anira_pipeline_add_inference`` of section 3.2:
+
+.. code-block:: c
+
+    static convert_state state;
+    anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
+    desc.user_data = &state;
+    desc.flags = ANIRA_STAGE_REALTIME_PRE_POST;   /* required: pre_process runs on the driving thread */
+    desc.pre_process = convert_pre_process;        /* post_process stays NULL: the default push */
+    desc.prepare = convert_prepare;
+    desc.release = convert_release;
+    anira_pipeline_add_stage(pipe, &desc, &err);  /* once per pipeline */
+
+**The same in C++.** :cpp:class:`anira::Stage` of ``anira/anira.hpp`` is the descriptor with
+virtual functions in place of the function pointers: ``phases()`` states the phases the stage
+fills (only those reach the descriptor; the others stay ``NULL``, so a stage of
+``post_process`` alone leaves the default ``pre_process`` running), ``flags()`` is the promise,
+``prepare(handler, report)`` may throw (an ``anira::Error`` fails the prepare with its status,
+``std::bad_alloc`` with ``ANIRA_ERROR_OUT_OF_MEMORY``, anything else with
+``ANIRA_ERROR_INTERNAL``), and the four phase functions take a
+:cpp:class:`anira::StageContext`, the six accessors as methods, with
+:cpp:class:`anira::RingView` as the typed ring (``pop_block<T>`` over a ``std::span``; the
+element type names the dtype, and another type than the ring's moves nothing). The base class
+is the default: ``Stage::pre_process(ctx)`` is ``anira_stage_default_pre_process``,
+``Stage::post_process(ctx)`` the default push. The stage is handed to an
+:cpp:class:`anira::Pipeline` as :cpp:class:`anira::stage::Custom` over a ``std::shared_ptr``,
+which the pipeline's carrier shares, so the object lives at least as long as the last pipeline
+or handler that carries it; ``release()`` runs once, when that carrier dies.
 
 .. code-block:: cpp
 
-    // Create an instance of anira::PrePostProcessor
-    anira::PrePostProcessor pp_processor(inference_config);
+    #include <memory>
+    #include <span>
+    #include <vector>
+    #include <anira/anira.hpp>
 
-If your model requires custom pre- or post-processing (such as frequency domain transforms, custom windowing, or multi-tensor operations), you can create a custom preprocessor by inheriting from the :cpp:class:`anira::PrePostProcessor` class. For detailed information on implementing custom preprocessing and postprocessing, see the :doc:`custom_preprocessing` chapter.
+    class Int16ToFloat : public anira::Stage {
+    public:
+        uint32_t phases() const noexcept override { return k_pre_process; }   // post_process: the default
+        uint32_t flags() const noexcept override { return ANIRA_STAGE_REALTIME_PRE_POST; }
+
+        anira_status prepare(anira_handler* handler, const anira::PlanReport& /*report*/) override {
+            m_scratch.resize(static_cast<size_t>(anira_handler_num_entries(handler)) * k_hop);
+            return ANIRA_OK;
+        }
+
+        anira_status pre_process(anira::StageContext& ctx) noexcept override {
+            anira::Role role = ANIRA_ROLE_FORCE32;                       // what slot 0 is
+            if (const anira_status st = ctx.input_role(0, role); st != ANIRA_OK) { return st; }
+            if (role != ANIRA_ROLE_STREAMED) { return ANIRA_ERROR_CONFIG; }
+            anira::RingView ring;                                        // the host's int16 ring
+            if (const anira_status st = ctx.input_ring(0, ring); st != ANIRA_OK) { return st; }
+            anira::Tensor model{};                                       // the float32 model end
+            if (const anira_status st = ctx.input_tensor(0, model); st != ANIRA_OK) { return st; }
+            float* samples = model.data_f32();
+            if (samples == nullptr || ring.dtype() != ANIRA_DTYPE_I16) { return ANIRA_ERROR_CONFIG; }
+            const std::span<int16_t> scratch(m_scratch.data() + static_cast<size_t>(ctx.entry()) * k_hop, k_hop);
+            for (uint32_t c = 0; c < ring.num_channels(); ++c) {
+                if (ring.pop_block(c, scratch) != k_hop) { return ANIRA_ERROR_INTERNAL; }
+                for (size_t n = 0; n < k_hop; ++n) {
+                    samples[c * k_hop + n] = static_cast<float>(scratch[n]) / 32768.0F;
+                }
+            }
+            return ANIRA_OK;
+        }
+
+    private:
+        static constexpr size_t k_hop = 512;
+        std::vector<int16_t> m_scratch;
+    };
+
+The pipeline takes it beside the inference stage, and the handler is created from it as in
+section 3.2:
+
+.. code-block:: cpp
+
+    anira::Pipeline pipe{anira::stage::Inference(cfg),   // every engine of the build
+                         anira::stage::Custom(std::make_shared<Int16ToFloat>())};
+    anira_handler* h = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_handler_create(context.native(), pipe.native(), &h, &err);   // then prepare with the contract
 
 3. Inference Handler
 --------------------
 
-In your application, you will need to create an instance of the :cpp:class:`anira::InferenceHandler` class. This class is responsible for managing the inference process, including threading and real-time constraints. The constructor takes as arguments an instance of the default or custom :cpp:class:`anira::PrePostProcessor` and an instance of the :cpp:class:`anira::InferenceConfig` structure.
+In your application, you will need to create an instance of the :cpp:class:`anira::InferenceHandler` class. This class is responsible for managing the inference process, including threading and real-time constraints. The constructor takes as arguments an instance of the default or custom :cpp:class:`anira::PrePostProcessor` and an instance of the :cpp:class:`anira::InferenceConfig` structure. The :cpp:class:`anira::PrePostProcessor` is the 2.x processor class and stays with this handler; its 3.x form is the stage of section 2, which runs on the C handler of section 3.2.
 
 .. code-block:: cpp
 
@@ -549,7 +911,7 @@ The context configuration of section 1.4 (an ``anira::ContextConfig``, or the co
 
 The same in C: ``anira_context_create(config, &context, &err)``, ``anira_context_capabilities`` with the enumerators ``anira_capabilities_backends`` / ``domains`` / ``ext_kinds`` / ``edges`` / ``edge`` (``out == NULL`` asks for the count, a short buffer returns ``ANIRA_INCOMPLETE``, records are written at the caller's ``element_size``), ``anira_context_probe``, and, taking no context since the queue and the pool are the core's, ``anira_drain_log`` and ``anira_num_inference_threads`` and ``anira_context_destroy``. ``anira_enabled_backends`` (``anira::enabled_backends()``) says what this build compiled in without a context; ``anira_capabilities_backends`` what is usable here. In this pre-release every context is Host-only: the report is the compiled-in engines on ``ANIRA_PROVIDER_DEFAULT``, the host domain and one zero-copy edge per engine, and a device block on the config is refused with ``ANIRA_ERROR_NOT_SUPPORTED``. ``anira_now_ms`` / ``anira_now_ns`` are the steady clock deadlines will be spelled in; ``anira_shutdown`` (called by a plugin's module-exit entry point, see the CLAP example) stops the core's threads only when no context and no handler exist, ``anira_has_core`` and ``anira_release_core_if_idle`` are the unload hook's questions.
 
-**The bridge.** The 2.x inference handler (sections 2 to 5) does not take a context: it takes the :cpp:struct:`anira::CoreConfig` the bridge builds from the same config, and the core reconciles it exactly as it reconciles a context (the C handler of section 3.2 takes the context itself; a context and a handler's core config in one process are reconciled against each other by the rules below):
+**The bridge.** The 2.x inference handler (sections 3 to 5) does not take a context: it takes the :cpp:struct:`anira::CoreConfig` the bridge builds from the same config, and the core reconciles it exactly as it reconciles a context (the C handler of section 3.2 takes the context itself; a context and a handler's core config in one process are reconciled against each other by the rules below):
 
 .. code-block:: cpp
 
@@ -620,9 +982,13 @@ is a config object, ``anira_pipeline_create`` / ``anira_pipeline_add_inference``
 configuration and, optionally, the candidate backends as ``anira_backend_id`` rows; ``NULL``
 means every engine this build carries plus the custom entries, an entry for an absent engine
 being skipped) / ``anira_pipeline_destroy``, copied by the handler that takes it and
-destroyable right after. A pipeline holds exactly one inference stage; the pre- and
-post-processing stages around it arrive with a later pre-release. A custom engine is part of
-the inference stage and never a stage of its own: it is one more implementation a
+destroyable right after. A pipeline holds exactly one inference stage and at most one pre-
+and post-processing stage (section 2): ``anira_pipeline_add_stage`` copies an
+``anira_stage_desc`` of ``anira/abi/stage.h`` (a name, up to four phase callbacks, a prepare
+and a release function, one ``user_data`` slot and the stage's real-time flags) into a
+carrier the pipeline and its handlers share, and a second call is
+``ANIRA_ERROR_INVALID_STATE``. A custom engine
+is part of the inference stage and never a stage of its own: it is one more implementation a
 candidate's ``engine_id`` resolves to, and its call runs in ``ANIRA_PHASE_INFERENCE`` (the
 phase of ``anira_stage_phase`` between ``ANIRA_PHASE_BEFORE_INFERENCE`` and
 ``ANIRA_PHASE_AFTER_INFERENCE``) exactly as a built-in engine's does. Registering one by name
@@ -634,16 +1000,21 @@ may then be destroyed by its creator; the handler keeps what it needs) and copie
 ``anira_handler_prepare(h, contract, &err)`` is the blocking quiescence point, never from the
 driver thread and never overlapped by another handler entry: it validates the configuration
 against the Hard contract (the rules of section 1.1 and the contract's own: geometry, an
-explicit budget, a fixed or no warmup, the miss policy against the anchor, the ring dtypes by
-canonical name), loads the model of every candidate that has an entry, sizes the rings for the
-block range and the latency, selects the plan of the variant's default engine (else plan 0)
-and builds the plan report; a second prepare replaces the session whole, a failed one leaves
-the handler unprepared. ``anira_handler_destroy`` releases the session and, with the last
+explicit budget, a fixed or no warmup, the miss policy against the anchor, the ring dtypes
+and the host domains by canonical name, the stage's real-time promise against its placement),
+loads the model of every candidate that has an entry, sizes the rings for the block range and
+the latency, selects the plan of the variant's default engine (else plan 0), builds the plan
+report and, last, calls the stage's prepare function when the pipeline has a stage with one
+(a status other than ``ANIRA_OK`` fails the prepare with it); a
+second prepare replaces the session whole, a failed one leaves the handler unprepared.
+``anira_handler_num_entries(h)`` then says how many chunks may be in flight at once, the size
+of a stage's per-entry scratch (section 2). ``anira_handler_destroy`` releases the session and, with the last
 handler in this copy of anira, joins the inference thread pool; a handler counts as a user of
 the core, so ``anira_shutdown`` is refused while one lives. What this pre-release refuses at
 prepare, with ``ANIRA_ERROR_NOT_SUPPORTED``: an Async contract, ``ANIRA_BUDGET_MEASURED`` and
 ``ANIRA_WARMUP_UNTIL_STABLE`` (the defaults of a fresh contract: set an explicit budget and a
-fixed warmup, as every bundled contract file does).
+fixed warmup, as every bundled contract file does), a Buffer spec (section 1.1) and a host
+domain other than ``ANIRA_DOMAIN_HOST`` (section 1.3).
 
 .. code-block:: c
 
@@ -676,9 +1047,10 @@ fixed warmup, as every bundled contract file does).
     const int64_t shape[2] = { num_channels, block_size };
     anira_tensor block;
     anira_tensor_init_host_planar(&block, channels, (uint32_t)num_channels, ANIRA_DTYPE_F32, 2, shape);
-    /* the process callback: the sample count is shape[1]; in place is the same tensor twice */
+    /* the process callback: the sample count is shape[1]; in place is the same tensor twice,
+       each side with its slot (the tensor's position in the model config's list) */
     block.shape[1] = (int64_t)num_samples;
-    st = anira_handler_process(h, &block, &block, 0, NULL);
+    st = anira_handler_process(h, &block, 0, &block, 0, NULL);
     if (st == ANIRA_MISSED) { /* the buffers hold what the miss policy chose */ }
     if (ANIRA_FAILED(st)) { /* a refusal, recorded in anira_handler_rt_error */ }
     /* off the driver thread: */
@@ -694,7 +1066,8 @@ convention of 3.1 (``out == NULL`` asks for the count, a short buffer returns
 ``anira_plan_info`` per candidate that has a model entry in the configuration (the engine, the
 provider, the custom engine's id, the budget of that plan), and per plan the
 ``anira_plan_slot`` rows of its inputs and outputs (host rows in this pre-release: host to
-host, zero-copy, recipe ``"host"``, the wait strategy the core runs) and the
+host, zero-copy, recipe ``"host"``, the wait strategy the core runs; ``role`` is the
+``anira_role`` of the tensor's spec, the same in every plan) and the
 ``anira_plan_ext`` rows of the extensions it consumes. Every successful prepare also logs the
 report as Info records of the group ``anira.capi`` (set the context's log level to
 ``ANIRA_LOG_INFO`` or ``ANIRA_LOG_DEBUG`` to see them): a head line with the counts and the
@@ -722,23 +1095,26 @@ for ``set_inference_backend`` of the 2.x handler, which selects the first plan o
 in the same table. An index out of range is a no-op recorded
 as ``ANIRA_ERROR_CONFIG`` in ``anira_handler_rt_error``. In C++, ``anira::Pipeline``,
 ``anira::stage::Inference`` and ``anira::PlanReport`` of ``anira/anira.hpp`` are the same
-objects (``anira::Pipeline pipe{anira::stage::Inference(cfg, {{ANIRA_ENGINE_ONNXRUNTIME}})};``,
+objects (``anira::Pipeline pipe{anira::stage::Inference(cfg)};`` for the default candidate
+set, or ``anira::stage::Inference(cfg, {row})`` with ``anira::BackendId`` rows, the
+``anira_backend_id`` record with its ``struct_size``;
 ``anira::PlanReport(anira_handler_plan_report(h)).plans()``); the ``anira::InferenceHandler``
 class arrives with the runtime cut-over.
 
 **The Hard entries.** The driver thread pumps its blocks through
-``anira_handler_process(h, in, out, tensor_index, &delivered)``,
+``anira_handler_process(h, in, in_slot, out, out_slot, &delivered)``,
 ``anira_handler_process_multi(h, inputs, num_inputs, outputs, num_outputs, delivered)``,
-``anira_handler_push_data(h, in, tensor_index)`` / ``push_data_multi(h, inputs, num_inputs)``
-and ``anira_handler_pop_data(h, out, tensor_index, &delivered)`` /
+``anira_handler_push_data(h, in, slot)`` / ``push_data_multi(h, inputs, num_inputs)``
+and ``anira_handler_pop_data(h, out, slot, &delivered)`` /
 ``pop_data_multi(h, outputs, num_outputs, delivered)``, the 2.x methods of sections 5.1 to 5.4
 as C entries, ``[driver-thread]`` and ``ANIRA_NONBLOCKING``. A host block is one
 ``anira_tensor`` (section 3.3) per slot, handed over as ``const anira_tensor*``, an output's
 included: anira never writes a descriptor, it writes the memory an output names, so a host
-builds its tensors once and reuses them. The logical shape is always ``[channels, samples]``
-(``[1, samples]`` for a spec without a Channel axis, ``[1, values]`` for a Static slot), the
+builds its tensors once and reuses them. These entries carry the Streamed tensors (a Static
+tensor travels whole, see *Static tensors* below). The logical shape of a host block is always
+``[channels, samples]`` (``[1, samples]`` for a spec without a Channel axis), the
 sample count is ``shape[1]`` (there is no ``num_in`` / ``num_out``), and the tensor's dtype
-must be the slot's, which is the ring dtype of a Streamed slot: nothing converts, and another
+must be the slot's ring dtype: nothing converts, and another
 dtype is ``ANIRA_ERROR_CONFIG``. The memory is host memory (``ANIRA_DOMAIN_HOST`` or
 ``ANIRA_DOMAIN_HOST_PINNED``) in one of three descriptions:
 
@@ -752,7 +1128,7 @@ dtype is ``ANIRA_ERROR_CONFIG``. The memory is host memory (``ANIRA_DOMAIN_HOST`
       anira_tensor block;
       anira_tensor_init_host_planar(&block, buffer.getArrayOfWritePointers(),
                                     (uint32_t)buffer.getNumChannels(), ANIRA_DTYPE_F32, 2, shape);
-      anira_handler_process(handler, &block, &block, 0, NULL);
+      anira_handler_process(handler, &block, 0, &block, 0, NULL);
 
 - *one block read by strides*, in elements: contiguous channels are ``{samples, 1}``, an
   interleaved block, which is what miniaudio and most device callbacks hand out, is
@@ -769,7 +1145,7 @@ dtype is ``ANIRA_ERROR_CONFIG``. The memory is host memory (``ANIRA_DOMAIN_HOST`
       anira_tensor_init_host(&out, frames_out, ANIRA_DTYPE_F32, 2, shape);
       in.strides[0] = out.strides[0] = 1;
       in.strides[1] = out.strides[1] = 2; /* the channel count */
-      anira_handler_process(handler, &in, &out, 0, &delivered);
+      anira_handler_process(handler, &in, 0, &out, 0, &delivered);
 
 - *one packed block*, all-zero strides, which reads as ``{samples, 1}``.
 
@@ -778,7 +1154,22 @@ description is copied straight between the host memory and the ring, and the two
 call may be described differently. In place is the same tensor as input and output; there is
 no ``_inplace`` name. An *empty tensor* (``shape[1] == 0``; its memory arm is not read, so
 NULL is legal) leaves a slot out: the multi forms take exactly one tensor per slot, Static
-slots included, and ``num_inputs`` / ``num_outputs`` must be the handler's slot counts.
+slots included (the whole tensor or an empty one, see *Static tensors* below) and State slots
+too (always an empty one: anira feeds declared state itself, and anything else at that
+position is ``ANIRA_ERROR_INVALID_ARGUMENT``), and ``num_inputs`` / ``num_outputs`` must be
+the lengths of the model config's two lists. A *slot* is one number everywhere: the tensor's
+position in the model config's input list or output list, which is what ``slot``,
+``in_slot`` and ``out_slot``, the ``_multi`` arrays and their ``delivered`` counts,
+the latency vector (``0`` for an output that is not Streamed), the plan report's rows and
+the context accessors of a stage (``anira_stage_input_role`` and its siblings) all index by.
+The two lists are unrelated, so the single
+``process`` forms name one slot per side: a model with ``data`` at input 1 and
+``processed_data`` at output 0 calls ``anira_handler_process(h, &in, 1, &out, 0, &delivered)``.
+A host that does not want to hard-code a slot resolves it by the tensor's canonical name at
+setup, and asks what a slot is through the plan report: ``anira_plan_slot.role`` is the
+``anira_role`` of the slot's spec, which decides the entries that take the slot (a stage reads
+it in its ``prepare``, which receives the report, and per call from
+``anira_stage_input_role`` / ``anira_stage_output_role``).
 ``release``, ``manager_ctx`` and ``acquire`` are not read; the memory is borrowed until the
 call returns. Every tensor of a call is validated before anything is pushed, so a refusal
 writes no ring: a malformed descriptor is ``ANIRA_ERROR_INVALID_ARGUMENT`` (a rank other than
@@ -790,9 +1181,9 @@ is ``0``, a channel that does not start on a multiple of the element size), a fl
 library does not know is ``ANIRA_ERROR_NOT_SUPPORTED``, and the checks run in the order rank,
 domain, flags, shape, dtype, memory and strides, the input before the output. ``delivered``
 is a nullable pure out parameter (an array of ``num_outputs`` counts in the multi forms),
-written on every return: zeroed first, then ``shape[1]`` of each output on ``ANIRA_OK``
-(clamped to the tensor's size for a Static output) and ``0`` on ``ANIRA_MISSED`` and on a
-failure. It is never read: the request is ``shape[1]`` of the output tensor, so a miss leaves
+written on every return: zeroed first, then ``shape[1]`` of each Streamed output on
+``ANIRA_OK`` and ``0`` on ``ANIRA_MISSED`` and on a failure (a carried Static output of a multi
+form reports its element count on ``ANIRA_OK`` and on ``ANIRA_MISSED`` alike). It is never read: the request is ``shape[1]`` of the output tensor, so a miss leaves
 nothing to refill. Under ``ANIRA_MISS_BYPASS``, input and output
 memory that overlap under two different descriptions are undefined on a miss; the same tensor
 on both sides is left where it is.
@@ -812,7 +1203,7 @@ before each call; there is no float-only family of entries:
 
     /* the process callback: one store, then the call; in place is the same tensor twice */
     block.shape[1] = (int64_t)num_samples;
-    anira_status st = anira_handler_process(h, &block, &block, 0, &delivered);
+    anira_status st = anira_handler_process(h, &block, 0, &block, 0, &delivered);
 
 The tensor names the pointer array, not the channels, and borrows it: the array must live as
 long as the tensor is used, and what it holds is read at each call, so a host that rewrites the
@@ -821,7 +1212,58 @@ callbacks (``juce::AudioBuffer::getArrayOfWritePointers``) fills the tensor in t
 in the JUCE example above, which is legal there: the factory is a field fill,
 ``[thread-safe]`` and ``ANIRA_NONBLOCKING``. Separate input and output buffers are two tensors,
 the input's over ``const float* const*`` with ``ANIRA_TENSOR_READ_ONLY`` ORed into ``flags``.
-A Static slot is ``[1, values]`` over one pointer.
+A Static tensor is never planar: it is one block in the spec's shape (next paragraph).
+
+**Static tensors.** A Static tensor has one description everywhere: the whole tensor in the
+spec's shape and dtype, any dtype, a Channel axis of any extent included (a Buffer spec is not
+served this way: under a Hard contract it is refused at prepare, see section 1.1). One ``anira_tensor_init_host`` over the spec's
+extents builds it (all-zero strides are packed row-major; other strides are read and written
+as given). The handler keeps the value in a store of its own, sized and zeroed at
+``anira_handler_create``, untouched by ``anira_handler_prepare`` and ``anira_handler_reset``:
+
+- ``anira_handler_set_static_input(h, slot, &tensor)`` stores an input. Every inference
+  submitted afterwards sees it whole (it is copied under a latch and materialised into the
+  model's input tensor when the chunk is formed, ahead of the stage's ``pre_process``, where
+  ``anira_stage_input_tensor`` reads it; section 2 has the write order of one chunk), so a
+  value set between two calls never tears.
+- ``anira_handler_get_static_output(h, slot, &out)`` reads the value the latest collected
+  inference produced; all zeros before the first. A chunk that completed as zeros (dropped, or
+  failed in a stage or in the engine) captures nothing: the store holds what the model
+  produced last.
+
+Both are ``[driver-thread]`` and ``ANIRA_NONBLOCKING``, legal from create on (a value set before
+prepare survives it) and from a stage's ``prepare``. "Fits" is a check, never a clamp: another
+rank or extent is ``ANIRA_ERROR_INVALID_ARGUMENT`` (there is no partial Static tensor and no
+count), another dtype ``ANIRA_ERROR_CONFIG``, ``ANIRA_TENSOR_PLANAR`` or an unknown flag
+``ANIRA_ERROR_NOT_SUPPORTED``; a slot out of range or a Streamed or a State slot, NULL or
+misaligned memory, a negative stride and ``ANIRA_TENSOR_READ_ONLY`` on the output are
+``ANIRA_ERROR_INVALID_ARGUMENT``. Every refusal but the NULL handler is recorded in
+``anira_handler_rt_error``.
+
+.. code-block:: c
+
+    /* Spec: "gain", ANIRA_ROLE_STATIC, axes [any 1]: one float32 value. */
+    float gain = 0.5f;
+    const int64_t gain_shape[1] = {1};
+    anira_tensor gain_tensor;
+    anira_tensor_init_host(&gain_tensor, &gain, ANIRA_DTYPE_F32, 1, gain_shape);
+    anira_handler_set_static_input(handler, 1, &gain_tensor);   /* input slot 1 */
+
+The multi forms accept a Static tensor as the element of its slot, and are *defined* as the
+sequence they abbreviate, over the same functions: ``set_static_input`` for every non-empty
+Static element of ``inputs``, the streamed call over the Streamed elements,
+``get_static_output`` for every non-empty Static element of ``outputs``. Every element is
+validated before anything is set or pushed. An element is *empty*, and leaves its slot out,
+when it has a rank of 1 or more and an extent of 0 (``{channels, 0}`` for a Streamed slot; a
+spec extent is never 0); nothing else of it is read. A single form names a Streamed slot only:
+a ``slot`` naming a Static tensor on either side is ``ANIRA_ERROR_INVALID_ARGUMENT``,
+because the single form of a Static slot is the pair above (a generator with Static input 0
+calls ``anira_handler_set_static_input(h, 0, ..)`` and ``anira_handler_pop_data(h, .., 0, ..)``).
+On a missed block a carried Static output holds the stored value under every policy. Under
+``ANIRA_MISS_CALLBACK`` anira fills the non-empty Static output elements with the stored value
+first and then calls the ``anira_miss_fn``, which may leave or overwrite them and so has the
+last word on every output of the block; what it writes reaches the caller's memory only, never
+the store.
 
 **Status and counts.** Every Hard entry returns an ``anira_status``: ``ANIRA_OK`` when the
 block was delivered in full; ``ANIRA_MISSED`` when its inference had not completed, which is
@@ -829,18 +1271,21 @@ a success (``ANIRA_FAILED(status)`` is false): the memory holds what the miss po
 (section 1.3) and every delivered count is ``0``; or a failure, where every delivered count
 is ``0`` as well. None of them waits, and a refusal carries no ``anira_error``: the entry
 returns the failure status, records it in ``anira_handler_rt_error`` and logs once through
-the real-time queue (:doc:`logging`); a miss is not recorded. ``tensor_index`` is the slot in
-the input and the output list.
+the real-time queue (:doc:`logging`); a miss is not recorded.
 ``anira_handler_get_latency(h, i)`` and ``anira_handler_get_latencies(h, &count, out)``
-(index-aligned with the output list, ``0`` for a Static output) are valid from prepare on;
+(index-aligned with the output list, one entry per output tensor, ``0`` for an output that
+is not Streamed) are valid from prepare on;
 ``anira_handler_get_available_samples(h, i, channel, &count)`` collects the completed
 inferences and reports what waits in the output ring (right after prepare, the latency);
 ``anira_handler_reset(h)`` is the wait-free stream reset of 5.5; ``anira_handler_rt_error(h)``
 the last real-time failure, readable from any thread and any callback.
 
-**The _wait twins.** ``anira_handler_process_wait(h, in, out, timeout_ms, tensor_index,
-&delivered)``, ``process_multi_wait(h, inputs, num_inputs, outputs, num_outputs, delivered,
-timeout_ms)``, ``pop_data_wait`` and ``pop_data_multi_wait`` wait for the block's inference:
+**The _wait twins.** A ``_wait`` twin is its bare form with ``double timeout_ms`` appended as
+the last parameter: ``anira_handler_process_wait(h, in, in_slot, out, out_slot, &delivered,
+timeout_ms)``, ``process_multi_wait(h, inputs, num_inputs, outputs, num_outputs, delivered,
+timeout_ms)``, ``pop_data_wait(h, out, slot, &delivered, timeout_ms)`` and
+``pop_data_multi_wait(h, outputs, num_outputs, delivered, timeout_ms)`` wait for the block's
+inference:
 ``timeout_ms >= 0`` explicitly, ``ANIRA_WAIT_CONTRACT`` for ``wait_ratio`` times the block
 duration (the call's block on the process forms — the 2.x ``blocking_ratio`` wait inside
 ``process`` — and the contract's ``block_max`` on the pop forms), ``ANIRA_WAIT_FOREVER``
@@ -876,9 +1321,8 @@ visible. The three records are Tier 1: no ``struct_size`` and no version field, 
 is their version, their layout is committed in ``abi/layout-<major>.txt`` and mirrored for
 JavaScript in the generated ``web/src/abi/layout.ts``, and
 ``anira_sizeof(ANIRA_STRUCT_TENSOR)`` answers an allocator that cannot see the header (``0``
-for an id this build does not know; in this pre-release that includes
-``ANIRA_STRUCT_STAGE_CTX``). The Hard entries of 3.2 take host tensors; only host memory is
-read in this pre-release, and the Static tensor entries follow.
+for an id this build does not know). The Hard entries and the two Static entries of 3.2 take
+host tensors; only host memory is read in this pre-release.
 
 **The factories.** ``anira_tensor_init_host(&t, data, dtype, ndim, shape)`` and
 ``anira_tensor_init_pinned`` describe host memory; ``anira_tensor_init_cuda(&t, ptr, device,
@@ -1068,6 +1512,103 @@ element type names the dtype, a const element type sets ``ANIRA_TENSOR_READ_ONLY
 and ``dup()`` the two token calls. The draft factories have no C++ spelling while they are
 unmeasured: call ``anira_tensor_init_metal(&tensor, ...)`` on a ``Tensor``.
 
+3.4. State tensors
+~~~~~~~~~~~~~~~~~~
+
+A model whose state is explicit, an output tensor that is the next inference's input (an
+exported GRU or LSTM hidden state, a streaming-convolution cache), declares the pair in its
+model config and anira runs the feedback itself: no stage is needed for it. Both halves carry
+the role ``ANIRA_ROLE_STATE`` (``"role": "state"``), and the pairing is stated once, on the
+input, which names the output it is fed from: ``"state_source"`` in the model file,
+``spec.state_source("state_out")`` on the builder, ``anira_tensor_spec_set_state_source(spec,
+"state_out")`` in C. The bundled ``StatefulAccumulatorNetwork``
+(``extras/models/model-pool/stateful_accumulator.model.json``, :doc:`examples`) is the
+smallest instance: a stereo stream of 64 samples per inference and a ``[1, 2, 2]`` state
+around it, per channel a running sum and a block counter, the state first in the inputs and
+last in the outputs, so ``processed_data`` is ``data`` plus the running sum. Trimmed to one
+engine:
+
+.. code-block:: json
+
+    {
+      "models": [
+        { "engine": "onnxruntime",
+          "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_stereo.onnx" }
+      ],
+      "inputs": [
+        { "name": "state_in", "dtype": "float32", "role": "state",
+          "axes": [["batch", 1], ["channel", 2], ["any", 2]], "state_source": "state_out" },
+        { "name": "data", "dtype": "float32", "role": "streamed",
+          "axes": [["batch", 1], ["channel", 2], ["time", 64]], "window": { "min": 64, "max": 64 } }
+      ],
+      "outputs": [
+        { "name": "processed_data", "dtype": "float32", "role": "streamed",
+          "axes": [["batch", 1], ["channel", 2], ["time", 64]], "window": { "min": 64, "max": 64 } },
+        { "name": "state_out", "dtype": "float32", "role": "state",
+          "axes": [["batch", 1], ["channel", 2], ["any", 2]] }
+      ]
+    }
+
+**What anira does.** The handler owns the state: one value per pair, on the port of the State
+input, in the spec's shape and dtype, the same kind of store a Static tensor has (section
+3.2), zeroed at ``anira_handler_create`` and at every ``anira_handler_prepare``. On the
+inference thread the value is copied into the model input as the first step of every
+inference, ahead of the stage's ``before_inference``, and the model output is copied into the
+value of the input it feeds as the last step, behind the stage's ``after_inference``; both are
+anira's own steps, without an allocation, wait-free and never torn (the Static store's latch),
+and ``ANIRA_PHASE_INFERENCE`` stays the engine call alone. A failed inference (an engine
+failure, a hook that returns a failure) skips the capture, so the state keeps its last good
+value; a dropped chunk never runs and does not advance it; a missed block does not affect it,
+since its inference still runs and only its delivery is late. The state is the handler's, not
+a session's or a processor's, so it survives ``anira_handler_set_plan`` between two engines.
+``anira_handler_reset`` and ``anira_handler_prepare`` re-initialise it to zeros; the reset
+stays wait-free, since the value is zeroed on the inference thread at the first inference of
+the new stream, keyed on the chunk's dispatch generation, so an inference still in flight
+across the reset can never seed the new stream with its capture (section 5.5). A model with a
+pair runs as ``ANIRA_MODEL_STATEFUL`` whatever its ``state`` says: a session-exclusive
+processor, one inference at a time and in submission order, which is what makes the feedback
+well defined. The contract file's fixed warm-up runs inside the processor when it loads and
+reaches neither the state nor the stream.
+
+**What the host sees.** A State spec may stand anywhere in its list, so the two lists follow
+the model file's own tensor order (the accumulator's state is first in, last out), and it has
+a slot like every other tensor, its position in the list. No Hard entry carries it: a single
+form that names its slot is ``ANIRA_ERROR_INVALID_ARGUMENT``; in the arrays of a ``_multi``
+form its position holds the empty tensor (a rank of 1 or more with an extent of 0; a zeroed
+record has rank 0 and is refused) and its ``delivered`` count is always ``0``;
+``anira_handler_get_latency`` and ``anira_handler_get_available_samples`` read ``0`` for a
+State output. The accumulator's stream therefore runs as ``anira_handler_process(h, &in, 1,
+&out, 0, &delivered)``: ``data`` is input 1, ``processed_data`` output 0. The value of the
+state is not host-readable in this pre-release (a tensor is either state or an ordinary
+output), and its initial value is zeros.
+
+**What a stage sees** (section 2): the two hooks see the state at its slot,
+``anira_stage_input_tensor`` in ``before_inference`` being the fed state (what the engine will
+get) and ``anira_stage_output_tensor`` in ``after_inference`` the produced one (what the next
+inference will be fed), and a stage may read or alter either; in ``pre_process`` and
+``post_process`` a State slot answers ``ANIRA_ERROR_INVALID_STATE``.
+
+**Validation**, at ``anira_handler_create`` and again at ``anira_handler_prepare``,
+``ANIRA_ERROR_CONFIG`` naming the tensor: a State input without a source; a source that names
+no output, or an output of another role; a State output named by no input, or by two; a source
+on an output spec or on a spec of another role (``anira_tensor_spec_set_state_source`` refuses
+the latter with ``ANIRA_ERROR_INVALID_ARGUMENT`` and the loader ``state_source`` on an output
+with ``ANIRA_ERROR_JSON``); two halves of unequal dtype or shape; a Time axis, a window, a time
+ratio or a latency on a State spec; a ring dtype or the anchor naming one.
+``ANIRA_ERROR_NOT_SUPPORTED`` in this pre-release: a State tensor of another dtype than
+``float32``, as every model tensor (the value takes the spec's dtype; the role has no rule of
+its own), and a transposed layout on one (a view layout prepares). A Channel axis of any
+extent is legal, as on every non-Streamed spec.
+
+.. note::
+    The accumulator's model file names rows for LibTorch, ONNX Runtime and ExecuTorch and none
+    for TFLite or LiteRT: that export orders its outputs ``[state_out, processed_data]``, and
+    the engines of this pre-release bind tensors by position until they bind by name, so a
+    positional binding of the declared order would read the stream where the state is. The
+    2.x bridge (``anira::v3compat::to_inference_config``) refuses a model with a State spec
+    with ``ANIRA_ERROR_NOT_SUPPORTED``: the 2.x runtime feeds no state back, and the model
+    would run on a zero state without a word.
+
 4. Get ready for Processing
 ---------------------------
 
@@ -1124,7 +1665,7 @@ The :cpp:func:`anira::InferenceHandler::prepare` method is called with an instan
     inference_handler.prepare(host_config, custom_latency_values);
 
 .. note::
-    Only streamable tensors can have a latency != 0. Non-streamable tensors are available via the :cpp:func:`anira::PrePostProcessor::get_output` method and do not require a latency value.
+    Only streamable tensors can have a latency != 0. Non-streamable tensors are available via the :cpp:func:`anira::PrePostProcessor::get_output` method (``anira_handler_get_static_output`` on the C handler, section 3.2) and do not require a latency value.
 
 4.3. Select Backend
 ~~~~~~~~~~~~~~~~~~~
@@ -1342,6 +1883,29 @@ Some neural networks require additional input parameters or output values that d
 ..  note::
     The functions :cpp:func:`anira::PrePostProcessor::set_input` and :cpp:func:`anira::PrePostProcessor::get_output` can be called from any thread, allowing you to update control parameters or retrieve additional values asynchronously without blocking the real-time audio processing thread.
 
+**The same on the C handler** (section 3.2, *Static tensors*): a 3.x spec gives such a tensor
+the Static role (section 1.1), and its value travels whole, in the spec's shape and dtype,
+through ``anira_handler_set_static_input(h, slot, &tensor)`` and
+``anira_handler_get_static_output(h, slot, &out)``, or as the element of its slot in a
+``_multi`` form. There is no per-element write and no count; both entries are
+``[driver-thread]``, not any-thread. The effect above, with the control tensor and the value
+tensor declared ``[any 2]`` at slot 1 of their lists:
+
+.. code-block:: c
+
+    float control[2] = { gain_param, threshold_param };
+    const int64_t two[1] = { 2 };
+    anira_tensor control_tensor;
+    anira_tensor_init_host(&control_tensor, control, ANIRA_DTYPE_F32, 1, two);
+    anira_handler_set_static_input(h, 1, &control_tensor);       /* every inference from here on */
+
+    anira_handler_process(h, &block, 0, &block, 0, &delivered);  /* the stream, slot 0 */
+
+    float values[2];
+    anira_tensor values_tensor;
+    anira_tensor_init_host(&values_tensor, values, ANIRA_DTYPE_F32, 1, two);
+    anira_handler_get_static_output(h, 1, &values_tensor);       /* the latest collected inference's */
+
 5.4. One-sided Streaming: Generators and Analysers
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1362,6 +1926,12 @@ Streamable tensors may sit on one side only. A *generator* has no streamable inp
         inference_handler.pop_data(audio_output, num_samples, 0);
     }
 
+The same in C, with the Static input at slot 0 of the inputs and the stream at slot 0 of the
+outputs: ``anira_handler_set_static_input(h, 0, &frequency_tensor)`` and then
+``anira_handler_pop_data(h, &out, 0, &delivered)``; the pop is the pull, and the value current
+at the pull is what the inference captures. A single form never names a Static slot: the pair
+above is its single form.
+
 **Analyser: push the stream, read the latest result.** The input side behaves as for any other model. Non-streamable outputs carry the value of the *latest completed* inference: they are updated whenever results are collected (any ``process``/``push_data``/``pop_data``/``get_available_samples`` call), read ``0`` before the first inference completes, and ``get_latency()`` reports ``0`` for them. Push-only operation is supported — ``push_data()`` collects finished inferences itself (see the note in section 5.2).
 
 .. code-block:: cpp
@@ -1376,6 +1946,10 @@ Streamable tensors may sit on one side only. A *generator* has no streamable inp
         float score = pp_processor.get_output(0, 0);
     }
 
+In C: ``anira_handler_push_data(h, &in, 0)`` and then ``anira_handler_get_static_output(h, 0,
+&score_tensor)``, the whole tensor of the latest collected inference (zeros before the first
+one completes).
+
 5.5. Resetting the Stream
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1389,10 +1963,10 @@ Streamable tensors may sit on one side only. A *generator* has no streamable inp
 The call is wait-free and real-time safe for all session configurations, including stateful (``session_exclusive_processor``) ones — it never sleeps, locks, allocates, or performs a syscall, and carries ``ANIRA_NONBLOCKING`` (clang's ``nonblocking`` attribute wherever clang has it, which RealtimeSanitizer builds enforce). The same in C: ``anira_handler_reset``, which also clears ``anira_handler_rt_error`` and re-arms its latches (:doc:`logging`). Call it from the thread that drives :cpp:func:`anira::InferenceHandler::process` (or :cpp:func:`anira::InferenceHandler::push_data` / :cpp:func:`anira::InferenceHandler::pop_data`), or ensure no such call is concurrent — and never concurrently with :cpp:func:`anira::InferenceHandler::prepare` or destruction.
 
 ..  note::
-    :cpp:func:`anira::InferenceHandler::reset` does not wait for in-flight inferences to finish: an inference thread may still be executing a — discarded — inference after the call returns, including user code in a custom backend or the :cpp:func:`anira::PrePostProcessor::before_inference` / :cpp:func:`anira::PrePostProcessor::after_inference` hooks. If you need the guarantee that no inference thread touches shared state anymore (e.g. before mutating parameters such code reads), call :cpp:func:`anira::InferenceHandler::prepare` — which drains all in-flight work — or synchronize within your own backend.
+    :cpp:func:`anira::InferenceHandler::reset` does not wait for in-flight inferences to finish: an inference thread may still be executing a — discarded — inference after the call returns, including user code in a custom backend or the :cpp:func:`anira::PrePostProcessor::before_inference` / :cpp:func:`anira::PrePostProcessor::after_inference` hooks (a stage's ``before_inference`` / ``after_inference`` on the C handler). If you need the guarantee that no inference thread touches shared state anymore (e.g. before mutating parameters such code reads), call :cpp:func:`anira::InferenceHandler::prepare` — which drains all in-flight work — or synchronize within your own backend.
 
 ..  note::
     Until in-flight work finishes (bounded by one inference duration), its internal structures stay captive. If fresh data submitted in that window exhausts the remaining structure pool — likely on session-exclusive configurations, whose pools are small — the affected chunks complete as silence at their correct stream positions; the stream stays time-aligned and recovers by itself.
 
 ..  note::
-    Model-internal state (e.g. a recurrent hidden state inside the backend) is not reset — no anira reset has ever touched it. For stateful models, splice or clear such state via the :cpp:func:`anira::PrePostProcessor::before_inference` / :cpp:func:`anira::PrePostProcessor::after_inference` hooks.
+    State that an engine keeps inside itself (e.g. a recurrent hidden state inside the backend) is opaque to anira and is not reset — no anira reset has ever touched it. For such models, splice or clear the state via the :cpp:func:`anira::PrePostProcessor::before_inference` / :cpp:func:`anira::PrePostProcessor::after_inference` hooks (a stage's ``before_inference`` / ``after_inference``, section 2). Declared state is different: a 3.x model whose state is explicit declares the pair with the role ``ANIRA_ROLE_STATE`` (section 1.1), and ``anira_handler_reset`` and ``anira_handler_prepare`` re-initialise it to zeros. The reset stays wait-free: the state is zeroed on the inference thread, at the first inference of the new stream, so an inference still in flight across the reset cannot seed the new stream (section 3.4).

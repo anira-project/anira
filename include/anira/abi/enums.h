@@ -308,13 +308,33 @@ typedef enum anira_axis_tag {
 typedef enum anira_role {
     ANIRA_ROLE_STREAMED = 0,  /**< Has a Time axis consumed window-wise (inputs and outputs). */
     /**
-     * The whole submitted buffer is one model tensor, no Time axis (frames, images).
+     * The whole submitted buffer is one model tensor, no Time axis (frames, images): a per-job
+     * payload, which arrives with the Async contract. The spec is valid in a model config and a
+     * model file; anira_handler_prepare refuses it under a Hard contract with
+     * ANIRA_ERROR_NOT_SUPPORTED (a persistent side input under a Hard contract is
+     * ANIRA_ROLE_STATIC).
      */
     ANIRA_ROLE_BUFFER = 1,
     /**
      * No time semantics: conditioning in, scalar or embedding out; one value per job.
      */
     ANIRA_ROLE_STATIC = 2,
+    /**
+     * Declared state: one half of a pair of a state input and a state output with equal dtype
+     * and shape, paired by anira_tensor_spec_set_state_source on the input. anira keeps the
+     * state in the handler, on the port of the state input, in the spec's shape and dtype (the
+     * store of a Static tensor with another life), feeds it into the model input ahead of the
+     * stage's before_inference and captures the model output into it behind the stage's
+     * after_inference, on the inference thread; the value is zeroed at create and at prepare
+     * and re-initialised by anira_handler_reset. A State spec may stand anywhere in its list
+     * and has a slot like every other tensor, its position in the model config's list, but no
+     * Hard entry carries it: a single form that names its slot is ANIRA_ERROR_INVALID_ARGUMENT,
+     * and its position in an array of a _multi form must be the empty tensor (a rank of 1 or
+     * more with an extent of 0). A stage sees it at the same slot. No Time axis, window, time
+     * ratio or latency; the value takes the spec's dtype, float32 in this pre-release like
+     * every model tensor.
+     */
+    ANIRA_ROLE_STATE = 3,
     ANIRA_ROLE_FORCE32 = 0x7fffffff
 } anira_role;
 
@@ -535,7 +555,8 @@ typedef enum anira_probe_rung {
 typedef enum anira_model_state {
     ANIRA_MODEL_STATELESS = 0,  /**< Stateless (default). */
     /**
-     * Stateful: session-exclusive, lanes forced to 1; the v2 session_exclusive_processor.
+     * Stateful: session-exclusive, lanes forced to 1; the v2 session_exclusive_processor. A
+     * model with a declared state pair (ANIRA_ROLE_STATE) runs this way whatever it says here.
      */
     ANIRA_MODEL_STATEFUL = 1,
     ANIRA_MODEL_STATE_FORCE32 = 0x7fffffff
@@ -637,6 +658,23 @@ typedef enum anira_stage_phase {
     ANIRA_PHASE_RELEASE = 6,  /**< When the last carrier dies. */
     ANIRA_STAGE_PHASE_FORCE32 = 0x7fffffff
 } anira_stage_phase;
+
+/**
+ * @brief anira_stage_desc.flags bit: the stage promises that its pre_process and post_process
+ * allocate nothing, lock nothing and block on nothing. Required by anira_handler_prepare
+ * for a filled pre_process or post_process under a Hard contract, where the two phases
+ * run on the driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not
+ * required under an Async contract.
+ */
+#define ANIRA_STAGE_REALTIME_PRE_POST 1u
+
+/**
+ * @brief anira_stage_desc.flags bit: the stage promises the same of its before_inference and
+ * after_inference. Not required by any contract of this pre-release (the hooks run on an
+ * inference thread); a later contract option that runs them on the driving thread will
+ * require it together with ANIRA_STAGE_REALTIME_PRE_POST.
+ */
+#define ANIRA_STAGE_REALTIME_HOOKS 2u
 
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 

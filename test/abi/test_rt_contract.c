@@ -18,15 +18,20 @@
  * third one is a backup function of ANIRA_MISS_CALLBACK, which reads and fills its tensors
  * through the [callback-safe] accessors and is handed to anira_contract_hard_set_miss_fn: the
  * conversion to anira_miss_fn is clean only because the function is declared
- * ANIRA_NONBLOCKING itself (clang refuses to add the attribute through a conversion). The
- * file grows with abi/stage.h (the ring accessors and the stage defaults) and with the
- * handler's [callback-safe] entries.
+ * ANIRA_NONBLOCKING itself (clang refuses to add the attribute through a conversion). A
+ * fourth one is a phase callback of anira/abi/stage.h: it calls the six context accessors, the
+ * ten ring accessors and the two default bodies, all [callback-safe], and lands in the four
+ * anira_stage_fn slots of a descriptor. That typedef carries no attribute (whether a body is
+ * real-time is the stage's own promise, anira_stage_desc.flags), so the attribute on the
+ * function is the author's own check: clang verifies that everything it calls is nonblocking,
+ * which is the point. The file grows with the handler's [callback-safe] entries.
  */
 #include <anira/abi/config.h>
 #include <anira/abi/draft/tensor_platform.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
+#include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <stddef.h>
@@ -80,7 +85,8 @@ size_t anira_rt_contract_hard(anira_handler* handler,
                               const anira_tensor* outputs,
                               size_t* delivered) ANIRA_NONBLOCKING {
     size_t total = 0;
-    total += anira_handler_process(handler, inputs, outputs, 0u, delivered) == ANIRA_OK ? 1u : 0u;
+    total +=
+        anira_handler_process(handler, inputs, 0u, outputs, 0u, delivered) == ANIRA_OK ? 1u : 0u;
     total += anira_handler_process_multi(handler, inputs, 1u, outputs, 1u, delivered) == ANIRA_OK
                  ? 1u
                  : 0u;
@@ -88,6 +94,9 @@ size_t anira_rt_contract_hard(anira_handler* handler,
     total += anira_handler_push_data_multi(handler, inputs, 1u) == ANIRA_OK ? 1u : 0u;
     total += anira_handler_pop_data(handler, outputs, 0u, delivered) == ANIRA_OK ? 1u : 0u;
     total += anira_handler_pop_data_multi(handler, outputs, 1u, delivered) == ANIRA_OK ? 1u : 0u;
+    /* The Static entries are [driver-thread] and nonblocking like the Hard entries. */
+    total += anira_handler_set_static_input(handler, 1u, inputs) == ANIRA_OK ? 1u : 0u;
+    total += anira_handler_get_static_output(handler, 1u, outputs) == ANIRA_OK ? 1u : 0u;
     return total;
 }
 
@@ -122,6 +131,85 @@ static anira_status ANIRA_CALL anira_rt_contract_miss(anira_handler* handler,
         for (i = 0; i < samples; ++i) { out[(int64_t)i * step] = first; }
     }
     return ANIRA_OK;
+}
+
+/* anira/abi/stage.h: a phase callback as a host writes one. It asks the context what each slot
+   is, through all six context accessors: the role first, then only what the slot has in this
+   phase (asking for more is the stage's bug and is recorded). In pre_process it moves one hop
+   of every Streamed input by hand, through every ring accessor a stage has; in post_process it
+   pushes the outputs; anything else is left to the default bodies. */
+static anira_status ANIRA_CALL anira_rt_contract_stage(const anira_stage_ctx* ctx,
+                                                       void* user_data) ANIRA_NONBLOCKING {
+    uint32_t slot = 0;
+    (void)user_data;
+    if (ctx->phase == (uint32_t)ANIRA_PHASE_PRE_PROCESS) {
+        for (slot = 0; slot < ctx->num_inputs; ++slot) {
+            anira_role role = ANIRA_ROLE_FORCE32;
+            anira_ring* ring = NULL;
+            anira_dtype dtype = 0;
+            anira_tensor tensor;
+            void* data = NULL;
+            size_t elements = 0;
+            uint32_t channel = 0;
+            if (anira_stage_input_role(ctx, slot, &role) != ANIRA_OK) { continue; }
+            if (role != ANIRA_ROLE_STREAMED) { continue; }
+            if (anira_stage_input_ring(ctx, slot, &ring) != ANIRA_OK) { continue; }
+            if (anira_stage_input_tensor(ctx, slot, &tensor) != ANIRA_OK) { continue; }
+            dtype = anira_ring_dtype(ring);
+            data = anira_tensor_data(&tensor, dtype);
+            elements = anira_tensor_num_elements(&tensor);
+            if (data == NULL) { continue; }
+            for (channel = 0; channel < anira_ring_num_channels(ring); ++channel) {
+                const size_t fresh = anira_ring_available(ring, channel);
+                const size_t past = anira_ring_available_past(ring, channel);
+                if (fresh + past < elements) {
+                    (void)anira_ring_discard(ring, channel, fresh);
+                } else if (past > 0u) {
+                    (void)anira_ring_pop_windows(ring, channel, data, dtype, fresh, past, 0u, 1u);
+                } else {
+                    (void)anira_ring_peek_past_block(ring, channel, data, dtype, 0u);
+                    (void)anira_ring_pop_block(ring, channel, data, dtype, fresh);
+                }
+            }
+        }
+        return anira_stage_default_pre_process(ctx);
+    }
+    if (ctx->phase == (uint32_t)ANIRA_PHASE_POST_PROCESS) {
+        for (slot = 0; slot < ctx->num_outputs; ++slot) {
+            anira_role role = ANIRA_ROLE_FORCE32;
+            anira_ring* ring = NULL;
+            anira_dtype dtype = 0;
+            anira_tensor tensor;
+            const void* data = NULL;
+            if (anira_stage_output_role(ctx, slot, &role) != ANIRA_OK) { continue; }
+            if (role != ANIRA_ROLE_STREAMED) { continue; }
+            if (anira_stage_output_ring(ctx, slot, &ring) != ANIRA_OK) { continue; }
+            if (anira_stage_output_tensor(ctx, slot, &tensor) != ANIRA_OK) { continue; }
+            dtype = anira_ring_dtype(ring);
+            data = anira_tensor_data(&tensor, dtype);
+            if (data == NULL) { continue; }
+            (void)anira_ring_push_block(ring, 0u, data, dtype, 0u);
+            (void)anira_ring_push_fill(ring, 0u, data, dtype, 0u);
+        }
+        return anira_stage_default_post_process(ctx);
+    }
+    return ANIRA_OK;
+}
+
+/* anira_pipeline_add_stage is [main-thread]: a plain function fills the descriptor. The four
+   phase slots take the nonblocking function as it is, and the flags state the promise the
+   attribute checked. */
+/* NOLINTNEXTLINE(misc-use-internal-linkage) */
+anira_status anira_rt_contract_add_stage(anira_pipeline* pipeline, void* user_data);
+anira_status anira_rt_contract_add_stage(anira_pipeline* pipeline, void* user_data) {
+    anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
+    stage.user_data = user_data;
+    stage.flags = ANIRA_STAGE_REALTIME_PRE_POST | ANIRA_STAGE_REALTIME_HOOKS;
+    stage.pre_process = anira_rt_contract_stage;
+    stage.post_process = anira_rt_contract_stage;
+    stage.before_inference = anira_rt_contract_stage;
+    stage.after_inference = anira_rt_contract_stage;
+    return anira_pipeline_add_stage(pipeline, &stage, NULL);
 }
 
 /* The setter is [main-thread]: a plain function hands the pair over. */
