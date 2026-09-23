@@ -845,7 +845,9 @@ TEST(AbiEngine, AMissingFileOnARealEngineIsModelLoadOrNoSuchFile) {
         const anira_status status = anira_handler_prepare(handler, contract.native(), &err);
         EXPECT_TRUE(status == ANIRA_ERROR_NO_SUCH_FILE || status == ANIRA_ERROR_MODEL_LOAD)
             << status << ": " << err.message;
-        EXPECT_NE(std::strstr(err.message, k_missing_path), nullptr) << err.message;
+        // The message carries the absolute path in the platform's spelling (a drive letter and
+        // backslashes on Windows): the file's name is what every spelling shares.
+        EXPECT_NE(std::strstr(err.message, "anira-test-missing-model.bin"), nullptr) << err.message;
         EXPECT_EQ(anira_handler_plan_report(handler), nullptr) << "unprepared";
         anira_handler_destroy(handler);
     }
