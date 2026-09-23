@@ -23,6 +23,10 @@ macro(_anira_wire_tflite)
         set(ANIRA_${_ab_ID}_IOS_SHIM "${_ab_shim}")
         file(WRITE "${_ab_shim}/tensorflow/lite/c_api.h" "#include <c_api.h>\n")
         file(WRITE "${_ab_shim}/tensorflow/lite/core/c/c_api.h" "#include <c_api.h>\n")
+        # The engine adapter reads TfLiteTensor's dims_signature (common.h) and the opaque
+        # types header by their canonical paths as well.
+        file(WRITE "${_ab_shim}/tensorflow/lite/core/c/c_api_types.h" "#include <c_api_types.h>\n")
+        file(WRITE "${_ab_shim}/tensorflow/lite/core/c/common.h" "#include <common.h>\n")
         set(_ab_incdir "${_ab_shim}" "${_ab_fwk}/Headers")
         set(_ab_libdir "${_ab_fwk}")
         unset(_ab_fwk)
