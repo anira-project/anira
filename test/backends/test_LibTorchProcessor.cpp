@@ -8,6 +8,7 @@
 #ifdef USE_LIBTORCH
 
 #include <anira/InferenceConfig.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -19,6 +20,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "backend_test_support.h"
