@@ -69,10 +69,13 @@ std::string refused(const std::string& id, anira_phase phase, anira_status statu
 // ---- DescriptorLoaded -----------------------------------------------------------------------
 
 DescriptorLoaded::DescriptorLoaded(std::shared_ptr<const anira::capi::EngineCarrier> carrier,
-                                   std::string id,
                                    uint32_t row,
                                    std::shared_ptr<const anira_model_config> model)
-    : m_carrier(std::move(carrier)), m_id(std::move(id)), m_row(row), m_model(std::move(model)) {}
+    : m_carrier(std::move(carrier)), m_row(row), m_model(std::move(model)) {}
+
+const std::string& DescriptorLoaded::id() const noexcept {
+    return m_carrier->id();
+}
 
 DescriptorLoaded::~DescriptorLoaded() {
     unload();
@@ -80,7 +83,7 @@ DescriptorLoaded::~DescriptorLoaded() {
 
 void DescriptorLoaded::init(const anira_init_info& info) {
     const anira_status status = m_carrier->ensure_init(info);
-    if (status != ANIRA_OK) { throw StatusError(status, refused(m_id, ANIRA_PHASE_INIT, status)); }
+    if (status != ANIRA_OK) { throw StatusError(status, refused(id(), ANIRA_PHASE_INIT, status)); }
 }
 
 uint32_t DescriptorLoaded::flags() const noexcept {
@@ -131,7 +134,7 @@ void DescriptorLoaded::do_load(const Model& model) {
     void* loaded = nullptr;
     const anira_status status = desc.load(&info, desc.user_data, &loaded);
     // The refused load owes no unload.
-    if (status != ANIRA_OK) { throw StatusError(status, refused(m_id, ANIRA_PHASE_LOAD, status)); }
+    if (status != ANIRA_OK) { throw StatusError(status, refused(id(), ANIRA_PHASE_LOAD, status)); }
     m_loaded_pointer = loaded;
     m_unload_owed = true;
 }

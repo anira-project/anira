@@ -91,9 +91,9 @@ struct StageFacts {
 /// builds it from the pipeline's engines; NULL is a pipeline without one, the bridge's case:
 /// anira.v2.custom is the one custom id then).
 struct EngineFacts {
-    /// The ids the pipeline's engines are added under: a custom row naming one is a plan on the 2.x
-    /// CUSTOM backend, resolved by row like every plan; a custom row naming neither anira.v2.custom
-    /// nor one of these is refused at create.
+    /// The ids of the pipeline's engines: a custom row naming one is a plan on the 2.x CUSTOM
+    /// backend, resolved by row like every plan; a custom row naming neither anira.v2.custom nor
+    /// one of these is refused at create.
     std::vector<std::string> m_ids;
     /// One consumer per registered engine that declares consumed kinds, keyed by its id
     /// (m_engine_id; m_name is the id too, pointing into the carrier, which outlives the

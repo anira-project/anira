@@ -2026,7 +2026,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "Appends a model entry for a custom engine, named by the reverse-URI id it is added under on the pipeline (anira_pipeline_add_engine; the entry and the addition may come in either order). An id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id."
+        doc: "Appends a model entry for a custom engine, named by its reverse-URI id (the one anira_custom_engine_create gave it; the entry and the engine's addition to the pipeline, anira_pipeline_add_engine, may come in either order). An id no engine of the pipeline has is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.', or a NULL or empty path."
       - kind: function
         name: anira_model_config_add_model_bytes_custom
@@ -2518,7 +2518,7 @@ headers:
         name: anira_backend_id
         tier: 2
         struct_id: ANIRA_STRUCT_BACKEND_ID
-        doc: "A backend, where the pair must travel as one item: an engine on a provider (provider, or provider_id for one the enum does not name). Tier 2, struct_size first; enumerated at the caller's stride. engine_id is NULL for a built-in engine and the id a custom one is added under (anira_pipeline_add_engine), whose engine is then ANIRA_ENGINE_NONE: a registered engine has no value of anira_engine of its own."
+        doc: "A backend, where the pair must travel as one item: an engine on a provider (provider, or provider_id for one the enum does not name). Tier 2, struct_size first; enumerated at the caller's stride. engine_id is NULL for a built-in engine and a custom engine's own id (anira_custom_engine_create), whose engine is then ANIRA_ENGINE_NONE: a registered engine has no value of anira_engine of its own."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_backend_id) of the caller's header."}
           - {name: engine, type: uint32_t, doc: "anira_engine."}
@@ -3415,12 +3415,14 @@ headers:
       An engine is a descriptor, not a class: anira_engine_desc names a process function, a
       reset, a prepare, an unprepare, a load, an unload, an init and a release function, one
       user_data slot, the extension kinds it consumes and its flags. anira_custom_engine_create
-      copies it into a refcounted
-      anira_custom_engine, which anira_pipeline_add_engine adds to a pipeline under a
-      reverse-URI id: the object is what the engine is, the id is how the pipeline's model
-      entries name it. One engine may be added to any number of pipelines (under the same id or
-      different ones); the pipelines and every handler created from them share it. A model
-      entry names the engine by the id of its pipeline
+      copies it, under a reverse-URI id, into a refcounted anira_custom_engine, which
+      anira_pipeline_add_engine adds to pipelines: the object is what the engine is, the id is
+      how model entries name it, and both are fixed at create, so an engine has one id in every
+      pipeline it is added to. One engine may be added to any number of pipelines; the pipelines
+      and every handler created from them share it, and the engines of one pipeline have
+      distinct ids. The id is unique per pipeline, not per process: two engine objects may carry
+      one id in two pipelines (two instances of a plugin, each with its own engine). A model
+      entry names the engine by its id
       (anira_model_config_add_model_path_custom, anira_model_config_add_model_bytes_custom) and
       a candidate of anira_pipeline_add_inference with engine_id set selects it; wherever the
       engine-provider pair travels a registered engine is ANIRA_ENGINE_NONE with its id
@@ -3453,8 +3455,8 @@ headers:
       Two handlers share one loaded model when they run the same engine object on an equal
       model configuration (the whole variant: every entry, spec and extension the engine may
       read through load's record) resolved to equal tensors, on the same provider, whichever
-      pipelines they were created from; two engine objects never share, even with the same
-      callbacks. The shared
+      pipelines they were created from; two engine objects never share, even under one id with
+      the same callbacks. The shared
       call slots of a loaded model are its instances (anira_engine_load_info.instances, the
       model's max_instances): a process call of a handler whose model is stateless claims one
       of them, and no two calls run at once on one instance. A model declared
@@ -3818,14 +3820,15 @@ headers:
         name: anira_custom_engine_create
         returns: anira_status
         params:
+          - {type: const char*, name: engine_id, doc: "The engine's id, copied: the reverse-URI name model entries name the engine by (anira_model_config_add_model_path_custom), which anira_backend_id.engine_id, the plan report and every message about the engine carry; it must contain a '.', and the prefix \"anira.\" is anira's own. The id belongs to the engine, in every pipeline it is added to, and is unique per pipeline (anira_pipeline_add_engine), not per process: two engine objects may carry one id in two pipelines."}
           - {type: const anira_engine_desc*, name: desc, doc: "The engine; min(struct_size, sizeof(anira_engine_desc)) bytes are copied, with the consumed kinds, so the record and its strings may die when the call returns. The slots a shorter struct_size does not cover read as in ANIRA_ENGINE_DESC_INIT."}
           - {type: anira_custom_engine**, name: out, doc: "Receives the handle on success."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Creates a custom engine: the descriptor is copied into a refcounted object, which anira_pipeline_add_engine adds to any number of pipelines. The object is the engine's identity: handlers running the same object on an equal model configuration share one loaded model (one load), whichever pipelines they come from; two objects never share, even over the same callbacks and user_data. The handle holds one reference and may be destroyed right after the last anira_pipeline_add_engine; release fires exactly once, when the last reference dies (the handle, the pipelines, their handlers, the loaded models), after every unload. A refused call creates nothing and never calls release."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or out, a struct_size below the three leading slots {struct_size, abi_version, user_data}, a flags bit this header does not define, a NULL process, a NULL consumed_kinds (or a NULL entry in it) with a count above 0, or a NULL providers (or a NULL or empty entry in it) with a count above 0; ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve (anira_check_abi)."
+        doc: "Creates a custom engine: the id and the descriptor are copied into a refcounted object, which anira_pipeline_add_engine adds to any number of pipelines. The object is the engine's identity and the id its name, both fixed for the object's life: handlers running the same object on an equal model configuration share one loaded model (one load), whichever pipelines they come from; two objects never share, even under one id over the same callbacks and user_data. The handle holds one reference and may be destroyed right after the last anira_pipeline_add_engine; release fires exactly once, when the last reference dies (the handle, the pipelines, their handlers, the loaded models), after every unload. A refused call creates nothing and never calls release."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL engine_id, desc or out, an id without a '.' or with the prefix \"anira.\", a struct_size below the three leading slots {struct_size, abi_version, user_data}, a flags bit this header does not define, a NULL process, a NULL consumed_kinds (or a NULL entry in it) with a count above 0, or a NULL providers (or a NULL or empty entry in it) with a count above 0; ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve (anira_check_abi)."
 
       - kind: function
         name: anira_custom_engine_destroy
@@ -3842,14 +3845,13 @@ headers:
         returns: anira_status
         params:
           - {type: anira_pipeline*, name: pipeline, doc: "The pipeline."}
-          - {type: const char*, name: engine_id, doc: "The id the pipeline's model entries name the engine by, copied: a reverse-URI name, which must contain a '.', and the prefix \"anira.\" is anira's own. What anira_model_config_add_model_path_custom names and what anira_backend_id.engine_id carries. The id belongs to this pipeline, not to the engine: one engine may be added to two pipelines under different ids, or to one pipeline under two."}
           - {type: const anira_custom_engine*, name: engine, doc: "The engine; the pipeline takes a reference, so the handle may be destroyed right after."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Adds a custom engine to the pipeline under engine_id. Legal before or after anira_pipeline_add_inference; a handler copies the pipeline at anira_handler_create, so a later addition does not reach that handler. An added engine no entry names is not a plan and not an error; an entry whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, engine_id or engine, or an id without a '.' or with the prefix \"anira.\"; ANIRA_ERROR_INVALID_STATE for an id this pipeline already has."
+        doc: "Adds a custom engine to the pipeline, under the id it was created with (anira_custom_engine_create): the pipeline's model entries name it so. The engines of one pipeline have distinct ids. Legal before or after anira_pipeline_add_inference; a handler copies the pipeline at anira_handler_create, so a later addition does not reach that handler. An added engine no entry names is not a plan and not an error; an entry whose id no engine of the pipeline has is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline or engine; ANIRA_ERROR_INVALID_STATE when the pipeline already has an engine with the engine's id, this engine or another. A refused call takes no reference."
 
       - kind: function
         name: anira_pipeline_destroy

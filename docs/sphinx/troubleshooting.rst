@@ -29,7 +29,7 @@ Anira ships five inference engines, each an adapter of one internal interface:
     - ExecuTorch
 
 .. note::
-    A custom engine is created once and added to the pipeline under a reverse-URI id (``anira_custom_engine_create`` and ``anira_pipeline_add_engine``, or an :cpp:class:`anira::Engine` in C++) and runs like a built-in one: see :doc:`custom_backends`.
+    A custom engine is created once under a reverse-URI id and added to the pipeline (``anira_custom_engine_create`` and ``anira_pipeline_add_engine``, or an :cpp:class:`anira::Engine` in C++) and runs like a built-in one: see :doc:`custom_backends`.
 
 Is anira free and open source?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

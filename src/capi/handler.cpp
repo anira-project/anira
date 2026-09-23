@@ -785,12 +785,13 @@ anira::InferenceBackend backend_of_row(const anira::capi::ModelEntry& row, size_
 }
 
 // The engine of the pipeline a custom row names by its id, or null for the anira.v2.custom
-// row (validate refused every other id no engine of the pipeline serves).
-const anira::capi::PipelineEngine* registered_engine(const anira_pipeline& pipeline,
-                                                     const anira::capi::ModelEntry& row) {
+// row (validate refused every other id no engine of the pipeline has).
+std::shared_ptr<const anira::capi::EngineCarrier> registered_engine(
+    const anira_pipeline& pipeline,
+    const anira::capi::ModelEntry& row) {
     if (!row.is_custom()) { return nullptr; }
-    for (const anira::capi::PipelineEngine& engine : pipeline.m_engines) {
-        if (engine.m_id == row.m_engine_id) { return &engine; }
+    for (const std::shared_ptr<const anira::capi::EngineCarrier>& engine : pipeline.m_engines) {
+        if (engine->id() == row.m_engine_id) { return engine; }
     }
     return nullptr;
 }
@@ -850,14 +851,15 @@ void check_providers(const anira_context& context,
         const anira::capi::ModelEntry& row = model.m_models[key.m_row];
         const std::string provider = anira::capi::provider_label(key.m_provider, key.m_provider_id);
         std::string message = "handler: models[" + std::to_string(key.m_row) + "]: ";
-        if (const anira::capi::PipelineEngine* const engine = registered_engine(pipeline, row)) {
-            if (engine->m_carrier->serves(key.m_provider, key.m_provider_id)) { continue; }
+        if (const std::shared_ptr<const anira::capi::EngineCarrier> engine =
+                registered_engine(pipeline, row)) {
+            if (engine->serves(key.m_provider, key.m_provider_id)) { continue; }
             message += "custom engine '";
-            message += engine->m_id;
+            message += engine->id();
             message += "' does not serve provider '";
             message += provider;
             message += "' (its descriptor lists: ";
-            message += listed_providers(*engine->m_carrier);
+            message += listed_providers(*engine);
             message += ")";
         } else if (row.is_custom()) {
             message += "engine '";
@@ -987,7 +989,7 @@ std::vector<anira::backend::PlanRequest> plan_requests(const anira_handler& hand
                 request.m_model.m_options = set->m_options;
             }
         }
-        if (const anira::capi::PipelineEngine* const engine =
+        if (const std::shared_ptr<const anira::capi::EngineCarrier> engine =
                 registered_engine(handler.m_pipeline, row)) {
             if (variant == nullptr) {
                 variant = std::make_shared<const anira_model_config>(
@@ -997,14 +999,13 @@ std::vector<anira::backend::PlanRequest> plan_requests(const anira_handler& hand
             // The engine's load may read the whole variant (the load record names it), so
             // two handlers share its loaded model only over an equal one: the pool compares
             // the text beside the record. The carrier is the other half of the key: the same
-            // engine object, whichever pipeline it was added to and under whichever id.
+            // engine object, whichever pipeline it was added to.
             request.m_model.m_variant = variant_json;
             request.m_source = anira::backend::Source::Registered;
-            request.m_carrier = engine->m_carrier;
+            request.m_carrier = engine;
             request.m_context = handler.m_context;
             request.m_loaded =
-                std::make_shared<anira::backend::DescriptorLoaded>(engine->m_carrier,
-                                                                   engine->m_id,
+                std::make_shared<anira::backend::DescriptorLoaded>(engine,
                                                                    static_cast<uint32_t>(row_index),
                                                                    variant);
         } else {
@@ -1050,9 +1051,9 @@ void build_plans(anira_handler& handler,
         if (row.is_custom()) {
             handler.m_report.m_strings.push_back(row.m_engine_id);
             plan.m_info.engine_id = handler.m_report.m_strings.back().c_str();
-            if (const anira::capi::PipelineEngine* const engine =
+            if (const std::shared_ptr<const anira::capi::EngineCarrier> engine =
                     registered_engine(handler.m_pipeline, row)) {
-                plan.m_info.engine_flags = engine->m_carrier->desc().flags;
+                plan.m_info.engine_flags = engine->desc().flags;
             }
         }
         handler.m_plans.push_back(plan);
@@ -1869,9 +1870,28 @@ anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipeline,
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
-anira_status ANIRA_CALL anira_custom_engine_create(const anira_engine_desc* desc,
+anira_status ANIRA_CALL anira_custom_engine_create(const char* engine_id,
+                                                   const anira_engine_desc* desc,
                                                    anira_custom_engine** out,
                                                    anira_error* err) ANIRA_NOEXCEPT try {
+    ANIRA_CAPI_REQUIRE(engine_id != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "engine: NULL engine_id");
+    // The engine's name for its whole life: a reverse-URI id that is not one of anira's own.
+    ANIRA_CAPI_REQUIRE(std::strchr(engine_id, '.') != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "engine: the engine id '%s' is no reverse-URI name (it must contain a "
+                       "'.')",
+                       engine_id);
+    ANIRA_CAPI_REQUIRE(
+        std::strncmp(engine_id, k_anira_id_prefix, std::strlen(k_anira_id_prefix)) != 0,
+        err,
+        ANIRA_ERROR_INVALID_ARGUMENT,
+        "engine: the engine id '%s' carries the prefix \"%s\", which is anira's own",
+        engine_id,
+        k_anira_id_prefix);
     ANIRA_CAPI_REQUIRE(desc != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "engine: NULL desc");
     ANIRA_CAPI_REQUIRE(out != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "engine: NULL out");
     ANIRA_CAPI_REQUIRE(desc->struct_size >= k_engine_desc_head,
@@ -1928,8 +1948,9 @@ anira_status ANIRA_CALL anira_custom_engine_create(const anira_engine_desc* desc
                            "engine: the engine's providers[%u] is NULL or empty",
                            i);
     }
-    // The carrier copies the kinds and the providers.
-    *out = new anira_custom_engine{std::make_shared<anira::capi::EngineCarrier>(value)};
+    // The carrier copies the id, the kinds and the providers.
+    *out = new anira_custom_engine{
+        std::make_shared<anira::capi::EngineCarrier>(std::string(engine_id), value)};
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
@@ -1938,45 +1959,33 @@ void ANIRA_CALL anira_custom_engine_destroy(anira_custom_engine* engine) ANIRA_N
 } catch (...) { anira::capi::report_void_failure(__func__); }
 
 anira_status ANIRA_CALL anira_pipeline_add_engine(anira_pipeline* pipeline,
-                                                  const char* engine_id,
                                                   const anira_custom_engine* engine,
                                                   anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(pipeline != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "pipeline: NULL pipeline");
-    ANIRA_CAPI_REQUIRE(engine_id != nullptr,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "pipeline: NULL engine_id");
     ANIRA_CAPI_REQUIRE(engine != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "pipeline: NULL engine");
-    // A reverse-URI id that is not one of anira's own.
-    ANIRA_CAPI_REQUIRE(std::strchr(engine_id, '.') != nullptr,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "pipeline: the engine id '%s' is no reverse-URI name (it must contain a "
-                       "'.')",
-                       engine_id);
-    ANIRA_CAPI_REQUIRE(
-        std::strncmp(engine_id, k_anira_id_prefix, std::strlen(k_anira_id_prefix)) != 0,
-        err,
-        ANIRA_ERROR_INVALID_ARGUMENT,
-        "pipeline: the engine id '%s' carries the prefix \"%s\", which is anira's own",
-        engine_id,
-        k_anira_id_prefix);
-    // One engine per id; the engine itself may sit under several ids and in several pipelines.
-    for (const anira::capi::PipelineEngine& added : pipeline->m_engines) {
-        ANIRA_CAPI_REQUIRE(added.m_id != engine_id,
+    // One engine per id in a pipeline, since the id is how its model entries name the engine;
+    // the engine itself may sit in several pipelines, under its one id.
+    const std::string& id = engine->m_carrier->id();
+    for (const std::shared_ptr<const anira::capi::EngineCarrier>& added : pipeline->m_engines) {
+        ANIRA_CAPI_REQUIRE(added != engine->m_carrier,
                            err,
                            ANIRA_ERROR_INVALID_STATE,
-                           "pipeline: the pipeline already has an engine added as '%s'",
-                           engine_id);
+                           "pipeline: the engine '%s' is already added to this pipeline",
+                           id.c_str());
+        ANIRA_CAPI_REQUIRE(added->id() != id,
+                           err,
+                           ANIRA_ERROR_INVALID_STATE,
+                           "pipeline: the pipeline already has an engine '%s', another object; "
+                           "the engines of one pipeline need distinct ids",
+                           id.c_str());
     }
-    pipeline->m_engines.push_back(
-        anira::capi::PipelineEngine{.m_id = engine_id, .m_carrier = engine->m_carrier});
+    pipeline->m_engines.push_back(engine->m_carrier);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 

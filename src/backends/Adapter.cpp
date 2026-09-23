@@ -23,13 +23,12 @@
 namespace anira::backend {
 
 bool Model::operator==(const Model& other) const {
-    return m_engine == other.m_engine && m_engine_id == other.m_engine_id &&
-           m_path == other.m_path && m_bytes == other.m_bytes && m_num_bytes == other.m_num_bytes &&
-           m_entry == other.m_entry && m_variant == other.m_variant &&
-           m_provider == other.m_provider && m_provider_id == other.m_provider_id &&
-           m_options == other.m_options && m_inputs == other.m_inputs &&
-           m_outputs == other.m_outputs && m_instances == other.m_instances &&
-           m_warm_up == other.m_warm_up;
+    return m_engine == other.m_engine && m_path == other.m_path && m_bytes == other.m_bytes &&
+           m_num_bytes == other.m_num_bytes && m_entry == other.m_entry &&
+           m_variant == other.m_variant && m_provider == other.m_provider &&
+           m_provider_id == other.m_provider_id && m_options == other.m_options &&
+           m_inputs == other.m_inputs && m_outputs == other.m_outputs &&
+           m_instances == other.m_instances && m_warm_up == other.m_warm_up;
 }
 
 // ---- Loaded ---------------------------------------------------------------------------------

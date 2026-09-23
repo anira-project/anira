@@ -2,7 +2,7 @@
 #define ANIRA_BACKENDS_DESCRIPTORADAPTER_H
 /*
  * The adapter over a custom engine's descriptor (anira/abi/engine.h): what runs a custom
- * engine added to a pipeline under an id (anira_pipeline_add_engine). Private to src/backends
+ * engine added to pipelines (anira_pipeline_add_engine) under its id. Private to src/backends
  * and the scheduler (and the tests through the src/ include directory). The C lifecycle's
  * levels are the engine room's: one loaded model of one custom engine is one
  * DescriptorLoaded (init on the engine object once, before its first load; load builds the
@@ -48,12 +48,11 @@ namespace anira::backend {
 /// and its release outlive every loaded model of the engine.
 class ANIRA_API DescriptorLoaded final : public Loaded {
 public:
-    /// `carrier` is the engine the row names, `id` the id the row names it by in its pipeline
-    /// (what the messages say); `row` the entry's index in `model`, the variant (anira's own
-    /// copy, kept alive here: the load record names it, valid for the duration of the engine's
-    /// load, which copies what it keeps).
+    /// `carrier` is the engine the row names (its id is what the messages say); `row` the
+    /// entry's index in `model`, the variant (anira's own copy, kept alive here: the load
+    /// record names it, valid for the duration of the engine's load, which copies what it
+    /// keeps).
     DescriptorLoaded(std::shared_ptr<const anira::capi::EngineCarrier> carrier,
-                     std::string id,
                      uint32_t row,
                      std::shared_ptr<const anira_model_config> model);
     /// Calls the descriptor's unload with the loaded pointer, once, when a load succeeded (the
@@ -83,8 +82,8 @@ public:
     /// The engine the loaded model runs on.
     const anira::capi::EngineCarrier& carrier() const noexcept { return *m_carrier; }
 
-    /// The id the row names the engine by in its pipeline.
-    const std::string& id() const noexcept { return m_id; }
+    /// The engine's id, the one the row names it by.
+    const std::string& id() const noexcept;
 
     /// What the engine's load handed back for this loaded model: the loaded pointer every call
     /// sees in anira_engine_ctx.loaded; NULL before load and for a descriptor without a load.
@@ -99,7 +98,6 @@ private:
     void unload() noexcept;
 
     std::shared_ptr<const anira::capi::EngineCarrier> m_carrier;
-    std::string m_id;
     uint32_t m_row;
     std::shared_ptr<const anira_model_config> m_model;
     void* m_loaded_pointer = nullptr;

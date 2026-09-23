@@ -477,9 +477,10 @@ int anira_header_c_probe(void) {
         if (checks < 0) { /* never true: the object is never linked */
             checks += anira_sizeof(ANIRA_STRUCT_ENGINE_CTX) == 64u ? 1 : 0;
             anira_custom_engine* custom = NULL;
-            checks += anira_custom_engine_create(&engine, &custom, NULL) == ANIRA_OK ? 1 : 0;
-            checks += anira_pipeline_add_engine(NULL, "org.example.c", custom, NULL) ==
-                              ANIRA_ERROR_INVALID_ARGUMENT
+            checks +=
+                anira_custom_engine_create("org.example.c", &engine, &custom, NULL) == ANIRA_OK ? 1
+                                                                                                : 0;
+            checks += anira_pipeline_add_engine(NULL, custom, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
             anira_custom_engine_destroy(custom);

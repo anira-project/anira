@@ -337,30 +337,40 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipel
                                                            anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Creates a custom engine: the descriptor is copied into a refcounted object, which
- * anira_pipeline_add_engine adds to any number of pipelines. The object is the engine's
- * identity: handlers running the same object on an equal model configuration share one
- * loaded model (one load), whichever pipelines they come from; two objects never share,
- * even over the same callbacks and user_data. The handle holds one reference and may be
+ * @brief Creates a custom engine: the id and the descriptor are copied into a refcounted
+ * object, which anira_pipeline_add_engine adds to any number of pipelines. The object is
+ * the engine's identity and the id its name, both fixed for the object's life: handlers
+ * running the same object on an equal model configuration share one loaded model (one
+ * load), whichever pipelines they come from; two objects never share, even under one id
+ * over the same callbacks and user_data. The handle holds one reference and may be
  * destroyed right after the last anira_pipeline_add_engine; release fires exactly once,
  * when the last reference dies (the handle, the pipelines, their handlers, the loaded
  * models), after every unload. A refused call creates nothing and never calls release.
+ * @param engine_id The engine's id, copied: the reverse-URI name model entries name the engine
+ *        by (anira_model_config_add_model_path_custom), which
+ *        anira_backend_id.engine_id, the plan report and every message about the
+ *        engine carry; it must contain a '.', and the prefix "anira." is anira's own.
+ *        The id belongs to the engine, in every pipeline it is added to, and is
+ *        unique per pipeline (anira_pipeline_add_engine), not per process: two engine
+ *        objects may carry one id in two pipelines.
  * @param desc The engine; min(struct_size, sizeof(anira_engine_desc)) bytes are copied, with
  *        the consumed kinds, so the record and its strings may die when the call returns.
  *        The slots a shorter struct_size does not cover read as in ANIRA_ENGINE_DESC_INIT.
  * @param out Receives the handle on success.
  * @param err Nullable.
- * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or out, a struct_size below
- *         the three leading slots {struct_size, abi_version, user_data}, a flags bit this
- *         header does not define, a NULL process, a NULL consumed_kinds (or a NULL entry in it)
- *         with a count above 0, or a NULL providers (or a NULL or empty entry in it) with a
- *         count above 0; ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL engine_id, desc or out, an id
+ *         without a '.' or with the prefix "anira.", a struct_size below the three leading
+ *         slots {struct_size, abi_version, user_data}, a flags bit this header does not define,
+ *         a NULL process, a NULL consumed_kinds (or a NULL entry in it) with a count above 0,
+ *         or a NULL providers (or a NULL or empty entry in it) with a count above 0;
+ *         ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve
  *         (anira_check_abi).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
-ANIRA_API anira_status ANIRA_CALL anira_custom_engine_create(const anira_engine_desc* desc,
+ANIRA_API anira_status ANIRA_CALL anira_custom_engine_create(const char* engine_id,
+                                                             const anira_engine_desc* desc,
                                                              anira_custom_engine** out,
                                                              anira_error* err) ANIRA_NOEXCEPT;
 
@@ -376,30 +386,25 @@ ANIRA_API anira_status ANIRA_CALL anira_custom_engine_create(const anira_engine_
 ANIRA_API void ANIRA_CALL anira_custom_engine_destroy(anira_custom_engine* engine) ANIRA_NOEXCEPT;
 
 /**
- * @brief Adds a custom engine to the pipeline under engine_id. Legal before or after
- * anira_pipeline_add_inference; a handler copies the pipeline at anira_handler_create,
- * so a later addition does not reach that handler. An added engine no entry names is not
- * a plan and not an error; an entry whose id no engine of the pipeline serves is
- * ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id.
+ * @brief Adds a custom engine to the pipeline, under the id it was created with
+ * (anira_custom_engine_create): the pipeline's model entries name it so. The engines of
+ * one pipeline have distinct ids. Legal before or after anira_pipeline_add_inference; a
+ * handler copies the pipeline at anira_handler_create, so a later addition does not
+ * reach that handler. An added engine no entry names is not a plan and not an error; an
+ * entry whose id no engine of the pipeline has is ANIRA_ERROR_NOT_SUPPORTED at
+ * anira_handler_create, naming the id.
  * @param pipeline The pipeline.
- * @param engine_id The id the pipeline's model entries name the engine by, copied: a
- *        reverse-URI name, which must contain a '.', and the prefix "anira." is
- *        anira's own. What anira_model_config_add_model_path_custom names and what
- *        anira_backend_id.engine_id carries. The id belongs to this pipeline, not to
- *        the engine: one engine may be added to two pipelines under different ids, or
- *        to one pipeline under two.
  * @param engine The engine; the pipeline takes a reference, so the handle may be destroyed
  *        right after.
  * @param err Nullable.
- * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, engine_id or engine, or
- *         an id without a '.' or with the prefix "anira."; ANIRA_ERROR_INVALID_STATE for an id
- *         this pipeline already has.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline or engine;
+ *         ANIRA_ERROR_INVALID_STATE when the pipeline already has an engine with the engine's
+ *         id, this engine or another. A refused call takes no reference.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_engine(anira_pipeline* pipeline,
-                                                            const char* engine_id,
                                                             const anira_custom_engine* engine,
                                                             anira_error* err) ANIRA_NOEXCEPT;
 

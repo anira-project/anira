@@ -276,10 +276,8 @@ anira_status anira_rt_contract_register_engine(anira_pipeline* pipeline, void* u
     engine.flags = ANIRA_ENGINE_FLAG_REALTIME_SAFE;
     engine.process = anira_rt_contract_engine;
     anira_custom_engine* custom = NULL;
-    anira_status status = anira_custom_engine_create(&engine, &custom, NULL);
-    if (status == ANIRA_OK) {
-        status = anira_pipeline_add_engine(pipeline, "org.example.rt", custom, NULL);
-    }
+    anira_status status = anira_custom_engine_create("org.example.rt", &engine, &custom, NULL);
+    if (status == ANIRA_OK) { status = anira_pipeline_add_engine(pipeline, custom, NULL); }
     anira_custom_engine_destroy(custom);
     return status;
 }

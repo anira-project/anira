@@ -2503,18 +2503,20 @@ struct EngineTrampolines;
 }  // namespace detail
 
 /**
- * @brief A custom engine as a class: the engine object. Subclass it, hand it to a Pipeline under
- * a reverse-URI id (Pipeline::register_engine, or stage::Inference::engine, which Pipeline::add
- * registers before it adds the stage), and name the id on a model entry
+ * @brief A custom engine as a class: the engine object. Subclass it, construct it with its
+ * reverse-URI id (Engine(std::string id)), hand it to a Pipeline (Pipeline::register_engine, or
+ * stage::Inference::engine, which Pipeline::add registers before it adds the stage), and name
+ * the id on a model entry
  * (ModelConfig::add_model_path(id, path)): that entry is then a plan like a built-in engine's,
  * ANIRA_ENGINE_NONE with the id wherever the engine-provider pair travels. It is
  * anira_engine_desc with virtual functions in place of the function pointers, and the
  * semantics are those of anira/abi/engine.h, whose lifecycle it follows, the stage's lifecycle
  * with one level more and the same words (Stage, Stage::Prepared). The object is the engine's
- * identity, as an anira_custom_engine is in C: the first Pipeline::register_engine of an object
- * creates its C engine (flags() and consumed_kinds() are read then, once), and every later
- * registration of the same object, on the same Pipeline or another, under the same id or
- * another, adds that same C engine for as long as a Pipeline holding it lives. The levels, from
+ * identity and its id the engine's name, as an anira_custom_engine and its id are in C: the
+ * first Pipeline::register_engine of an object creates its C engine under the id (flags(),
+ * consumed_kinds() and providers() are read then, once), and every later registration of the
+ * same object, on another Pipeline, adds that same C engine for as long as a Pipeline holding
+ * it lives. The levels, from
  * the outermost in: init() is called once per C engine, by the first anira_handler_prepare
  * that reaches it, with the facts of the core in effect (InitInfo); load() is called once per
  * loaded model anira pools and returns that model's Engine::Loaded, the C lifecycle's loaded
@@ -2628,12 +2630,23 @@ public:
         virtual std::unique_ptr<Prepared> prepare(const PrepareInfo& info) = 0;
     };
 
-    Engine() = default;
+    /// The engine object under its id: the reverse-URI name model entries name it by
+    /// (ModelConfig::add_model_path(id, path)), which the plan report and every message about
+    /// the engine carry, fixed for the object's life as anira_custom_engine_create fixes a C
+    /// engine's. It is checked when the object's C engine is created, at its first
+    /// registration: an id without a '.' or with the prefix "anira." is
+    /// ANIRA_ERROR_INVALID_ARGUMENT there. The engines of one Pipeline have distinct ids; two
+    /// objects may carry one id on two Pipelines (two instances of a plugin, each with its own
+    /// engine) and never share a loaded model.
+    explicit Engine(std::string id) : m_id(std::move(id)) {}
     virtual ~Engine() = default;
     Engine(const Engine&) = delete;
     Engine& operator=(const Engine&) = delete;
     Engine(Engine&&) = delete;
     Engine& operator=(Engine&&) = delete;
+
+    /// The id the object was constructed with.
+    const std::string& id() const noexcept { return m_id; }
 
     /// The engine's promises, written into anira_engine_desc::flags at registration: an OR of
     /// ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE,
@@ -2691,6 +2704,7 @@ public:
 
 private:
     friend struct detail::EngineTrampolines;
+    std::string m_id;
     /// The C engine of this object while a Pipeline holding it lives: weak, since the C engine
     /// owns a shared_ptr to this object (its user_data), and a strong reference back would
     /// keep both alive forever. Guarded by m_handle_mutex: two plugin instances may register
@@ -2728,10 +2742,11 @@ struct EngineHandle {
  */
 struct EngineTrampolines {
     /// The C engine of `engine`: the one a living Pipeline already holds, else a new one
-    /// (anira_custom_engine_create), whose descriptor is read from the object now: flags(),
-    /// consumed_kinds(), providers(), the eight slots. @throws Error when the C entry refuses the
-    /// descriptor (a flags() bit anira/abi/enums.h does not define); a refused create keeps no copy
-    /// of the object and never calls its release.
+    /// (anira_custom_engine_create) under the object's id, whose descriptor is read from the
+    /// object now: flags(), consumed_kinds(), providers(), the eight slots. @throws Error when
+    /// the C entry refuses the id (no reverse-URI name, or anira's own) or the descriptor (a
+    /// flags() bit anira/abi/enums.h does not define); a refused create keeps no copy of the
+    /// object and never calls its release.
     static std::shared_ptr<EngineHandle> handle_of(const std::shared_ptr<Engine>& engine) {
         const std::scoped_lock<std::mutex> lock(engine->m_handle_mutex);
         if (std::shared_ptr<EngineHandle> handle = engine->m_handle.lock()) { return handle; }
@@ -2761,7 +2776,8 @@ struct EngineTrampolines {
         desc.user_data = holder.get();
         auto handle = std::make_shared<EngineHandle>();
         anira_error err{};
-        check(anira_custom_engine_create(&desc, &handle->m_engine, &err), err);
+        check(anira_custom_engine_create(engine->id().c_str(), &desc, &handle->m_engine, &err),
+              err);
         [[maybe_unused]] const std::shared_ptr<Engine>* const carried = holder.release();
         engine->m_handle = handle;
         return handle;
@@ -2907,7 +2923,7 @@ namespace stage {
  * @brief The inference stage of a Pipeline: the model configuration(s) it may run, the
  * candidate backends (empty = the default set: every engine this build carries, on
  * ANIRA_PROVIDER_DEFAULT, plus the custom entries) and the custom engines it brings along
- * (engine(id, impl): Pipeline::add registers each one on the pipeline through
+ * (engine(impl): Pipeline::add registers each one on the pipeline through
  * Pipeline::register_engine before it adds the stage). Holds pointers into the ModelConfigs, which
  * must outlive the Pipeline's construction; the pipeline copies them
  * (anira_pipeline_add_inference). One variant in this pre-release.
@@ -2926,13 +2942,13 @@ public:
         for (const ModelConfig& variant : variants) { m_variants.push_back(variant.native()); }
     }
 
-    /// A custom engine of this stage, registered on the pipeline under its reverse-URI id by
-    /// Pipeline::add before the stage is added (Pipeline::register_engine, one call per pair,
-    /// in the order given), so that a model entry of the stage's configuration may name the
-    /// id. A null implementation and an id the pipeline already has are refused there, by
-    /// Pipeline::register_engine's rules.
-    Inference& engine(std::string_view id, std::shared_ptr<Engine> implementation) {
-        m_engines.emplace_back(std::string(id), std::move(implementation));
+    /// A custom engine of this stage, registered on the pipeline under its id (Engine::id) by
+    /// Pipeline::add before the stage is added (Pipeline::register_engine, one call per
+    /// engine, in the order given), so that a model entry of the stage's configuration may
+    /// name the id. A null implementation and an id the pipeline already has are refused
+    /// there, by Pipeline::register_engine's rules.
+    Inference& engine(std::shared_ptr<Engine> implementation) {
+        m_engines.push_back(std::move(implementation));
         return *this;
     }
 
@@ -2941,14 +2957,12 @@ public:
     /// The candidate backends, in the order given; empty for the default set.
     std::span<const BackendId> candidates() const noexcept { return m_candidates; }
     /// The engines of engine(), in the order given.
-    std::span<const std::pair<std::string, std::shared_ptr<Engine>>> engines() const noexcept {
-        return m_engines;
-    }
+    std::span<const std::shared_ptr<Engine>> engines() const noexcept { return m_engines; }
 
 private:
     std::vector<const anira_model_config*> m_variants;
     std::vector<BackendId> m_candidates;
-    std::vector<std::pair<std::string, std::shared_ptr<Engine>>> m_engines;
+    std::vector<std::shared_ptr<Engine>> m_engines;
 };
 
 /**
@@ -2977,10 +2991,10 @@ private:
  * @brief An anira_pipeline with its lifetime: the stages a handler runs, exactly one
  * stage::Inference and at most one stage::Custom around it, and the custom engines registered
  * on it. A custom engine is no stage: it is part of the inference stage, one more
- * implementation its candidates resolve to, registered under a reverse-URI id through
- * register_engine or on the stage (stage::Inference::engine, which add registers before it
- * adds the stage) over anira_pipeline_add_engine, and named by a model entry of the
- * configuration (ModelConfig::add_model_path(id, path)). The pipeline holds the C engine of
+ * implementation its candidates resolve to, registered through register_engine or on the
+ * stage (stage::Inference::engine, which add registers before it adds the stage) over
+ * anira_pipeline_add_engine, and named by a model entry of the configuration by its id
+ * (Engine::id; ModelConfig::add_model_path(id, path)). The pipeline holds the C engine of
  * every Engine object registered on it, so another Pipeline registering the same object reuses
  * it, and handlers of both share loaded models. Move-only; copied by the handler that takes
  * it, engines included: a registration after a handler's create does not reach that handler.
@@ -3037,23 +3051,25 @@ public:
         std::visit([this](const auto& value) { add_stage(value); }, any_stage);
         return *this;
     }
-    /// Registers a custom engine on the pipeline under a reverse-URI id
+    /// Registers a custom engine on the pipeline under its id, Engine::id
     /// (anira_pipeline_add_engine). The object's C engine is created at its first registration
-    /// (anira_custom_engine_create: flags(), consumed_kinds() and providers() fill an
-    /// anira_engine_desc whose slots are the class's virtuals, read once, then) and reused by every
-    /// later one while a Pipeline holding it lives, on this Pipeline or another, under this id or
-    /// another, so handlers of all of them share loaded models of equal configurations. The C
-    /// engine holds a copy of the shared_ptr, so the object lives at least until the last pipeline
-    /// and handler that carry it are destroyed, whatever the caller does with its own pointer;
-    /// Engine::release answers the C engine once. Legal before or after the inference stage; a
-    /// model entry that names the id is a plan of the handler, an engine no entry names is not a
-    /// plan and not an error, and an entry whose id no engine of the pipeline serves is
+    /// (anira_custom_engine_create: the id, and flags(), consumed_kinds() and providers() fill
+    /// an anira_engine_desc whose slots are the class's virtuals, read once, then) and reused by
+    /// every later one while a Pipeline holding it lives, on another Pipeline, so handlers of
+    /// all of them share loaded models of equal configurations. The C engine holds a copy of
+    /// the shared_ptr, so the object lives at least until the last pipeline and handler that
+    /// carry it are destroyed, whatever the caller does with its own pointer; Engine::release
+    /// answers the C engine once. Legal before or after the inference stage; a model entry that
+    /// names the id is a plan of the handler, an engine no entry names is not a plan and not
+    /// an error, and an entry whose id no engine of the pipeline has is
     /// ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create.
     /// @throws Error ANIRA_ERROR_INVALID_ARGUMENT for a null engine (before the C call), an
     /// id without a '.' or with the prefix "anira.", or a flags() bit anira/abi/enums.h does
-    /// not define; ANIRA_ERROR_INVALID_STATE for an id this pipeline already has. A refused
-    /// call keeps no reference the call created.
-    Pipeline& register_engine(std::string_view id, const std::shared_ptr<Engine>& implementation) {
+    /// not define (the C engine's create refuses them, and nothing is created);
+    /// ANIRA_ERROR_INVALID_STATE when this pipeline already has an engine with the id, this
+    /// object or another. A refused call keeps no reference the call created: a C engine the
+    /// call created is dropped again, and Engine::release answers it.
+    Pipeline& register_engine(const std::shared_ptr<Engine>& implementation) {
         if (implementation == nullptr) {
             throw Error(ANIRA_ERROR_INVALID_ARGUMENT,
                         "anira::Pipeline::register_engine: a null engine");
@@ -3061,9 +3077,7 @@ public:
         std::shared_ptr<detail::EngineHandle> handle =
             detail::EngineTrampolines::handle_of(implementation);
         anira_error err{};
-        detail::check(
-            anira_pipeline_add_engine(m_pipeline, std::string(id).c_str(), handle->m_engine, &err),
-            err);
+        detail::check(anira_pipeline_add_engine(m_pipeline, handle->m_engine, &err), err);
         m_engines.push_back(std::move(handle));
         return *this;
     }
@@ -3075,9 +3089,7 @@ private:
     void add_stage(const stage::Inference& stage) {
         // The stage's engines first, so that a model entry naming one is served once the
         // stage is in; a refused registration leaves the stage out.
-        for (const std::pair<std::string, std::shared_ptr<Engine>>& engine : stage.engines()) {
-            register_engine(engine.first, engine.second);
-        }
+        for (const std::shared_ptr<Engine>& engine : stage.engines()) { register_engine(engine); }
         anira_error err{};
         const std::span<const anira_model_config* const> variants = stage.variants();
         const std::span<const BackendId> candidates = stage.candidates();

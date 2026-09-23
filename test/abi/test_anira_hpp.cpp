@@ -1965,6 +1965,8 @@ private:
 /// every Loaded and every Prepared it made, in order.
 class CountingEngine : public anira::Engine {
 public:
+    CountingEngine() : anira::Engine(k_cxx_engine_id) {}
+    explicit CountingEngine(std::string id) : anira::Engine(std::move(id)) {}
     uint32_t flags() const noexcept override { return m_flags; }
     std::span<const char* const> consumed_kinds() const noexcept override {
         return m_consumes_entry ? std::span<const char* const>(k_kinds)
@@ -2078,7 +2080,7 @@ TEST(AbiCxx, AnEngineSubclassRunsThroughACHandler) {
 
     std::optional<anira::Pipeline> pipe;
     pipe.emplace();
-    pipe->register_engine(k_cxx_engine_id, engine);
+    pipe->register_engine(engine);
     EXPECT_EQ(engine.use_count(), 2) << "the object's C engine holds its own copy";
     pipe->inference(model);
     CHandler handler(context, *pipe);
@@ -2179,7 +2181,7 @@ TEST(AbiCxx, AThrowingEngineLoadOrPrepareFailsTheHandlersPrepare) {
         auto engine = std::make_shared<CountingEngine>();
         engine->m_throw_at = where;
         anira::Pipeline pipe;
-        pipe.register_engine(k_cxx_engine_id, engine).inference(model);
+        pipe.register_engine(engine).inference(model);
         CHandler handler(context, pipe);
         ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
         const std::string refused = std::string("the engine 'org.example.cxx' refused ") + slot;
@@ -2258,7 +2260,7 @@ TEST(AbiCxx, InitRunsOncePerRegistrationAndAThrowFailsThePrepare) {
     engine->m_init_throws = true;
     stage->m_init_throws = true;
     {
-        const anira::Pipeline pipe{anira::stage::Inference(model).engine(k_cxx_engine_id, engine),
+        const anira::Pipeline pipe{anira::stage::Inference(model).engine(engine),
                                    anira::stage::Custom(stage)};
         CHandler first(context, pipe);
         CHandler second(context, pipe);
@@ -2317,9 +2319,8 @@ TEST(AbiCxx, InitRunsOncePerRegistrationAndAThrowFailsThePrepare) {
     auto idle_engine = std::make_shared<CountingEngine>();
     auto idle_stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
     {
-        const anira::Pipeline unused{
-            anira::stage::Inference(model).engine(k_cxx_engine_id, idle_engine),
-            anira::stage::Custom(idle_stage)};
+        const anira::Pipeline unused{anira::stage::Inference(model).engine(idle_engine),
+                                     anira::stage::Custom(idle_stage)};
     }
     EXPECT_EQ(idle_engine->m_inited + idle_stage->m_inited, 0);
     EXPECT_EQ(idle_engine->m_released.load(), 1) << "release owes nothing to init";
@@ -2330,16 +2331,15 @@ TEST(AbiCxx, InitRunsOncePerRegistrationAndAThrowFailsThePrepare) {
 // list of the pipeline and through Pipeline::add registers each one before the stage is added,
 // exactly as register_engine does, and the handler runs on it; a second pipeline registering the
 // same object while the first lives reuses its C engine (no second copy); a second registration
-// under one id is ANIRA_ERROR_INVALID_STATE and keeps no copy; release fires once, for the one C
-// engine, with its last reference.
+// of the object on one pipeline is ANIRA_ERROR_INVALID_STATE and keeps no copy; release fires
+// once, for the one C engine, with its last reference.
 TEST(AbiCxx, InferenceRegistersItsEnginesWhenTheStageIsAdded) {
     const anira_test::Context context;
     const ModelConfig model = engine_stream_model();
     auto engine = std::make_shared<CountingEngine>();
     engine->m_gain = 2.0F;
     {
-        const anira::Pipeline listed{
-            anira::stage::Inference(model).engine(k_cxx_engine_id, engine)};
+        const anira::Pipeline listed{anira::stage::Inference(model).engine(engine)};
         EXPECT_EQ(engine.use_count(), 2) << "the object's C engine holds its copy";
         CHandler handler(context, listed);
         ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
@@ -2357,16 +2357,16 @@ TEST(AbiCxx, InferenceRegistersItsEnginesWhenTheStageIsAdded) {
         // pipeline is refused by the C entry.
         anira::Pipeline added;
         anira::stage::Inference stage(model);
-        stage.engine(k_cxx_engine_id, engine);
+        stage.engine(engine);
         ASSERT_EQ(stage.engines().size(), 1U);
-        EXPECT_EQ(stage.engines()[0].first, k_cxx_engine_id);
-        EXPECT_EQ(stage.engines()[0].second, engine);
+        EXPECT_EQ(stage.engines()[0], engine);
+        EXPECT_EQ(stage.engines()[0]->id(), k_cxx_engine_id);
         added.add(stage);
-        EXPECT_EQ(engine.use_count(), 3) << "the stage's pair; the C engine's copy is the first's";
-        const Thrown twice = thrown_by([&] { added.register_engine(k_cxx_engine_id, engine); });
+        EXPECT_EQ(engine.use_count(), 3) << "the stage's copy; the C engine's copy is the first's";
+        const Thrown twice = thrown_by([&] { added.register_engine(engine); });
         EXPECT_TRUE(twice.m_thrown);
         EXPECT_EQ(twice.m_status, ANIRA_ERROR_INVALID_STATE);
-        EXPECT_NE(twice.m_what.find("already has an engine"), std::string::npos) << twice.m_what;
+        EXPECT_NE(twice.m_what.find("already added"), std::string::npos) << twice.m_what;
         EXPECT_EQ(engine.use_count(), 3) << "a refused registration keeps no copy";
         EXPECT_EQ(engine->m_released.load(), 0);
     }
@@ -2375,37 +2375,51 @@ TEST(AbiCxx, InferenceRegistersItsEnginesWhenTheStageIsAdded) {
 }
 
 // register_engine refuses what it cannot describe, and a refused registration keeps no copy
-// of the engine: a null engine before the C call, an id that is no reverse-URI name and a
-// flags() bit the C header does not define by the C entries. A refused id comes after the C
-// engine was created, so that C engine is dropped again and release answers it; a refused
-// flag comes before it exists, and nothing is released.
+// of the engine: a null engine before the C call; an id that is no reverse-URI name and a
+// flags() bit the C header does not define by the C engine's create, before the C engine
+// exists, so nothing is released; another object under an id the pipeline has by the C
+// addition, after the call created that object's C engine, which is dropped again and answered
+// by release().
 TEST(AbiCxx, RegisterEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
     anira::Pipeline pipe;
     const Thrown null_engine =
-        thrown_by([&] { pipe.register_engine(k_cxx_engine_id, std::shared_ptr<anira::Engine>()); });
+        thrown_by([&] { pipe.register_engine(std::shared_ptr<anira::Engine>()); });
     EXPECT_TRUE(null_engine.m_thrown);
     EXPECT_EQ(null_engine.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(null_engine.m_what.find("null engine"), std::string::npos) << null_engine.m_what;
 
-    auto engine = std::make_shared<CountingEngine>();
-    const Thrown bad_id = thrown_by([&] { pipe.register_engine("noreverseuri", engine); });
+    auto misnamed = std::make_shared<CountingEngine>("noreverseuri");
+    EXPECT_EQ(misnamed->id(), "noreverseuri");
+    const Thrown bad_id = thrown_by([&] { pipe.register_engine(misnamed); });
     EXPECT_TRUE(bad_id.m_thrown);
     EXPECT_EQ(bad_id.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(bad_id.m_what.find("reverse-URI"), std::string::npos) << bad_id.m_what;
-    EXPECT_EQ(engine.use_count(), 1);
-    EXPECT_EQ(engine->m_released.load(), 1) << "the C engine the refused call created";
+    EXPECT_EQ(misnamed.use_count(), 1);
+    EXPECT_EQ(misnamed->m_released.load(), 0) << "no C engine was created";
 
+    auto engine = std::make_shared<CountingEngine>();
     engine->m_flags = 16U;  // the bit above the four the C header defines
-    const Thrown bit = thrown_by([&] { pipe.register_engine(k_cxx_engine_id, engine); });
+    const Thrown bit = thrown_by([&] { pipe.register_engine(engine); });
     EXPECT_TRUE(bit.m_thrown);
     EXPECT_EQ(bit.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(bit.m_what.find("flags"), std::string::npos) << bit.m_what;
     EXPECT_EQ(engine.use_count(), 1);
-    EXPECT_EQ(engine->m_released.load(), 1) << "no C engine was created";
+    EXPECT_EQ(engine->m_released.load(), 0) << "no C engine was created";
 
     engine->m_flags = ANIRA_ENGINE_FLAG_DYNAMIC_TIME;  // read again by the next registration
-    pipe.register_engine(k_cxx_engine_id, engine);
+    pipe.register_engine(engine);
     EXPECT_EQ(engine.use_count(), 2);
+
+    // Another object under the id the pipeline has: the registration creates its C engine, the
+    // C addition refuses it, and that C engine goes again.
+    auto twin = std::make_shared<CountingEngine>();
+    const Thrown taken = thrown_by([&] { pipe.register_engine(twin); });
+    EXPECT_TRUE(taken.m_thrown);
+    EXPECT_EQ(taken.m_status, ANIRA_ERROR_INVALID_STATE);
+    EXPECT_NE(taken.m_what.find("another object"), std::string::npos) << taken.m_what;
+    EXPECT_EQ(twin.use_count(), 1);
+    EXPECT_EQ(twin->m_released.load(), 1) << "the C engine the refused call created";
+    EXPECT_EQ(engine->m_released.load(), 0);
 }
 
 // providers() fills the descriptor's list: a candidate per listed provider is a plan per
@@ -2427,7 +2441,7 @@ TEST(AbiCxx, ProvidersAreTheEnginesTwins) {
                                   .engine_id = k_cxx_engine_id,
                                   .provider_id = "com.example.npu"};
     anira::Pipeline pipe;
-    pipe.register_engine(k_cxx_engine_id, engine);
+    pipe.register_engine(engine);
     pipe.inference(engine_stream_model(), {on_coreml, on_npu});
     CHandler handler(context, pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
@@ -2455,7 +2469,7 @@ TEST(AbiCxx, ProvidersAreTheEnginesTwins) {
                                    .engine_id = k_cxx_engine_id,
                                    .provider_id = nullptr};
     anira::Pipeline other;
-    other.register_engine(k_cxx_engine_id, engine);
+    other.register_engine(engine);
     other.inference(engine_stream_model(), {on_cuda});
     const CHandler refused(context, other);
     EXPECT_EQ(refused.m_status, ANIRA_ERROR_NOT_SUPPORTED) << refused.m_err.message;
@@ -2481,7 +2495,7 @@ TEST(AbiCxx, APreparedPerHandlerDiesWithItsUnprepareAndResetSeesEveryNewStream) 
         auto engine = std::make_shared<CountingEngine>();
         std::optional<anira::Pipeline> pipe;
         pipe.emplace();
-        pipe->register_engine(k_cxx_engine_id, engine).inference(model);
+        pipe->register_engine(engine).inference(model);
         CHandler first(context, *pipe);
         CHandler second(context, *pipe);
         ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
@@ -2559,7 +2573,7 @@ TEST(AbiCxx, APreparedPerHandlerDiesWithItsUnprepareAndResetSeesEveryNewStream) 
         const ModelConfig model = engine_stream_model();
         auto engine = std::make_shared<CountingEngine>();
         anira::Pipeline pipe;
-        pipe.register_engine(k_cxx_engine_id, engine).inference(model);
+        pipe.register_engine(engine).inference(model);
         CHandler first(context, pipe);
         CHandler second(context, pipe);
         ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
@@ -2607,8 +2621,8 @@ TEST(AbiCxx, OneEngineObjectOnTwoPipelinesSharesOneLoadedModel) {
         std::optional<anira::Pipeline> second_pipe;
         first_pipe.emplace();
         second_pipe.emplace();
-        first_pipe->register_engine(k_cxx_engine_id, engine).inference(model);
-        second_pipe->register_engine(k_cxx_engine_id, engine).inference(model);
+        first_pipe->register_engine(engine).inference(model);
+        second_pipe->register_engine(engine).inference(model);
         EXPECT_EQ(engine.use_count(), 2) << "one C engine, one copy";
         CHandler first(context, *first_pipe);
         CHandler second(context, *second_pipe);
@@ -2637,7 +2651,7 @@ TEST(AbiCxx, OneEngineObjectOnTwoPipelinesSharesOneLoadedModel) {
     EXPECT_EQ(engine.use_count(), 1);
     {
         anira::Pipeline again;
-        again.register_engine(k_cxx_engine_id, engine);
+        again.register_engine(engine);
         EXPECT_EQ(engine.use_count(), 2) << "a fresh C engine";
     }
     EXPECT_EQ(engine->m_released.load(), 2);

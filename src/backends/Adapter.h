@@ -83,9 +83,11 @@ struct ANIRA_API Model {
     anira_engine m_engine = ANIRA_ENGINE_NONE;  ///< the built-in engine; NONE with m_engine_id
                                                 ///< for a registered one, NONE alone for the
                                                 ///< 2.x custom and roundtrip adapters
-    std::string m_engine_id;                    ///< a registered engine's id, else empty
-    std::string m_path;                         ///< the model file; empty for bytes
-    const void* m_bytes = nullptr;              ///< the model bytes; NULL for a path
+    /// A registered engine's id, else empty: what the messages name the engine by. No part of
+    /// the key: the carrier beside the record is, and the id is the carrier's own.
+    std::string m_engine_id;
+    std::string m_path;             ///< the model file; empty for bytes
+    const void* m_bytes = nullptr;  ///< the model bytes; NULL for a path
     size_t m_num_bytes = 0;
     /// Keeps the bytes alive while the loaded model lives: an aliasing shared_ptr over the
     /// row's carrier on the C path; empty on the 2.x path, whose caller owns the bytes.

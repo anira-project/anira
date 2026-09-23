@@ -4,7 +4,7 @@ Custom Engines
 An **engine** runs the model: it takes the model tensors of a chunk in, runs one inference,
 and writes the model tensors out. anira ships five (ONNX Runtime, LibTorch, ExecuTorch, LiteRT
 and TensorFlow Lite, ``ANIRA_ENGINE_*``), and a host adds its own: it **creates** the engine
-once as an object and **adds** it to a pipeline under a reverse-URI id. Examples: a Core ML or
+once as an object under a reverse-URI id and **adds** it to pipelines. Examples: a Core ML or
 a WebGPU runtime, an engine the build does not carry, a synthetic model, a bypass for
 measuring the pipeline's overhead. A custom engine is one more implementation the inference
 stage resolves to, never a stage of its own (the stage is the pre- and post-processing around
@@ -37,8 +37,8 @@ Creating and adding an engine
     desc.unprepare = my_unprepare;
 
     anira_custom_engine* engine = NULL;
-    anira_custom_engine_create(&desc, &engine, &err);                /* the engine object */
-    anira_pipeline_add_engine(pipe, "com.example.myengine", engine, &err);
+    anira_custom_engine_create("com.example.myengine", &desc, &engine, &err); /* the object */
+    anira_pipeline_add_engine(pipe, engine, &err);
     anira_custom_engine_destroy(engine);          /* the pipeline keeps its own reference */
 
     uint32_t row = 0;                                  /* the entry the engine serves */
@@ -46,14 +46,16 @@ Creating and adding an engine
 
 Two calls, two jobs:
 
-- ``anira_custom_engine_create(&desc, &engine, &err)`` copies the descriptor (within
-  ``struct_size``, with its strings) into a refcounted **engine object**. The object is what
-  the engine *is*: anira recognises the same engine by it, and shares loaded models between
-  handlers that run it (below).
-- ``anira_pipeline_add_engine(pipe, id, engine, &err)`` adds the engine to a pipeline under an
-  **id**, which is how the pipeline's model entries name it. The id belongs to the pipeline, not
-  to the engine: one engine may be added to any number of pipelines, under the same id or
-  different ones, and to one pipeline under two ids.
+- ``anira_custom_engine_create(id, &desc, &engine, &err)`` copies the descriptor (within
+  ``struct_size``, with its strings) into a refcounted **engine object** under an **id**. The
+  object is what the engine *is*: anira recognises the same engine by it, and shares loaded
+  models between handlers that run it (below). The id is how model entries name the engine,
+  and it stays the object's for its whole life: every pipeline the engine is added to, every
+  message and every plan report row about it use that one id.
+- ``anira_pipeline_add_engine(pipe, engine, &err)`` adds the engine to a pipeline. One engine
+  may be added to any number of pipelines, and the engines of one pipeline have distinct ids.
+  The id is unique per pipeline, not per process: two plugin instances that each create their
+  own engine under one id add them to their own pipelines, and the two engines share nothing.
 
 The handle, every pipeline the engine was added to, every handler created from those pipelines
 and every loaded model of the engine hold a reference. ``anira_custom_engine_destroy`` drops
@@ -76,16 +78,16 @@ engine of the pipeline serves is ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handle
 naming the id. anira never opens a custom entry's path or reads its bytes: the engine's
 ``load`` does, through the record it receives.
 
-``anira_custom_engine_create`` refuses with ``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL``
-descriptor or ``out``, a ``struct_size`` below the three leading slots (``struct_size``,
-``abi_version``, ``user_data``), a ``flags`` bit the header does not define, a ``NULL``
-``process``, a ``NULL`` ``consumed_kinds`` (or entry) with a count above 0 and a ``NULL``
-``providers`` (or a ``NULL`` or empty entry) with a count above 0, and with
-``ANIRA_ERROR_ABI_VERSION`` an ``abi_version`` ``anira_check_abi`` refuses; a refused create
-hands out nothing and never calls ``release``. ``anira_pipeline_add_engine`` refuses with
-``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL`` pipeline, id or engine and an id without a ``.`` or
-with the prefix ``anira.``, and with ``ANIRA_ERROR_INVALID_STATE`` an id the pipeline already
-has; a refused addition takes no reference.
+``anira_custom_engine_create`` refuses with ``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL`` id,
+descriptor or ``out``, an id without a ``.`` or with the prefix ``anira.``, a ``struct_size``
+below the three leading slots (``struct_size``, ``abi_version``, ``user_data``), a ``flags``
+bit the header does not define, a ``NULL`` ``process``, a ``NULL`` ``consumed_kinds`` (or
+entry) with a count above 0 and a ``NULL`` ``providers`` (or a ``NULL`` or empty entry) with a
+count above 0, and with ``ANIRA_ERROR_ABI_VERSION`` an ``abi_version`` ``anira_check_abi``
+refuses; a refused create hands out nothing and never calls ``release``.
+``anira_pipeline_add_engine`` refuses with ``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL`` pipeline
+or engine, and with ``ANIRA_ERROR_INVALID_STATE`` an engine whose id the pipeline already has,
+the same engine or another; a refused addition takes no reference.
 
 The descriptor
 --------------
@@ -431,12 +433,10 @@ Sharing and lifetime
 anira loads once per loaded model it **pools**. Two handlers share one loaded model and its
 shared slots, and ``load`` runs once for both, when
 
-- they run **the same engine object**, whichever pipelines they were created from and under
-  whichever ids those pipelines added it (two objects never share, even over the same
-  callbacks and ``user_data``),
+- they run **the same engine object**, whichever pipelines they were created from (two
+  objects never share, even under one id over the same callbacks and ``user_data``),
 - their **model configurations are equal**, the whole variant: every entry, spec and extension,
-  since ``load`` may read any of it through its record (so the id the entry names is part of
-  it, and two pipelines that add one engine under different ids load twice), and
+  since ``load`` may read any of it through its record, and
 - their plans run on **the same provider**, with the same provider options of their contexts
   (:doc:`usage` section 3.1): a provider is part of the loaded model, so two providers of one
   model are two loads, each its own ``loaded``, and
@@ -484,13 +484,13 @@ binary and adds it to every instance's pipeline:
             desc.unload = my_unload;
             desc.prepare = my_prepare;
             desc.unprepare = my_unprepare;
-            anira_custom_engine_create(&desc, &engine, NULL);
+            anira_custom_engine_create("com.example.myengine", &desc, &engine, NULL);
         }
         return engine;
     }
 
     /* Every plugin instance: */
-    anira_pipeline_add_engine(pipe, "com.example.myengine", shared_engine(), &err);
+    anira_pipeline_add_engine(pipe, shared_engine(), &err);
 
 The static handle keeps the engine alive for the life of the binary; destroy it at the plugin's
 unload, after the last instance. In C++ the idiom is a function-local ``std::weak_ptr``, which
@@ -615,7 +615,7 @@ At setup:
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
     desc.user_data = &engine;
     desc.flags = ANIRA_ENGINE_FLAG_REALTIME_SAFE;       /* the promise the body keeps */
-    desc.providers = providers;                         /* "onnxruntime:coreml"-style words, or */
+    desc.providers = providers;                         /* the enum's spellings, or */
     desc.num_providers = 1;                             /* any name of the engine's own */
     desc.process = gain_process;
     desc.reset = gain_reset;                  /* init, reset and release could stay NULL */
@@ -627,8 +627,8 @@ At setup:
     desc.release = gain_release;
 
     anira_custom_engine* gain = NULL;
-    anira_custom_engine_create(&desc, &gain, &err);
-    anira_pipeline_add_engine(pipe, "com.example.gain", gain, &err);
+    anira_custom_engine_create("com.example.gain", &desc, &gain, &err);
+    anira_pipeline_add_engine(pipe, gain, &err);
     anira_custom_engine_destroy(gain);
 
 The same in C++
@@ -636,7 +636,8 @@ The same in C++
 
 :cpp:class:`anira::Engine` of ``anira/anira.hpp`` is the descriptor with virtual functions in
 place of the function pointers, split as the C lifecycle is, exactly like
-:cpp:class:`anira::Stage`: the engine object, ``anira::Engine``, states its promise in
+:cpp:class:`anira::Stage`: the engine object, ``anira::Engine``, is constructed with its id
+(``anira::Engine(std::string id)``, read back by ``id()``), states its promise in
 ``flags()``, its extensions in ``consumed_kinds()`` and the providers it serves beyond the
 default one in ``providers()`` (all read once, when its C engine is
 created at its first registration), may override ``init(const InitInfo&)`` (the base does
@@ -665,19 +666,21 @@ ownership spellings: the loaded model is anira's from ``load`` on (deleted at th
 is registered on and every handler created from them (a ``std::shared_ptr``). What every
 handler shares is a member of the ``Loaded``, what an exclusive handler keeps per stream (its
 own executor) a member of the ``Prepared``; nothing an inference needs is a member of the
-``Engine``. The engine is registered with ``Pipeline::register_engine(id, impl)``, or brought
-along by the inference stage, ``stage::Inference(cfg).engine(id, impl)``, which
+``Engine``. The engine is registered with ``Pipeline::register_engine(impl)``, or brought
+along by the inference stage, ``stage::Inference(cfg).engine(impl)``, which
 ``Pipeline::add`` registers before it adds the stage.
 
 The ``anira::Engine`` object is the engine's identity, as ``anira_custom_engine`` is in C. The
-first registration of an object creates its C engine; every later registration of **the same
-object**, on the same ``Pipeline`` or another, reuses that C engine for as long as a
-``Pipeline`` holding it lives, so handlers of all of them share loaded models. The C engine
+first registration of an object creates its C engine under the object's id; every later
+registration of **the same object**, on another ``Pipeline``, reuses that C engine for as long
+as a ``Pipeline`` holding it lives, so handlers of all of them share loaded models. The C engine
 holds a copy of the ``shared_ptr``; ``release()`` runs once per C engine, when the last
 pipeline and handler carrying it are gone, and a registration after that creates a fresh C
-engine with a ``release()`` of its own. A registration refused for its id after it created the
-object's C engine drops that C engine again, and ``release()`` answers it. The gain engine, its
-``process`` the passthrough of the first slot times the gain:
+engine with a ``release()`` of its own. An id the C engine's create refuses creates nothing. A
+registration refused because the pipeline already has an engine with the object's id takes no
+reference; when that call created the object's C engine, the C engine is dropped again and
+``release()`` answers it. The gain engine, its ``process`` the passthrough of the first slot
+times the gain:
 
 .. code-block:: cpp
 
@@ -688,7 +691,7 @@ object's C engine drops that C engine again, and ``release()`` answers it. The g
 
     class Gain : public anira::Engine {
     public:
-        explicit Gain(float gain) : m_gain(gain) {}
+        explicit Gain(float gain) : anira::Engine("com.example.gain"), m_gain(gain) {}
         uint32_t flags() const noexcept override { return ANIRA_ENGINE_FLAG_REALTIME_SAFE; }
         // The providers served beyond the default one: the enum's spellings or any name of
         // the engine's own; the gain does the same work on every one of them.
@@ -752,9 +755,8 @@ object's C engine drops that C engine again, and ``release()`` answers it. The g
 
     anira::ModelConfig cfg = anira::ModelConfig::from_file("gain.model.json");
     cfg.add_model_path("com.example.gain", "gain.bin");             // the entry the engine serves
-    anira::Pipeline pipe{
-        anira::stage::Inference(cfg).engine("com.example.gain", std::make_shared<Gain>(0.5F))};
-    // or: pipe.register_engine("com.example.gain", std::make_shared<Gain>(0.5F));
+    anira::Pipeline pipe{anira::stage::Inference(cfg).engine(std::make_shared<Gain>(0.5F))};
+    // or: pipe.register_engine(std::make_shared<Gain>(0.5F));
 
 To share the engine across the instances of a plugin, every instance registers the same object,
 kept once per binary; the ``std::weak_ptr`` lets it go with the last instance:
@@ -772,7 +774,7 @@ kept once per binary; the ``std::weak_ptr`` lets it go with the last instance:
     }
 
     // every plugin instance, each with its own Pipeline:
-    pipe.register_engine("com.example.gain", shared_gain());
+    pipe.register_engine(shared_gain());
 
 Every instance's ``Pipeline`` holds the object's C engine, so two instances with equal
 configurations load the model once. Keep the ``Pipeline`` for as long as the instance runs:

@@ -11,12 +11,15 @@
  *
  * An engine is a descriptor, not a class: anira_engine_desc names a process function, a reset,
  * a prepare, an unprepare, a load, an unload, an init and a release function, one user_data
- * slot, the extension kinds it consumes and its flags. anira_custom_engine_create copies it
- * into a refcounted anira_custom_engine, which anira_pipeline_add_engine adds to a pipeline
- * under a reverse-URI id: the object is what the engine is, the id is how the pipeline's model
- * entries name it. One engine may be added to any number of pipelines (under the same id or
- * different ones); the pipelines and every handler created from them share it. A model entry
- * names the engine by the id of its pipeline (anira_model_config_add_model_path_custom,
+ * slot, the extension kinds it consumes and its flags. anira_custom_engine_create copies it,
+ * under a reverse-URI id, into a refcounted anira_custom_engine, which
+ * anira_pipeline_add_engine adds to pipelines: the object is what the engine is, the id is how
+ * model entries name it, and both are fixed at create, so an engine has one id in every
+ * pipeline it is added to. One engine may be added to any number of pipelines; the pipelines
+ * and every handler created from them share it, and the engines of one pipeline have distinct
+ * ids. The id is unique per pipeline, not per process: two engine objects may carry one id in
+ * two pipelines (two instances of a plugin, each with its own engine). A model entry names the
+ * engine by its id (anira_model_config_add_model_path_custom,
  * anira_model_config_add_model_bytes_custom) and a candidate of anira_pipeline_add_inference
  * with engine_id set selects it; wherever the engine-provider pair travels a registered engine
  * is ANIRA_ENGINE_NONE with its id (anira_backend_id, anira_plan_info, anira_stage_ctx). An
@@ -45,8 +48,8 @@
  * ever ran. Two handlers share one loaded model when they run the same engine object on an
  * equal model configuration (the whole variant: every entry, spec and extension the engine may
  * read through load's record) resolved to equal tensors, on the same provider, whichever
- * pipelines they were created from; two engine objects never share, even with the same
- * callbacks. The shared call slots of a loaded model are its instances
+ * pipelines they were created from; two engine objects never share, even under one id with the
+ * same callbacks. The shared call slots of a loaded model are its instances
  * (anira_engine_load_info.instances, the model's max_instances): a process call of a handler
  * whose model is stateless claims one of them, and no two calls run at once on one instance. A
  * model declared ANIRA_MODEL_STATEFUL or with a declared State pair is loaded once too, with 0

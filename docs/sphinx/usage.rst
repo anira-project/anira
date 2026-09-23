@@ -218,9 +218,10 @@ not here, so one config serves every build.
 
       cfg.model_ext(i, anira::ext::Entry{"decode"});
 
-- **Custom engines.** An engine added to the pipeline by name (a reverse-URI id such as
-  ``"de.tu-berlin.coreml"``: ``anira_pipeline_add_engine``, section 3.2, or
-  :cpp:class:`anira::Engine` of :doc:`custom_backends`) gets its entries through the string
+- **Custom engines.** An engine created under a name (a reverse-URI id such as
+  ``"de.tu-berlin.coreml"``: ``anira_custom_engine_create``, section 3.2, or
+  :cpp:class:`anira::Engine` of :doc:`custom_backends`) and added to the pipeline gets its
+  entries through the string
   overloads: ``add_model_path("de.tu-berlin.coreml", path)``, ``add_model_bytes(id, bytes)``
   and ``default_engine("de.tu-berlin.coreml")``. anira never opens such an entry's path: the
   engine's ``load`` does, and binds the tensors itself from the names the record carries
@@ -1096,12 +1097,12 @@ flags) into a carrier the pipeline and its handlers share, and a second call is
 stage of its own: it is one more implementation a candidate's ``engine_id`` resolves to, and
 its call runs in ``ANIRA_PHASE_INFERENCE`` (the phase of ``anira_phase`` between
 ``ANIRA_PHASE_BEFORE_INFERENCE`` and ``ANIRA_PHASE_AFTER_INFERENCE``) exactly as a built-in
-engine's does. It is an object: ``anira_custom_engine_create(&desc, &engine, &err)`` copies an
-``anira_engine_desc`` of ``anira/abi/engine.h`` into a refcounted ``anira_custom_engine``, and
-``anira_pipeline_add_engine(pipe, engine_id, engine, &err)`` adds it to a pipeline under a
-reverse-URI id (it must contain a ``.``; the prefix ``anira.`` is anira's own). The id belongs
-to the pipeline, the object is the engine: one engine may be added to several pipelines, and
-the handle, the pipelines, their handlers and the loaded models all hold a reference, so
+engine's does. It is an object: ``anira_custom_engine_create(engine_id, &desc, &engine, &err)``
+copies an ``anira_engine_desc`` of ``anira/abi/engine.h`` into a refcounted
+``anira_custom_engine`` under a reverse-URI id (it must contain a ``.``; the prefix ``anira.``
+is anira's own), and ``anira_pipeline_add_engine(pipe, engine, &err)`` adds it to a pipeline.
+The object is the engine and the id its name in every pipeline it is added to: one engine may
+be added to several pipelines, the engines of one pipeline have distinct ids, and the handle, the pipelines, their handlers and the loaded models all hold a reference, so
 ``anira_custom_engine_destroy`` may run right after the last addition. The lifecycle is the
 stage's with one level more, the model's, and the same words; the descriptor's slots, from
 the innermost level out: ``process``, the engine call, the one required slot, on an inference
@@ -1914,7 +1915,7 @@ Before processing audio, you must select which inference backend to use. The ava
 - ``anira::InferenceBackend::EXECUTORCH`` - ExecuTorch programs (``"executorch"``)
 - ``anira::InferenceBackend::CUSTOM`` - Custom backend implementations (the ``anira.v2.custom`` engine)
 
-On the C handler of section 3.2 the plans are selected instead (``anira_handler_set_plan`` over the plan report, one plan per model entry of the configuration), and a custom backend is a **registered engine**: an ``anira_engine_desc`` made an engine object (``anira_custom_engine_create``) and added to the pipeline under its id (``anira_pipeline_add_engine``), or an :cpp:class:`anira::Engine` in C++, run like a built-in engine (:doc:`custom_backends`); ``anira::InferenceBackend::CUSTOM`` over a :cpp:class:`anira::BackendBase` stays with the 2.x handler below until the cut-over (:doc:`migration`).
+On the C handler of section 3.2 the plans are selected instead (``anira_handler_set_plan`` over the plan report, one plan per model entry of the configuration), and a custom backend is a **registered engine**: an ``anira_engine_desc`` made an engine object under its id (``anira_custom_engine_create``) and added to the pipeline (``anira_pipeline_add_engine``), or an :cpp:class:`anira::Engine` in C++, run like a built-in engine (:doc:`custom_backends`); ``anira::InferenceBackend::CUSTOM`` over a :cpp:class:`anira::BackendBase` stays with the 2.x handler below until the cut-over (:doc:`migration`).
 
 The first model entry's engine is selected automatically; to run another one, select the backend that corresponds to your model format:
 

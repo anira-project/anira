@@ -1978,10 +1978,10 @@ public:
             const anira_engine_desc desc =
                 accumulator_desc(*registration.m_engine, registration.m_flags);
             anira_custom_engine* engine = nullptr;
-            EXPECT_EQ(anira_custom_engine_create(&desc, &engine, &m_err), ANIRA_OK)
-                << m_err.message;
-            EXPECT_EQ(anira_pipeline_add_engine(m_pipeline, registration.m_id, engine, &m_err),
+            EXPECT_EQ(anira_custom_engine_create(registration.m_id, &desc, &engine, &m_err),
                       ANIRA_OK)
+                << m_err.message;
+            EXPECT_EQ(anira_pipeline_add_engine(m_pipeline, engine, &m_err), ANIRA_OK)
                 << m_err.message;
             anira_custom_engine_destroy(engine);
         }

@@ -86,10 +86,10 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        (``anira_model_config_add_model_path``); the engines are ``ANIRA_ENGINE_ONNXRUNTIME``
        (2.x ``ONNX``), ``ANIRA_ENGINE_LIBTORCH``, ``ANIRA_ENGINE_TFLITE``,
        ``ANIRA_ENGINE_LITERT``, ``ANIRA_ENGINE_EXECUTORCH``. A custom backend is a named
-       engine, added to the pipeline under its id (``anira_custom_engine_create`` and
-       ``anira_pipeline_add_engine``;
-       ``anira::Pipeline::register_engine(id, impl)`` or
-       ``anira::stage::Inference(cfg).engine(id, impl)`` with an :cpp:class:`anira::Engine`)
+       engine, created under its id and added to the pipeline (``anira_custom_engine_create``
+       and ``anira_pipeline_add_engine``; an :cpp:class:`anira::Engine` constructed with its
+       id and registered with ``anira::Pipeline::register_engine(impl)`` or
+       ``anira::stage::Inference(cfg).engine(impl)``)
        and named by the entry: ``cfg.add_model_path("de.tu-berlin.coreml", path)``
        (``anira_model_config_add_model_path_custom``).
    * - ``anira::ModelData{bytes, size, backend}`` (binary)
@@ -317,11 +317,12 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
      - anira 3.x
    * - ``class X : public anira::BackendBase``, handed to the ``InferenceHandler`` constructor
        and selected with ``set_inference_backend(InferenceBackend::CUSTOM)``
-     - An ``anira_engine_desc`` made an engine with ``anira_custom_engine_create(&desc,
-       &engine, &err)`` and added with ``anira_pipeline_add_engine(pipe, id, engine, &err)``
-       under a reverse-URI id, or a subclass of :cpp:class:`anira::Engine`
-       registered with ``Pipeline::register_engine(id, impl)`` or brought along by
-       ``stage::Inference(cfg).engine(id, impl)``; a model entry names the id
+     - An ``anira_engine_desc`` made an engine under a reverse-URI id with
+       ``anira_custom_engine_create(id, &desc, &engine, &err)`` and added with
+       ``anira_pipeline_add_engine(pipe, engine, &err)``, or a subclass of
+       :cpp:class:`anira::Engine` constructed with its id and registered with
+       ``Pipeline::register_engine(impl)`` or brought along by
+       ``stage::Inference(cfg).engine(impl)``; a model entry names the id
        (``cfg.add_model_path(id, path)``), and that entry is a plan the report lists as
        ``ANIRA_ENGINE_NONE`` with the id, selected with ``anira_handler_set_plan``.
    * - ``X(anira::InferenceConfig& config)`` and the members sized from it

@@ -262,18 +262,19 @@ static_assert(
     !noexcept(
         std::declval<anira::Engine::Loaded&>().prepare(std::declval<const anira::PrepareInfo&>())));
 // The two registration spellings: on the pipeline and on the inference stage, both taking the
-// id and the shared registration; the stage lists what it brought.
+// shared engine object alone, whose id is its own (the constructor's, read back by id()); the
+// stage lists what it brought.
 static_assert(
     std::is_same_v<decltype(&anira::Pipeline::register_engine),
-                   anira::Pipeline& (anira::Pipeline::*)(std::string_view,
-                                                         const std::shared_ptr<anira::Engine>&)>);
+                   anira::Pipeline& (anira::Pipeline::*)(const std::shared_ptr<anira::Engine>&)>);
 static_assert(std::is_same_v<decltype(&anira::stage::Inference::engine),
                              anira::stage::Inference& (
-                                 anira::stage::Inference::*)(std::string_view,
-                                                             std::shared_ptr<anira::Engine>)>);
+                                 anira::stage::Inference::*)(std::shared_ptr<anira::Engine>)>);
+static_assert(std::is_same_v<decltype(std::declval<const anira::stage::Inference&>().engines()),
+                             std::span<const std::shared_ptr<anira::Engine>>>);
 static_assert(
-    std::is_same_v<decltype(std::declval<const anira::stage::Inference&>().engines()),
-                   std::span<const std::pair<std::string, std::shared_ptr<anira::Engine>>>>);
+    std::is_same_v<decltype(std::declval<const anira::Engine&>().id()), const std::string&>);
+static_assert(noexcept(std::declval<const anira::Engine&>().id()));
 
 // The contract and job-option values are aggregates, spelled with designated initializers.
 static_assert(std::is_aggregate_v<anira::Hard>);
@@ -441,6 +442,7 @@ private:
 
 class ProbeEngine final : public anira::Engine {
 public:
+    ProbeEngine() : anira::Engine("org.example.probe") {}
     uint32_t flags() const noexcept override { return ANIRA_ENGINE_FLAG_REALTIME_SAFE; }
 
     void init(const anira::InitInfo& info) override {
@@ -563,9 +565,8 @@ int anira_header_cxx20_probe() {
         // A custom engine registered on the pipeline, and brought along by the inference
         // stage in an initializer list; the enum alias where the model config takes one.
         const std::shared_ptr<anira::Engine> probe_engine = std::make_shared<ProbeEngine>();
-        other.register_engine("org.example.probe", probe_engine);
-        const anira::Pipeline with_engine{
-            anira::stage::Inference(model).engine("org.example.probe", probe_engine)};
+        other.register_engine(probe_engine);
+        const anira::Pipeline with_engine{anira::stage::Inference(model).engine(probe_engine)};
         const anira::stage::Inference brings(model);
         checks += brings.engines().empty() ? 1 : 0;
         const anira::EngineKind kind = model.model_engine(0);
