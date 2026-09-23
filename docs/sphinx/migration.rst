@@ -33,7 +33,10 @@ Where the 2.x API stands in this pre-release
   does exactly that for its callers, and a host of the C ABI does it itself (:doc:`usage`
   section 3.2). A custom :cpp:class:`anira::PrePostProcessor` stays with the 2.x handler; its
   3.x form is the *stage* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`),
-  which runs on the C handler: :ref:`migration-runtime` maps one onto the other.
+  which runs on the C handler. A custom :cpp:class:`anira::BackendBase` stays with the 2.x
+  handler likewise; its 3.x form is a *registered engine* (``anira_engine_desc``,
+  :cpp:class:`anira::Engine`; :doc:`custom_backends`), which runs on the C handler like a
+  built-in one. :ref:`migration-runtime` maps both onto their 3.x forms.
 - **The bundled models.** The 2.x fixture headers with their ``anira::InferenceConfig`` statics
   (``cnn_config``, ``hybridnn_config``, ``rnn_config``, ``gain_config``, ``stereo_gain_config``,
   ``rave_funk_drum_config`` and the encoder and decoder) are gone. Every bundled model ships a
@@ -83,7 +86,10 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        (``anira_model_config_add_model_path``); the engines are ``ANIRA_ENGINE_ONNXRUNTIME``
        (2.x ``ONNX``), ``ANIRA_ENGINE_LIBTORCH``, ``ANIRA_ENGINE_TFLITE``,
        ``ANIRA_ENGINE_LITERT``, ``ANIRA_ENGINE_EXECUTORCH``. A custom backend is a named
-       engine: ``cfg.add_model_path("de.tu-berlin.coreml", path)``
+       engine, registered on the pipeline under its id (``anira_pipeline_register_engine``;
+       ``anira::Pipeline::register_engine(id, impl)`` or
+       ``anira::stage::Inference(cfg).engine(id, impl)`` with an :cpp:class:`anira::Engine`)
+       and named by the entry: ``cfg.add_model_path("de.tu-berlin.coreml", path)``
        (``anira_model_config_add_model_path_custom``).
    * - ``anira::ModelData{bytes, size, backend}`` (binary)
      - ``cfg.add_model_bytes(engine, bytes, ownership, release, ctx)`` with a
@@ -290,6 +296,65 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
        (``anira_stage_ctx.entry``, ``anira_handler_num_entries``) in ``pre_process``
        (:doc:`custom_preprocessing`).
 
+What each virtual of a custom :cpp:class:`anira::BackendBase` becomes on the engine (the C
+descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`custom_backends`):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - anira 2.x
+     - anira 3.x
+   * - ``class X : public anira::BackendBase``, handed to the ``InferenceHandler`` constructor
+       and selected with ``set_inference_backend(InferenceBackend::CUSTOM)``
+     - An ``anira_engine_desc`` registered with ``anira_pipeline_register_engine(pipe, id,
+       &desc, &err)`` under a reverse-URI id, or a subclass of :cpp:class:`anira::Engine`
+       registered with ``Pipeline::register_engine(id, impl)`` or brought along by
+       ``stage::Inference(cfg).engine(id, impl)``; a model entry names the id
+       (``cfg.add_model_path(id, path)``), and that entry is a plan the report lists as
+       ``ANIRA_ENGINE_NONE`` with the id, selected with ``anira_handler_set_plan``.
+   * - ``X(anira::InferenceConfig& config)`` and the members sized from it
+     - The prepared model: ``prepare(info, user_data, &prepared)`` receives an
+       ``anira_engine_prepare_info`` (the entry's row and the variant for the config getters,
+       a template of every tensor on the engine's side, the name each slot binds to, the
+       instance count) and hands back what ``process`` runs on
+       (``Engine::prepare(const EnginePrepareInfo&)`` returns the
+       :cpp:class:`anira::Engine::Prepared`); once per prepared model anira pools, per
+       handler for a session-exclusive model.
+   * - ``prepare()`` (load the model, allocate)
+     - The same ``prepare``: load from ``anira_model_config_model_path(info->model,
+       info->row)`` or ``anira_model_config_model_bytes``, which anira never opened; bind the
+       slots by ``input_names`` / ``output_names``; size ``instances`` instances. A status
+       other than ``ANIRA_OK`` fails ``anira_handler_prepare`` naming the engine; a C++
+       ``prepare`` may throw.
+   * - ``process(std::vector<BufferF>& input, std::vector<BufferF>& output,
+       std::shared_ptr<SessionElement> session)``
+     - ``process(const anira_engine_ctx* ctx, void* prepared, void* user_data)`` /
+       ``Engine::Prepared::process(EngineContext& ctx)``: one ``anira_tensor`` per slot of
+       either side in ``ctx->inputs`` / ``ctx->outputs`` (``ctx.inputs()`` / ``ctx.outputs()``),
+       State tensors included, the instance in ``ctx->instance``, no session; every pointer
+       and extent read from this call's descriptors, never from prepare. A status other
+       than ``ANIRA_OK`` fails the chunk (zeros at its stream position, ``ANIRA_ERROR_ENGINE``
+       latched in ``anira_handler_rt_error``) where a 2.x processor cleared its output or
+       threw.
+   * - the instance pool of a processor (``m_instances``, the busy flags, the claim loop)
+     - ``info->instances`` instances of the prepared model, each claimed by anira and named
+       in ``ctx->instance``; never two calls at once on one instance.
+   * - a hidden state kept inside the backend, cleared by hand
+     - ``reset(ctx, prepared, user_data)`` / ``Engine::Prepared::reset(EngineContext&)``: the
+       first inference of a new stream on a session-exclusive prepared model, right before
+       its ``process``; or a declared State pair (:doc:`usage` section 3.4), which anira
+       binds and flips.
+   * - the destructor
+     - ``unprepare(prepared, user_data)`` once per successful prepare, when the last handler
+       sharing the prepared model is re-prepared or destroyed (``Engine::Prepared`` is
+       deleted there); ``release(user_data)`` once, with the last carrier
+       (``Engine::release()``).
+   * - ``InferenceBackend::CUSTOM`` in the plan report and the stage context
+     - ``ANIRA_ENGINE_NONE`` with ``engine_id`` (``anira_plan_info``, ``anira_stage_ctx``,
+       ``anira_backend_id``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend on
+       the C handler until the cut-over.
+
 .. _migration-bridge:
 
 The bridge to the 2.x runtime
@@ -371,7 +436,9 @@ saying what to change: an Async contract; a ``MEASURED`` budget or ``UNTIL_STABL
 fixture does); a spec dtype other than float32; a layout that moves an axis of extent above 1
 (a transpose; a view over unit axes is fine); a dynamic Time extent on a Buffer tensor; an
 engine this build does not carry (see the candidates below); a custom engine other than
-``anira.v2.custom``. Every other rule of section 1.1 that a configuration breaks is
+``anira.v2.custom`` (the C handler runs a custom engine registered on its pipeline and
+refuses an unregistered id at ``anira_handler_create``, :doc:`custom_backends`). Every other
+rule of section 1.1 that a configuration breaks is
 ``ANIRA_ERROR_CONFIG`` with the tensor's or the entry's name in the message. A ring dtype that
 differs from its spec's dtype, or that names no Streamed tensor, is ``ANIRA_ERROR_CONFIG``.
 

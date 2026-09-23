@@ -241,7 +241,21 @@ accessors and the two default bodies it may call). For an entry under it the gen
 requires ``nonblocking: true`` exactly as it does for ``driver-thread``, since anira's side is
 real-time on both threads; for a callback typedef under it (``anira_stage_fn``) it requires
 no attribute, since whether a stage body is real-time is the stage's own promise
-(``anira_stage_desc.flags``), stated per stage and checked at prepare. The 64-bit rule has a closed allowlist
+(``anira_stage_desc.flags``), stated per stage and checked at prepare. An
+``inference-thread`` callback typedef (``anira_engine_process_fn``) carries no
+``nonblocking`` for the same reason: whether an engine's body is real-time is the engine's
+promise, the flag ``ANIRA_ENGINE_FLAG_REALTIME_SAFE``. The two descriptors of the registry
+follow one naming scheme and one shape, which every later descriptor keeps: ``stage`` /
+``engine`` on every level (``anira_stage_desc`` / ``anira_engine_desc``, ``anira_stage_ctx`` /
+``anira_engine_ctx``, ``anira_stage_prepare_info`` / ``anira_engine_prepare_info``, the
+``anira_stage_*_fn`` / ``anira_engine_*_fn`` typedefs, ``anira::Stage`` / ``anira::Engine``
+with ``StageContext`` / ``EngineContext`` and ``StagePrepareInfo`` / ``EnginePrepareInfo``),
+``FLAG`` in every flag define (``ANIRA_STAGE_FLAG_*``, ``ANIRA_ENGINE_FLAG_*``, so that no
+flag reads like a value of an enum), ``Prepared`` for what ``prepare`` hands back (the C
+``prepared`` pointer; the nested classes ``Stage::Prepared`` and ``Engine::Prepared``), and
+one callback shape: ``prepare(info, user_data, &prepared)`` in, every per-chunk callback
+``(ctx, prepared, user_data)``, ``unprepare(prepared, user_data)`` and ``release(user_data)``
+out. The 64-bit rule has a closed allowlist
 of six names: ``anira_now_ns`` and the factories ``anira_tensor_init_vulkan``,
 ``anira_tensor_init_opaque_fd``, ``anira_tensor_init_wgpu_buffer``,
 ``anira_tensor_init_dmabuf`` and ``anira_tensor_init_iosurface``, whose parameters are vendor

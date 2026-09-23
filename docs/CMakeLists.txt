@@ -60,6 +60,7 @@ add_custom_target(breathe-apidocs
     -g class,struct,union -f
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_inference_config_1_1_defaults.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_session_element_1_1_thread_safe_struct.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_session_element_1_1_plan_slot.rst
     # anira::Stage::Prepared and anira::Engine::Prepared are documented inside their outer
     # class's page (breathe lists the nested class there); a page of their own would declare
     # every member twice.

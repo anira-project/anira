@@ -186,10 +186,7 @@ in ``prepare``, and clears them at ``reset``, the first chunk of a new stream:
     public:
         uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
         uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
-
-        std::unique_ptr<Prepared> prepare(const anira::StagePrepareInfo& info) override {
-            return std::make_unique<Frames>(info.num_entries());   // this handler's windows
-        }
+        std::unique_ptr<Prepared> prepare(const anira::StagePrepareInfo& info) override;
 
     private:
         class Frames;
@@ -245,6 +242,10 @@ in ``prepare``, and clears them at ``reset``, the first chunk of a new stream:
         static constexpr size_t k_hop = 512;
         std::vector<float> m_windows;
     };
+
+    std::unique_ptr<anira::Stage::Prepared> Spectral::prepare(const anira::StagePrepareInfo& info) {
+        return std::make_unique<Frames>(info.num_entries());   // this handler's windows
+    }
 
 The example is mono (channel ``0``); a multi-channel stage loops over
 ``ring.num_channels()`` and lays the channels out as the model tensor expects. What an

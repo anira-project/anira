@@ -22,13 +22,14 @@ Anira supports macOS, Linux, and Windows platforms. It has been tested on x86_64
 Which neural network frameworks are supported?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Anira currently supports three inference backends:
+Anira ships five inference engines, each an adapter of one internal interface:
     - LibTorch
     - ONNX Runtime
-    - TensorFlow Lite
+    - LiteRT (and the legacy TensorFlow Lite runtime, mutually exclusive with it)
+    - ExecuTorch
 
 .. note::
-    Custom backends can be integrated as needed.
+    A custom engine is registered on the pipeline under a reverse-URI id (``anira_pipeline_register_engine``, or an :cpp:class:`anira::Engine` in C++) and runs like a built-in one: see :doc:`custom_backends`.
 
 Is anira free and open source?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -113,7 +113,7 @@ Backend-specific implementations for different inference engines.
 * The ONNX Runtime adapter (``src/backends/OnnxRuntimeAdapter.cpp``, internal) - ONNX Runtime integration
 * The TensorFlow Lite and LiteRT adapters (``src/backends/TFLiteAdapter.cpp``, ``LiteRtAdapter.cpp``, internal) - TensorFlow Lite and LiteRT integration
 * The ExecuTorch adapter (``src/backends/ExecuTorchAdapter.cpp``, internal) - ExecuTorch integration
-* :cpp:class:`anira::BackendBase` - For inheritance for custom inference engines
+* :cpp:class:`anira::Engine` (``anira_engine_desc`` of ``anira/abi/engine.h`` in C) - a custom engine registered on the pipeline under its id, run through the same adapter interface as the five above (:doc:`custom_backends`); :cpp:class:`anira::BackendBase` is the 2.x handler's custom backend until the cut-over
 
 Data Flow
 ---------
