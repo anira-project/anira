@@ -1,5 +1,5 @@
-// anira/abi/handler.h: anira_handler_create and anira_handler_prepare. Every ex-translator
-// contract rule through prepare's anira_error, the three miss policies on a starved block, the
+// anira/abi/handler.h: anira_handler_create and anira_handler_prepare. Every contract rule of
+// the validator through prepare's anira_error, the three miss policies on a starved block, the
 // legacy contract's ZEROS, the structural rules at create, a model that does not load, the
 // second prepare, the failed prepare, and the context that outlives its destroy while a
 // handler lives.

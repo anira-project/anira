@@ -1,22 +1,26 @@
 /*
- * The section-2 validator and the translation of the 3.x configuration handles into the 2.x
- * runtime's InferenceConfig / CoreConfig / HostConfig. Private to src/capi (the tests reach
- * it through the src/ include directory); the exported face is anira/compat/v3_to_v2.h.
+ * The validator of the 3.x configuration (section 2 of the v3 design): every rule a model
+ * config, its contract and the pipeline's candidates must meet, in order (axes, roles,
+ * windows, layouts, extensions, declared state, entries against candidates), and what it
+ * derives from a configuration that passed: the resolved extents, channels, hops and anchor
+ * of every tensor spec (DerivedSpec), the plan table (PlanKey, matching_plans: a model entry
+ * on a provider per plan, and the default-set rule), and the per-slot facts it resolves from
+ * the contract and the model (ring dtypes, host domains, declared state pairs). What the
+ * pipeline's stage and engines mean to it arrives as StageFacts and EngineFacts. It is what
+ * anira_handler_create and anira_handler_prepare run before anything is loaded; the 2.x
+ * configuration objects the scheduler still takes are made from its results by the bridge
+ * (v3_to_v2.h). Private to src/capi (the tests reach it through the src/ include directory).
  *
  * Every function here throws anira::StatusError (the status the C boundary returns, with the
- * message the caller reads) or std::invalid_argument (the 2.x constructors' own cross-checks,
- * which the firewall classifies as ANIRA_ERROR_CONFIG); the exported entries catch at the
- * boundary and say it once. Nothing here logs.
+ * message the caller reads); the exported entries catch at the boundary and say it once.
+ * Nothing here logs.
  */
-#ifndef ANIRA_CAPI_TRANSLATE_H
-#define ANIRA_CAPI_TRANSLATE_H
+#ifndef ANIRA_CAPI_VALIDATE_H
+#define ANIRA_CAPI_VALIDATE_H
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/system/Exports.h>
-#include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 
 #include <cstddef>
@@ -183,25 +187,13 @@ ANIRA_API void validate(const anira_model_config& model,
                         const EngineFacts* engines = nullptr,
                         bool default_set = false);
 
-/// The 2.x InferenceConfig of a model config under a Hard contract (validate, then map). A
-/// registered engine's row becomes a ModelData row on the 2.x CUSTOM backend, like the
-/// anira.v2.custom row: the plan table resolves plans by row, never by the backend, so several
-/// such rows are legal.
-ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config& model,
-                                                       const anira_contract& contract,
-                                                       const anira_backend_id* candidates,
-                                                       uint32_t num_candidates,
-                                                       const StageFacts* stages = nullptr,
-                                                       const EngineFacts* engines = nullptr,
-                                                       bool default_set = false);
-
 /// The ring dtype of every slot: two vectors sized to the model's input and output lists,
 /// ANIRA_DTYPE_F32 everywhere, then each entry of the Hard contract's ring dtypes resolved
 /// by tensor name into its slot. Run validate first: it refuses a name that matches no
 /// tensor, a non-Streamed tensor, and a dtype other than the spec's (nothing converts) unless
 /// a stage fills the phase that moves that ring.
-ANIRA_API anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
-                                             const anira_model_config& model);
+ANIRA_API anira::RingDtypes ring_dtypes_of(const anira_contract& contract,
+                                           const anira_model_config& model);
 
 /// The declared host-end domain of every slot (anira_contract_set_host_domain): two vectors
 /// sized to the model's input and output lists, ANIRA_DOMAIN_HOST everywhere, then each entry
@@ -213,8 +205,8 @@ struct HostDomains {
     std::vector<anira_domain> m_inputs;
     std::vector<anira_domain> m_outputs;
 };
-ANIRA_API HostDomains make_host_domains(const anira_contract& contract,
-                                        const anira_model_config& model);
+ANIRA_API HostDomains host_domains_of(const anira_contract& contract,
+                                      const anira_model_config& model);
 
 /// One declared state pair (ANIRA_ROLE_STATE) as slots: the State input and the State output
 /// it is fed from, each the tensor's position in the model config's list of its side.
@@ -230,33 +222,26 @@ struct StateLink {
 /// and two halves of unequal dtype or shape.
 ANIRA_API std::vector<StateLink> state_links(const anira_model_config& model);
 
-/// The 2.x CoreConfig of a context config: threads, wait strategy and the log scalars, after
-/// check_context_extensions. Kept for the bridge (anira::v3compat::to_core_config); the core
-/// itself reads the context config.
-ANIRA_API anira::CoreConfig make_core_config(const anira_context_config& config);
-
-/// The context config of a 2.x CoreConfig, field by field: threads, wait strategy, log
-/// level, drain, interval and queue capacity; no sink, no flags, no device block, no
-/// extensions. The log level is copied explicitly (CoreConfig defaults to Info/Error,
-/// anira_context_config to WARNING). The 2.x InferenceManager constructor is the only
-/// caller; it leaves with the 2.x classes at the cut-over.
-ANIRA_API anira_context_config make_context_config(const anira::CoreConfig& core_config);
-
 /// The consumed-or-fail walk over a context config's extension bag alone (the model,
 /// contract and spec bags are walked at anira_handler_create and prepare). Throws
 /// StatusError with ANIRA_ERROR_EXTENSION_UNKNOWN / _UNCONSUMED naming the kind.
 ANIRA_API void check_context_extensions(const anira_context_config& config);
 
-/// The 2.x HostConfig of a Hard contract's geometry and the model config's anchor.
-ANIRA_API anira::HostConfig make_host_config(const anira_contract& contract,
-                                             const anira_model_config& model);
+/// The stream a model's host block counts in (anira_model_config_set_anchor): the named
+/// Streamed tensor or, unnamed, the first Streamed input, else the first Streamed output.
+struct Anchor {
+    bool m_named = false;  ///< false: the default choice (2.x k_first_streamable)
+    bool m_is_input = true;
+    size_t m_index = 0;  ///< the tensor's position in the list of its side
+};
 
-/// The same with the host's own (possibly fractional) geometry.
-ANIRA_API anira::HostConfig make_host_config(const anira_model_config& model,
-                                             float buffer_size,
-                                             float sample_rate,
-                                             bool allow_smaller);
+/// The anchor of a model without a contract: the tensor spec rules that need none (the
+/// extents, the roles, the windows pinned to window_min), then the anchor rule. Throws
+/// StatusError with ANIRA_ERROR_CONFIG for a model without an input or an output, a spec that
+/// breaks a rule, no Streamed tensor, or an anchor that names no Streamed tensor. What the
+/// bridge's HostConfig of the host's own geometry reads (v3_to_v2.h make_host_config).
+ANIRA_API Anchor anchor_of(const anira_model_config& model);
 
 }  // namespace anira::capi
 
-#endif  // ANIRA_CAPI_TRANSLATE_H
+#endif  // ANIRA_CAPI_VALIDATE_H

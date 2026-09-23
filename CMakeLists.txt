@@ -330,7 +330,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/context.cpp
     src/capi/core.cpp
     src/capi/thread.cpp
-    src/capi/translate.cpp
+    src/capi/validate.cpp
     src/capi/v3_to_v2.cpp
     src/capi/version.cpp
     src/capi/handler.cpp

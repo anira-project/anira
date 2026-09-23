@@ -17,7 +17,7 @@
 #include <vector>
 
 #include "ext_registry.h"
-#include "translate.h"
+#include "validate.h"
 #include "words.h"
 
 namespace anira::capi {

@@ -514,7 +514,7 @@ TEST(AbiModelConfig, CanonicalNamesAreUniqueAcrossSides) {
     EXPECT_EQ(m.m_config->m_outputs.size(), 1u);
 }
 
-// ---- layout helpers (src/capi/layout.h): what the loader, the upgrade and the translator share
+// ---- layout helpers (src/capi/layout.h): what the loader, the upgrade and the validator share
 
 namespace {
 

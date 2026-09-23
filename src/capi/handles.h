@@ -5,7 +5,7 @@
  * The bodies of the opaque configuration handles of anira/abi/config.h. Private to
  * src/capi (and the tests through the src/ include directory): the layouts never enter
  * the ABI, which is what lets them change in any release. Every C setter is a thin,
- * firewalled wrapper over a member here, so the JSON loaders and the translator share the
+ * firewalled wrapper over a member here, so the JSON loaders and the validator share the
  * same code paths.
  */
 

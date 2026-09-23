@@ -25,7 +25,7 @@
 #include <vector>
 
 #include "../backends/Adapters.h"
-#include "../capi/translate.h"
+#include "../capi/v3_to_v2.h"
 #include "TensorRun.h"
 
 namespace anira {

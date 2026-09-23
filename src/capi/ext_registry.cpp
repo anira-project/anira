@@ -20,7 +20,7 @@
 
 #include "capi_internal.h"
 #include "handles.h"
-#include "translate.h"
+#include "validate.h"
 #include "words.h"
 
 namespace anira::capi {
@@ -561,7 +561,7 @@ anira_status ExtBag::set_json(const char* kind, std::string_view utf8, anira_err
 
 namespace {
 
-// The translator's candidate rule (translate.h engine_is_candidate) for a consumer: NULL =
+// The validator's candidate rule (validate.h engine_is_candidate) for a consumer: NULL =
 // every engine; an entry with an engine_id keeps the custom engine of that name; a built-in
 // engine keeps its rows; {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps every custom engine. The
 // provider is not read for a consumer: an engine reads its extensions on every provider.

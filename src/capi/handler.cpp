@@ -81,7 +81,8 @@
 #include "handles.h"
 #include "port.h"
 #include "stage.h"
-#include "translate.h"
+#include "v3_to_v2.h"
+#include "validate.h"
 #include "words.h"
 
 using anira::capi::translate_exception;
@@ -1386,7 +1387,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     const anira::capi::HardContract& hard = *snapshot.hard();  // validate refused Async
     check_buffer_specs(model);
     check_stage_flags(stage);
-    const anira::RingDtypes ring_dtypes = anira::capi::make_ring_dtypes(snapshot, model);
+    const anira::RingDtypes ring_dtypes = anira::capi::ring_dtypes_of(snapshot, model);
     check_miss_policy(hard, model, derived, ring_dtypes);
     anira::InferenceConfig config =
         anira::capi::make_inference_config(model,
@@ -1485,7 +1486,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // domain of every declared State pair (the pair is the model's, in the engine domain of the
     // plans that run it, host memory for every engine of this pre-release; the declared domain
     // of the slot overrides it), set while no chunk exists.
-    const anira::capi::HostDomains host_domains = anira::capi::make_host_domains(snapshot, model);
+    const anira::capi::HostDomains host_domains = anira::capi::host_domains_of(snapshot, model);
     for (size_t slot = 0;
          slot < handler.m_input_ports.size() && slot < host_domains.m_inputs.size();
          ++slot) {

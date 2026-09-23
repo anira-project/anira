@@ -1,5 +1,6 @@
-// The translator behind anira/compat/v3_to_v2.h, exercised through its status-returning
-// face: every section-2 rule the 2.x runtime can honour returns ANIRA_ERROR_CONFIG with a
+// The bridge behind anira/compat/v3_to_v2.h (the validator of src/capi/validate.h and the 2.x
+// translators of src/capi/v3_to_v2.h), exercised through its status-returning face: every
+// section-2 rule the 2.x runtime can honour returns ANIRA_ERROR_CONFIG with a
 // message naming the tensor or the entry, everything the 2.x runtime cannot do returns
 // ANIRA_ERROR_NOT_SUPPORTED, and a valid configuration maps onto the 2.x InferenceConfig,
 // CoreConfig and HostConfig the same way the 2.x constructors would build them.
@@ -28,7 +29,8 @@
 
 #include "../support/inference_config_eq.h"
 #include "../support/v2_documents.h"
-#include "capi/translate.h"
+#include "capi/v3_to_v2.h"
+#include "capi/validate.h"
 #include "fixtures.h"
 
 namespace {

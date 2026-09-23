@@ -41,7 +41,7 @@
 
 #include "ext_registry.h"
 #include "port.h"
-#include "translate.h"
+#include "validate.h"
 #include "words.h"
 
 // The members of anira_ring dispatch through std::visit, which is declared to throw

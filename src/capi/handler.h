@@ -64,7 +64,7 @@ struct anira_pipeline {
                                                        ///< caller's list, or the default set
     /// Whether m_candidates is the default set (a NULL list at add_inference: every engine of
     /// the build on the default provider, the custom entries, every pin): under it an entry is
-    /// one plan, on its pin or on the default provider (translate.h matching_plans).
+    /// one plan, on its pin or on the default provider (validate.h matching_plans).
     bool m_default_set = false;
     bool m_has_inference = false;
     /// The one stage of the pipeline (anira_pipeline_add_stage; a second call is refused), or

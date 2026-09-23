@@ -1,5 +1,5 @@
 // The C++ face of anira/compat/v3_to_v2.h: the overloads over the anira.hpp handles return
-// the 2.x object and throw anira::Error with the translator's message. The rules themselves
+// the 2.x object and throw anira::Error with the bridge's message. The rules themselves
 // are test_Translate's; here each overload is exercised once, plus what only the C++ face
 // adds (the Hard aggregate minted on the way, the thrown message).
 
