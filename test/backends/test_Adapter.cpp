@@ -14,6 +14,7 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -1132,6 +1133,50 @@ Model onnx_accumulator_model() {
 
 }  // namespace
 
+// The provider of the record: the default one always; a provider of the enum or a registered
+// name exactly when the runtime lists it among its available execution providers, never
+// Vulkan; a record on a provider the adapter does not serve is refused at load with the
+// runtime's list, before anything of the model is read.
+TEST(AdapterOnnxRuntime, TheProviderIsServedWhenTheRuntimeListsIt) {
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
+    ASSERT_NE(adapter, nullptr);
+    const Loaded& loaded = adapter->loaded();
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_VULKAN, ""));
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "com.example.nobody"));
+    const std::vector<anira::backend::ProviderInfo> listed =
+        anira::backend::onnxruntime_providers();
+    for (const anira::backend::ProviderInfo& info : listed) {
+        EXPECT_TRUE(loaded.serves(info.m_provider, info.m_provider_id)) << info.m_provider_id;
+    }
+    const bool has_cuda = std::ranges::any_of(listed, [](const anira::backend::ProviderInfo& p) {
+        return p.m_provider == ANIRA_PROVIDER_CUDA;
+    });
+    EXPECT_EQ(loaded.serves(ANIRA_PROVIDER_CUDA, ""), has_cuda);
+    EXPECT_NE(loaded.provider_reason().find("execution providers"), std::string::npos)
+        << loaded.provider_reason();
+
+    Model nobody = onnx_gain_model();
+    nobody.m_provider_id = "com.example.nobody";
+    const anira::StatusError refused =
+        status_error_of([&nobody] { builtin_rig(ANIRA_ENGINE_ONNXRUNTIME)->prepare(nobody); });
+    EXPECT_EQ(refused.status(), ANIRA_ERROR_NOT_SUPPORTED);
+    const std::string message = refused.what();
+    EXPECT_NE(message.find("engine 'onnxruntime' does not serve provider 'com.example.nobody'"),
+              std::string::npos)
+        << message;
+    EXPECT_NE(message.find("execution providers"), std::string::npos) << message;
+    if (!has_cuda) {
+        Model cuda = onnx_gain_model();
+        cuda.m_provider = ANIRA_PROVIDER_CUDA;
+        const anira::StatusError no_cuda =
+            status_error_of([&cuda] { builtin_rig(ANIRA_ENGINE_ONNXRUNTIME)->prepare(cuda); });
+        EXPECT_EQ(no_cuda.status(), ANIRA_ERROR_NOT_SUPPORTED);
+        EXPECT_NE(std::string(no_cuda.what()).find("provider 'cuda'"), std::string::npos)
+            << no_cuda.what();
+    }
+}
+
 // The gain: audio_in and the two outputs bind by position (the graph names them data,
 // processed_data and peak), the gain input by its canonical name; the check passes on the
 // graph's [1, 1, -1] and [1]; the run applies the gain over the descriptors' memory, in place.
@@ -1530,6 +1575,52 @@ TEST(AdapterLiteRt, TheGainNeedsItsOutputsNamedAndRunsAtTheExportsRank) {
               (std::vector<anira_binding>{ANIRA_BINDING_NAME, ANIRA_BINDING_NAME}));
     expect_gain_of_one_half(*adapter);
     expect_gain_of_one_half(*adapter);
+}
+
+// The provider of the record on LiteRT: an accelerator by its hardware's name beside DEFAULT
+// ("gpu", "npu"), never a provider of the enum; a name whose hardware no registered
+// accelerator supports here is refused at load naming the registered ones (the environment's
+// automatic registration loads the accelerator libraries it finds).
+TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
+    ASSERT_NE(adapter, nullptr);
+    const Loaded& loaded = adapter->loaded();
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "gpu"));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "npu"));
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "tpu"));
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUDA, ""));
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_XNNPACK, ""));
+    EXPECT_NE(loaded.provider_reason().find("'gpu'"), std::string::npos)
+        << loaded.provider_reason();
+
+    Model enum_provider = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
+    enum_provider.m_provider = ANIRA_PROVIDER_CUDA;
+    const anira::StatusError refused = status_error_of(
+        [&enum_provider] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(enum_provider); });
+    EXPECT_EQ(refused.status(), ANIRA_ERROR_NOT_SUPPORTED);
+    EXPECT_NE(std::string(refused.what()).find("engine 'litert' does not serve provider 'cuda'"),
+              std::string::npos)
+        << refused.what();
+
+    const std::vector<anira::backend::ProviderInfo> listed =
+        anira::backend::litert_providers(anira::LogLevel::Error);
+    const bool has_gpu = std::ranges::any_of(listed, [](const anira::backend::ProviderInfo& p) {
+        return p.m_provider_id == "gpu";
+    });
+    if (!has_gpu) {
+        Model gpu = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
+        gpu.m_outputs[0].m_engine_name = "output_0";
+        gpu.m_outputs[1].m_engine_name = "output_1";
+        gpu.m_provider_id = "gpu";
+        const anira::StatusError no_gpu =
+            status_error_of([&gpu] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(gpu); });
+        EXPECT_EQ(no_gpu.status(), ANIRA_ERROR_NOT_SUPPORTED);
+        const std::string message = no_gpu.what();
+        EXPECT_NE(message.find("no registered accelerator supports 'gpu'"), std::string::npos)
+            << message;
+        EXPECT_NE(message.find("cpu"), std::string::npos) << message;
+    }
 }
 
 // The accumulator on LiteRT: the same reversal on the output side, refused by position and

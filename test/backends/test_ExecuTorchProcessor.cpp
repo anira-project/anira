@@ -14,6 +14,7 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -121,6 +122,80 @@ TEST(ExecuTorchProcessor, BinaryModelDataLoadsFromMemory) {
     EXPECT_EQ(adapter->run(context_of(input_tensors, output_tensors), nullptr, false), ANIRA_OK);
     for (size_t i = 0; i < k_size; ++i) {
         EXPECT_FLOAT_EQ(output[0].get_sample(0, i), 0.5F) << "sample " << i;
+    }
+}
+
+// The provider of the record on ExecuTorch is the backend an export was lowered to: the
+// adapter serves the default provider and every backend registered to the runtime and
+// available (this package registers XNNPACK), the capabilities' query lists the same, and a
+// pinned entry whose method does not use the pinned backend (the bundled gain is a portable
+// export) is a mislabeled export, refused at load naming the pin, the backend and the method.
+TEST(ExecuTorchProcessor, TheProviderIsTheExportsBackend) {
+    // The package registers the XNNPACK backend (the adapter loads every method with its
+    // options): the query lists it as the enum's provider, and the adapter serves every
+    // provider the query lists.
+    const std::vector<anira::backend::ProviderInfo> listed = anira::backend::executorch_providers();
+    const bool lists_xnnpack =
+        std::ranges::any_of(listed, [](const anira::backend::ProviderInfo& p) {
+            return p.m_provider == ANIRA_PROVIDER_XNNPACK && p.m_provider_id.empty();
+        });
+    EXPECT_TRUE(lists_xnnpack);
+
+    const std::shared_ptr<Rig> adapter = executorch_adapter();
+    const std::shared_ptr<anira::backend::Loaded> fresh =
+        anira::backend::make_builtin_loaded(ANIRA_ENGINE_EXECUTORCH);
+    ASSERT_NE(fresh, nullptr);
+    const anira::backend::Loaded& loaded = *fresh;
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_XNNPACK, ""));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "XnnpackBackend"))
+        << "the registered name serves as the custom spelling";
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUDA, ""));
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "NobodysBackend"));
+    for (const anira::backend::ProviderInfo& info : listed) {
+        EXPECT_TRUE(loaded.serves(info.m_provider, info.m_provider_id)) << info.m_provider_id;
+    }
+    EXPECT_NE(loaded.provider_reason().find("XnnpackBackend"), std::string::npos)
+        << loaded.provider_reason();
+
+    // The multifunction export's "gain2" (one input, one output), a portable method.
+    const anira::InferenceConfig config(
+        {anira::ModelData(multifunction_model_path(),
+                          anira::InferenceBackend::EXECUTORCH,
+                          "gain2")},
+        {anira::TensorShape({{1, 1, static_cast<int64_t>(k_size)}},
+                            {{1, 1, static_cast<int64_t>(k_size)}})},
+        5.0F,
+        /*warm_up=*/1,
+        /*session_exclusive_processor=*/true);
+    Model neutral = anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH);
+    ASSERT_EQ(neutral.m_entry, "gain2");
+    adapter->prepare(neutral);
+    EXPECT_TRUE(adapter->prepared()) << "a portable export on the default provider";
+
+    Model pinned = neutral;
+    pinned.m_provider = ANIRA_PROVIDER_XNNPACK;
+    try {
+        executorch_adapter()->prepare(pinned);
+        FAIL() << "a portable export pinned to XNNPACK loaded";
+    } catch (const anira::StatusError& error) {
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        const std::string message = error.what();
+        EXPECT_NE(message.find("pinned to provider 'xnnpack' (backend 'XnnpackBackend')"),
+                  std::string::npos)
+            << message;
+        EXPECT_NE(message.find("method 'gain2' uses no backend"), std::string::npos) << message;
+    }
+    Model cuda = neutral;
+    cuda.m_provider = ANIRA_PROVIDER_CUDA;
+    try {
+        executorch_adapter()->prepare(cuda);
+        FAIL() << "a provider no backend spells loaded";
+    } catch (const anira::StatusError& error) {
+        EXPECT_EQ(error.status(), ANIRA_ERROR_NOT_SUPPORTED);
+        EXPECT_NE(std::string(error.what()).find("does not serve provider 'cuda'"),
+                  std::string::npos)
+            << error.what();
     }
 }
 

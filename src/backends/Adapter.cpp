@@ -43,13 +43,14 @@ void Loaded::load(const Model& model) {
     // the plan's against the capabilities or the descriptor's list): an adapter that does not
     // serve it never sees the record.
     if (!serves(model.m_provider, model.m_provider_id)) {
-        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
-                          std::string("engine '") +
-                              (model.m_engine_id.empty() ? anira::capi::engine_word(model.m_engine)
-                                                         : model.m_engine_id.c_str()) +
-                              "' does not serve provider '" +
-                              anira::capi::provider_label(model.m_provider, model.m_provider_id) +
-                              "'");
+        std::string message = "engine '";
+        message += model.m_engine_id.empty() ? anira::capi::engine_word(model.m_engine)
+                                             : model.m_engine_id.c_str();
+        message += "' does not serve provider '";
+        message += anira::capi::provider_label(model.m_provider, model.m_provider_id);
+        message += "': ";
+        message += provider_reason();
+        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED, message);
     }
     // By position for every slot until do_load says otherwise (set_bindings).
     m_bindings.m_inputs.assign(m_model.m_inputs.size(), ANIRA_BINDING_POSITION);

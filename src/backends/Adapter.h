@@ -215,6 +215,12 @@ public:
     virtual bool serves(anira_provider provider, std::string_view provider_id) const noexcept {
         return provider == ANIRA_PROVIDER_DEFAULT && provider_id.empty();
     }
+    /// Why the adapter serves what it serves, for the refusal of a provider it does not: the
+    /// runtime's own list where it has one, the pre-release's limit else. Named after the
+    /// engine and the provider in load's ANIRA_ERROR_NOT_SUPPORTED.
+    virtual std::string provider_reason() const {
+        return "this engine serves the default provider alone in this pre-release";
+    }
 
     /// The record load kept.
     const Model& model() const noexcept { return m_model; }

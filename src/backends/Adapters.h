@@ -94,7 +94,8 @@ struct ProviderInfo {
 /// The providers an engine of this build serves here: the default provider first, then what
 /// its runtime reports (ONNX Runtime: Ort::GetAvailableProviders(), the enum's value where one
 /// fits and the runtime's name else; LiteRT: the accelerators a fresh environment registers, by
-/// hardware; the other three engines the default provider alone in this pre-release), an equal
+/// hardware; ExecuTorch: the backends registered to its runtime, the delegates an export may be
+/// lowered to; TFLite and LibTorch the default provider alone in this pre-release), an equal
 /// provider once. Empty for an engine this build does not carry. `level` is the level the
 /// runtime's own logger is created with where the query needs one (LiteRT's environment).
 ANIRA_API std::vector<ProviderInfo> builtin_providers(anira_engine engine, anira::LogLevel level);
@@ -126,6 +127,10 @@ ANIRA_API std::vector<ProviderInfo> litert_providers(anira::LogLevel level);
 #endif
 #ifdef USE_EXECUTORCH
 ANIRA_API std::shared_ptr<Loaded> make_executorch_loaded();
+/// The backends registered to the ExecuTorch runtime of this build and available, the
+/// delegates an export may be lowered to: the enum's value for XnnpackBackend, CoreMLBackend
+/// and VulkanBackend, the registered name in provider_id for every other.
+ANIRA_API std::vector<ProviderInfo> executorch_providers();
 #endif
 
 /// The plan table of a 2.x session: one request per configured model, in m_model_data order

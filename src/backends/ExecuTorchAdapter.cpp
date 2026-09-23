@@ -21,15 +21,19 @@
 #include <anira/abi/status.h>
 #include <anira/utils/Logger.h>
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "../capi/words.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
 #include "Adapter.h"
@@ -44,6 +48,7 @@
 #include "executorch/extension/tensor/tensor_ptr_maker.h"
 #include "executorch/extension/threadpool/threadpool_guard.h"
 #include "executorch/runtime/backend/backend_options_map.h"
+#include "executorch/runtime/backend/interface.h"
 #include "executorch/runtime/backend/options.h"
 #include "executorch/runtime/core/data_loader.h"
 #include "executorch/runtime/core/error.h"
@@ -72,6 +77,50 @@ constexpr const char* k_engine = "executorch";
 // copy of the weights per executor.
 constexpr const char* k_xnnpack_backend = "XnnpackBackend";
 constexpr int k_xnnpack_workspace_per_instance = 0;
+
+// The names ExecuTorch's backends register under that spell a provider of anira's enum (the
+// delegate an export is lowered to, as the .pte names it); every other registered backend
+// travels as it is, the runtime's own word, in provider_id.
+constexpr std::array<std::pair<const char*, anira_provider>, 3> k_backend_names{{
+    {k_xnnpack_backend, ANIRA_PROVIDER_XNNPACK},
+    {"CoreMLBackend", ANIRA_PROVIDER_COREML},
+    {"VulkanBackend", ANIRA_PROVIDER_VULKAN},
+}};
+
+// The registered name of a provider: the table's for one of the enum, the provider_id itself
+// (a registered name the capabilities listed) for a custom one; empty for the default provider
+// and for a provider of the enum no backend spells.
+std::string backend_name_of(anira_provider provider, std::string_view provider_id) {
+    if (!provider_id.empty()) { return std::string(provider_id); }
+    for (const auto& [name, value] : k_backend_names) {
+        if (value == provider) { return name; }
+    }
+    return "";
+}
+
+// The backends registered to this runtime and available, by their registered names.
+std::vector<std::string> registered_backends() {
+    std::vector<std::string> names;
+    const size_t count = executorch::runtime::get_num_registered_backends();
+    for (size_t i = 0; i < count; ++i) {
+        const auto name = executorch::runtime::get_backend_name(i);
+        if (!name.ok() || name.get() == nullptr) { continue; }
+        const executorch::runtime::BackendInterface* backend =
+            executorch::runtime::get_backend_class(name.get());
+        if (backend == nullptr || !backend->is_available()) { continue; }
+        names.emplace_back(name.get());
+    }
+    return names;
+}
+
+std::string backends_list(const std::vector<std::string>& names) {
+    std::string text;
+    for (const std::string& name : names) {
+        if (!text.empty()) { text += ", "; }
+        text += name;
+    }
+    return text.empty() ? "none" : text;
+}
 
 // Every fallible ExecuTorch call returns a runtime::Error (or a Result carrying one). A failure
 // here means a setup or runtime problem, so it becomes a StatusError with the failing call and
@@ -176,6 +225,11 @@ public:
     /// The method's tensors of either side as the meta describes them, in the method's order.
     std::vector<EngineTensor> inputs();
     std::vector<EngineTensor> outputs();
+    /// The backends the method uses (the delegates the export was lowered to), by their
+    /// registered names; empty for a portable export.
+    std::vector<std::string> backends();
+    /// The method executed per inference.
+    const std::string& method() const noexcept { return m_method; }
 
     /// Builds the staging tensors once, one per input slot wrapping instance-owned host memory
     /// of the record's element count and engine dims, in the method's positional order.
@@ -271,6 +325,20 @@ std::vector<EngineTensor> Instance::outputs() {
                                            tag.ok() && *tag == executorch::runtime::Tag::Tensor));
     }
     return tensors;
+}
+
+std::vector<std::string> Instance::backends() {
+    auto meta = m_module->method_meta(m_method);
+    executorch_check(meta.error(),
+                     "Module::method_meta",
+                     ANIRA_ERROR_MODEL_LOAD,
+                     m_shared->m_where);
+    std::vector<std::string> names;
+    for (size_t i = 0; i < meta->num_backends(); ++i) {
+        const auto name = meta->get_backend_name(i);
+        if (name.ok() && name.get() != nullptr) { names.emplace_back(name.get()); }
+    }
+    return names;
 }
 
 void Instance::bind(const Model& model,
@@ -393,11 +461,55 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
 /// shared slot 0 or, for a record without a shared slot, the spare of the first exclusive
 /// session.
 class ExecuTorchLoaded final : public ExecutorLoaded {
+public:
+    /// The default provider (a portable export, or whatever delegates the runtime has for the
+    /// export's), or a backend registered to this runtime and available, by the name the
+    /// enum's spelling maps to or the registered name itself.
+    bool serves(anira_provider provider, std::string_view provider_id) const noexcept override {
+        if (provider == ANIRA_PROVIDER_DEFAULT && provider_id.empty()) { return true; }
+        try {
+            const std::string wanted = backend_name_of(provider, provider_id);
+            if (wanted.empty()) { return false; }
+            const std::vector<std::string> registered = registered_backends();
+            return std::ranges::find(registered, wanted) != registered.end();
+        } catch (...) {  // NOLINT(bugprone-empty-catch) an unlisted backend is the answer
+            return false;
+        }
+    }
+
+    std::string provider_reason() const override {
+        std::string reason =
+            "ExecuTorch runs the backends compiled into its runtime (registered "
+            "and available here: ";
+        try {
+            reason += backends_list(registered_backends());
+        } catch (...) {  // NOLINT(bugprone-empty-catch) the list stays as far as it got
+        }
+        reason += "); an entry pinned to a provider names the backend its export was lowered to";
+        return reason;
+    }
+
 protected:
     void do_load(const Model& model) override {
         require_f32(model, k_engine);
         m_shared = std::make_shared<const SharedProgram>(model);
         auto probe = std::make_unique<Instance>(m_shared, model);
+        // A pinned entry names the backend its export was lowered to: the method must use it,
+        // or the export is mislabeled and refused here rather than at its first call.
+        if (model.m_provider != ANIRA_PROVIDER_DEFAULT || !model.m_provider_id.empty()) {
+            const std::string wanted = backend_name_of(model.m_provider, model.m_provider_id);
+            const std::vector<std::string> used = probe->backends();
+            if (std::ranges::find(used, wanted) == used.end()) {
+                throw StatusError(
+                    ANIRA_ERROR_CONFIG,
+                    "executorch: " + m_shared->m_where + ": the entry is pinned to provider '" +
+                        anira::capi::provider_label(model.m_provider, model.m_provider_id) +
+                        "' (backend '" + wanted + "'), but its method '" + probe->method() +
+                        "' uses " +
+                        (used.empty() ? "no backend" : "the backends " + backends_list(used)) +
+                        "; a pin names the backend the export was lowered to");
+            }
+        }
         const std::vector<EngineTensor> inputs = probe->inputs();
         const std::vector<EngineTensor> outputs = probe->outputs();
         m_input_bindings = bind_side(model.m_inputs,
@@ -433,6 +545,23 @@ private:
 
 std::shared_ptr<Loaded> make_executorch_loaded() {
     return std::make_shared<ExecuTorchLoaded>();
+}
+
+std::vector<ProviderInfo> executorch_providers() {
+    std::vector<ProviderInfo> providers;
+    for (const std::string& name : registered_backends()) {
+        ProviderInfo info;
+        info.m_provider_id = name;
+        for (const auto& [registered, value] : k_backend_names) {
+            if (name == registered) {
+                info.m_provider = value;
+                info.m_provider_id.clear();
+                break;
+            }
+        }
+        providers.push_back(std::move(info));
+    }
+    return providers;
 }
 
 }  // namespace anira::backend

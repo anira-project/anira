@@ -29,6 +29,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -55,6 +56,58 @@ namespace anira::backend {
 namespace {
 
 constexpr const char* k_engine = "litert";
+
+// The accelerators LiteRT can take beyond the CPU, by the hardware they support, as the
+// provider names anira gives them (custom providers beside ANIRA_PROVIDER_DEFAULT): "gpu",
+// "npu" and, in the web build, "webnn". The CPU accelerator is the default provider.
+#if defined(__EMSCRIPTEN__)
+constexpr size_t k_hardware_count = 3;
+#else
+constexpr size_t k_hardware_count = 2;
+#endif
+constexpr std::array<std::pair<int, const char*>, k_hardware_count> k_hardware{{
+    {kLiteRtHwAcceleratorGpu, "gpu"},
+    {kLiteRtHwAcceleratorNpu, "npu"},
+#if defined(__EMSCRIPTEN__)
+    {kLiteRtHwAcceleratorWebNn, "webnn"},
+#endif
+}};
+
+// The hardware bit of a provider name; 0 for a name the table lacks.
+int hardware_of(std::string_view provider_id) noexcept {
+    for (const auto& [hardware, name] : k_hardware) {
+        if (provider_id == name) { return hardware; }
+    }
+    return 0;
+}
+
+// The hardware every accelerator registered to an environment supports, as one set.
+LiteRtHwAcceleratorSet registered_hardware(LiteRtEnvironment env) noexcept {
+    LiteRtHwAcceleratorSet registered = 0;
+    LiteRtParamIndex count = 0;
+    if (LiteRtGetNumAccelerators(env, &count) != kLiteRtStatusOk) { return registered; }
+    for (LiteRtParamIndex index = 0; index < count; ++index) {
+        LiteRtAccelerator accelerator = nullptr;
+        LiteRtHwAcceleratorSet support = 0;
+        if (LiteRtGetAccelerator(env, index, &accelerator) == kLiteRtStatusOk &&
+            LiteRtGetAcceleratorHardwareSupport(accelerator, &support) == kLiteRtStatusOk) {
+            registered |= support;
+        }
+    }
+    return registered;
+}
+
+// The names of a hardware set, as a message lists them ("cpu" for the CPU accelerator).
+std::string hardware_names(LiteRtHwAcceleratorSet hardware) {
+    std::string text;
+    if ((hardware & kLiteRtHwAcceleratorCpu) != 0) { text = "cpu"; }
+    for (const auto& [bit, name] : k_hardware) {
+        if ((hardware & bit) == 0) { continue; }
+        if (!text.empty()) { text += ", "; }
+        text += name;
+    }
+    return text.empty() ? "none" : text;
+}
 
 // The status names of litert/c/litert_common.h, so a message reads "kLiteRtStatusErrorFileIO"
 // and not a number.
@@ -190,6 +243,23 @@ SharedModel::SharedModel(const Model& model) {
         litert_check(LiteRtCreateEnvironment(1, env_options.data(), &m_env),
                      "LiteRtCreateEnvironment");
 
+        // The accelerator of the record: the CPU for the default provider, the hardware a
+        // custom name spells else, and the environment must have registered one that supports
+        // it (its automatic registration loads the accelerator libraries it finds), or the
+        // load is refused here rather than at the compiled model.
+        const int wanted = model.m_provider_id.empty() ? kLiteRtHwAcceleratorCpu
+                                                       : hardware_of(model.m_provider_id);
+        if (wanted != kLiteRtHwAcceleratorCpu) {
+            const LiteRtHwAcceleratorSet registered = registered_hardware(m_env);
+            if ((registered & wanted) == 0) {
+                throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                                  "litert: no registered accelerator supports '" +
+                                      model.m_provider_id +
+                                      "' here (the accelerators registered support: " +
+                                      hardware_names(registered) + ")");
+            }
+        }
+
         if (model.m_bytes != nullptr) {
             litert_check(
                 LiteRtCreateModelFromBuffer(m_env, model.m_bytes, model.m_num_bytes, &m_model),
@@ -211,7 +281,7 @@ SharedModel::SharedModel(const Model& model) {
         // depends only on the core exported API (LiteRtCreateOpaqueOptions /
         // AddOpaqueOptions).
         litert_check(LiteRtCreateOptions(&m_options), "LiteRtCreateOptions");
-        litert_check(LiteRtSetOptionsHardwareAccelerators(m_options, kLiteRtHwAcceleratorCpu),
+        litert_check(LiteRtSetOptionsHardwareAccelerators(m_options, wanted),
                      "LiteRtSetOptionsHardwareAccelerators");
 
         LiteRtOpaqueOptions cpu_opaque = nullptr;
@@ -501,6 +571,28 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
 /// one must be the record's); the probe is the executor of shared slot 0 or, for a record
 /// without a shared slot, the spare of the first exclusive session.
 class LiteRtLoaded final : public ExecutorLoaded {
+public:
+    /// The default provider (the CPU accelerator), or an accelerator by its hardware's name
+    /// beside ANIRA_PROVIDER_DEFAULT; whether the environment registers one is load's
+    /// question. No provider of the enum names a LiteRT accelerator.
+    bool serves(anira_provider provider, std::string_view provider_id) const noexcept override {
+        if (provider != ANIRA_PROVIDER_DEFAULT) { return false; }
+        return provider_id.empty() || hardware_of(provider_id) != 0;
+    }
+
+    std::string provider_reason() const override {
+        std::string names;
+        for (const auto& [hardware, name] : k_hardware) {
+            if (!names.empty()) { names += ", "; }
+            names += "'";
+            names += name;
+            names += "'";
+        }
+        return "LiteRT takes an accelerator by the hardware's name beside ANIRA_PROVIDER_DEFAULT "
+               "(" +
+               names + "); no provider of the enum names one";
+    }
+
 protected:
     void do_load(const Model& model) override {
         require_f32(model, k_engine);
@@ -540,20 +632,6 @@ std::shared_ptr<Loaded> make_litert_loaded() {
 }
 
 std::vector<ProviderInfo> litert_providers(anira::LogLevel level) {
-    // The hardware an accelerator supports, as the provider names anira gives them: the CPU
-    // accelerator is the default provider, listed by the caller.
-#if defined(__EMSCRIPTEN__)
-    constexpr size_t k_hardware_count = 3;  // WebNN exists in the web build alone
-#else
-    constexpr size_t k_hardware_count = 2;
-#endif
-    static constexpr std::array<std::pair<int, const char*>, k_hardware_count> k_hardware{{
-        {kLiteRtHwAcceleratorGpu, "gpu"},
-        {kLiteRtHwAcceleratorNpu, "npu"},
-#if defined(__EMSCRIPTEN__)
-        {kLiteRtHwAcceleratorWebNn, "webnn"},
-#endif
-    }};
     std::vector<ProviderInfo> providers;
     // A fresh environment registers the accelerators it can load (its automatic registration).
     // An accelerator it cannot load is this query's answer, not a warning: the environment's
@@ -572,26 +650,14 @@ std::vector<ProviderInfo> litert_providers(anira::LogLevel level) {
                           "the capabilities list the default provider alone");
         return providers;
     }
-    LiteRtParamIndex count = 0;
-    if (LiteRtGetNumAccelerators(env, &count) == kLiteRtStatusOk) {
-        for (LiteRtParamIndex index = 0; index < count; ++index) {
-            LiteRtAccelerator accelerator = nullptr;
-            LiteRtHwAcceleratorSet support = 0;
-            if (LiteRtGetAccelerator(env, index, &accelerator) != kLiteRtStatusOk ||
-                LiteRtGetAcceleratorHardwareSupport(accelerator, &support) != kLiteRtStatusOk) {
-                continue;
-            }
-            for (const auto& [hardware, name] : k_hardware) {
-                if ((support & hardware) == 0) { continue; }
-                ProviderInfo info;
-                info.m_provider_id = name;
-                if (std::ranges::find(providers, info) == providers.end()) {
-                    providers.push_back(std::move(info));
-                }
-            }
-        }
-    }
+    const LiteRtHwAcceleratorSet registered = registered_hardware(env);
     LiteRtDestroyEnvironment(env);
+    for (const auto& [hardware, name] : k_hardware) {
+        if ((registered & hardware) == 0) { continue; }
+        ProviderInfo info;
+        info.m_provider_id = name;
+        providers.push_back(std::move(info));
+    }
     return providers;
 }
 

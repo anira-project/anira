@@ -430,6 +430,13 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
 /// the first exclusive session; every executor loads its own module (its own functions and
 /// graph executors, and its own copy of the weights).
 class LibTorchLoaded final : public ExecutorLoaded {
+public:
+    std::string provider_reason() const override {
+        return "a LibTorch device needs the device-domain edges of a later pre-release (a "
+               ".to(device) per call allocates), so the adapter runs the default provider "
+               "alone";
+    }
+
 protected:
     void do_load(const Model& model) override {
         require_f32(model, k_engine);

@@ -27,9 +27,11 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "../capi/words.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
 #include "Adapter.h"
@@ -120,11 +122,61 @@ std::vector<EngineTensor> side_of(const Ort::Session& session,
     return tensors;
 }
 
+// The registered names of ONNX Runtime's execution providers (its constants.h) that spell a
+// provider of anira's enum; every other name travels as it is, the runtime's own word, in
+// provider_id. Vulkan has no ONNX Runtime execution provider.
+constexpr std::array<std::pair<const char*, anira_provider>, 6> k_provider_names{{
+    {"CPUExecutionProvider", ANIRA_PROVIDER_DEFAULT},
+    {"CUDAExecutionProvider", ANIRA_PROVIDER_CUDA},
+    {"DmlExecutionProvider", ANIRA_PROVIDER_DIRECTML},
+    {"CoreMLExecutionProvider", ANIRA_PROVIDER_COREML},
+    {"WebGpuExecutionProvider", ANIRA_PROVIDER_WEBGPU},
+    {"XnnpackExecutionProvider", ANIRA_PROVIDER_XNNPACK},
+}};
+
+// The registered name of the record's provider: the table's for a provider of the enum, the
+// provider_id itself (a registered name the capabilities listed) for a custom one; empty for
+// the default provider and for Vulkan.
+std::string registered_name(const Model& model) {
+    if (!model.m_provider_id.empty()) { return model.m_provider_id; }
+    for (const auto& [name, value] : k_provider_names) {
+        if (value == model.m_provider && value != ANIRA_PROVIDER_DEFAULT) { return name; }
+    }
+    return "";
+}
+
+// Appends the record's provider to the session options, ahead of the CPU provider ONNX Runtime
+// keeps last: CUDA through its own entry, every other through the generic one under its
+// registered name (the generic entry takes the registered names as well as the short ones).
+// A provider the runtime refuses (not in this build, no device) is ANIRA_ERROR_NOT_SUPPORTED
+// with the runtime's text.
+void append_provider(Ort::SessionOptions& options, const Model& model) {
+    if (model.m_provider == ANIRA_PROVIDER_DEFAULT && model.m_provider_id.empty()) { return; }
+    const std::string label = anira::capi::provider_label(model.m_provider, model.m_provider_id);
+    const std::string name = registered_name(model);
+    if (name.empty()) {
+        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                          "onnxruntime: no execution provider serves '" + label + "'");
+    }
+    try {
+        if (model.m_provider == ANIRA_PROVIDER_CUDA) {
+            const OrtCUDAProviderOptions cuda{};
+            options.AppendExecutionProvider_CUDA(cuda);
+        } else {
+            options.AppendExecutionProvider(name, {});
+        }
+    } catch (const Ort::Exception& e) {
+        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                          "onnxruntime: the runtime refused execution provider '" + label + "' (" +
+                              name + "): " + e.what());
+    }
+}
+
 /// What one load shares between its executors: the environment handle (anira's log level on
 /// it; ONNX Runtime keeps one environment per process behind every handle) and the session
-/// options (one intra-op thread), which a session reads at its creation on the control thread
-/// and never again. Immutable after load, held by the loaded model and by every executor,
-/// freed with the last of them.
+/// options (one intra-op thread, the record's provider appended), which a session reads at its
+/// creation on the control thread and never again. Immutable after load, held by the loaded
+/// model and by every executor, freed with the last of them.
 struct SharedEnvironment {
     explicit SharedEnvironment(const Model& model);
 
@@ -145,6 +197,7 @@ SharedEnvironment::SharedEnvironment(const Model& model)
     : m_env(to_ort_logging_level(model.m_log_level), "Default") {
 #endif
     m_options.SetIntraOpNumThreads(1);
+    append_provider(m_options, model);
 }
 
 /// One session of the model over the shared environment: what one executor of the adapter
@@ -380,6 +433,41 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
 /// file), the probe the executor of shared slot 0 or, for a record without a shared slot, the
 /// spare of the first exclusive session; every executor a session of its own.
 class OnnxRuntimeLoaded final : public ExecutorLoaded {
+public:
+    /// The default provider always; a provider of the enum or a registered name when the
+    /// runtime lists it among its available execution providers (never Vulkan, which ONNX
+    /// Runtime has no provider for).
+    bool serves(anira_provider provider, std::string_view provider_id) const noexcept override {
+        if (provider == ANIRA_PROVIDER_DEFAULT && provider_id.empty()) { return true; }
+        if (provider == ANIRA_PROVIDER_VULKAN) { return false; }
+        try {
+            for (const ProviderInfo& info : onnxruntime_providers()) {
+                if (info.m_provider == provider && info.m_provider_id == provider_id) {
+                    return true;
+                }
+            }
+        } catch (...) {  // NOLINT(bugprone-empty-catch) an unlisted provider is the answer
+        }
+        return false;
+    }
+
+    std::string provider_reason() const override {
+        std::string reason =
+            "the ONNX Runtime of this build reports these execution providers "
+            "beyond the CPU: ";
+        std::string listed;
+        try {
+            for (const ProviderInfo& info : onnxruntime_providers()) {
+                if (!listed.empty()) { listed += ", "; }
+                listed += anira::capi::provider_label(info.m_provider, info.m_provider_id);
+            }
+        } catch (...) {  // NOLINT(bugprone-empty-catch) the list stays as far as it got
+        }
+        reason += listed.empty() ? "none" : listed;
+        reason += " (and it has no Vulkan provider)";
+        return reason;
+    }
+
 protected:
     void do_load(const Model& model) override {
         require_f32(model, k_engine);
@@ -420,23 +508,13 @@ std::shared_ptr<Loaded> make_onnxruntime_loaded() {
 }
 
 std::vector<ProviderInfo> onnxruntime_providers() {
-    // The registered names of ONNX Runtime's execution providers (its constants.h) that spell
-    // a provider of anira's enum; every other name travels as it is, the runtime's own word.
-    static constexpr std::array<std::pair<const char*, anira_provider>, 6> k_names{{
-        {"CPUExecutionProvider", ANIRA_PROVIDER_DEFAULT},
-        {"CUDAExecutionProvider", ANIRA_PROVIDER_CUDA},
-        {"DmlExecutionProvider", ANIRA_PROVIDER_DIRECTML},
-        {"CoreMLExecutionProvider", ANIRA_PROVIDER_COREML},
-        {"WebGpuExecutionProvider", ANIRA_PROVIDER_WEBGPU},
-        {"XnnpackExecutionProvider", ANIRA_PROVIDER_XNNPACK},
-    }};
     std::vector<ProviderInfo> providers;
     try {
         throw_if_foreign_onnxruntime();
         for (const std::string& name : Ort::GetAvailableProviders()) {
             ProviderInfo info;
             info.m_provider_id = name;
-            for (const auto& [registered, value] : k_names) {
+            for (const auto& [registered, value] : k_provider_names) {
                 if (name == registered) {
                     info.m_provider = value;
                     info.m_provider_id.clear();

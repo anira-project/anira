@@ -86,7 +86,7 @@ std::vector<ProviderInfo> builtin_providers(anira_engine engine, anira::LogLevel
         case ANIRA_ENGINE_LITERT: providers = litert_providers(level); break;
 #endif
 #ifdef USE_EXECUTORCH
-        case ANIRA_ENGINE_EXECUTORCH: break;
+        case ANIRA_ENGINE_EXECUTORCH: providers = executorch_providers(); break;
 #endif
         default: return providers;  // not in this build: no provider at all
     }

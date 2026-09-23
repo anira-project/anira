@@ -467,6 +467,12 @@ void Instance::reset(const anira_engine_ctx& /*ctx*/) noexcept {
 /// the executor of shared slot 0 or, for a record without a shared slot, the spare of the
 /// first exclusive session.
 class TFLiteLoaded final : public ExecutorLoaded {
+public:
+    std::string provider_reason() const override {
+        return "the TensorFlow Lite C API of this build ships no delegate factory, so the "
+               "adapter runs the default provider alone in this pre-release";
+    }
+
 protected:
     void do_load(const Model& model) override {
         require_f32(model, k_engine);
