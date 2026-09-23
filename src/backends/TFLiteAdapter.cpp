@@ -41,8 +41,10 @@
 // which includes tensorflow/lite/c/c_api_types.h, a path the pinned 2.17 include tree does not
 // carry; the symbol is exported by the prebuilt library (checked with nm), so its prototype is
 // declared here as that header declares it.
+// NOLINTBEGIN(readability-identifier-naming) TFLite's C API spells the name
 extern "C" TFL_CAPI_EXPORT TfLiteStatus
     TfLiteInterpreterResetVariableTensors(TfLiteInterpreter* interpreter);
+// NOLINTEND(readability-identifier-naming)
 
 namespace anira::backend {
 
@@ -446,7 +448,7 @@ protected:
         // The names of the first instance (every instance loaded the same file) bind the
         // slots; the check against the dims runs in bind, after the resize and the
         // allocation, on every instance.
-        Instance& first = *m_instances.front();
+        const Instance& first = *m_instances.front();
         const std::vector<std::string> in_names = first.input_names();
         const std::vector<std::string> out_names = first.output_names();
         const std::vector<SlotBinding> input_bindings =
