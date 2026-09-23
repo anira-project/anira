@@ -80,6 +80,7 @@
 #include "port.h"
 #include "stage.h"
 #include "translate.h"
+#include "words.h"
 
 using anira::capi::translate_exception;
 
@@ -103,7 +104,7 @@ constexpr uint32_t k_stage_flags =
 /// Every flags bit anira/abi/engine.h defines: an engine's promises.
 constexpr uint32_t k_engine_flags = ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL |
                                     ANIRA_ENGINE_FLAG_REALTIME_SAFE |
-                                    ANIRA_ENGINE_FLAG_DYNAMIC_TIME;
+                                    ANIRA_ENGINE_FLAG_DYNAMIC_TIME | ANIRA_ENGINE_FLAG_STATE_ALIAS;
 /// The prefix of the engine ids anira keeps for itself (anira.v2.custom among them): a
 /// registration under it is refused.
 constexpr const char* k_anira_id_prefix = "anira.";
@@ -1065,18 +1066,9 @@ void build_report(anira_handler& handler,
 
 #ifdef ENABLE_LOGGING
 // The words of the plan report's log lines: the JSON vocabulary where one exists (the
-// provider suffixes of anira_provider, json.cpp's k_waits), the enumerator's own word else.
+// provider words of words.h, json.cpp's k_waits), the enumerator's own word else.
 const char* provider_word(uint32_t provider) {
-    switch (provider) {
-        case ANIRA_PROVIDER_DEFAULT: return "default";
-        case ANIRA_PROVIDER_CUDA: return "cuda";
-        case ANIRA_PROVIDER_WEBGPU: return "webgpu";
-        case ANIRA_PROVIDER_DIRECTML: return "directml";
-        case ANIRA_PROVIDER_COREML: return "coreml";
-        case ANIRA_PROVIDER_XNNPACK: return "xnnpack";
-        case ANIRA_PROVIDER_VULKAN: return "vulkan";
-        default: return "unknown";
-    }
+    return anira::capi::provider_word(static_cast<anira_provider>(provider));
 }
 
 const char* domain_word(uint32_t domain) {
@@ -1714,7 +1706,7 @@ anira_status ANIRA_CALL anira_custom_engine_create(const anira_engine_desc* desc
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "engine: the engine's flags 0x%x carry a bit this library does not "
                        "define (ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL | ANIRA_ENGINE_FLAG_REALTIME_SAFE "
-                       "| ANIRA_ENGINE_FLAG_DYNAMIC_TIME is 0x%x)",
+                       "| ANIRA_ENGINE_FLAG_DYNAMIC_TIME | ANIRA_ENGINE_FLAG_STATE_ALIAS is 0x%x)",
                        value.flags,
                        k_engine_flags);
     ANIRA_CAPI_REQUIRE(value.process != nullptr,
@@ -1734,7 +1726,19 @@ anira_status ANIRA_CALL anira_custom_engine_create(const anira_engine_desc* desc
                            "engine: the engine's consumed_kinds[%u] is NULL",
                            i);
     }
-    // The carrier copies the kinds.
+    ANIRA_CAPI_REQUIRE(value.providers != nullptr || value.num_providers == 0,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "engine: the engine's providers is NULL with a count of %u",
+                       value.num_providers);
+    for (uint32_t i = 0; i < value.num_providers; ++i) {
+        ANIRA_CAPI_REQUIRE(value.providers[i] != nullptr && value.providers[i][0] != '\0',
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "engine: the engine's providers[%u] is NULL or empty",
+                           i);
+    }
+    // The carrier copies the kinds and the providers.
     *out = new anira_custom_engine{std::make_shared<anira::capi::EngineCarrier>(value)};
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }

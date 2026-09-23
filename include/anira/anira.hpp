@@ -1148,6 +1148,25 @@ public:
                       "anira_model_config_model_bytes");
         return {static_cast<const std::byte*>(bytes), size};
     }
+    /// Pins the entry to the provider its file is built for (an ExecuTorch export lowered to
+    /// a backend, an ONNX Runtime .ort compiled for an execution provider): a provider of the
+    /// enum, or a custom name in the engine's own vocabulary with ANIRA_PROVIDER_DEFAULT beside
+    /// it. Only a candidate naming that provider runs a pinned entry; an entry without a pin
+    /// runs on any provider of its engine, the candidate deciding. Two entries of one engine
+    /// may coexist when their pins differ. DEFAULT with an empty name unpins.
+    ModelConfig& model_provider(uint32_t index,
+                                anira_provider provider,
+                                std::string_view provider_id = {}) {
+        anira_error err{};
+        const std::string id(provider_id);
+        detail::check(anira_model_config_set_model_provider(m_config,
+                                                            index,
+                                                            provider,
+                                                            id.empty() ? nullptr : id.c_str(),
+                                                            &err),
+                      err);
+        return *this;
+    }
     /// What this entry's export calls the tensor you named canonical (binds it by name).
     ModelConfig& tensor_name(uint32_t index,
                              std::string_view canonical,
@@ -2865,7 +2884,7 @@ private:
  * adds the stage) over anira_pipeline_add_engine, and named by a model entry of the
  * configuration (ModelConfig::add_model_path(id, path)). The pipeline holds the C engine of
  * every Engine object registered on it, so another Pipeline registering the same object reuses
- * it, and handlers of both share prepared models. Move-only; copied by the handler that takes
+ * it, and handlers of both share loaded models. Move-only; copied by the handler that takes
  * it, engines included: a registration after a handler's create does not reach that handler.
  */
 class Pipeline {
@@ -2923,7 +2942,7 @@ public:
     /// (anira_custom_engine_create: flags() and consumed_kinds() fill an anira_engine_desc whose
     /// five slots are the class's virtuals, read once, then) and reused by every later one while
     /// a Pipeline holding it lives, on this Pipeline or another, under this id or another, so
-    /// handlers of all of them share prepared models of equal configurations. The C engine holds
+    /// handlers of all of them share loaded models of equal configurations. The C engine holds
     /// a copy of the shared_ptr, so the object lives at least until the last pipeline and
     /// handler that carry it are destroyed, whatever the caller does with its own pointer;
     /// Engine::release answers the C engine once. Legal before or after the inference stage; a

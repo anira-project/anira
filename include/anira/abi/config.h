@@ -1088,6 +1088,62 @@ ANIRA_API const char* ANIRA_CALL anira_model_config_model_engine_id(const anira_
                                                                     uint32_t model_index) ANIRA_NOEXCEPT;
 
 /**
+ * @brief Pins the entry to a provider: its file is built for one (an ExecuTorch export lowered
+ * to a backend, an ONNX Runtime .ort compiled for an execution provider), so only a
+ * candidate naming that provider runs it, and a candidate naming it picks this entry. An
+ * entry without a pin is neutral: it runs on any provider of its engine, the candidate
+ * deciding. Two entries of one engine may coexist when their pins differ. JSON: the
+ * "engine" word's suffix, "executorch:coreml" (the enum's spellings) or
+ * "executorch:com.example.npu" (a custom name).
+ * @param config The config.
+ * @param model_index An entry.
+ * @param provider A provider of the enum, or ANIRA_PROVIDER_DEFAULT with a provider_id for a
+ *        custom one; DEFAULT with a NULL provider_id unpins the entry.
+ * @param provider_id A custom provider's name in the engine's vocabulary (the runtime's own
+ *        name for a built-in engine, an entry of a custom engine's providers list),
+ *        copied; NULL for a provider of the enum.
+ * @param err Nullable.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config, an index out of range,
+ *         an unknown provider value, both a provider of the enum and a provider_id, or an empty
+ *         provider_id.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_model_config_set_model_provider(anira_model_config* config,
+                                                                        uint32_t model_index,
+                                                                        anira_provider provider,
+                                                                        const char* provider_id,
+                                                                        anira_error* err) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The provider the entry is pinned to.
+ * @param config The config.
+ * @param model_index An entry.
+ * @return The provider; ANIRA_PROVIDER_DEFAULT for a neutral entry, for an entry pinned to a
+ *         custom provider (anira_model_config_model_provider_id names it) and for an index out
+ *         of range.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_provider ANIRA_CALL anira_model_config_model_provider(const anira_model_config* config,
+                                                                      uint32_t model_index) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The custom provider the entry is pinned to.
+ * @param config The config.
+ * @param model_index An entry.
+ * @return Object-owned; NULL for a neutral entry, for an entry pinned to a provider of the enum
+ *         and for an index out of range.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API const char* ANIRA_CALL anira_model_config_model_provider_id(const anira_model_config* config,
+                                                                      uint32_t model_index) ANIRA_NOEXCEPT;
+
+/**
  * @brief The entry's model path.
  * @param config The config.
  * @param model_index An entry.

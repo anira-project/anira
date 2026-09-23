@@ -227,10 +227,12 @@ int anira_header_c_probe(void) {
         uint32_t count = 0;
         checks +=
             backend.struct_size == sizeof(anira_backend_id) && backend.engine_id == NULL ? 1 : 0;
+        checks += backend.provider == ANIRA_PROVIDER_DEFAULT && backend.provider_id == NULL ? 1 : 0;
         checks += edge.struct_size == sizeof(anira_edge_info) && edge.available == 0u ? 1 : 0;
         checks += slot.struct_size == sizeof(anira_plan_slot) && slot.recipe == NULL ? 1 : 0;
         checks += ext.struct_size == sizeof(anira_plan_ext) && ext.host == NULL ? 1 : 0;
         checks += info.struct_size == sizeof(anira_plan_info) && info.budget_ms == 0.0 ? 1 : 0;
+        checks += info.provider_id == NULL && info.engine_flags == 0u ? 1 : 0;
         if (checks < 0) { /* never true: keeps the calls out of the probe's own result */
             const double now = anira_now_ms();
             const anira_status status =
@@ -426,10 +428,13 @@ int anira_header_c_probe(void) {
             engine.struct_size == sizeof(anira_engine_desc) && engine.user_data == NULL ? 1 : 0;
         checks += engine.flags == 0u && engine.process == NULL && engine.release == NULL ? 1 : 0;
         checks += engine.load == NULL && engine.unload == NULL && engine.init == NULL ? 1 : 0;
+        checks += engine.providers == NULL && engine.num_providers == 0u ? 1 : 0;
         checks += load_info.struct_size == sizeof(anira_engine_load_info) &&
                           load_info.model == NULL && load_info.instances == 0u
                       ? 1
                       : 0;
+        checks +=
+            load_info.provider == ANIRA_PROVIDER_DEFAULT && load_info.provider_id == NULL ? 1 : 0;
         checks += sizeof(anira_engine_ctx) == 64u && offsetof(anira_engine_ctx, inputs) == 32u &&
                           offsetof(anira_engine_ctx, loaded) == 48u &&
                           offsetof(anira_engine_ctx, reserved_ptr1) == 56u

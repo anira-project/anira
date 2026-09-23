@@ -621,7 +621,7 @@ TEST(AbiEngine, CreateRefusals) {
     bad.struct_size = static_cast<uint32_t>(offsetof(anira_engine_desc, user_data));
     refused(&bad, "struct_size");
     bad = engine;
-    bad.flags = 8U;  // the reserved alias bit is not defined in this pre-release
+    bad.flags = 16U;  // the bit above the four the header defines
     refused(&bad, "flags");
     bad.flags = 0x80000000U | ANIRA_ENGINE_FLAG_REALTIME_SAFE;
     refused(&bad, "flags");
@@ -714,6 +714,10 @@ TEST(AbiEngine, AShortDescriptorReadsAsTheDefaults) {
     EXPECT_EQ(kept.unload, nullptr);
     EXPECT_EQ(kept.init, nullptr);
     EXPECT_EQ(kept.release, nullptr);
+    EXPECT_EQ(kept.providers, nullptr);
+    EXPECT_EQ(kept.num_providers, 0U);
+    EXPECT_TRUE(carrier.serves(ANIRA_PROVIDER_DEFAULT, ""));
+    EXPECT_FALSE(carrier.serves(ANIRA_PROVIDER_CUDA, ""));
     ASSERT_EQ(carrier.consumed_kinds().size(), 1U);
     EXPECT_EQ(carrier.consumed_kinds()[0], "model:entry");
     ASSERT_NE(kept.consumed_kinds, nullptr);
@@ -721,6 +725,48 @@ TEST(AbiEngine, AShortDescriptorReadsAsTheDefaults) {
     EXPECT_STREQ(kept.consumed_kinds[0], "model:entry");
     pipe.destroy();
     EXPECT_EQ(life.m_released, 0) << "the release slot lay beyond struct_size";
+}
+
+// The providers an engine lists are copied into the carrier (the caller's array may die) and
+// answer serves(): DEFAULT always, a provider of the enum through its spelling, a custom one by
+// its name; a NULL or empty entry, or a NULL list with a count, is refused at create.
+TEST(AbiEngine, TheProvidersListIsCopiedAndAnswersServes) {
+    Pipe pipe;
+    EngineLife life;
+    anira_engine_desc engine = full_engine(life);
+    {
+        const std::string coreml = "coreml";  // dies before the carrier does
+        const std::string npu = "com.example.npu";
+        const std::array<const char*, 2> providers{coreml.c_str(), npu.c_str()};
+        engine.providers = providers.data();
+        engine.num_providers = 2;
+        ASSERT_EQ(pipe.add_new_engine("org.example.served", engine), ANIRA_OK)
+            << pipe.m_err.message;
+    }
+    ASSERT_EQ(pipe.m_pipeline->m_engines.size(), 1U);
+    const anira::capi::EngineCarrier& carrier = *pipe.m_pipeline->m_engines[0].m_carrier;
+    EXPECT_EQ(carrier.providers(), (std::vector<std::string>{"coreml", "com.example.npu"}));
+    ASSERT_EQ(carrier.desc().num_providers, 2U);
+    EXPECT_STREQ(carrier.desc().providers[1], "com.example.npu");
+    EXPECT_TRUE(carrier.serves(ANIRA_PROVIDER_DEFAULT, ""));
+    EXPECT_TRUE(carrier.serves(ANIRA_PROVIDER_COREML, ""));
+    EXPECT_TRUE(carrier.serves(ANIRA_PROVIDER_DEFAULT, "com.example.npu"));
+    EXPECT_FALSE(carrier.serves(ANIRA_PROVIDER_CUDA, ""));
+    EXPECT_FALSE(carrier.serves(ANIRA_PROVIDER_DEFAULT, "com.example.other"));
+    pipe.destroy();
+    EXPECT_EQ(life.m_released, 1);
+
+    anira_engine_desc bad = full_engine(life);
+    bad.num_providers = 1;  // a NULL list with a count
+    anira_custom_engine* out = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    EXPECT_EQ(anira_custom_engine_create(&bad, &out, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(std::strstr(err.message, "providers"), nullptr) << err.message;
+    const std::array<const char*, 1> empty{""};
+    bad.providers = empty.data();
+    EXPECT_EQ(anira_custom_engine_create(&bad, &out, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(out, nullptr);
+    EXPECT_EQ(life.m_released, 1) << "a refused create never calls release";
 }
 
 // The abi_version of the descriptor is checked as anira_check_abi checks it: another major is

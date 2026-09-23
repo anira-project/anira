@@ -215,6 +215,47 @@ TEST(AbiJsonModel, StateSourceRejectionsNameTheKeyPath) {
         ANIRA_ERROR_JSON);
 }
 
+// The "engine" word's suffix pins the entry: the enum's spelling to its value, any other word
+// to a custom provider's name, "default" to a neutral entry; to_json writes the suffix back,
+// so the pin survives a round trip and two entries of one engine may differ in it alone.
+TEST(AbiJsonModel, AProviderSuffixPinsTheEntry) {
+    const Loaded loaded(R"({"models": [
+        {"engine": "executorch:coreml", "path": "net.coreml.pte"},
+        {"engine": "executorch:com.example.npu", "path": "net.npu.pte"},
+        {"engine": "com.example.engine:fast", "path": "net.bin"},
+        {"engine": "onnxruntime:default", "path": "net.onnx"},
+        {"engine": "libtorch", "path": "net.pt"}]})");
+    ASSERT_EQ(loaded.m_status, ANIRA_OK) << loaded.m_err.message;
+    EXPECT_EQ(anira_model_config_model_engine(loaded.m_config, 0), ANIRA_ENGINE_EXECUTORCH);
+    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 0), ANIRA_PROVIDER_COREML);
+    EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 0), nullptr);
+    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 1), ANIRA_PROVIDER_DEFAULT);
+    EXPECT_STREQ(anira_model_config_model_provider_id(loaded.m_config, 1), "com.example.npu");
+    EXPECT_STREQ(anira_model_config_model_engine_id(loaded.m_config, 2), "com.example.engine");
+    EXPECT_STREQ(anira_model_config_model_provider_id(loaded.m_config, 2), "fast");
+    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 3), ANIRA_PROVIDER_DEFAULT);
+    EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 3), nullptr);
+    EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 4), nullptr);
+    const std::string text = model_text(loaded.m_config);
+    EXPECT_NE(text.find("\"engine\": \"executorch:coreml\""), std::string::npos) << text;
+    EXPECT_NE(text.find("\"engine\": \"executorch:com.example.npu\""), std::string::npos) << text;
+    EXPECT_NE(text.find("\"engine\": \"com.example.engine:fast\""), std::string::npos) << text;
+    EXPECT_NE(text.find("\"engine\": \"onnxruntime\""), std::string::npos)
+        << "a neutral entry carries no suffix:\n"
+        << text;
+    const Loaded again(text.c_str());
+    ASSERT_EQ(again.m_status, ANIRA_OK) << again.m_err.message;
+    EXPECT_EQ(model_text(again.m_config), text);
+    EXPECT_EQ(
+        load_fails(R"({"models": [{"engine": "executorch:", "path": "x"}]})", "models[0].engine"),
+        ANIRA_ERROR_JSON)
+        << "a colon without a provider";
+    EXPECT_EQ(
+        load_fails(R"({"models": [{"engine": "foo:coreml", "path": "x"}]})", "models[0].engine"),
+        ANIRA_ERROR_JSON)
+        << "the engine word is checked as before";
+}
+
 TEST(AbiJsonModel, RejectionsNameTheKeyPath) {
     EXPECT_EQ(load_fails(R"({"models": [{"engine": "foo", "path": "x"}]})", "models[0].engine"),
               ANIRA_ERROR_JSON);

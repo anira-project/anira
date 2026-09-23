@@ -44,37 +44,38 @@
  * was added to, their handlers, the loaded models), after every unload, whether or not init
  * ever ran. Two handlers share one loaded model when they run the same engine object on an
  * equal model configuration (the whole variant: every entry, spec and extension the engine may
- * read through load's record) resolved to equal tensors, whichever pipelines they were created
- * from; two engine objects never share, even with the same callbacks. The shared call slots of
- * a loaded model are its instances (anira_engine_load_info.instances, the model's
- * max_instances): a process call of a handler whose model is stateless claims one of them, and
- * no two calls run at once on one instance. A model declared ANIRA_MODEL_STATEFUL or with a
- * declared State pair is loaded once too, with 0 shared slots: its handlers are exclusive
- * (ANIRA_PREPARE_EXCLUSIVE at their prepare; their inferences run one at a time and in order,
- * under the dispatch gate), their calls carry ANIRA_ENGINE_CALL_EXCLUSIVE with instance 0,
- * claim no shared slot and run on what their prepare built. The engine binds by name where its
- * side has names: the load record carries the name each slot binds to (the entry's tensors
- * record, else the canonical name), and an engine that cannot bind a slot refuses load. process
- * runs on an inference thread, in ANIRA_PHASE_INFERENCE, over an anira_engine_ctx, the engine's
- * twin of the stage context (Tier 1, 64 bytes, ANIRA_STRUCT_ENGINE_CTX, on anira's stack for
- * the duration of the call): the instance of the prepared model the call runs on, the chunk's
- * entry, the two tensor arrays in slot order, State tensors included, the ticket, the per-call
- * flags and the loaded pointer. The adapter rule: read every extent and every memory handle
- * (data pointer, byte_offset, strides, domain) from the tensors of THIS call, never from a
- * value kept at load or prepare, and never assume a tensor is anira's own buffer (the halves of
- * a declared State pair alternate between two buffers; a later pre-release hands a caller's
- * Buffer tensor over in place). A status other than ANIRA_OK fails the chunk: it lands in
- * anira_handler_rt_error with one latched record, anira zeroes the outputs, the chunk delivers
- * zeros at its stream position, a State pair keeps its last good value. reset re-initialises
- * the state an engine keeps per handler: for an exclusive handler, at the first inference of a
- * new stream (after prepare, after anira_handler_reset), on that handler's prepared with that
- * inference's context, right before its process; a handler whose model is stateless is never
- * reset. The flags are the engine's promises, reported in anira_plan_info.engine_flags and
- * consumed by later contract options (ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
- * ANIRA_ENGINE_FLAG_REALTIME_SAFE, ANIRA_ENGINE_FLAG_DYNAMIC_TIME of anira/abi/enums.h); a bit
- * this header does not define is ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create.
- * The callback typedefs carry no real-time attribute: whether process is real-time is the
- * engine's own promise, the flag. The C++ face is anira::Engine of anira/anira.hpp.
+ * read through load's record) resolved to equal tensors, on the same provider, whichever
+ * pipelines they were created from; two engine objects never share, even with the same
+ * callbacks. The shared call slots of a loaded model are its instances
+ * (anira_engine_load_info.instances, the model's max_instances): a process call of a handler
+ * whose model is stateless claims one of them, and no two calls run at once on one instance. A
+ * model declared ANIRA_MODEL_STATEFUL or with a declared State pair is loaded once too, with 0
+ * shared slots: its handlers are exclusive (ANIRA_PREPARE_EXCLUSIVE at their prepare; their
+ * inferences run one at a time and in order, under the dispatch gate), their calls carry
+ * ANIRA_ENGINE_CALL_EXCLUSIVE with instance 0, claim no shared slot and run on what their
+ * prepare built. The engine binds by name where its side has names: the load record carries the
+ * name each slot binds to (the entry's tensors record, else the canonical name), and an engine
+ * that cannot bind a slot refuses load. process runs on an inference thread, in
+ * ANIRA_PHASE_INFERENCE, over an anira_engine_ctx, the engine's twin of the stage context (Tier
+ * 1, 64 bytes, ANIRA_STRUCT_ENGINE_CTX, on anira's stack for the duration of the call): the
+ * instance of the loaded model the call runs on, the chunk's entry, the two tensor arrays in
+ * slot order, State tensors included, the ticket, the per-call flags and the loaded pointer.
+ * The adapter rule: read every extent and every memory handle (data pointer, byte_offset,
+ * strides, domain) from the tensors of THIS call, never from a value kept at load or prepare,
+ * and never assume a tensor is anira's own buffer (the halves of a declared State pair
+ * alternate between two buffers; a later pre-release hands a caller's Buffer tensor over in
+ * place). A status other than ANIRA_OK fails the chunk: it lands in anira_handler_rt_error with
+ * one latched record, anira zeroes the outputs, the chunk delivers zeros at its stream
+ * position, a State pair keeps its last good value. reset re-initialises the state an engine
+ * keeps per handler: for an exclusive handler, at the first inference of a new stream (after
+ * prepare, after anira_handler_reset), on that handler's prepared with that inference's
+ * context, right before its process; a handler whose model is stateless is never reset. The
+ * flags are the engine's promises, reported in anira_plan_info.engine_flags and consumed by
+ * later contract options (ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE,
+ * ANIRA_ENGINE_FLAG_DYNAMIC_TIME of anira/abi/enums.h); a bit this header does not define is
+ * ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create. The callback typedefs carry no
+ * real-time attribute: whether process is real-time is the engine's own promise, the flag. The
+ * C++ face is anira::Engine of anira/anira.hpp.
  */
 
 #include <stddef.h>
@@ -94,7 +95,7 @@ extern "C" {
 
 /**
  * @brief What anira_engine_load_fn receives: the model to load and the tensors the engine will
- * be handed. Tier 2, struct_size first, no implicit padding (LP64 64 bytes, ILP32 44);
+ * be handed. Tier 2, struct_size first, no implicit padding (LP64 72 bytes, ILP32 48);
  * anira fills it, so it carries no struct_id. Valid for the duration of the call: the
  * engine copies what it keeps and never keeps the pointers.
  */
@@ -134,12 +135,24 @@ typedef struct anira_engine_load_info {
      * (ANIRA_PREPARE_EXCLUSIVE), never on a shared slot.
      */
     uint32_t instances;
-    uint32_t reserved;  /**< 0. */
+    /**
+     * anira_provider: the provider this load is for, ANIRA_PROVIDER_DEFAULT beside a
+     * provider_id. A provider is part of the loaded model: two providers of one model load
+     * twice; a load that cannot serve the one it is asked for returns
+     * ANIRA_ERROR_NOT_SUPPORTED.
+     */
+    uint32_t provider;
+    /**
+     * NULL for a provider the enum names; the name of a custom provider in the engine's
+     * vocabulary (an entry of the descriptor's providers list), valid until the callback
+     * returns.
+     */
+    const char* provider_id;
 } anira_engine_load_info;
 /**
  * @brief No model: what a test fills by hand.
  */
-#define ANIRA_ENGINE_LOAD_INFO_INIT ANIRA_INIT(anira_engine_load_info, sizeof(anira_engine_load_info), 0u, NULL, NULL, NULL, NULL, NULL, 0u, 0u, 0u, 0u)
+#define ANIRA_ENGINE_LOAD_INFO_INIT ANIRA_INIT(anira_engine_load_info, sizeof(anira_engine_load_info), 0u, NULL, NULL, NULL, NULL, NULL, 0u, 0u, 0u, 0u, NULL)
 
 /**
  * @brief What a process or reset call of an engine sees. Tier 1: 64 bytes, frozen, identical on
@@ -225,11 +238,14 @@ typedef anira_status (ANIRA_CALL* anira_engine_init_fn)(const anira_init_info* i
 
 /**
  * @brief The load function of an engine: called from anira_handler_prepare under the core's
- * lifecycle lock, once per loaded model anira pools. It may allocate, read files, log,
- * call the config getters and the tensor accessors; it must not call an entry that takes
- * the lifecycle lock. This is where the engine loads the row's model, binds the slots by
- * the names of the record and sizes the shared call slots the record counts (instances;
- * 0 for a model whose handlers are exclusive). A status other than ANIRA_OK fails
+ * lifecycle lock, once per loaded model anira pools (a provider is part of the loaded
+ * model: two providers of one model load twice, and the record's provider and
+ * provider_id say which one this load is for; a load that cannot serve it returns
+ * ANIRA_ERROR_NOT_SUPPORTED). It may allocate, read files, log, call the config getters
+ * and the tensor accessors; it must not call an entry that takes the lifecycle lock.
+ * This is where the engine loads the row's model, binds the slots by the names of the
+ * record and sizes the shared call slots the record counts (instances; 0 for a model
+ * whose handlers are exclusive). A status other than ANIRA_OK fails
  * anira_handler_prepare with it, the message naming the engine; unload is not called
  * then.
  * @param info The record; valid until the callback returns.
@@ -358,10 +374,10 @@ typedef void (ANIRA_CALL* anira_engine_release_fn)(void* user_data);
  * @brief A custom engine, handed once to anira_custom_engine_create and copied within
  * struct_size into the refcounted anira_custom_engine, which every pipeline it is added
  * to and every handler created from them share. Tier 2: struct_size first, user_data
- * third (its offset never moves), no implicit padding (LP64 96 bytes, ILP32 56), growth
+ * third (its offset never moves), no implicit padding (LP64 112 bytes, ILP32 68), growth
  * at the tail. The slots are listed as the stage's, from the innermost level out: the
- * per-chunk call, reset, prepare, unprepare, load, unload, init, release. process is
- * required; every other slot may be NULL.
+ * per-chunk call, reset, prepare, unprepare, load, unload, init, release; then the
+ * providers the engine serves. process is required; every other slot may be NULL.
  */
 typedef struct anira_engine_desc {
     uint32_t struct_size;  /**< sizeof(anira_engine_desc) of the caller's header. */
@@ -384,11 +400,10 @@ typedef struct anira_engine_desc {
     uint32_t num_consumed_kinds;  /**< The length of consumed_kinds. */
     /**
      * The engine's promises, an OR of ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
-     * ANIRA_ENGINE_FLAG_REALTIME_SAFE and ANIRA_ENGINE_FLAG_DYNAMIC_TIME; 0 promises nothing.
-     * Reported in anira_plan_info.engine_flags of every plan of the engine. A bit this header
-     * does not define is ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create; the name
-     * ANIRA_ENGINE_FLAG_STATE_ALIAS is reserved for the aliased State pair of a later
-     * pre-release.
+     * ANIRA_ENGINE_FLAG_REALTIME_SAFE, ANIRA_ENGINE_FLAG_DYNAMIC_TIME and
+     * ANIRA_ENGINE_FLAG_STATE_ALIAS; 0 promises nothing. Reported in
+     * anira_plan_info.engine_flags of every plan of the engine. A bit this header does not
+     * define is ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create.
      */
     uint32_t flags;
     /**
@@ -431,12 +446,24 @@ typedef struct anira_engine_desc {
      * unload. NULL: none.
      */
     anira_engine_release_fn release;
+    /**
+     * The providers the engine serves beyond ANIRA_PROVIDER_DEFAULT, as strings, copied; NULL
+     * with a count of 0 serves DEFAULT alone. The enum's JSON spellings name a provider of the
+     * enum ("cuda", "webgpu", "directml", "coreml", "xnnpack", "vulkan"); any other string is a
+     * custom provider in the engine's own vocabulary (a reverse-URI name is the convention, not
+     * a rule). A candidate naming a provider the list lacks is ANIRA_ERROR_NOT_SUPPORTED at
+     * anira_handler_create; load may still refuse one it cannot serve at run time. A tail
+     * field: a caller whose header ends before it serves DEFAULT alone.
+     */
+    const char* const* providers;
+    uint32_t num_providers;  /**< The length of providers. */
+    uint32_t reserved;  /**< 0. */
 } anira_engine_desc;
 /**
  * @brief An engine without a callback and without a promise (flags 0): process must be filled
  * before anira_custom_engine_create.
  */
-#define ANIRA_ENGINE_DESC_INIT ANIRA_INIT(anira_engine_desc, sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+#define ANIRA_ENGINE_DESC_INIT ANIRA_INIT(anira_engine_desc, sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0)
 
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 

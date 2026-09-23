@@ -60,6 +60,7 @@ static_assert(std::is_same_v<decltype(anira_init_info::num_threads), uint32_t>,
               "the shared init record's thread count");
 static_assert(ANIRA_PREPARE_EXCLUSIVE == k_bit0, "the exclusive bit of a prepare");
 static_assert(ANIRA_ENGINE_CALL_EXCLUSIVE == k_bit0, "the exclusive bit of an engine call");
+static_assert(ANIRA_ENGINE_FLAG_STATE_ALIAS == (k_bit0 << 3), "the fourth engine promise");
 // anira/abi/stage.h: the stage context is frozen at 64 bytes, eight scalars and four pointer
 // slots (the frame and three reserved ones), and travels by value like the tensor.
 static_assert(sizeof(anira_stage_ctx) == 64 && alignof(anira_stage_ctx) == 8,
@@ -163,6 +164,10 @@ static_assert(std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
                   ? 1
                   : 0;
     checks += load_info.struct_size == sizeof(anira_engine_load_info) && load_info.instances == 0U
+                  ? 1
+                  : 0;
+    checks += load_info.provider == ANIRA_PROVIDER_DEFAULT && load_info.provider_id == nullptr &&
+                      engine.providers == nullptr && engine.num_providers == 0U
                   ? 1
                   : 0;
     checks += engine_ctx.inputs == nullptr && engine_ctx.outputs_bits == 0u &&

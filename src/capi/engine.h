@@ -19,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "translate.h"
@@ -40,9 +41,15 @@ public:
     EngineCarrier(EngineCarrier&&) = delete;
     EngineCarrier& operator=(EngineCarrier&&) = delete;
 
-    /// The descriptor; consumed_kinds points into this carrier.
+    /// The descriptor; consumed_kinds and providers point into this carrier.
     const anira_engine_desc& desc() const noexcept { return m_desc; }
     const std::vector<std::string>& consumed_kinds() const noexcept { return m_kinds; }
+    /// The providers the descriptor listed, as its strings.
+    const std::vector<std::string>& providers() const noexcept { return m_providers; }
+    /// Whether the engine serves a provider: DEFAULT always; a provider of the enum when the
+    /// list spells it (words.h); a custom one (DEFAULT beside a provider_id) when the list
+    /// carries that name.
+    bool serves(anira_provider provider, std::string_view provider_id) const noexcept;
 
     /// The engine's init slot, once per engine object, with the facts of the core in effect:
     /// the first call runs init and remembers a success, every later call answers ANIRA_OK at
@@ -55,6 +62,8 @@ private:
     anira_engine_desc m_desc;
     std::vector<std::string> m_kinds;
     std::vector<const char*> m_kind_pointers;
+    std::vector<std::string> m_providers;
+    std::vector<const char*> m_provider_pointers;
     mutable std::mutex m_init_mutex;
     mutable bool m_initialised = false;
 };

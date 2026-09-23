@@ -79,13 +79,21 @@ struct TensorBinding {
 struct ModelEntry {
     anira_engine m_engine = ANIRA_ENGINE_NONE;
     std::string m_engine_id;  ///< non-empty for a custom engine
-    std::string m_path;       ///< kept for to_json even after set_model_bytes
+    /// The provider the entry is pinned to (anira_model_config_set_model_provider): the enum's,
+    /// or DEFAULT with m_provider_id for a custom one; DEFAULT and empty for a neutral entry,
+    /// which runs on any provider of its engine.
+    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    std::string m_provider_id;
+    std::string m_path;  ///< kept for to_json even after set_model_bytes
     std::shared_ptr<BytesCarrier> m_bytes;
     std::map<std::string, TensorBinding> m_tensors;
     ExtBag m_ext;
 
     bool is_custom() const noexcept { return !m_engine_id.empty(); }
     bool has_bytes() const noexcept { return m_bytes != nullptr; }
+    bool is_pinned() const noexcept {
+        return m_provider != ANIRA_PROVIDER_DEFAULT || !m_provider_id.empty();
+    }
 };
 
 /// The Hard (real-time) half of a contract: v2's HostConfig geometry, budget and warmup.

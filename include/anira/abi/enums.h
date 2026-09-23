@@ -628,7 +628,13 @@ typedef enum anira_engine {
 
 /**
  * @brief Execution provider, the other backend axis; a provider name means the same thing
- * across engines.
+ * across engines. A provider the enum does not name travels as a string beside it,
+ * provider_id (anira_backend_id, anira_plan_info, anira_engine_load_info, the pin of a
+ * model entry), in the engine's own vocabulary: the runtime's name for a built-in engine
+ * (what the context's capabilities report), an entry of the descriptor's providers list
+ * for a custom engine; provider is ANIRA_PROVIDER_DEFAULT beside a provider_id. A
+ * provider is part of the loaded model: two providers of one model load twice
+ * (anira/abi/engine.h).
  */
 typedef enum anira_provider {
     ANIRA_PROVIDER_DEFAULT = 0,  /**< The engine's own CPU path (JSON: no suffix). */
@@ -733,6 +739,17 @@ typedef enum anira_stage_phase {
  * built-in engine sets it.
  */
 #define ANIRA_ENGINE_FLAG_DYNAMIC_TIME 4u
+
+/**
+ * @brief anira_engine_desc.flags bit: the engine keeps its own aliasing of a declared State
+ * pair. anira then binds one stable buffer per pair as both the State input and the
+ * State output of every call and never flips the two: the engine reads the state before
+ * it writes it (in place) or copies for itself, and every address stays put across
+ * calls, which a captured graph (CUDA graphs, WebGPU replay) needs. Without the bit the
+ * two buffers alternate behind every successful inference (anira/abi/handler.h).
+ * Reported in anira_plan_info.engine_flags; no built-in engine sets it.
+ */
+#define ANIRA_ENGINE_FLAG_STATE_ALIAS 8u
 
 /**
  * @brief anira_prepare_info.flags bit (anira/abi/lifecycle.h): the handler's inferences run one

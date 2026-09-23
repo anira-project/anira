@@ -395,7 +395,8 @@ _Static_assert(sizeof(anira_engine_load_info) ==
                    sizeof(((const anira_engine_load_info*)0)->num_inputs) +
                    sizeof(((const anira_engine_load_info*)0)->num_outputs) +
                    sizeof(((const anira_engine_load_info*)0)->instances) +
-                   sizeof(((const anira_engine_load_info*)0)->reserved),
+                   sizeof(((const anira_engine_load_info*)0)->provider) +
+                   sizeof(((const anira_engine_load_info*)0)->provider_id),
                "anira_engine_load_info has no implicit padding");
 
 _Static_assert(sizeof(anira_engine_ctx) == 64, "anira_engine_ctx size");
@@ -442,7 +443,10 @@ _Static_assert(sizeof(anira_engine_desc) ==
                    sizeof(((const anira_engine_desc*)0)->load) +
                    sizeof(((const anira_engine_desc*)0)->unload) +
                    sizeof(((const anira_engine_desc*)0)->init) +
-                   sizeof(((const anira_engine_desc*)0)->release),
+                   sizeof(((const anira_engine_desc*)0)->release) +
+                   sizeof(((const anira_engine_desc*)0)->providers) +
+                   sizeof(((const anira_engine_desc*)0)->num_providers) +
+                   sizeof(((const anira_engine_desc*)0)->reserved),
                "anira_engine_desc has no implicit padding");
 
 _Static_assert(offsetof(anira_plan_slot, struct_size) == 0, "anira_plan_slot.struct_size first");

@@ -184,6 +184,81 @@ TEST(AbiModelConfig, DefaultsAndEntries) {
     EXPECT_EQ(anira_model_config_model_path(m.m_config, 3), nullptr);
 }
 
+// An entry is neutral until it is pinned to a provider: the enum's, or a custom name beside
+// DEFAULT; DEFAULT alone unpins; the refusals name the argument.
+TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
+    Model m;
+    uint32_t index = 0;
+    ASSERT_EQ(anira_model_config_add_model_path(m.m_config,
+                                                ANIRA_ENGINE_EXECUTORCH,
+                                                "net.pte",
+                                                &index,
+                                                &m.m_err),
+              ANIRA_OK);
+    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_DEFAULT)
+        << "neutral until pinned";
+    EXPECT_EQ(anira_model_config_model_provider_id(m.m_config, 0), nullptr);
+    EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
+                                                    0,
+                                                    ANIRA_PROVIDER_COREML,
+                                                    nullptr,
+                                                    &m.m_err),
+              ANIRA_OK);
+    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_COREML);
+    EXPECT_EQ(anira_model_config_model_provider_id(m.m_config, 0), nullptr);
+    EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
+                                                    0,
+                                                    ANIRA_PROVIDER_DEFAULT,
+                                                    "com.example.npu",
+                                                    &m.m_err),
+              ANIRA_OK);
+    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_DEFAULT)
+        << "a custom provider travels beside DEFAULT";
+    EXPECT_STREQ(anira_model_config_model_provider_id(m.m_config, 0), "com.example.npu");
+    EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
+                                                    0,
+                                                    ANIRA_PROVIDER_DEFAULT,
+                                                    nullptr,
+                                                    &m.m_err),
+              ANIRA_OK)
+        << "unpinned again";
+    EXPECT_EQ(anira_model_config_model_provider_id(m.m_config, 0), nullptr);
+    // The refusals.
+    EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
+                                                    1,
+                                                    ANIRA_PROVIDER_CUDA,
+                                                    nullptr,
+                                                    &m.m_err),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "out of range";
+    EXPECT_NE(std::strstr(m.m_err.message, "out of range"), nullptr) << m.m_err.message;
+    EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
+                                                    0,
+                                                    ANIRA_PROVIDER_CUDA,
+                                                    "com.example.npu",
+                                                    &m.m_err),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "both at once";
+    EXPECT_EQ(
+        anira_model_config_set_model_provider(m.m_config, 0, ANIRA_PROVIDER_DEFAULT, "", &m.m_err),
+        ANIRA_ERROR_INVALID_ARGUMENT)
+        << "an empty name";
+    EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
+                                                    0,
+                                                    bad_enum<anira_provider>(0x1000),
+                                                    nullptr,
+                                                    &m.m_err),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "a value the enum does not name";
+    EXPECT_EQ(
+        anira_model_config_set_model_provider(nullptr, 0, ANIRA_PROVIDER_CUDA, nullptr, &m.m_err),
+        ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_DEFAULT)
+        << "a refused call leaves the entry as it was";
+    EXPECT_EQ(anira_model_config_model_provider(nullptr, 0), ANIRA_PROVIDER_DEFAULT);
+    EXPECT_EQ(anira_model_config_model_provider_id(nullptr, 0), nullptr);
+}
+
 TEST(AbiModelConfig, EntryRejections) {
     Model m;
     uint32_t index = 0;

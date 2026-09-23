@@ -331,7 +331,11 @@ typedef struct anira_stage_ctx {
      * engine.
      */
     uint32_t engine;
-    uint32_t provider;  /**< anira_provider of that plan. */
+    /**
+     * anira_provider of that plan; ANIRA_PROVIDER_DEFAULT for a custom provider, which the plan
+     * report names (anira_plan_info.provider_id).
+     */
+    uint32_t provider;
     uint32_t variant;  /**< The variant of that plan; 0 in this pre-release. */
     /**
      * The tensors of the model's input list, State tensors included: the slots the input

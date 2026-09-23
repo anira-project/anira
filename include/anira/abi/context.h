@@ -36,11 +36,11 @@ extern "C" {
 // NOLINTBEGIN(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 /**
- * @brief A backend, where the pair must travel as one item: an engine on a provider. Tier 2,
- * struct_size first; enumerated at the caller's stride. engine_id is NULL for a built-in
- * engine and the id a custom one is added under (anira_pipeline_add_engine), whose
- * engine is then ANIRA_ENGINE_NONE: a registered engine has no value of anira_engine of
- * its own.
+ * @brief A backend, where the pair must travel as one item: an engine on a provider (provider,
+ * or provider_id for one the enum does not name). Tier 2, struct_size first; enumerated
+ * at the caller's stride. engine_id is NULL for a built-in engine and the id a custom
+ * one is added under (anira_pipeline_add_engine), whose engine is then
+ * ANIRA_ENGINE_NONE: a registered engine has no value of anira_engine of its own.
  */
 typedef struct anira_backend_id {
     uint32_t struct_size;  /**< sizeof(anira_backend_id) of the caller's header. */
@@ -51,11 +51,19 @@ typedef struct anira_backend_id {
      * storage of the library when anira wrote it.
      */
     const char* engine_id;
+    /**
+     * NULL for a provider the enum names (provider says which); the name of a custom provider
+     * in the engine's vocabulary (anira_provider), with provider ANIRA_PROVIDER_DEFAULT beside
+     * it. A tail field: a caller whose header ends before it names the enum's providers alone.
+     * Static storage of the library when anira wrote it; the caller's, valid for the call, when
+     * the caller did.
+     */
+    const char* provider_id;
 } anira_backend_id;
 /**
  * @brief No engine on the default provider.
  */
-#define ANIRA_BACKEND_ID_INIT ANIRA_INIT(anira_backend_id, sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, NULL)
+#define ANIRA_BACKEND_ID_INIT ANIRA_INIT(anira_backend_id, sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, NULL, NULL)
 
 /**
  * @brief One row of the edge registry: whether a tensor in domain from_domain can reach the
@@ -148,7 +156,10 @@ ANIRA_API const anira_capabilities* ANIRA_CALL anira_context_capabilities(const 
                                                                           ANIRA_NOEXCEPT;
 
 /**
- * @brief The backends that are compiled in and usable here, one record per (engine, provider).
+ * @brief The backends that are compiled in and usable here, one record per (engine, provider)
+ * the build and its runtimes report: the enum's providers by provider, any other by
+ * provider_id in the runtime's own words (an ONNX Runtime execution provider by its
+ * name); a custom engine's providers are its descriptor's and are not listed here.
  * Stride-explicit enumeration: min(element_size, the library's record size) bytes are
  * written per element.
  * @param capabilities The capabilities.

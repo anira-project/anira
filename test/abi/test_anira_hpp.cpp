@@ -2349,7 +2349,7 @@ TEST(AbiCxx, RegisterEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
     EXPECT_EQ(engine.use_count(), 1);
     EXPECT_EQ(engine->m_released.load(), 1) << "the C engine the refused call created";
 
-    engine->m_flags = 8U;
+    engine->m_flags = 16U;  // the bit above the four the C header defines
     const Thrown bit = thrown_by([&] { pipe.register_engine(k_cxx_engine_id, engine); });
     EXPECT_TRUE(bit.m_thrown);
     EXPECT_EQ(bit.m_status, ANIRA_ERROR_INVALID_ARGUMENT);

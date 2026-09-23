@@ -34,6 +34,7 @@
 #include "ext_registry.h"
 #include "handles.h"
 #include "layout.h"
+#include "words.h"
 
 using anira::capi::StatusError;
 using anira::capi::translate_exception;
@@ -419,6 +420,30 @@ void set_engine_from_json(const Json& node,
     engine_id = word;
 }
 
+// models[].engine: the engine word, with an optional provider suffix after the first ':'
+// ("executorch:coreml" for the enum's spellings, "executorch:com.example.npu" for a custom
+// provider), which pins the entry (anira_model_config_set_model_provider).
+void set_entry_engine_from_json(const Json& node,
+                                const std::string& path,
+                                anira::capi::ModelEntry& entry) {
+    const std::string word = require_string(node, path);
+    const size_t colon = word.find(':');
+    if (colon == std::string::npos) {
+        set_engine_from_json(node, path, entry.m_engine, entry.m_engine_id);
+        return;
+    }
+    const std::string suffix = word.substr(colon + 1);
+    if (suffix.empty()) { fail_json(path, R"(")" + word + R"(" names no provider after the ':')"); }
+    set_engine_from_json(Json(word.substr(0, colon)), path, entry.m_engine, entry.m_engine_id);
+    entry.m_provider = ANIRA_PROVIDER_DEFAULT;
+    entry.m_provider_id.clear();
+    if (const std::optional<anira_provider> known = anira::capi::provider_of_word(suffix)) {
+        entry.m_provider = *known;  // "default" spells a neutral entry
+        return;
+    }
+    entry.m_provider_id = suffix;
+}
+
 // models[].tensors.<canonical>.layout: spec axis indices and "insert" (ANIRA_AXIS_INSERT).
 std::vector<uint32_t> parse_layout(const Json& node, const std::string& path) {
     require_array(node, path);
@@ -534,7 +559,7 @@ void load_model_v3(const Json& root, const char* base_dir, anira_model_config& c
                 for (const auto& [ekey, evalue] : value[i].items()) {
                     const std::string ekey_path = child(entry_path, ekey.c_str());
                     if (ekey == "engine") {
-                        set_engine_from_json(evalue, ekey_path, entry.m_engine, entry.m_engine_id);
+                        set_entry_engine_from_json(evalue, ekey_path, entry);
                         has_engine = true;
                     } else if (ekey == "path") {
                         entry.m_path = resolve_path(require_string(evalue, ekey_path), base_dir);
@@ -1340,8 +1365,14 @@ Json model_to_json(const anira_model_config& cfg) {
     Json models = Json::array();
     for (const anira::capi::ModelEntry& entry : cfg.m_models) {
         Json object = Json::object();
-        object["engine"] =
-            entry.is_custom() ? entry.m_engine_id.c_str() : word_of(entry.m_engine, k_engines);
+        std::string engine_word =
+            entry.is_custom() ? entry.m_engine_id : word_of(entry.m_engine, k_engines);
+        if (entry.m_provider != ANIRA_PROVIDER_DEFAULT) {
+            engine_word += std::string(":") + anira::capi::provider_word(entry.m_provider);
+        } else if (!entry.m_provider_id.empty()) {
+            engine_word += ":" + entry.m_provider_id;
+        }
+        object["engine"] = engine_word;
         if (!entry.m_path.empty()) { object["path"] = entry.m_path; }
         write_tensor_records(object, entry);
         write_exts(object, entry.m_ext);

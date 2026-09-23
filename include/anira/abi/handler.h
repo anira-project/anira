@@ -198,7 +198,10 @@ typedef struct anira_plan_info {
      * anira_engine; ANIRA_ENGINE_NONE for a custom engine, which engine_id names.
      */
     uint32_t engine;
-    uint32_t provider;  /**< anira_provider; ANIRA_PROVIDER_DEFAULT in this pre-release. */
+    /**
+     * anira_provider of the plan; ANIRA_PROVIDER_DEFAULT beside a provider_id.
+     */
+    uint32_t provider;
     /**
      * NULL for a built-in engine; the registered name of a custom engine, valid while the
      * report is.
@@ -212,11 +215,17 @@ typedef struct anira_plan_info {
      */
     uint32_t engine_flags;
     uint32_t reserved;  /**< 0. */
+    /**
+     * NULL for a provider the enum names; the name of the plan's custom provider
+     * (anira_provider), valid while the report is. A tail field: a caller whose header ends
+     * before it gets its rows without it.
+     */
+    const char* provider_id;
 } anira_plan_info;
 /**
  * @brief No plan.
  */
-#define ANIRA_PLAN_INFO_INIT ANIRA_INIT(anira_plan_info, sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, NULL, 0.0, 0u, 0u)
+#define ANIRA_PLAN_INFO_INIT ANIRA_INIT(anira_plan_info, sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, NULL, 0.0, 0u, 0u, NULL)
 
 /**
  * @brief Creates an empty pipeline. A pipeline holds exactly one inference stage
@@ -315,12 +324,11 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipel
  * @brief Creates a custom engine: the descriptor is copied into a refcounted object, which
  * anira_pipeline_add_engine adds to any number of pipelines. The object is the engine's
  * identity: handlers running the same object on an equal model configuration share one
- * prepared model (one prepare), whichever pipelines they come from; two objects never
- * share, even over the same callbacks and user_data. The handle holds one reference and
- * may be destroyed right after the last anira_pipeline_add_engine; release fires exactly
- * once, when the last reference dies (the handle, the pipelines, their handlers, the
- * prepared models), after every unprepare. A refused call creates nothing and never
- * calls release.
+ * loaded model (one load), whichever pipelines they come from; two objects never share,
+ * even over the same callbacks and user_data. The handle holds one reference and may be
+ * destroyed right after the last anira_pipeline_add_engine; release fires exactly once,
+ * when the last reference dies (the handle, the pipelines, their handlers, the loaded
+ * models), after every unload. A refused call creates nothing and never calls release.
  * @param desc The engine; min(struct_size, sizeof(anira_engine_desc)) bytes are copied, with
  *        the consumed kinds, so the record and its strings may die when the call returns.
  *        The slots a shorter struct_size does not cover read as in ANIRA_ENGINE_DESC_INIT.
@@ -328,9 +336,10 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipel
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or out, a struct_size below
  *         the three leading slots {struct_size, abi_version, user_data}, a flags bit this
- *         header does not define, a NULL process, or a NULL consumed_kinds (or a NULL entry in
- *         it) with a count above 0; ANIRA_ERROR_ABI_VERSION for an abi_version this library
- *         does not serve (anira_check_abi).
+ *         header does not define, a NULL process, a NULL consumed_kinds (or a NULL entry in it)
+ *         with a count above 0, or a NULL providers (or a NULL or empty entry in it) with a
+ *         count above 0; ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve
+ *         (anira_check_abi).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -381,7 +390,7 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_engine(anira_pipeline* pipe
 /**
  * @brief Destroys a pipeline; handlers created from it keep their copy. The release function of
  * a stage fires here when no handler shares its carrier any more, and a custom engine's
- * when neither its handle, another pipeline, a handler nor a prepared model holds it any
+ * when neither its handle, another pipeline, a handler nor a loaded model holds it any
  * more.
  * @param pipeline The handle; NULL is a no-op.
  * @par Thread contract
