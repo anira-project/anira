@@ -72,15 +72,28 @@ The rules in short
   fills the phase that moves that ring.
 - Ask per slot in every callback and keep nothing: the tensor an accessor fills describes the
   memory the tensor has right now, which an engine may swap between inferences.
-- One registration, one prepared object per handler. ``prepare`` receives the record
-  (``anira_stage_prepare_info``, :cpp:class:`anira::StagePrepareInfo`: the handler, the plan
-  report, ``num_entries``, a template of the model end of every slot and the canonical names)
-  and hands back what the phases of that handler run on: the ``prepared`` pointer in C, the
-  :cpp:class:`anira::Stage::Prepared` in C++. What a stage keeps per handler, its per-entry
-  scratch above all, lives there, never in ``user_data`` or in the registration, which every
-  handler of the pipeline shares. anira calls ``unprepare`` (deletes the ``Prepared``) once per
-  successful prepare, at the next prepare of that handler and at its destroy, and ``release``
-  once, with the last carrier.
+- One registration, initialised once, one prepared object per handler. The descriptor's
+  slots, from the innermost level out: ``pre_process``, ``post_process``,
+  ``before_inference``, ``after_inference``, ``reset``, ``prepare``, ``unprepare``, ``init``,
+  ``release``. ``init`` runs once per ``anira_pipeline_add_stage``, at the first
+  ``anira_handler_prepare`` of a handler of that pipeline, before that handler's prepare, with
+  the facts of the core (``anira_init_info`` of ``anira/abi/lifecycle.h``,
+  :cpp:class:`anira::InitInfo`: the log level, the size of the inference thread pool, the
+  handler's context); what a stage keeps for its whole registration (a lookup table, a thread
+  of its own) is built there, behind ``user_data`` in C, as a member of the object in C++. A
+  refused init fails that prepare (``the stage refused init``) and leaves the registration
+  uninitialised, so the next prepare calls init again. ``prepare`` receives the record
+  (``anira_prepare_info`` of the same header, shared with the engine descriptor,
+  :cpp:class:`anira::PrepareInfo`: the handler, the plan report, ``num_entries``, a template
+  of the model end of every slot, the canonical names and the ``flags`` of the prepare,
+  ``ANIRA_PREPARE_EXCLUSIVE`` when the handler's inferences run one at a time and in order,
+  informational for a stage) and hands back what the phases of that handler run on: the
+  ``prepared`` pointer in C, the :cpp:class:`anira::Stage::Prepared` in C++. What a stage
+  keeps per handler, its per-entry scratch above all, lives there, never in ``user_data`` or
+  in the registration, which every handler of the pipeline shares. anira calls ``unprepare``
+  (deletes the ``Prepared``) once per successful prepare, at the next prepare of that handler
+  and at its destroy, and ``release`` once, with the last carrier, whether init ever ran or
+  not.
 - ``reset`` runs for the first chunk of a new stream (after prepare, after
   ``anira_handler_reset``), before that chunk's ``pre_process`` and on its thread, with the
   chunk's context in ``ANIRA_PHASE_RESET``, where the accessors answer the role only: what the
@@ -114,7 +127,7 @@ factor is copied into it, since nothing here is per entry:
         uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
         uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
 
-        std::unique_ptr<Prepared> prepare(const anira::StagePrepareInfo& /*info*/) override {
+        std::unique_ptr<Prepared> prepare(const anira::PrepareInfo& /*info*/) override {
             return std::make_unique<Scaler>(m_gain);   // one per handler; anira deletes it at unprepare
         }
 
@@ -186,7 +199,7 @@ in ``prepare``, and clears them at ``reset``, the first chunk of a new stream:
     public:
         uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
         uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
-        std::unique_ptr<Prepared> prepare(const anira::StagePrepareInfo& info) override;
+        std::unique_ptr<Prepared> prepare(const anira::PrepareInfo& info) override;
 
     private:
         class Frames;
@@ -243,7 +256,7 @@ in ``prepare``, and clears them at ``reset``, the first chunk of a new stream:
         std::vector<float> m_windows;
     };
 
-    std::unique_ptr<anira::Stage::Prepared> Spectral::prepare(const anira::StagePrepareInfo& info) {
+    std::unique_ptr<anira::Stage::Prepared> Spectral::prepare(const anira::PrepareInfo& info) {
         return std::make_unique<Frames>(info.num_entries());   // this handler's windows
     }
 
@@ -284,7 +297,7 @@ nothing is shared by the handlers of the pipeline:
 
     typedef struct spectral { float* windows; uint32_t entries; } spectral;   /* one per handler */
 
-    static anira_status ANIRA_CALL spectral_prepare(const anira_stage_prepare_info* info,
+    static anira_status ANIRA_CALL spectral_prepare(const anira_prepare_info* info,
                                                     void* user_data,
                                                     void** out_prepared) {
         spectral* s = (spectral*)calloc(1, sizeof(spectral));
@@ -380,7 +393,8 @@ nothing is shared by the handlers of the pipeline:
         free(s);
     }
 
-and its descriptor, filled once at setup (``release`` stays ``NULL``: nothing is shared):
+and its descriptor, filled once at setup (``init`` and ``release`` stay ``NULL``: nothing is
+shared by the handlers of the pipeline):
 
 .. code-block:: c
 
@@ -448,9 +462,12 @@ and the handler is created from the pipeline as in section 3.2 of the :doc:`usag
 In C++, :cpp:class:`anira::Pipeline` takes the stage as :cpp:class:`anira::stage::Custom` over
 a ``std::shared_ptr``; the pipeline's carrier shares the pointer, so the registration lives at
 least until the last pipeline or handler that carries it is destroyed, whatever you do with
-your own pointer, each handler's ``anira_handler_prepare`` asks it for a ``Prepared`` of its
-own (returned as a ``std::unique_ptr``, since anira is its one owner from then on and deletes
-it at unprepare), and ``Stage::release()`` runs once, when the last carrier dies:
+your own pointer, the first ``anira_handler_prepare`` of a handler of the pipeline calls its
+``Stage::init()`` (the base class does nothing; an override may throw, which fails that prepare
+and leaves init to the next one), each handler's ``anira_handler_prepare`` asks it for a
+``Prepared`` of its own (returned as a ``std::unique_ptr``, since anira is its one owner from
+then on and deletes it at unprepare), and ``Stage::release()`` runs once, when the last carrier
+dies, whether init ever ran or not:
 
 .. code-block:: cpp
 
@@ -465,9 +482,11 @@ it at unprepare), and ``Stage::release()`` runs once, when the last carrier dies
 ``anira_handler_prepare`` then validates the stage with the rest: under a Hard contract a
 filled ``pre_process`` or ``post_process`` without ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` is
 ``ANIRA_ERROR_CONFIG`` naming the flag, a ring dtype that differs from its spec's is accepted
-only where the stage fills the phase that moves that ring, and the stage's own ``prepare``
-runs last, with the record; a status a C ``prepare`` returns, an exception a C++ ``prepare``
-throws or a null ``Prepared`` it returns, fails the prepare (``the stage refused prepare``),
-and no unprepare follows. The
+only where the stage fills the phase that moves that ring, and the stage runs last: its
+``init`` when this is the first prepare of a handler of the pipeline (a status it returns, or
+an exception a C++ ``init`` throws, fails the prepare with ``the stage refused init``, and the
+next prepare calls init again), then its own ``prepare``, with the record; a status a C
+``prepare`` returns, an exception a C++ ``prepare`` throws or a null ``Prepared`` it returns,
+fails the prepare (``the stage refused prepare``), and no unprepare follows. The
 :cpp:class:`anira::InferenceHandler` class of ``anira/anira.hpp`` arrives with the runtime
 cut-over; until then a stage is driven through the C entries of the handler.

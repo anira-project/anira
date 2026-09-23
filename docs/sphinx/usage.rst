@@ -223,7 +223,7 @@ not here, so one config serves every build.
   :cpp:class:`anira::Engine` of :doc:`custom_backends`) gets its entries through the string
   overloads: ``add_model_path("de.tu-berlin.coreml", path)``, ``add_model_bytes(id, bytes)``
   and ``default_engine("de.tu-berlin.coreml")``. anira never opens such an entry's path: the
-  engine's ``prepare`` does, and binds the tensors itself from the names the record carries
+  engine's ``load`` does, and binds the tensors itself from the names the record carries
   (the plan report says ``ANIRA_BINDING_ENGINE`` for its slots). An entry whose id no
   registration on the pipeline serves is ``ANIRA_ERROR_NOT_SUPPORTED`` at
   ``anira_handler_create``, naming the id; ``anira.v2.custom``, the 2.x ``CUSTOM`` backend,
@@ -233,7 +233,10 @@ not here, so one config serves every build.
   never concurrently. A model with a declared State pair (section 1.1) runs this way whatever
   it says here.
 - **Instances.** ``max_instances(n)`` is the ceiling within which the planner allocates
-  parallel instances of a stateless model (default 1).
+  parallel instances of a stateless model (default 1): the shared call slots of its loaded
+  model, one inference at a time on each, claimed by the calls of every handler that runs the
+  model. A stateful model has none; each of its handlers runs on what its own prepare built
+  (section 3.2).
 - **Anchor.** ``anchor(canonical)`` names the streamed tensor that is the model's clock: the
   Hard contract's block range and rate are counted in its Time-axis elements, and every other
   streamed tensor's time ratio is stated against it. The default (an empty name) is the first
@@ -734,14 +737,27 @@ nonblocking calls, and an author who wants clang's compile-time check declares t
 ``ANIRA_NONBLOCKING`` themselves (``anira_stage_fn`` carries no attribute, since the promise
 differs per stage).
 
-**The lifecycle: prepare, prepared, reset, unprepare, release.** One registration serves
-every handler created from the pipeline, and each handler is prepared on its own.
+**The lifecycle: init, prepare, prepared, reset, unprepare, release.** One registration serves
+every handler created from the pipeline, initialised once, and each handler is prepared on its
+own. ``init(info, user_data)`` runs once per registration (per ``anira_pipeline_add_stage``),
+on the caller of the first ``anira_handler_prepare`` of a handler of the pipeline, before that
+handler's prepare, with an ``anira_init_info`` (``anira/abi/lifecycle.h``, the header that
+holds the two records the stage and the engine descriptors share): the log level in effect,
+the size of the inference thread pool (``0`` when the context brought its own threads) and
+the context of that handler, whose capabilities are legal to query, valid until the call
+returns. It may allocate and log, never call an entry that takes the lifecycle lock; what a
+stage keeps for its whole registration lives behind ``user_data``, whether init filled it or
+the caller did before ``anira_pipeline_add_stage``. A status other than ``ANIRA_OK`` fails
+that prepare with it (``the stage refused init``) and leaves the registration uninitialised,
+so the next prepare calls init again; ``NULL`` for a stage with nothing to initialise.
 ``prepare(info, user_data, &prepared)`` runs on the caller of ``anira_handler_prepare`` after
-the plan report is built, once per prepare of each handler, with an
-``anira_stage_prepare_info``: the handler, the plan report, ``num_entries``, a template of the
-model end of every slot of either list (the spec's dtype and shape at the pinned window, the
-slot's host domain, all-zero strides, no memory) and the canonical names, valid for the
-duration of the call. It may allocate (this is where the per-entry scratch is sized, by
+the plan report is built, once per prepare of each handler, with an ``anira_prepare_info``
+(the same header): the handler, the plan report, ``num_entries``, a template of the model end
+of every slot of either list (the spec's dtype and shape at the pinned window, the slot's host
+domain, all-zero strides, no memory), the canonical names and the ``flags`` of the prepare
+(``ANIRA_PREPARE_EXCLUSIVE`` when the handler's inferences run one at a time and in order, a
+model declared stateful or with a declared State pair; informational for a stage), valid for
+the duration of the call. It may allocate (this is where the per-entry scratch is sized, by
 ``num_entries``), may call the ``[callback-safe]`` entries, the handler's getters and the two
 Static entries, never ``prepare``, ``destroy`` or a Hard entry, and hands a pointer back
 through ``out_prepared``: this handler's ``prepared``, which every phase call
@@ -761,8 +777,9 @@ old session is released, before the new prepare; a prepare that fails earlier un
 previous one too) and at ``anira_handler_destroy``, after the last phase call.
 ``release(user_data)`` runs exactly once, when the last carrier of the descriptor dies
 (``anira_pipeline_destroy`` or ``anira_handler_destroy``, whichever comes last), after every
-unprepare; no callback runs afterwards. The same lifecycle, with the same words, is the
-engine descriptor's (:doc:`custom_backends`).
+unprepare, whether or not init ever ran; no callback runs afterwards. The same lifecycle, with
+the same words and one level more (the model's, ``load`` and ``unload``), is the engine
+descriptor's (:doc:`custom_backends`).
 
 **An example: an int16 stream into a float model.** The host pushes ``int16`` samples
 (``hard_ring_dtype("in", ANIRA_DTYPE_I16)``, section 1.3), the model reads ``float32``.
@@ -782,7 +799,7 @@ chunks on several threads, and for two handlers created from one pipeline:
 
     typedef struct convert_scratch { int16_t* samples; uint32_t entries; } convert_scratch;
 
-    static anira_status ANIRA_CALL convert_prepare(const anira_stage_prepare_info* info,
+    static anira_status ANIRA_CALL convert_prepare(const anira_prepare_info* info,
                                                    void* user_data,
                                                    void** out_prepared) {
         convert_scratch* scratch = (convert_scratch*)calloc(1, sizeof(convert_scratch));
@@ -836,7 +853,7 @@ chunks on several threads, and for two handlers created from one pipeline:
         free(scratch);
     }
 
-At setup, beside ``anira_pipeline_add_inference`` of section 3.2 (``user_data`` and
+At setup, beside ``anira_pipeline_add_inference`` of section 3.2 (``user_data``, ``init`` and
 ``release`` stay ``NULL``: nothing is shared by the handlers, and the scratch dies with each
 prepare):
 
@@ -853,16 +870,20 @@ prepare):
 virtual functions in place of the function pointers, split as the C lifecycle is: the
 registration, ``anira::Stage``, states the phases the stage fills in ``phases()`` (only those
 reach the descriptor; the others stay ``NULL``, so a stage of ``post_process`` alone leaves
-the default ``pre_process`` running) and its promise in ``flags()``, and its
-``prepare(const StagePrepareInfo&)`` (the record as views: ``handler()``, ``report()``,
-``num_entries()``, ``inputs()`` / ``outputs()``, the names) returns a
+the default ``pre_process`` running) and its promise in ``flags()``, its
+``init(const InitInfo&)`` runs once per registration, at the first prepare of a handler of
+the pipeline (the base class does nothing; an override builds what the stage keeps for its
+whole registration as a member of the object), and its ``prepare(const PrepareInfo&)`` (the
+record as views: ``handler()``, ``report()``, ``num_entries()``, ``inputs()`` /
+``outputs()``, the names, ``flags()`` and ``exclusive()``) returns a
 ``std::unique_ptr<Stage::Prepared>``, the prepared object of that handler, on which the four
 phase functions and ``reset`` are the virtuals, each taking a :cpp:class:`anira::StageContext`
 with the six accessors as methods and :cpp:class:`anira::RingView` as the typed ring
 (``pop_block<T>`` over a ``std::span``; the element type names the dtype, and another type
-than the ring's moves nothing). ``prepare`` may throw (an ``anira::Error`` fails the prepare
-with its status, ``std::bad_alloc`` with ``ANIRA_ERROR_OUT_OF_MEMORY``, anything else with
-``ANIRA_ERROR_INTERNAL``; a null return is ``ANIRA_ERROR_INTERNAL`` too). The base class is
+than the ring's moves nothing). ``init`` and ``prepare`` may throw (an ``anira::Error`` fails
+the prepare with its status, ``std::bad_alloc`` with ``ANIRA_ERROR_OUT_OF_MEMORY``, anything
+else with ``ANIRA_ERROR_INTERNAL``; a null return of ``prepare`` is ``ANIRA_ERROR_INTERNAL``
+too, and a throw of ``init`` leaves the registration to the next prepare). The base class is
 the default: ``Stage::Prepared::pre_process(ctx)`` is ``anira_stage_default_pre_process``,
 ``Stage::Prepared::post_process(ctx)`` the default push, ``reset`` does nothing. Why the two
 ownership spellings: the prepared object is anira's from ``prepare`` on (it is deleted at the
@@ -870,7 +891,8 @@ C unprepare, so a ``std::unique_ptr`` says so), while the registration is shared
 pipeline and every handler created from it (a ``std::shared_ptr``). The stage is handed to an
 :cpp:class:`anira::Pipeline` as :cpp:class:`anira::stage::Custom` over that ``std::shared_ptr``,
 which the pipeline's carrier shares, so the registration lives at least as long as the last
-pipeline or handler that carries it; ``release()`` runs once, when that carrier dies.
+pipeline or handler that carries it; ``release()`` runs once, when that carrier dies, whether
+init ever ran or not.
 
 .. code-block:: cpp
 
@@ -883,7 +905,7 @@ pipeline or handler that carries it; ``release()`` runs once, when that carrier 
     public:
         uint32_t phases() const noexcept override { return k_pre_process; }   // post_process: the default
         uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
-        std::unique_ptr<Prepared> prepare(const anira::StagePrepareInfo& info) override;
+        std::unique_ptr<Prepared> prepare(const anira::PrepareInfo& info) override;
 
     private:
         class Converter;
@@ -918,7 +940,7 @@ pipeline or handler that carries it; ``release()`` runs once, when that carrier 
         std::vector<int16_t> m_scratch;
     };
 
-    std::unique_ptr<anira::Stage::Prepared> Int16ToFloat::prepare(const anira::StagePrepareInfo& info) {
+    std::unique_ptr<anira::Stage::Prepared> Int16ToFloat::prepare(const anira::PrepareInfo& info) {
         return std::make_unique<Converter>(info.num_entries());   // one per handler, its own scratch
     }
 
@@ -1043,8 +1065,8 @@ being skipped) / ``anira_pipeline_destroy``, copied by the handler that takes it
 destroyable right after. A pipeline holds exactly one inference stage and at most one pre-
 and post-processing stage (section 2): ``anira_pipeline_add_stage`` copies an
 ``anira_stage_desc`` of ``anira/abi/stage.h`` (up to four phase callbacks, a reset, a prepare,
-an unprepare and a release function, one ``user_data`` slot and the stage's real-time flags)
-into a carrier the pipeline and its handlers share, and a second call is
+an unprepare, an init and a release function, one ``user_data`` slot and the stage's real-time
+flags) into a carrier the pipeline and its handlers share, and a second call is
 ``ANIRA_ERROR_INVALID_STATE``. A **custom engine** is part of the inference stage and never a
 stage of its own: it is one more implementation a candidate's ``engine_id`` resolves to, and
 its call runs in ``ANIRA_PHASE_INFERENCE`` (the phase of ``anira_stage_phase`` between
@@ -1054,21 +1076,35 @@ engine's does. It is an object: ``anira_custom_engine_create(&desc, &engine, &er
 ``anira_pipeline_add_engine(pipe, engine_id, engine, &err)`` adds it to a pipeline under a
 reverse-URI id (it must contain a ``.``; the prefix ``anira.`` is anira's own). The id belongs
 to the pipeline, the object is the engine: one engine may be added to several pipelines, and
-the handle, the pipelines, their handlers and the prepared models all hold a reference, so
-``anira_custom_engine_destroy`` may run right after the last addition. The descriptor's slots:
-``process``, the engine call, the one required slot, on an inference
-thread over an ``anira_engine_ctx`` (the instance of the prepared model the call runs on,
+the handle, the pipelines, their handlers and the loaded models all hold a reference, so
+``anira_custom_engine_destroy`` may run right after the last addition. The lifecycle is the
+stage's with one level more, the model's, and the same words; the descriptor's slots, from
+the innermost level out: ``process``, the engine call, the one required slot, on an inference
+thread over an ``anira_engine_ctx`` (the shared slot of the loaded model the call runs on,
 the chunk's ``entry``, one ``anira_tensor`` per slot of either side, State tensors included,
-over the memory the engine reads and writes); ``reset``, the first inference of a new stream
-on a session-exclusive prepared model, right before its ``process``; ``prepare``, once per
-prepared model anira pools, from ``anira_handler_prepare`` under the core's lifecycle lock,
-over an ``anira_engine_prepare_info`` (the entry's row and the variant for the config
-getters, a template of every tensor on the engine's side, the name each slot binds to, the
-instance count), handing back the ``prepared`` pointer every later call of that prepared
-model receives beside ``user_data``; ``unprepare``, once per successful prepare, when the
-last handler sharing the prepared model is re-prepared or destroyed; ``release``, once, when
-the last reference to the engine object dies; plus ``user_data``, the ``consumed_kinds`` of the walk (keyed by the id)
-and the engine's ``flags`` (``ANIRA_ENGINE_FLAG_*``, reported in
+over the memory the engine reads and writes, the per-call ``flags`` and the ``loaded``
+pointer); ``reset``, the first inference of a new stream of an exclusive handler, right
+before its ``process``, on that handler's prepared pointer; ``prepare``, once per handler and
+loaded model the handler runs on, at ``anira_handler_prepare`` on its caller's thread, over
+the ``anira_prepare_info`` the stage's prepare receives (section 2) and the loaded pointer,
+handing back the ``prepared`` pointer every ``process``, ``reset`` and ``unprepare`` of that
+handler receives beside ``user_data`` (what an exclusive handler keeps per stream, its own
+executor included, is built here, since its calls claim no shared slot; a handler whose model
+is stateless needs nothing here and may hand back ``NULL``); ``unprepare``, once per
+successful prepare, at the handler's next prepare and at its destroy, after its in-flight
+inferences drained; ``load``, once per loaded model anira pools, from ``anira_handler_prepare``
+under the core's lifecycle lock, over an ``anira_engine_load_info`` (the entry's row and the
+variant for the config getters, a template of every tensor on the engine's side, the name
+each slot binds to, the shared call slots, ``instances``), handing back the ``loaded`` pointer
+every prepare of that model receives and every ``process`` and ``reset`` sees in
+``ctx->loaded``; ``unload``, once per successful load, when the last handler holding the
+loaded model is re-prepared or destroyed, after every unprepare of it; ``init``, once per
+engine object, at the first ``anira_handler_prepare`` that reaches it, before its first load,
+over an ``anira_init_info`` (the log level, the size of the inference thread pool, the
+handler's context; a refused init fails that prepare and the next one calls init again);
+``release``, once, when the last reference to the engine object dies, after every unload,
+whether or not init ever ran; plus ``user_data``, the ``consumed_kinds`` of the walk (keyed by
+the id) and the engine's ``flags`` (``ANIRA_ENGINE_FLAG_*``, reported in
 ``anira_plan_info.engine_flags``). Adding is legal before or after
 ``anira_pipeline_add_inference``; a handler copies the pipeline at create, so a later
 addition does not reach it. A model entry that names the id is a plan like a built-in
@@ -1084,11 +1120,18 @@ three leading slots, a flags bit the header does not define, a ``NULL`` ``proces
 ``NULL`` pipeline, id or engine and a malformed id, and with ``ANIRA_ERROR_INVALID_STATE`` an id
 the pipeline already has; neither refusal leaves a reference behind. The pool rule: two
 handlers that run the same engine object on an equal model configuration resolved to equal
-tensors share one prepared model (one ``prepare``, one ``unprepare``), whichever pipelines they
-come from; two engine objects never share; a session-exclusive model is prepared per handler;
-``release`` fires once per engine object;
-``prepare`` and ``unprepare`` may run under the lifecycle lock and must not call an entry
-that takes it. :doc:`custom_backends` is the full account, with the C++ face
+tensors share one loaded model (one ``load``, one ``unload``), whichever pipelines they come
+from, and each is prepared on it (one ``prepare``, one ``unprepare`` per handler); two engine
+objects never share. A stateful model (``ANIRA_MODEL_STATEFUL`` or a declared State pair) is
+loaded once too, with ``0`` shared call slots: its handlers are exclusive
+(``ANIRA_PREPARE_EXCLUSIVE`` at their prepare), their inferences run one at a time and in
+order, and their calls carry ``ANIRA_ENGINE_CALL_EXCLUSIVE`` with ``instance`` 0 and run on
+what their prepare built; a call of a handler whose model is stateless claims one of the
+loaded model's ``instances`` slots, never two calls at once on one. ``release`` fires once per
+engine object; ``init`` and ``load`` run under the lifecycle lock, ``unload`` may, and none of
+the three may call an entry that takes it; ``prepare`` may call the ``[callback-safe]``
+entries, the handler's getters and the two Static entries, never prepare, destroy or a Hard
+entry. :doc:`custom_backends` is the full account, with the C++ face
 :cpp:class:`anira::Engine`.
 ``anira_handler`` is the runtime object over a context:
 ``anira_handler_create(context, pipeline, &h, &err)`` adds a reference to the context (which
@@ -1098,11 +1141,14 @@ driver thread and never overlapped by another handler entry: it validates the co
 against the Hard contract (the rules of section 1.1 and the contract's own: geometry, an
 explicit budget, a fixed or no warmup, the miss policy against the anchor, the ring dtypes
 and the host domains by canonical name, the stage's real-time promise against its placement),
-loads the model of every candidate that has an entry, sizes the rings for the block range and
-the latency, selects the plan of the variant's default engine (else plan 0), builds the plan
-report and, last, calls the stage's prepare function when the pipeline has a stage with one
-(a status other than ``ANIRA_OK`` fails the prepare with it); a
-second prepare replaces the session whole, a failed one leaves the handler unprepared.
+loads the model of every candidate that has an entry (once per loaded model anira pools: a
+second handler on an equal model configuration resolved to equal tensors shares it, the pool
+rule above), sizes the rings for the block range and the latency, selects the plan of the
+variant's default engine (else plan 0), builds the plan report, prepares every registered
+engine's plan for this handler on its loaded model and, last, calls the stage's init (at the
+first prepare of a handler of the pipeline) and its prepare function when the pipeline has a
+stage with one (a status other than ``ANIRA_OK`` from any of them fails the prepare with it);
+a second prepare replaces the session whole, a failed one leaves the handler unprepared.
 ``anira_handler_num_entries(h)`` then says how many chunks may be in flight at once, the size
 of a stage's per-entry scratch (section 2). ``anira_handler_destroy`` releases the session and, with the last
 handler in this copy of anira, joins the inference thread pool; a handler counts as a user of
@@ -1698,7 +1744,7 @@ engine itself copies is its adapter's, as for every slot:
      - memcpy out of it
      - 2
 
-The two buffers take the spec's dtype: a registered engine binds what its ``prepare`` accepts
+The two buffers take the spec's dtype: a registered engine binds what its ``load`` accepts
 (an ``int32`` pair runs), while every built-in adapter of this pre-release refuses a model
 with a tensor of another dtype than ``float32`` at prepare with ``ANIRA_ERROR_CONFIG`` naming
 the engine and the tensor. A failed inference (an engine failure, a hook that returns a
@@ -1710,9 +1756,10 @@ survives ``anira_handler_set_plan`` between two engines. ``anira_handler_reset``
 side is zeroed on the inference thread at the first inference of the new stream, keyed on the
 chunk's dispatch generation, so an inference still in flight across the reset can never seed
 the new stream with what it wrote (section 5.5). A model with a pair runs as
-``ANIRA_MODEL_STATEFUL`` whatever its ``state`` says: a session-exclusive processor, one
-inference at a time and in submission order, which is what makes the feedback well defined,
-and what lets the two buffers go without a latch (only the inference thread touches them).
+``ANIRA_MODEL_STATEFUL`` whatever its ``state`` says: an exclusive handler, one inference at a
+time and in submission order, on what its own prepare built (section 3.2), which is what
+makes the feedback well defined, and what lets the two buffers go without a latch (only the
+inference thread touches them).
 The contract file's fixed warm-up runs inside the adapter when the model loads and reaches
 neither the state nor the stream.
 
@@ -2124,4 +2171,4 @@ The call is wait-free and real-time safe for all session configurations, includi
     Until in-flight work finishes (bounded by one inference duration), its internal structures stay captive. If fresh data submitted in that window exhausts the remaining structure pool — likely on session-exclusive configurations, whose pools are small — the affected chunks complete as silence at their correct stream positions; the stream stays time-aligned and recovers by itself.
 
 ..  note::
-    What ``anira_handler_reset`` re-initialises, beside the rings and the stream position: **declared state**, the pair of a model whose state is explicit (``ANIRA_ROLE_STATE``, section 1.1), zeroed on the inference thread at the first inference of the new stream, so an inference still in flight across the reset cannot seed the new stream (section 3.4); **the engine's own state** (a recurrent hidden state the model does not declare, a variable tensor), through the engine's ``reset`` slot, for a session-exclusive prepared model (``ANIRA_MODEL_STATEFUL`` or a declared pair), on the inference thread right before the first ``process`` of the new stream (TensorFlow Lite resets its variable tensors there, a registered engine whatever it keeps, :doc:`custom_backends`; a shared prepared model, which several handlers may run, is never reset); and **the stage's own state** (a resampler, an overlap buffer, a filter's history), through the stage's ``reset`` slot, before the first ``pre_process`` of the new stream (section 2). The reset stays wait-free on the caller's side: each of the three is re-initialised at the first chunk of the new stream, keyed on the chunk's generation stamp. What a 2.x :cpp:class:`anira::BackendBase` keeps inside itself is opaque to the 2.x runtime and is not reset, as before: splice or clear it in the :cpp:func:`anira::PrePostProcessor::before_inference` / :cpp:func:`anira::PrePostProcessor::after_inference` hooks.
+    What ``anira_handler_reset`` re-initialises, beside the rings and the stream position: **declared state**, the pair of a model whose state is explicit (``ANIRA_ROLE_STATE``, section 1.1), zeroed on the inference thread at the first inference of the new stream, so an inference still in flight across the reset cannot seed the new stream (section 3.4); **the engine's own state** (a recurrent hidden state the model does not declare, a variable tensor), through the engine's ``reset`` slot, for an exclusive handler (``ANIRA_MODEL_STATEFUL`` or a declared pair), on the inference thread right before the first ``process`` of the new stream, on what that handler's prepare built (TensorFlow Lite resets the variable tensors of the handler's own interpreter there, a registered engine whatever its prepared handle keeps, :doc:`custom_backends`; a handler whose model is stateless runs on the shared call slots of the loaded model, which keep nothing between calls, and is never reset); and **the stage's own state** (a resampler, an overlap buffer, a filter's history), through the stage's ``reset`` slot, before the first ``pre_process`` of the new stream (section 2). The reset stays wait-free on the caller's side: each of the three is re-initialised at the first chunk of the new stream, keyed on the chunk's generation stamp. What a 2.x :cpp:class:`anira::BackendBase` keeps inside itself is opaque to the 2.x runtime and is not reset, as before: splice or clear it in the :cpp:func:`anira::PrePostProcessor::before_inference` / :cpp:func:`anira::PrePostProcessor::after_inference` hooks.

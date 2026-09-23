@@ -234,12 +234,21 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
        :cpp:class:`anira::stage::Custom`; at most one per pipeline, the registration every
        handler of the pipeline shares.
    * - the members of a processor (a scratch sized in its constructor from the config)
-     - The prepared object of one handler: ``prepare(info, user_data, &prepared)`` hands it back
-       (``Stage::prepare(const StagePrepareInfo&)`` returns the :cpp:class:`anira::Stage::Prepared`),
-       sized by the record's ``num_entries`` and templates; every phase of that handler receives
-       it, ``unprepare`` gets it back (anira deletes the ``Prepared``) at the next prepare or the
-       destroy of the handler, and ``reset`` re-initialises what it keeps at the first chunk of
-       a new stream.
+     - The prepared object of one handler: ``prepare(info, user_data, &prepared)`` receives an
+       ``anira_prepare_info`` (``anira/abi/lifecycle.h``, the record an earlier pre-release
+       called ``anira_stage_prepare_info``) and hands it back
+       (``Stage::prepare(const PrepareInfo&)`` returns the
+       :cpp:class:`anira::Stage::Prepared`), sized by the record's ``num_entries`` and
+       templates; every phase of that handler receives it, ``unprepare`` gets it back (anira
+       deletes the ``Prepared``) at the next prepare or the destroy of the handler, and
+       ``reset`` re-initialises what it keeps at the first chunk of a new stream.
+   * - a static of the processor class, shared by every instance of it
+     - ``init(info, user_data)`` / ``Stage::init(const InitInfo&)``: once per
+       ``anira_pipeline_add_stage``, at the first ``anira_handler_prepare`` of a handler of the
+       pipeline, before that handler's prepare, with an ``anira_init_info``
+       (``anira/abi/lifecycle.h``: the log level, the size of the inference thread pool, the
+       handler's context); a refused init fails that prepare and the next one calls init
+       again; ``release`` once, with the last carrier, whether or not init ever ran.
    * - ``pre_process(std::vector<RingBuffer>& input, std::vector<BufferF>& output,
        InferenceBackend backend)``
      - ``pre_process(const anira_stage_ctx* ctx, void* prepared, void* user_data)`` /
@@ -316,42 +325,64 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
        (``cfg.add_model_path(id, path)``), and that entry is a plan the report lists as
        ``ANIRA_ENGINE_NONE`` with the id, selected with ``anira_handler_set_plan``.
    * - ``X(anira::InferenceConfig& config)`` and the members sized from it
-     - The prepared model: ``prepare(info, user_data, &prepared)`` receives an
-       ``anira_engine_prepare_info`` (the entry's row and the variant for the config getters,
+     - Two levels. The loaded model: ``load(info, user_data, &loaded)`` receives an
+       ``anira_engine_load_info`` (the record an earlier pre-release called
+       ``anira_engine_prepare_info``: the entry's row and the variant for the config getters,
        a template of every tensor on the engine's side, the name each slot binds to, the
-       instance count) and hands back what ``process`` runs on
-       (``Engine::prepare(const EnginePrepareInfo&)`` returns the
-       :cpp:class:`anira::Engine::Prepared`); once per prepared model anira pools, per
-       handler for a session-exclusive model.
+       shared call slots) and hands back what every prepare, ``process`` and ``reset`` of
+       that model sees (``Engine::load(const EngineLoadInfo&)`` returns the
+       :cpp:class:`anira::Engine::Loaded`); once per loaded model anira pools, a stateful
+       model included. The prepared handle: ``prepare(info, loaded, user_data, &prepared)``
+       receives the ``anira_prepare_info`` the stage's prepare receives (the handler, its plan
+       report, ``num_entries``, the model-end templates, the names, ``flags``) and the loaded
+       pointer, and hands back what ``process`` runs on for that handler
+       (``Engine::Loaded::prepare(const PrepareInfo&)`` returns the
+       :cpp:class:`anira::Engine::Prepared`); once per handler and loaded model.
    * - ``prepare()`` (load the model, allocate)
-     - The same ``prepare``: load from ``anira_model_config_model_path(info->model,
-       info->row)`` or ``anira_model_config_model_bytes``, which anira never opened; bind the
-       slots by ``input_names`` / ``output_names``; size ``instances`` instances. A status
-       other than ``ANIRA_OK`` fails ``anira_handler_prepare`` naming the engine; a C++
-       ``prepare`` may throw.
+     - ``load``: load from ``anira_model_config_model_path(info->model, info->row)`` or
+       ``anira_model_config_model_bytes``, which anira never opened; bind the slots by
+       ``input_names`` / ``output_names``; size ``instances`` shared call slots (``0`` for a
+       model whose handlers are exclusive). A status other than ``ANIRA_OK`` fails
+       ``anira_handler_prepare`` naming the engine (``refused load``); a C++ ``load`` may
+       throw. Then ``prepare``, per handler: what an exclusive handler keeps per stream
+       (``ANIRA_PREPARE_EXCLUSIVE`` in ``info->flags``), its own executor included; a handler
+       whose model is stateless may hand back ``NULL``.
    * - ``process(std::vector<BufferF>& input, std::vector<BufferF>& output,
        std::shared_ptr<SessionElement> session)``
      - ``process(const anira_engine_ctx* ctx, void* prepared, void* user_data)`` /
        ``Engine::Prepared::process(EngineContext& ctx)``: one ``anira_tensor`` per slot of
        either side in ``ctx->inputs`` / ``ctx->outputs`` (``ctx.inputs()`` / ``ctx.outputs()``),
-       State tensors included, the instance in ``ctx->instance``, no session; every pointer
-       and extent read from this call's descriptors, never from prepare. A status other
-       than ``ANIRA_OK`` fails the chunk (zeros at its stream position, ``ANIRA_ERROR_ENGINE``
-       latched in ``anira_handler_rt_error``) where a 2.x processor cleared its output or
-       threw.
+       State tensors included, the shared slot in ``ctx->instance`` (``0`` under
+       ``ANIRA_ENGINE_CALL_EXCLUSIVE`` in ``ctx->flags``, the call of an exclusive handler,
+       which runs on what its prepare built), the loaded pointer in ``ctx->loaded``, no
+       session; every pointer and extent read from this call's descriptors, never from load
+       or prepare. A status other than ``ANIRA_OK`` fails the chunk (zeros at its stream
+       position, ``ANIRA_ERROR_ENGINE`` latched in ``anira_handler_rt_error``) where a 2.x
+       processor cleared its output or threw.
    * - the instance pool of a processor (``m_instances``, the busy flags, the claim loop)
-     - ``info->instances`` instances of the prepared model, each claimed by anira and named
-       in ``ctx->instance``; never two calls at once on one instance.
+     - ``info->instances`` shared call slots of the loaded model (the model's
+       ``max_instances``), each claimed by anira for a call of a handler whose model is
+       stateless and named in ``ctx->instance``; never two calls at once on one slot. The
+       calls of an exclusive handler claim none and run on what its prepare built.
    * - a hidden state kept inside the backend, cleared by hand
      - ``reset(ctx, prepared, user_data)`` / ``Engine::Prepared::reset(EngineContext&)``: the
-       first inference of a new stream on a session-exclusive prepared model, right before
-       its ``process``; or a declared State pair (:doc:`usage` section 3.4), which anira
+       first inference of a new stream of an exclusive handler, on its prepared handle, right
+       before its ``process``; or a declared State pair (:doc:`usage` section 3.4), which anira
        binds and flips.
+   * - a static of the backend class, shared by every instance of it (a device context, a
+       thread pool)
+     - ``init(info, user_data)`` / ``Engine::init(const InitInfo&)``: once per engine object,
+       at the first ``anira_handler_prepare`` that reaches it, before its first load, with an
+       ``anira_init_info`` (``anira/abi/lifecycle.h``: the log level, the size of the
+       inference thread pool, the handler's context); a refused init fails that prepare and
+       the next one calls init again.
    * - the destructor
-     - ``unprepare(prepared, user_data)`` once per successful prepare, when the last handler
-       sharing the prepared model is re-prepared or destroyed (``Engine::Prepared`` is
-       deleted there); ``release(user_data)`` once, with the last carrier
-       (``Engine::release()``).
+     - ``unprepare(prepared, user_data)`` once per successful prepare, at the handler's next
+       prepare and at its destroy (``Engine::Prepared`` is deleted there);
+       ``unload(loaded, user_data)`` once per successful load, when the last handler holding
+       the loaded model is re-prepared or destroyed, after every unprepare of it
+       (``Engine::Loaded`` is deleted there); ``release(user_data)`` once, with the last
+       reference to the engine object, whether or not init ever ran (``Engine::release()``).
    * - ``InferenceBackend::CUSTOM`` in the plan report and the stage context
      - ``ANIRA_ENGINE_NONE`` with ``engine_id`` (``anira_plan_info``, ``anira_stage_ctx``,
        ``anira_backend_id``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend on

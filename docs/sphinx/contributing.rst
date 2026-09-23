@@ -246,16 +246,25 @@ no attribute, since whether a stage body is real-time is the stage's own promise
 ``nonblocking`` for the same reason: whether an engine's body is real-time is the engine's
 promise, the flag ``ANIRA_ENGINE_FLAG_REALTIME_SAFE``. The two descriptors of the registry
 follow one naming scheme and one shape, which every later descriptor keeps: ``stage`` /
-``engine`` on every level (``anira_stage_desc`` / ``anira_engine_desc``, ``anira_stage_ctx`` /
-``anira_engine_ctx``, ``anira_stage_prepare_info`` / ``anira_engine_prepare_info``, the
-``anira_stage_*_fn`` / ``anira_engine_*_fn`` typedefs, ``anira::Stage`` / ``anira::Engine``
-with ``StageContext`` / ``EngineContext`` and ``StagePrepareInfo`` / ``EnginePrepareInfo``),
-``FLAG`` in every flag define (``ANIRA_STAGE_FLAG_*``, ``ANIRA_ENGINE_FLAG_*``, so that no
-flag reads like a value of an enum), ``Prepared`` for what ``prepare`` hands back (the C
-``prepared`` pointer; the nested classes ``Stage::Prepared`` and ``Engine::Prepared``), and
-one callback shape: ``prepare(info, user_data, &prepared)`` in, every per-chunk callback
-``(ctx, prepared, user_data)``, ``unprepare(prepared, user_data)`` and ``release(user_data)``
-out. The 64-bit rule has a closed allowlist
+``engine`` on every level that belongs to one side (``anira_stage_desc`` /
+``anira_engine_desc``, ``anira_stage_ctx`` / ``anira_engine_ctx``, the ``anira_stage_*_fn`` /
+``anira_engine_*_fn`` typedefs, ``anira::Stage`` / ``anira::Engine`` with ``StageContext`` /
+``EngineContext``), no side on the records of the shared lifecycle (``anira_init_info`` and
+``anira_prepare_info`` of ``anira/abi/lifecycle.h``, what the ``init`` and the ``prepare``
+slot of either descriptor receive; ``anira::InitInfo`` / ``anira::PrepareInfo``), the verb on
+the record of a level one side alone has (``anira_engine_load_info``,
+``anira::EngineLoadInfo``), ``FLAG`` in every flag define (``ANIRA_STAGE_FLAG_*``,
+``ANIRA_ENGINE_FLAG_*``, so that no flag reads like a value of an enum), ``Prepared`` for what
+``prepare`` hands back and ``Loaded`` for what ``load`` hands back (the C ``prepared`` and
+``loaded`` pointers; the nested classes ``Stage::Prepared``, ``Engine::Loaded`` and
+``Engine::Prepared``), and one callback shape, from the outermost level in:
+``init(info, user_data)`` and ``release(user_data)`` once per carrier;
+``load(info, user_data, &loaded)`` and ``unload(loaded, user_data)`` once per loaded model,
+the engine's level alone; ``prepare(info, user_data, &prepared)`` for the stage,
+``prepare(info, loaded, user_data, &prepared)`` for the engine and
+``unprepare(prepared, user_data)`` once per handler; every per-chunk callback
+``(ctx, prepared, user_data)``, the four phases and ``reset`` of the stage, ``process`` and
+``reset`` of the engine. The 64-bit rule has a closed allowlist
 of six names: ``anira_now_ns`` and the factories ``anira_tensor_init_vulkan``,
 ``anira_tensor_init_opaque_fd``, ``anira_tensor_init_wgpu_buffer``,
 ``anira_tensor_init_dmabuf`` and ``anira_tensor_init_iosurface``, whose parameters are vendor
