@@ -239,11 +239,17 @@ private:
     void fail(const char* who, uint32_t phase, anira_status status) noexcept ANIRA_NONBLOCKING;
     /// The declared state around the engine call, on the inference thread (the class comment).
     /// bind_state is the one bind step: the chunk's descriptor of every State input over the
-    /// read buffer of its port's StateSlot, in the spec's dtype and shape, and the descriptor
-    /// of every State output over the write buffer of the input it feeds; a field fill.
-    /// promote_state flips every pair: what an inference produced is what the next one reads.
+    /// read buffer of its port's StateSlot, in the spec's dtype, shape and domain, and the
+    /// descriptor of every State output over the write buffer of the input it feeds, or over
+    /// the same read buffer when the chunk's plan keeps its own aliasing
+    /// (PlanSlot::m_state_alias); a field fill. promote_state flips every pair, what an
+    /// inference produced being what the next one reads, unless the chunk's plan aliases, where
+    /// the one buffer already holds the produced state.
     void bind_state(Chunk& chunk) noexcept ANIRA_NONBLOCKING;
-    void promote_state() noexcept ANIRA_NONBLOCKING;
+    void promote_state(const Chunk& chunk) noexcept ANIRA_NONBLOCKING;
+    /// Whether the chunk's plan keeps its own aliasing of the State pairs (the session's
+    /// table; a stamp is always in range).
+    bool aliases_state(const Chunk& chunk) const noexcept ANIRA_NONBLOCKING;
     /// The count check around the two ring-moving phases, over the stream ports of one side:
     /// snapshot() reads available() of every channel ahead of the phase; the check behind it
     /// repairs a shortfall (an input ring discards to its hop, an output ring is topped up with

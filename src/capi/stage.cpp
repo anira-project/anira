@@ -867,9 +867,17 @@ void StageProcessor::post_process(std::vector<anira::BufferF>& input,
     }
 }
 
+bool StageProcessor::aliases_state(const Chunk& chunk) const noexcept ANIRA_NONBLOCKING {
+    const std::vector<anira::SessionElement::PlanSlot>& plans = m_session->m_plans;
+    return chunk.m_plan < plans.size() && plans[chunk.m_plan].m_state_alias;
+}
+
 void StageProcessor::bind_state(Chunk& chunk) noexcept ANIRA_NONBLOCKING {
+    // A plan whose engine keeps its own aliasing sees one buffer as both halves.
+    const bool alias = aliases_state(chunk);
     // The input half of every pair: the chunk's descriptor of the State input over the read
-    // buffer, in the spec's dtype and shape (the buffer is packed row-major: all-zero strides).
+    // buffer, in the spec's dtype and shape (the buffer is packed row-major: all-zero strides)
+    // and the pair's domain.
     for (size_t slot = 0; slot < chunk.m_input_tensors.size() && slot < m_input_ports.size();
          ++slot) {
         auto* state = std::get_if<StatePort>(&m_input_ports[slot]);
@@ -888,9 +896,10 @@ void StageProcessor::bind_state(Chunk& chunk) noexcept ANIRA_NONBLOCKING {
                                value.dtype(),
                                static_cast<uint32_t>(value.shape().size()),
                                value.shape().data());
+        chunk.m_input_tensors[slot].domain = static_cast<uint32_t>(value.domain());
     }
     // The output half: the descriptor of the State output over the write buffer of the input
-    // it feeds (the port's partner names it).
+    // it feeds (the port's partner names it), or over its read buffer under aliasing.
     for (size_t slot = 0; slot < chunk.m_output_tensors.size() && slot < m_output_ports.size();
          ++slot) {
         const auto* state = std::get_if<StatePort>(&m_output_ports[slot]);
@@ -901,14 +910,18 @@ void StageProcessor::bind_state(Chunk& chunk) noexcept ANIRA_NONBLOCKING {
         if (input == nullptr || !input->m_value.has_value()) { continue; }
         StateSlot& value = *input->m_value;
         anira_tensor_init_host(&chunk.m_output_tensors[slot],
-                               value.write(),
+                               alias ? value.read() : value.write(),
                                value.dtype(),
                                static_cast<uint32_t>(value.shape().size()),
                                value.shape().data());
+        chunk.m_output_tensors[slot].domain = static_cast<uint32_t>(value.domain());
     }
 }
 
-void StageProcessor::promote_state() noexcept ANIRA_NONBLOCKING {
+void StageProcessor::promote_state(const Chunk& chunk) noexcept ANIRA_NONBLOCKING {
+    // Under aliasing the engine updated the read buffer in place: it already holds the
+    // produced state, and a flip would hand the next inference the stale other buffer.
+    if (aliases_state(chunk)) { return; }
     for (Port& port : m_input_ports) {
         auto* state = std::get_if<StatePort>(&port);
         if (state == nullptr || !state->m_value.has_value()) { continue; }
@@ -953,7 +966,7 @@ void StageProcessor::after_inference(
     // chunk delivers zeros; a failed before_inference and a failed engine never come here) and
     // not for a chunk that completed as zeros: the read buffer keeps the last good state.
     if (chunk.m_stage_status != ANIRA_OK || chunk.m_completed_as_zeros) { return; }
-    promote_state();
+    promote_state(chunk);
 }
 
 }  // namespace anira::capi

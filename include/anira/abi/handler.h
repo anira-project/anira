@@ -65,10 +65,11 @@
  * input, post_process for an output), since nothing in anira converts. Every tensor of either
  * side has one declared host-end domain (anira_contract_set_host_domain, default
  * ANIRA_DOMAIN_HOST): the domain anira allocates the ring, the model tensor, the Static store
- * and the state buffers of the slot in, and the domain all four stage phases work in; the plan
- * report's slot rows carry it as domain_in of an input and domain_out of an output, against the
- * engine's domain on the other side. Anything but ANIRA_DOMAIN_HOST is
- * ANIRA_ERROR_NOT_SUPPORTED at prepare in this pre-release.
+ * and, overriding the engine domain of the plans that run the pair (host memory for every
+ * engine of this pre-release), the state buffers of the slot in, and the domain all four stage
+ * phases work in; the plan report's slot rows carry it as domain_in of an input and domain_out
+ * of an output, against the engine's domain on the other side. Anything but ANIRA_DOMAIN_HOST
+ * is ANIRA_ERROR_NOT_SUPPORTED at prepare in this pre-release.
  */
 
 #include <stddef.h>
@@ -631,10 +632,13 @@ ANIRA_API anira_status ANIRA_CALL anira_plan_report_exts(const anira_plan_report
  * and two plans on one engine (two variants, two providers) stay distinct. A chunk keeps
  * the plan it was submitted under from its pre-processing to its post-processing: one
  * that is queued or in flight when the call lands finishes on the old plan, and exactly
- * one engine runs for it. An index out of range is a no-op recorded as
- * ANIRA_ERROR_CONFIG in anira_handler_rt_error; a call on an unprepared handler is a
- * no-op recorded as ANIRA_ERROR_NOT_PREPARED. Not while anira_handler_prepare runs
- * (prepare is the quiescence point).
+ * one engine runs for it. A plan switch keeps the model's state: every plan of the one
+ * variant runs the same declared State pairs, and the next chunk's inference reads the
+ * state the last one produced, whichever plan produced it and whether or not that plan's
+ * engine keeps its own aliasing (ANIRA_ENGINE_FLAG_STATE_ALIAS). An index out of range
+ * is a no-op recorded as ANIRA_ERROR_CONFIG in anira_handler_rt_error; a call on an
+ * unprepared handler is a no-op recorded as ANIRA_ERROR_NOT_PREPARED. Not while
+ * anira_handler_prepare runs (prepare is the quiescence point).
  * @param handler The handler.
  * @param plan A dense plan index the report handed out.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler; ANIRA_ERROR_NOT_PREPARED

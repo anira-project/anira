@@ -647,6 +647,8 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
             slot.m_engine_id = request.m_model.m_engine_id;
             slot.m_legacy_backend = request.m_legacy_backend;
             slot.m_missing_model = request.m_missing_model;
+            slot.m_state_alias = (slot.m_loaded->flags() &
+                                  static_cast<uint32_t>(ANIRA_ENGINE_FLAG_STATE_ALIAS)) != 0;
             session->m_plans.push_back(std::move(slot));
             has_custom_backend = has_custom_backend || request.m_source == backend::Source::Legacy;
         }

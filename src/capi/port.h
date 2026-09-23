@@ -330,8 +330,13 @@ struct StaticPort {
 /// written per inference. The stage processor binds the model's State input to read() and the
 /// model's State output of the pair to write() ahead of the inference and flips the two behind
 /// a successful one, so the produced state is the next inference's input without a copy of
-/// anira's; a failed inference leaves the read buffer the last good state. Nothing here
-/// allocates after construction. Non-copyable and non-movable: the ports name its memory.
+/// anira's; a failed inference leaves the read buffer the last good state. Under a plan whose
+/// engine keeps its own aliasing (ANIRA_ENGINE_FLAG_STATE_ALIAS) both halves are bound to
+/// read() and nothing flips: the engine updates the state in place, every address stays put
+/// across calls (what a captured graph needs), and the one buffer is the state a plan without
+/// the flag reads next (a plan switch keeps the state either way). The pair is the model's:
+/// every plan of the one variant runs the same pair, in the pair's domain (domain()). Nothing
+/// here allocates after construction. Non-copyable and non-movable: the ports name its memory.
 class StateSlot {
 public:
     /// `shape` is the spec's (every extent above 0, at most ANIRA_MAX_RANK of them), `dtype`
@@ -371,6 +376,14 @@ public:
     size_t num_elements() const noexcept { return m_num_elements; }
     size_t num_bytes() const noexcept { return m_num_bytes; }
 
+    /// The domain the two buffers live in, which the bound descriptors report: the engine
+    /// domain of the plans that run the pair, the declared host-end domain of the slot
+    /// (anira_contract_set_host_domain) overriding it; host memory for every engine of this
+    /// pre-release, so the buffers above are the pair wherever it runs. Set at prepare, while
+    /// no chunk exists; read on the inference thread.
+    anira_domain domain() const noexcept { return m_domain; }
+    void set_domain(anira_domain domain) noexcept { m_domain = domain; }
+
     /// The buffer the next inference reads its State input from: the last promoted state.
     void* read() noexcept { return m_buffers[m_read]; }
     /// The same for a reader at quiescence (a white-box check; no latch guards it).
@@ -402,6 +415,7 @@ private:
     std::vector<unsigned char> m_storage;  ///< both buffers plus one alignment block
     std::array<unsigned char*, 2> m_buffers{};
     size_t m_read = 0;  ///< which of the two is read; the other is written
+    anira_domain m_domain = ANIRA_DOMAIN_HOST;
 };
 
 /// One half of a declared state pair. The INPUT half holds the state: a StateSlot in the

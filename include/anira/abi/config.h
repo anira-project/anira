@@ -663,20 +663,22 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* c
 
 /**
  * @brief The host-end domain of one tensor, common to both contract kinds like
- * anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor,
- * the Static store and the state buffers of the slot in, and the domain all four phases
- * of a stage, the feed and the capture work in; the planner joins it to the engine's
- * domain per slot with the edge of the registry's rows (anira_plan_slot.domain_in /
- * domain_out / edge_class / recipe). A tensor declared in the engine's own domain has no
- * edge to cross. The ring, the model tensor and the tensors the context accessors fill
- * share the declared domain, readable from the domain field of any tensor an accessor
- * fills or from the plan row. Set per tensor by canonical name, resolved at
- * anira_handler_prepare: a name that matches no tensor is ANIRA_ERROR_CONFIG there, and
- * in this pre-release any domain but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED
- * there, naming the tensor (the declaration is data; the runtime allocates in host
- * memory only). In a contract file the key is a top-level "host_domains": {"<name>":
- * "<domain word>"}, the words the lower-case suffixes of anira_domain ("host",
- * "host_pinned", "cuda", ...).
+ * anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor
+ * and the Static store of the slot in, and the domain all four phases of a stage, the
+ * feed and the capture work in; for a State input it overrides the domain of the pair's
+ * two buffers, which is the engine domain of the plans that run the pair otherwise (host
+ * memory for every engine of this pre-release), the domain the bound State descriptors
+ * report; the planner joins it to the engine's domain per slot with the edge of the
+ * registry's rows (anira_plan_slot.domain_in / domain_out / edge_class / recipe). A
+ * tensor declared in the engine's own domain has no edge to cross. The ring, the model
+ * tensor and the tensors the context accessors fill share the declared domain, readable
+ * from the domain field of any tensor an accessor fills or from the plan row. Set per
+ * tensor by canonical name, resolved at anira_handler_prepare: a name that matches no
+ * tensor is ANIRA_ERROR_CONFIG there, and in this pre-release any domain but
+ * ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED there, naming the tensor (the
+ * declaration is data; the runtime allocates in host memory only). In a contract file
+ * the key is a top-level "host_domains": {"<name>": "<domain word>"}, the words the
+ * lower-case suffixes of anira_domain ("host", "host_pinned", "cuda", ...).
  * @param contract Either contract kind.
  * @param canonical The tensor's canonical name (the one its spec was created with): any tensor
  *        of either side, Streamed, Buffer, Static and State alike.

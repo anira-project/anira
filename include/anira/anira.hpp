@@ -2450,8 +2450,10 @@ private:
  * returns, and never kept beyond it. The adapter rule of anira/abi/engine.h binds here: read
  * every extent and every memory handle from the tensors of THIS call, never from a value kept
  * at prepare, and never assume a tensor is anira's own buffer (the halves of a declared State
- * pair alternate between two buffers; a later pre-release hands a caller's Buffer tensor over
- * in place).
+ * pair alternate between two buffers, unless the engine's flags() carry
+ * ANIRA_ENGINE_FLAG_STATE_ALIAS, where one stable buffer is both halves of every call and the
+ * engine updates it in place; a later pre-release hands a caller's Buffer tensor over in
+ * place).
  *
  * [inference-thread]: every method is noexcept, allocates nothing and reads one field of the
  * record.

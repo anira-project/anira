@@ -333,6 +333,10 @@ public:
         /// A 2.x row for a backend of the build without a model: the roundtrip runs for the
         /// plan, and the inference thread logs RtSite::NoModelForBackend once per prepare.
         bool m_missing_model = false;
+        /// The plan's engine keeps its own aliasing of a declared State pair
+        /// (ANIRA_ENGINE_FLAG_STATE_ALIAS in its flags): the stage processor binds one stable
+        /// buffer as both halves of every pair for a chunk of this plan and never flips it.
+        bool m_state_alias = false;
     };
 
     /**

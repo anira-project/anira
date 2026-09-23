@@ -743,11 +743,15 @@ typedef enum anira_stage_phase {
 /**
  * @brief anira_engine_desc.flags bit: the engine keeps its own aliasing of a declared State
  * pair. anira then binds one stable buffer per pair as both the State input and the
- * State output of every call and never flips the two: the engine reads the state before
- * it writes it (in place) or copies for itself, and every address stays put across
- * calls, which a captured graph (CUDA graphs, WebGPU replay) needs. Without the bit the
- * two buffers alternate behind every successful inference (anira/abi/handler.h).
- * Reported in anira_plan_info.engine_flags; no built-in engine sets it.
+ * State output of every call of a plan of the engine and never flips the two: the engine
+ * reads the state before it writes it (in place) or copies for itself, and every address
+ * stays put across calls, which a captured graph (CUDA graphs, WebGPU replay) needs.
+ * Without the bit the two buffers alternate behind every successful inference
+ * (anira/abi/handler.h). The pair is the model's, shared by every plan of the variant: a
+ * plan switch between an aliasing engine and one without the bit keeps the state (the
+ * one buffer an aliasing plan updates is the buffer a flipping plan reads next). The
+ * generation rule is the same under both: the first inference of a new stream reads
+ * zeros. Reported in anira_plan_info.engine_flags; no built-in engine sets it.
  */
 #define ANIRA_ENGINE_FLAG_STATE_ALIAS 8u
 

@@ -1478,8 +1478,18 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         static_cast<double>(hard.m_block_max) / hard.m_rate * 1e6 * hard.m_wait_ratio));
 
     // The declared host-end domain per slot (validate refused a name that is no tensor's and,
-    // in this pre-release, any domain but host memory): what the slot rows report.
+    // in this pre-release, any domain but host memory): what the slot rows report, and the
+    // domain of every declared State pair (the pair is the model's, in the engine domain of the
+    // plans that run it, host memory for every engine of this pre-release; the declared domain
+    // of the slot overrides it), set while no chunk exists.
     const anira::capi::HostDomains host_domains = anira::capi::make_host_domains(snapshot, model);
+    for (size_t slot = 0;
+         slot < handler.m_input_ports.size() && slot < host_domains.m_inputs.size();
+         ++slot) {
+        auto* state = std::get_if<anira::capi::StatePort>(&handler.m_input_ports[slot]);
+        if (state == nullptr || !state->m_value.has_value()) { continue; }
+        state->m_value->set_domain(host_domains.m_inputs[slot]);
+    }
     build_report(handler,
                  model,
                  snapshot,

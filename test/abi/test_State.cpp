@@ -1938,9 +1938,10 @@ void ANIRA_CALL accumulator_release(void* user_data) {
     ++static_cast<AccumulatorEngine*>(user_data)->m_released;
 }
 
-anira_engine_desc accumulator_desc(AccumulatorEngine& engine) {
+anira_engine_desc accumulator_desc(AccumulatorEngine& engine, uint32_t flags = 0) {
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
     desc.user_data = &engine;
+    desc.flags = flags;
     desc.process = accumulator_process;
     desc.prepare = accumulator_prepare;
     desc.unprepare = accumulator_unprepare;
@@ -1954,10 +1955,12 @@ anira_engine_desc accumulator_desc(AccumulatorEngine& engine) {
 constexpr const char* k_accumulator_id = "org.example.accumulator";
 constexpr const char* k_other_accumulator_id = "org.example.accumulator.other";
 
-/// One registration for the rig: the id and the engine behind it.
+/// One registration for the rig: the id, the engine behind it and the flags its descriptor
+/// carries (ANIRA_ENGINE_FLAG_STATE_ALIAS for an engine that aliases the pair).
 struct Registration {
     const char* m_id;
     AccumulatorEngine* m_engine;
+    uint32_t m_flags = 0;
 };
 
 /// A handler over a model whose rows name registered accumulator engines (registered on the
@@ -1972,7 +1975,8 @@ public:
         : m_context(4), m_block_max(block_max) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
         for (const Registration& registration : registrations) {
-            const anira_engine_desc desc = accumulator_desc(*registration.m_engine);
+            const anira_engine_desc desc =
+                accumulator_desc(*registration.m_engine, registration.m_flags);
             anira_custom_engine* engine = nullptr;
             EXPECT_EQ(anira_custom_engine_create(&desc, &engine, &m_err), ANIRA_OK)
                 << m_err.message;
@@ -2055,6 +2059,8 @@ struct PointerLog {
     static constexpr size_t k_capacity = 64;
     std::array<std::atomic<const void*>, k_capacity> m_in{};
     std::array<std::atomic<const void*>, k_capacity> m_out{};
+    std::array<std::atomic<uint32_t>, k_capacity> m_domain_in{};   ///< the descriptor's domain
+    std::array<std::atomic<uint32_t>, k_capacity> m_domain_out{};  ///< the descriptor's domain
     std::atomic<size_t> m_num_in{0};
     std::atomic<size_t> m_num_out{0};
     std::atomic<uint32_t> m_refused{0};  ///< accessor calls that did not answer ANIRA_OK
@@ -2076,7 +2082,10 @@ anira_status ANIRA_CALL log_state_in(const anira_stage_ctx* ctx,
         return ANIRA_OK;
     }
     const size_t index = log->m_num_in.fetch_add(1);
-    if (index < PointerLog::k_capacity) { log->m_in.at(index).store(memory_of(tensor)); }
+    if (index < PointerLog::k_capacity) {
+        log->m_in.at(index).store(memory_of(tensor));
+        log->m_domain_in.at(index).store(tensor.domain);
+    }
     return ANIRA_OK;
 }
 
@@ -2090,7 +2099,10 @@ anira_status ANIRA_CALL log_state_out(const anira_stage_ctx* ctx,
         return ANIRA_OK;
     }
     const size_t index = log->m_num_out.fetch_add(1);
-    if (index < PointerLog::k_capacity) { log->m_out.at(index).store(memory_of(tensor)); }
+    if (index < PointerLog::k_capacity) {
+        log->m_out.at(index).store(memory_of(tensor));
+        log->m_domain_out.at(index).store(tensor.domain);
+    }
     return ANIRA_OK;
 }
 
@@ -2158,6 +2170,124 @@ TEST(AbiState, TheStateAlternatesBetweenTwoBuffers) {
     ASSERT_NE(value, nullptr);
     EXPECT_EQ(value->read(), log.m_out.at(7).load());
     EXPECT_EQ(state_values(rig.get(), 0).at(1), 8.0F);
+}
+
+/// The pointer identity under ANIRA_ENGINE_FLAG_STATE_ALIAS over `inferences` logged
+/// inferences: both halves name one address, the same one every time, on a 64-byte boundary.
+void expect_one_stable_buffer(const PointerLog& log, size_t inferences) {
+    ASSERT_LE(inferences, PointerLog::k_capacity);
+    ASSERT_EQ(log.m_num_in.load(), inferences);
+    ASSERT_EQ(log.m_num_out.load(), inferences);
+    EXPECT_EQ(log.m_refused.load(), 0U);
+    const void* first = log.m_in.at(0).load();
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(first) % 64, 0U) << "unaligned";
+    for (size_t k = 0; k < inferences; ++k) {
+        EXPECT_EQ(log.m_in.at(k).load(), first) << "inference " << k << " reads another buffer";
+        EXPECT_EQ(log.m_out.at(k).load(), first) << "inference " << k << " writes another buffer";
+    }
+}
+
+// An engine that keeps its own aliasing (ANIRA_ENGINE_FLAG_STATE_ALIAS) sees one stable buffer
+// as both halves of the pair on every call, the same address across the stream, and nothing
+// flips: the accumulator reads its carry before it writes, so the closed form holds in place;
+// the read buffer of the port is that one buffer; the bound descriptors carry the pair's domain
+// (host memory); a reset zeroes it, so the stream starts over as it does without the flag.
+TEST(AbiState, AnAliasingEngineSeesOneStableBufferAsBothHalves) {
+    AccumulatorEngine engine;
+    PointerLog log;
+    const std::array<Registration, 1> registrations{{{.m_id = k_accumulator_id,
+                                                      .m_engine = &engine,
+                                                      .m_flags = ANIRA_ENGINE_FLAG_STATE_ALIAS}}};
+    RegisteredRig rig(accumulator_model(k_accumulator_id), registrations, {logging_stage(log)});
+    ASSERT_TRUE(rig.ready());
+    anira_handler* h = rig.get();
+    const std::vector<anira_plan_info> plans = [h] {
+        const anira_plan_report* report = anira_handler_plan_report(h);
+        uint32_t count = 0;
+        EXPECT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), &count, nullptr),
+                  ANIRA_OK);
+        std::vector<anira_plan_info> rows(count, ANIRA_PLAN_INFO_INIT);
+        EXPECT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), &count, rows.data()),
+                  ANIRA_OK);
+        return rows;
+    }();
+    ASSERT_EQ(plans.size(), 1U);
+    EXPECT_EQ(plans[0].engine_flags, static_cast<uint32_t>(ANIRA_ENGINE_FLAG_STATE_ALIAS));
+    const size_t latency = anira_handler_get_latency(h, RegisteredRig::processed_slot());
+    size_t position = 0;
+    Streams streams;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(8), position, streams));
+    expect_closed_form(streams, latency);
+    EXPECT_EQ(engine.m_calls.load(), 8);
+    ASSERT_NO_FATAL_FAILURE(expect_one_stable_buffer(log, 8));
+    for (size_t k = 0; k < 8; ++k) {
+        EXPECT_EQ(log.m_domain_in.at(k).load(), static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+        EXPECT_EQ(log.m_domain_out.at(k).load(), static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+        // Before the engine writes, both halves hold the same memory: the carried state.
+        EXPECT_EQ(engine.m_read_first.at(k).load(), engine.m_write_first.at(k).load())
+            << "inference " << k;
+    }
+    const auto* port = std::get_if<anira::capi::StatePort>(&h->m_input_ports[0]);
+    ASSERT_NE(port, nullptr);
+    const anira::capi::StateSlot* value = port->m_value.has_value() ? &*port->m_value : nullptr;
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(value->read(), log.m_in.at(0).load()) << "the one buffer is the state";
+    EXPECT_EQ(value->domain(), ANIRA_DOMAIN_HOST);
+    EXPECT_EQ(state_values(h, 0).at(1), 8.0F) << "the counter counts every inference";
+
+    anira_handler_reset(h);
+    position = 0;
+    Streams again;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(8), position, again));
+    EXPECT_EQ(again.m_out, streams.m_out) << "the reset started the state over at zeros";
+    EXPECT_EQ(state_values(h, 0).at(1), 8.0F);
+}
+
+// The pair is the model's: a plan switch between an aliasing engine and a flipping one keeps
+// the state, since the one buffer the aliasing plan updates in place is the read buffer the
+// flipping plan reads next, and the flipping plan's promotion leaves its produced state where
+// the aliasing plan reads it; the closed form holds across the three legs, and the counter
+// counts every inference of both engines.
+TEST(AbiState, APlanSwitchBetweenAnAliasingAndAFlippingEngineKeepsTheState) {
+    AccumulatorEngine flipping;
+    AccumulatorEngine aliasing;
+    const std::array<Registration, 2> registrations{
+        {{.m_id = k_accumulator_id, .m_engine = &flipping, .m_flags = 0},
+         {.m_id = k_other_accumulator_id,
+          .m_engine = &aliasing,
+          .m_flags = ANIRA_ENGINE_FLAG_STATE_ALIAS}}};
+    ModelConfig model = accumulator_model(k_accumulator_id);
+    model.add_model_path(k_other_accumulator_id, "custom-processor");
+    PointerLog log;
+    RegisteredRig rig(model, registrations, {logging_stage(log)});
+    ASSERT_TRUE(rig.ready());
+    anira_handler* h = rig.get();
+    EXPECT_EQ(anira_plan_report_num_plans(anira_handler_plan_report(h)), 2U);
+    const size_t latency = anira_handler_get_latency(h, RegisteredRig::processed_slot());
+    size_t position = 0;
+    Streams streams;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(4), position, streams));
+    ASSERT_EQ(anira_handler_set_plan(h, 1), ANIRA_OK);
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(4), position, streams));
+    ASSERT_EQ(anira_handler_set_plan(h, 0), ANIRA_OK);
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(4), position, streams));
+    expect_closed_form(streams, latency);
+    EXPECT_EQ(flipping.m_calls.load(), 8);
+    EXPECT_EQ(aliasing.m_calls.load(), 4);
+    EXPECT_EQ(state_values(h, 0).at(1), 12.0F) << "the counter counts both engines' inferences";
+    // The aliasing leg (inferences 4..7) names one address for both halves, the address the
+    // flipping leg before it produced (its last write) and the flipping leg after it reads.
+    ASSERT_EQ(log.m_num_in.load(), 12U);
+    ASSERT_EQ(log.m_num_out.load(), 12U);
+    const void* stable = log.m_in.at(4).load();
+    EXPECT_EQ(stable, log.m_out.at(3).load()) << "the aliasing plan reads what the flip produced";
+    for (size_t k = 4; k < 8; ++k) {
+        EXPECT_EQ(log.m_in.at(k).load(), stable) << "inference " << k;
+        EXPECT_EQ(log.m_out.at(k).load(), stable) << "inference " << k;
+    }
+    EXPECT_EQ(log.m_in.at(8).load(), stable) << "the flipping plan reads the aliased buffer next";
+    EXPECT_NE(log.m_out.at(8).load(), stable) << "and writes the other one again";
 }
 
 // A failed inference does not promote: the pair keeps its read buffer, so the next inference
