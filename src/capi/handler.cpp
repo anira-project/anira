@@ -1262,13 +1262,14 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
 
     // Quiescence: the previous session is released before the new one is built.
     unprepare(handler);
-    // Declared state: the port survives the re-prepare, its value does not. Every State value
-    // starts the new session at zeros and forgets the generation it was last fed under (no
-    // chunk of the old session can touch it any more; the Static values stay).
+    // Declared state: the port survives the re-prepare, its value does not. Both buffers of
+    // every pair start the new session at zeros, and the port forgets the generation it was
+    // last bound under (no chunk of the old session can touch it any more; the Static values
+    // stay).
     for (anira::capi::Port& port : handler.m_input_ports) {
         auto* state = std::get_if<anira::capi::StatePort>(&port);
         if (state == nullptr || !state->m_value.has_value()) { continue; }
-        state->m_value->zero();
+        state->m_value->zero_both();
         state->m_generation = anira::capi::StatePort::k_no_generation;
     }
 
@@ -1765,9 +1766,10 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
     // specs, so the vectors are never resized and no arm ever changes). A static port holds
     // its zeroed value in the spec's shape and dtype, built in place (an atomic does not
     // move): from here on the two Static entries work, prepared or not. A stream port gets
-    // its fields at prepare. A State input holds the state the same way, the value the stage
-    // processor feeds and captures on the inference thread, and a State output names the
-    // input it feeds; no entry of the handler carries either. A Buffer tensor is a per-job
+    // its fields at prepare. A State input holds the state's two buffers, which the stage
+    // processor binds the pair's model tensors to and flips on the inference thread, and a
+    // State output names the input it feeds; no entry of the handler carries either. A Buffer
+    // tensor is a per-job
     // payload of the Async contract, and prepare refuses it under a Hard one
     // (check_buffer_specs), so its port holds nothing.
     const anira_model_config& model = handler->m_pipeline.m_variants[0];

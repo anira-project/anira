@@ -1598,26 +1598,73 @@ engine:
       ]
     }
 
-**What anira does.** The handler owns the state: one value per pair, on the port of the State
-input, in the spec's shape and dtype, the same kind of store a Static tensor has (section
-3.2), zeroed at ``anira_handler_create`` and at every ``anira_handler_prepare``. On the
-inference thread the value is copied into the model input as the first step of every
-inference, ahead of the stage's ``before_inference``, and the model output is copied into the
-value of the input it feeds as the last step, behind the stage's ``after_inference``; both are
-anira's own steps, without an allocation, wait-free and never torn (the Static store's latch),
-and ``ANIRA_PHASE_INFERENCE`` stays the engine call alone. A failed inference (an engine
-failure, a hook that returns a failure) skips the capture, so the state keeps its last good
-value; a dropped chunk never runs and does not advance it; a missed block does not affect it,
-since its inference still runs and only its delivery is late. The state is the handler's, not
-a session's or a processor's, so it survives ``anira_handler_set_plan`` between two engines.
-``anira_handler_reset`` and ``anira_handler_prepare`` re-initialise it to zeros; the reset
-stays wait-free, since the value is zeroed on the inference thread at the first inference of
-the new stream, keyed on the chunk's dispatch generation, so an inference still in flight
-across the reset can never seed the new stream with its capture (section 5.5). A model with a
-pair runs as ``ANIRA_MODEL_STATEFUL`` whatever its ``state`` says: a session-exclusive
-processor, one inference at a time and in submission order, which is what makes the feedback
-well defined. The contract file's fixed warm-up runs inside the processor when it loads and
-reaches neither the state nor the stream.
+**What anira does.** The handler owns the state: two buffers per pair, on the port of the
+State input, each in the spec's shape and dtype and starting on a 64-byte boundary, both
+zeroed at ``anira_handler_create`` and at every ``anira_handler_prepare``. anira copies
+nothing: on the inference thread, as the first step of every inference and ahead of the
+stage's ``before_inference``, the model's State input is bound to one buffer (the read side,
+the state the last inference produced) and the model's State output of the pair to the other
+(the write side); the engine reads and writes the two through its tensors like any other
+slot; and as the last step, behind the stage's ``after_inference``, the pair flips, so what
+this inference wrote is what the next one reads. Both steps are field fills, without an
+allocation or a lock, and ``ANIRA_PHASE_INFERENCE`` stays the engine call alone. Whether the
+engine itself copies is its adapter's, as for every slot:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 30 30 18
+
+   * - Engine
+     - State input
+     - State output
+     - Copies per pair
+   * - ONNX Runtime
+     - bound in place (an ``Ort::Value`` over the read buffer)
+     - bound in place (a pre-created ``Ort::Value`` over the write buffer)
+     - 0
+   * - LibTorch
+     - bound in place (a ``torch::from_blob`` view)
+     - the engine's result copied into the write buffer
+     - 1
+   * - ExecuTorch
+     - copied into the runtime's staging tensor
+     - copied out of the memory-planned result
+     - 2
+   * - TFLite
+     - ``TfLiteTensorCopyFromBuffer``
+     - ``TfLiteTensorCopyToBuffer``
+     - 2 (in place once the queue's storage carries the engine's alignment, a later
+       pre-release)
+   * - LiteRT
+     - lock and memcpy into the managed buffer
+     - lock and memcpy out of it
+     - 2 (likewise)
+   * - a registered engine
+     - its own
+     - its own
+     - its own
+   * - the 2.x ``BackendBase`` behind ``anira.v2.custom``
+     - memcpy into the 2.x buffer
+     - memcpy out of it
+     - 2
+
+The two buffers take the spec's dtype: a registered engine binds what its ``prepare`` accepts
+(an ``int32`` pair runs), while every built-in adapter of this pre-release refuses a model
+with a tensor of another dtype than ``float32`` at prepare with ``ANIRA_ERROR_CONFIG`` naming
+the engine and the tensor. A failed inference (an engine failure, a hook that returns a
+failure) does not flip, so the read side keeps the last good state; a dropped chunk never runs
+and does not advance it; a missed block does not affect it, since its inference still runs and
+only its delivery is late. The state is the handler's, not a session's or a processor's, so it
+survives ``anira_handler_set_plan`` between two engines. ``anira_handler_reset`` and
+``anira_handler_prepare`` re-initialise it to zeros; the reset stays wait-free, since the read
+side is zeroed on the inference thread at the first inference of the new stream, keyed on the
+chunk's dispatch generation, so an inference still in flight across the reset can never seed
+the new stream with what it wrote (section 5.5). A model with a pair runs as
+``ANIRA_MODEL_STATEFUL`` whatever its ``state`` says: a session-exclusive processor, one
+inference at a time and in submission order, which is what makes the feedback well defined,
+and what lets the two buffers go without a latch (only the inference thread touches them).
+The contract file's fixed warm-up runs inside the adapter when the model loads and reaches
+neither the state nor the stream.
 
 **What the host sees.** A State spec may stand anywhere in its list, so the two lists follow
 the model file's own tensor order (the accumulator's state is first in, last out), and it has
@@ -1632,9 +1679,10 @@ state is not host-readable in this pre-release (a tensor is either state or an o
 output), and its initial value is zeros.
 
 **What a stage sees** (section 2): the two hooks see the state at its slot,
-``anira_stage_input_tensor`` in ``before_inference`` being the fed state (what the engine will
-get) and ``anira_stage_output_tensor`` in ``after_inference`` the produced one (what the next
-inference will be fed), and a stage may read or alter either; in ``pre_process`` and
+``anira_stage_input_tensor`` in ``before_inference`` being the read side (what the engine will
+get) and ``anira_stage_output_tensor`` in ``after_inference`` the write side (what the next
+inference will read), the two descriptors naming the pair's two buffers in turn from one
+inference to the next, and a stage may read or alter either; in ``pre_process`` and
 ``post_process`` a State slot answers ``ANIRA_ERROR_INVALID_STATE``.
 
 **Validation**, at ``anira_handler_create`` and again at ``anira_handler_prepare``,
@@ -1644,10 +1692,12 @@ on an output spec or on a spec of another role (``anira_tensor_spec_set_state_so
 the latter with ``ANIRA_ERROR_INVALID_ARGUMENT`` and the loader ``state_source`` on an output
 with ``ANIRA_ERROR_JSON``); two halves of unequal dtype or shape; a Time axis, a window, a time
 ratio or a latency on a State spec; a ring dtype or the anchor naming one.
-``ANIRA_ERROR_NOT_SUPPORTED`` in this pre-release: a State tensor of another dtype than
-``float32``, as every model tensor (the value takes the spec's dtype; the role has no rule of
-its own), and a transposed layout on one (a view layout prepares). A Channel axis of any
-extent is legal, as on every non-Streamed spec.
+``ANIRA_ERROR_NOT_SUPPORTED`` in this pre-release: a transposed layout on a State spec (a view
+layout prepares). A State pair of another dtype than ``float32`` is legal on the handler (its
+buffers never travel through the queue, whose storage is float32 in this pre-release), and
+whether an engine takes it is decided at prepare: a registered engine binds what its
+``prepare`` accepts, a built-in adapter refuses it with ``ANIRA_ERROR_CONFIG``. A Channel axis
+of any extent is legal, as on every non-Streamed spec.
 
 .. note::
     The accumulator's model file names a row for every engine. Its TFLite export orders the

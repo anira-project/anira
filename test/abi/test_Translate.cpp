@@ -778,7 +778,7 @@ TEST(AbiTranslate, ANonFloat32DtypeIsNotSupported) {
     const Outcome outcome = bridge(model);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "tensor 'out': dtype");
-    expect_contains(outcome.m_message, "float32 only");
+    expect_contains(outcome.m_message, "the queue stores float32");
 }
 
 TEST(AbiTranslate, NoStreamedTensorIsConfig) {

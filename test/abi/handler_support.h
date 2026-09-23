@@ -14,6 +14,7 @@
 #include <anira/abi/core.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
+#include <anira/abi/stage.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/compat/v3_to_v2.h>
 #include <anira/scheduler/Core.h>
@@ -225,12 +226,14 @@ inline anira::ContractHandle file_contract(const char* contract_json,
     return contract;
 }
 
-/// A pipeline with one inference stage and the handler over it. An empty span means NULL
-/// candidates: the default set (every engine of this build plus the custom entries).
+/// A pipeline with one inference stage, the stages of `stages` (at most one in this
+/// pre-release) and the handler over it. An empty span means NULL candidates: the default set
+/// (every engine of this build plus the custom entries).
 struct Handler {
     Handler(const Context& context,
             const anira::ModelConfig& model,
-            std::span<const anira_backend_id> candidates = {}) {
+            std::span<const anira_backend_id> candidates = {},
+            std::span<const anira_stage_desc> stages = {}) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
         const anira_model_config* variants[] = {model.native()};
         EXPECT_EQ(anira_pipeline_add_inference(m_pipeline,
@@ -241,6 +244,10 @@ struct Handler {
                                                &m_err),
                   ANIRA_OK)
             << m_err.message;
+        for (const anira_stage_desc& stage : stages) {
+            EXPECT_EQ(anira_pipeline_add_stage(m_pipeline, &stage, &m_err), ANIRA_OK)
+                << m_err.message;
+        }
         EXPECT_EQ(anira_handler_create(context.m_context, m_pipeline, &m_handler, &m_err), ANIRA_OK)
             << m_err.message;
     }

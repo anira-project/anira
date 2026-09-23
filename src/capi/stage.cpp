@@ -853,38 +853,52 @@ void StageProcessor::post_process(std::vector<anira::BufferF>& input,
     }
 }
 
-void StageProcessor::feed_state(const Chunk& chunk,
-                                std::vector<anira::BufferF>& inputs) noexcept ANIRA_NONBLOCKING {
-    for (size_t slot = 0; slot < inputs.size() && slot < m_input_ports.size(); ++slot) {
+void StageProcessor::bind_state(Chunk& chunk) noexcept ANIRA_NONBLOCKING {
+    // The input half of every pair: the chunk's descriptor of the State input over the read
+    // buffer, in the spec's dtype and shape (the buffer is packed row-major: all-zero strides).
+    for (size_t slot = 0; slot < chunk.m_input_tensors.size() && slot < m_input_ports.size();
+         ++slot) {
         auto* state = std::get_if<StatePort>(&m_input_ports[slot]);
         if (state == nullptr || !state->m_value.has_value()) { continue; }
-        StaticSlot& value = *state->m_value;
+        StateSlot& value = *state->m_value;
         if (state->m_generation != chunk.m_dispatch_generation) {
             // The first inference of a new stream (a reset, a prepare): the state starts over.
             // The chunk's stamp, never the session's atomic: a reset that lands between a
-            // chunk's stale check and its feed must not zero the value for a chunk of the old
-            // stream, whose capture would then seed the new one.
-            value.zero();
+            // chunk's stale check and its bind must not zero the read buffer for a chunk of
+            // the old stream, whose promotion would then seed the new one.
+            value.zero_read();
             state->m_generation = chunk.m_dispatch_generation;
         }
-        value.read_packed(inputs[slot].get_write_pointer(0),
-                          m_inference_config.get_tensor_input_size()[slot] * sizeof(float));
+        anira_tensor_init_host(&chunk.m_input_tensors[slot],
+                               value.read(),
+                               value.dtype(),
+                               static_cast<uint32_t>(value.shape().size()),
+                               value.shape().data());
     }
-}
-
-void StageProcessor::capture_state(std::vector<anira::BufferF>& outputs) noexcept
-    ANIRA_NONBLOCKING {
-    for (size_t slot = 0; slot < outputs.size() && slot < m_output_ports.size(); ++slot) {
+    // The output half: the descriptor of the State output over the write buffer of the input
+    // it feeds (the port's partner names it).
+    for (size_t slot = 0; slot < chunk.m_output_tensors.size() && slot < m_output_ports.size();
+         ++slot) {
         const auto* state = std::get_if<StatePort>(&m_output_ports[slot]);
         if (state == nullptr) { continue; }
-        // The value lives on the input half this output feeds: the port's partner names it.
         auto* input = state->m_partner < m_input_ports.size()
                           ? std::get_if<StatePort>(&m_input_ports[state->m_partner])
                           : nullptr;
         if (input == nullptr || !input->m_value.has_value()) { continue; }
-        input->m_value->write_packed(
-            outputs[slot].get_read_pointer(0),
-            m_inference_config.get_tensor_output_size()[slot] * sizeof(float));
+        StateSlot& value = *input->m_value;
+        anira_tensor_init_host(&chunk.m_output_tensors[slot],
+                               value.write(),
+                               value.dtype(),
+                               static_cast<uint32_t>(value.shape().size()),
+                               value.shape().data());
+    }
+}
+
+void StageProcessor::promote_state() noexcept ANIRA_NONBLOCKING {
+    for (Port& port : m_input_ports) {
+        auto* state = std::get_if<StatePort>(&port);
+        if (state == nullptr || !state->m_value.has_value()) { continue; }
+        state->m_value->flip();
     }
 }
 
@@ -895,9 +909,10 @@ void StageProcessor::before_inference(
     const size_t entry = entry_of_inputs(input);
     if (entry == k_no_entry) { return; }
     Chunk& chunk = *m_chunks[entry];
-    // The declared state, the library's first step: every State input is fed from its port
-    // ahead of the stage's hook, which may read or alter it (the class comment).
-    feed_state(chunk, input);
+    // The declared state, the library's first step: every pair is bound ahead of the stage's
+    // hook, which sees the read buffer as the fed state and may read or alter it (the class
+    // comment).
+    bind_state(chunk);
     if (!m_fills_before) { return; }
     const StageFrame frame = make_frame_with_inputs(chunk);
     const anira_stage_ctx ctx = make_ctx(ANIRA_PHASE_BEFORE_INFERENCE, entry, frame);
@@ -919,12 +934,12 @@ void StageProcessor::after_inference(
         // do_inference zeroes the outputs of a chunk whose after_inference failed.
         chunk.m_stage_status = run_phase(ctx);
     }
-    // The declared state, the library's last step: every State output is captured into the
-    // value of the input it feeds, behind the stage's hook. Not behind a failed hook (the chunk
-    // delivers zeros; a failed before_inference and a throwing engine never come here) and not
-    // for a chunk that completed as zeros: the state keeps its last good value.
+    // The declared state, the library's last step: every pair is promoted behind the stage's
+    // hook, which saw the write buffer as the produced state. Not behind a failed hook (the
+    // chunk delivers zeros; a failed before_inference and a failed engine never come here) and
+    // not for a chunk that completed as zeros: the read buffer keeps the last good state.
     if (chunk.m_stage_status != ANIRA_OK || chunk.m_completed_as_zeros) { return; }
-    capture_state(output);
+    promote_state();
 }
 
 }  // namespace anira::capi
