@@ -10,6 +10,7 @@
  * one row per configured model, in m_model_data order, then every other backend of the build,
  * CUSTOM last); a C-created handler asks for exactly its plans.
  */
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
@@ -18,6 +19,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "Adapter.h"
@@ -78,10 +80,34 @@ struct PlanRequest {
 /// build does not carry (the factories below, one per engine).
 ANIRA_API std::shared_ptr<Loaded> make_builtin_loaded(anira_engine engine);
 
+/// One provider a built-in engine's runtime reports usable here: a provider of the enum, or
+/// ANIRA_PROVIDER_DEFAULT with a name in the runtime's own words (an ONNX Runtime execution
+/// provider by its registered name, a LiteRT accelerator by its hardware: "gpu", "npu",
+/// "webnn"). What the context's capabilities list per (engine, provider).
+struct ProviderInfo {
+    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    std::string m_provider_id;
+
+    bool operator==(const ProviderInfo& other) const = default;
+};
+
+/// The providers an engine of this build serves here: the default provider first, then what
+/// its runtime reports (ONNX Runtime: Ort::GetAvailableProviders(), the enum's value where one
+/// fits and the runtime's name else; LiteRT: the accelerators a fresh environment registers, by
+/// hardware; the other three engines the default provider alone in this pre-release), an equal
+/// provider once. Empty for an engine this build does not carry. `level` is the level the
+/// runtime's own logger is created with where the query needs one (LiteRT's environment).
+ANIRA_API std::vector<ProviderInfo> builtin_providers(anira_engine engine, anira::LogLevel level);
+
 /// The built-in adapters, one factory each, each defined in its own translation unit
 /// (<Engine>Adapter.cpp) where the engine's headers stay; unloaded.
 #ifdef USE_ONNXRUNTIME
 ANIRA_API std::shared_ptr<Loaded> make_onnxruntime_loaded();
+/// The execution providers the ONNX Runtime of this build reports available
+/// (Ort::GetAvailableProviders()), the CPU provider left out: the enum's value for CUDA,
+/// DirectML, CoreML, WebGPU and XNNPACK, the runtime's registered name in provider_id for
+/// every other. Empty, with a warning logged, when the runtime cannot be asked.
+ANIRA_API std::vector<ProviderInfo> onnxruntime_providers();
 #endif
 #ifdef USE_LIBTORCH
 ANIRA_API std::shared_ptr<Loaded> make_libtorch_loaded();
@@ -91,6 +117,12 @@ ANIRA_API std::shared_ptr<Loaded> make_tflite_loaded();
 #endif
 #ifdef USE_LITERT
 ANIRA_API std::shared_ptr<Loaded> make_litert_loaded();
+/// The accelerators a fresh LiteRT environment registers here (its automatic registration,
+/// which loads the accelerator libraries it finds), by the hardware they support: "gpu",
+/// "npu", "webnn" as custom providers beside ANIRA_PROVIDER_DEFAULT, the CPU accelerator left
+/// out. Empty when the environment cannot be created. The environment is created with
+/// `level` as its logger's minimum severity and destroyed before the call returns.
+ANIRA_API std::vector<ProviderInfo> litert_providers(anira::LogLevel level);
 #endif
 #ifdef USE_EXECUTORCH
 ANIRA_API std::shared_ptr<Loaded> make_executorch_loaded();

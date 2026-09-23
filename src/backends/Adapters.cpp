@@ -1,5 +1,6 @@
 #include "Adapters.h"
 
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/backends/BackendBase.h>
@@ -66,6 +67,38 @@ std::shared_ptr<Loaded> make_builtin_loaded(anira_engine engine) {
 #endif
         default: return nullptr;
     }
+}
+
+std::vector<ProviderInfo> builtin_providers(anira_engine engine, anira::LogLevel level) {
+    static_cast<void>(level);
+    std::vector<ProviderInfo> providers;
+    switch (engine) {
+#ifdef USE_LIBTORCH
+        case ANIRA_ENGINE_LIBTORCH: break;
+#endif
+#ifdef USE_ONNXRUNTIME
+        case ANIRA_ENGINE_ONNXRUNTIME: providers = onnxruntime_providers(); break;
+#endif
+#ifdef USE_TFLITE
+        case ANIRA_ENGINE_TFLITE: break;
+#endif
+#ifdef USE_LITERT
+        case ANIRA_ENGINE_LITERT: providers = litert_providers(level); break;
+#endif
+#ifdef USE_EXECUTORCH
+        case ANIRA_ENGINE_EXECUTORCH: break;
+#endif
+        default: return providers;  // not in this build: no provider at all
+    }
+    // The default provider first, then the runtime's, each once.
+    std::vector<ProviderInfo> listed;
+    listed.push_back(ProviderInfo{});
+    for (ProviderInfo& provider : providers) {
+        if (std::ranges::find(listed, provider) == listed.end()) {
+            listed.push_back(std::move(provider));
+        }
+    }
+    return listed;
 }
 
 anira_engine engine_of(anira::InferenceBackend backend) noexcept {

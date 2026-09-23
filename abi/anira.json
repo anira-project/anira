@@ -5860,7 +5860,7 @@
       "file": "context.h",
       "guard": "ANIRA_ABI_CONTEXT_H",
       "brief": "The context handle over the core, its capabilities and the probe.",
-      "doc": "anira_context is a refcounted handle over the immortal core, one core per copy of anira (a shared library has one, every static embedding its own). anira_context_create reconciles the context config into the core (the first context's config takes effect whole; later contexts reconcile per field: wait strategy first wins, log level most verbose wins, the thread pool only shrinks and never to zero, drain mode, queue capacity and drain interval first win with a warning), registers the config's log sink and probes the capabilities. The clock and the shutdown family of the core are abi/core.h. Two contexts in one copy are two views of one core with two log sinks. Thread pool and inference queue are core-owned and exist exactly while any handler in this copy exists; anira_shutdown is refused while a context or a handler lives. In this pre-release every context is Host-only: the probe reports the compiled-in engines on ANIRA_PROVIDER_DEFAULT, the host domain and one zero-copy edge per engine; a device block on the config is ANIRA_ERROR_NOT_SUPPORTED at create.",
+      "doc": "anira_context is a refcounted handle over the immortal core, one core per copy of anira (a shared library has one, every static embedding its own). anira_context_create reconciles the context config into the core (the first context's config takes effect whole; later contexts reconcile per field: wait strategy first wins, log level most verbose wins, the thread pool only shrinks and never to zero, drain mode, queue capacity and drain interval first win with a warning), registers the config's log sink and probes the capabilities. The clock and the shutdown family of the core are abi/core.h. Two contexts in one copy are two views of one core with two log sinks. Thread pool and inference queue are core-owned and exist exactly while any handler in this copy exists; anira_shutdown is refused while a context or a handler lives. In this pre-release every context is Host-only (the host domain alone): the probe reports the compiled-in engines on the providers their runtimes report usable here (every engine on ANIRA_PROVIDER_DEFAULT; ONNX Runtime's available execution providers, the enum's value where one fits and the runtime's own name in provider_id else; LiteRT's registered accelerators by hardware, \"gpu\", \"npu\", \"webnn\"), and one host edge per backend row; a device block on the config is ANIRA_ERROR_NOT_SUPPORTED at create.",
       "includes": [
         "<stddef.h>",
         "<stdint.h>",
@@ -5913,7 +5913,7 @@
           "name": "anira_edge_info",
           "tier": 2,
           "struct_id": "ANIRA_STRUCT_EDGE_INFO",
-          "doc": "One row of the edge registry: whether a tensor in domain from_domain can reach the backend (to_engine, to_provider), how (edge_class), how sure the probe is (rung), and why not (reason). Valid for the duration of the enumerating call.",
+          "doc": "One row of the edge registry: whether a tensor in domain from_domain can reach the backend (to_engine, to_provider, or to_provider_id for a provider the enum does not name), how (edge_class), how sure the probe is (rung), and why not (reason). Valid for the duration of the enumerating call.",
           "fields": [
             {
               "name": "struct_size",
@@ -5933,7 +5933,7 @@
             {
               "name": "to_provider",
               "type": "uint32_t",
-              "doc": "anira_provider of the backend."
+              "doc": "anira_provider of the backend; ANIRA_PROVIDER_DEFAULT beside a to_provider_id."
             },
             {
               "name": "edge_class",
@@ -5954,11 +5954,16 @@
               "name": "reason",
               "type": "const char*",
               "doc": "Why the edge is unavailable, or what makes it available; static storage of the library, NULL when there is nothing to say."
+            },
+            {
+              "name": "to_provider_id",
+              "type": "const char*",
+              "doc": "NULL for a provider the enum names; the name of a custom provider of the backend, in the engine's own vocabulary (anira_provider), valid while the capabilities are. A tail field: a caller whose header ends before it reads the rows without it."
             }
           ],
           "init": {
             "name": "ANIRA_EDGE_INFO_INIT",
-            "value": "sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL",
+            "value": "sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL, NULL",
             "doc": "No edge."
           }
         },
@@ -6029,7 +6034,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Re-runs the probe and refreshes the capabilities the handle reports. Host-only in this pre-release: the answer is the compiled-in engines and one zero-copy host edge per engine, and force changes nothing.",
+          "doc": "Re-runs the probe and refreshes the capabilities the handle reports: the compiled-in engines on the providers their runtimes report usable now (anira_capabilities_backends), one host edge per backend row, the host domain. Nothing is cached in this pre-release, so force changes nothing.",
           "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL context."
         },
         {
@@ -6196,7 +6201,7 @@
           "thread": "thread-safe",
           "status": "promised",
           "since": "0.2",
-          "doc": "One row of the edge registry, by domain and backend.",
+          "doc": "One row of the edge registry, by domain and backend: the engine on the provider, a custom provider by its provider_id (read when the caller's record has the slot).",
           "return_doc": "ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no row for the pair (out untouched); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the fixed fields."
         },
         {

@@ -13,11 +13,13 @@
  */
 #ifdef USE_LITERT
 
+#include <anira/CoreConfig.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/utils/Logger.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -34,6 +36,7 @@
 #include "../utils/StatusError.h"
 #include "Adapter.h"
 #include "Adapters.h"
+#include "litert/c/internal/litert_accelerator.h"
 #include "litert/c/litert_any.h"
 #include "litert/c/litert_common.h"
 #include "litert/c/litert_compiled_model.h"
@@ -534,6 +537,62 @@ private:
 
 std::shared_ptr<Loaded> make_litert_loaded() {
     return std::make_shared<LiteRtLoaded>();
+}
+
+std::vector<ProviderInfo> litert_providers(anira::LogLevel level) {
+    // The hardware an accelerator supports, as the provider names anira gives them: the CPU
+    // accelerator is the default provider, listed by the caller.
+#if defined(__EMSCRIPTEN__)
+    constexpr size_t k_hardware_count = 3;  // WebNN exists in the web build alone
+#else
+    constexpr size_t k_hardware_count = 2;
+#endif
+    static constexpr std::array<std::pair<int, const char*>, k_hardware_count> k_hardware{{
+        {kLiteRtHwAcceleratorGpu, "gpu"},
+        {kLiteRtHwAcceleratorNpu, "npu"},
+#if defined(__EMSCRIPTEN__)
+        {kLiteRtHwAcceleratorWebNn, "webnn"},
+#endif
+    }};
+    std::vector<ProviderInfo> providers;
+    // A fresh environment registers the accelerators it can load (its automatic registration).
+    // An accelerator it cannot load is this query's answer, not a warning: the environment's
+    // logger keeps errors alone, whatever anira's level; the adapter's environments at load
+    // keep anira's level, so a load that asks for an accelerator says why it failed.
+    const auto severity =
+        std::max(static_cast<int64_t>(level), static_cast<int64_t>(anira::LogLevel::Error));
+    const std::array<LiteRtEnvOption, 1> env_options = {{
+        {.tag = kLiteRtEnvOptionTagMinLoggerSeverity,
+         .value = {.type = kLiteRtAnyTypeInt, .int_value = severity}},
+    }};
+    LiteRtEnvironment env = nullptr;
+    if (LiteRtCreateEnvironment(1, env_options.data(), &env) != kLiteRtStatusOk || env == nullptr) {
+        ANIRA_LOG_WARNING(anira::log_group::k_backend_litert,
+                          "litert: no environment could be created to ask for the accelerators; "
+                          "the capabilities list the default provider alone");
+        return providers;
+    }
+    LiteRtParamIndex count = 0;
+    if (LiteRtGetNumAccelerators(env, &count) == kLiteRtStatusOk) {
+        for (LiteRtParamIndex index = 0; index < count; ++index) {
+            LiteRtAccelerator accelerator = nullptr;
+            LiteRtHwAcceleratorSet support = 0;
+            if (LiteRtGetAccelerator(env, index, &accelerator) != kLiteRtStatusOk ||
+                LiteRtGetAcceleratorHardwareSupport(accelerator, &support) != kLiteRtStatusOk) {
+                continue;
+            }
+            for (const auto& [hardware, name] : k_hardware) {
+                if ((support & hardware) == 0) { continue; }
+                ProviderInfo info;
+                info.m_provider_id = name;
+                if (std::ranges::find(providers, info) == providers.end()) {
+                    providers.push_back(std::move(info));
+                }
+            }
+        }
+    }
+    LiteRtDestroyEnvironment(env);
+    return providers;
 }
 
 }  // namespace anira::backend

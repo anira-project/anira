@@ -10,7 +10,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "handles.h"
@@ -21,10 +23,12 @@
 /// replaces the rows under it, so a reader on another thread sees one probe or the other.
 struct anira_capabilities {
     mutable std::mutex m_mutex;
-    std::vector<anira_backend_id> m_backends;
+    std::vector<anira_backend_id> m_backends;  ///< one per (engine, provider) the probe found
     std::vector<anira_domain> m_domains;
     std::vector<const char*> m_ext_kinds;
-    std::vector<anira_edge_info> m_edges;
+    std::vector<anira_edge_info> m_edges;  ///< one host edge per backend row
+    std::deque<std::string> m_strings;     ///< the custom provider names the rows point into
+                                           ///< (a deque keeps the pointers stable)
 };
 
 /// A refcounted handle over the core. The user's create holds one reference, released by

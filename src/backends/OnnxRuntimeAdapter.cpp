@@ -20,6 +20,7 @@
 #include <onnxruntime_c_api.h>
 #include <onnxruntime_cxx_api.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -416,6 +417,45 @@ private:
 
 std::shared_ptr<Loaded> make_onnxruntime_loaded() {
     return std::make_shared<OnnxRuntimeLoaded>();
+}
+
+std::vector<ProviderInfo> onnxruntime_providers() {
+    // The registered names of ONNX Runtime's execution providers (its constants.h) that spell
+    // a provider of anira's enum; every other name travels as it is, the runtime's own word.
+    static constexpr std::array<std::pair<const char*, anira_provider>, 6> k_names{{
+        {"CPUExecutionProvider", ANIRA_PROVIDER_DEFAULT},
+        {"CUDAExecutionProvider", ANIRA_PROVIDER_CUDA},
+        {"DmlExecutionProvider", ANIRA_PROVIDER_DIRECTML},
+        {"CoreMLExecutionProvider", ANIRA_PROVIDER_COREML},
+        {"WebGpuExecutionProvider", ANIRA_PROVIDER_WEBGPU},
+        {"XnnpackExecutionProvider", ANIRA_PROVIDER_XNNPACK},
+    }};
+    std::vector<ProviderInfo> providers;
+    try {
+        throw_if_foreign_onnxruntime();
+        for (const std::string& name : Ort::GetAvailableProviders()) {
+            ProviderInfo info;
+            info.m_provider_id = name;
+            for (const auto& [registered, value] : k_names) {
+                if (name == registered) {
+                    info.m_provider = value;
+                    info.m_provider_id.clear();
+                    break;
+                }
+            }
+            if (info.m_provider == ANIRA_PROVIDER_DEFAULT && info.m_provider_id.empty()) {
+                continue;  // the CPU provider: the default provider, listed by the caller
+            }
+            providers.push_back(std::move(info));
+        }
+    } catch (const std::exception& error) {
+        ANIRA_LOG_WARNING(anira::log_group::k_backend_onnx,
+                          "onnxruntime: the runtime could not be asked for its execution "
+                          "providers (%s); the capabilities list the default provider alone",
+                          error.what());
+        providers.clear();
+    }
+    return providers;
 }
 
 }  // namespace anira::backend
