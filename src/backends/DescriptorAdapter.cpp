@@ -114,6 +114,9 @@ void DescriptorLoaded::do_load(const Model& model) {
     // The shared call slots: the record's count, 0 for a model run by exclusive sessions alone
     // (their calls run on what their prepare builds and claim no slot).
     info.instances = model.m_instances;
+    // The provider this load is for: a value of the enum, or DEFAULT beside the custom name.
+    info.provider = static_cast<uint32_t>(model.m_provider);
+    info.provider_id = model.m_provider_id.empty() ? nullptr : model.m_provider_id.c_str();
 
     void* loaded = nullptr;
     const anira_status status = desc.load(&info, desc.user_data, &loaded);

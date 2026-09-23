@@ -841,17 +841,20 @@ TEST(AbiCxx, PipelineIsMoveOnlyAndHoldsOneInferenceStage) {
     EXPECT_NE(variants.m_what.find("one variant per inference stage"), std::string::npos)
         << variants.m_what;
 
+    // A candidate's provider is checked for its syntax here (a provider of the enum and a
+    // provider_id at once); whether an engine serves it is the handler's question at create.
     const Thrown provider = thrown_by([&] {
         const anira::Pipeline gpu{
             anira::stage::Inference(model,
                                     {anira::BackendId{.struct_size = sizeof(anira::BackendId),
                                                       .engine = ANIRA_ENGINE_ONNXRUNTIME,
                                                       .provider = ANIRA_PROVIDER_CUDA,
-                                                      .engine_id = nullptr}})};
+                                                      .engine_id = nullptr,
+                                                      .provider_id = "com.example.npu"}})};
     });
     EXPECT_TRUE(provider.m_thrown);
-    EXPECT_EQ(provider.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    EXPECT_NE(provider.m_what.find("Host-only"), std::string::npos) << provider.m_what;
+    EXPECT_EQ(provider.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(provider.m_what.find("at once"), std::string::npos) << provider.m_what;
 
     EXPECT_EQ(anira::stage::Inference(model).variants().size(), 1u);
     EXPECT_TRUE(anira::stage::Inference(model).candidates().empty());
@@ -1779,6 +1782,8 @@ struct EngineLoadCounts {
     std::string m_path;
     std::size_t m_num_bytes = 0;
     uint32_t m_instances = 0;
+    anira::Provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    std::string m_provider_id;
     std::vector<std::string> m_input_names;
     std::vector<std::string> m_output_names;
     std::vector<Tensor> m_inputs;   ///< the templates
@@ -1928,6 +1933,7 @@ public:
         return m_consumes_entry ? std::span<const char* const>(k_kinds)
                                 : std::span<const char* const>{};
     }
+    std::span<const char* const> providers() const noexcept override { return m_providers; }
 
     void init(const anira::InitInfo& info) override {
         ++m_inited;
@@ -1947,6 +1953,8 @@ public:
         counts->m_path = std::string(info.model_path(info.row()));
         counts->m_num_bytes = info.model_bytes(info.row()).size();
         counts->m_instances = info.instances();
+        counts->m_provider = info.provider();
+        counts->m_provider_id = std::string(info.provider_id());
         for (const char* name : info.input_names()) { counts->m_input_names.emplace_back(name); }
         for (const char* name : info.output_names()) { counts->m_output_names.emplace_back(name); }
         counts->m_inputs.assign(info.inputs().begin(), info.inputs().end());
@@ -1983,6 +1991,7 @@ public:
     uint32_t m_flags = 0;
     float m_gain = 1.0F;
     bool m_consumes_entry = false;
+    std::vector<const char*> m_providers;  ///< what providers() answers
     bool m_init_throws = false;
     PrepareMode m_mode = PrepareMode::Ok;
     ThrowAt m_throw_at = ThrowAt::Prepare;
@@ -2360,6 +2369,62 @@ TEST(AbiCxx, RegisterEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
     engine->m_flags = ANIRA_ENGINE_FLAG_DYNAMIC_TIME;  // read again by the next registration
     pipe.register_engine(k_cxx_engine_id, engine);
     EXPECT_EQ(engine.use_count(), 2);
+}
+
+// providers() fills the descriptor's list: a candidate per listed provider is a plan per
+// provider, each load's EngineLoadInfo says which one it is for (the enum's value, or DEFAULT
+// with the custom name), the report's rows carry both, and a candidate naming a provider the
+// object does not list is refused at create.
+TEST(AbiCxx, ProvidersAreTheEnginesTwins) {
+    const anira_test::Context context;
+    auto engine = std::make_shared<CountingEngine>();
+    engine->m_providers = {"coreml", "com.example.npu"};
+    const anira::BackendId on_coreml{.struct_size = sizeof(anira::BackendId),
+                                     .engine = ANIRA_ENGINE_NONE,
+                                     .provider = ANIRA_PROVIDER_COREML,
+                                     .engine_id = k_cxx_engine_id,
+                                     .provider_id = nullptr};
+    const anira::BackendId on_npu{.struct_size = sizeof(anira::BackendId),
+                                  .engine = ANIRA_ENGINE_NONE,
+                                  .provider = ANIRA_PROVIDER_DEFAULT,
+                                  .engine_id = k_cxx_engine_id,
+                                  .provider_id = "com.example.npu"};
+    anira::Pipeline pipe;
+    pipe.register_engine(k_cxx_engine_id, engine);
+    pipe.inference(engine_stream_model(), {on_coreml, on_npu});
+    CHandler handler(context, pipe);
+    ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+    ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(engine->m_inited, 1);
+    EXPECT_EQ(engine->m_loaded, 2) << "a provider is part of the loaded model";
+    ASSERT_EQ(engine->m_loads.size(), 2U);
+    EXPECT_EQ(engine->m_loads[0]->m_provider, ANIRA_PROVIDER_COREML);
+    EXPECT_EQ(engine->m_loads[0]->m_provider_id, "");
+    EXPECT_EQ(engine->m_loads[1]->m_provider, ANIRA_PROVIDER_DEFAULT);
+    EXPECT_EQ(engine->m_loads[1]->m_provider_id, "com.example.npu");
+    const anira::PlanReport report(anira_handler_plan_report(handler.m_handler));
+    const std::vector<anira_plan_info> plans = report.plans();
+    ASSERT_EQ(plans.size(), 2U);
+    EXPECT_EQ(plans[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
+    EXPECT_EQ(plans[0].provider_id, nullptr);
+    EXPECT_EQ(plans[1].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
+    ASSERT_NE(plans[1].provider_id, nullptr);
+    EXPECT_STREQ(plans[1].provider_id, "com.example.npu");
+    handler.destroy();
+
+    const anira::BackendId on_cuda{.struct_size = sizeof(anira::BackendId),
+                                   .engine = ANIRA_ENGINE_NONE,
+                                   .provider = ANIRA_PROVIDER_CUDA,
+                                   .engine_id = k_cxx_engine_id,
+                                   .provider_id = nullptr};
+    anira::Pipeline other;
+    other.register_engine(k_cxx_engine_id, engine);
+    other.inference(engine_stream_model(), {on_cuda});
+    const CHandler refused(context, other);
+    EXPECT_EQ(refused.m_status, ANIRA_ERROR_NOT_SUPPORTED) << refused.m_err.message;
+    EXPECT_NE(std::string(refused.m_err.message).find("'cuda'"), std::string::npos)
+        << refused.m_err.message;
+    EXPECT_EQ(engine->m_loaded, 2) << "a refused create loads nothing";
 }
 
 // One registration, one loaded model, one Prepared per handler: a session-exclusive model is

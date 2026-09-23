@@ -72,7 +72,6 @@ struct PlanRequest {
     bool m_missing_model = false;
     /// The 2.x backend the plan reports (InferenceManager::set_backend / get_backend).
     anira::InferenceBackend m_legacy_backend = anira::InferenceBackend::CUSTOM;
-    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
 };
 
 /// The loaded model of a built-in engine of this build, unloaded; NULL for an engine this

@@ -643,7 +643,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
                     .m_info = nullptr});
             }
             slot.m_engine = request.m_model.m_engine;
-            slot.m_provider = request.m_provider;
+            slot.m_provider = request.m_model.m_provider;
             slot.m_engine_id = request.m_model.m_engine_id;
             slot.m_legacy_backend = request.m_legacy_backend;
             slot.m_missing_model = request.m_missing_model;

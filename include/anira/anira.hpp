@@ -2349,6 +2349,18 @@ public:
     /// State pair, whose handlers are exclusive (PrepareInfo::exclusive at their prepare) and
     /// run on what their Prepared builds, never on a shared slot.
     uint32_t instances() const noexcept { return m_info->instances; }
+    /// The provider this load is for: a provider of the enum, or ANIRA_PROVIDER_DEFAULT beside
+    /// provider_id() for a custom one. A provider is part of the loaded model: two providers of
+    /// one model are two loads, each its own Loaded. What a load cannot serve it refuses with
+    /// ANIRA_ERROR_NOT_SUPPORTED (the handler checked the plan's provider against providers()
+    /// at create; a device missing at run time is the load's to report).
+    Provider provider() const noexcept { return static_cast<Provider>(m_info->provider); }
+    /// The custom provider's name, in the engine's own vocabulary (an entry of providers());
+    /// empty for a provider the enum names. Valid for the duration of the call.
+    std::string_view provider_id() const noexcept {
+        return m_info->provider_id != nullptr ? std::string_view(m_info->provider_id)
+                                              : std::string_view();
+    }
 
     const anira_engine_load_info* native() const noexcept { return m_info; }
 
@@ -2551,16 +2563,26 @@ public:
     Engine& operator=(Engine&&) = delete;
 
     /// The engine's promises, written into anira_engine_desc::flags at registration: an OR of
-    /// ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE and
-    /// ANIRA_ENGINE_FLAG_DYNAMIC_TIME; 0 (the default) promises nothing. A bit
-    /// anira/abi/enums.h does not define is refused at registration with
-    /// ANIRA_ERROR_INVALID_ARGUMENT. Read once, when the engine is registered.
+    /// ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE,
+    /// ANIRA_ENGINE_FLAG_DYNAMIC_TIME and ANIRA_ENGINE_FLAG_STATE_ALIAS; 0 (the default)
+    /// promises nothing. A bit anira/abi/enums.h does not define is refused at registration
+    /// with ANIRA_ERROR_INVALID_ARGUMENT. Read once, when the engine is registered.
     virtual uint32_t flags() const noexcept { return 0; }
     /// The extensions the engine reads at load, as "<host>:<kind>" strings (hosts:
     /// tensor_spec, model, model_config, context, contract); they join the consumed-or-fail
     /// walk for the entries of this engine, keyed by its id. Read once, when the engine is
     /// registered; the strings are copied.
     virtual std::span<const char* const> consumed_kinds() const noexcept { return {}; }
+    /// The providers the engine serves beyond ANIRA_PROVIDER_DEFAULT, written into
+    /// anira_engine_desc::providers at registration: the JSON spellings of anira_provider
+    /// ("cuda", "webgpu", "directml", "coreml", "xnnpack", "vulkan") name a provider of the
+    /// enum, any other string a custom provider in the engine's own vocabulary (the name a
+    /// candidate's provider_id and a model entry's pin spell). Empty (the default) serves the
+    /// default provider alone; a candidate naming a provider the list lacks is
+    /// ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create. Read once, when the engine is
+    /// registered; the strings are copied. A provider is part of the loaded model: two
+    /// providers of one model are two loads (EngineLoadInfo::provider, provider_id).
+    virtual std::span<const char* const> providers() const noexcept { return {}; }
 
     /// Called once per C engine of this object, by the first anira_handler_prepare that reaches
     /// it (a row of the engine survives validation), under the core's lifecycle lock
@@ -2634,16 +2656,19 @@ struct EngineHandle {
 struct EngineTrampolines {
     /// The C engine of `engine`: the one a living Pipeline already holds, else a new one
     /// (anira_custom_engine_create), whose descriptor is read from the object now: flags(),
-    /// consumed_kinds(), the eight slots. @throws Error when the C entry refuses the descriptor
-    /// (a flags() bit anira/abi/enums.h does not define); a refused create keeps no copy of the
-    /// object and never calls its release.
+    /// consumed_kinds(), providers(), the eight slots. @throws Error when the C entry refuses the
+    /// descriptor (a flags() bit anira/abi/enums.h does not define); a refused create keeps no copy
+    /// of the object and never calls its release.
     static std::shared_ptr<EngineHandle> handle_of(const std::shared_ptr<Engine>& engine) {
         const std::scoped_lock<std::mutex> lock(engine->m_handle_mutex);
         if (std::shared_ptr<EngineHandle> handle = engine->m_handle.lock()) { return handle; }
         const std::span<const char* const> kinds = engine->consumed_kinds();
+        const std::span<const char* const> providers = engine->providers();
         anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
         desc.consumed_kinds = kinds.empty() ? nullptr : kinds.data();
         desc.num_consumed_kinds = static_cast<uint32_t>(kinds.size());
+        desc.providers = providers.empty() ? nullptr : providers.data();
+        desc.num_providers = static_cast<uint32_t>(providers.size());
         desc.flags = engine->flags();  // the C entry refuses a bit it does not define
         // The shared lifecycle, every slot filled: process and reset on the handler's Prepared,
         // prepare returning it and unprepare deleting it, load returning the Loaded and unload
@@ -2930,21 +2955,23 @@ public:
     /// that handler until the C unprepare deletes it; Stage::release answers this add once.
     /// @throws Error when the C entry refuses it: a second inference stage is
     /// ANIRA_ERROR_CONFIG, a second custom stage ANIRA_ERROR_INVALID_STATE, more than one
-    /// variant or a non-default provider ANIRA_ERROR_NOT_SUPPORTED; a null custom stage, a
-    /// phases() bit that names none of the four phases, or a flags() bit anira/abi/stage.h
-    /// does not define, is ANIRA_ERROR_INVALID_ARGUMENT.
+    /// variant ANIRA_ERROR_NOT_SUPPORTED; a null custom stage, a phases() bit that names none
+    /// of the four phases, a flags() bit anira/abi/stage.h does not define, or a candidate
+    /// whose provider is no value of anira_provider, carries a provider of the enum and a
+    /// provider_id at once, or an empty provider_id, is ANIRA_ERROR_INVALID_ARGUMENT. Whether
+    /// an engine serves a candidate's provider is anira_handler_create's question.
     Pipeline& add(const AnyStage& any_stage) {
         std::visit([this](const auto& value) { add_stage(value); }, any_stage);
         return *this;
     }
     /// Registers a custom engine on the pipeline under a reverse-URI id
     /// (anira_pipeline_add_engine). The object's C engine is created at its first registration
-    /// (anira_custom_engine_create: flags() and consumed_kinds() fill an anira_engine_desc whose
-    /// five slots are the class's virtuals, read once, then) and reused by every later one while
-    /// a Pipeline holding it lives, on this Pipeline or another, under this id or another, so
-    /// handlers of all of them share loaded models of equal configurations. The C engine holds
-    /// a copy of the shared_ptr, so the object lives at least until the last pipeline and
-    /// handler that carry it are destroyed, whatever the caller does with its own pointer;
+    /// (anira_custom_engine_create: flags(), consumed_kinds() and providers() fill an
+    /// anira_engine_desc whose slots are the class's virtuals, read once, then) and reused by every
+    /// later one while a Pipeline holding it lives, on this Pipeline or another, under this id or
+    /// another, so handlers of all of them share loaded models of equal configurations. The C
+    /// engine holds a copy of the shared_ptr, so the object lives at least until the last pipeline
+    /// and handler that carry it are destroyed, whatever the caller does with its own pointer;
     /// Engine::release answers the C engine once. Legal before or after the inference stage; a
     /// model entry that names the id is a plan of the handler, an engine no entry names is not a
     /// plan and not an error, and an entry whose id no engine of the pipeline serves is

@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -70,8 +71,9 @@ struct TensorInfo {
 /// configuration it came from (a model entry and the validator's derived quantities on the C
 /// path, an InferenceConfig on the 2.x path), so that a pooled model never aliases a session's
 /// configuration (issue #76). Two records compare equal when they describe the same model for
-/// the same engine with the same tensors, shared slots, warm-up and entry, and, for a custom
-/// engine, the same variant: the pool's key, beside the carrier of a custom engine. The bytes
+/// the same engine on the same provider with the same tensors, shared slots, warm-up and
+/// entry, and, for a custom engine, the same variant: the pool's key, beside the carrier of a
+/// custom engine (two providers of one model load twice). The bytes
 /// compare by identity, as the 2.x ModelData compares them; the bytes owner and the log level
 /// are no part of the identity (the level is what the engine's environment is created with, and
 /// the core reconciles one level for the process). Whether a session runs the model exclusively
@@ -93,6 +95,11 @@ struct ANIRA_API Model {
     /// load may read the whole model config, so its loaded models are shared over an equal one
     /// only. Empty for a built-in engine, which reads the record alone.
     std::string m_variant;
+    /// The provider the loaded model runs on: a provider of the enum, or ANIRA_PROVIDER_DEFAULT
+    /// beside m_provider_id for a custom one, in the engine's own vocabulary (what the plan's
+    /// candidate named, or the entry's pin). Part of the key.
+    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    std::string m_provider_id;
     std::vector<TensorInfo> m_inputs;   ///< in slot order, State tensors included
     std::vector<TensorInfo> m_outputs;  ///< in slot order, State tensors included
     /// The shared call slots of the loaded model: the process calls that may run at once on
@@ -200,6 +207,14 @@ public:
 
     /// The engine's promises (ANIRA_ENGINE_FLAG_*); 0 promises nothing.
     virtual uint32_t flags() const noexcept { return 0; }
+
+    /// Whether the engine serves a provider: the default provider alone unless an adapter says
+    /// otherwise (a built-in engine whose runtime takes one, the descriptor adapter, whose
+    /// engine's load decides). load refuses a record on a provider the adapter does not serve
+    /// with ANIRA_ERROR_NOT_SUPPORTED, before do_load.
+    virtual bool serves(anira_provider provider, std::string_view provider_id) const noexcept {
+        return provider == ANIRA_PROVIDER_DEFAULT && provider_id.empty();
+    }
 
     /// The record load kept.
     const Model& model() const noexcept { return m_model; }

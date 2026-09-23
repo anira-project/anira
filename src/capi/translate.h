@@ -44,13 +44,31 @@ struct DerivedSpec {
     std::optional<size_t> m_time_axis;  ///< the Time axis, when the spec has one
 };
 
+/// One plan of the table the validator derives: a model entry on a provider. A row is a plan
+/// once per candidate that names its engine (a built-in one, or the custom id) and a provider
+/// the entry accepts: any for a neutral entry, its pin alone for a pinned one (models[].engine
+/// with a suffix, anira_model_config_set_model_provider); with no candidate list a row is one
+/// plan, on its pin or on ANIRA_PROVIDER_DEFAULT. The provider is the plan's, in the engine's
+/// vocabulary: a value of the enum, or ANIRA_PROVIDER_DEFAULT beside a custom name.
+struct PlanKey {
+    size_t m_row = 0;  ///< the models[] index
+    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    std::string m_provider_id;  ///< a custom provider's name; empty for one the enum names
+
+    bool operator==(const PlanKey& other) const = default;
+};
+
 /// What the validator derives for one model config under one (optional) Hard contract.
 struct Derived {
     std::vector<DerivedSpec> m_inputs;
     std::vector<DerivedSpec> m_outputs;
-    std::vector<size_t> m_rows;   ///< the models[] indices that survived the candidate filter
-    bool m_anchor_named = false;  ///< false: the first Streamed input, else the first
-                                  ///< Streamed output (2.x k_first_streamable)
+    std::vector<size_t> m_rows;    ///< the models[] indices that survived the candidate filter
+                                   ///< (a plan of at least one candidate), in entry order
+    std::vector<PlanKey> m_plans;  ///< the plan table: the plans of every surviving row, in
+                                   ///< entry order and, within a row, candidate order; the
+                                   ///< dense plan index of the handler is the position here
+    bool m_anchor_named = false;   ///< false: the first Streamed input, else the first
+                                   ///< Streamed output (2.x k_first_streamable)
     bool m_anchor_is_input = true;
     size_t m_anchor_index = 0;
 };
@@ -91,6 +109,34 @@ struct EngineFacts {
 ANIRA_API std::vector<ExtConsumer> pipeline_consumers(const StageFacts* stages,
                                                       const EngineFacts* engines);
 
+/// Whether a candidate names an engine: a built-in engine by its value, a custom engine by its
+/// id (a candidate with an engine_id keeps the custom rows of that name; {ANIRA_ENGINE_NONE,
+/// DEFAULT, NULL} keeps every custom row); NULL keeps everything (the bridge's rule). The
+/// engine rule alone, what the extension walk keys a consumer by; the provider is not read.
+ANIRA_API bool engine_is_candidate(anira_engine engine,
+                                   const std::string& engine_id,
+                                   const anira_backend_id* candidates,
+                                   uint32_t num_candidates) noexcept;
+
+/// The plans of one model entry under the candidates (PlanKey): one per candidate naming its
+/// engine whose provider the entry accepts, in candidate order, an equal provider once; with
+/// a NULL list one plan, on the entry's pin or on ANIRA_PROVIDER_DEFAULT. Under the default
+/// set (default_set: the list anira_pipeline_add_inference built for a NULL one, every engine
+/// on the default provider and every pin) an entry whose engine is named is one plan too, on
+/// its pin or on ANIRA_PROVIDER_DEFAULT, whatever else the list names. Empty for an entry no
+/// candidate runs.
+ANIRA_API std::vector<PlanKey> matching_plans(size_t row_index,
+                                              const ModelEntry& row,
+                                              const anira_backend_id* candidates,
+                                              uint32_t num_candidates,
+                                              bool default_set = false);
+
+/// Whether a model entry is a plan of the candidates (matching_plans is not empty): what the
+/// extension walk keys an entry by.
+ANIRA_API bool row_is_candidate(const ModelEntry& row,
+                                const anira_backend_id* candidates,
+                                uint32_t num_candidates);
+
 /// The 2.x backend a model row maps to: CUSTOM for every custom row (whether its id is served
 /// is check_rows' question: anira.v2.custom, or an engine registered on the pipeline), the
 /// engine's own backend for a built-in engine of this build, nullopt for an engine this build
@@ -113,10 +159,12 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 
 /// Runs every section-2 rule the 2.x runtime can honour, in order, and derives the
 /// per-tensor quantities; contract may be NULL (no contract rule runs, flexible windows
-/// pin to window_min). The candidates narrow the model entries: NULL keeps every row (the
-/// bridge's rule; the handler always names its set), a built-in engine keeps its rows,
-/// {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps the custom rows, a non-NULL engine_id keeps
-/// the custom rows of that name; the provider is not read. Throws StatusError with
+/// pin to window_min). The candidates narrow the model entries and make the plan table
+/// (Derived::m_plans): NULL keeps every row as one plan (the bridge's rule; the handler always
+/// names its set), a built-in engine keeps its rows, {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps
+/// the custom rows, a non-NULL engine_id keeps the custom rows of that name, and a row is a
+/// plan once per candidate whose provider it accepts (matching_plans; under the default set,
+/// default_set, one plan per row on its pin or on the default provider). Throws StatusError with
 /// ANIRA_ERROR_CONFIG for a rule the configuration breaks (no surviving row among them)
 /// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do. `stages` is what the
 /// pipeline's stage adds (NULL: no stage, the bridge's case): the ring dtype rule
@@ -132,7 +180,8 @@ ANIRA_API void validate(const anira_model_config& model,
                         uint32_t num_candidates,
                         Derived& out,
                         const StageFacts* stages = nullptr,
-                        const EngineFacts* engines = nullptr);
+                        const EngineFacts* engines = nullptr,
+                        bool default_set = false);
 
 /// The 2.x InferenceConfig of a model config under a Hard contract (validate, then map). A
 /// registered engine's row becomes a ModelData row on the 2.x CUSTOM backend, like the
@@ -143,7 +192,8 @@ ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config&
                                                        const anira_backend_id* candidates,
                                                        uint32_t num_candidates,
                                                        const StageFacts* stages = nullptr,
-                                                       const EngineFacts* engines = nullptr);
+                                                       const EngineFacts* engines = nullptr,
+                                                       bool default_set = false);
 
 /// The ring dtype of every slot: two vectors sized to the model's input and output lists,
 /// ANIRA_DTYPE_F32 everywhere, then each entry of the Hard contract's ring dtypes resolved

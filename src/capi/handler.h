@@ -31,12 +31,13 @@
 
 namespace anira::capi {
 
-/// A candidate backend with its engine_id string owned (anira_backend_id::engine_id is a
-/// pointer). The pointer inside m_id is not trusted after a copy: anira_pipeline::candidate_ids
-/// re-points it at m_engine_id.
+/// A candidate backend with its engine_id and provider_id strings owned (the two pointers of
+/// anira_backend_id). The pointers inside m_id are not trusted after a copy:
+/// anira_pipeline::candidate_ids re-points them at the strings.
 struct Candidate {
     anira_backend_id m_id = ANIRA_BACKEND_ID_INIT;
-    std::string m_engine_id;  ///< m_id.engine_id points here when set
+    std::string m_engine_id;    ///< m_id.engine_id points here when set
+    std::string m_provider_id;  ///< m_id.provider_id points here when set
 };
 
 /// A field-wise copy of a model config (the handle is move-only: its legacy contract is a
@@ -61,6 +62,10 @@ struct anira_pipeline {
                                                        ///< this pre-release
     std::vector<anira::capi::Candidate> m_candidates;  ///< never empty after add_inference: the
                                                        ///< caller's list, or the default set
+    /// Whether m_candidates is the default set (a NULL list at add_inference: every engine of
+    /// the build on the default provider, the custom entries, every pin): under it an entry is
+    /// one plan, on its pin or on the default provider (translate.h matching_plans).
+    bool m_default_set = false;
     bool m_has_inference = false;
     /// The one stage of the pipeline (anira_pipeline_add_stage; a second call is refused), or
     /// null. The carrier is shared with every copy of the pipeline (anira_handler_create's), so

@@ -20,6 +20,7 @@
 #include "ext_registry.h"
 #include "handles.h"
 #include "layout.h"
+#include "words.h"
 
 using anira::capi::report_void_failure;
 using anira::capi::translate_exception;
@@ -35,19 +36,6 @@ bool valid_role(anira_role role) {
 bool valid_axis_tag(anira_axis_tag tag) {
     return tag >= ANIRA_AXIS_BATCH && tag <= ANIRA_AXIS_ANY;
 }
-bool known_provider(anira_provider provider) {
-    switch (provider) {
-        case ANIRA_PROVIDER_DEFAULT:
-        case ANIRA_PROVIDER_CUDA:
-        case ANIRA_PROVIDER_WEBGPU:
-        case ANIRA_PROVIDER_DIRECTML:
-        case ANIRA_PROVIDER_COREML:
-        case ANIRA_PROVIDER_XNNPACK:
-        case ANIRA_PROVIDER_VULKAN: return true;
-        default: return false;
-    }
-}
-
 bool builtin_engine(anira_engine engine) {
     return engine >= ANIRA_ENGINE_ONNXRUNTIME && engine <= ANIRA_ENGINE_EXECUTORCH;
 }
@@ -858,7 +846,7 @@ anira_status ANIRA_CALL anira_model_config_set_model_provider(anira_model_config
                        "model entry: index %u is out of range (%zu entries)",
                        model_index,
                        config->m_models.size());
-    ANIRA_CAPI_REQUIRE(known_provider(provider),
+    ANIRA_CAPI_REQUIRE(anira::capi::known_provider(provider),
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "model entry: provider %d is not a provider this header names",

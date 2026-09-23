@@ -12,8 +12,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -21,6 +23,7 @@
 #include "ext_registry.h"
 #include "handles.h"
 #include "layout.h"
+#include "words.h"
 
 namespace anira::capi {
 namespace {
@@ -54,17 +57,6 @@ const char* role_word(anira_role role) {
     }
 }
 
-const char* engine_word(anira_engine engine) {
-    switch (engine) {
-        case ANIRA_ENGINE_ONNXRUNTIME: return "onnxruntime";
-        case ANIRA_ENGINE_LIBTORCH: return "libtorch";
-        case ANIRA_ENGINE_TFLITE: return "tflite";
-        case ANIRA_ENGINE_LITERT: return "litert";
-        case ANIRA_ENGINE_EXECUTORCH: return "executorch";
-        default: return "none";
-    }
-}
-
 std::string hex_dtype(anira_dtype dtype) {
     static constexpr const char* k_digits = "0123456789abcdef";
     std::string text = "0x";
@@ -83,8 +75,14 @@ std::string engines_list(const std::vector<anira_engine>& engines) {
     return text.empty() ? "none" : text;
 }
 
+// The provider a candidate names, as its own words: the id where the record carries one, the
+// enum's value else.
+std::string_view candidate_provider_id(const anira_backend_id& id) noexcept {
+    return id.provider_id != nullptr ? std::string_view(id.provider_id) : std::string_view();
+}
+
 // The candidate list as a message names it: the built-in engines by word, a custom engine
-// by its id.
+// by its id, a provider as the "engine" word's suffix.
 std::string candidates_list(const anira_backend_id* candidates, uint32_t num_candidates) {
     std::string text;
     if (candidates == nullptr) { return "every engine"; }
@@ -93,29 +91,17 @@ std::string candidates_list(const anira_backend_id* candidates, uint32_t num_can
         const anira_backend_id& id = candidates[i];
         text += id.engine_id != nullptr ? id.engine_id
                                         : engine_word(static_cast<anira_engine>(id.engine));
+        if (id.provider != ANIRA_PROVIDER_DEFAULT || !candidate_provider_id(id).empty()) {
+            text += ":" + provider_label(static_cast<anira_provider>(id.provider),
+                                         candidate_provider_id(id));
+        }
     }
     return text.empty() ? "none" : text;
 }
 
-// The same rule as the extension walk (ext_registry.cpp): NULL = every row is a candidate
-// (the bridge's rule; the handler never passes NULL); an entry with an engine_id keeps the
-// custom rows of that name; a built-in engine keeps its rows; {ANIRA_ENGINE_NONE, DEFAULT,
-// NULL} keeps every custom row (a custom row carries ANIRA_ENGINE_NONE), as the
-// anira_engine list did. The provider is not read: add_inference refused a non-default one.
-bool is_candidate(anira_engine engine,
-                  const std::string& engine_id,
-                  const anira_backend_id* candidates,
-                  uint32_t num_candidates) {
-    if (candidates == nullptr) { return true; }
-    for (uint32_t i = 0; i < num_candidates; ++i) {
-        const anira_backend_id& id = candidates[i];
-        if (id.engine_id != nullptr) {
-            if (!engine_id.empty() && engine_id == id.engine_id) { return true; }
-            continue;
-        }
-        if (id.engine == static_cast<uint32_t>(engine)) { return true; }
-    }
-    return false;
+// The provider a pinned entry names, as a message names it.
+std::string pin_label(const ModelEntry& row) {
+    return provider_label(row.m_provider, row.m_provider_id);
 }
 
 const anira_tensor_spec* find_spec(const anira_model_config& model,
@@ -516,22 +502,29 @@ void check_rows(const anira_model_config& model,
                 const anira_backend_id* candidates,
                 uint32_t num_candidates,
                 const EngineFacts* engines,
-                Derived& out) {
+                Derived& out,
+                bool default_set) {
     if (model.m_models.empty()) {
         config_error("no model entry: add a model by path or bytes at least once");
     }
-    // The rows kept so far, keyed by (engine, id): every custom row maps to the 2.x CUSTOM
+    // The rows kept so far, keyed by (engine, id, pin): every custom row maps to the 2.x CUSTOM
     // backend, and the plans are resolved by row, so two registered engines on two rows are
-    // two plans; two rows naming one engine (or one id) are one plan too many.
+    // two plans, and so are two rows of one engine pinned to two providers (an export per
+    // backend); two rows naming one engine (or one id) with the same pin, or both without one,
+    // are one plan too many.
     struct Taken {
         anira_engine m_engine;
         std::string m_engine_id;
+        anira_provider m_provider;
+        std::string m_provider_id;
         size_t m_row;
     };
     std::vector<Taken> taken;
     for (size_t i = 0; i < model.m_models.size(); ++i) {
         const ModelEntry& row = model.m_models[i];
-        if (!is_candidate(row.m_engine, row.m_engine_id, candidates, num_candidates)) { continue; }
+        std::vector<PlanKey> plans =
+            matching_plans(i, row, candidates, num_candidates, default_set);
+        if (plans.empty()) { continue; }
         if (row.is_custom()) {
             if (!serves_custom_id(row.m_engine_id, engines)) {
                 not_supported(at_row(i) + "custom engine '" + row.m_engine_id +
@@ -548,15 +541,24 @@ void check_rows(const anira_model_config& model,
             config_error(at_row(i) + "neither a path nor bytes");
         }
         for (const Taken& other : taken) {
-            if (other.m_engine == row.m_engine && other.m_engine_id == row.m_engine_id) {
+            if (other.m_engine == row.m_engine && other.m_engine_id == row.m_engine_id &&
+                other.m_provider == row.m_provider && other.m_provider_id == row.m_provider_id) {
                 config_error(at_row(other.m_row) + "and models[" + std::to_string(i) +
-                             "] both name engine '" + engine_label(row) +
-                             "'; the 2.x runtime holds one model per engine");
+                             "] both name engine '" + engine_label(row) + "'" +
+                             (row.is_pinned() ? " pinned to provider '" + pin_label(row) + "'"
+                                              : " without a provider pin") +
+                             "; one entry per engine and provider");
             }
         }
-        taken.push_back(
-            Taken{.m_engine = row.m_engine, .m_engine_id = row.m_engine_id, .m_row = i});
+        taken.push_back(Taken{.m_engine = row.m_engine,
+                              .m_engine_id = row.m_engine_id,
+                              .m_provider = row.m_provider,
+                              .m_provider_id = row.m_provider_id,
+                              .m_row = i});
         out.m_rows.push_back(i);
+        out.m_plans.insert(out.m_plans.end(),
+                           std::make_move_iterator(plans.begin()),
+                           std::make_move_iterator(plans.end()));
     }
     if (out.m_rows.empty()) {
         // Zero plans is a configuration the caller can fix, not a limit of this build.
@@ -674,6 +676,61 @@ anira::LogLevel log_level_of(anira_log_level level) {
 
 // ---- the public pieces ----------------------------------------------------------------------
 
+bool engine_is_candidate(anira_engine engine,
+                         const std::string& engine_id,
+                         const anira_backend_id* candidates,
+                         uint32_t num_candidates) noexcept {
+    if (candidates == nullptr) { return true; }
+    for (uint32_t i = 0; i < num_candidates; ++i) {
+        const anira_backend_id& id = candidates[i];
+        if (id.engine_id != nullptr) {
+            if (!engine_id.empty() && engine_id == id.engine_id) { return true; }
+            continue;
+        }
+        if (id.engine == static_cast<uint32_t>(engine)) { return true; }
+    }
+    return false;
+}
+
+std::vector<PlanKey> matching_plans(size_t row_index,
+                                    const ModelEntry& row,
+                                    const anira_backend_id* candidates,
+                                    uint32_t num_candidates,
+                                    bool default_set) {
+    std::vector<PlanKey> plans;
+    if (candidates == nullptr ||
+        (default_set &&
+         engine_is_candidate(row.m_engine, row.m_engine_id, candidates, num_candidates))) {
+        // The bridge's rule, and the default set's for an engine it names: one plan per row,
+        // on its pin or on the default provider.
+        plans.push_back(PlanKey{.m_row = row_index,
+                                .m_provider = row.m_provider,
+                                .m_provider_id = row.m_provider_id});
+        return plans;
+    }
+    if (default_set) { return plans; }
+    for (uint32_t i = 0; i < num_candidates; ++i) {
+        const anira_backend_id& id = candidates[i];
+        if (!engine_is_candidate(row.m_engine, row.m_engine_id, &id, 1)) { continue; }
+        PlanKey plan{.m_row = row_index,
+                     .m_provider = static_cast<anira_provider>(id.provider),
+                     .m_provider_id = std::string(candidate_provider_id(id))};
+        // A pinned entry accepts its pin alone; a neutral one whatever the candidate names.
+        if (row.is_pinned() &&
+            (plan.m_provider != row.m_provider || plan.m_provider_id != row.m_provider_id)) {
+            continue;
+        }
+        if (std::ranges::find(plans, plan) == plans.end()) { plans.push_back(std::move(plan)); }
+    }
+    return plans;
+}
+
+bool row_is_candidate(const ModelEntry& row,
+                      const anira_backend_id* candidates,
+                      uint32_t num_candidates) {
+    return !matching_plans(0, row, candidates, num_candidates).empty();
+}
+
 std::vector<ExtConsumer> pipeline_consumers(const StageFacts* stages, const EngineFacts* engines) {
     std::vector<ExtConsumer> consumers;
     if (stages != nullptr) {
@@ -747,7 +804,8 @@ void validate(const anira_model_config& model,
               uint32_t num_candidates,
               Derived& out,
               const StageFacts* stages,
-              const EngineFacts* engines) {
+              const EngineFacts* engines,
+              bool default_set) {
     out = Derived{};
     if (model.m_inputs.empty()) { config_error("no input tensor"); }
     if (model.m_outputs.empty()) { config_error("no output tensor"); }
@@ -764,7 +822,7 @@ void validate(const anira_model_config& model,
     }
     resolve_anchor(model, out);
     check_ratios(model, out);
-    check_rows(model, candidates, num_candidates, engines, out);
+    check_rows(model, candidates, num_candidates, engines, out, default_set);
     check_layouts(model, out);
     const std::vector<ExtConsumer> consumers = pipeline_consumers(stages, engines);
     check_extensions(model,
@@ -832,9 +890,10 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                              const anira_backend_id* candidates,
                                              uint32_t num_candidates,
                                              const StageFacts* stages,
-                                             const EngineFacts* engines) {
+                                             const EngineFacts* engines,
+                                             bool default_set) {
     Derived derived;
-    validate(model, &contract, candidates, num_candidates, derived, stages, engines);
+    validate(model, &contract, candidates, num_candidates, derived, stages, engines, default_set);
     const HardContract& hard = *contract.hard();
 
     std::vector<anira::ModelData> model_data;

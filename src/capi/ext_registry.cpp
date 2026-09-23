@@ -18,6 +18,7 @@
 
 #include "capi_internal.h"
 #include "handles.h"
+#include "translate.h"
 
 namespace anira::capi {
 
@@ -333,24 +334,15 @@ anira_status ExtBag::set_json(const char* kind, std::string_view utf8, anira_err
 
 namespace {
 
-// The same rule as the translator's candidate filter (translate.cpp): NULL = every row; an
-// entry with an engine_id keeps the custom rows of that name; a built-in engine keeps its
-// rows; {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps every custom row (a custom row carries
-// ANIRA_ENGINE_NONE). The provider is not read.
+// The translator's candidate rule (translate.h engine_is_candidate) for a consumer: NULL =
+// every engine; an entry with an engine_id keeps the custom engine of that name; a built-in
+// engine keeps its rows; {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps every custom engine. The
+// provider is not read for a consumer: an engine reads its extensions on every provider.
 bool candidate(anira_engine engine,
                const std::string& engine_id,
                const anira_backend_id* candidates,
                uint32_t num_candidates) {
-    if (candidates == nullptr) { return true; }
-    for (uint32_t i = 0; i < num_candidates; ++i) {
-        const anira_backend_id& id = candidates[i];
-        if (id.engine_id != nullptr) {
-            if (!engine_id.empty() && engine_id == id.engine_id) { return true; }
-            continue;
-        }
-        if (id.engine == static_cast<uint32_t>(engine)) { return true; }
-    }
-    return false;
+    return engine_is_candidate(engine, engine_id, candidates, num_candidates);
 }
 
 const char* consumer_of(std::string_view host,
@@ -497,8 +489,8 @@ anira_status walk_bags(const anira_model_config& model,
     }
     for (size_t i = 0; i < model.m_models.size(); ++i) {
         const ModelEntry& entry = model.m_models[i];
-        if (!candidate(entry.m_engine, entry.m_engine_id, candidates, num_candidates)) {
-            continue;  // filtered out
+        if (!row_is_candidate(entry, candidates, num_candidates)) {
+            continue;  // filtered out: no candidate runs the entry (its engine, or its pin)
         }
         const anira_status status = check_bag(entry.m_ext,
                                               "model",

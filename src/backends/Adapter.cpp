@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "../capi/words.h"
 #include "../utils/StatusError.h"
 #include "ProcessingGuard.h"
 
@@ -24,9 +25,10 @@ namespace anira::backend {
 bool Model::operator==(const Model& other) const {
     return m_engine == other.m_engine && m_engine_id == other.m_engine_id &&
            m_path == other.m_path && m_bytes == other.m_bytes && m_num_bytes == other.m_num_bytes &&
-           m_entry == other.m_entry && m_variant == other.m_variant && m_inputs == other.m_inputs &&
-           m_outputs == other.m_outputs && m_instances == other.m_instances &&
-           m_warm_up == other.m_warm_up;
+           m_entry == other.m_entry && m_variant == other.m_variant &&
+           m_provider == other.m_provider && m_provider_id == other.m_provider_id &&
+           m_inputs == other.m_inputs && m_outputs == other.m_outputs &&
+           m_instances == other.m_instances && m_warm_up == other.m_warm_up;
 }
 
 // ---- Loaded ---------------------------------------------------------------------------------
@@ -37,6 +39,18 @@ void Loaded::load(const Model& model) {
     m_num_instances = 0;
     m_busy.clear();
     m_model = model;
+    // The provider is checked once more at the door of every adapter (the handler checked
+    // the plan's against the capabilities or the descriptor's list): an adapter that does not
+    // serve it never sees the record.
+    if (!serves(model.m_provider, model.m_provider_id)) {
+        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                          std::string("engine '") +
+                              (model.m_engine_id.empty() ? anira::capi::engine_word(model.m_engine)
+                                                         : model.m_engine_id.c_str()) +
+                              "' does not serve provider '" +
+                              anira::capi::provider_label(model.m_provider, model.m_provider_id) +
+                              "'");
+    }
     // By position for every slot until do_load says otherwise (set_bindings).
     m_bindings.m_inputs.assign(m_model.m_inputs.size(), ANIRA_BINDING_POSITION);
     m_bindings.m_outputs.assign(m_model.m_outputs.size(), ANIRA_BINDING_POSITION);
