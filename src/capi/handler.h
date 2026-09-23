@@ -66,11 +66,12 @@ struct anira_pipeline {
     /// null. The carrier is shared with every copy of the pipeline (anira_handler_create's), so
     /// the stage's release fires once, when the last of them dies.
     std::shared_ptr<anira::capi::StageCarrier> m_stage;
-    /// The custom engines registered on the pipeline (anira_pipeline_register_engine), in
-    /// registration order, one carrier per id (a second registration of an id is refused).
-    /// Shared with every copy of the pipeline like the stage's carrier, so an engine's release
+    /// The custom engines added to the pipeline (anira_pipeline_add_engine), in the order they
+    /// were added, each under an id unique in the pipeline (a second addition of an id is
+    /// refused). The carriers are shared with the engine's handle, with every other pipeline
+    /// the engine was added to and with every copy of the pipeline, so an engine's release
     /// fires once, when the last of them dies.
-    std::vector<std::shared_ptr<const anira::capi::EngineCarrier>> m_engines;
+    std::vector<anira::capi::PipelineEngine> m_engines;
 
     /// The candidate view a translate/ext call takes (pointers into the strings); control
     /// thread only. Never empty after add_inference.

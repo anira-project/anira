@@ -535,8 +535,8 @@ void check_rows(const anira_model_config& model,
         if (row.is_custom()) {
             if (!serves_custom_id(row.m_engine_id, engines)) {
                 not_supported(at_row(i) + "custom engine '" + row.m_engine_id +
-                              "' is not registered on this pipeline "
-                              "(anira_pipeline_register_engine)");
+                              "' is not added to this pipeline "
+                              "(anira_pipeline_add_engine)");
             }
         } else if (!backend_of(row).has_value()) {
             not_supported(

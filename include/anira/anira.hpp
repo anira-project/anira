@@ -112,6 +112,7 @@
 #include <ios>
 #include <iterator>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <ratio>
@@ -2314,25 +2315,36 @@ private:
     const anira_engine_ctx* m_ctx;
 };
 
+namespace detail {
+struct EngineHandle;
+struct EngineTrampolines;
+}  // namespace detail
+
 /**
- * @brief A custom engine as a class: the registration. Subclass it, hand it to a Pipeline under
+ * @brief A custom engine as a class: the engine object. Subclass it, hand it to a Pipeline under
  * a reverse-URI id (Pipeline::register_engine, or stage::Inference::engine, which Pipeline::add
  * registers before it adds the stage), and name the id on a model entry
  * (ModelConfig::add_model_path(id, path)): that entry is then a plan like a built-in engine's,
  * ANIRA_ENGINE_NONE with the id wherever the engine-provider pair travels. It is
  * anira_engine_desc with virtual functions in place of the function pointers, and the
  * semantics are those of anira/abi/engine.h, whose lifecycle it follows, the stage's lifecycle
- * with the same words (Stage, Stage::Prepared): the registration is one object shared by the
- * pipeline and every handler created from it (flags() and consumed_kinds() are read once, when
- * the engine is registered), and prepare() is called once per prepared model anira pools and
- * returns that model's Engine::Prepared, the C lifecycle's prepared pointer as a class: process
- * and reset run on it, so what the engine loads and what its instances need is a member of the
- * Prepared and never of the registration. Equal models of two handlers on one pipeline share one
- * Prepared and its instances; a session-exclusive model (ANIRA_MODEL_STATEFUL, a declared State
- * pair) is prepared for its handler alone. anira owns the Prepared from prepare on and deletes
- * it at the C unprepare, when the last handler sharing it is re-prepared or destroyed, on the
- * thread of that entry, after its in-flight inferences have drained; release() runs once, when
- * the last carrier dies, after every Prepared was deleted.
+ * with the same words (Stage, Stage::Prepared). The object is the engine's identity, as an
+ * anira_custom_engine is in C: the first Pipeline::register_engine of an object creates its C
+ * engine (flags() and consumed_kinds() are read then, once), and every later registration of
+ * the same object, on the same Pipeline or another, under the same id or another, adds that
+ * same C engine for as long as a Pipeline holding it lives. prepare() is called once per
+ * prepared model anira pools and returns that model's Engine::Prepared, the C lifecycle's
+ * prepared pointer as a class: process and reset run on it, so what the engine loads and what
+ * its instances need is a member of the Prepared and never of the Engine. Two handlers share
+ * one Prepared and its instances when they run the same Engine object on an equal model
+ * configuration resolved to equal tensors, whichever Pipelines they were created from (two
+ * Engine objects never share); a session-exclusive model (ANIRA_MODEL_STATEFUL, a declared
+ * State pair) is prepared for its handler alone. So instances of one plugin that share a model
+ * load it once when they register one Engine object, kept by the plugin for the whole binary.
+ * anira owns the Prepared from prepare on and deletes it at the C unprepare, when the last
+ * handler sharing it is re-prepared or destroyed, on the thread of that entry, after its
+ * in-flight inferences have drained; release() runs once per C engine, when the last reference
+ * to it dies, after every Prepared was deleted.
  *
  * anira never opens a registered row's path or reads its bytes: prepare does, through the
  * record (EnginePrepareInfo::model_path(row()), model_bytes(row()), the config getters on the
@@ -2358,8 +2370,8 @@ private:
  * Why the ownership spelling: the Prepared is polymorphic and lives on the heap; prepare returns
  * a std::unique_ptr because anira is its one owner from then on (the trampoline releases it
  * into the C out_prepared on success; a refused prepare destroys nothing that was not
- * returned); the registration is a std::shared_ptr because it IS shared, by the pipeline and
- * every handler created from it.
+ * returned); the Engine is a std::shared_ptr because it IS shared, by every pipeline it is
+ * registered on and every handler created from them: its C engine holds a copy until release.
  */
 class Engine {
 public:
@@ -2425,23 +2437,84 @@ public:
     /// since nothing could run the inference. The handler's prepare then fails with the
     /// status, its message naming the engine, and unprepare is not called.
     virtual std::unique_ptr<Prepared> prepare(const EnginePrepareInfo& info) = 0;
-    /// Called once per registration of this engine, when the last pipeline or handler that
-    /// carries it dies, on the thread of that destroy ([main-thread]), after every Prepared of
-    /// it was deleted; no callback of that chain runs afterwards. The object itself lives as
-    /// long as a shared_ptr to it does.
+    /// Called once per C engine of this object, when the last reference to it dies (every
+    /// Pipeline that registered it, every handler created from them, every prepared model), on
+    /// the thread of that destroy ([main-thread]), after every Prepared of it was deleted; no
+    /// callback of that C engine runs afterwards. A registration after that creates a new C
+    /// engine, answered by a release of its own. The object itself lives as long as a
+    /// shared_ptr to it does.
     virtual void release() noexcept {}
+
+private:
+    friend struct detail::EngineTrampolines;
+    /// The C engine of this object while a Pipeline holding it lives: weak, since the C engine
+    /// owns a shared_ptr to this object (its user_data), and a strong reference back would
+    /// keep both alive forever. Guarded by m_handle_mutex: two plugin instances may register
+    /// one object from two threads.
+    std::mutex m_handle_mutex;
+    std::weak_ptr<detail::EngineHandle> m_handle;
 };
 
 namespace detail {
 
 /**
- * @brief The C callbacks of an Engine registered through Pipeline::register_engine. user_data
- * is a heap-allocated std::shared_ptr<Engine>, so the control block keeps the registration
- * alive for as long as a carrier of the descriptor exists; release deletes it, exactly once.
- * prepared is the Engine::Prepared of one prepared model, released from prepare's unique_ptr
- * into the C out_prepared and deleted at unprepare, exactly once per successful prepare.
+ * @brief One reference to the C engine of an Engine object (anira_custom_engine), dropped at
+ * destruction. Held by every Pipeline that registered the object; the object itself holds it
+ * weakly (Engine::m_handle), which is how a later registration finds it again.
+ */
+struct EngineHandle {
+    EngineHandle() = default;
+    ~EngineHandle() { anira_custom_engine_destroy(m_engine); }
+    EngineHandle(const EngineHandle&) = delete;
+    EngineHandle& operator=(const EngineHandle&) = delete;
+    EngineHandle(EngineHandle&&) = delete;
+    EngineHandle& operator=(EngineHandle&&) = delete;
+
+    anira_custom_engine* m_engine = nullptr;
+};
+
+/**
+ * @brief The C callbacks of an Engine registered through Pipeline::register_engine, and the C
+ * engine of an Engine object (handle_of). user_data is a heap-allocated std::shared_ptr<Engine>,
+ * so the control block keeps the object alive for as long as the C engine exists; release
+ * deletes it, exactly once per C engine. prepared is the Engine::Prepared of one prepared
+ * model, released from prepare's unique_ptr into the C out_prepared and deleted at unprepare,
+ * exactly once per successful prepare.
  */
 struct EngineTrampolines {
+    /// The C engine of `engine`: the one a living Pipeline already holds, else a new one
+    /// (anira_custom_engine_create), whose descriptor is read from the object now: flags(),
+    /// consumed_kinds(), the five slots. @throws Error when the C entry refuses the descriptor
+    /// (a flags() bit anira/abi/enums.h does not define); a refused create keeps no copy of the
+    /// object and never calls its release.
+    static std::shared_ptr<EngineHandle> handle_of(const std::shared_ptr<Engine>& engine) {
+        const std::scoped_lock<std::mutex> lock(engine->m_handle_mutex);
+        if (std::shared_ptr<EngineHandle> handle = engine->m_handle.lock()) { return handle; }
+        const std::span<const char* const> kinds = engine->consumed_kinds();
+        anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
+        desc.consumed_kinds = kinds.empty() ? nullptr : kinds.data();
+        desc.num_consumed_kinds = static_cast<uint32_t>(kinds.size());
+        desc.flags = engine->flags();  // the C entry refuses a bit it does not define
+        // The shared lifecycle, every slot filled: process and reset on the prepared model's
+        // Prepared, prepare returning it, unprepare deleting it, release for the C engine.
+        desc.process = &process;
+        desc.reset = &reset;
+        desc.prepare = &prepare;
+        desc.unprepare = &unprepare;
+        desc.release = &release;
+        // The C engine owns the copy from a successful create on and deletes it in release; a
+        // refused create never calls release, so the copy dies here with the throw. The handle
+        // exists first, so that nothing between the create and its owner can leak the engine.
+        auto holder = std::make_unique<std::shared_ptr<Engine>>(engine);
+        desc.user_data = holder.get();
+        auto handle = std::make_shared<EngineHandle>();
+        anira_error err{};
+        check(anira_custom_engine_create(&desc, &handle->m_engine, &err), err);
+        [[maybe_unused]] const std::shared_ptr<Engine>* const carried = holder.release();
+        engine->m_handle = handle;
+        return handle;
+    }
+
     static Engine& engine_of(void* user_data) noexcept {
         return **static_cast<std::shared_ptr<Engine>*>(user_data);
     }
@@ -2528,10 +2601,10 @@ namespace stage {
  * @brief The inference stage of a Pipeline: the model configuration(s) it may run, the
  * candidate backends (empty = the default set: every engine this build carries, on
  * ANIRA_PROVIDER_DEFAULT, plus the custom entries) and the custom engines it brings along
- * (engine(id, impl): Pipeline::add registers each one on the pipeline, as Pipeline::register_engine
- * does, before it adds the stage). Holds pointers into the ModelConfigs, which must outlive
- * the Pipeline's construction; the pipeline copies them (anira_pipeline_add_inference). One
- * variant in this pre-release.
+ * (engine(id, impl): Pipeline::add registers each one on the pipeline through
+ * Pipeline::register_engine before it adds the stage). Holds pointers into the ModelConfigs, which
+ * must outlive the Pipeline's construction; the pipeline copies them
+ * (anira_pipeline_add_inference). One variant in this pre-release.
  */
 class Inference {
 public:
@@ -2600,10 +2673,11 @@ private:
  * on it. A custom engine is no stage: it is part of the inference stage, one more
  * implementation its candidates resolve to, registered under a reverse-URI id through
  * register_engine or on the stage (stage::Inference::engine, which add registers before it
- * adds the stage) over anira_pipeline_register_engine, and named by a model entry of the
- * configuration (ModelConfig::add_model_path(id, path)). Move-only; copied by the handler that
- * takes it, engines included: a registration after a handler's create does not reach that
- * handler.
+ * adds the stage) over anira_pipeline_add_engine, and named by a model entry of the
+ * configuration (ModelConfig::add_model_path(id, path)). The pipeline holds the C engine of
+ * every Engine object registered on it, so another Pipeline registering the same object reuses
+ * it, and handlers of both share prepared models. Move-only; copied by the handler that takes
+ * it, engines included: a registration after a handler's create does not reach that handler.
  */
 class Pipeline {
 public:
@@ -2624,11 +2698,14 @@ public:
     ~Pipeline() { anira_pipeline_destroy(m_pipeline); }
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;
-    Pipeline(Pipeline&& other) noexcept : m_pipeline(std::exchange(other.m_pipeline, nullptr)) {}
+    Pipeline(Pipeline&& other) noexcept
+        : m_pipeline(std::exchange(other.m_pipeline, nullptr))
+        , m_engines(std::move(other.m_engines)) {}
     Pipeline& operator=(Pipeline&& other) noexcept {
         if (this != &other) {
             anira_pipeline_destroy(m_pipeline);
             m_pipeline = std::exchange(other.m_pipeline, nullptr);
+            m_engines = std::move(other.m_engines);
         }
         return *this;
     }
@@ -2653,46 +2730,33 @@ public:
         return *this;
     }
     /// Registers a custom engine on the pipeline under a reverse-URI id
-    /// (anira_pipeline_register_engine): the engine is read once, here (its flags() and
-    /// consumed_kinds() fill an anira_engine_desc whose five slots are the class's virtuals),
-    /// and the pipeline's carrier, which every handler created from it shares, holds a copy of
-    /// the shared_ptr, so the object lives at least until the last of them is destroyed,
-    /// whatever the caller does with its own pointer; Engine::release answers this
-    /// registration once. Legal before or after the inference stage; a model entry that names
-    /// the id is a plan of the handler, an engine no entry names is not a plan and not an
-    /// error, and an entry whose id no registration serves is ANIRA_ERROR_NOT_SUPPORTED at
-    /// anira_handler_create.
+    /// (anira_pipeline_add_engine). The object's C engine is created at its first registration
+    /// (anira_custom_engine_create: flags() and consumed_kinds() fill an anira_engine_desc whose
+    /// five slots are the class's virtuals, read once, then) and reused by every later one while
+    /// a Pipeline holding it lives, on this Pipeline or another, under this id or another, so
+    /// handlers of all of them share prepared models of equal configurations. The C engine holds
+    /// a copy of the shared_ptr, so the object lives at least until the last pipeline and
+    /// handler that carry it are destroyed, whatever the caller does with its own pointer;
+    /// Engine::release answers the C engine once. Legal before or after the inference stage; a
+    /// model entry that names the id is a plan of the handler, an engine no entry names is not a
+    /// plan and not an error, and an entry whose id no engine of the pipeline serves is
+    /// ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create.
     /// @throws Error ANIRA_ERROR_INVALID_ARGUMENT for a null engine (before the C call), an
     /// id without a '.' or with the prefix "anira.", or a flags() bit anira/abi/enums.h does
     /// not define; ANIRA_ERROR_INVALID_STATE for an id this pipeline already has. A refused
-    /// call keeps no copy of the engine and never calls its release.
-    Pipeline& register_engine(std::string_view id, std::shared_ptr<Engine> implementation) {
+    /// call keeps no reference the call created.
+    Pipeline& register_engine(std::string_view id, const std::shared_ptr<Engine>& implementation) {
         if (implementation == nullptr) {
             throw Error(ANIRA_ERROR_INVALID_ARGUMENT,
                         "anira::Pipeline::register_engine: a null engine");
         }
-        const std::span<const char* const> kinds = implementation->consumed_kinds();
-        anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
-        desc.consumed_kinds = kinds.empty() ? nullptr : kinds.data();
-        desc.num_consumed_kinds = static_cast<uint32_t>(kinds.size());
-        desc.flags = implementation->flags();  // the C entry refuses a bit it does not define
-        // The shared lifecycle, every slot filled: process and reset on the prepared model's
-        // Prepared, prepare returning it, unprepare deleting it, release for the registration.
-        desc.process = &detail::EngineTrampolines::process;
-        desc.reset = &detail::EngineTrampolines::reset;
-        desc.prepare = &detail::EngineTrampolines::prepare;
-        desc.unprepare = &detail::EngineTrampolines::unprepare;
-        desc.release = &detail::EngineTrampolines::release;
-        // The carrier owns the copy from a successful registration on and deletes it in
-        // release; a refused registration never calls release, so the copy dies here with the
-        // throw.
-        auto holder = std::make_unique<std::shared_ptr<Engine>>(std::move(implementation));
-        desc.user_data = holder.get();
+        std::shared_ptr<detail::EngineHandle> handle =
+            detail::EngineTrampolines::handle_of(implementation);
         anira_error err{};
         detail::check(
-            anira_pipeline_register_engine(m_pipeline, std::string(id).c_str(), &desc, &err),
+            anira_pipeline_add_engine(m_pipeline, std::string(id).c_str(), handle->m_engine, &err),
             err);
-        [[maybe_unused]] const std::shared_ptr<Engine>* const carried = holder.release();
+        m_engines.push_back(std::move(handle));
         return *this;
     }
 
@@ -2764,6 +2828,9 @@ private:
     }
 
     anira_pipeline* m_pipeline = nullptr;
+    /// The C engines of the Engine objects registered here, one entry per registration: what
+    /// lets another Pipeline registering the same object find the same C engine.
+    std::vector<std::shared_ptr<detail::EngineHandle>> m_engines;
 };
 
 // ---- job options (section 6) ---------------------------------------------------------------

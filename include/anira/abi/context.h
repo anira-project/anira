@@ -38,7 +38,7 @@ extern "C" {
 /**
  * @brief A backend, where the pair must travel as one item: an engine on a provider. Tier 2,
  * struct_size first; enumerated at the caller's stride. engine_id is NULL for a built-in
- * engine and the registered name of a custom one (anira_pipeline_register_engine), whose
+ * engine and the id a custom one is added under (anira_pipeline_add_engine), whose
  * engine is then ANIRA_ENGINE_NONE: a registered engine has no value of anira_engine of
  * its own.
  */

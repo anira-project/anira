@@ -1947,9 +1947,13 @@ public:
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
         for (const Registration& registration : registrations) {
             const anira_engine_desc desc = accumulator_desc(*registration.m_engine);
-            EXPECT_EQ(anira_pipeline_register_engine(m_pipeline, registration.m_id, &desc, &m_err),
+            anira_custom_engine* engine = nullptr;
+            EXPECT_EQ(anira_custom_engine_create(&desc, &engine, &m_err), ANIRA_OK)
+                << m_err.message;
+            EXPECT_EQ(anira_pipeline_add_engine(m_pipeline, registration.m_id, engine, &m_err),
                       ANIRA_OK)
                 << m_err.message;
+            anira_custom_engine_destroy(engine);
         }
         const std::array<const anira_model_config*, 1> variants{model.native()};
         const std::vector<anira_backend_id> candidates = custom_candidates();

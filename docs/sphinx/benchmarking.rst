@@ -374,7 +374,7 @@ This configuration measures the overhead of anira's processing pipeline without 
 Benchmarking Custom Inference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A custom engine is benchmarked like a built-in one: it is registered on the pipeline under its id (``anira_pipeline_register_engine``, or an :cpp:class:`anira::Engine` through ``Pipeline::register_engine``; :doc:`custom_backends`), named by a model entry, and its plan is selected; the 2.x fixture of this pre-release, whose handler takes a :cpp:class:`anira::BackendBase`, selects that backend instead:
+A custom engine is benchmarked like a built-in one: it is added to the pipeline under its id (``anira_custom_engine_create`` and ``anira_pipeline_add_engine``, or an :cpp:class:`anira::Engine` through ``Pipeline::register_engine``; :doc:`custom_backends`), named by a model entry, and its plan is selected; the 2.x fixture of this pre-release, whose handler takes a :cpp:class:`anira::BackendBase`, selects that backend instead:
 
 .. code-block:: cpp
     :caption: benchmark.cpp

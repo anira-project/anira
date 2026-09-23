@@ -11,30 +11,30 @@
  *
  * A pipeline is a config object: one inference stage (a model configuration and its candidate
  * backends), at most one pre- and post-processing stage around it (anira_pipeline_add_stage,
- * the descriptor of anira/abi/stage.h) and the custom engines registered on it
- * (anira_pipeline_register_engine, the descriptor of anira/abi/engine.h), copied by
- * anira_handler_create and destroyable right after. A handler is the runtime object over one
- * context: anira_handler_prepare takes a Hard contract, validates the configuration against it,
- * loads the models of the surviving candidates, sizes the rings and builds the plan report;
- * from then on the driver thread pumps samples through the Hard entries, which are
- * ANIRA_NONBLOCKING and never wait, and a thread that may wait calls their _wait twins. A _wait
- * twin is its bare form with double timeout_ms appended as the last parameter, and nothing else
- * differs in the signature. The entries under the bare names (anira_handler_process, push_data,
- * pop_data, their _multi forms and the _wait twins) carry the Streamed tensors: they take a
- * host block as an anira_tensor of anira/abi/tensor.h, one tensor per slot: the logical shape
- * is [channels, samples], the sample count is shape[1], the dtype must be the slot's ring dtype
- * (nothing converts) and the memory is host memory in one of three descriptions, for any
- * channel count: planar (ANIRA_TENSOR_PLANAR, one pointer per channel), one block read by
- * strides in elements (contiguous is {samples, 1}, interleaved is {1, channels}), or one block
- * with all-zero strides (packed row-major). Every description is copied straight between the
- * host memory and the ring. A descriptor is never written, an output's included (the memory it
- * names is), so a host builds its tensors once and reuses them; in place is the same tensor as
- * input and output; an empty tensor (shape[1] == 0, its memory arm not read, NULL legal) leaves
- * a slot out. release, manager_ctx and acquire are not read: the memory is borrowed until the
- * call returns. A host that holds float channel pointers (float* const*, what an audio host
- * hands out) builds one planar tensor over its pointer array with
- * anira_tensor_init_host_planar, once, and stores shape[1] before each call. Every Hard entry
- * returns an anira_status: ANIRA_OK, ANIRA_MISSED for a block the miss policy filled (a
+ * the descriptor of anira/abi/stage.h) and the custom engines added to it
+ * (anira_custom_engine_create over the descriptor of anira/abi/engine.h, then
+ * anira_pipeline_add_engine), copied by anira_handler_create and destroyable right after. A
+ * handler is the runtime object over one context: anira_handler_prepare takes a Hard contract,
+ * validates the configuration against it, loads the models of the surviving candidates, sizes
+ * the rings and builds the plan report; from then on the driver thread pumps samples through
+ * the Hard entries, which are ANIRA_NONBLOCKING and never wait, and a thread that may wait
+ * calls their _wait twins. A _wait twin is its bare form with double timeout_ms appended as the
+ * last parameter, and nothing else differs in the signature. The entries under the bare names
+ * (anira_handler_process, push_data, pop_data, their _multi forms and the _wait twins) carry
+ * the Streamed tensors: they take a host block as an anira_tensor of anira/abi/tensor.h, one
+ * tensor per slot: the logical shape is [channels, samples], the sample count is shape[1], the
+ * dtype must be the slot's ring dtype (nothing converts) and the memory is host memory in one
+ * of three descriptions, for any channel count: planar (ANIRA_TENSOR_PLANAR, one pointer per
+ * channel), one block read by strides in elements (contiguous is {samples, 1}, interleaved is
+ * {1, channels}), or one block with all-zero strides (packed row-major). Every description is
+ * copied straight between the host memory and the ring. A descriptor is never written, an
+ * output's included (the memory it names is), so a host builds its tensors once and reuses
+ * them; in place is the same tensor as input and output; an empty tensor (shape[1] == 0, its
+ * memory arm not read, NULL legal) leaves a slot out. release, manager_ctx and acquire are not
+ * read: the memory is borrowed until the call returns. A host that holds float channel pointers
+ * (float* const*, what an audio host hands out) builds one planar tensor over its pointer array
+ * with anira_tensor_init_host_planar, once, and stores shape[1] before each call. Every Hard
+ * entry returns an anira_status: ANIRA_OK, ANIRA_MISSED for a block the miss policy filled (a
  * success), or a failure. The delivered counts come back through a nullable size_t* delivered,
  * a pure out parameter written on every return: zeroed first, then on ANIRA_OK shape[1] of each
  * Streamed output; 0 on ANIRA_MISSED and on a failure. It is never read: the request is
@@ -222,7 +222,8 @@ typedef struct anira_plan_info {
  * @brief Creates an empty pipeline. A pipeline holds exactly one inference stage
  * (anira_pipeline_add_inference) and at most one pre- and post-processing stage
  * (anira_pipeline_add_stage). Value-like: copied by anira_handler_create, destroyable
- * right after; the copy shares the carriers of the stage and of the registered engines.
+ * right after; the copy shares the carrier of the stage and the custom engines added to
+ * it.
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL out.
@@ -242,11 +243,11 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_create(anira_pipeline** out,
  * against this build, the extensions on the model and its specs) is checked at
  * anira_handler_create; the contract rules at prepare. A custom engine is part of this
  * stage and never a stage of its own: it is one more implementation a candidate's
- * engine_id resolves to, registered on the pipeline with anira_pipeline_register_engine
- * (before or after this call), and its call runs in ANIRA_PHASE_INFERENCE like a
- * built-in engine's; an entry whose id no registration serves is
- * ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create (anira.v2.custom, the 2.x CUSTOM
- * backend of the bridge, needs no registration in this pre-release).
+ * engine_id resolves to, added to the pipeline with anira_pipeline_add_engine (before or
+ * after this call), and its call runs in ANIRA_PHASE_INFERENCE like a built-in engine's;
+ * an entry whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at
+ * anira_handler_create (anira.v2.custom, the 2.x CUSTOM backend of the bridge, needs no
+ * registration in this pre-release).
  * @param pipeline The pipeline.
  * @param variants The model configurations the stage may run, copied; exactly one in this
  *        pre-release.
@@ -309,42 +310,76 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipel
                                                            anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Registers a custom engine on the pipeline under engine_id: the descriptor is copied
- * into a refcounted carrier, which the pipeline and every handler created from it share,
- * and release fires exactly once, when the last of them is destroyed, after every
- * unprepare. Legal before or after anira_pipeline_add_inference; a handler copies the
- * pipeline at anira_handler_create, so a later registration does not reach that handler.
- * A registered engine no entry names is not a plan and not an error; an entry whose id
- * no registration serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming
- * the id. A refused call creates no carrier and never calls release.
- * @param pipeline The pipeline.
- * @param engine_id The engine's reverse-URI id, copied: it must contain a '.', and the prefix
- *        "anira." is anira's own. What a model entry names
- *        (anira_model_config_add_model_path_custom) and what
- *        anira_backend_id.engine_id carries.
+ * @brief Creates a custom engine: the descriptor is copied into a refcounted object, which
+ * anira_pipeline_add_engine adds to any number of pipelines. The object is the engine's
+ * identity: handlers running the same object on an equal model configuration share one
+ * prepared model (one prepare), whichever pipelines they come from; two objects never
+ * share, even over the same callbacks and user_data. The handle holds one reference and
+ * may be destroyed right after the last anira_pipeline_add_engine; release fires exactly
+ * once, when the last reference dies (the handle, the pipelines, their handlers, the
+ * prepared models), after every unprepare. A refused call creates nothing and never
+ * calls release.
  * @param desc The engine; min(struct_size, sizeof(anira_engine_desc)) bytes are copied, with
  *        the consumed kinds, so the record and its strings may die when the call returns.
  *        The slots a shorter struct_size does not cover read as in ANIRA_ENGINE_DESC_INIT.
+ * @param out Receives the handle on success.
  * @param err Nullable.
- * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, engine_id or desc, an id
- *         without a '.' or with the prefix "anira.", a struct_size below the three leading
- *         slots {struct_size, abi_version, user_data}, a flags bit this header does not define,
- *         a NULL process, or a NULL consumed_kinds (or a NULL entry in it) with a count above
- *         0; ANIRA_ERROR_INVALID_STATE for an id this pipeline already has;
- *         ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve
- *         (anira_check_abi).
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or out, a struct_size below
+ *         the three leading slots {struct_size, abi_version, user_data}, a flags bit this
+ *         header does not define, a NULL process, or a NULL consumed_kinds (or a NULL entry in
+ *         it) with a count above 0; ANIRA_ERROR_ABI_VERSION for an abi_version this library
+ *         does not serve (anira_check_abi).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
-ANIRA_API anira_status ANIRA_CALL anira_pipeline_register_engine(anira_pipeline* pipeline,
-                                                                 const char* engine_id,
-                                                                 const anira_engine_desc* desc,
-                                                                 anira_error* err) ANIRA_NOEXCEPT;
+ANIRA_API anira_status ANIRA_CALL anira_custom_engine_create(const anira_engine_desc* desc,
+                                                             anira_custom_engine** out,
+                                                             anira_error* err) ANIRA_NOEXCEPT;
+
+/**
+ * @brief Drops the handle's reference. The pipelines the engine was added to and the handlers
+ * created from them keep theirs; release fires here when no one holds the engine any
+ * more.
+ * @param engine The handle; NULL is a no-op.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API void ANIRA_CALL anira_custom_engine_destroy(anira_custom_engine* engine) ANIRA_NOEXCEPT;
+
+/**
+ * @brief Adds a custom engine to the pipeline under engine_id. Legal before or after
+ * anira_pipeline_add_inference; a handler copies the pipeline at anira_handler_create,
+ * so a later addition does not reach that handler. An added engine no entry names is not
+ * a plan and not an error; an entry whose id no engine of the pipeline serves is
+ * ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id.
+ * @param pipeline The pipeline.
+ * @param engine_id The id the pipeline's model entries name the engine by, copied: a
+ *        reverse-URI name, which must contain a '.', and the prefix "anira." is
+ *        anira's own. What anira_model_config_add_model_path_custom names and what
+ *        anira_backend_id.engine_id carries. The id belongs to this pipeline, not to
+ *        the engine: one engine may be added to two pipelines under different ids, or
+ *        to one pipeline under two.
+ * @param engine The engine; the pipeline takes a reference, so the handle may be destroyed
+ *        right after.
+ * @param err Nullable.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, engine_id or engine, or
+ *         an id without a '.' or with the prefix "anira."; ANIRA_ERROR_INVALID_STATE for an id
+ *         this pipeline already has.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_engine(anira_pipeline* pipeline,
+                                                            const char* engine_id,
+                                                            const anira_custom_engine* engine,
+                                                            anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Destroys a pipeline; handlers created from it keep their copy. The release function of
- * a stage or of a registered engine fires here when no handler shares its carrier any
+ * a stage fires here when no handler shares its carrier any more, and a custom engine's
+ * when neither its handle, another pipeline, a handler nor a prepared model holds it any
  * more.
  * @param pipeline The handle; NULL is a no-op.
  * @par Thread contract
@@ -358,7 +393,7 @@ ANIRA_API void ANIRA_CALL anira_pipeline_destroy(anira_pipeline* pipeline) ANIRA
  * handles may be destroyed when the call returns. Validates the variant's structure,
  * walks the extensions on the model and its specs, and checks the named candidates
  * against this build (a named candidate whose engine is not in the build is
- * ANIRA_ERROR_NOT_SUPPORTED, and so is an entry whose custom id no registration of the
+ * ANIRA_ERROR_NOT_SUPPORTED, and so is an entry whose custom id no engine of the
  * pipeline serves; under the default candidate set an entry for an absent engine is
  * skipped, and a variant left with no entry is ANIRA_ERROR_CONFIG). Models are loaded at
  * anira_handler_prepare in this pre-release, so a file that will not load is reported

@@ -11,47 +11,53 @@
  *
  * An engine is a descriptor, not a class: anira_engine_desc names a process function, a reset,
  * a prepare, an unprepare and a release function, one user_data slot, the extension kinds it
- * consumes and its flags, and is handed once to anira_pipeline_register_engine under a
- * reverse-URI id, which copies it into a refcounted carrier that the pipeline and every handler
- * created from it share. A model entry names the engine by that id
- * (anira_model_config_add_model_path_custom, anira_model_config_add_model_bytes_custom) and a
- * candidate of anira_pipeline_add_inference with engine_id set selects it; wherever the
- * engine-provider pair travels a registered engine is ANIRA_ENGINE_NONE with its id
- * (anira_backend_id, anira_plan_info, anira_stage_ctx). A registered engine no entry names is
- * not a plan and not an error; an entry whose id no registration serves is
- * ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create. The lifecycle is the stage's
- * (anira/abi/stage.h), with the same words on both sides: prepare receives an
+ * consumes and its flags. anira_custom_engine_create copies it into a refcounted
+ * anira_custom_engine, which anira_pipeline_add_engine adds to a pipeline under a reverse-URI
+ * id: the object is what the engine is, the id is how the pipeline's model entries name it. One
+ * engine may be added to any number of pipelines (under the same id or different ones); the
+ * pipelines and every handler created from them share it. A model entry names the engine by the
+ * id of its pipeline (anira_model_config_add_model_path_custom,
+ * anira_model_config_add_model_bytes_custom) and a candidate of anira_pipeline_add_inference
+ * with engine_id set selects it; wherever the engine-provider pair travels a registered engine
+ * is ANIRA_ENGINE_NONE with its id (anira_backend_id, anira_plan_info, anira_stage_ctx). An
+ * added engine no entry names is not a plan and not an error; an entry whose id no engine of
+ * the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create. The lifecycle is
+ * the stage's (anira/abi/stage.h), with the same words on both sides: prepare receives an
  * anira_engine_prepare_info (the variant, the entry's row, a template of every tensor on the
  * engine's side, the name each slot binds to, the instance count) and hands back a prepared
- * pointer; every process and reset call receives that pointer beside the registration's
- * user_data, as (ctx, prepared, user_data); unprepare frees what one prepare loaded; release
- * fires once, when the last carrier dies, after every unprepare. anira prepares once per
- * prepared model it pools (equal models of two handlers share one prepared model and its
- * instances; a session-exclusive model, one declared ANIRA_MODEL_STATEFUL or one with a
- * declared State pair, is prepared for its handler alone) and unprepares it when the last
- * handler sharing it is re-prepared or destroyed. The engine binds by name where its side has
- * names: the record carries the name each slot binds to (the entry's tensors record, else the
- * canonical name), and an engine that cannot bind a slot refuses prepare. process runs on an
- * inference thread, in ANIRA_PHASE_INFERENCE, over an anira_engine_ctx, the engine's twin of
- * the stage context (Tier 1, 64 bytes, ANIRA_STRUCT_ENGINE_CTX, on anira's stack for the
- * duration of the call): the instance of the prepared model the call runs on, the chunk's
- * entry, the two tensor arrays in slot order, State tensors included, the ticket and the
- * per-call flags. The adapter rule: read every extent and every memory handle (data pointer,
- * byte_offset, strides, domain) from the tensors of THIS call, never from a value kept at
- * prepare, and never assume a tensor is anira's own buffer (the halves of a declared State pair
- * alternate between two buffers; a later pre-release hands a caller's Buffer tensor over in
- * place). A status other than ANIRA_OK fails the chunk: it lands in anira_handler_rt_error with
- * one latched record, anira zeroes the outputs, the chunk delivers zeros at its stream
- * position, a State pair keeps its last good value. reset re-initialises the state an engine
- * keeps inside itself, for a session-exclusive prepared model, at the first inference of a new
- * stream (after prepare, after anira_handler_reset), on the claimed instance with that
- * inference's context, right before its process; a shared prepared model is never reset. The
- * flags are the engine's promises, reported in anira_plan_info.engine_flags and consumed by
- * later contract options (ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE,
+ * pointer; every process and reset call receives that pointer beside the engine's user_data, as
+ * (ctx, prepared, user_data); unprepare frees what one prepare loaded; release fires once, when
+ * the last reference to the engine dies (its handle, the pipelines it was added to, their
+ * handlers, the prepared models), after every unprepare. anira prepares once per prepared model
+ * it pools and unprepares it when the last handler sharing it is re-prepared or destroyed. Two
+ * handlers share one prepared model and its instances when they run the same engine object on
+ * an equal model configuration (the whole variant: every entry, spec and extension the engine
+ * may read through prepare's record) resolved to equal tensors, whichever pipelines they were
+ * created from; two engine objects never share, even with the same callbacks. A
+ * session-exclusive model (one declared ANIRA_MODEL_STATEFUL or one with a declared State pair)
+ * is prepared for its handler alone. The engine binds by name where its side has names: the
+ * record carries the name each slot binds to (the entry's tensors record, else the canonical
+ * name), and an engine that cannot bind a slot refuses prepare. process runs on an inference
+ * thread, in ANIRA_PHASE_INFERENCE, over an anira_engine_ctx, the engine's twin of the stage
+ * context (Tier 1, 64 bytes, ANIRA_STRUCT_ENGINE_CTX, on anira's stack for the duration of the
+ * call): the instance of the prepared model the call runs on, the chunk's entry, the two tensor
+ * arrays in slot order, State tensors included, the ticket and the per-call flags. The adapter
+ * rule: read every extent and every memory handle (data pointer, byte_offset, strides, domain)
+ * from the tensors of THIS call, never from a value kept at prepare, and never assume a tensor
+ * is anira's own buffer (the halves of a declared State pair alternate between two buffers; a
+ * later pre-release hands a caller's Buffer tensor over in place). A status other than ANIRA_OK
+ * fails the chunk: it lands in anira_handler_rt_error with one latched record, anira zeroes the
+ * outputs, the chunk delivers zeros at its stream position, a State pair keeps its last good
+ * value. reset re-initialises the state an engine keeps inside itself, for a session-exclusive
+ * prepared model, at the first inference of a new stream (after prepare, after
+ * anira_handler_reset), on the claimed instance with that inference's context, right before its
+ * process; a shared prepared model is never reset. The flags are the engine's promises,
+ * reported in anira_plan_info.engine_flags and consumed by later contract options
+ * (ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE,
  * ANIRA_ENGINE_FLAG_DYNAMIC_TIME of anira/abi/enums.h); a bit this header does not define is
- * ANIRA_ERROR_INVALID_ARGUMENT at registration. The callback typedefs carry no real-time
- * attribute: whether process is real-time is the engine's own promise, the flag. The C++ face
- * is anira::Engine of anira/anira.hpp.
+ * ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create. The callback typedefs carry no
+ * real-time attribute: whether process is real-time is the engine's own promise, the flag. The
+ * C++ face is anira::Engine of anira/anira.hpp.
  */
 
 #include <stddef.h>
@@ -245,9 +251,10 @@ typedef void (ANIRA_CALL* anira_engine_reset_fn)(const anira_engine_ctx* ctx,
 typedef void (ANIRA_CALL* anira_engine_unprepare_fn)(void* prepared, void* user_data);
 
 /**
- * @brief The release function of an engine: called exactly once, when the last carrier of the
- * descriptor dies (anira_pipeline_destroy or anira_handler_destroy, whichever comes
- * last), after every unprepare. No callback of the engine runs afterwards. NULL: none.
+ * @brief The release function of an engine: called exactly once, when the last reference to the
+ * anira_custom_engine dies (anira_custom_engine_destroy, anira_pipeline_destroy or
+ * anira_handler_destroy, whichever comes last), after every unprepare. No callback of
+ * the engine runs afterwards. NULL: none.
  * @param user_data The descriptor's user_data.
  * @par Thread contract
  * [main-thread]
@@ -255,20 +262,20 @@ typedef void (ANIRA_CALL* anira_engine_unprepare_fn)(void* prepared, void* user_
 typedef void (ANIRA_CALL* anira_engine_release_fn)(void* user_data);
 
 /**
- * @brief A custom engine, handed once to anira_pipeline_register_engine under its id and copied
- * within struct_size into a refcounted carrier that the pipeline and every handler
- * created from it share. Tier 2: struct_size first, user_data third (its offset never
- * moves), no implicit padding (LP64 72 bytes, ILP32 44), growth at the tail. The slots
- * are listed as the stage's: the per-chunk call, reset, prepare, unprepare, release.
- * process is required; every other slot may be NULL.
+ * @brief A custom engine, handed once to anira_custom_engine_create and copied within
+ * struct_size into the refcounted anira_custom_engine, which every pipeline it is added
+ * to and every handler created from them share. Tier 2: struct_size first, user_data
+ * third (its offset never moves), no implicit padding (LP64 72 bytes, ILP32 44), growth
+ * at the tail. The slots are listed as the stage's: the per-chunk call, reset, prepare,
+ * unprepare, release. process is required; every other slot may be NULL.
  */
 typedef struct anira_engine_desc {
     uint32_t struct_size;  /**< sizeof(anira_engine_desc) of the caller's header. */
     uint32_t abi_version;  /**< ANIRA_ABI_VERSION the caller compiled against. */
     /**
-     * Handed to every callback as it is; never read by anira. One per registration, shared by
-     * every prepared model of the engine: what one prepared model keeps lives behind the
-     * prepared pointer its prepare hands back.
+     * Handed to every callback as it is; never read by anira. One per engine object, shared by
+     * every pipeline it is added to and every prepared model of the engine: what one prepared
+     * model keeps lives behind the prepared pointer its prepare hands back.
      */
     void* user_data;
     /**
@@ -284,8 +291,8 @@ typedef struct anira_engine_desc {
      * The engine's promises, an OR of ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
      * ANIRA_ENGINE_FLAG_REALTIME_SAFE and ANIRA_ENGINE_FLAG_DYNAMIC_TIME; 0 promises nothing.
      * Reported in anira_plan_info.engine_flags of every plan of the engine. A bit this header
-     * does not define is ANIRA_ERROR_INVALID_ARGUMENT at anira_pipeline_register_engine; the
-     * name ANIRA_ENGINE_FLAG_STATE_ALIAS is reserved for the aliased State pair of a later
+     * does not define is ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create; the name
+     * ANIRA_ENGINE_FLAG_STATE_ALIAS is reserved for the aliased State pair of a later
      * pre-release.
      */
     uint32_t flags;
@@ -309,13 +316,14 @@ typedef struct anira_engine_desc {
      */
     anira_engine_unprepare_fn unprepare;
     /**
-     * Once, when the last carrier dies, after every unprepare. NULL: none.
+     * Once, when the last reference to the engine object dies, after every unprepare. NULL:
+     * none.
      */
     anira_engine_release_fn release;
 } anira_engine_desc;
 /**
  * @brief An engine without a callback and without a promise (flags 0): process must be filled
- * before the registration.
+ * before anira_custom_engine_create.
  */
 #define ANIRA_ENGINE_DESC_INIT ANIRA_INIT(anira_engine_desc, sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL)
 

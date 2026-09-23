@@ -7,9 +7,7 @@
 #include <anira/abi/enums.h>
 
 #include <cstdint>
-#include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "ext_registry.h"
@@ -17,8 +15,7 @@
 
 namespace anira::capi {
 
-EngineCarrier::EngineCarrier(std::string id, const anira_engine_desc& desc)
-    : m_id(std::move(id)), m_desc(desc) {
+EngineCarrier::EngineCarrier(const anira_engine_desc& desc) : m_desc(desc) {
     m_kinds.reserve(desc.num_consumed_kinds);
     for (uint32_t i = 0; i < desc.num_consumed_kinds; ++i) {
         m_kinds.emplace_back(desc.consumed_kinds[i]);
@@ -30,20 +27,20 @@ EngineCarrier::EngineCarrier(std::string id, const anira_engine_desc& desc)
 }
 
 EngineCarrier::~EngineCarrier() {
-    // Exactly once: the carrier dies with the last pipeline or handler that shares it, after
-    // every unprepare of a prepared model that ran on it.
+    // Exactly once: the carrier dies with the last handle, pipeline, handler or prepared model
+    // that shares it, after every unprepare of a prepared model that ran on it.
     if (m_desc.release != nullptr) { m_desc.release(m_desc.user_data); }
 }
 
-EngineFacts engine_facts(const std::vector<std::shared_ptr<const EngineCarrier>>& engines) {
+EngineFacts engine_facts(const std::vector<PipelineEngine>& engines) {
     EngineFacts facts;
-    for (const std::shared_ptr<const EngineCarrier>& engine : engines) {
-        facts.m_ids.push_back(engine->id());
-        if (engine->consumed_kinds().empty()) { continue; }
-        facts.m_consumers.push_back(ExtConsumer{.m_name = engine->id().c_str(),
+    for (const PipelineEngine& engine : engines) {
+        facts.m_ids.push_back(engine.m_id);
+        if (engine.m_carrier->consumed_kinds().empty()) { continue; }
+        facts.m_consumers.push_back(ExtConsumer{.m_name = engine.m_id.c_str(),
                                                 .m_engine = ANIRA_ENGINE_NONE,
-                                                .m_engine_id = engine->id(),
-                                                .m_consumed = engine->consumed_kinds()});
+                                                .m_engine_id = engine.m_id,
+                                                .m_consumed = engine.m_carrier->consumed_kinds()});
     }
     return facts;
 }

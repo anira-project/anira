@@ -47,6 +47,8 @@ anira_contract_set_edge_cost
 anira_contract_set_ext
 anira_contract_set_ext_json
 anira_contract_set_host_domain
+anira_custom_engine_create
+anira_custom_engine_destroy
 anira_drain_log
 anira_enabled_backends
 anira_handler_create
@@ -124,11 +126,11 @@ anira_model_config_to_json
 anira_now_ms
 anira_now_ns
 anira_num_inference_threads
+anira_pipeline_add_engine
 anira_pipeline_add_inference
 anira_pipeline_add_stage
 anira_pipeline_create
 anira_pipeline_destroy
-anira_pipeline_register_engine
 anira_plan_report_exts
 anira_plan_report_num_plans
 anira_plan_report_plans

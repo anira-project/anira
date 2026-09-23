@@ -611,10 +611,10 @@ typedef enum anira_pad_policy {
 
 /**
  * @brief Inference engine, one of the two independent backend axes. Values 6 and up are
- * reserved for later anira engines. A registered custom engine
- * (anira_pipeline_register_engine) has no value of its own: wherever the pair travels it
- * is ANIRA_ENGINE_NONE with its engine_id (anira_backend_id, anira_plan_info,
- * anira_stage_ctx).
+ * reserved for later anira engines. A custom engine (anira_custom_engine_create, added
+ * to a pipeline with anira_pipeline_add_engine) has no value of its own: wherever the
+ * pair travels it is ANIRA_ENGINE_NONE with its engine_id (anira_backend_id,
+ * anira_plan_info, anira_stage_ctx).
  */
 typedef enum anira_engine {
     ANIRA_ENGINE_NONE = 0,  /**< No engine; as a default engine it means models[0]. */

@@ -218,8 +218,8 @@ not here, so one config serves every build.
 
       cfg.model_ext(i, anira::ext::Entry{"decode"});
 
-- **Custom engines.** An engine registered on the pipeline by name (a reverse-URI id such as
-  ``"de.tu-berlin.coreml"``: ``anira_pipeline_register_engine``, section 3.2, or
+- **Custom engines.** An engine added to the pipeline by name (a reverse-URI id such as
+  ``"de.tu-berlin.coreml"``: ``anira_pipeline_add_engine``, section 3.2, or
   :cpp:class:`anira::Engine` of :doc:`custom_backends`) gets its entries through the string
   overloads: ``add_model_path("de.tu-berlin.coreml", path)``, ``add_model_bytes(id, bytes)``
   and ``default_engine("de.tu-berlin.coreml")``. anira never opens such an entry's path: the
@@ -1049,10 +1049,14 @@ into a carrier the pipeline and its handlers share, and a second call is
 stage of its own: it is one more implementation a candidate's ``engine_id`` resolves to, and
 its call runs in ``ANIRA_PHASE_INFERENCE`` (the phase of ``anira_stage_phase`` between
 ``ANIRA_PHASE_BEFORE_INFERENCE`` and ``ANIRA_PHASE_AFTER_INFERENCE``) exactly as a built-in
-engine's does. ``anira_pipeline_register_engine(pipe, engine_id, &desc, &err)`` registers one
-under a reverse-URI id (it must contain a ``.``; the prefix ``anira.`` is anira's own),
-copying an ``anira_engine_desc`` of ``anira/abi/engine.h`` into a carrier the pipeline and
-its handlers share: ``process``, the engine call, the one required slot, on an inference
+engine's does. It is an object: ``anira_custom_engine_create(&desc, &engine, &err)`` copies an
+``anira_engine_desc`` of ``anira/abi/engine.h`` into a refcounted ``anira_custom_engine``, and
+``anira_pipeline_add_engine(pipe, engine_id, engine, &err)`` adds it to a pipeline under a
+reverse-URI id (it must contain a ``.``; the prefix ``anira.`` is anira's own). The id belongs
+to the pipeline, the object is the engine: one engine may be added to several pipelines, and
+the handle, the pipelines, their handlers and the prepared models all hold a reference, so
+``anira_custom_engine_destroy`` may run right after the last addition. The descriptor's slots:
+``process``, the engine call, the one required slot, on an inference
 thread over an ``anira_engine_ctx`` (the instance of the prepared model the call runs on,
 the chunk's ``entry``, one ``anira_tensor`` per slot of either side, State tensors included,
 over the memory the engine reads and writes); ``reset``, the first inference of a new stream
@@ -1062,24 +1066,27 @@ over an ``anira_engine_prepare_info`` (the entry's row and the variant for the c
 getters, a template of every tensor on the engine's side, the name each slot binds to, the
 instance count), handing back the ``prepared`` pointer every later call of that prepared
 model receives beside ``user_data``; ``unprepare``, once per successful prepare, when the
-last handler sharing the prepared model is re-prepared or destroyed; ``release``, once, with
-the last carrier; plus ``user_data``, the ``consumed_kinds`` of the walk (keyed by the id)
+last handler sharing the prepared model is re-prepared or destroyed; ``release``, once, when
+the last reference to the engine object dies; plus ``user_data``, the ``consumed_kinds`` of the walk (keyed by the id)
 and the engine's ``flags`` (``ANIRA_ENGINE_FLAG_*``, reported in
-``anira_plan_info.engine_flags``). Registering is legal before or after
+``anira_plan_info.engine_flags``). Adding is legal before or after
 ``anira_pipeline_add_inference``; a handler copies the pipeline at create, so a later
-registration does not reach it. A model entry that names the id is a plan like a built-in
+addition does not reach it. A model entry that names the id is a plan like a built-in
 engine's, ``ANIRA_ENGINE_NONE`` with the id wherever the engine-provider pair travels, its
 slots bound by the engine itself (``ANIRA_BINDING_ENGINE``); an engine no entry names is not
-a plan and not an error; an entry whose id no registration serves is
+a plan and not an error; an entry whose id no engine of the pipeline serves is
 ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``, naming the id (``anira.v2.custom``,
-the 2.x ``CUSTOM`` backend, needs no registration). The refusals of the registration:
-``ANIRA_ERROR_INVALID_ARGUMENT`` for a ``NULL`` pipeline, id or descriptor, a malformed id, a
-``struct_size`` below the three leading slots, a flags bit the header does not define, a
-``NULL`` ``process`` or a ``NULL`` ``consumed_kinds`` with a count; ``ANIRA_ERROR_INVALID_STATE``
-for an id the pipeline already has; ``ANIRA_ERROR_ABI_VERSION`` per ``anira_check_abi``; a
-refused call creates no carrier and never calls ``release``. The pool rule: equal models of
-two handlers on one carrier share one prepared model (one ``prepare``, one ``unprepare``),
-a session-exclusive model is prepared per handler, ``release`` fires once per registration;
+the 2.x ``CUSTOM`` backend, needs no engine). The create refuses with
+``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL`` descriptor or ``out``, a ``struct_size`` below the
+three leading slots, a flags bit the header does not define, a ``NULL`` ``process`` or a
+``NULL`` ``consumed_kinds`` with a count, and with ``ANIRA_ERROR_ABI_VERSION`` what
+``anira_check_abi`` refuses; the addition refuses with ``ANIRA_ERROR_INVALID_ARGUMENT`` a
+``NULL`` pipeline, id or engine and a malformed id, and with ``ANIRA_ERROR_INVALID_STATE`` an id
+the pipeline already has; neither refusal leaves a reference behind. The pool rule: two
+handlers that run the same engine object on an equal model configuration resolved to equal
+tensors share one prepared model (one ``prepare``, one ``unprepare``), whichever pipelines they
+come from; two engine objects never share; a session-exclusive model is prepared per handler;
+``release`` fires once per engine object;
 ``prepare`` and ``unprepare`` may run under the lifecycle lock and must not call an entry
 that takes it. :doc:`custom_backends` is the full account, with the C++ face
 :cpp:class:`anira::Engine`.
@@ -1825,7 +1832,7 @@ Before processing audio, you must select which inference backend to use. The ava
 - ``anira::InferenceBackend::EXECUTORCH`` - ExecuTorch programs (``"executorch"``)
 - ``anira::InferenceBackend::CUSTOM`` - Custom backend implementations (the ``anira.v2.custom`` engine)
 
-On the C handler of section 3.2 the plans are selected instead (``anira_handler_set_plan`` over the plan report, one plan per model entry of the configuration), and a custom backend is a **registered engine**: an ``anira_engine_desc`` registered on the pipeline under its id (``anira_pipeline_register_engine``), or an :cpp:class:`anira::Engine` in C++, run like a built-in engine (:doc:`custom_backends`); ``anira::InferenceBackend::CUSTOM`` over a :cpp:class:`anira::BackendBase` stays with the 2.x handler below until the cut-over (:doc:`migration`).
+On the C handler of section 3.2 the plans are selected instead (``anira_handler_set_plan`` over the plan report, one plan per model entry of the configuration), and a custom backend is a **registered engine**: an ``anira_engine_desc`` made an engine object (``anira_custom_engine_create``) and added to the pipeline under its id (``anira_pipeline_add_engine``), or an :cpp:class:`anira::Engine` in C++, run like a built-in engine (:doc:`custom_backends`); ``anira::InferenceBackend::CUSTOM`` over a :cpp:class:`anira::BackendBase` stays with the 2.x handler below until the cut-over (:doc:`migration`).
 
 The first model entry's engine is selected automatically; to run another one, select the backend that corresponds to your model format:
 

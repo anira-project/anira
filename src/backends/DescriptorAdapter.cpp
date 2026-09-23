@@ -50,9 +50,10 @@ std::vector<const char*> names_of(const std::vector<TensorInfo>& slots) {
 }  // namespace
 
 DescriptorAdapter::DescriptorAdapter(std::shared_ptr<const anira::capi::EngineCarrier> carrier,
+                                     std::string id,
                                      uint32_t row,
                                      std::shared_ptr<const anira_model_config> model)
-    : m_carrier(std::move(carrier)), m_row(row), m_model(std::move(model)) {}
+    : m_carrier(std::move(carrier)), m_id(std::move(id)), m_row(row), m_model(std::move(model)) {}
 
 DescriptorAdapter::~DescriptorAdapter() {
     unprepare();
@@ -106,7 +107,7 @@ void DescriptorAdapter::do_prepare(const Model& model) {
     if (status != ANIRA_OK) {
         // The refused prepare owes no unprepare.
         throw StatusError(status,
-                          "the engine '" + m_carrier->id() + "' refused prepare: it returned " +
+                          "the engine '" + m_id + "' refused prepare: it returned " +
                               std::to_string(static_cast<int>(status)) + " (" +
                               anira_status_string(status) + ")");
     }

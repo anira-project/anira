@@ -131,6 +131,7 @@ typedef struct anira_context_config anira_context_config;
 typedef struct anira_contract anira_contract;
 typedef struct anira_job_options anira_job_options;
 typedef struct anira_pipeline anira_pipeline;
+typedef struct anira_custom_engine anira_custom_engine;
 typedef struct anira_context anira_context;
 typedef struct anira_capabilities anira_capabilities;
 typedef struct anira_inference_thread anira_inference_thread;

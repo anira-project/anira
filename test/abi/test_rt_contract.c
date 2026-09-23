@@ -266,8 +266,8 @@ static anira_status ANIRA_CALL anira_rt_contract_engine(const anira_engine_ctx* 
     return total > 0u || ctx->num_inputs == 0u ? ANIRA_OK : ANIRA_ERROR_ENGINE;
 }
 
-/* anira_pipeline_register_engine is [main-thread]: a plain function fills the descriptor and
-   states the promise the attribute checked. */
+/* anira_custom_engine_create and anira_pipeline_add_engine are [main-thread]: a plain function
+   fills the descriptor and states the promise the attribute checked. */
 /* NOLINTNEXTLINE(misc-use-internal-linkage) */
 anira_status anira_rt_contract_register_engine(anira_pipeline* pipeline, void* user_data);
 anira_status anira_rt_contract_register_engine(anira_pipeline* pipeline, void* user_data) {
@@ -275,7 +275,13 @@ anira_status anira_rt_contract_register_engine(anira_pipeline* pipeline, void* u
     engine.user_data = user_data;
     engine.flags = ANIRA_ENGINE_FLAG_REALTIME_SAFE;
     engine.process = anira_rt_contract_engine;
-    return anira_pipeline_register_engine(pipeline, "org.example.rt", &engine, NULL);
+    anira_custom_engine* custom = NULL;
+    anira_status status = anira_custom_engine_create(&engine, &custom, NULL);
+    if (status == ANIRA_OK) {
+        status = anira_pipeline_add_engine(pipeline, "org.example.rt", custom, NULL);
+    }
+    anira_custom_engine_destroy(custom);
+    return status;
 }
 
 /* The setter is [main-thread]: a plain function hands the pair over. */

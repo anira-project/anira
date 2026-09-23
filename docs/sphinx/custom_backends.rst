@@ -3,10 +3,10 @@ Custom Engines
 
 An **engine** runs the model: it takes the model tensors of a chunk in, runs one inference,
 and writes the model tensors out. anira ships five (ONNX Runtime, LibTorch, ExecuTorch, LiteRT
-and TensorFlow Lite, ``ANIRA_ENGINE_*``), and a host adds its own by **registering** one on the
-pipeline under a reverse-URI id: a Core ML or a WebGPU runtime, an engine the build does not
-carry, a synthetic model, a bypass for measuring the pipeline's overhead. A registered engine
-is one more implementation the inference stage resolves to, never a stage of its own (the
+and TensorFlow Lite, ``ANIRA_ENGINE_*``), and a host adds its own: it **creates** the engine
+once as an object and **adds** it to a pipeline under a reverse-URI id. Examples: a Core ML or
+a WebGPU runtime, an engine the build does not carry, a synthetic model, a bypass for
+measuring the pipeline's overhead. A custom engine is one more implementation the inference stage resolves to, never a stage of its own (the
 stage is the pre- and post-processing around it, :doc:`custom_preprocessing`): a model entry
 names it by its id, and the handler prepares it, runs it and resets it exactly as it does a
 built-in engine, with the same plan report, the same real-time rules and the same failure
@@ -15,10 +15,10 @@ same descriptor is a subclass of :cpp:class:`anira::Engine` (below). Its lifecyc
 stage's, with the same words on both sides: ``prepare`` hands back a ``prepared`` pointer,
 every per-chunk call receives it as ``(ctx, prepared, user_data)``, ``reset`` runs at a
 stream boundary, ``unprepare`` frees what one prepare loaded, ``release`` fires once per
-registration.
+engine object.
 
-Registering an engine
----------------------
+Creating and adding an engine
+-----------------------------
 
 .. code-block:: c
 
@@ -30,36 +30,52 @@ Registering an engine
     desc.process = my_process;                         /* the one required slot */
     desc.prepare = my_prepare;
     desc.unprepare = my_unprepare;
-    anira_pipeline_register_engine(pipe, "com.example.myengine", &desc, &err);
+
+    anira_custom_engine* engine = NULL;
+    anira_custom_engine_create(&desc, &engine, &err);                /* the engine object */
+    anira_pipeline_add_engine(pipe, "com.example.myengine", engine, &err);
+    anira_custom_engine_destroy(engine);          /* the pipeline keeps its own reference */
 
     uint32_t row = 0;                                  /* the entry the engine serves */
     anira_model_config_add_model_path_custom(cfg, "com.example.myengine", "model.bin", &row, &err);
 
-``anira_pipeline_register_engine(pipe, id, &desc, &err)`` copies the descriptor (within
-``struct_size``, with its strings) into a carrier that the pipeline and every handler created
-from it share, so ``release`` fires exactly once, with the last of them. The id is a
-reverse-URI name: it must contain a ``.``, and the prefix ``anira.`` is anira's own
-(``anira.v2.custom`` names the 2.x ``CUSTOM`` backend of :doc:`migration`). Registering is
-legal before or after ``anira_pipeline_add_inference``; a handler copies the pipeline at
-``anira_handler_create``, so a registration made afterwards does not reach that handler. A
-model entry that names the id (``anira_model_config_add_model_path_custom``,
+Two calls, two jobs:
+
+- ``anira_custom_engine_create(&desc, &engine, &err)`` copies the descriptor (within
+  ``struct_size``, with its strings) into a refcounted **engine object**. The object is what
+  the engine *is*: anira recognises the same engine by it, and shares prepared models between
+  handlers that run it (below).
+- ``anira_pipeline_add_engine(pipe, id, engine, &err)`` adds the engine to a pipeline under an
+  **id**, which is how the pipeline's model entries name it. The id belongs to the pipeline, not
+  to the engine: one engine may be added to any number of pipelines, under the same id or
+  different ones, and to one pipeline under two ids.
+
+The handle, every pipeline the engine was added to, every handler created from those pipelines
+and every prepared model of the engine hold a reference. ``anira_custom_engine_destroy`` drops
+the handle's, so it may run right after the last ``anira_pipeline_add_engine``; ``release``
+fires exactly once, when the last reference is gone. The id is a reverse-URI name: it must
+contain a ``.``, and the prefix ``anira.`` is anira's own (``anira.v2.custom`` names the 2.x
+``CUSTOM`` backend of :doc:`migration`). Adding is legal before or after
+``anira_pipeline_add_inference``; a handler copies the pipeline at ``anira_handler_create``, so
+an engine added afterwards does not reach that handler. A model entry that names the id (``anira_model_config_add_model_path_custom``,
 ``anira_model_config_add_model_bytes_custom``; ``"engine": "com.example.myengine"`` in a model
 file) is a plan of the handler like a built-in engine's entry; several such entries on one
 model configuration are several plans, which ``anira_handler_set_plan`` switches between,
-resolved by entry, never by the 2.x backend they map to. A registered engine no entry names
-is not a plan and not an error; an entry whose id no registration serves is
+resolved by entry, never by the 2.x backend they map to. An added engine no entry names is not
+a plan and not an error; an entry whose id no engine of the pipeline serves is
 ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``, naming the id. anira never opens
-a registered entry's path or reads its bytes: the engine's ``prepare`` does, through the
-record it receives.
+a custom entry's path or reads its bytes: the engine's ``prepare`` does, through the record it
+receives.
 
-The refusals of the registration, ``ANIRA_ERROR_INVALID_ARGUMENT``: a ``NULL`` pipeline, id
-or descriptor; an id without a ``.`` or with the prefix ``anira.``; a ``struct_size`` below
-the three leading slots (``struct_size``, ``abi_version``, ``user_data``); a ``flags`` bit the
-header does not define; a ``NULL`` ``process``; a ``NULL`` ``consumed_kinds`` (or entry) with
-a count above 0. ``ANIRA_ERROR_INVALID_STATE`` for an id the pipeline already has (checked
-last, so a malformed descriptor is reported as such whatever the pipeline holds), and
-``ANIRA_ERROR_ABI_VERSION`` per ``anira_check_abi``. A refused call creates no carrier and
-never calls ``release``.
+``anira_custom_engine_create`` refuses with ``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL``
+descriptor or ``out``, a ``struct_size`` below the three leading slots (``struct_size``,
+``abi_version``, ``user_data``), a ``flags`` bit the header does not define, a ``NULL``
+``process`` and a ``NULL`` ``consumed_kinds`` (or entry) with a count above 0, and with
+``ANIRA_ERROR_ABI_VERSION`` an ``abi_version`` ``anira_check_abi`` refuses; a refused create
+hands out nothing and never calls ``release``. ``anira_pipeline_add_engine`` refuses with
+``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL`` pipeline, id or engine and an id without a ``.`` or
+with the prefix ``anira.``, and with ``ANIRA_ERROR_INVALID_STATE`` an id the pipeline already
+has; a refused addition takes no reference.
 
 The descriptor
 --------------
@@ -68,8 +84,8 @@ The descriptor
 ``ANIRA_ENGINE_DESC_INIT`` is an engine without a callback and without a promise) names, in
 the order of the lifecycle:
 
-- ``user_data``: handed to every callback as it is, never read by anira. One per
-  registration, shared by every prepared model of the engine; what one prepared model keeps
+- ``user_data``: handed to every callback as it is, never read by anira. One per engine
+  object, shared by every pipeline it was added to and every prepared model of the engine; what one prepared model keeps
   lives behind the ``prepared`` pointer its ``prepare`` hands back.
 - ``consumed_kinds`` / ``num_consumed_kinds``: the extensions the engine reads at prepare, as
   ``"<host>:<kind>"`` strings (hosts ``tensor_spec``, ``model``, ``model_config``,
@@ -126,7 +142,7 @@ naming the engine (``the engine 'com.example.myengine' refused prepare: it retur
 no ``unprepare`` follows for that prepare. What the call hands back through ``out_prepared``
 (which starts ``NULL``; ``NULL`` is a legal value) is the ``prepared`` pointer every
 ``process``, ``reset`` and ``unprepare`` of **this** prepared model receives beside the
-registration's ``user_data``: two pointers, two lifetimes.
+engine's ``user_data``: two pointers, two lifetimes.
 
 **process(ctx, prepared, user_data)** runs on an inference thread, in
 ``ANIRA_PHASE_INFERENCE`` (between the stage's ``before_inference`` and ``after_inference``),
@@ -181,9 +197,9 @@ under the core's lifecycle lock (it does when a later plan of the same prepare f
 plans prepared before it are unprepared on the way out), so like ``prepare`` it must not call
 an entry that takes that lock.
 
-**release(user_data)** runs exactly once, when the last carrier of the descriptor dies
-(``anira_pipeline_destroy`` or ``anira_handler_destroy``, whichever comes last), after every
-``unprepare``; no callback of the engine runs afterwards.
+**release(user_data)** runs exactly once, when the last reference to the engine object dies
+(``anira_custom_engine_destroy``, ``anira_pipeline_destroy`` or ``anira_handler_destroy``,
+whichever comes last), after every ``unprepare``; no callback of the engine runs afterwards.
 
 Statuses and flags
 ------------------
@@ -200,9 +216,10 @@ The flags are the engine's promises, declared once and reported in
 - ``ANIRA_ENGINE_FLAG_DYNAMIC_TIME``: ``process`` accepts a Time extent varying per call at or
   below the template's. Reported; no built-in engine sets it.
 
-A bit the header does not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at the registration; the
+A bit the header does not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at
+``anira_custom_engine_create``; the
 name ``ANIRA_ENGINE_FLAG_STATE_ALIAS`` is reserved for the aliased State pair of a later
-pre-release. Where a registered engine appears, the engine-provider pair is
+pre-release. Where a custom engine appears, the engine-provider pair is
 ``ANIRA_ENGINE_NONE`` with the id: ``anira_plan_info.engine`` and ``engine_id``,
 ``anira_stage_ctx.engine`` in the stage's phases, ``anira_backend_id`` among the candidates of
 ``anira_pipeline_add_inference`` (``engine_id`` set, ``engine`` ``ANIRA_ENGINE_NONE``). The
@@ -229,21 +246,60 @@ this pre-release, the queue's storage; the built-in adapters refuse a model with
 another dtype at prepare with ``ANIRA_ERROR_CONFIG`` naming the engine and the tensor, a
 registered engine binds what its ``prepare`` accepts.
 
-Pooling and lifetime
+Sharing and lifetime
 --------------------
 
-anira prepares once per prepared model it **pools**: two handlers whose entries describe the
-same model for the same engine with the same tensors, instances, warm-up and entry, on the
-same carrier (the pipeline's registration), share one prepared model and its instances, and
-``prepare`` runs once for both (two handlers with different resolved windows never share; two
-pipelines registering one id share nothing). A **session-exclusive** model, one declared
-``ANIRA_MODEL_STATEFUL`` or one with a declared State pair, is prepared for its handler alone,
-with ``instances`` ``1``, and is the only one ``reset`` runs on. ``unprepare`` fires when the
-last handler sharing the prepared model is re-prepared or destroyed; ``release`` once, with
-the last carrier. The order for one registration serving two handlers of one pipeline:
-``prepare`` (once, or once per handler), the ``process`` calls of both handlers, the
-``unprepare`` of each prepared model as its last handler goes, ``release`` when the pipeline
-and both handlers are gone.
+anira prepares once per prepared model it **pools**. Two handlers share one prepared model and
+its instances, and ``prepare`` runs once for both, when
+
+- they run **the same engine object**, whichever pipelines they were created from and under
+  whichever ids those pipelines added it (two objects never share, even over the same
+  callbacks and ``user_data``),
+- their **model configurations are equal**, the whole variant: every entry, spec and extension,
+  since ``prepare`` may read any of it through its record (so the id the entry names is part of
+  it, and two pipelines that add one engine under different ids prepare twice), and
+- their tensors **resolve to the same shapes** (two handlers with different resolved windows
+  never share).
+
+A **session-exclusive** model, one declared ``ANIRA_MODEL_STATEFUL`` or one with a declared
+State pair, is prepared for its handler alone, with ``instances`` ``1``, and is the only one
+``reset`` runs on. ``unprepare`` fires when the last handler sharing the prepared model is
+re-prepared or destroyed; ``release`` once, when the last reference to the engine object dies.
+The order for one engine serving two handlers: ``prepare`` (once, or once per handler), the
+``process`` calls of both handlers, the ``unprepare`` of each prepared model as its last handler
+goes, ``release`` when the handle, the pipelines and the handlers are all gone.
+
+Sharing an engine across plugin instances
+-----------------------------------------
+
+The built-in engines share models between plugin instances without any help: two instances of
+one plugin with equal settings load a model once. A custom engine does the same when the
+instances hand anira **the same engine object**. The plugin keeps one object for its whole
+binary and adds it to every instance's pipeline:
+
+.. code-block:: c
+
+    /* One engine object per plugin binary, created by the first instance. */
+    static anira_custom_engine* shared_engine(void) {
+        static anira_custom_engine* engine = NULL;   /* guard with a lock if instances are
+                                                        created on several threads */
+        if (engine == NULL) {
+            anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
+            desc.process = my_process;
+            desc.prepare = my_prepare;
+            desc.unprepare = my_unprepare;
+            anira_custom_engine_create(&desc, &engine, NULL);
+        }
+        return engine;
+    }
+
+    /* Every plugin instance: */
+    anira_pipeline_add_engine(pipe, "com.example.myengine", shared_engine(), &err);
+
+The static handle keeps the engine alive for the life of the binary; destroy it at the plugin's
+unload, after the last instance. In C++ the idiom is a function-local ``std::weak_ptr``, which
+lets the engine go with the last instance (below). Two different plugin binaries never share a
+custom engine: each has its own object, and a plugin's engine code never outlives the plugin.
 
 An example: a gain engine in C
 ------------------------------
@@ -258,7 +314,7 @@ its own call; the entry's path is read but not opened, since this engine has no 
     #include <anira/abi/config.h>
     #include <anira/abi/handler.h>   /* includes anira/abi/engine.h and anira/abi/tensor.h */
 
-    typedef struct gain_engine { float gain; } gain_engine;               /* the registration */
+    typedef struct gain_engine { float gain; } gain_engine;               /* the user_data */
     typedef struct gain_prepared { size_t elements; } gain_prepared;    /* one prepared model */
 
     static anira_status ANIRA_CALL gain_prepare(const anira_engine_prepare_info* info,
@@ -307,15 +363,20 @@ At setup:
     desc.process = gain_process;
     desc.prepare = gain_prepare;
     desc.unprepare = gain_unprepare;                    /* reset and release stay NULL */
-    anira_pipeline_register_engine(pipe, "com.example.gain", &desc, &err);
+
+    anira_custom_engine* gain = NULL;
+    anira_custom_engine_create(&desc, &gain, &err);
+    anira_pipeline_add_engine(pipe, "com.example.gain", gain, &err);
+    anira_custom_engine_destroy(gain);
 
 The same in C++
 ---------------
 
 :cpp:class:`anira::Engine` of ``anira/anira.hpp`` is the descriptor with virtual functions in
 place of the function pointers, split as the C lifecycle is, exactly like
-:cpp:class:`anira::Stage`: the registration, ``anira::Engine``, states its promise in
-``flags()`` and its extensions in ``consumed_kinds()`` (both read once, at the registration),
+:cpp:class:`anira::Stage`: the engine object, ``anira::Engine``, states its promise in
+``flags()`` and its extensions in ``consumed_kinds()`` (both read once, when its C engine is
+created at its first registration),
 and its ``prepare(const EnginePrepareInfo&)`` returns a ``std::unique_ptr<Engine::Prepared>``,
 the prepared model, on which ``process(EngineContext&)`` and ``reset(EngineContext&)`` are the
 virtuals (``noexcept``; the base ``reset`` does nothing). :cpp:class:`anira::EnginePrepareInfo`
@@ -329,13 +390,21 @@ handler's prepare with its status, ``std::bad_alloc`` with ``ANIRA_ERROR_OUT_OF_
 anything else with ``ANIRA_ERROR_INTERNAL``, and ``what()`` goes to the log (a null return is
 ``ANIRA_ERROR_INTERNAL`` too); a throw never crosses the C boundary. Why the two ownership
 spellings: the prepared model is anira's from ``prepare`` on (deleted at the C ``unprepare``,
-so a ``std::unique_ptr`` says so), while the registration is shared by the pipeline and every
-handler created from it (a ``std::shared_ptr``). The engine is registered with
-``Pipeline::register_engine(id, impl)``, or brought along by the inference stage,
-``stage::Inference(cfg).engine(id, impl)``, which ``Pipeline::add`` registers before it adds
-the stage; either way the pipeline's carrier holds a copy of the ``shared_ptr``, and
-``release()`` runs once, when the last carrier dies. The gain engine, its ``process`` the
-passthrough of the first slot times the gain:
+so a ``std::unique_ptr`` says so), while the engine object is shared by every pipeline it is
+registered on and every handler created from them (a ``std::shared_ptr``). The engine is
+registered with ``Pipeline::register_engine(id, impl)``, or brought along by the inference
+stage, ``stage::Inference(cfg).engine(id, impl)``, which ``Pipeline::add`` registers before it
+adds the stage.
+
+The ``anira::Engine`` object is the engine's identity, as ``anira_custom_engine`` is in C. The
+first registration of an object creates its C engine; every later registration of **the same
+object**, on the same ``Pipeline`` or another, reuses that C engine for as long as a
+``Pipeline`` holding it lives, so handlers of all of them share prepared models. The C engine
+holds a copy of the ``shared_ptr``; ``release()`` runs once per C engine, when the last
+pipeline and handler carrying it are gone, and a registration after that creates a fresh C
+engine with a ``release()`` of its own. A registration refused for its id after it created the
+object's C engine drops that C engine again, and ``release()`` answers it. The gain engine, its
+``process`` the passthrough of the first slot times the gain:
 
 .. code-block:: cpp
 
@@ -383,6 +452,29 @@ passthrough of the first slot times the gain:
     cfg.add_model_path("com.example.gain", "gain.bin");             // the entry the engine serves
     anira::Pipeline pipe{anira::stage::Inference(cfg).engine("com.example.gain", std::make_shared<Gain>(0.5F))};
     // or: pipe.register_engine("com.example.gain", std::make_shared<Gain>(0.5F));
+
+To share the engine across the instances of a plugin, every instance registers the same object,
+kept once per binary; the ``std::weak_ptr`` lets it go with the last instance:
+
+.. code-block:: cpp
+
+    std::shared_ptr<anira::Engine> shared_gain() {
+        static std::mutex mutex;
+        static std::weak_ptr<anira::Engine> cache;       // one per plugin binary
+        const std::lock_guard<std::mutex> lock(mutex);
+        if (std::shared_ptr<anira::Engine> engine = cache.lock()) { return engine; }
+        auto engine = std::make_shared<Gain>(0.5F);
+        cache = engine;
+        return engine;
+    }
+
+    // every plugin instance, each with its own Pipeline:
+    pipe.register_engine("com.example.gain", shared_gain());
+
+Every instance's ``Pipeline`` holds the object's C engine, so two instances with equal
+configurations prepare the model once. Keep the ``Pipeline`` for as long as the instance runs:
+a registration made after every ``Pipeline`` holding the object is gone creates a new C engine,
+which does not share with handlers of the old one.
 
 Using an engine directly in a custom engine
 -------------------------------------------

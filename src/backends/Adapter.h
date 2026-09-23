@@ -51,11 +51,11 @@ struct TensorInfo {
 /// configuration it came from (a model entry and the validator's derived quantities on the C
 /// path, an InferenceConfig on the 2.x path), so that a pooled adapter never aliases a
 /// session's configuration (issue #76). Two records compare equal when they describe the same
-/// model for the same engine with the same tensors, instances, warm-up and entry: the pool's
-/// key, beside the carrier of a registered engine. The bytes compare by identity, as the 2.x
-/// ModelData compares them; the bytes owner and the log level are no part of the identity (the
-/// level is what the engine's environment is created with, and the core reconciles one level
-/// for the process).
+/// model for the same engine with the same tensors, instances, warm-up and entry, and, for a
+/// custom engine, the same variant: the pool's key, beside the carrier of a custom engine. The
+/// bytes compare by identity, as the 2.x ModelData compares them; the bytes owner and the log level
+/// are no part of the identity (the level is what the engine's environment is created with, and the
+/// core reconciles one level for the process).
 struct ANIRA_API Model {
     anira_engine m_engine = ANIRA_ENGINE_NONE;  ///< the built-in engine; NONE with m_engine_id
                                                 ///< for a registered one, NONE alone for the
@@ -68,6 +68,10 @@ struct ANIRA_API Model {
     /// carrier on the C path; empty on the 2.x path, whose caller owns the bytes.
     std::shared_ptr<const void> m_bytes_owner;
     std::string m_entry;  ///< the method or function of the file to run; empty for its default
+    /// A custom engine's variant as canonical JSON text (anira::capi::model_config_json):
+    /// its prepare may read the whole model config, so its prepared models are shared over an
+    /// equal one only. Empty for a built-in engine, which reads the record alone.
+    std::string m_variant;
     std::vector<TensorInfo> m_inputs;   ///< in slot order, State tensors included
     std::vector<TensorInfo> m_outputs;  ///< in slot order, State tensors included
     uint32_t m_instances = 1;  ///< process calls that may run at once on the prepared model,
@@ -150,9 +154,8 @@ protected:
     /// the process of the first inference of a new stream; nothing by default.
     virtual void reset(const anira_engine_ctx& ctx) noexcept { static_cast<void>(ctx); }
     /// Whether run claims an instance per call (the default). The legacy adapter answers
-    /// false: the five 2.x processors claim their own instances inside their process, and a
-    /// 2.x custom backend is called as concurrently as the scheduler dispatches, as it always
-    /// was.
+    /// false: a 2.x BackendBase takes no instance index and is called as concurrently as the
+    /// scheduler dispatches, as it always was.
     virtual bool claims_instances() const noexcept { return true; }
     /// What do_prepare reports for the slots it bound (bind_slots): one entry per slot of
     /// either side of the record.

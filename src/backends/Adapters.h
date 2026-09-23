@@ -52,7 +52,8 @@ enum class Source : uint8_t {
 struct PlanRequest {
     Source m_source = Source::Roundtrip;
     Model m_model;
-    /// Registered only: the carrier of the engine's descriptor, part of the pool's key.
+    /// Registered only: the carrier of the engine's descriptor, part of the pool's key: the
+    /// engine object (anira_custom_engine), whichever pipeline it was added to.
     std::shared_ptr<const anira::capi::EngineCarrier> m_carrier;
     /// Registered only: the adapter over the carrier's descriptor (a DescriptorAdapter over
     /// the row and the variant), unprepared. The core prepares it once and pools it, unless

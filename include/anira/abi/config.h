@@ -977,10 +977,10 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model
                                                                      anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Appends a model entry for a custom engine, named by the reverse-URI id it is
- * registered under on the pipeline (anira_pipeline_register_engine; the entry and the
- * registration may come in either order). An id no registration of the pipeline serves
- * is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id.
+ * @brief Appends a model entry for a custom engine, named by the reverse-URI id it is added
+ * under on the pipeline (anira_pipeline_add_engine; the entry and the addition may come
+ * in either order). An id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED
+ * at anira_handler_create, naming the id.
  * @param config The config.
  * @param engine_id A registered custom engine's name, reverse-URI (must contain a '.').
  * @param utf8_path Model file path, UTF-8, copied.

@@ -1916,12 +1916,12 @@ public:
 }  // namespace
 
 // An Engine subclass end to end through a C-created handler: register_engine hands the
-// pipeline's carrier a copy of the shared_ptr, a handler created from the pipeline carries it
+// object's C engine a copy of the shared_ptr, a handler created from the pipeline carries it
 // on, prepare sees the record (the row, the variant's facts through the getters, the templates,
 // the names, one instance), every block goes through process with the context the record
 // promises, the flags and the consumed kinds reach the plan report under the engine's id, the
 // Prepared dies with the handler, and the shared_ptr is given back exactly once, when the last
-// carrier dies.
+// reference to the C engine dies.
 TEST(AbiCxx, AnEngineSubclassRunsThroughACHandler) {
     const anira_test::Context context;
     ModelConfig model = engine_stream_model();
@@ -1935,11 +1935,11 @@ TEST(AbiCxx, AnEngineSubclassRunsThroughACHandler) {
     std::optional<anira::Pipeline> pipe;
     pipe.emplace();
     pipe->register_engine(k_cxx_engine_id, engine);
-    EXPECT_EQ(engine.use_count(), 2) << "the pipeline's carrier holds its own copy";
+    EXPECT_EQ(engine.use_count(), 2) << "the object's C engine holds its own copy";
     pipe->inference(model);
     CHandler handler(context, *pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
-    EXPECT_EQ(engine.use_count(), 2) << "the handler shares the pipeline's carrier";
+    EXPECT_EQ(engine.use_count(), 2) << "the handler shares the pipeline's C engine";
     pipe.reset();  // the handler carries the engine alone now
     EXPECT_EQ(engine.use_count(), 2);
     EXPECT_EQ(engine->m_released.load(), 0);
@@ -2067,9 +2067,10 @@ TEST(AbiCxx, AThrowingEnginePrepareFailsTheHandlersPrepare) {
 
 // The inference stage brings its engines along: stage::Inference::engine in an initializer
 // list of the pipeline and through Pipeline::add registers each one before the stage is added,
-// exactly as register_engine does, and the handler runs on it; a second registration under one
-// id is ANIRA_ERROR_INVALID_STATE, keeps no copy and never calls release; release fires once
-// per registration, with the last carrier of each.
+// exactly as register_engine does, and the handler runs on it; a second pipeline registering the
+// same object while the first lives reuses its C engine (no second copy); a second registration
+// under one id is ANIRA_ERROR_INVALID_STATE and keeps no copy; release fires once, for the one C
+// engine, with its last reference.
 TEST(AbiCxx, InferenceRegistersItsEnginesWhenTheStageIsAdded) {
     const anira_test::Context context;
     const ModelConfig model = engine_stream_model();
@@ -2078,7 +2079,7 @@ TEST(AbiCxx, InferenceRegistersItsEnginesWhenTheStageIsAdded) {
     {
         const anira::Pipeline listed{
             anira::stage::Inference(model).engine(k_cxx_engine_id, engine)};
-        EXPECT_EQ(engine.use_count(), 2) << "the pipeline's carrier holds its copy";
+        EXPECT_EQ(engine.use_count(), 2) << "the object's C engine holds its copy";
         CHandler handler(context, listed);
         ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
         ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
@@ -2090,8 +2091,9 @@ TEST(AbiCxx, InferenceRegistersItsEnginesWhenTheStageIsAdded) {
         expect_scaled_passthrough(handler.m_handler, in, out, 2.0F);
         EXPECT_EQ(engine->last()->m_processed.load(), 2);
 
-        // Through add, on a second pipeline: the stage lists what it brings, and a second
-        // registration under the id on that pipeline is refused by the C entry.
+        // Through add, on a second pipeline: the stage lists what it brings, the pipeline reuses
+        // the C engine the first one holds, and a second registration under the id on that
+        // pipeline is refused by the C entry.
         anira::Pipeline added;
         anira::stage::Inference stage(model);
         stage.engine(k_cxx_engine_id, engine);
@@ -2099,21 +2101,23 @@ TEST(AbiCxx, InferenceRegistersItsEnginesWhenTheStageIsAdded) {
         EXPECT_EQ(stage.engines()[0].first, k_cxx_engine_id);
         EXPECT_EQ(stage.engines()[0].second, engine);
         added.add(stage);
-        EXPECT_EQ(engine.use_count(), 4) << "the stage's pair and the second carrier's copy";
+        EXPECT_EQ(engine.use_count(), 3) << "the stage's pair; the C engine's copy is the first's";
         const Thrown twice = thrown_by([&] { added.register_engine(k_cxx_engine_id, engine); });
         EXPECT_TRUE(twice.m_thrown);
         EXPECT_EQ(twice.m_status, ANIRA_ERROR_INVALID_STATE);
         EXPECT_NE(twice.m_what.find("already has an engine"), std::string::npos) << twice.m_what;
-        EXPECT_EQ(engine.use_count(), 4) << "a refused registration keeps no copy";
+        EXPECT_EQ(engine.use_count(), 3) << "a refused registration keeps no copy";
         EXPECT_EQ(engine->m_released.load(), 0);
     }
-    EXPECT_EQ(engine->m_released.load(), 2) << "once per registration";
+    EXPECT_EQ(engine->m_released.load(), 1) << "once, for the one C engine";
     EXPECT_EQ(engine.use_count(), 1);
 }
 
 // register_engine refuses what it cannot describe, and a refused registration keeps no copy
 // of the engine: a null engine before the C call, an id that is no reverse-URI name and a
-// flags() bit the C header does not define by the C entry.
+// flags() bit the C header does not define by the C entries. A refused id comes after the C
+// engine was created, so that C engine is dropped again and release answers it; a refused
+// flag comes before it exists, and nothing is released.
 TEST(AbiCxx, RegisterEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
     anira::Pipeline pipe;
     const Thrown null_engine =
@@ -2128,6 +2132,7 @@ TEST(AbiCxx, RegisterEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
     EXPECT_EQ(bad_id.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(bad_id.m_what.find("reverse-URI"), std::string::npos) << bad_id.m_what;
     EXPECT_EQ(engine.use_count(), 1);
+    EXPECT_EQ(engine->m_released.load(), 1) << "the C engine the refused call created";
 
     engine->m_flags = 8U;
     const Thrown bit = thrown_by([&] { pipe.register_engine(k_cxx_engine_id, engine); });
@@ -2135,7 +2140,7 @@ TEST(AbiCxx, RegisterEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
     EXPECT_EQ(bit.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(bit.m_what.find("flags"), std::string::npos) << bit.m_what;
     EXPECT_EQ(engine.use_count(), 1);
-    EXPECT_EQ(engine->m_released.load(), 0);
+    EXPECT_EQ(engine->m_released.load(), 1) << "no C engine was created";
 
     engine->m_flags = ANIRA_ENGINE_FLAG_DYNAMIC_TIME;  // read again by the next registration
     pipe.register_engine(k_cxx_engine_id, engine);
@@ -2246,6 +2251,55 @@ TEST(AbiCxx, APreparedPerPreparedModelDiesWithItsUnprepareAndResetSeesEveryNewSt
         EXPECT_TRUE(shared->m_deleted.load());
         EXPECT_EQ(engine->m_released.load(), 0) << "the pipeline still carries the engine";
     }
+}
+
+// The Engine object is the engine's identity: one object registered on two Pipelines (the
+// plugin-instance idiom: one object per binary, one Pipeline per instance) gives one C engine,
+// so two handlers of equal configurations share one prepared model; release fires once. After
+// every Pipeline holding it is gone, a registration creates a fresh C engine, answered by a
+// release of its own.
+TEST(AbiCxx, OneEngineObjectOnTwoPipelinesSharesOnePreparedModel) {
+    const anira_test::Context context;
+    const anira::ContractHandle contract = anira_test::explicit_contract();
+    const ModelConfig model = engine_stream_model();
+    auto engine = std::make_shared<CountingEngine>();
+    {
+        std::optional<anira::Pipeline> first_pipe;
+        std::optional<anira::Pipeline> second_pipe;
+        first_pipe.emplace();
+        second_pipe.emplace();
+        first_pipe->register_engine(k_cxx_engine_id, engine).inference(model);
+        second_pipe->register_engine(k_cxx_engine_id, engine).inference(model);
+        EXPECT_EQ(engine.use_count(), 2) << "one C engine, one copy";
+        CHandler first(context, *first_pipe);
+        CHandler second(context, *second_pipe);
+        ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
+        ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
+        first_pipe.reset();
+        second_pipe.reset();
+        ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
+        ASSERT_EQ(second.prepare(contract), ANIRA_OK) << second.m_err.message;
+        EXPECT_EQ(engine->m_prepared, 1) << "one prepared model across the two pipelines";
+        std::vector<float> in;
+        std::vector<float> out;
+        drive(first.m_handler, 2, in, out);
+        drive(second.m_handler, 2, in, out);
+        ASSERT_FALSE(HasFatalFailure());
+        EXPECT_EQ(engine->last()->m_processed.load(), 4);
+        first.destroy();
+        EXPECT_FALSE(engine->last()->m_deleted.load());
+        second.destroy();
+        EXPECT_TRUE(engine->last()->m_deleted.load());
+    }
+    EXPECT_EQ(engine->m_released.load(), 1);
+    EXPECT_EQ(engine.use_count(), 1);
+    {
+        anira::Pipeline again;
+        again.register_engine(k_cxx_engine_id, engine);
+        EXPECT_EQ(engine.use_count(), 2) << "a fresh C engine";
+    }
+    EXPECT_EQ(engine->m_released.load(), 2);
+    EXPECT_EQ(engine.use_count(), 1);
 }
 
 // The enum alias is EngineKind: what a model config takes and answers for a built-in engine,

@@ -1424,6 +1424,14 @@ anira_status write_text(const std::string& text, char* buf, size_t cap, size_t* 
 
 }  // namespace
 
+namespace anira::capi {
+
+std::string model_config_json(const anira_model_config& model) {
+    return model_to_json(model).dump();
+}
+
+}  // namespace anira::capi
+
 // ==== entry points ==============================================================================
 
 anira_status ANIRA_CALL anira_model_config_from_json(const char* utf8,

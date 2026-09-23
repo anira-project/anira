@@ -86,7 +86,8 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        (``anira_model_config_add_model_path``); the engines are ``ANIRA_ENGINE_ONNXRUNTIME``
        (2.x ``ONNX``), ``ANIRA_ENGINE_LIBTORCH``, ``ANIRA_ENGINE_TFLITE``,
        ``ANIRA_ENGINE_LITERT``, ``ANIRA_ENGINE_EXECUTORCH``. A custom backend is a named
-       engine, registered on the pipeline under its id (``anira_pipeline_register_engine``;
+       engine, added to the pipeline under its id (``anira_custom_engine_create`` and
+       ``anira_pipeline_add_engine``;
        ``anira::Pipeline::register_engine(id, impl)`` or
        ``anira::stage::Inference(cfg).engine(id, impl)`` with an :cpp:class:`anira::Engine`)
        and named by the entry: ``cfg.add_model_path("de.tu-berlin.coreml", path)``
@@ -307,8 +308,9 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
      - anira 3.x
    * - ``class X : public anira::BackendBase``, handed to the ``InferenceHandler`` constructor
        and selected with ``set_inference_backend(InferenceBackend::CUSTOM)``
-     - An ``anira_engine_desc`` registered with ``anira_pipeline_register_engine(pipe, id,
-       &desc, &err)`` under a reverse-URI id, or a subclass of :cpp:class:`anira::Engine`
+     - An ``anira_engine_desc`` made an engine with ``anira_custom_engine_create(&desc,
+       &engine, &err)`` and added with ``anira_pipeline_add_engine(pipe, id, engine, &err)``
+       under a reverse-URI id, or a subclass of :cpp:class:`anira::Engine`
        registered with ``Pipeline::register_engine(id, impl)`` or brought along by
        ``stage::Inference(cfg).engine(id, impl)``; a model entry names the id
        (``cfg.add_model_path(id, path)``), and that entry is a plan the report lists as

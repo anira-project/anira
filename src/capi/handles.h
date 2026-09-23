@@ -27,6 +27,12 @@
 
 namespace anira::capi {
 
+/// The model config as the compact JSON text anira_model_config_to_json writes (json.cpp): the
+/// whole variant, every entry, spec and extension, in a canonical order. What a custom engine's
+/// prepared model is pooled by beside its record (backend::Model::m_variant), since its prepare
+/// may read any of it.
+std::string model_config_json(const anira_model_config& model);
+
 /// One axis of a tensor spec; written says whether set_axis touched the slot.
 struct Axis {
     anira_axis_tag m_tag = ANIRA_AXIS_ANY;

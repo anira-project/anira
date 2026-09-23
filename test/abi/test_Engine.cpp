@@ -1,6 +1,7 @@
-// anira/abi/engine.h: the registration of a custom engine on a pipeline
-// (anira_pipeline_register_engine), the lifetime of its carrier, the stage's twin, and the
-// engine at run time: a model entry naming a registered id is a plan the C handler prepares
+// anira/abi/engine.h: the custom engine as an object (anira_custom_engine_create) added to
+// pipelines under ids (anira_pipeline_add_engine), the lifetime of its carrier, the stage's
+// twin, sharing across pipelines, and the engine at run time: a model entry naming an added id
+// is a plan the C handler prepares
 // through the engine's prepare, runs through its process on every inference and resets at a
 // stream boundary, on every leg of the build (a registered engine needs no built-in one).
 #include <anira/abi/build_info.h>
@@ -48,7 +49,7 @@ using anira_test::RecordCollector;
 
 constexpr size_t k_hop = anira_test::k_block;
 
-/// What an engine's callbacks count on its registration.
+/// What an engine's callbacks count on its user_data.
 struct EngineLife {
     int m_released = 0;
     int m_prepared = 0;
@@ -146,9 +147,21 @@ struct Pipe {
                   ANIRA_OK)
             << m_err.message;
     }
-    anira_status register_engine(const char* id, const anira_engine_desc& engine) {
+    /// A new engine over `engine`, added under `id` and its handle destroyed again: the
+    /// pipeline holds the only reference then. The first refusal's status (the create's or the
+    /// add's); a refused add drops the engine it created, so its release fires.
+    anira_status add_new_engine(const char* id, const anira_engine_desc& engine) {
         m_err = ANIRA_ERROR_INIT;
-        return anira_pipeline_register_engine(m_pipeline, id, &engine, &m_err);
+        anira_custom_engine* handle = nullptr;
+        anira_status status = anira_custom_engine_create(&engine, &handle, &m_err);
+        if (status == ANIRA_OK) { status = add_engine(id, handle); }
+        anira_custom_engine_destroy(handle);
+        return status;
+    }
+    /// Adds an existing engine under `id`.
+    anira_status add_engine(const char* id, const anira_custom_engine* engine) {
+        m_err = ANIRA_ERROR_INIT;
+        return anira_pipeline_add_engine(m_pipeline, id, engine, &m_err);
     }
     anira_status create_handler(const Context& context, anira_handler** out) {
         m_err = ANIRA_ERROR_INIT;
@@ -438,56 +451,86 @@ std::vector<anira_plan_ext> ext_rows(const anira_handler* handler, uint32_t plan
 
 }  // namespace
 
-// Every ANIRA_ERROR_INVALID_ARGUMENT cause of the registration, named in the message: the three
-// NULL arguments, an id that is no reverse-URI name or anira's own (anira.v2.custom among them),
-// a short struct_size, a flags bit the header does not define, a NULL process and a NULL kinds
-// array or entry with a count. A refused call creates no carrier and never calls release.
-TEST(AbiEngine, RegisterRefusals) {
-    Pipe pipe;
+// Every ANIRA_ERROR_INVALID_ARGUMENT cause of the engine's create, named in the message: a NULL
+// desc or out, a short struct_size, a flags bit the header does not define, a NULL process and a
+// NULL kinds array or entry with a count. A refused create hands out nothing and never calls
+// release.
+TEST(AbiEngine, CreateRefusals) {
     EngineLife life;
     const anira_engine_desc engine = full_engine(life);
-    const auto refused =
-        [&pipe, &life](const char* id, const anira_engine_desc* desc, const char* fragment) {
-            anira_error err = ANIRA_ERROR_INIT;
-            EXPECT_EQ(anira_pipeline_register_engine(pipe.m_pipeline, id, desc, &err),
-                      ANIRA_ERROR_INVALID_ARGUMENT)
-                << id;
-            EXPECT_NE(std::strstr(err.message, fragment), nullptr) << err.message;
-            EXPECT_TRUE(pipe.m_pipeline->m_engines.empty());
-            EXPECT_EQ(life.m_released, 0);
-        };
+    const auto refused = [&life](const anira_engine_desc* desc, const char* fragment) {
+        anira_error err = ANIRA_ERROR_INIT;
+        anira_custom_engine* handle = nullptr;
+        EXPECT_EQ(anira_custom_engine_create(desc, &handle, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_NE(std::strstr(err.message, fragment), nullptr) << err.message;
+        EXPECT_EQ(handle, nullptr);
+        EXPECT_EQ(life.m_released, 0);
+    };
+    refused(nullptr, "NULL desc");
     {
         anira_error err = ANIRA_ERROR_INIT;
-        EXPECT_EQ(anira_pipeline_register_engine(nullptr, "org.example.gain", &engine, &err),
-                  ANIRA_ERROR_INVALID_ARGUMENT);
-        EXPECT_NE(std::strstr(err.message, "NULL pipeline"), nullptr) << err.message;
+        EXPECT_EQ(anira_custom_engine_create(&engine, nullptr, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_NE(std::strstr(err.message, "NULL out"), nullptr) << err.message;
     }
-    refused(nullptr, &engine, "NULL engine_id");
-    refused("org.example.gain", nullptr, "NULL desc");
-    // The id: a reverse-URI name, and not one of anira's own.
-    refused("gain", &engine, "'.'");
-    refused("anira.gain", &engine, "anira.");
-    refused(k_custom, &engine, "anira.");
-    // The descriptor.
     anira_engine_desc bad = engine;
     bad.struct_size = static_cast<uint32_t>(offsetof(anira_engine_desc, user_data));
-    refused("org.example.gain", &bad, "struct_size");
+    refused(&bad, "struct_size");
     bad = engine;
     bad.flags = 8U;  // the reserved alias bit is not defined in this pre-release
-    refused("org.example.gain", &bad, "flags");
+    refused(&bad, "flags");
     bad.flags = 0x80000000U | ANIRA_ENGINE_FLAG_REALTIME_SAFE;
-    refused("org.example.gain", &bad, "flags");
+    refused(&bad, "flags");
     bad = engine;
     bad.process = nullptr;
-    refused("org.example.gain", &bad, "process");
+    refused(&bad, "process");
     bad = engine;
     bad.num_consumed_kinds = 1;
-    refused("org.example.gain", &bad, "consumed_kinds");
+    refused(&bad, "consumed_kinds");
     const std::array<const char*, 1> null_kind{nullptr};
     bad.consumed_kinds = null_kind.data();
-    refused("org.example.gain", &bad, "consumed_kinds[0]");
-    // The same descriptor, well formed, registers: the refusals were the arguments'.
-    EXPECT_EQ(pipe.register_engine("org.example.gain", engine), ANIRA_OK) << pipe.m_err.message;
+    refused(&bad, "consumed_kinds[0]");
+    // The same descriptor, well formed, creates: the refusals were the arguments'. The handle
+    // holds the only reference, so its destroy releases.
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_custom_engine* handle = nullptr;
+    ASSERT_EQ(anira_custom_engine_create(&engine, &handle, &err), ANIRA_OK) << err.message;
+    ASSERT_NE(handle, nullptr);
+    anira_custom_engine_destroy(handle);
+    EXPECT_EQ(life.m_released, 1);
+    anira_custom_engine_destroy(nullptr);  // NULL-safe
+}
+
+// Every ANIRA_ERROR_INVALID_ARGUMENT cause of the addition, named in the message: the three
+// NULL arguments and an id that is no reverse-URI name or anira's own (anira.v2.custom among
+// them). A refused addition takes no reference: the engine stays the handle's alone.
+TEST(AbiEngine, AddRefusals) {
+    Pipe pipe;
+    EngineLife life;
+    const anira_engine_desc desc = full_engine(life);
+    anira_custom_engine* engine = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_custom_engine_create(&desc, &engine, &err), ANIRA_OK) << err.message;
+    const auto refused =
+        [&pipe](const char* id, const anira_custom_engine* added, const char* fragment) {
+            EXPECT_EQ(pipe.add_engine(id, added), ANIRA_ERROR_INVALID_ARGUMENT) << id;
+            EXPECT_NE(std::strstr(pipe.m_err.message, fragment), nullptr) << pipe.m_err.message;
+            EXPECT_TRUE(pipe.m_pipeline->m_engines.empty());
+        };
+    {
+        anira_error null_err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_pipeline_add_engine(nullptr, "org.example.gain", engine, &null_err),
+                  ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_NE(std::strstr(null_err.message, "NULL pipeline"), nullptr) << null_err.message;
+    }
+    refused(nullptr, engine, "NULL engine_id");
+    refused("org.example.gain", nullptr, "NULL engine");
+    // The id: a reverse-URI name, and not one of anira's own.
+    refused("gain", engine, "'.'");
+    refused("anira.gain", engine, "anira.");
+    refused(k_custom, engine, "anira.");
+    EXPECT_EQ(pipe.add_engine("org.example.gain", engine), ANIRA_OK) << pipe.m_err.message;
+    anira_custom_engine_destroy(engine);
+    EXPECT_EQ(life.m_released, 0) << "the pipeline holds it";
     pipe.destroy();
     EXPECT_EQ(life.m_released, 1);
 }
@@ -495,7 +538,7 @@ TEST(AbiEngine, RegisterRefusals) {
 // A caller compiled against a header that ends after process hands over the slots up to it:
 // the rest reads as ANIRA_ENGINE_DESC_INIT, so the carrier's engine has no reset, no prepare,
 // no unprepare and no release, whatever the memory beyond struct_size holds; the kinds are
-// copied, the id owned.
+// copied, and the pipeline owns the id.
 TEST(AbiEngine, AShortDescriptorReadsAsTheDefaults) {
     Pipe pipe;
     EngineLife life;
@@ -508,11 +551,11 @@ TEST(AbiEngine, AShortDescriptorReadsAsTheDefaults) {
                                                sizeof(anira_engine_process_fn));
     {
         const std::string id = "org.example.short";  // dies before the carrier does
-        ASSERT_EQ(pipe.register_engine(id.c_str(), engine), ANIRA_OK) << pipe.m_err.message;
+        ASSERT_EQ(pipe.add_new_engine(id.c_str(), engine), ANIRA_OK) << pipe.m_err.message;
     }
     ASSERT_EQ(pipe.m_pipeline->m_engines.size(), 1U);
-    const anira::capi::EngineCarrier& carrier = *pipe.m_pipeline->m_engines[0];
-    EXPECT_EQ(carrier.id(), "org.example.short");
+    EXPECT_EQ(pipe.m_pipeline->m_engines[0].m_id, "org.example.short");
+    const anira::capi::EngineCarrier& carrier = *pipe.m_pipeline->m_engines[0].m_carrier;
     const anira_engine_desc& kept = carrier.desc();
     EXPECT_EQ(kept.struct_size, sizeof(anira_engine_desc));
     EXPECT_EQ(kept.abi_version, ANIRA_ABI_VERSION);
@@ -539,49 +582,51 @@ TEST(AbiEngine, AbiVersionIsChecked) {
     EngineLife life;
     anira_engine_desc engine = full_engine(life);
     engine.abi_version = ANIRA_MAKE_ABI_VERSION(ANIRA_ABI_MAJOR + 1U, 0U);
-    EXPECT_EQ(pipe.register_engine("org.example.gain", engine), ANIRA_ERROR_ABI_VERSION);
+    EXPECT_EQ(pipe.add_new_engine("org.example.gain", engine), ANIRA_ERROR_ABI_VERSION);
     EXPECT_NE(std::strstr(pipe.m_err.message, "ABI"), nullptr) << pipe.m_err.message;
     EXPECT_TRUE(pipe.m_pipeline->m_engines.empty());
     engine.abi_version = ANIRA_ABI_VERSION;
-    EXPECT_EQ(pipe.register_engine("org.example.gain", engine), ANIRA_OK) << pipe.m_err.message;
+    EXPECT_EQ(pipe.add_new_engine("org.example.gain", engine), ANIRA_OK) << pipe.m_err.message;
     EXPECT_EQ(pipe.m_pipeline->m_engines.size(), 1U);
     pipe.destroy();
     EXPECT_EQ(life.m_released, 1);
 }
 
-// One carrier per id: a second registration of an id is ANIRA_ERROR_INVALID_STATE naming it,
-// creates no carrier and never calls its release, while a malformed second descriptor reports
-// its own fault first (the duplicate is checked last); another id registers beside the first.
+// One engine per id in a pipeline: a second addition under a taken id is
+// ANIRA_ERROR_INVALID_STATE naming it and takes no reference, whichever engine it brings (the
+// engine already there included); another id is added beside the first, and one engine may sit
+// under two ids of one pipeline.
 TEST(AbiEngine, ADuplicateIdIsInvalidState) {
     Pipe pipe;
     EngineLife first;
     EngineLife second;
-    EngineLife third;
-    ASSERT_EQ(pipe.register_engine("org.example.twice", full_engine(first)), ANIRA_OK)
-        << pipe.m_err.message;
-    EXPECT_EQ(pipe.register_engine("org.example.twice", full_engine(second)),
-              ANIRA_ERROR_INVALID_STATE);
+    anira_error err = ANIRA_ERROR_INIT;
+    const anira_engine_desc first_desc = full_engine(first);
+    const anira_engine_desc second_desc = full_engine(second);
+    anira_custom_engine* first_engine = nullptr;
+    anira_custom_engine* second_engine = nullptr;
+    ASSERT_EQ(anira_custom_engine_create(&first_desc, &first_engine, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(anira_custom_engine_create(&second_desc, &second_engine, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(pipe.add_engine("org.example.twice", first_engine), ANIRA_OK) << pipe.m_err.message;
+    EXPECT_EQ(pipe.add_engine("org.example.twice", second_engine), ANIRA_ERROR_INVALID_STATE);
     EXPECT_NE(std::strstr(pipe.m_err.message, "org.example.twice"), nullptr) << pipe.m_err.message;
     EXPECT_NE(std::strstr(pipe.m_err.message, "already"), nullptr) << pipe.m_err.message;
-    // The same descriptor a second time is a duplicate as well.
-    EXPECT_EQ(pipe.register_engine("org.example.twice", full_engine(first)),
-              ANIRA_ERROR_INVALID_STATE);
-    // A malformed descriptor under the taken id is reported as such, not as a duplicate.
-    anira_engine_desc bad = full_engine(second);
-    bad.flags = 8U;
-    EXPECT_EQ(pipe.register_engine("org.example.twice", bad), ANIRA_ERROR_INVALID_ARGUMENT);
-    bad = full_engine(second);
-    bad.process = nullptr;
-    EXPECT_EQ(pipe.register_engine("org.example.twice", bad), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(pipe.register_engine("org.example.thrice", full_engine(third)), ANIRA_OK)
-        << pipe.m_err.message;
+    // The engine already there, a second time under its id, is a duplicate as well.
+    EXPECT_EQ(pipe.add_engine("org.example.twice", first_engine), ANIRA_ERROR_INVALID_STATE);
+    // The same engine under another id is a second name for it.
+    EXPECT_EQ(pipe.add_engine("org.example.alias", first_engine), ANIRA_OK) << pipe.m_err.message;
     ASSERT_EQ(pipe.m_pipeline->m_engines.size(), 2U);
-    EXPECT_EQ(pipe.m_pipeline->m_engines[0]->id(), "org.example.twice");
-    EXPECT_EQ(pipe.m_pipeline->m_engines[1]->id(), "org.example.thrice");
+    EXPECT_EQ(pipe.m_pipeline->m_engines[0].m_id, "org.example.twice");
+    EXPECT_EQ(pipe.m_pipeline->m_engines[1].m_id, "org.example.alias");
+    EXPECT_EQ(pipe.m_pipeline->m_engines[0].m_carrier, pipe.m_pipeline->m_engines[1].m_carrier);
+    anira_custom_engine_destroy(second_engine);
+    EXPECT_EQ(second.m_released, 1) << "the refused additions took no reference";
+    anira_custom_engine_destroy(first_engine);
+    EXPECT_EQ(first.m_released, 0);
     pipe.destroy();
-    EXPECT_EQ(first.m_released, 1);
-    EXPECT_EQ(second.m_released, 0);
-    EXPECT_EQ(third.m_released, 1);
+    EXPECT_EQ(first.m_released, 1) << "once, for both ids";
 }
 
 // A registration is legal before and after anira_pipeline_add_inference, and a handler created
@@ -594,18 +639,18 @@ TEST(AbiEngine, LegalBeforeAndAfterAddInference) {
     Pipe pipe;
     EngineLife before;
     EngineLife after;
-    ASSERT_EQ(pipe.register_engine("org.example.before", full_engine(before)), ANIRA_OK)
+    ASSERT_EQ(pipe.add_new_engine("org.example.before", full_engine(before)), ANIRA_OK)
         << pipe.m_err.message;
     pipe.add_inference(stream_model());
-    ASSERT_EQ(pipe.register_engine("org.example.after", full_engine(after)), ANIRA_OK)
+    ASSERT_EQ(pipe.add_new_engine("org.example.after", full_engine(after)), ANIRA_OK)
         << pipe.m_err.message;
     ASSERT_EQ(pipe.m_pipeline->m_engines.size(), 2U);
 
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
     ASSERT_EQ(handler->m_pipeline.m_engines.size(), 2U);
-    EXPECT_EQ(handler->m_pipeline.m_engines[0].get(), pipe.m_pipeline->m_engines[0].get());
-    EXPECT_EQ(handler->m_pipeline.m_engines[1].get(), pipe.m_pipeline->m_engines[1].get());
+    EXPECT_EQ(handler->m_pipeline.m_engines[0].m_carrier, pipe.m_pipeline->m_engines[0].m_carrier);
+    EXPECT_EQ(handler->m_pipeline.m_engines[1].m_carrier, pipe.m_pipeline->m_engines[1].m_carrier);
     anira_error err = ANIRA_ERROR_INIT;
     const anira::ContractHandle contract = explicit_contract();
     ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
@@ -621,7 +666,7 @@ TEST(AbiEngine, LegalBeforeAndAfterAddInference) {
     GainEngine gain;
     Pipe named;
     named.add_inference(stream_model("org.example.after", k_never_opened));
-    ASSERT_EQ(named.register_engine("org.example.after", gain_desc(gain)), ANIRA_OK)
+    ASSERT_EQ(named.add_new_engine("org.example.after", gain_desc(gain)), ANIRA_OK)
         << named.m_err.message;
     anira_handler* runs = nullptr;
     ASSERT_EQ(named.create_handler(context, &runs), ANIRA_OK) << named.m_err.message;
@@ -653,7 +698,7 @@ TEST(AbiEngine, ReleaseFiresOnceWithTheLastCarrier) {
                      std::to_string(order[2]));
         EngineLife life;
         Pipe pipe;
-        ASSERT_EQ(pipe.register_engine("org.example.shared", full_engine(life)), ANIRA_OK)
+        ASSERT_EQ(pipe.add_new_engine("org.example.shared", full_engine(life)), ANIRA_OK)
             << pipe.m_err.message;
         pipe.add_inference(model);
         anira_handler* first = nullptr;
@@ -684,7 +729,7 @@ TEST(AbiEngine, RegisteredAfterCreateDoesNotReachTheHandler) {
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
     EngineLife life;
-    ASSERT_EQ(pipe.register_engine("org.example.late", full_engine(life)), ANIRA_OK)
+    ASSERT_EQ(pipe.add_new_engine("org.example.late", full_engine(life)), ANIRA_OK)
         << pipe.m_err.message;
     EXPECT_EQ(pipe.m_pipeline->m_engines.size(), 1U);
     EXPECT_TRUE(handler->m_pipeline.m_engines.empty());
@@ -705,7 +750,7 @@ TEST(AbiEngine, PassthroughOnEveryLeg) {
     GainEngine gain;
     gain.m_gain = 0.5F;
     Pipe pipe;
-    ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
     pipe.add_inference(gain_model());
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
@@ -750,8 +795,8 @@ TEST(AbiEngine, PassthroughOnEveryLeg) {
     EXPECT_EQ(gain.m_released, 1);
 }
 
-// A custom row whose id no registration serves is ANIRA_ERROR_NOT_SUPPORTED at create, naming
-// the id and the entry that registers one; another registration does not serve it.
+// A custom row whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at create,
+// naming the id and the entry that adds one; an engine under another id does not serve it.
 TEST(AbiEngine, AnUnregisteredCustomIdIsNotSupported) {
     const Context context;
     for (const bool other_registered : {false, true}) {
@@ -759,7 +804,7 @@ TEST(AbiEngine, AnUnregisteredCustomIdIsNotSupported) {
         GainEngine gain;  // outlives the pipeline, whose carrier's release reads it
         Pipe pipe;
         if (other_registered) {
-            ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK)
+            ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK)
                 << pipe.m_err.message;
         }
         pipe.add_inference(stream_model("org.example.nobody", k_never_opened));
@@ -769,9 +814,9 @@ TEST(AbiEngine, AnUnregisteredCustomIdIsNotSupported) {
         EXPECT_EQ(handler, nullptr);
         EXPECT_NE(std::strstr(pipe.m_err.message, "org.example.nobody"), nullptr)
             << pipe.m_err.message;
-        EXPECT_NE(std::strstr(pipe.m_err.message, "is not registered on this pipeline"), nullptr)
+        EXPECT_NE(std::strstr(pipe.m_err.message, "is not added to this pipeline"), nullptr)
             << pipe.m_err.message;
-        EXPECT_NE(std::strstr(pipe.m_err.message, "anira_pipeline_register_engine"), nullptr)
+        EXPECT_NE(std::strstr(pipe.m_err.message, "anira_pipeline_add_engine"), nullptr)
             << pipe.m_err.message;
         EXPECT_EQ(gain.m_prepared, 0);
     }
@@ -863,7 +908,7 @@ TEST(AbiEngine, EqualConfigsShareOnePreparedModelAStatefulOneNever) {
     {
         GainEngine gain;
         Pipe pipe;
-        ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
         ModelConfig model = gain_model();
         model.max_instances(2);
         pipe.add_inference(model);
@@ -894,7 +939,7 @@ TEST(AbiEngine, EqualConfigsShareOnePreparedModelAStatefulOneNever) {
     {
         GainEngine gain;
         Pipe pipe;
-        ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
         ModelConfig model = gain_model();
         model.max_instances(2);
         model.state(ANIRA_MODEL_STATEFUL);
@@ -961,7 +1006,7 @@ TEST(AbiEngine, UnprepareOncePerPreparedModel) {
     const Context context;
     GainEngine gain;
     Pipe pipe;
-    ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
     pipe.add_inference(gain_model());
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
@@ -991,7 +1036,7 @@ TEST(AbiEngine, UnprepareIsNotDeferredByAnInferenceThreadKeepingTheLastJob) {
     const anira::ContractHandle contract = explicit_contract();
     GainEngine gain;
     Pipe pipe;
-    ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
     ModelConfig model = gain_model();
     model.state(ANIRA_MODEL_STATEFUL);
     pipe.add_inference(model);
@@ -1034,7 +1079,7 @@ TEST(AbiEngine, ARefusedPrepareFailsThePrepareAndOwesNoUnprepare) {
     GainEngine gain;
     gain.m_refuse_prepare = ANIRA_ERROR_MODEL_LOAD;
     Pipe pipe;
-    ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
     pipe.add_inference(gain_model());
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
@@ -1064,7 +1109,7 @@ TEST(AbiEngine, ResetIsCalledAtTheFirstInferenceOfANewGeneration) {
     {
         GainEngine gain;
         Pipe pipe;
-        ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
         ModelConfig model = gain_model();
         model.state(ANIRA_MODEL_STATEFUL);
         pipe.add_inference(model);
@@ -1095,7 +1140,7 @@ TEST(AbiEngine, ResetIsCalledAtTheFirstInferenceOfANewGeneration) {
     {
         GainEngine gain;
         Pipe pipe;
-        ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
         pipe.add_inference(gain_model());
         anira_handler* handler = nullptr;
         ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
@@ -1121,7 +1166,7 @@ TEST(AbiEngine, FlagsRoundTripThroughThePlanReport) {
     GainEngine gain;
     constexpr uint32_t k_flags = ANIRA_ENGINE_FLAG_REALTIME_SAFE | ANIRA_ENGINE_FLAG_DYNAMIC_TIME;
     Pipe pipe;
-    ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain, k_flags)), ANIRA_OK)
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain, k_flags)), ANIRA_OK)
         << pipe.m_err.message;
     // Two custom rows, two plans: the registered engine's and the engine-free pass-through's.
     ModelConfig model = gain_model();
@@ -1165,7 +1210,7 @@ TEST(AbiEngine, AFailingProcessDeliversZerosAndLatchesItsStatus) {
     const Context context;
     GainEngine gain;
     Pipe pipe;
-    ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
     pipe.add_inference(gain_model());
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
@@ -1220,7 +1265,7 @@ TEST(AbiEngine, ProcessSeesTheSpecsDtypeAndShapeEveryCall) {
     const Context context;
     GainEngine gain;
     Pipe pipe;
-    ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
     ModelConfig model = gain_model();
     model.tensor_name(0, "out", "y_out");
     pipe.add_inference(model);
@@ -1256,7 +1301,7 @@ TEST(AbiEngine, TheExtRowsOfARegisteredEngineAreKeyedByItsId) {
         desc.consumed_kinds = kinds.data();
         desc.num_consumed_kinds = 1;
         Pipe pipe;
-        ASSERT_EQ(pipe.register_engine(k_gain_id, desc), ANIRA_OK) << pipe.m_err.message;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, desc), ANIRA_OK) << pipe.m_err.message;
         ModelConfig model = gain_model();
         model.model_ext_json(0, "entry", R"({"name": "forward"})");
         pipe.add_inference(model);
@@ -1276,7 +1321,7 @@ TEST(AbiEngine, TheExtRowsOfARegisteredEngineAreKeyedByItsId) {
     {
         GainEngine gain;
         Pipe pipe;
-        ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
         ModelConfig model = gain_model();
         model.model_ext_json(0, "entry", R"({"name": "forward"})");
         pipe.add_inference(model);
@@ -1295,9 +1340,9 @@ TEST(AbiEngine, ARegisteredEngineNoRowNamesIsNotAPlan) {
     GainEngine named;
     GainEngine idle;
     Pipe pipe;
-    ASSERT_EQ(pipe.register_engine("org.example.idle", gain_desc(idle)), ANIRA_OK)
+    ASSERT_EQ(pipe.add_new_engine("org.example.idle", gain_desc(idle)), ANIRA_OK)
         << pipe.m_err.message;
-    ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(named)), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(named)), ANIRA_OK) << pipe.m_err.message;
     pipe.add_inference(gain_model());
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
@@ -1315,18 +1360,18 @@ TEST(AbiEngine, ARegisteredEngineNoRowNamesIsNotAPlan) {
     EXPECT_EQ(named.m_released, 1);
 }
 
-// The carrier is in the pool's key: two pipelines registering one id over one model share
-// nothing, each engine's prepare and unprepare run once, and the two handlers run on two
-// adapters.
-TEST(AbiEngine, TwoPipelinesUnderOneIdShareNothing) {
+// The carrier is in the pool's key: two engine objects (two creates, even over equal
+// descriptors) under one id in two pipelines over one model share nothing, each engine's prepare
+// and unprepare run once, and the two handlers run on two adapters.
+TEST(AbiEngine, TwoEngineObjectsUnderOneIdShareNothing) {
     const Context context;
     GainEngine first_engine;
     GainEngine second_engine;
     Pipe first;
     Pipe second;
-    ASSERT_EQ(first.register_engine(k_gain_id, gain_desc(first_engine)), ANIRA_OK)
+    ASSERT_EQ(first.add_new_engine(k_gain_id, gain_desc(first_engine)), ANIRA_OK)
         << first.m_err.message;
-    ASSERT_EQ(second.register_engine(k_gain_id, gain_desc(second_engine)), ANIRA_OK)
+    ASSERT_EQ(second.add_new_engine(k_gain_id, gain_desc(second_engine)), ANIRA_OK)
         << second.m_err.message;
     const ModelConfig model = gain_model();
     first.add_inference(model);
@@ -1359,6 +1404,118 @@ TEST(AbiEngine, TwoPipelinesUnderOneIdShareNothing) {
     EXPECT_EQ(second_engine.m_released, 1);
 }
 
+// The engine object is the pool's key, not the pipeline: one engine added to two pipelines
+// (under different ids, the handle destroyed right after the additions) over equal model
+// configurations gives two handlers one prepared model: one prepare, one adapter, one unprepare
+// with the last handler; release fires once, when the pipelines and the handlers are all gone.
+TEST(AbiEngine, OneEngineInTwoPipelinesSharesOnePreparedModel) {
+    const Context context;
+    GainEngine gain;
+    const anira_engine_desc desc = gain_desc(gain);
+    anira_custom_engine* engine = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_custom_engine_create(&desc, &engine, &err), ANIRA_OK) << err.message;
+    Pipe first;
+    Pipe second;
+    ASSERT_EQ(first.add_engine(k_gain_id, engine), ANIRA_OK) << first.m_err.message;
+    ASSERT_EQ(second.add_engine("org.example.other", engine), ANIRA_OK) << second.m_err.message;
+    anira_custom_engine_destroy(engine);  // the pipelines hold it now
+    first.add_inference(gain_model());
+    second.add_inference(stream_model("org.example.other", k_never_opened));
+    anira_handler* first_handler = nullptr;
+    anira_handler* second_handler = nullptr;
+    ASSERT_EQ(first.create_handler(context, &first_handler), ANIRA_OK) << first.m_err.message;
+    ASSERT_EQ(second.create_handler(context, &second_handler), ANIRA_OK) << second.m_err.message;
+    first.destroy();
+    second.destroy();
+    EXPECT_EQ(gain.m_released, 0) << "the handlers hold it";
+    const anira::ContractHandle contract = explicit_contract();
+    // The ids differ, and with them the variants' texts: only an equal variant shares, so the
+    // second pipeline names the engine under the first's id below. Here: two prepared models.
+    ASSERT_EQ(anira_handler_prepare(first_handler, contract.native(), &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(anira_handler_prepare(second_handler, contract.native(), &err), ANIRA_OK)
+        << err.message;
+    EXPECT_EQ(gain.m_prepared, 2) << "the variants name the engine by different ids";
+    anira_handler_destroy(second_handler);
+    anira_handler_destroy(first_handler);
+    EXPECT_EQ(gain.m_unprepared, 2);
+    EXPECT_EQ(gain.m_released, 1);
+
+    // Under one id over one model: one prepared model for both handlers.
+    GainEngine shared;
+    const anira_engine_desc shared_desc = gain_desc(shared);
+    ASSERT_EQ(anira_custom_engine_create(&shared_desc, &engine, &err), ANIRA_OK) << err.message;
+    Pipe third;
+    Pipe fourth;
+    ASSERT_EQ(third.add_engine(k_gain_id, engine), ANIRA_OK) << third.m_err.message;
+    ASSERT_EQ(fourth.add_engine(k_gain_id, engine), ANIRA_OK) << fourth.m_err.message;
+    anira_custom_engine_destroy(engine);
+    const ModelConfig model = gain_model();
+    third.add_inference(model);
+    fourth.add_inference(model);
+    ASSERT_EQ(third.create_handler(context, &first_handler), ANIRA_OK) << third.m_err.message;
+    ASSERT_EQ(fourth.create_handler(context, &second_handler), ANIRA_OK) << fourth.m_err.message;
+    third.destroy();
+    fourth.destroy();
+    ASSERT_EQ(anira_handler_prepare(first_handler, contract.native(), &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(anira_handler_prepare(second_handler, contract.native(), &err), ANIRA_OK)
+        << err.message;
+    EXPECT_EQ(shared.m_prepared, 1) << "one engine, one model: one prepare";
+    EXPECT_EQ(anira_test::session_of(first_handler)->m_plans.at(0).m_adapter,
+              anira_test::session_of(second_handler)->m_plans.at(0).m_adapter);
+    ASSERT_NO_FATAL_FAILURE(run_ramp(first_handler, 2));
+    ASSERT_NO_FATAL_FAILURE(run_ramp(second_handler, 2));
+    EXPECT_EQ(shared.m_processed.load(), 4);
+    anira_handler_destroy(first_handler);
+    EXPECT_EQ(shared.m_unprepared, 0) << "the second handler still runs on it";
+    EXPECT_EQ(shared.m_released, 0);
+    anira_handler_destroy(second_handler);
+    EXPECT_EQ(shared.m_unprepared, 1);
+    EXPECT_EQ(shared.m_released, 1);
+}
+
+// The whole variant is in the pool's key of a custom engine, since its prepare may read any of
+// it: one engine in two pipelines over models that differ in an entry the record does not
+// carry (a second row, the engine-free pass-through's) prepares twice.
+TEST(AbiEngine, OneEngineOverTwoVariantsPreparesTwice) {
+    const Context context;
+    GainEngine gain;
+    const anira_engine_desc desc = gain_desc(gain);
+    anira_custom_engine* engine = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_custom_engine_create(&desc, &engine, &err), ANIRA_OK) << err.message;
+    Pipe first;
+    Pipe second;
+    ASSERT_EQ(first.add_engine(k_gain_id, engine), ANIRA_OK) << first.m_err.message;
+    ASSERT_EQ(second.add_engine(k_gain_id, engine), ANIRA_OK) << second.m_err.message;
+    anira_custom_engine_destroy(engine);
+    const ModelConfig plain = gain_model();
+    ModelConfig extended = gain_model();
+    extended.add_model_path(k_custom, "custom-processor");
+    first.add_inference(plain);
+    second.add_inference(extended);
+    anira_handler* first_handler = nullptr;
+    anira_handler* second_handler = nullptr;
+    ASSERT_EQ(first.create_handler(context, &first_handler), ANIRA_OK) << first.m_err.message;
+    ASSERT_EQ(second.create_handler(context, &second_handler), ANIRA_OK) << second.m_err.message;
+    const anira::ContractHandle contract = explicit_contract();
+    ASSERT_EQ(anira_handler_prepare(first_handler, contract.native(), &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(anira_handler_prepare(second_handler, contract.native(), &err), ANIRA_OK)
+        << err.message;
+    EXPECT_EQ(gain.m_prepared, 2);
+    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0).m_adapter,
+              anira_test::session_of(second_handler)->m_plans.at(0).m_adapter);
+    anira_handler_destroy(first_handler);
+    anira_handler_destroy(second_handler);
+    first.destroy();
+    second.destroy();
+    EXPECT_EQ(gain.m_unprepared, 2);
+    EXPECT_EQ(gain.m_released, 1);
+}
+
 // A registered engine received the names and bound its slots itself: every slot row of its
 // plan reads ANIRA_BINDING_ENGINE, while the engine-free pass-through's rows read
 // ANIRA_BINDING_POSITION.
@@ -1366,7 +1523,7 @@ TEST(AbiEngine, ASlotReportsHowItWasBound) {
     const Context context;
     GainEngine gain;
     Pipe pipe;
-    ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
     ModelConfig model = gain_model();
     model.add_model_path(k_custom, "custom-processor");
     pipe.add_inference(model);
