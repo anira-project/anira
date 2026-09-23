@@ -44,7 +44,7 @@ public:
     LegacyAdapter& operator=(LegacyAdapter&&) = delete;
 
     /// The backend the 2.x call goes to.
-    anira::BackendBase* backend() const noexcept { return m_backend; }
+    anira::BackendBase* wrapped() const noexcept { return m_backend; }
 
 protected:
     void do_prepare(const Model& model) override;

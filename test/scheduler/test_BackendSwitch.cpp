@@ -15,6 +15,7 @@
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/tensor.h>
 #include <anira/backends/BackendBase.h>

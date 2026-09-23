@@ -92,9 +92,10 @@ static_assert(
         std::is_same_v<decltype(anira_engine_desc::release), anira_engine_release_fn>,
     "the slots of anira_engine_desc");
 // The two tail fields of the plan records.
-static_assert(std::is_same_v<decltype(anira_plan_slot::binding), uint32_t> &&
-                  std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
-              "the tail fields are anira_binding and the engine flags, as uint32_t");
+static_assert(std::is_same_v<decltype(anira_plan_slot::binding), uint32_t>,
+              "the tail field of anira_plan_slot is anira_binding, as uint32_t");
+static_assert(std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
+              "the tail field of anira_plan_info is the engine flags, as uint32_t");
 
 [[maybe_unused]] int anira_header_cxx17_probe() {
     const anira_error err = ANIRA_ERROR_INIT;

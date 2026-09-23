@@ -44,6 +44,7 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "../../extras/models/model_files.h"
@@ -764,8 +765,8 @@ TEST(AbiStage, TwoHandlersOfOnePipelineGetTheirOwnPreparedPointer) {
     ASSERT_EQ(anira_handler_prepare(first, contract.native(), &err), ANIRA_OK) << err.message;
     ASSERT_EQ(anira_handler_prepare(second, contract.native(), &err), ANIRA_OK) << err.message;
     ASSERT_EQ(registration.m_prepared.size(), 2U);
-    PerHandler& of_first = *registration.m_prepared[0];
-    PerHandler& of_second = *registration.m_prepared[1];
+    const PerHandler& of_first = *registration.m_prepared[0];
+    const PerHandler& of_second = *registration.m_prepared[1];
     EXPECT_EQ(of_first.m_handler, first);
     EXPECT_EQ(of_second.m_handler, second);
     EXPECT_EQ(first->m_stage_prepared, &of_first);

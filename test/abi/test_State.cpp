@@ -30,6 +30,7 @@
 #include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
+#include <anira/backends/BackendBase.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
 #include <gtest/gtest.h>

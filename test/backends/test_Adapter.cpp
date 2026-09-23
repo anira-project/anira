@@ -3,6 +3,7 @@
 // float32 helpers of the built-in adapters, the 2.x plan table as requests, and the copies the
 // legacy adapter makes around a descriptor that names other memory than the struct's buffer.
 
+#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
@@ -544,7 +545,7 @@ TEST(Adapter, LegacyAdapterPreparesItsBackendAndPassesTheStructsBuffersThrough) 
     anira::InferenceConfig config = custom_only_config();
     RecordingBackend backend(config);
     anira::backend::LegacyAdapter adapter(backend);
-    EXPECT_EQ(adapter.backend(), &backend);
+    EXPECT_EQ(adapter.wrapped(), &backend);
     adapter.prepare(gain_model());
     EXPECT_EQ(backend.m_prepares, 1);
 

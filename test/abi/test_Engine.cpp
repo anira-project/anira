@@ -4,13 +4,12 @@
 // registered engine is a registration alone, and a model entry naming its id is refused at
 // anira_handler_create as it was before (LegalBeforeAndAfterAddInference says so); the runtime
 // cases follow that commit.
-#include <anira/abi/config.h>
+#include <anira/abi/build_info.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
-#include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
 #include <gtest/gtest.h>
 
@@ -20,12 +19,10 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
-#include <memory>
 #include <string>
 #include <vector>
 
 #include "capi/engine.h"
-#include "capi/handler.h"
 #include "handler_support.h"
 
 namespace {

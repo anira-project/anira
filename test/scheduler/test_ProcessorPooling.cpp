@@ -8,7 +8,6 @@
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
