@@ -264,7 +264,13 @@ the engine's level alone; ``prepare(info, user_data, &prepared)`` for the stage,
 ``prepare(info, loaded, user_data, &prepared)`` for the engine and
 ``unprepare(prepared, user_data)`` once per handler; every per-chunk callback
 ``(ctx, prepared, user_data)``, the four phases and ``reset`` of the stage, ``process`` and
-``reset`` of the engine. The 64-bit rule has a closed allowlist
+``reset`` of the engine. The provider is the engine's twin wherever the two-axis backend id
+travels: ``provider`` beside ``engine`` and ``provider_id`` beside ``engine_id``
+(``anira_backend_id``, ``anira_plan_info``, ``anira_engine_load_info``,
+``anira_provider_option_set``; ``to_provider`` / ``to_provider_id`` on ``anira_edge_info``), a
+value of the enum or ``ANIRA_PROVIDER_DEFAULT`` beside a name in the engine's own vocabulary,
+and the JSON spellings of both enums live in one place, ``src/capi/words.h``, which the JSON
+reader and writer, the messages, the carriers and the adapters share. The 64-bit rule has a closed allowlist
 of six names: ``anira_now_ns`` and the factories ``anira_tensor_init_vulkan``,
 ``anira_tensor_init_opaque_fd``, ``anira_tensor_init_wgpu_buffer``,
 ``anira_tensor_init_dmabuf`` and ``anira_tensor_init_iosurface``, whose parameters are vendor

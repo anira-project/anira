@@ -67,7 +67,11 @@ an engine added afterwards does not reach that handler. A model entry that names
 ``"engine": "com.example.myengine"`` in a model file) is a plan of the handler like a built-in
 engine's entry; several such entries on one model configuration are several plans, which
 ``anira_handler_set_plan`` switches between, resolved by entry, never by the 2.x backend they
-map to. An added engine no entry names is not a plan and not an error; an entry whose id no
+map to. A candidate of ``anira_pipeline_add_inference`` names the engine on a **provider**
+(``anira_backend_id``: ``engine_id`` with ``provider``, or ``provider_id`` for a provider the
+enum does not name), and a plan is one entry on one provider: an entry without a pin is a
+plan per candidate of its engine, an entry pinned to a provider (:doc:`usage` section 1.1) a
+plan on that candidate alone. An added engine no entry names is not a plan and not an error; an entry whose id no
 engine of the pipeline serves is ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``,
 naming the id. anira never opens a custom entry's path or reads its bytes: the engine's
 ``load`` does, through the record it receives.
@@ -75,7 +79,8 @@ naming the id. anira never opens a custom entry's path or reads its bytes: the e
 ``anira_custom_engine_create`` refuses with ``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL``
 descriptor or ``out``, a ``struct_size`` below the three leading slots (``struct_size``,
 ``abi_version``, ``user_data``), a ``flags`` bit the header does not define, a ``NULL``
-``process`` and a ``NULL`` ``consumed_kinds`` (or entry) with a count above 0, and with
+``process``, a ``NULL`` ``consumed_kinds`` (or entry) with a count above 0 and a ``NULL``
+``providers`` (or a ``NULL`` or empty entry) with a count above 0, and with
 ``ANIRA_ERROR_ABI_VERSION`` an ``abi_version`` ``anira_check_abi`` refuses; a refused create
 hands out nothing and never calls ``release``. ``anira_pipeline_add_engine`` refuses with
 ``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL`` pipeline, id or engine and an id without a ``.`` or
@@ -100,8 +105,18 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
   this engine, keyed by its id: its ``model:`` kinds read its own entries alone, its other
   kinds any host, and each consumed slot is an ``anira_plan_ext`` row of the plan whose
   consumer reads the engine's id.
-- ``flags``: the engine's promises, an OR of the three ``ANIRA_ENGINE_FLAG_*`` bits below;
+- ``flags``: the engine's promises, an OR of the four ``ANIRA_ENGINE_FLAG_*`` bits below;
   ``0`` promises nothing.
+- ``providers`` / ``num_providers``: the providers the engine serves beyond
+  ``ANIRA_PROVIDER_DEFAULT``, as strings, copied. The JSON spellings of ``anira_provider``
+  (``"cuda"``, ``"webgpu"``, ``"directml"``, ``"coreml"``, ``"xnnpack"``, ``"vulkan"``) name a
+  provider of the enum; any other string is a custom provider in the engine's own vocabulary
+  (a reverse-URI name is the convention, not a rule), which a candidate names in
+  ``provider_id`` beside ``ANIRA_PROVIDER_DEFAULT`` and a model entry's pin spells as the
+  ``"engine"`` word's suffix. ``NULL`` with a count of 0 serves the default provider alone. A
+  candidate naming a provider the list lacks is ``ANIRA_ERROR_NOT_SUPPORTED`` at
+  ``anira_handler_create``, naming the engine, the provider and the list; ``load`` may still
+  refuse one it cannot serve at run time (a device missing).
 - ``process``: the engine call, ``anira_engine_process_fn``. Required.
 - ``reset``: ``anira_engine_reset_fn``. ``NULL``: nothing to reset.
 - ``prepare``: ``anira_engine_prepare_fn``. ``NULL``: nothing to prepare, and ``prepared`` is
@@ -174,6 +189,12 @@ what it keeps and never keeps the pointers):
   have; an engine without names binds by position. Either way the plan report says
   ``ANIRA_BINDING_ENGINE`` for every slot of the plan: the engine received the names and bound
   itself.
+- ``provider`` / ``provider_id``: the provider this load is for, a value of the enum or
+  ``ANIRA_PROVIDER_DEFAULT`` beside the custom name, in the words of the descriptor's list. A
+  provider is part of the loaded model: two providers of one model are two loads, each its own
+  ``loaded``; a load that cannot serve the one it is asked for returns
+  ``ANIRA_ERROR_NOT_SUPPORTED`` (the handler checked the plan's provider against the list at
+  create, so this is a device missing at run time).
 - ``instances``: the **shared call slots** of this loaded model, the ``process`` calls that
   may run at once on them, each on its own instance below this count (``ctx->instance``): the
   model's ``max_instances`` for a stateless model, clamped to the size of the inference-thread
@@ -288,8 +309,9 @@ for the duration of the call, like the stage's ``anira_stage_ctx``):
 extent and every memory handle (the data pointer, ``byte_offset``, the strides, the domain)
 from the tensors of **this** call, never from a value kept at load or prepare, and never
 assume a tensor is anira's own buffer. The halves of a declared State pair alternate between
-two buffers from one inference to the next (below), and a later pre-release hands a caller's
-Buffer tensor over in place. The templates of the load record say what the shapes will be;
+two buffers from one inference to the next (below), unless the engine's flags carry
+``ANIRA_ENGINE_FLAG_STATE_ALIAS``, and a later pre-release hands a caller's Buffer tensor
+over in place. The templates of the load record say what the shapes will be;
 the memory is the context's. A Time extent below the template's is legal only under
 ``ANIRA_ENGINE_FLAG_DYNAMIC_TIME``. The rule's other half is the executor's: what one call
 runs on owns everything with run-time state (above), so an engine keeps a shared slot's
@@ -351,17 +373,23 @@ The flags are the engine's promises, declared once and reported in
   sets it.
 - ``ANIRA_ENGINE_FLAG_DYNAMIC_TIME``: ``process`` accepts a Time extent varying per call at or
   below the template's. Reported; no built-in engine sets it.
+- ``ANIRA_ENGINE_FLAG_STATE_ALIAS``: the engine keeps its own aliasing of a declared State
+  pair. anira binds one stable buffer per pair as both the State input and the State output of
+  every call of a plan of this engine and never flips it: the engine reads the state before it
+  writes it, in place, and every address stays put across calls, which a captured graph (CUDA
+  graphs, WebGPU replay) needs. Honoured per plan (below); no built-in engine sets it.
 
 A bit the header does not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at
-``anira_custom_engine_create``; the name ``ANIRA_ENGINE_FLAG_STATE_ALIAS`` is reserved for the
-aliased State pair of a later pre-release. The flags of the two records are anira's, not the
+``anira_custom_engine_create``. The flags of the two records are anira's, not the
 engine's, and say what the handler is: ``ANIRA_PREPARE_EXCLUSIVE`` in
 ``anira_prepare_info.flags`` and ``ANIRA_ENGINE_CALL_EXCLUSIVE`` in ``anira_engine_ctx.flags``
 (above). Where a custom engine appears, the engine-provider pair is ``ANIRA_ENGINE_NONE`` with
-the id: ``anira_plan_info.engine`` and ``engine_id``, ``anira_stage_ctx.engine`` in the
-stage's phases, ``anira_backend_id`` among the candidates of ``anira_pipeline_add_inference``
-(``engine_id`` set, ``engine`` ``ANIRA_ENGINE_NONE``). The plan report's slot rows read
-``ANIRA_BINDING_ENGINE``, and its extension rows name the engine by its id.
+the id and the plan's provider beside it (``provider``, or ``provider_id`` for a custom one):
+``anira_plan_info.engine``, ``engine_id``, ``provider`` and ``provider_id``,
+``anira_stage_ctx.engine`` and ``provider`` in the stage's phases, ``anira_backend_id`` among
+the candidates of ``anira_pipeline_add_inference`` (``engine_id`` set, ``engine``
+``ANIRA_ENGINE_NONE``). The plan report's slot rows read ``ANIRA_BINDING_ENGINE``, and its
+extension rows name the engine by its id.
 
 Declared state and the two buffers
 ----------------------------------
@@ -375,6 +403,17 @@ buffers in turn from one call to the next, so an engine that read the data point
 at prepare would read the wrong half every other inference. An engine that binds caller
 memory (an ``Ort::Value`` over the descriptor, a ``torch::from_blob`` view) runs the pair
 without a copy; one that stages its inputs copies as it copies every other slot.
+
+An engine whose runtime wants the addresses to stay put, a captured graph above all, sets
+``ANIRA_ENGINE_FLAG_STATE_ALIAS``: for every call of a plan of that engine anira binds **one**
+buffer as both halves of the pair and never flips, so the State input's memory is the State
+output's, and the engine reads the state before it writes it (in place) or copies for itself.
+The pair is the model's, not a plan's: every plan of the variant runs the same pair, in the
+engine domain of the plans that run it (host memory for every engine of this pre-release; the
+slot's declared host domain overrides it, :doc:`usage` section 1.3), so a plan switch keeps
+the state whether the plans flip or alias (the one buffer an aliasing plan updates is the read
+buffer a flipping plan reads next), and the first inference of a new stream reads zeros
+either way.
 
 A model with a declared State pair is stateful: it is loaded once, with no shared slot, and
 every handler of it is exclusive (``ANIRA_PREPARE_EXCLUSIVE``), so an engine that keeps state
@@ -398,6 +437,9 @@ shared slots, and ``load`` runs once for both, when
 - their **model configurations are equal**, the whole variant: every entry, spec and extension,
   since ``load`` may read any of it through its record (so the id the entry names is part of
   it, and two pipelines that add one engine under different ids load twice), and
+- their plans run on **the same provider**, with the same provider options of their contexts
+  (:doc:`usage` section 3.1): a provider is part of the loaded model, so two providers of one
+  model are two loads, each its own ``loaded``, and
 - their tensors **resolve to the same shapes** (two handlers with different resolved windows
   never share), with the same shared-slot count and the same fixed warm-up.
 
@@ -474,6 +516,7 @@ own call; the entry's path is read but not opened, since this engine has no file
     typedef struct gain_loaded {                                    /* one loaded model */
         size_t elements;                                            /* of the first slot */
         uint32_t instances;                                         /* its shared slots */
+        uint32_t provider;                                          /* what it runs on */
     } gain_loaded;
     typedef struct gain_prepared {                                  /* one handler on it */
         const gain_loaded* loaded;
@@ -498,6 +541,9 @@ own call; the entry's path is read but not opened, since this engine has no file
         if (l == NULL) { return ANIRA_ERROR_OUT_OF_MEMORY; }
         l->elements = anira_tensor_num_elements(&info->inputs[0]);   /* the template's shape */
         l->instances = info->instances;          /* 0 when every handler of it is exclusive */
+        l->provider = info->provider;            /* the plan's; info->provider_id names a
+                                                    custom one; this engine does the same work
+                                                    on every provider it lists */
         *out_loaded = l;                         /* every prepare, process and reset gets it */
         return ANIRA_OK;
     }
@@ -565,9 +611,12 @@ At setup:
 .. code-block:: c
 
     static gain_engine engine = { 0.5f };
+    static const char* const providers[] = { "coreml" };  /* beyond the default provider */
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
     desc.user_data = &engine;
     desc.flags = ANIRA_ENGINE_FLAG_REALTIME_SAFE;       /* the promise the body keeps */
+    desc.providers = providers;                         /* "onnxruntime:coreml"-style words, or */
+    desc.num_providers = 1;                             /* any name of the engine's own */
     desc.process = gain_process;
     desc.reset = gain_reset;                  /* init, reset and release could stay NULL */
     desc.prepare = gain_prepare;
@@ -588,7 +637,8 @@ The same in C++
 :cpp:class:`anira::Engine` of ``anira/anira.hpp`` is the descriptor with virtual functions in
 place of the function pointers, split as the C lifecycle is, exactly like
 :cpp:class:`anira::Stage`: the engine object, ``anira::Engine``, states its promise in
-``flags()`` and its extensions in ``consumed_kinds()`` (both read once, when its C engine is
+``flags()``, its extensions in ``consumed_kinds()`` and the providers it serves beyond the
+default one in ``providers()`` (all read once, when its C engine is
 created at its first registration), may override ``init(const InitInfo&)`` (the base does
 nothing), and its ``load(const EngineLoadInfo&)`` returns a
 ``std::unique_ptr<Engine::Loaded>``, the loaded model, whose ``prepare(const PrepareInfo&)``
@@ -598,7 +648,8 @@ base ``reset`` does nothing). The records are views: :cpp:class:`anira::InitInfo
 (``log_level()``, ``num_threads()``, ``context()``), :cpp:class:`anira::EngineLoadInfo`
 (``row()``, ``model()``, the getters ``model_path(i)``, ``model_bytes(i)``,
 ``model_engine_id(i)``, ``inputs()`` / ``outputs()`` as ``std::span<const Tensor>``,
-``input_names()`` / ``output_names()``, ``instances()``), :cpp:class:`anira::PrepareInfo`
+``input_names()`` / ``output_names()``, ``instances()``, ``provider()`` and
+``provider_id()``), :cpp:class:`anira::PrepareInfo`
 (``handler()``, ``report()``, ``num_entries()``, ``inputs()`` / ``outputs()``,
 ``input_names()`` / ``output_names()``, ``flags()`` and ``exclusive()``), and
 :cpp:class:`anira::EngineContext` the context (``instance()``, ``entry()``, ``ticket()``,
@@ -631,6 +682,7 @@ object's C engine drops that C engine again, and ``release()`` answers it. The g
 .. code-block:: cpp
 
     #include <algorithm>
+    #include <array>
     #include <memory>
     #include <anira/anira.hpp>
 
@@ -638,10 +690,14 @@ object's C engine drops that C engine again, and ``release()`` answers it. The g
     public:
         explicit Gain(float gain) : m_gain(gain) {}
         uint32_t flags() const noexcept override { return ANIRA_ENGINE_FLAG_REALTIME_SAFE; }
+        // The providers served beyond the default one: the enum's spellings or any name of
+        // the engine's own; the gain does the same work on every one of them.
+        std::span<const char* const> providers() const noexcept override { return k_providers; }
         // init(const anira::InitInfo&) is not overridden: nothing to build once per object.
         std::unique_ptr<Loaded> load(const anira::EngineLoadInfo& info) override;
 
     private:
+        static constexpr std::array<const char*, 1> k_providers{"coreml"};
         class Shared;
         class Run;
         float m_gain;
