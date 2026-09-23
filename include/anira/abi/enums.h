@@ -653,10 +653,15 @@ typedef enum anira_provider {
  * abi/engine.h). The two lifecycles share it, so like their shared records
  * (anira/abi/lifecycle.h) it names no side. The value travels in one field,
  * anira_stage_ctx.phase, since a stage's accessors depend on it; an engine receives
- * none, each of its slots being a callback of its own. Pinned now. The three
- * inference-thread phases are numbered in the order they run; the phases of the shared
- * lifecycle (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and
- * unprepare, then init, then the engine's two model-level phases, load and unload.
+ * none, each of its slots being a callback of its own. Every message anira writes about
+ * a slot names the phase by the lower-case name of its value (pre_process, post_process,
+ * before_inference, inference, after_inference, prepare, release, reset, unprepare,
+ * init, load, unload): a stage phase that fails or that an accessor refuses, a refused
+ * init, load or prepare of a stage or an engine ("the engine 'x' refused load: it
+ * returned N"), a failed engine call. Pinned now. The three inference-thread phases are
+ * numbered in the order they run; the phases of the shared lifecycle
+ * (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and unprepare,
+ * then init, then the engine's two model-level phases, load and unload.
  */
 typedef enum anira_phase {
     ANIRA_PHASE_PRE_PROCESS = 0,  /**< Before the model inputs are formed. */
@@ -664,8 +669,9 @@ typedef enum anira_phase {
     ANIRA_PHASE_BEFORE_INFERENCE = 2,  /**< On the inference thread, before the engine call. */
     /**
      * On the inference thread, the engine call itself: the built-in engine of the running plan,
-     * or a registered custom engine's process. No stage callback runs in this phase; it is the
-     * word a failure, a log record or a report row uses for the engine call.
+     * or a registered custom engine's process. No stage callback runs in this phase; a failed
+     * engine call is logged under its word ("inference failed in session N: the engine of plan
+     * P returned S").
      */
     ANIRA_PHASE_INFERENCE = 3,
     ANIRA_PHASE_AFTER_INFERENCE = 4,  /**< On the inference thread, after the engine call. */

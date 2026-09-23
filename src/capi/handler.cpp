@@ -752,14 +752,16 @@ void check_stage_flags(const anira::capi::StageCarrier* stage) {
     const anira_stage_desc& desc = stage->desc();
     const bool fills_pre_or_post = desc.pre_process != nullptr || desc.post_process != nullptr;
     if (!fills_pre_or_post || (desc.flags & ANIRA_STAGE_FLAG_REALTIME_PRE_POST) != 0) { return; }
-    throw StatusError(ANIRA_ERROR_CONFIG,
-                      std::string("the stage: ") +
-                          (desc.pre_process != nullptr ? "pre_process" : "post_process") +
-                          " is filled and runs on the driving thread under a Hard contract, "
-                          "which requires ANIRA_STAGE_FLAG_REALTIME_PRE_POST in "
-                          "anira_stage_desc.flags (the stage's promise that pre_process, "
-                          "post_process and reset allocate nothing, lock nothing and block on "
-                          "nothing)");
+    throw StatusError(
+        ANIRA_ERROR_CONFIG,
+        std::string("the stage: ") +
+            anira::capi::phase_word(desc.pre_process != nullptr ? ANIRA_PHASE_PRE_PROCESS
+                                                                : ANIRA_PHASE_POST_PROCESS) +
+            " is filled and runs on the driving thread under a Hard contract, "
+            "which requires ANIRA_STAGE_FLAG_REALTIME_PRE_POST in "
+            "anira_stage_desc.flags (the stage's promise that pre_process, "
+            "post_process and reset allocate nothing, lock nothing and block on "
+            "nothing)");
 }
 
 // Whether a model entry is the variant's default engine (by id for a custom engine, by
@@ -1563,7 +1565,8 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     const anira_status init_status = stage->ensure_init(init);
     if (init_status != ANIRA_OK) {
         throw StatusError(init_status,
-                          std::string("the stage refused init: it returned ") +
+                          std::string("the stage refused ") +
+                              anira::capi::phase_word(ANIRA_PHASE_INIT) + ": it returned " +
                               std::to_string(static_cast<int>(init_status)) + " (" +
                               anira_status_string(init_status) + ")");
     }
@@ -1573,7 +1576,8 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     const anira_status status = desc.prepare(&info, desc.user_data, &stage_prepared);
     if (status != ANIRA_OK) {
         throw StatusError(status,
-                          std::string("the stage refused prepare: it returned ") +
+                          std::string("the stage refused ") +
+                              anira::capi::phase_word(ANIRA_PHASE_PREPARE) + ": it returned " +
                               std::to_string(static_cast<int>(status)) + " (" +
                               anira_status_string(status) + ")");
     }

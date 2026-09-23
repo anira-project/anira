@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "../capi/engine.h"
+#include "../capi/words.h"
 #include "../utils/StatusError.h"
 #include "Adapter.h"
 
@@ -48,10 +49,19 @@ std::vector<const char*> names_of(const std::vector<TensorInfo>& slots) {
     return names;
 }
 
-// "the engine 'x' refused load: it returned 5 (ANIRA_ERROR_MODEL_LOAD)".
-std::string refused(const std::string& id, const char* what, anira_status status) {
-    return "the engine '" + id + "' refused " + what + ": it returned " +
-           std::to_string(static_cast<int>(status)) + " (" + anira_status_string(status) + ")";
+// "the engine 'x' refused load: it returned 5 (ANIRA_ERROR_MODEL_LOAD)", the level named by its
+// phase's word.
+std::string refused(const std::string& id, anira_phase phase, anira_status status) {
+    std::string message = "the engine '";
+    message += id;
+    message += "' refused ";
+    message += anira::capi::phase_word(phase);
+    message += ": it returned ";
+    message += std::to_string(static_cast<int>(status));
+    message += " (";
+    message += anira_status_string(status);
+    message += ")";
+    return message;
 }
 
 }  // namespace
@@ -70,7 +80,7 @@ DescriptorLoaded::~DescriptorLoaded() {
 
 void DescriptorLoaded::init(const anira_init_info& info) {
     const anira_status status = m_carrier->ensure_init(info);
-    if (status != ANIRA_OK) { throw StatusError(status, refused(m_id, "init", status)); }
+    if (status != ANIRA_OK) { throw StatusError(status, refused(m_id, ANIRA_PHASE_INIT, status)); }
 }
 
 uint32_t DescriptorLoaded::flags() const noexcept {
@@ -121,7 +131,7 @@ void DescriptorLoaded::do_load(const Model& model) {
     void* loaded = nullptr;
     const anira_status status = desc.load(&info, desc.user_data, &loaded);
     // The refused load owes no unload.
-    if (status != ANIRA_OK) { throw StatusError(status, refused(m_id, "load", status)); }
+    if (status != ANIRA_OK) { throw StatusError(status, refused(m_id, ANIRA_PHASE_LOAD, status)); }
     m_loaded_pointer = loaded;
     m_unload_owed = true;
 }
@@ -147,7 +157,9 @@ DescriptorPrepared::DescriptorPrepared(DescriptorLoaded& loaded, const PrepareRe
     const anira_status status =
         desc.prepare(request.m_info, loaded.engine_loaded(), desc.user_data, &prepared);
     // The refused prepare owes no unprepare.
-    if (status != ANIRA_OK) { throw StatusError(status, refused(loaded.id(), "prepare", status)); }
+    if (status != ANIRA_OK) {
+        throw StatusError(status, refused(loaded.id(), ANIRA_PHASE_PREPARE, status));
+    }
     m_prepared = prepared;
     m_unprepare_owed = true;
 }

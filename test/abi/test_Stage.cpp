@@ -52,6 +52,7 @@
 #include "../support/log_record_collector.h"
 #include "capi/port.h"
 #include "capi/stage.h"
+#include "capi/words.h"
 #include "float_face.h"
 #include "handler_support.h"
 
@@ -507,6 +508,36 @@ struct HandBuiltCtx {
 // ============================================================================================
 // anira_pipeline_add_stage
 // ============================================================================================
+
+// One word per phase, the lower-case name of its value: what every message about a slot names
+// the phase by (a stage phase that fails, a refused init, load or prepare, a failed engine
+// call); a value the enum does not name reads "unknown phase".
+TEST(AbiStage, EveryPhaseHasOneWord) {
+    const std::array<std::pair<anira_phase, const char*>, 12> expected{{
+        {ANIRA_PHASE_PRE_PROCESS, "pre_process"},
+        {ANIRA_PHASE_POST_PROCESS, "post_process"},
+        {ANIRA_PHASE_BEFORE_INFERENCE, "before_inference"},
+        {ANIRA_PHASE_INFERENCE, "inference"},
+        {ANIRA_PHASE_AFTER_INFERENCE, "after_inference"},
+        {ANIRA_PHASE_PREPARE, "prepare"},
+        {ANIRA_PHASE_RELEASE, "release"},
+        {ANIRA_PHASE_RESET, "reset"},
+        {ANIRA_PHASE_UNPREPARE, "unprepare"},
+        {ANIRA_PHASE_INIT, "init"},
+        {ANIRA_PHASE_LOAD, "load"},
+        {ANIRA_PHASE_UNLOAD, "unload"},
+    }};
+    for (const auto& [phase, word] : expected) {
+        EXPECT_STREQ(anira::capi::phase_word(phase), word) << static_cast<int>(phase);
+    }
+    for (uint32_t value = ANIRA_PHASE_PRE_PROCESS; value <= ANIRA_PHASE_UNLOAD; ++value) {
+        EXPECT_STRNE(anira::capi::phase_word(static_cast<anira_phase>(value)), "unknown phase")
+            << "value " << value << " of the enum has no word";
+    }
+    EXPECT_EQ(anira::capi::k_phase_words.size(), expected.size());
+    EXPECT_STREQ(anira::capi::phase_word(static_cast<anira_phase>(ANIRA_PHASE_UNLOAD + 1)),
+                 "unknown phase");
+}
 
 TEST(AbiStage, AddStageRefusals) {
     anira_error err = ANIRA_ERROR_INIT;

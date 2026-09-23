@@ -317,7 +317,7 @@ void check_contract(const anira_contract& contract,
             config_error("contract: the ring dtype of '" + name + "' is " + hex_dtype(dtype) +
                          " but its spec's dtype is " + hex_dtype(spec->m_dtype) +
                          "; nothing converts (add a stage that fills " +
-                         (is_input ? "pre_process" : "post_process") +
+                         phase_word(is_input ? ANIRA_PHASE_PRE_PROCESS : ANIRA_PHASE_POST_PROCESS) +
                          " and converts, anira_pipeline_add_stage)");
         }
     }

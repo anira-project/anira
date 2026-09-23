@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "../backends/Adapter.h"
+#include "../capi/words.h"
 
 namespace anira {
 
@@ -396,8 +397,9 @@ void InferenceThread::do_inference(
                 thread_safe_struct->m_completed_as_zeros = true;
                 if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
                     ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
-                                       "inference failed in session %d: the engine of plan %u "
+                                       "%s failed in session %d: the engine of plan %u "
                                        "returned %d (%s); delivering zeros",
+                                       capi::phase_word(ANIRA_PHASE_INFERENCE),
                                        session->m_session_id,
                                        plan,
                                        static_cast<int>(status),

@@ -1,12 +1,15 @@
 /*
- * The spellings of anira_provider: the suffix of a model entry's "engine" word in JSON, the
- * strings of an engine descriptor's providers list, the words of the plan report's log lines.
- * One vocabulary for every place a provider is spelled; any other word is a custom provider's
- * name in the engine's own vocabulary.
+ * The words anira spells its enums with, one table each, for every place the word appears.
+ * The providers: the suffix of a model entry's "engine" word in JSON, the strings of an engine
+ * descriptor's providers list, the words of the plan report's log lines; any other word is a
+ * custom provider's name in the engine's own vocabulary. The built-in engines: the "engine"
+ * word of a model entry and of every message that names one. The phases: how every message
+ * about a slot names its phase.
  */
 #pragma once
 
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 
 #include <array>
 #include <optional>
@@ -81,6 +84,34 @@ inline const char* engine_word(anira_engine engine) noexcept {
         if (value == engine) { return name; }
     }
     return "none";
+}
+
+/// The words of anira_phase, the lower-case names of its values: how every message anira writes
+/// about a slot names the phase (a stage phase that fails or that an accessor refuses, a refused
+/// init, load or prepare of a stage or an engine, a failed engine call).
+inline constexpr std::array<std::pair<const char*, anira_phase>, 12> k_phase_words{{
+    {"pre_process", ANIRA_PHASE_PRE_PROCESS},
+    {"post_process", ANIRA_PHASE_POST_PROCESS},
+    {"before_inference", ANIRA_PHASE_BEFORE_INFERENCE},
+    {"inference", ANIRA_PHASE_INFERENCE},
+    {"after_inference", ANIRA_PHASE_AFTER_INFERENCE},
+    {"prepare", ANIRA_PHASE_PREPARE},
+    {"release", ANIRA_PHASE_RELEASE},
+    {"reset", ANIRA_PHASE_RESET},
+    {"unprepare", ANIRA_PHASE_UNPREPARE},
+    {"init", ANIRA_PHASE_INIT},
+    {"load", ANIRA_PHASE_LOAD},
+    {"unload", ANIRA_PHASE_UNLOAD},
+}};
+
+/// The word of a phase; "unknown phase" for a value the enum does not name. Real-time safe: the
+/// stage's failure records and the engine call's failure record call it on the driving and the
+/// inference thread.
+inline const char* phase_word(anira_phase phase) noexcept ANIRA_NONBLOCKING {
+    for (const auto& [name, value] : k_phase_words) {
+        if (value == phase) { return name; }
+    }
+    return "unknown phase";
 }
 
 }  // namespace anira::capi

@@ -42,6 +42,7 @@
 #include "ext_registry.h"
 #include "port.h"
 #include "translate.h"
+#include "words.h"
 
 // The members of anira_ring dispatch through std::visit, which is declared to throw
 // std::bad_variant_access for a valueless variant. A ring never is one: its arm is emplaced by
@@ -105,17 +106,6 @@ bool ring_transfer(const anira_ring* ring,
                                static_cast<unsigned int>(ring->dtype()));
     }
     return false;
-}
-
-[[maybe_unused]] const char* phase_word(uint32_t phase) noexcept ANIRA_NONBLOCKING {
-    switch (phase) {
-        case ANIRA_PHASE_PRE_PROCESS: return "pre_process";
-        case ANIRA_PHASE_POST_PROCESS: return "post_process";
-        case ANIRA_PHASE_BEFORE_INFERENCE: return "before_inference";
-        case ANIRA_PHASE_AFTER_INFERENCE: return "after_inference";
-        case ANIRA_PHASE_RESET: return "reset";
-        default: return "unknown phase";
-    }
 }
 
 anira_stage_fn phase_slot(const anira_stage_desc& desc, uint32_t phase) noexcept ANIRA_NONBLOCKING {
@@ -218,7 +208,7 @@ anira_status no_such(const anira_stage_ctx* ctx,
                                entry,
                                static_cast<unsigned int>(slot),
                                what,
-                               phase_word(ctx->phase));
+                               anira::capi::phase_word(static_cast<anira_phase>(ctx->phase)));
     }
     return ANIRA_ERROR_INVALID_STATE;
 }
@@ -668,7 +658,7 @@ void StageProcessor::fail([[maybe_unused]] const char* who,
     ANIRA_LOG_RT_ERROR(anira::log_group::k_capi,
                        "%s: %s returned %d (%s); the chunk delivers zeros",
                        who,
-                       phase_word(phase),
+                       phase_word(static_cast<anira_phase>(phase)),
                        static_cast<int>(status),
                        anira_status_string(status));
 }
@@ -730,7 +720,7 @@ void StageProcessor::report_hop([[maybe_unused]] uint32_t phase,
                            "%s: %s moved %s tensor %zu, channel %zu by %zu elements, the hop "
                            "is %zu; %s",
                            mover(phase),
-                           phase_word(phase),
+                           phase_word(static_cast<anira_phase>(phase)),
                            pre ? "input" : "output",
                            tensor,
                            channel,
