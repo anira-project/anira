@@ -396,7 +396,7 @@ std::size_t engine_probe(const anira_engine_ctx* record) noexcept ANIRA_NONBLOCK
     for (const anira::Tensor& input : ctx.inputs()) {
         seen += input.num_elements() + (input.data_f32() != nullptr ? 1 : 0);
     }
-    for (anira::Tensor& output : ctx.outputs()) {
+    for (const anira::Tensor& output : ctx.outputs()) {
         float* const samples = output.data_f32();
         if (samples != nullptr && output.num_elements() > 0) { samples[0] = 0.0F; }
         seen += output.extent(0);
