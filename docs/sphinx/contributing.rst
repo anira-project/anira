@@ -249,9 +249,10 @@ follow one naming scheme and one shape, which every later descriptor keeps: ``st
 ``engine`` on every level that belongs to one side (``anira_stage_desc`` /
 ``anira_engine_desc``, ``anira_stage_ctx`` / ``anira_engine_ctx``, the ``anira_stage_*_fn`` /
 ``anira_engine_*_fn`` typedefs, ``anira::Stage`` / ``anira::Engine`` with ``StageContext`` /
-``EngineContext``), no side on the records of the shared lifecycle (``anira_init_info`` and
-``anira_prepare_info`` of ``anira/abi/lifecycle.h``, what the ``init`` and the ``prepare``
-slot of either descriptor receive; ``anira::InitInfo`` / ``anira::PrepareInfo``), the verb on
+``EngineContext``), no side on what the two lifecycles share (the records ``anira_init_info``
+and ``anira_prepare_info`` of ``anira/abi/lifecycle.h``, what the ``init`` and the ``prepare``
+slot of either descriptor receive, ``anira::InitInfo`` / ``anira::PrepareInfo``, and the enum
+``anira_phase``, which names the phases of both), the verb on
 the record of a level one side alone has (``anira_engine_load_info``,
 ``anira::EngineLoadInfo``), ``FLAG`` in every flag define (``ANIRA_STAGE_FLAG_*``,
 ``ANIRA_ENGINE_FLAG_*``, so that no flag reads like a value of an enum), ``Prepared`` for what

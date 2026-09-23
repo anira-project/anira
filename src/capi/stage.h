@@ -222,7 +222,7 @@ private:
     StageFrame make_frame_with_outputs(const Chunk& chunk) const noexcept ANIRA_NONBLOCKING;
     /// The eight scalars of a ctx for the chunk at `entry`, and `frame` as its frame; the
     /// reserved slots stay NULL.
-    anira_stage_ctx make_ctx(anira_stage_phase phase,
+    anira_stage_ctx make_ctx(anira_phase phase,
                              size_t entry,
                              const StageFrame& frame) const noexcept ANIRA_NONBLOCKING;
     /// Runs the stage's slot of one phase (the caller checked that it is filled) with the

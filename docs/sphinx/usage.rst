@@ -1094,7 +1094,7 @@ an unprepare, an init and a release function, one ``user_data`` slot and the sta
 flags) into a carrier the pipeline and its handlers share, and a second call is
 ``ANIRA_ERROR_INVALID_STATE``. A **custom engine** is part of the inference stage and never a
 stage of its own: it is one more implementation a candidate's ``engine_id`` resolves to, and
-its call runs in ``ANIRA_PHASE_INFERENCE`` (the phase of ``anira_stage_phase`` between
+its call runs in ``ANIRA_PHASE_INFERENCE`` (the phase of ``anira_phase`` between
 ``ANIRA_PHASE_BEFORE_INFERENCE`` and ``ANIRA_PHASE_AFTER_INFERENCE``) exactly as a built-in
 engine's does. It is an object: ``anira_custom_engine_create(&desc, &engine, &err)`` copies an
 ``anira_engine_desc`` of ``anira/abi/engine.h`` into a refcounted ``anira_custom_engine``, and

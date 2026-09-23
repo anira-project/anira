@@ -1889,9 +1889,7 @@ public:
     explicit StageContext(const anira_stage_ctx* ctx) noexcept : m_ctx(ctx) {}
 
     /// The phase this call runs in.
-    anira_stage_phase phase() const noexcept {
-        return static_cast<anira_stage_phase>(m_ctx->phase);
-    }
+    anira_phase phase() const noexcept { return static_cast<anira_phase>(m_ctx->phase); }
     /// The engine of the plan the chunk was submitted under; ANIRA_ENGINE_NONE for a custom one.
     EngineKind engine() const noexcept { return static_cast<EngineKind>(m_ctx->engine); }
     /// The provider of that plan.
@@ -2111,8 +2109,8 @@ private:
 class Stage {
 public:
     /// The bit of one phase in phases().
-    static constexpr uint32_t phase_bit(anira_stage_phase stage_phase) noexcept {
-        return uint32_t{1} << static_cast<uint32_t>(stage_phase);
+    static constexpr uint32_t phase_bit(anira_phase phase) noexcept {
+        return uint32_t{1} << static_cast<uint32_t>(phase);
     }
     static constexpr uint32_t k_pre_process = uint32_t{1} << ANIRA_PHASE_PRE_PROCESS;
     static constexpr uint32_t k_post_process = uint32_t{1} << ANIRA_PHASE_POST_PROCESS;

@@ -648,13 +648,17 @@ typedef enum anira_provider {
 } anira_provider;
 
 /**
- * @brief The phase a stage callback runs in, and the engine call between two of them
- * (abi/stage.h, M2); pinned now. The three inference-thread phases are numbered in the
- * order they run; the phases of the shared lifecycle (anira/abi/lifecycle.h) are
- * appended behind the lifecycle pair: reset and unprepare, then init, then the engine's
- * two model-level phases, load and unload.
+ * @brief The phase a callback of either descriptor runs in: the phases and slots of a stage,
+ * the engine call between two of them and the slots of an engine (abi/stage.h,
+ * abi/engine.h). The two lifecycles share it, so like their shared records
+ * (anira/abi/lifecycle.h) it names no side. The value travels in one field,
+ * anira_stage_ctx.phase, since a stage's accessors depend on it; an engine receives
+ * none, each of its slots being a callback of its own. Pinned now. The three
+ * inference-thread phases are numbered in the order they run; the phases of the shared
+ * lifecycle (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and
+ * unprepare, then init, then the engine's two model-level phases, load and unload.
  */
-typedef enum anira_stage_phase {
+typedef enum anira_phase {
     ANIRA_PHASE_PRE_PROCESS = 0,  /**< Before the model inputs are formed. */
     ANIRA_PHASE_POST_PROCESS = 1,  /**< After the model outputs arrive. */
     ANIRA_PHASE_BEFORE_INFERENCE = 2,  /**< On the inference thread, before the engine call. */
@@ -696,8 +700,8 @@ typedef enum anira_stage_phase {
      * unprepare of it: an engine's unload slot (anira_engine_unload_fn).
      */
     ANIRA_PHASE_UNLOAD = 11,
-    ANIRA_STAGE_PHASE_FORCE32 = 0x7fffffff
-} anira_stage_phase;
+    ANIRA_PHASE_FORCE32 = 0x7fffffff
+} anira_phase;
 
 /**
  * @brief anira_stage_desc.flags bit: the stage promises that its pre_process and post_process

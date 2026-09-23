@@ -325,7 +325,7 @@ ANIRA_API size_t ANIRA_CALL anira_ring_pop_windows(anira_ring* ring,
  * roles alone.
  */
 typedef struct anira_stage_ctx {
-    uint32_t phase;  /**< anira_stage_phase: the phase this call runs in. */
+    uint32_t phase;  /**< anira_phase: the phase this call runs in. */
     /**
      * anira_engine of the plan the chunk was submitted under; ANIRA_ENGINE_NONE for a custom
      * engine.

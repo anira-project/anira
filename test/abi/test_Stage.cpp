@@ -208,7 +208,7 @@ void expect_same_stream(const std::vector<float>& actual, const std::vector<floa
 
 // ---- the recording stage -----------------------------------------------------------------------
 
-constexpr size_t k_phases = 5;   // indexed by anira_stage_phase up to AFTER_INFERENCE (4)
+constexpr size_t k_phases = 5;   // indexed by anira_phase up to AFTER_INFERENCE (4)
 constexpr size_t k_tensors = 4;  // the tensors per side the record has room for
 
 /// "Not asked": what a question a probe did not ask leaves in its status slot.

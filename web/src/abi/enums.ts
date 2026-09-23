@@ -308,7 +308,7 @@ export const anira_provider = {
 } as const
 export type anira_provider = (typeof anira_provider)[keyof typeof anira_provider]
 
-export const anira_stage_phase = {
+export const anira_phase = {
   ANIRA_PHASE_PRE_PROCESS: 0,
   ANIRA_PHASE_POST_PROCESS: 1,
   ANIRA_PHASE_BEFORE_INFERENCE: 2,
@@ -322,7 +322,7 @@ export const anira_stage_phase = {
   ANIRA_PHASE_LOAD: 10,
   ANIRA_PHASE_UNLOAD: 11,
 } as const
-export type anira_stage_phase = (typeof anira_stage_phase)[keyof typeof anira_stage_phase]
+export type anira_phase = (typeof anira_phase)[keyof typeof anira_phase]
 
 export const anira_binding = {
   ANIRA_BINDING_POSITION: 0,

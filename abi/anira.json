@@ -1735,9 +1735,9 @@
         },
         {
           "kind": "enum",
-          "name": "anira_stage_phase",
-          "terminator": "ANIRA_STAGE_PHASE_FORCE32",
-          "doc": "The phase a stage callback runs in, and the engine call between two of them (abi/stage.h, M2); pinned now. The three inference-thread phases are numbered in the order they run; the phases of the shared lifecycle (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and unprepare, then init, then the engine's two model-level phases, load and unload.",
+          "name": "anira_phase",
+          "terminator": "ANIRA_PHASE_FORCE32",
+          "doc": "The phase a callback of either descriptor runs in: the phases and slots of a stage, the engine call between two of them and the slots of an engine (abi/stage.h, abi/engine.h). The two lifecycles share it, so like their shared records (anira/abi/lifecycle.h) it names no side. The value travels in one field, anira_stage_ctx.phase, since a stage's accessors depend on it; an engine receives none, each of its slots being a callback of its own. Pinned now. The three inference-thread phases are numbered in the order they run; the phases of the shared lifecycle (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and unprepare, then init, then the engine's two model-level phases, load and unload.",
           "values": [
             {
               "name": "ANIRA_PHASE_PRE_PROCESS",
@@ -1800,7 +1800,7 @@
               "doc": "When the last handler holding a loaded model is re-prepared or destroyed, after every unprepare of it: an engine's unload slot (anira_engine_unload_fn)."
             },
             {
-              "name": "ANIRA_STAGE_PHASE_FORCE32",
+              "name": "ANIRA_PHASE_FORCE32",
               "value": "0x7fffffff"
             }
           ]
@@ -7093,7 +7093,7 @@
             {
               "name": "phase",
               "type": "uint32_t",
-              "doc": "anira_stage_phase: the phase this call runs in."
+              "doc": "anira_phase: the phase this call runs in."
             },
             {
               "name": "engine",

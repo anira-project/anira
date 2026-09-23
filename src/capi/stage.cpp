@@ -638,7 +638,7 @@ StageFrame StageProcessor::make_frame_with_outputs(const Chunk& chunk) const noe
     return frame;
 }
 
-anira_stage_ctx StageProcessor::make_ctx(anira_stage_phase phase,
+anira_stage_ctx StageProcessor::make_ctx(anira_phase phase,
                                          size_t entry,
                                          const StageFrame& frame) const noexcept ANIRA_NONBLOCKING {
     // The plan the chunk was stamped with (Core::pre_process), never the session's atomic: all

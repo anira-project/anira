@@ -91,8 +91,8 @@ _Static_assert(sizeof(anira_engine) == 4, "anira_engine is a 32-bit enum");
 _Static_assert(ANIRA_ENGINE_FORCE32 == 0x7fffffff, "anira_engine terminator");
 _Static_assert(sizeof(anira_provider) == 4, "anira_provider is a 32-bit enum");
 _Static_assert(ANIRA_PROVIDER_FORCE32 == 0x7fffffff, "anira_provider terminator");
-_Static_assert(sizeof(anira_stage_phase) == 4, "anira_stage_phase is a 32-bit enum");
-_Static_assert(ANIRA_STAGE_PHASE_FORCE32 == 0x7fffffff, "anira_stage_phase terminator");
+_Static_assert(sizeof(anira_phase) == 4, "anira_phase is a 32-bit enum");
+_Static_assert(ANIRA_PHASE_FORCE32 == 0x7fffffff, "anira_phase terminator");
 _Static_assert(sizeof(anira_binding) == 4, "anira_binding is a 32-bit enum");
 _Static_assert(ANIRA_BINDING_FORCE32 == 0x7fffffff, "anira_binding terminator");
 

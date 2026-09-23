@@ -725,9 +725,9 @@ headers:
           - {name: ANIRA_PROVIDER_VULKAN, value: 6, doc: "Vulkan (JSON \":vulkan\")."}
           - {name: ANIRA_PROVIDER_FORCE32, value: "0x7fffffff"}
       - kind: enum
-        name: anira_stage_phase
-        terminator: ANIRA_STAGE_PHASE_FORCE32
-        doc: "The phase a stage callback runs in, and the engine call between two of them (abi/stage.h, M2); pinned now. The three inference-thread phases are numbered in the order they run; the phases of the shared lifecycle (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and unprepare, then init, then the engine's two model-level phases, load and unload."
+        name: anira_phase
+        terminator: ANIRA_PHASE_FORCE32
+        doc: "The phase a callback of either descriptor runs in: the phases and slots of a stage, the engine call between two of them and the slots of an engine (abi/stage.h, abi/engine.h). The two lifecycles share it, so like their shared records (anira/abi/lifecycle.h) it names no side. The value travels in one field, anira_stage_ctx.phase, since a stage's accessors depend on it; an engine receives none, each of its slots being a callback of its own. Pinned now. The three inference-thread phases are numbered in the order they run; the phases of the shared lifecycle (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and unprepare, then init, then the engine's two model-level phases, load and unload."
         values:
           - {name: ANIRA_PHASE_PRE_PROCESS, value: 0, doc: "Before the model inputs are formed."}
           - {name: ANIRA_PHASE_POST_PROCESS, value: 1, doc: "After the model outputs arrive."}
@@ -741,7 +741,7 @@ headers:
           - {name: ANIRA_PHASE_INIT, value: 9, doc: "At the first anira_handler_prepare that reaches a stage's or an engine's carrier, once per carrier: the init slot (anira_stage_init_fn, anira_engine_init_fn) with an anira_init_info."}
           - {name: ANIRA_PHASE_LOAD, value: 10, doc: "At anira_handler_prepare, under the core's lifecycle lock, once per loaded model anira pools: an engine's load slot (anira_engine_load_fn) with an anira_engine_load_info."}
           - {name: ANIRA_PHASE_UNLOAD, value: 11, doc: "When the last handler holding a loaded model is re-prepared or destroyed, after every unprepare of it: an engine's unload slot (anira_engine_unload_fn)."}
-          - {name: ANIRA_STAGE_PHASE_FORCE32, value: "0x7fffffff"}
+          - {name: ANIRA_PHASE_FORCE32, value: "0x7fffffff"}
       - kind: define
         name: ANIRA_STAGE_FLAG_REALTIME_PRE_POST
         value: "1u"
@@ -3198,7 +3198,7 @@ headers:
         align: 8
         doc: "What a phase callback of a stage sees. Tier 1: 64 bytes, frozen, identical on every target; no struct_size. anira fills one on its own stack per call: the record and the frame it names are valid until the callback returns, and a record kept beyond it must not be handed to an accessor. Every scalar but phase has the same value in all four phases of a chunk. The tensors and the rings are not in the record: a stage asks for them per slot through anira_stage_input_role, anira_stage_input_ring, anira_stage_input_tensor and their output twins, handing over the ctx as it received it. What a phase exposes: pre_process the input rings and the model's input tensors (a State input has no host end and is not exposed), before_inference the input tensors, after_inference the output tensors, post_process the output tensors (State outputs excepted) and the output rings, reset (ANIRA_PHASE_RESET, the stage's reset slot) the roles alone."
         fields:
-          - {name: phase, type: uint32_t, doc: "anira_stage_phase: the phase this call runs in."}
+          - {name: phase, type: uint32_t, doc: "anira_phase: the phase this call runs in."}
           - {name: engine, type: uint32_t, doc: "anira_engine of the plan the chunk was submitted under; ANIRA_ENGINE_NONE for a custom engine."}
           - {name: provider, type: uint32_t, doc: "anira_provider of that plan; ANIRA_PROVIDER_DEFAULT for a custom provider, which the plan report names (anira_plan_info.provider_id)."}
           - {name: variant, type: uint32_t, doc: "The variant of that plan; 0 in this pre-release."}

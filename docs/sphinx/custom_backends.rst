@@ -133,7 +133,7 @@ Three levels, three pointers, three lifetimes: ``user_data`` lives with the engi
 The stage's descriptor (``anira_stage_desc``, :doc:`custom_preprocessing`) has the same slots
 minus the model level, and its ``init`` and ``prepare`` receive the same two records,
 ``anira_init_info`` and ``anira_prepare_info`` of ``anira/abi/lifecycle.h``.
-``anira_stage_phase`` names the phase of every slot, ``ANIRA_PHASE_INIT``,
+``anira_phase`` names the phase of every slot, ``ANIRA_PHASE_INIT``,
 ``ANIRA_PHASE_LOAD`` and ``ANIRA_PHASE_UNLOAD`` among them for the outer levels.
 
 The lifecycle
