@@ -94,7 +94,7 @@ TEST(AbiBridge, CandidatesNarrowTheEntries) {
     model.add_model_path(ANIRA_ENGINE_LIBTORCH, "model.pt");
     model.input(streamed("in"));
     model.output(streamed("out"));
-    const std::array<anira::Engine, 1> custom_only{ANIRA_ENGINE_NONE};
+    const std::array<anira::EngineKind, 1> custom_only{ANIRA_ENGINE_NONE};
     const anira::InferenceConfig cfg =
         anira::v3compat::to_inference_config(model, explicit_hard(), custom_only);
     EXPECT_EQ(cfg.m_model_data.size(), 1U);
@@ -220,6 +220,6 @@ TEST(AbiBridge, HostConfigFromTheHardGeometryAndFromTheHostsOwn) {
 }
 
 TEST(AbiBridge, EnabledEngines) {
-    const std::vector<anira::Engine> engines = anira::v3compat::enabled_engines();
-    for (const anira::Engine engine : engines) { EXPECT_NE(engine, ANIRA_ENGINE_NONE); }
+    const std::vector<anira::EngineKind> engines = anira::v3compat::enabled_engines();
+    for (const anira::EngineKind engine : engines) { EXPECT_NE(engine, ANIRA_ENGINE_NONE); }
 }

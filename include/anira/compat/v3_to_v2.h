@@ -141,9 +141,10 @@ namespace anira::v3compat {
 /// to_inference_config over the handles; throws anira::Error with the reason. The model
 /// config is taken by lvalue reference only: a bytes entry is borrowed, so the object must
 /// outlive the result (see the file comment).
-inline anira::InferenceConfig to_inference_config(const anira::ModelConfig& model,
-                                                  const anira::ContractHandle& contract,
-                                                  std::span<const anira::Engine> candidates = {}) {
+inline anira::InferenceConfig to_inference_config(
+    const anira::ModelConfig& model,
+    const anira::ContractHandle& contract,
+    std::span<const anira::EngineKind> candidates = {}) {
     anira::InferenceConfig out;
     anira_error err = ANIRA_ERROR_INIT;
     const anira_status status =
@@ -156,17 +157,20 @@ inline anira::InferenceConfig to_inference_config(const anira::ModelConfig& mode
     if (ANIRA_FAILED(status)) { throw anira::Error(err); }
     return out;
 }
-inline anira::InferenceConfig to_inference_config(const anira::ModelConfig& model,
-                                                  const anira::Hard& hard,
-                                                  std::span<const anira::Engine> candidates = {}) {
+inline anira::InferenceConfig to_inference_config(
+    const anira::ModelConfig& model,
+    const anira::Hard& hard,
+    std::span<const anira::EngineKind> candidates = {}) {
     return to_inference_config(model, anira::ContractHandle(hard), candidates);
 }
 anira::InferenceConfig to_inference_config(anira::ModelConfig&& model,
                                            const anira::ContractHandle& contract,
-                                           std::span<const anira::Engine> candidates = {}) = delete;
+                                           std::span<const anira::EngineKind> candidates = {}) =
+    delete;
 anira::InferenceConfig to_inference_config(anira::ModelConfig&& model,
                                            const anira::Hard& hard,
-                                           std::span<const anira::Engine> candidates = {}) = delete;
+                                           std::span<const anira::EngineKind> candidates = {}) =
+    delete;
 
 /// to_core_config over the handle; throws anira::Error with the reason.
 inline anira::CoreConfig to_core_config(const anira::ContextConfig& config) {
