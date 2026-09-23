@@ -37,7 +37,6 @@
 #include "../utils/StatusError.h"
 #include "Adapter.h"
 #include "Adapters.h"
-#include "litert/c/internal/litert_accelerator.h"
 #include "litert/c/litert_any.h"
 #include "litert/c/litert_common.h"
 #include "litert/c/litert_compiled_model.h"
@@ -50,6 +49,12 @@
 #include "litert/c/litert_options.h"
 #include "litert/c/litert_tensor_buffer.h"
 #include "litert/c/litert_tensor_buffer_types.h"
+
+// The accelerator query is internal to LiteRT and exported by every package but the Windows
+// DLL (cmake/backends/litert.cmake defines ANIRA_LITERT_ACCELERATOR_QUERY where it is).
+#if defined(ANIRA_LITERT_ACCELERATOR_QUERY)
+#include "litert/c/internal/litert_accelerator.h"
+#endif
 
 namespace anira::backend {
 
@@ -81,6 +86,10 @@ int hardware_of(std::string_view provider_id) noexcept {
     return 0;
 }
 
+#if defined(ANIRA_LITERT_ACCELERATOR_QUERY)
+// Whether this LiteRT library can be asked which accelerators an environment registered.
+constexpr bool k_accelerator_query = true;
+
 // The hardware every accelerator registered to an environment supports, as one set.
 LiteRtHwAcceleratorSet registered_hardware(LiteRtEnvironment env) noexcept {
     LiteRtHwAcceleratorSet registered = 0;
@@ -96,6 +105,20 @@ LiteRtHwAcceleratorSet registered_hardware(LiteRtEnvironment env) noexcept {
     }
     return registered;
 }
+#else
+constexpr bool k_accelerator_query = false;
+
+// The CPU accelerator alone: this LiteRT library does not export its accelerator query, so no
+// accelerator beyond the one every environment registers is known here.
+LiteRtHwAcceleratorSet registered_hardware(LiteRtEnvironment /*env*/) noexcept {
+    return kLiteRtHwAcceleratorCpu;
+}
+#endif
+
+// What a message adds where the library cannot be asked for its accelerators.
+constexpr const char* k_no_query_note =
+    "; this LiteRT library does not export its accelerator query, so no accelerator beyond "
+    "the CPU is known here";
 
 // The names of a hardware set, as a message lists them ("cpu" for the CPU accelerator).
 std::string hardware_names(LiteRtHwAcceleratorSet hardware) {
@@ -252,11 +275,13 @@ SharedModel::SharedModel(const Model& model) {
         if (wanted != kLiteRtHwAcceleratorCpu) {
             const LiteRtHwAcceleratorSet registered = registered_hardware(m_env);
             if ((registered & wanted) == 0) {
-                throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
-                                  "litert: no registered accelerator supports '" +
-                                      model.m_provider_id +
-                                      "' here (the accelerators registered support: " +
-                                      hardware_names(registered) + ")");
+                std::string message = "litert: no registered accelerator supports '";
+                message += model.m_provider_id;
+                message += "' here (the accelerators registered support: ";
+                message += hardware_names(registered);
+                if (!k_accelerator_query) { message += k_no_query_note; }
+                message += ")";
+                throw StatusError(ANIRA_ERROR_NOT_SUPPORTED, message);
             }
         }
 
@@ -588,9 +613,12 @@ public:
             names += name;
             names += "'";
         }
-        return "LiteRT takes an accelerator by the hardware's name beside ANIRA_PROVIDER_DEFAULT "
-               "(" +
-               names + "); no provider of the enum names one";
+        std::string reason =
+            "LiteRT takes an accelerator by the hardware's name beside ANIRA_PROVIDER_DEFAULT (";
+        reason += names;
+        reason += "); no provider of the enum names one";
+        if (!k_accelerator_query) { reason += k_no_query_note; }
+        return reason;
     }
 
 protected:
@@ -633,6 +661,8 @@ std::shared_ptr<Loaded> make_litert_loaded() {
 
 std::vector<ProviderInfo> litert_providers(anira::LogLevel level) {
     std::vector<ProviderInfo> providers;
+    // A library that cannot be asked lists no accelerator: an environment is not worth creating.
+    if (!k_accelerator_query) { return providers; }
     // A fresh environment registers the accelerators it can load (its automatic registration).
     // An accelerator it cannot load is this query's answer, not a warning: the environment's
     // logger keeps errors alone, whatever anira's level; the adapter's environments at load

@@ -1590,7 +1590,8 @@ TEST(AdapterLiteRt, TheGainNeedsItsOutputsNamedAndRunsAtTheExportsRank) {
 // The provider of the record on LiteRT: an accelerator by its hardware's name beside DEFAULT
 // ("gpu", "npu"), never a provider of the enum; a name whose hardware no registered
 // accelerator supports here is refused at load naming the registered ones (the environment's
-// automatic registration loads the accelerator libraries it finds).
+// automatic registration loads the accelerator libraries it finds; a LiteRT library that does
+// not export its accelerator query, the Windows DLL, knows the CPU alone and says so).
 TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
     ASSERT_NE(adapter, nullptr);
