@@ -59,6 +59,67 @@ typedef struct anira_ext_entry {
 #define ANIRA_EXT_ENTRY_INIT ANIRA_INIT(anira_ext_entry, {sizeof(anira_ext_entry), 1, "entry"}, NULL)
 
 /**
+ * @brief One set of anira_ext_provider_options: a backend (an engine on a provider, the
+ * two-axis id as anira_backend_id spells it) and the options its runtime takes for the
+ * provider, as string pairs in the runtime's own vocabulary (ONNX Runtime's execution
+ * provider option keys: device_id for CUDA, backend_path for QNN, ...). Tier 2,
+ * struct_size first, read within it; copied by the set call. A NULL keys or values with
+ * a count above 0 reads as no options.
+ */
+typedef struct anira_provider_option_set {
+    uint32_t struct_size;  /**< sizeof(anira_provider_option_set) of the caller's header. */
+    /**
+     * anira_engine of the backend; ANIRA_ENGINE_NONE with an engine_id for a custom engine (no
+     * custom engine reads the kind in this pre-release).
+     */
+    uint32_t engine;
+    /**
+     * anira_provider of the backend; ANIRA_PROVIDER_DEFAULT beside a provider_id. A set for the
+     * default provider has no execution provider to feed and is ignored.
+     */
+    uint32_t provider;
+    uint32_t num_options;  /**< The number of key/value pairs. */
+    const char* engine_id;  /**< NULL for a built-in engine; the id of a custom engine, copied. */
+    /**
+     * NULL for a provider the enum names; a custom provider's name in the engine's vocabulary,
+     * copied.
+     */
+    const char* provider_id;
+    const char* const* keys;  /**< num_options option names, NUL-terminated, copied. */
+    const char* const* values;  /**< num_options option values, NUL-terminated, copied. */
+} anira_provider_option_set;
+/**
+ * @brief No backend and no options.
+ */
+#define ANIRA_PROVIDER_OPTION_SET_INIT ANIRA_INIT(anira_provider_option_set, sizeof(anira_provider_option_set), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, 0u, NULL, NULL, NULL, NULL)
+
+/**
+ * @brief Extension "provider_options", version 1, on the context config: the options an
+ * engine's runtime takes for a provider, one set per backend
+ * (anira_provider_option_set). Consumed by the ONNX Runtime adapter in this pre-release,
+ * which reads the set of the plan's backend at load into the execution provider's
+ * options (CUDA's own entry and the generic one alike); a set for a backend no plan runs
+ * on is not an error. The options are part of the loaded model: two contexts with
+ * different options for one backend load twice. JSON: {"version": 1, "sets":
+ * [{"backend": "onnxruntime:cuda", "options": {"device_id": "0"}}]}, the backend as a
+ * model entry's "engine" word with its provider suffix, every option value a string.
+ */
+typedef struct anira_ext_provider_options {
+    anira_ext_header header;  /**< {sizeof(anira_ext_provider_options), 1, "provider_options"}. */
+    /**
+     * num_sets records, each read within its struct_size; copied. NULL with a count of 0 for
+     * none.
+     */
+    const anira_provider_option_set* sets;
+    uint32_t num_sets;  /**< The number of sets. */
+    uint32_t reserved;  /**< 0. */
+} anira_ext_provider_options;
+/**
+ * @brief An anira_ext_provider_options with its header filled and no set yet.
+ */
+#define ANIRA_EXT_PROVIDER_OPTIONS_INIT ANIRA_INIT(anira_ext_provider_options, {sizeof(anira_ext_provider_options), 1, "provider_options"}, NULL, 0u, 0u)
+
+/**
  * @brief Scalar enumeration of the extension kinds this build understands, without a context:
  * NULL out returns the count, a short buffer is filled as far as it goes and returns
  * ANIRA_INCOMPLETE.

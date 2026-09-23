@@ -629,6 +629,43 @@ TEST(AbiCxx, FromFileOnAMissingFileThrowsNoSuchFile) {
     EXPECT_NE(contract.m_what.find("nope.json"), std::string::npos) << contract.m_what;
 }
 
+// ext::ProviderOptions mints a record that stands on its own (its sets, arrays and strings
+// in its own storage), which the context config copies: the JSON form carries the sets.
+TEST(AbiCxx, ProviderOptionsExtensionMintsASelfContainedRecord) {
+    anira::ext::ProviderOptions value;
+    value.sets.push_back({.engine = ANIRA_ENGINE_ONNXRUNTIME,
+                          .engine_id = "",
+                          .provider = ANIRA_PROVIDER_CUDA,
+                          .provider_id = "",
+                          .options = {{"device_id", "0"}}});
+    value.sets.push_back({.engine = ANIRA_ENGINE_NONE,
+                          .engine_id = "org.example.engine",
+                          .provider = ANIRA_PROVIDER_DEFAULT,
+                          .provider_id = "fast",
+                          .options = {}});
+    const auto native = anira::detail::ExtTraits<anira::ext::ProviderOptions>::mint(value);
+    ASSERT_EQ(native.num_sets, 2u);
+    ASSERT_NE(native.sets, nullptr);
+    EXPECT_EQ(native.sets[0].engine, static_cast<uint32_t>(ANIRA_ENGINE_ONNXRUNTIME));
+    EXPECT_EQ(native.sets[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CUDA));
+    EXPECT_EQ(native.sets[0].engine_id, nullptr);
+    ASSERT_EQ(native.sets[0].num_options, 1u);
+    EXPECT_STREQ(native.sets[0].keys[0], "device_id");
+    EXPECT_STREQ(native.sets[0].values[0], "0");
+    EXPECT_STREQ(native.sets[1].engine_id, "org.example.engine");
+    EXPECT_STREQ(native.sets[1].provider_id, "fast");
+    EXPECT_EQ(native.sets[1].keys, nullptr);
+    EXPECT_EQ(native.header.struct_size, sizeof(anira_ext_provider_options));
+    EXPECT_STREQ(native.header.kind, "provider_options");
+
+    anira::ContextConfig config;
+    config.ext(value);
+    const std::string json = config.to_json();
+    EXPECT_NE(json.find("\"provider_options\""), std::string::npos) << json;
+    EXPECT_NE(json.find("\"onnxruntime:cuda\""), std::string::npos) << json;
+    EXPECT_NE(json.find("\"org.example.engine:fast\""), std::string::npos) << json;
+}
+
 // ---- after the header review ------------------------------------------------------------------
 
 TEST(AbiCxx, JobOptionsExtensionKeepsTheValueItPointsInto) {

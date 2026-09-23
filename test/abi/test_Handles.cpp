@@ -850,14 +850,15 @@ TEST(AbiJobOptions, ScalarsAndBorrowedExtensions) {
 TEST(AbiExtKinds, ScalarEnumerationConvention) {
     uint32_t count = 0;
     EXPECT_EQ(anira_registered_ext_kinds(&count, nullptr), ANIRA_OK);
-    EXPECT_EQ(count, 1u) << "v3.0.0 registers one kind: entry";
+    EXPECT_EQ(count, 2u) << "this pre-release registers two kinds: entry, provider_options";
     std::array<const char*, 4> kinds{};
     count = 0;
     EXPECT_EQ(anira_registered_ext_kinds(&count, kinds.data()), ANIRA_INCOMPLETE) << "capacity 0";
-    EXPECT_EQ(count, 1u);
+    EXPECT_EQ(count, 2u);
     count = kinds.size();
     EXPECT_EQ(anira_registered_ext_kinds(&count, kinds.data()), ANIRA_OK);
-    EXPECT_EQ(count, 1u);
+    EXPECT_EQ(count, 2u);
     EXPECT_STREQ(kinds[0], "entry");
+    EXPECT_STREQ(kinds[1], "provider_options");
     EXPECT_EQ(anira_registered_ext_kinds(nullptr, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
 }

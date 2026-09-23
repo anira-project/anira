@@ -971,9 +971,20 @@ std::vector<anira::backend::PlanRequest> plan_requests(const anira_handler& hand
         request.m_legacy_backend = backend_of_row(row, row_index);
         request.m_model = model_of_row(model, row, derived, config);
         // The provider is the plan's, part of the pool key: two providers of one row are two
-        // loaded models.
+        // loaded models, and so are two option sets of the context for one backend (the
+        // "provider_options" extension of the handler's context config).
         request.m_model.m_provider = key.m_provider;
         request.m_model.m_provider_id = key.m_provider_id;
+        if (const auto* options =
+                handler.m_context->m_config.m_ext.payload<anira::capi::ProviderOptionsPayload>(
+                    "provider_options")) {
+            if (const anira::capi::ProviderOptionSet* set = options->find(row.m_engine,
+                                                                          row.m_engine_id,
+                                                                          key.m_provider,
+                                                                          key.m_provider_id)) {
+                request.m_model.m_options = set->m_options;
+            }
+        }
         if (const anira::capi::PipelineEngine* const engine =
                 registered_engine(handler.m_pipeline, row)) {
             if (variant == nullptr) {

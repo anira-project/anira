@@ -28,6 +28,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -158,12 +159,31 @@ void append_provider(Ort::SessionOptions& options, const Model& model) {
         throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
                           "onnxruntime: no execution provider serves '" + label + "'");
     }
+    // The options of the record (the "provider_options" context extension's set for this
+    // backend), in the runtime's vocabulary: CUDA's V2 options take them by key, the generic
+    // entry as its map.
+    std::vector<const char*> keys;
+    std::vector<const char*> values;
+    std::unordered_map<std::string, std::string> map;
+    for (const auto& [key, value] : model.m_options) {
+        keys.push_back(key.c_str());
+        values.push_back(value.c_str());
+        map[key] = value;
+    }
     try {
         if (model.m_provider == ANIRA_PROVIDER_CUDA) {
-            const OrtCUDAProviderOptions cuda{};
-            options.AppendExecutionProvider_CUDA(cuda);
+            const OrtApi& api = Ort::GetApi();
+            OrtCUDAProviderOptionsV2* cuda = nullptr;
+            Ort::ThrowOnError(api.CreateCUDAProviderOptions(&cuda));
+            const std::unique_ptr<OrtCUDAProviderOptionsV2, void (*)(OrtCUDAProviderOptionsV2*)>
+                guard(cuda, api.ReleaseCUDAProviderOptions);
+            if (!keys.empty()) {
+                Ort::ThrowOnError(
+                    api.UpdateCUDAProviderOptions(cuda, keys.data(), values.data(), keys.size()));
+            }
+            options.AppendExecutionProvider_CUDA_V2(*cuda);
         } else {
-            options.AppendExecutionProvider(name, {});
+            options.AppendExecutionProvider(name, map);
         }
     } catch (const Ort::Exception& e) {
         throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,

@@ -283,6 +283,11 @@ _Static_assert(offsetof(anira_ext_header, struct_size) == 0, "anira_ext_header.s
 _Static_assert(offsetof(anira_ext_entry, header) == 0, "anira_ext_entry.header (an anira_ext_header) first");
 _Static_assert(offsetof(anira_ext_entry, header.struct_size) == 0, "anira_ext_entry: struct_size first through the header");
 
+_Static_assert(offsetof(anira_provider_option_set, struct_size) == 0, "anira_provider_option_set.struct_size first");
+
+_Static_assert(offsetof(anira_ext_provider_options, header) == 0, "anira_ext_provider_options.header (an anira_ext_header) first");
+_Static_assert(offsetof(anira_ext_provider_options, header.struct_size) == 0, "anira_ext_provider_options: struct_size first through the header");
+
 _Static_assert(offsetof(anira_cuda_desc, struct_size) == 0, "anira_cuda_desc.struct_size first");
 
 _Static_assert(offsetof(anira_gl_desc, struct_size) == 0, "anira_gl_desc.struct_size first");

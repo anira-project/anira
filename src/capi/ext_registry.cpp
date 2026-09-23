@@ -8,9 +8,11 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>  // IWYU pragma: keep - declares the nlohmann::json type name
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -19,6 +21,7 @@
 #include "capi_internal.h"
 #include "handles.h"
 #include "translate.h"
+#include "words.h"
 
 namespace anira::capi {
 
@@ -70,11 +73,223 @@ std::string entry_to_json(const void* payload) {
     return nlohmann::json{{"name", entry->m_name}}.dump();
 }
 
+// ---- the "provider_options" row (version 1) ----------------------------------------------
+
+constexpr const char* k_provider_options = "provider_options";
+// The fixed head of anira_provider_option_set: struct_size, engine, provider, num_options.
+constexpr uint32_t k_option_set_head = 4 * sizeof(uint32_t);
+
+void provider_options_fix_header(ProviderOptionsPayload& payload) {
+    payload.fix_header();
+}
+
+void* provider_options_clone(const anira_ext_header* header) {
+    anira_ext_provider_options record = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
+    const size_t readable = header->struct_size < sizeof(anira_ext_provider_options)
+                                ? header->struct_size
+                                : sizeof(anira_ext_provider_options);
+    std::memcpy(&record, header, readable);
+    auto* payload = new ProviderOptionsPayload();
+    if (record.sets != nullptr) {
+        for (uint32_t i = 0; i < record.num_sets; ++i) {
+            anira_provider_option_set set = ANIRA_PROVIDER_OPTION_SET_INIT;
+            const anira_provider_option_set& given = record.sets[i];
+            if (given.struct_size < k_option_set_head) { continue; }
+            const size_t bytes = given.struct_size < sizeof(anira_provider_option_set)
+                                     ? given.struct_size
+                                     : sizeof(anira_provider_option_set);
+            std::memcpy(&set, &given, bytes);
+            ProviderOptionSet copy;
+            copy.m_engine = static_cast<anira_engine>(set.engine);
+            copy.m_engine_id = set.engine_id != nullptr ? set.engine_id : "";
+            copy.m_provider = static_cast<anira_provider>(set.provider);
+            copy.m_provider_id = set.provider_id != nullptr ? set.provider_id : "";
+            if (set.keys != nullptr && set.values != nullptr) {
+                for (uint32_t k = 0; k < set.num_options; ++k) {
+                    if (set.keys[k] == nullptr || set.values[k] == nullptr) { continue; }
+                    copy.m_options.emplace_back(set.keys[k], set.values[k]);
+                }
+            }
+            payload->m_sets.push_back(std::move(copy));
+        }
+    }
+    provider_options_fix_header(*payload);
+    return payload;
+}
+
+void provider_options_destroy(void* payload) {
+    delete static_cast<ProviderOptionsPayload*>(payload);
+}
+
+// The backend word of a set: a model entry's "engine" word with its provider suffix.
+bool parse_backend_word(std::string_view word, ProviderOptionSet& set, std::string& error) {
+    const size_t colon = word.find(':');
+    const std::string_view engine = word.substr(0, colon);
+    if (engine.empty()) {
+        error = "provider_options.sets[].backend: names no engine";
+        return false;
+    }
+    if (const std::optional<anira_engine> known = engine_of_word(engine)) {
+        set.m_engine = *known;
+        set.m_engine_id.clear();
+    } else if (engine.find('.') != std::string_view::npos) {
+        set.m_engine = ANIRA_ENGINE_NONE;
+        set.m_engine_id = std::string(engine);
+    } else {
+        error = "provider_options.sets[].backend: '" + std::string(engine) +
+                "' is neither a built-in engine's word nor a custom engine's reverse-URI id";
+        return false;
+    }
+    set.m_provider = ANIRA_PROVIDER_DEFAULT;
+    set.m_provider_id.clear();
+    if (colon == std::string_view::npos) { return true; }
+    const std::string_view suffix = word.substr(colon + 1);
+    if (suffix.empty()) {
+        error = "provider_options.sets[].backend: names no provider after the ':'";
+        return false;
+    }
+    if (const std::optional<anira_provider> known = provider_of_word(suffix)) {
+        set.m_provider = *known;
+    } else {
+        set.m_provider_id = std::string(suffix);
+    }
+    return true;
+}
+
+std::string backend_word(const ProviderOptionSet& set) {
+    std::string word = set.m_engine_id.empty() ? engine_word(set.m_engine) : set.m_engine_id;
+    if (set.m_provider != ANIRA_PROVIDER_DEFAULT) {
+        word += ":";
+        word += provider_word(set.m_provider);
+    } else if (!set.m_provider_id.empty()) {
+        word += ":" + set.m_provider_id;
+    }
+    return word;
+}
+
+void* provider_options_from_json(std::string_view utf8, std::string& error) {
+    const nlohmann::json object = nlohmann::json::parse(utf8, nullptr, false);
+    if (object.is_discarded() || !object.is_object()) {
+        error = "provider_options: not a JSON object";
+        return nullptr;
+    }
+    const auto sets = object.find("sets");
+    if (sets == object.end() || !sets->is_array()) {
+        error = "provider_options.sets: an array is required";
+        return nullptr;
+    }
+    auto payload = std::make_unique<ProviderOptionsPayload>();
+    size_t index = 0;
+    for (const nlohmann::json& node : *sets) {
+        const std::string at = "provider_options.sets[" + std::to_string(index++) + "]";
+        if (!node.is_object()) {
+            error = at + ": not a JSON object";
+            return nullptr;
+        }
+        const auto backend = node.find("backend");
+        if (backend == node.end() || !backend->is_string()) {
+            error = at + ".backend: a string is required";
+            return nullptr;
+        }
+        ProviderOptionSet set;
+        if (!parse_backend_word(backend->get<std::string>(), set, error)) {
+            error.replace(0, std::strlen("provider_options.sets[]"), at);
+            return nullptr;
+        }
+        const auto options = node.find("options");
+        if (options != node.end()) {
+            if (!options->is_object()) {
+                error = at + ".options: a JSON object of strings is required";
+                return nullptr;
+            }
+            for (const auto& [key, value] : options->items()) {
+                if (!value.is_string()) {
+                    error = at;
+                    error += ".options.";
+                    error += key;
+                    error += ": a string is required";
+                    return nullptr;
+                }
+                set.m_options.emplace_back(key, value.get<std::string>());
+            }
+        }
+        payload->m_sets.push_back(std::move(set));
+    }
+    provider_options_fix_header(*payload);
+    return payload.release();
+}
+
+std::string provider_options_to_json(const void* payload) {
+    const auto* options = static_cast<const ProviderOptionsPayload*>(payload);
+    nlohmann::json sets = nlohmann::json::array();
+    for (const ProviderOptionSet& set : options->m_sets) {
+        nlohmann::json pairs = nlohmann::json::object();
+        for (const auto& [key, value] : set.m_options) { pairs[key] = value; }
+        sets.push_back(nlohmann::json{{"backend", backend_word(set)}, {"options", pairs}});
+    }
+    return nlohmann::json{{"sets", sets}}.dump();
+}
+
 const char* host_name(std::string_view host) {
     return host == "tensor_spec" ? "tensor" : host == "model" ? "model" : host.data();
 }
 
 }  // namespace
+
+bool ProviderOptionSet::names(anira_engine engine,
+                              std::string_view engine_id,
+                              anira_provider provider,
+                              std::string_view provider_id) const noexcept {
+    const bool same_engine =
+        m_engine_id.empty() ? (engine_id.empty() && m_engine == engine) : m_engine_id == engine_id;
+    return same_engine && m_provider == provider && m_provider_id == provider_id;
+}
+
+void ProviderOptionsPayload::fix_header() {
+    m_records.clear();
+    m_keys.clear();
+    m_values.clear();
+    m_records.reserve(m_sets.size());
+    m_keys.reserve(m_sets.size());
+    m_values.reserve(m_sets.size());
+    for (const ProviderOptionSet& set : m_sets) {
+        std::vector<const char*> keys;
+        std::vector<const char*> values;
+        keys.reserve(set.m_options.size());
+        values.reserve(set.m_options.size());
+        for (const auto& [key, value] : set.m_options) {
+            keys.push_back(key.c_str());
+            values.push_back(value.c_str());
+        }
+        m_keys.push_back(std::move(keys));
+        m_values.push_back(std::move(values));
+        anira_provider_option_set record = ANIRA_PROVIDER_OPTION_SET_INIT;
+        record.engine = static_cast<uint32_t>(set.m_engine);
+        record.provider = static_cast<uint32_t>(set.m_provider);
+        record.num_options = static_cast<uint32_t>(set.m_options.size());
+        record.engine_id = set.m_engine_id.empty() ? nullptr : set.m_engine_id.c_str();
+        record.provider_id = set.m_provider_id.empty() ? nullptr : set.m_provider_id.c_str();
+        record.keys = m_keys.back().empty() ? nullptr : m_keys.back().data();
+        record.values = m_values.back().empty() ? nullptr : m_values.back().data();
+        m_records.push_back(record);
+    }
+    m_hdr.header.struct_size = sizeof(anira_ext_provider_options);
+    m_hdr.header.version = 1;
+    m_hdr.header.kind = k_provider_options;
+    m_hdr.sets = m_records.empty() ? nullptr : m_records.data();
+    m_hdr.num_sets = static_cast<uint32_t>(m_records.size());
+    m_hdr.reserved = 0;
+}
+
+const ProviderOptionSet* ProviderOptionsPayload::find(anira_engine engine,
+                                                      std::string_view engine_id,
+                                                      anira_provider provider,
+                                                      std::string_view provider_id) const noexcept {
+    for (const ProviderOptionSet& set : m_sets) {
+        if (set.names(engine, engine_id, provider, provider_id)) { return &set; }
+    }
+    return nullptr;
+}
 
 const std::vector<ExtRow>& ext_rows() {
     static const std::vector<ExtRow> k_rows = {
@@ -85,12 +300,24 @@ const std::vector<ExtRow>& ext_rows() {
          .m_destroy = entry_destroy,
          .m_from_json = entry_from_json,
          .m_to_json = entry_to_json},
+        {.m_kind = k_provider_options,
+         .m_version = 1,
+         .m_struct_size = sizeof(anira_ext_provider_options),
+         .m_clone = provider_options_clone,
+         .m_destroy = provider_options_destroy,
+         .m_from_json = provider_options_from_json,
+         .m_to_json = provider_options_to_json},
     };
     return k_rows;
 }
 
 const std::vector<ExtConsumer>& ext_consumers() {
     static const std::vector<ExtConsumer> k_consumers = {
+#ifdef USE_ONNXRUNTIME
+        {.m_name = "OnnxRuntimeAdapter",
+         .m_engine = ANIRA_ENGINE_ONNXRUNTIME,
+         .m_consumed = {"context:provider_options"}},
+#endif
 #ifdef USE_LIBTORCH
         {.m_name = "LibTorchAdapter",
          .m_engine = ANIRA_ENGINE_LIBTORCH,

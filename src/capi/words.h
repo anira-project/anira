@@ -66,6 +66,15 @@ inline constexpr std::array<std::pair<const char*, anira_engine>, 5> k_engine_wo
     {"executorch", ANIRA_ENGINE_EXECUTORCH},
 }};
 
+/// The built-in engine a word spells; nothing for a word the enum does not name (a custom
+/// engine's id).
+inline std::optional<anira_engine> engine_of_word(std::string_view word) noexcept {
+    for (const auto& [name, value] : k_engine_words) {
+        if (word == name) { return value; }
+    }
+    return std::nullopt;
+}
+
 /// The word of a built-in engine; "none" for ANIRA_ENGINE_NONE and any other value.
 inline const char* engine_word(anira_engine engine) noexcept {
     for (const auto& [name, value] : k_engine_words) {

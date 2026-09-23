@@ -4,8 +4,10 @@
 #include <anira/abi/status.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "capi/ext_registry.h"
@@ -27,13 +29,133 @@ anira_ext_entry make_entry(const char* name) {
 
 TEST(AbiExtRegistry, RegistryRowsAndKinds) {
     const std::vector<anira::capi::ExtRow>& rows = anira::capi::ext_rows();
-    ASSERT_EQ(rows.size(), 1u);
+    ASSERT_EQ(rows.size(), 2u);
     EXPECT_STREQ(rows[0].m_kind, "entry");
     EXPECT_EQ(rows[0].m_version, 1u);
     EXPECT_EQ(rows[0].m_struct_size, sizeof(anira_ext_entry));
     EXPECT_NE(rows[0].m_from_json, nullptr) << "entry has a JSON form";
-    ASSERT_EQ(anira::capi::ext_kinds().size(), 1u);
+    EXPECT_STREQ(rows[1].m_kind, "provider_options");
+    EXPECT_EQ(rows[1].m_version, 1u);
+    EXPECT_EQ(rows[1].m_struct_size, sizeof(anira_ext_provider_options));
+    EXPECT_NE(rows[1].m_from_json, nullptr) << "provider_options has a JSON form";
+    ASSERT_EQ(anira::capi::ext_kinds().size(), 2u);
     EXPECT_STREQ(anira::capi::ext_kinds()[0], "entry");
+    EXPECT_STREQ(anira::capi::ext_kinds()[1], "provider_options");
+}
+
+// The "provider_options" kind: a C record of sets (each read within its struct_size, the
+// strings and arrays copied) becomes a payload whose C view points into itself and survives a
+// copy of the bag; the JSON twin spells a backend as a model entry's "engine" word with its
+// provider suffix and the options as an object of strings; find answers by the two-axis id.
+TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
+    std::string device = "0";  // the caller's strings may die after the call
+    const std::array<const char*, 2> keys{"device_id", "arena_extend_strategy"};
+    const std::array<const char*, 2> values{device.c_str(), "kNextPowerOfTwo"};
+    std::array<anira_provider_option_set, 3> sets{ANIRA_PROVIDER_OPTION_SET_INIT,
+                                                  ANIRA_PROVIDER_OPTION_SET_INIT,
+                                                  ANIRA_PROVIDER_OPTION_SET_INIT};
+    sets[0].engine = ANIRA_ENGINE_ONNXRUNTIME;
+    sets[0].provider = ANIRA_PROVIDER_CUDA;
+    sets[0].keys = keys.data();
+    sets[0].values = values.data();
+    sets[0].num_options = 2;
+    sets[1].engine = ANIRA_ENGINE_ONNXRUNTIME;
+    sets[1].provider_id = "QNNExecutionProvider";
+    sets[1].keys = keys.data();
+    sets[1].values = values.data();
+    sets[1].num_options = 1;
+    sets[2].engine = ANIRA_ENGINE_NONE;
+    sets[2].engine_id = "org.example.engine";
+    sets[2].provider_id = "fast";
+    sets[2].num_options = 3;  // a count without arrays reads as no options
+    anira_ext_provider_options record = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
+    record.sets = sets.data();
+    record.num_sets = 3;
+    ExtBag bag;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(bag.set(&record.header, &err), ANIRA_OK) << err.message;
+    device = "9";
+    const auto* payload = bag.payload<anira::capi::ProviderOptionsPayload>("provider_options");
+    ASSERT_NE(payload, nullptr);
+    ASSERT_EQ(payload->m_sets.size(), 3u);
+    EXPECT_EQ(payload->m_sets[0].m_engine, ANIRA_ENGINE_ONNXRUNTIME);
+    EXPECT_EQ(payload->m_sets[0].m_provider, ANIRA_PROVIDER_CUDA);
+    EXPECT_EQ(payload->m_sets[0].m_options,
+              (std::vector<std::pair<std::string, std::string>>{
+                  {"device_id", "0"},
+                  {"arena_extend_strategy", "kNextPowerOfTwo"}}));
+    EXPECT_EQ(payload->m_sets[1].m_provider_id, "QNNExecutionProvider");
+    EXPECT_EQ(payload->m_sets[1].m_options.size(), 1u);
+    EXPECT_EQ(payload->m_sets[2].m_engine_id, "org.example.engine");
+    EXPECT_EQ(payload->m_sets[2].m_provider_id, "fast");
+    EXPECT_TRUE(payload->m_sets[2].m_options.empty());
+    // The C view points into the payload.
+    ASSERT_EQ(payload->m_hdr.num_sets, 3u);
+    EXPECT_NE(payload->m_hdr.sets, sets.data());
+    EXPECT_STREQ(payload->m_hdr.sets[0].keys[0], "device_id");
+    EXPECT_STREQ(payload->m_hdr.sets[0].values[0], "0");
+    EXPECT_STREQ(payload->m_hdr.sets[1].provider_id, "QNNExecutionProvider");
+    EXPECT_EQ(payload->m_hdr.sets[2].keys, nullptr);
+    // find: by value for a built-in engine and a provider of the enum, by name else.
+    EXPECT_EQ(payload->find(ANIRA_ENGINE_ONNXRUNTIME, "", ANIRA_PROVIDER_CUDA, ""),
+              &payload->m_sets[0]);
+    EXPECT_EQ(
+        payload->find(ANIRA_ENGINE_ONNXRUNTIME, "", ANIRA_PROVIDER_DEFAULT, "QNNExecutionProvider"),
+        &payload->m_sets[1]);
+    EXPECT_EQ(
+        payload->find(ANIRA_ENGINE_NONE, "org.example.engine", ANIRA_PROVIDER_DEFAULT, "fast"),
+        &payload->m_sets[2]);
+    EXPECT_EQ(payload->find(ANIRA_ENGINE_ONNXRUNTIME, "", ANIRA_PROVIDER_DEFAULT, ""), nullptr);
+    EXPECT_EQ(payload->find(ANIRA_ENGINE_LIBTORCH, "", ANIRA_PROVIDER_CUDA, ""), nullptr);
+    // A copy of the bag re-clones through the payload's own C view.
+    const ExtBag copy = bag;  // NOLINT(performance-unnecessary-copy-initialization) the copy is the
+                              // test
+    const auto* copied = copy.payload<anira::capi::ProviderOptionsPayload>("provider_options");
+    ASSERT_NE(copied, nullptr);
+    EXPECT_NE(copied, payload);
+    ASSERT_EQ(copied->m_sets.size(), 3u);
+    EXPECT_EQ(copied->m_sets[0].m_options, payload->m_sets[0].m_options);
+    EXPECT_STREQ(copied->m_hdr.sets[0].keys[1], "arena_extend_strategy");
+    // The JSON twin, both ways.
+    EXPECT_EQ(
+        bag.find("provider_options")->to_json(),
+        R"({"sets":[{"backend":"onnxruntime:cuda","options":{"arena_extend_strategy":"kNextPowerOfTwo","device_id":"0"}},)"
+        R"({"backend":"onnxruntime:QNNExecutionProvider","options":{"device_id":"0"}},)"
+        R"({"backend":"org.example.engine:fast","options":{}}]})");
+    ExtBag parsed;
+    ASSERT_EQ(
+        parsed.set_json(
+            "provider_options",
+            R"({"sets": [{"backend": "onnxruntime:coreml", "options": {"MLComputeUnits": "ALL"}},
+                                           {"backend": "executorch"}]})",
+            &err),
+        ANIRA_OK)
+        << err.message;
+    const auto* from_json = parsed.payload<anira::capi::ProviderOptionsPayload>("provider_options");
+    ASSERT_NE(from_json, nullptr);
+    ASSERT_EQ(from_json->m_sets.size(), 2u);
+    EXPECT_EQ(from_json->m_sets[0].m_provider, ANIRA_PROVIDER_COREML);
+    EXPECT_EQ(from_json->m_sets[0].m_options,
+              (std::vector<std::pair<std::string, std::string>>{{"MLComputeUnits", "ALL"}}));
+    EXPECT_EQ(from_json->m_sets[1].m_engine, ANIRA_ENGINE_EXECUTORCH);
+    EXPECT_EQ(from_json->m_sets[1].m_provider, ANIRA_PROVIDER_DEFAULT);
+    EXPECT_TRUE(from_json->m_sets[1].m_options.empty());
+    // The refusals name the path.
+    EXPECT_EQ(parsed.set_json("provider_options", R"({"sets": 1})", &err), ANIRA_ERROR_JSON);
+    EXPECT_NE(std::strstr(err.message, "provider_options.sets"), nullptr) << err.message;
+    EXPECT_EQ(
+        parsed.set_json("provider_options", R"({"sets": [{"backend": "nobody:cuda"}]})", &err),
+        ANIRA_ERROR_JSON);
+    EXPECT_NE(std::strstr(err.message, "sets[0].backend"), nullptr) << err.message;
+    EXPECT_EQ(
+        parsed.set_json("provider_options", R"({"sets": [{"backend": "onnxruntime:"}]})", &err),
+        ANIRA_ERROR_JSON);
+    EXPECT_EQ(parsed.set_json(
+                  "provider_options",
+                  R"({"sets": [{"backend": "onnxruntime:cuda", "options": {"device_id": 0}}]})",
+                  &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_NE(std::strstr(err.message, "sets[0].options.device_id"), nullptr) << err.message;
 }
 
 TEST(AbiExtRegistry, SetDeepCopiesAKnownKind) {

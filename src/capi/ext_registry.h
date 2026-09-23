@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 struct anira_model_config;
@@ -129,6 +130,42 @@ private:
 struct EntryPayload {
     anira_ext_entry m_hdr;
     std::string m_name;
+};
+
+/// One set of the "provider_options" kind: a backend as the two-axis id and the options its
+/// runtime takes for the provider, as string pairs in the runtime's own vocabulary.
+struct ProviderOptionSet {
+    anira_engine m_engine = ANIRA_ENGINE_NONE;
+    std::string m_engine_id;
+    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    std::string m_provider_id;
+    std::vector<std::pair<std::string, std::string>> m_options;
+
+    /// Whether the set is the backend's: the engine (a built-in one by value, a custom one by
+    /// id) on the provider (a provider of the enum by value, a custom one by name).
+    bool names(anira_engine engine,
+               std::string_view engine_id,
+               anira_provider provider,
+               std::string_view provider_id) const noexcept;
+};
+
+/// The payload of the "provider_options" kind (version 1): the header's sets point into
+/// m_records, whose strings and arrays point into m_sets, m_keys and m_values (rebuilt by
+/// fix_header after every change of m_sets).
+struct ANIRA_API ProviderOptionsPayload {
+    anira_ext_provider_options m_hdr;
+    std::vector<ProviderOptionSet> m_sets;
+    std::vector<anira_provider_option_set> m_records;
+    std::vector<std::vector<const char*>> m_keys;
+    std::vector<std::vector<const char*>> m_values;
+
+    /// Rebuilds the C view over m_sets.
+    void fix_header();
+    /// The set of a backend, or NULL when the payload has none for it.
+    const ProviderOptionSet* find(anira_engine engine,
+                                  std::string_view engine_id,
+                                  anira_provider provider,
+                                  std::string_view provider_id) const noexcept;
 };
 
 /// The consumed-or-fail walk of section 1b over a model config (its specs, its entries, the

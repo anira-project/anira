@@ -534,6 +534,15 @@ TEST(Adapter, ModelsCompareByWhatAnAdapterReads) {
     EXPECT_NE(a, b) << "the warm-up is";
     b = gain_model(0);
     EXPECT_NE(a, b) << "a record without a shared slot (an exclusive session's) is another";
+    b = gain_model(2);
+    b.m_provider = ANIRA_PROVIDER_CUDA;
+    EXPECT_NE(a, b) << "the provider is";
+    b = gain_model(2);
+    b.m_provider_id = "QNNExecutionProvider";
+    EXPECT_NE(a, b) << "a custom provider is";
+    b = gain_model(2);
+    b.m_options = {{"device_id", "1"}};
+    EXPECT_NE(a, b) << "the provider's options are";
 }
 
 // ============================================================================================
@@ -1169,6 +1178,7 @@ TEST(AdapterOnnxRuntime, TheProviderIsServedWhenTheRuntimeListsIt) {
     if (!has_cuda) {
         Model cuda = onnx_gain_model();
         cuda.m_provider = ANIRA_PROVIDER_CUDA;
+        cuda.m_options = {{"device_id", "0"}};  // travel to the V2 options, refused with them
         const anira::StatusError no_cuda =
             status_error_of([&cuda] { builtin_rig(ANIRA_ENGINE_ONNXRUNTIME)->prepare(cuda); });
         EXPECT_EQ(no_cuda.status(), ANIRA_ERROR_NOT_SUPPORTED);

@@ -199,9 +199,19 @@ int anira_header_c_probe(void) {
         anira_metal_desc metal = ANIRA_METAL_DESC_INIT;
         anira_d3d12_desc d3d12 = ANIRA_D3D12_DESC_INIT;
         anira_webgpu_desc webgpu = ANIRA_WEBGPU_DESC_INIT;
+        anira_provider_option_set option_set = ANIRA_PROVIDER_OPTION_SET_INIT;
+        anira_ext_provider_options provider_options = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
         entry.name = "forward";
         checks += entry.header.struct_size == sizeof(anira_ext_entry) ? 1 : 0;
         checks += entry.header.version == 1u ? 1 : 0;
+        checks += option_set.struct_size == sizeof(anira_provider_option_set) &&
+                          option_set.num_options == 0u && option_set.keys == NULL
+                      ? 1
+                      : 0;
+        checks += provider_options.header.struct_size == sizeof(anira_ext_provider_options) &&
+                          provider_options.sets == NULL && provider_options.num_sets == 0u
+                      ? 1
+                      : 0;
         checks +=
             cuda.struct_size == sizeof(anira_cuda_desc) && cuda.ownership == ANIRA_OWNERSHIP_OWNED
                 ? 1

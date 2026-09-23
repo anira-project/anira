@@ -196,6 +196,45 @@ TEST(AbiContext, ADeviceBlockIsRefused) {
     EXPECT_EQ(Core::get_num_contexts(), 0U);
 }
 
+// The "provider_options" extension on the context config: consumed by the ONNX Runtime
+// adapter of a build that carries it (the create's walk names no candidate: every consumer of
+// the build reads), unconsumed and refused by name in a build without it; the JSON form round
+// trips through the context file.
+TEST(AbiContext, ProviderOptionsAreConsumedByTheOnnxRuntimeAdapter) {
+    const Config config;
+    anira_error err = ANIRA_ERROR_INIT;
+    const char* text =
+        R"({"sets": [{"backend": "onnxruntime:cuda", "options": {"device_id": "0"}}]})";
+    ASSERT_EQ(anira_context_config_set_ext_json(config.m_config,
+                                                "provider_options",
+                                                text,
+                                                std::strlen(text),
+                                                &err),
+              ANIRA_OK)
+        << err.message;
+    anira_context* context = nullptr;
+    const anira_status status = anira_context_create(config.m_config, &context, &err);
+#ifdef USE_ONNXRUNTIME
+    ASSERT_EQ(status, ANIRA_OK) << err.message;
+    ASSERT_NE(context, nullptr);
+    anira_context_destroy(context);
+#else
+    EXPECT_EQ(status, ANIRA_ERROR_EXTENSION_UNCONSUMED);
+    EXPECT_EQ(context, nullptr);
+    EXPECT_NE(std::strstr(err.message, "provider_options"), nullptr) << err.message;
+#endif
+    // The context file carries the extension under its kind.
+    size_t len = 0;
+    EXPECT_EQ(anira_context_config_to_json(config.m_config, nullptr, 0, &len),
+              ANIRA_ERROR_BUFFER_TOO_SMALL);
+    std::string json(len + 1, '\0');
+    ASSERT_EQ(anira_context_config_to_json(config.m_config, json.data(), json.size(), &len),
+              ANIRA_OK);
+    json.resize(len);
+    EXPECT_NE(json.find("\"provider_options\""), std::string::npos) << json;
+    EXPECT_NE(json.find("\"onnxruntime:cuda\""), std::string::npos) << json;
+}
+
 TEST(AbiContext, AnUnconsumedContextExtensionIsRefused) {
     const Config config;
     anira_error err = ANIRA_ERROR_INIT;

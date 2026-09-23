@@ -100,6 +100,10 @@ struct ANIRA_API Model {
     /// candidate named, or the entry's pin). Part of the key.
     anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
     std::string m_provider_id;
+    /// The options the engine's runtime takes for the provider, as string pairs in the
+    /// runtime's own vocabulary (the "provider_options" context extension's set for this
+    /// backend); part of the key: two option sets are two loaded models. Empty for none.
+    std::vector<std::pair<std::string, std::string>> m_options;
     std::vector<TensorInfo> m_inputs;   ///< in slot order, State tensors included
     std::vector<TensorInfo> m_outputs;  ///< in slot order, State tensors included
     /// The shared call slots of the loaded model: the process calls that may run at once on

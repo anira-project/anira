@@ -209,9 +209,26 @@ struct Result {
 
 namespace ext {
 
-/// The one extension kind of 3.0: the entry point of a LibTorch or ExecuTorch file.
+/// The "entry" kind: the entry point of a LibTorch or ExecuTorch file.
 struct Entry {
     std::string name;
+};
+
+/// The "provider_options" kind, on the context config: the options an engine's runtime takes
+/// for a provider, one set per backend, as string pairs in the runtime's own vocabulary
+/// (ONNX Runtime's execution provider option keys). Read at load by the ONNX Runtime adapter
+/// for the plan's backend; a set for a backend no plan runs on is not an error; the options
+/// are part of the loaded model.
+struct ProviderOptions {
+    struct Set {
+        EngineKind engine = ANIRA_ENGINE_NONE;  ///< ANIRA_ENGINE_NONE with engine_id for a custom
+                                                ///< engine
+        std::string engine_id;
+        Provider provider = ANIRA_PROVIDER_DEFAULT;  ///< ANIRA_PROVIDER_DEFAULT beside provider_id
+        std::string provider_id;
+        std::vector<std::pair<std::string, std::string>> options;
+    };
+    std::vector<Set> sets;
 };
 
 }  // namespace ext
@@ -236,6 +253,62 @@ struct ExtTraits<ext::Entry> {
     static Native mint(const ext::Entry& entry) {
         Native native = ANIRA_EXT_ENTRY_INIT;
         native.name = entry.name.c_str();
+        return native;
+    }
+};
+
+/// The C record of ext::ProviderOptions with the storage its pointers reach into: the sets,
+/// their key and value arrays and copies of every string, so that the minted record stands on
+/// its own for as long as it lives (the set call copies it; a job options handle keeps it).
+struct ProviderOptionsNative : anira_ext_provider_options {
+    std::vector<anira_provider_option_set> m_sets;
+    std::vector<std::vector<const char*>> m_keys;
+    std::vector<std::vector<const char*>> m_values;
+    std::vector<std::string> m_strings;  ///< every string, at a stable address (reserved once)
+};
+
+template <>
+struct ExtTraits<ext::ProviderOptions> {
+    using Native = ProviderOptionsNative;
+
+    static Native mint(const ext::ProviderOptions& value) {
+        Native native;
+        static_cast<anira_ext_provider_options&>(native) = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
+        std::size_t strings = 0;
+        for (const ext::ProviderOptions::Set& set : value.sets) {
+            strings += 2 + 2 * set.options.size();
+        }
+        native.m_strings.reserve(strings);  // never grown afterwards: the pointers stay put
+        const auto keep = [&native](const std::string& text) -> const char* {
+            if (text.empty()) { return nullptr; }
+            native.m_strings.push_back(text);
+            return native.m_strings.back().c_str();
+        };
+        native.m_sets.reserve(value.sets.size());
+        native.m_keys.reserve(value.sets.size());
+        native.m_values.reserve(value.sets.size());
+        for (const ext::ProviderOptions::Set& set : value.sets) {
+            std::vector<const char*> keys;
+            std::vector<const char*> values;
+            for (const auto& [key, option] : set.options) {
+                keys.push_back(keep(key));
+                values.push_back(keep(option));
+            }
+            native.m_keys.push_back(std::move(keys));
+            native.m_values.push_back(std::move(values));
+            anira_provider_option_set record = ANIRA_PROVIDER_OPTION_SET_INIT;
+            record.engine = static_cast<uint32_t>(set.engine);
+            record.provider = static_cast<uint32_t>(set.provider);
+            record.num_options = static_cast<uint32_t>(set.options.size());
+            record.engine_id = keep(set.engine_id);
+            record.provider_id = keep(set.provider_id);
+            record.keys = native.m_keys.back().empty() ? nullptr : native.m_keys.back().data();
+            record.values =
+                native.m_values.back().empty() ? nullptr : native.m_values.back().data();
+            native.m_sets.push_back(record);
+        }
+        native.sets = native.m_sets.empty() ? nullptr : native.m_sets.data();
+        native.num_sets = static_cast<uint32_t>(native.m_sets.size());
         return native;
     }
 };

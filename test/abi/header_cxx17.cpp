@@ -123,6 +123,10 @@ static_assert(std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
     checks += std::strlen(record.message) == 7 ? 1 : 0;
     checks += ANIRA_ABI_VERSION_MINOR(ANIRA_ABI_VERSION) == ANIRA_ABI_MINOR ? 1 : 0;
     const anira_ext_entry entry = ANIRA_EXT_ENTRY_INIT;
+    const anira_provider_option_set option_set = ANIRA_PROVIDER_OPTION_SET_INIT;
+    const anira_ext_provider_options provider_options = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
+    checks += option_set.struct_size == sizeof(anira_provider_option_set) ? 1 : 0;
+    checks += provider_options.header.version == 1u && provider_options.num_sets == 0u ? 1 : 0;
     const anira_cuda_desc cuda = ANIRA_CUDA_DESC_INIT;
     const anira_gl_desc gl = ANIRA_GL_DESC_INIT;
     const anira_vulkan_desc vulkan = ANIRA_VULKAN_DESC_INIT;
