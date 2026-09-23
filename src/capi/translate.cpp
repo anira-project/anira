@@ -500,24 +500,40 @@ void check_ratios(const anira_model_config& model, const Derived& derived) {
     check(model.m_outputs, derived.m_outputs);
 }
 
+// Whether a custom row's id is served: anira.v2.custom (the 2.x pass-through, kept through
+// this pre-release), or an engine registered on the pipeline.
+bool serves_custom_id(const std::string& id, const EngineFacts* engines) {
+    if (id == k_v2_custom_engine) { return true; }
+    return engines != nullptr && std::ranges::find(engines->m_ids, id) != engines->m_ids.end();
+}
+
 void check_rows(const anira_model_config& model,
                 const anira_backend_id* candidates,
                 uint32_t num_candidates,
+                const EngineFacts* engines,
                 Derived& out) {
     if (model.m_models.empty()) {
         config_error("no model entry: add a model by path or bytes at least once");
     }
-    std::vector<std::pair<anira::InferenceBackend, size_t>> taken;
+    // The rows kept so far, keyed by (engine, id): every custom row maps to the 2.x CUSTOM
+    // backend, and the plans are resolved by row, so two registered engines on two rows are
+    // two plans; two rows naming one engine (or one id) are one plan too many.
+    struct Taken {
+        anira_engine m_engine;
+        std::string m_engine_id;
+        size_t m_row;
+    };
+    std::vector<Taken> taken;
     for (size_t i = 0; i < model.m_models.size(); ++i) {
         const ModelEntry& row = model.m_models[i];
         if (!is_candidate(row.m_engine, row.m_engine_id, candidates, num_candidates)) { continue; }
-        const std::optional<anira::InferenceBackend> backend = backend_of(row);
-        if (!backend.has_value()) {
-            if (row.is_custom()) {
+        if (row.is_custom()) {
+            if (!serves_custom_id(row.m_engine_id, engines)) {
                 not_supported(at_row(i) + "custom engine '" + row.m_engine_id +
-                              "' has no 2.x adapter (only '" + k_v2_custom_engine +
-                              "' maps to the 2.x CUSTOM backend)");
+                              "' is not registered on this pipeline "
+                              "(anira_pipeline_register_engine)");
             }
+        } else if (!backend_of(row).has_value()) {
             not_supported(
                 at_row(i) + "engine '" + engine_word(row.m_engine) +
                 "' is not in this build (its engines: " + engines_list(enabled_engines()) +
@@ -526,14 +542,15 @@ void check_rows(const anira_model_config& model,
         if (row.m_path.empty() && !row.has_bytes()) {
             config_error(at_row(i) + "neither a path nor bytes");
         }
-        for (const auto& [other, index] : taken) {
-            if (other == *backend) {
-                config_error(at_row(index) + "and models[" + std::to_string(i) +
+        for (const Taken& other : taken) {
+            if (other.m_engine == row.m_engine && other.m_engine_id == row.m_engine_id) {
+                config_error(at_row(other.m_row) + "and models[" + std::to_string(i) +
                              "] both name engine '" + engine_label(row) +
                              "'; the 2.x runtime holds one model per engine");
             }
         }
-        taken.emplace_back(*backend, i);
+        taken.push_back(
+            Taken{.m_engine = row.m_engine, .m_engine_id = row.m_engine_id, .m_row = i});
         out.m_rows.push_back(i);
     }
     if (out.m_rows.empty()) {
@@ -622,16 +639,10 @@ void check_extensions(const anira_model_config& model,
                       const anira_contract* contract,
                       const anira_backend_id* candidates,
                       uint32_t num_candidates,
-                      const StageFacts* stages = nullptr) {
+                      const std::vector<ExtConsumer>* pipeline = nullptr) {
     anira_error local = ANIRA_ERROR_INIT;
     const anira_status status =
-        ext_check_consumed(model,
-                           config,
-                           contract,
-                           candidates,
-                           num_candidates,
-                           &local,
-                           stages != nullptr ? &stages->m_consumers : nullptr);
+        ext_check_consumed(model, config, contract, candidates, num_candidates, &local, pipeline);
     if (ANIRA_FAILED(status)) { refuse(status, local.message); }
 }
 
@@ -658,11 +669,22 @@ anira::LogLevel log_level_of(anira_log_level level) {
 
 // ---- the public pieces ----------------------------------------------------------------------
 
-std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcept {
-    if (row.is_custom()) {
-        if (row.m_engine_id == k_v2_custom_engine) { return anira::InferenceBackend::CUSTOM; }
-        return std::nullopt;
+std::vector<ExtConsumer> pipeline_consumers(const StageFacts* stages, const EngineFacts* engines) {
+    std::vector<ExtConsumer> consumers;
+    if (stages != nullptr) {
+        consumers.insert(consumers.end(), stages->m_consumers.begin(), stages->m_consumers.end());
     }
+    if (engines != nullptr) {
+        consumers.insert(consumers.end(), engines->m_consumers.begin(), engines->m_consumers.end());
+    }
+    return consumers;
+}
+
+std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcept {
+    // Every custom row is a plan on the 2.x CUSTOM backend, resolved by row in the plan
+    // table: the pass-through and a registered engine alike (check_rows refuses an id that
+    // neither is).
+    if (row.is_custom()) { return anira::InferenceBackend::CUSTOM; }
     switch (row.m_engine) {
 #ifdef USE_ONNXRUNTIME
         case ANIRA_ENGINE_ONNXRUNTIME: return anira::InferenceBackend::ONNX;
@@ -719,7 +741,8 @@ void validate(const anira_model_config& model,
               const anira_backend_id* candidates,
               uint32_t num_candidates,
               Derived& out,
-              const StageFacts* stages) {
+              const StageFacts* stages,
+              const EngineFacts* engines) {
     out = Derived{};
     if (model.m_inputs.empty()) { config_error("no input tensor"); }
     if (model.m_outputs.empty()) { config_error("no output tensor"); }
@@ -736,9 +759,15 @@ void validate(const anira_model_config& model,
     }
     resolve_anchor(model, out);
     check_ratios(model, out);
-    check_rows(model, candidates, num_candidates, out);
+    check_rows(model, candidates, num_candidates, engines, out);
     check_layouts(model, out);
-    check_extensions(model, nullptr, contract, candidates, num_candidates, stages);
+    const std::vector<ExtConsumer> consumers = pipeline_consumers(stages, engines);
+    check_extensions(model,
+                     nullptr,
+                     contract,
+                     candidates,
+                     num_candidates,
+                     consumers.empty() ? nullptr : &consumers);
 }
 
 anira::RingDtypes make_ring_dtypes(const anira_contract& contract,
@@ -797,9 +826,10 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                              const anira_contract& contract,
                                              const anira_backend_id* candidates,
                                              uint32_t num_candidates,
-                                             const StageFacts* stages) {
+                                             const StageFacts* stages,
+                                             const EngineFacts* engines) {
     Derived derived;
-    validate(model, &contract, candidates, num_candidates, derived, stages);
+    validate(model, &contract, candidates, num_candidates, derived, stages, engines);
     const HardContract& hard = *contract.hard();
 
     std::vector<anira::ModelData> model_data;

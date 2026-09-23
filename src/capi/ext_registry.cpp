@@ -372,33 +372,46 @@ const char* consumer_of(std::string_view host,
     return nullptr;
 }
 
-// The stages of a pipeline's chain that declare "<host>:<kind>", in chain order. A stage reads
-// a slot wherever it sits: no engine, no candidate filter.
-std::vector<const char*> stage_consumers_of(std::string_view host,
-                                            std::string_view kind,
-                                            const std::vector<ExtConsumer>* stages) {
+// The consumers of a pipeline that read "<host>:<kind>", in the vector's order. Its stage
+// (neither engine key) reads a slot wherever it sits: no candidate filter. A registered
+// engine (m_engine_id) reads only while it is a candidate, and a "model" host only when the
+// entry is its own (entry_engine_id): the rule of the build's adapters, keyed by the id.
+std::vector<const char*> pipeline_consumers_of(std::string_view host,
+                                               std::string_view kind,
+                                               const std::string& entry_engine_id,
+                                               const anira_backend_id* candidates,
+                                               uint32_t num_candidates,
+                                               const std::vector<ExtConsumer>* pipeline) {
     std::vector<const char*> names;
-    if (stages == nullptr) { return names; }
+    if (pipeline == nullptr) { return names; }
     const std::string wanted = std::string(host) + ":" + std::string(kind);
-    for (const ExtConsumer& stage : *stages) {
-        if (std::ranges::find(stage.m_consumed, wanted) != stage.m_consumed.end()) {
-            names.push_back(stage.m_name);
+    for (const ExtConsumer& consumer : *pipeline) {
+        if (!consumer.m_engine_id.empty()) {
+            if (!candidate(ANIRA_ENGINE_NONE, consumer.m_engine_id, candidates, num_candidates)) {
+                continue;
+            }
+            if (host == "model" && entry_engine_id != consumer.m_engine_id) { continue; }
+        }
+        if (std::ranges::find(consumer.m_consumed, wanted) != consumer.m_consumed.end()) {
+            names.push_back(consumer.m_name);
         }
     }
     return names;
 }
 
 // One host's bag: every slot known and consumed, else the failure names it. With rows, each
-// consumed slot is recorded as one plan row per consumer: anira's own adapter, then the stages.
+// consumed slot is recorded as one plan row per consumer: anira's own adapter, then the
+// pipeline's consumers.
 anira_status check_bag(const ExtBag& bag,
                        std::string_view host,
                        const std::string& where,
                        anira_engine entry_engine,
+                       const std::string& entry_engine_id,
                        const anira_backend_id* candidates,
                        uint32_t num_candidates,
                        anira_error* err,
                        std::vector<ExtPlanRow>* rows,
-                       const std::vector<ExtConsumer>* stages) {
+                       const std::vector<ExtConsumer>* pipeline) {
     for (const ExtSlot& slot : bag.slots()) {
         if (!slot.known()) {
             fail(err,
@@ -412,8 +425,12 @@ anira_status check_bag(const ExtBag& bag,
         }
         const char* consumer =
             consumer_of(host, slot.kind(), entry_engine, candidates, num_candidates);
-        const std::vector<const char*> stage_consumers =
-            stage_consumers_of(host, slot.kind(), stages);
+        const std::vector<const char*> stage_consumers = pipeline_consumers_of(host,
+                                                                               slot.kind(),
+                                                                               entry_engine_id,
+                                                                               candidates,
+                                                                               num_candidates,
+                                                                               pipeline);
         if (consumer == nullptr && stage_consumers.empty()) {
             fail(err,
                  ANIRA_ERROR_EXTENSION_UNCONSUMED,
@@ -449,17 +466,20 @@ anira_status walk_bags(const anira_model_config& model,
                        uint32_t num_candidates,
                        anira_error* err,
                        std::vector<ExtPlanRow>* rows,
-                       const std::vector<ExtConsumer>* stages) {
+                       const std::vector<ExtConsumer>* pipeline) {
+    // A host that is no model entry has no engine: nothing is filtered by one there.
+    const std::string no_engine_id;
     for (const anira_tensor_spec& spec : model.m_inputs) {
         const anira_status status = check_bag(spec.m_ext,
                                               "tensor_spec",
                                               "'" + spec.m_name + "'",
                                               ANIRA_ENGINE_NONE,
+                                              no_engine_id,
                                               candidates,
                                               num_candidates,
                                               err,
                                               rows,
-                                              stages);
+                                              pipeline);
         if (ANIRA_FAILED(status)) { return status; }
     }
     for (const anira_tensor_spec& spec : model.m_outputs) {
@@ -467,11 +487,12 @@ anira_status walk_bags(const anira_model_config& model,
                                               "tensor_spec",
                                               "'" + spec.m_name + "'",
                                               ANIRA_ENGINE_NONE,
+                                              no_engine_id,
                                               candidates,
                                               num_candidates,
                                               err,
                                               rows,
-                                              stages);
+                                              pipeline);
         if (ANIRA_FAILED(status)) { return status; }
     }
     for (size_t i = 0; i < model.m_models.size(); ++i) {
@@ -483,33 +504,36 @@ anira_status walk_bags(const anira_model_config& model,
                                               "model",
                                               std::to_string(i),
                                               entry.m_engine,
+                                              entry.m_engine_id,
                                               candidates,
                                               num_candidates,
                                               err,
                                               rows,
-                                              stages);
+                                              pipeline);
         if (ANIRA_FAILED(status)) { return status; }
     }
     const anira_status status = check_bag(model.m_ext,
                                           "model_config",
                                           "",
                                           ANIRA_ENGINE_NONE,
+                                          no_engine_id,
                                           candidates,
                                           num_candidates,
                                           err,
                                           rows,
-                                          stages);
+                                          pipeline);
     if (ANIRA_FAILED(status)) { return status; }
     if (config != nullptr) {
         const anira_status context_status = check_bag(config->m_ext,
                                                       "context",
                                                       "",
                                                       ANIRA_ENGINE_NONE,
+                                                      no_engine_id,
                                                       candidates,
                                                       num_candidates,
                                                       err,
                                                       rows,
-                                                      stages);
+                                                      pipeline);
         if (ANIRA_FAILED(context_status)) { return context_status; }
     }
     if (contract != nullptr) {
@@ -517,11 +541,12 @@ anira_status walk_bags(const anira_model_config& model,
                                                        "contract",
                                                        "",
                                                        ANIRA_ENGINE_NONE,
+                                                       no_engine_id,
                                                        candidates,
                                                        num_candidates,
                                                        err,
                                                        rows,
-                                                       stages);
+                                                       pipeline);
         if (ANIRA_FAILED(contract_status)) { return contract_status; }
     }
     return ANIRA_OK;
@@ -535,19 +560,19 @@ anira_status ext_check_consumed(const anira_model_config& model,
                                 const anira_backend_id* candidates,
                                 uint32_t num_candidates,
                                 anira_error* err,
-                                const std::vector<ExtConsumer>* stages) {
-    return walk_bags(model, config, contract, candidates, num_candidates, err, nullptr, stages);
+                                const std::vector<ExtConsumer>* pipeline) {
+    return walk_bags(model, config, contract, candidates, num_candidates, err, nullptr, pipeline);
 }
 
 std::vector<ExtPlanRow> ext_consumed_rows(const anira_model_config& model,
                                           const anira_contract* contract,
                                           const anira_backend_id* candidates,
                                           uint32_t num_candidates,
-                                          const std::vector<ExtConsumer>* stages) {
+                                          const std::vector<ExtConsumer>* pipeline) {
     std::vector<ExtPlanRow> rows;
     anira_error ignored = ANIRA_ERROR_INIT;
     static_cast<void>(
-        walk_bags(model, nullptr, contract, candidates, num_candidates, &ignored, &rows, stages));
+        walk_bags(model, nullptr, contract, candidates, num_candidates, &ignored, &rows, pipeline));
     return rows;
 }
 

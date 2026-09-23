@@ -791,7 +791,7 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
         other.output(streamed("out"));
         const CreateOutcome outcome = try_create(context, other, {});
         EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-        expect_contains(outcome.m_message, "has no 2.x adapter");
+        expect_contains(outcome.m_message, "is not registered on this pipeline");
     }
     const std::optional<anira_engine> missing = missing_engine();
     if (missing.has_value()) {

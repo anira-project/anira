@@ -2,16 +2,21 @@
 #define ANIRA_CAPI_ENGINE_H
 /*
  * The engine behind anira/abi/engine.h: the refcounted carrier of one anira_engine_desc a
- * pipeline registers under an id, the twin of StageCarrier (src/capi/stage.h). Private to
- * src/capi (and the tests through the src/ include directory): nothing here enters the ABI.
- * What runs a registered engine (the adapter over its descriptor, the pool of prepared models)
- * arrives with the engine room of src/backends; this file holds the registration alone.
+ * pipeline registers under an id, the twin of StageCarrier (src/capi/stage.h), and what the
+ * pipeline's registrations mean to the validator (engine_facts, the twin of stage_facts).
+ * Private to src/capi (and the tests through the src/ include directory): nothing here enters
+ * the ABI. What runs a registered engine is the engine room's DescriptorAdapter
+ * (src/backends/DescriptorAdapter.h) over the carrier, one per prepared model, pooled by the
+ * core like a built-in engine's adapter with the carrier in the key.
  */
 #include <anira/abi/engine.h>
 #include <anira/system/Exports.h>
 
+#include <memory>
 #include <string>
 #include <vector>
+
+#include "translate.h"
 
 namespace anira::capi {
 
@@ -44,6 +49,14 @@ private:
     std::vector<std::string> m_kinds;
     std::vector<const char*> m_kind_pointers;
 };
+
+/// What a pipeline's registered engines (anira_pipeline::m_engines, the carriers in
+/// registration order) mean to the validator: their ids, and one consumer per engine that
+/// declares consumed kinds, named and keyed by its id (the pointers into the carriers, which
+/// the pipeline and every handler copy share, so they outlive the facts). The twin of
+/// stage_facts (stage.h).
+ANIRA_API EngineFacts
+    engine_facts(const std::vector<std::shared_ptr<const EngineCarrier>>& engines);
 
 }  // namespace anira::capi
 

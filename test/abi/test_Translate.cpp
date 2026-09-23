@@ -833,7 +833,8 @@ TEST(AbiTranslate, RowRules) {
     outcome = bridge(foreign);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message,
-                    "models[0]: custom engine 'de.tu-berlin.coreml' has no 2.x adapter");
+                    "models[0]: custom engine 'de.tu-berlin.coreml' is not registered on this "
+                    "pipeline");
 
     ModelConfig twice;
     twice.add_model_path(k_custom, "a.custom");

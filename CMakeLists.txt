@@ -283,6 +283,7 @@ target_sources(${PROJECT_NAME}
         src/backends/Adapter.cpp
         src/backends/Adapters.cpp
         src/backends/LegacyAdapter.cpp
+        src/backends/DescriptorAdapter.cpp
         ${BACKEND_SOURCES}
 
         # Scheduler

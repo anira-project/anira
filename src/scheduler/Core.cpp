@@ -712,16 +712,21 @@ std::shared_ptr<backend::Adapter> Core::acquire_adapter_locked(State& state,
     std::shared_ptr<backend::Adapter> adapter;
     if (request.m_source == backend::Source::BuiltIn) {
         adapter = backend::make_builtin_adapter(request.m_model.m_engine);
-    }
-    if (adapter == nullptr) {
-        // A registered engine has no adapter in this line yet; a built-in engine this
-        // build does not carry has none either. The C path refuses both at create.
-        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
-                          std::string("Core::create_session: no adapter runs engine '") +
-                              (request.m_model.m_engine_id.empty()
-                                   ? std::to_string(static_cast<int>(request.m_model.m_engine))
-                                   : request.m_model.m_engine_id) +
-                              "' in this build");
+        if (adapter == nullptr) {
+            // A built-in engine this build does not carry. The C path refuses it at create.
+            throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                              "Core::create_session: no adapter runs engine " +
+                                  std::to_string(static_cast<int>(request.m_model.m_engine)) +
+                                  " in this build");
+        }
+    } else {
+        // A registered engine: the request brought its adapter over the carrier's descriptor.
+        adapter = request.m_adapter;
+        if (adapter == nullptr) {
+            throw StatusError(ANIRA_ERROR_INTERNAL,
+                              "Core::create_session: a Registered plan request for engine '" +
+                                  request.m_model.m_engine_id + "' without an adapter");
+        }
     }
     // prepare once per prepared model; a throw leaves the pool untouched.
     adapter->prepare(request.m_model);

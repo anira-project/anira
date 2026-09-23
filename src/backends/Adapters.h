@@ -36,8 +36,9 @@ enum class Source : uint8_t {
     /// A built-in engine (make_builtin_adapter): pooled by model identity across the sessions
     /// of the process, prepared once per pooled model; a session-exclusive model gets its own.
     BuiltIn,
-    /// A registered engine: an adapter over its carrier's descriptor, pooled by model identity
-    /// and carrier. No adapter runs one yet in this line: the plan table refuses the request.
+    /// A registered engine: the request's own adapter over its carrier's descriptor
+    /// (DescriptorAdapter, m_adapter), pooled by model identity and carrier like a built-in
+    /// engine's; a session-exclusive model gets its own.
     Registered,
     /// A caller's 2.x BackendBase (m_backend): a LegacyAdapter per session, never pooled.
     Legacy,
@@ -53,6 +54,11 @@ struct PlanRequest {
     Model m_model;
     /// Registered only: the carrier of the engine's descriptor, part of the pool's key.
     std::shared_ptr<const anira::capi::EngineCarrier> m_carrier;
+    /// Registered only: the adapter over the carrier's descriptor (a DescriptorAdapter over
+    /// the row and the variant), unprepared. The core prepares it once and pools it, unless
+    /// the pool holds an equal record on the same carrier, in which case it is dropped
+    /// unprepared and the pooled adapter serves the plan.
+    std::shared_ptr<Adapter> m_adapter;
     /// Legacy only: the caller's backend, which outlives the session (the 2.x rule).
     anira::BackendBase* m_backend = nullptr;
     /// A 2.x row for a backend of the build without a model: the roundtrip runs for it, and the

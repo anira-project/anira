@@ -69,8 +69,32 @@ struct StageFacts {
     std::vector<ExtConsumer> m_consumers;
 };
 
-/// The 2.x backend a model row maps to, or nullopt when this build has no adapter for it
-/// (an engine that is not compiled in, a custom engine other than anira.v2.custom).
+/// What a pipeline's registered engines mean to the validator (engine_facts() of engine.h
+/// builds it from the pipeline's carriers; NULL is a pipeline without one, the bridge's case:
+/// anira.v2.custom is the one custom id then).
+struct EngineFacts {
+    /// The registered ids: a custom row naming one is a plan on the 2.x CUSTOM backend,
+    /// resolved by row like every plan; a custom row naming neither anira.v2.custom nor one
+    /// of these is refused at create.
+    std::vector<std::string> m_ids;
+    /// One consumer per registered engine that declares consumed kinds, keyed by its id
+    /// (m_engine_id; m_name is the id too, pointing into the carrier, which outlives the
+    /// facts): it joins the consumed-or-fail walk beside the stage's consumer, reading its
+    /// "model:" kinds from its own entries and its other kinds from any host, while it is a
+    /// candidate. Empty otherwise.
+    std::vector<ExtConsumer> m_consumers;
+};
+
+/// The consumers a pipeline declares, in one vector: the stage's, then one per registered
+/// engine that declares kinds (either may be NULL). What the extension walk of validate and
+/// the plan report's consumer column read.
+ANIRA_API std::vector<ExtConsumer> pipeline_consumers(const StageFacts* stages,
+                                                      const EngineFacts* engines);
+
+/// The 2.x backend a model row maps to: CUSTOM for every custom row (whether its id is served
+/// is check_rows' question: anira.v2.custom, or an engine registered on the pipeline), the
+/// engine's own backend for a built-in engine of this build, nullopt for an engine this build
+/// does not carry.
 ANIRA_API std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcept;
 
 /// The engine's extents of one slot under one row: the spec's derived extents (its dynamic
@@ -97,20 +121,29 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 /// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do. `stages` is what the
 /// pipeline's stage adds (NULL: no stage, the bridge's case): the ring dtype rule
 /// relaxes for a side whose phase the stage fills, and the stage's consumed kinds join the
-/// extension walk.
+/// extension walk. `engines` are the pipeline's registered engines (NULL: none, the bridge's
+/// case): a custom row naming one of their ids is a plan, and their consumed kinds join the
+/// walk; a custom row naming neither anira.v2.custom nor a registered id is
+/// ANIRA_ERROR_NOT_SUPPORTED. A registered row's path is never opened here: the engine's
+/// prepare decides.
 ANIRA_API void validate(const anira_model_config& model,
                         const anira_contract* contract,
                         const anira_backend_id* candidates,
                         uint32_t num_candidates,
                         Derived& out,
-                        const StageFacts* stages = nullptr);
+                        const StageFacts* stages = nullptr,
+                        const EngineFacts* engines = nullptr);
 
-/// The 2.x InferenceConfig of a model config under a Hard contract (validate, then map).
+/// The 2.x InferenceConfig of a model config under a Hard contract (validate, then map). A
+/// registered engine's row becomes a ModelData row on the 2.x CUSTOM backend, like the
+/// anira.v2.custom row: the plan table resolves plans by row, never by the backend, so several
+/// such rows are legal.
 ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                                        const anira_contract& contract,
                                                        const anira_backend_id* candidates,
                                                        uint32_t num_candidates,
-                                                       const StageFacts* stages = nullptr);
+                                                       const StageFacts* stages = nullptr,
+                                                       const EngineFacts* engines = nullptr);
 
 /// The ring dtype of every slot: two vectors sized to the model's input and output lists,
 /// ANIRA_DTYPE_F32 everywhere, then each entry of the Hard contract's ring dtypes resolved

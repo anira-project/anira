@@ -204,3 +204,97 @@ TEST(AbiExtRegistry, ConsumedOrFailWalkNamesTheOffender) {
               ANIRA_ERROR_EXTENSION_UNCONSUMED);
     EXPECT_NE(std::strstr(err.message, "on contract"), nullptr);
 }
+
+// A pipeline's registered engine joins the walk as a consumer keyed by its id: its "model:"
+// kinds read the entries of its own id alone (the rule of the build's adapters, keyed by the
+// engine), its other kinds any host, and only while it is a candidate; the stage's consumer
+// stays unfiltered. The plan rows name the engine by its id.
+TEST(AbiExtRegistry, AnEngineConsumerKeyedByIdReadsItsOwnEntriesOnly) {
+    anira_model_config model;
+    anira_error err = ANIRA_ERROR_INIT;
+    const anira_ext_entry entry = make_entry("forward");
+    anira::capi::ModelEntry first;
+    first.m_engine_id = "org.example.first";
+    first.m_path = "first.bin";
+    ASSERT_EQ(first.m_ext.set(&entry.header, &err), ANIRA_OK);
+    anira::capi::ModelEntry second;
+    second.m_engine_id = "org.example.second";
+    second.m_path = "second.bin";
+    ASSERT_EQ(second.m_ext.set(&entry.header, &err), ANIRA_OK);
+    model.m_models.push_back(first);
+    model.m_models.push_back(second);
+
+    const anira::capi::ExtConsumer first_engine{.m_name = "org.example.first",
+                                                .m_engine = ANIRA_ENGINE_NONE,
+                                                .m_engine_id = "org.example.first",
+                                                .m_consumed = {"model:entry"}};
+    const anira::capi::ExtConsumer second_engine{.m_name = "org.example.second",
+                                                 .m_engine = ANIRA_ENGINE_NONE,
+                                                 .m_engine_id = "org.example.second",
+                                                 .m_consumed = {"model:entry"}};
+    // One engine: its own entry is consumed, the other engine's is not, named by its index.
+    std::vector<anira::capi::ExtConsumer> pipeline{first_engine};
+    EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err, &pipeline),
+              ANIRA_ERROR_EXTENSION_UNCONSUMED);
+    EXPECT_STREQ(err.message,
+                 "extension 'entry' on model 1 is not consumed by any stage in this build");
+    // Both engines: every entry has its consumer.
+    pipeline.push_back(second_engine);
+    EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err, &pipeline),
+              ANIRA_OK)
+        << err.message;
+    // A plan's rows are keyed by its candidate: the second engine's plan sees its own entry
+    // and its own consumer alone.
+    const anira_backend_id only_second{.struct_size = sizeof(anira_backend_id),
+                                       .engine = ANIRA_ENGINE_NONE,
+                                       .provider = ANIRA_PROVIDER_DEFAULT,
+                                       .engine_id = "org.example.second"};
+    const std::vector<anira::capi::ExtPlanRow> rows =
+        anira::capi::ext_consumed_rows(model, nullptr, &only_second, 1, &pipeline);
+    ASSERT_EQ(rows.size(), 1U);
+    EXPECT_EQ(rows[0].m_host, "model 1");
+    EXPECT_EQ(rows[0].m_kind, "entry");
+    EXPECT_EQ(rows[0].m_consumer, "org.example.second");
+    // An engine that is no candidate reads nothing: the first engine's entry is not walked
+    // under the second's candidate, and under a built-in candidate no custom entry is.
+    const anira_backend_id only_onnx{.struct_size = sizeof(anira_backend_id),
+                                     .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                     .provider = ANIRA_PROVIDER_DEFAULT,
+                                     .engine_id = nullptr};
+    EXPECT_TRUE(anira::capi::ext_consumed_rows(model, nullptr, &only_onnx, 1, &pipeline).empty());
+
+    // A kind on another host than the entry ("tensor_spec:entry") is read from any spec by an
+    // engine that declares it, and by the stage, which reads a slot wherever it sits.
+    anira_tensor_spec spec;
+    spec.m_name = "audio_in";
+    ASSERT_EQ(spec.m_ext.set(&entry.header, &err), ANIRA_OK);
+    model.m_inputs.push_back(spec);
+    EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err, &pipeline),
+              ANIRA_ERROR_EXTENSION_UNCONSUMED);
+    EXPECT_STREQ(
+        err.message,
+        "extension 'entry' on tensor 'audio_in' is not consumed by any stage in this build");
+    const anira::capi::ExtConsumer spec_reader{.m_name = "org.example.second",
+                                               .m_engine = ANIRA_ENGINE_NONE,
+                                               .m_engine_id = "org.example.second",
+                                               .m_consumed = {"model:entry", "tensor_spec:entry"}};
+    pipeline.back() = spec_reader;
+    EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err, &pipeline),
+              ANIRA_OK)
+        << err.message;
+    const std::vector<anira::capi::ExtPlanRow> spec_rows =
+        anira::capi::ext_consumed_rows(model, nullptr, &only_second, 1, &pipeline);
+    ASSERT_EQ(spec_rows.size(), 2U);
+    EXPECT_EQ(spec_rows[0].m_host, "tensor 'audio_in'");
+    EXPECT_EQ(spec_rows[0].m_consumer, "org.example.second");
+    EXPECT_EQ(spec_rows[1].m_host, "model 1");
+    const anira::capi::ExtConsumer stage{.m_name = "stage",
+                                         .m_engine = ANIRA_ENGINE_NONE,
+                                         .m_engine_id = "",
+                                         .m_consumed = {"tensor_spec:entry"}};
+    const std::vector<anira::capi::ExtConsumer> stage_only{stage, first_engine, second_engine};
+    EXPECT_EQ(
+        anira::capi::ext_check_consumed(model, nullptr, nullptr, &only_onnx, 1, &err, &stage_only),
+        ANIRA_OK)
+        << "the stage reads the spec's slot whatever the candidates: " << err.message;
+}
