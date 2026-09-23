@@ -979,6 +979,52 @@ TEST(AbiEngine, UnprepareOncePerPreparedModel) {
     EXPECT_EQ(gain.m_released, 1);
 }
 
+// unprepare is not deferred by an inference thread: while another handler keeps the core's
+// pool alive, the thread that ran the last inference of a handler lets go of that handler's
+// session with the job, so the re-prepare and the destroy of the handler unprepare its
+// prepared model before they return, whatever ran on it. (A session-exclusive model, so that
+// each handler has a prepared model of its own to watch.)
+TEST(AbiEngine, UnprepareIsNotDeferredByAnInferenceThreadKeepingTheLastJob) {
+    const Context context(2);
+    const anira::ContractHandle contract = explicit_contract();
+    GainEngine gain;
+    Pipe pipe;
+    ASSERT_EQ(pipe.register_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ModelConfig model = gain_model();
+    model.state(ANIRA_MODEL_STATEFUL);
+    pipe.add_inference(model);
+    anira_handler* first = nullptr;
+    anira_handler* second = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &first), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.create_handler(context, &second), ANIRA_OK) << pipe.m_err.message;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_handler_prepare(first, contract.native(), &err), ANIRA_OK) << err.message;
+    ASSERT_EQ(anira_handler_prepare(second, contract.native(), &err), ANIRA_OK) << err.message;
+    ASSERT_NO_FATAL_FAILURE(run_ramp(first, 3));
+    ASSERT_NO_FATAL_FAILURE(run_ramp(second, 3));
+    EXPECT_EQ(gain.m_unprepared, 0);
+    // The re-prepare of the first handler gives its prepared model back before it returns,
+    // the second handler (and with it the pool and its threads) staying alive.
+    ASSERT_EQ(anira_handler_prepare(first, contract.native(), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(gain.m_unprepared, 1) << "unprepared at the re-prepare, not at a later dequeue";
+    EXPECT_EQ(gain.m_prepared, 3);
+    ASSERT_NO_FATAL_FAILURE(run_ramp(first, 2));
+    anira_handler_destroy(first);
+    EXPECT_EQ(gain.m_unprepared, 2) << "unprepared at the destroy";
+    ASSERT_NO_FATAL_FAILURE(run_ramp(second, 2, 1.0F, 4));
+    anira_handler_destroy(second);
+    EXPECT_EQ(gain.m_unprepared, 3);
+    // Every pointer handed out came back once (in the order of the re-prepare and the two
+    // destroys, not of the prepares).
+    std::vector<void*> handed_out = gain.m_handed_out;
+    std::vector<void*> handed_back = gain.m_handed_back;
+    std::ranges::sort(handed_out);
+    std::ranges::sort(handed_back);
+    EXPECT_EQ(handed_back, handed_out);
+    pipe.destroy();
+    EXPECT_EQ(gain.m_released, 1);
+}
+
 // A prepare the engine refuses fails anira_handler_prepare with the engine's status, naming the
 // engine; no unprepare is owed for it, and the handler stays unprepared.
 TEST(AbiEngine, ARefusedPrepareFailsThePrepareAndOwesNoUnprepare) {

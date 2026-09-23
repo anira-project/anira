@@ -266,6 +266,21 @@ void InferenceThread::process_dequeued_inference() {
         ActiveInferenceGuard& operator=(const ActiveInferenceGuard&) = delete;
         std::atomic<int>& m_counter;
     } const active_guard(session->m_active_inferences);
+    // The job's data goes back to the queue's empty state before the count drops, on every
+    // exit path (declared after the guard above, so destroyed before it): a thread that kept
+    // the last job's session and struct in m_inference_data until its next dequeue held that
+    // session alive past Core::release_session, which waits on the count and then expects the
+    // manager's reference to be the last, so the session, its plan table and the prepared
+    // models in it (whose unprepare the engines are promised at the handler's re-prepare or
+    // destroy) lived on until this thread picked up another session's job. Never the last
+    // reference here: the drainer holds its own while the count is above zero.
+    struct ReleaseJobGuard {
+        explicit ReleaseJobGuard(InferenceData& data) : m_data(data) {}
+        ~ReleaseJobGuard() { m_data = InferenceData{}; }
+        ReleaseJobGuard(const ReleaseJobGuard&) = delete;
+        ReleaseJobGuard& operator=(const ReleaseJobGuard&) = delete;
+        InferenceData& m_data;
+    } const release_guard(m_inference_data);
 
     // Whether the struct's done signal was published: a struct is signalled exactly once,
     // whatever path it takes (a second signal would let a later try_acquire succeed for a
