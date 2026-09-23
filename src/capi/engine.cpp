@@ -5,8 +5,11 @@
 
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/lifecycle.h>
+#include <anira/abi/status.h>
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -27,9 +30,21 @@ EngineCarrier::EngineCarrier(const anira_engine_desc& desc) : m_desc(desc) {
 }
 
 EngineCarrier::~EngineCarrier() {
-    // Exactly once: the carrier dies with the last handle, pipeline, handler or prepared model
-    // that shares it, after every unprepare of a prepared model that ran on it.
+    // Exactly once: the carrier dies with the last handle, pipeline, handler or loaded model
+    // that shares it, after every unload of a loaded model that ran on it, whether or not init
+    // ever ran.
     if (m_desc.release != nullptr) { m_desc.release(m_desc.user_data); }
+}
+
+anira_status EngineCarrier::ensure_init(const anira_init_info& info) const {
+    const std::scoped_lock<std::mutex> lock(m_init_mutex);
+    if (m_initialised) { return ANIRA_OK; }
+    if (m_desc.init != nullptr) {
+        const anira_status status = m_desc.init(&info, m_desc.user_data);
+        if (status != ANIRA_OK) { return status; }
+    }
+    m_initialised = true;
+    return ANIRA_OK;
 }
 
 EngineFacts engine_facts(const std::vector<PipelineEngine>& engines) {

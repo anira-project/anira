@@ -1,11 +1,15 @@
 /*
- * The ONNX Runtime adapter: one Ort::Session per instance in its own environment, the slots
- * bound to the graph's inputs and outputs by name where the entry's tensors record or the
- * canonical name matches one and by graph position otherwise, checked against the graph's
- * shapes at prepare, and every tensor of a call bound over anira's memory: Ort::Value tensors
- * created per call over the descriptors of the context, the outputs pre-created over the
- * output descriptors' memory and handed to Session::Run, so no result is copied. File-local
- * over anira::backend::Model: nothing of ONNX Runtime enters a public header.
+ * The ONNX Runtime adapter: one environment handle and one session-options object per loaded
+ * model, shared by every executor (ONNX Runtime keeps one environment per process behind the
+ * handle; the web build creates it with a global thread pool of one thread, since a
+ * WebAssembly session cannot spawn its own), and one Ort::Session per executor (kept per
+ * executor, so that no two executors share a session's allocator), the slots bound to the
+ * graph's inputs and outputs by name where the entry's tensors record or the canonical name
+ * matches one and by graph position otherwise, checked against the graph's shapes at load,
+ * and every tensor of a call bound over anira's memory: Ort::Value tensors created per call
+ * over the descriptors of the context, the outputs pre-created over the output descriptors'
+ * memory and handed to Session::Run, so no result is copied. File-local over
+ * anira::backend::Model: nothing of ONNX Runtime enters a public header.
  */
 #include <anira/CoreConfig.h>
 #include <anira/abi/engine.h>
@@ -115,13 +119,40 @@ std::vector<EngineTensor> side_of(const Ort::Session& session,
     return tensors;
 }
 
-/// One session of the model in its own environment: what one instance of the adapter runs
-/// on. Loads at construction (a file or the bytes of the record), binds afterwards, and runs
-/// every inference over the context's descriptors.
-class Instance {
+/// What one load shares between its executors: the environment handle (anira's log level on
+/// it; ONNX Runtime keeps one environment per process behind every handle) and the session
+/// options (one intra-op thread), which a session reads at its creation on the control thread
+/// and never again. Immutable after load, held by the loaded model and by every executor,
+/// freed with the last of them.
+struct SharedEnvironment {
+    explicit SharedEnvironment(const Model& model);
+
+    Ort::Env m_env;
+    Ort::SessionOptions m_options;
+};
+
+SharedEnvironment::SharedEnvironment(const Model& model)
+#ifdef USE_ANIRA_WEB
+    : m_env(nullptr) {
+    // No session-owned threads in WebAssembly: the environment carries a global thread pool of
+    // one intra-op thread the sessions run on. The environment copies the threading options,
+    // which die with this scope.
+    Ort::ThreadingOptions threading;
+    threading.SetGlobalIntraOpNumThreads(1);
+    m_env = Ort::Env(threading, to_ort_logging_level(model.m_log_level), "Default");
+#else
+    : m_env(to_ort_logging_level(model.m_log_level), "Default") {
+#endif
+    m_options.SetIntraOpNumThreads(1);
+}
+
+/// One session of the model over the shared environment: what one executor of the adapter
+/// runs on. Loads at construction (a file or the bytes of the record), binds afterwards, and
+/// runs every inference over the context's descriptors.
+class Instance final : public Executor {
 public:
-    explicit Instance(const Model& model);
-    ~Instance();
+    Instance(std::shared_ptr<const SharedEnvironment> shared, const Model& model);
+    ~Instance() override;
     Instance(const Instance&) = delete;
     Instance& operator=(const Instance&) = delete;
     Instance(Instance&&) = delete;
@@ -141,11 +172,11 @@ public:
     /// The FIXED warm-up of the record, over this instance's own scratch memory and through
     /// the process path; a failing inference is StatusError(ANIRA_ERROR_ENGINE) with ONNX
     /// Runtime's text.
-    void warm_up(uint32_t iterations);
+    void warm_up(uint32_t iterations) override;
 
     /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
     /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing run.
-    anira_status process(const anira_engine_ctx& ctx) noexcept;
+    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override;
 
 private:
     /// Binds every descriptor of the context and runs; throws StatusError for a descriptor
@@ -153,9 +184,8 @@ private:
     void run(const anira_engine_ctx& ctx);
 
     Ort::MemoryInfo m_memory_info;
-    Ort::Env m_env;
+    std::shared_ptr<const SharedEnvironment> m_shared;  ///< the environment and the options
     Ort::AllocatorWithDefaultOptions m_allocator;
-    Ort::SessionOptions m_session_options;
     std::unique_ptr<Ort::Session> m_session;
 
     std::vector<Ort::AllocatedStringPtr> m_name_store;  ///< every graph name, owned
@@ -169,36 +199,15 @@ private:
     std::vector<Ort::Value> m_outputs;  ///< per output slot, likewise
 };
 
-Instance::Instance(const Model& model)
+Instance::Instance(std::shared_ptr<const SharedEnvironment> shared, const Model& model)
     : m_memory_info(Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU))
-#ifdef USE_ANIRA_WEB
-    , m_env(nullptr) {
-    // Create threading options
-    OrtThreadingOptions* threading_options = nullptr;
-    Ort::ThrowOnError(Ort::GetApi().CreateThreadingOptions(&threading_options));
-    Ort::ThrowOnError(Ort::GetApi().SetGlobalIntraOpNumThreads(threading_options, 1));
-
-    // Create environment with global threadpools
-    OrtEnv* raw_env = nullptr;
-    Ort::ThrowOnError(Ort::GetApi().CreateEnvWithGlobalThreadPools(
-        to_ort_logging_level(model.m_log_level),  // Logging level
-        "Default",                                // Log ID
-        threading_options,                        // Threading options
-        &raw_env                                  // Out parameter for the raw environment
-        ));
-
-    m_env = Ort::Env(raw_env);  // Wrap the raw environment in a C++ object
-#else
-    , m_env(to_ort_logging_level(model.m_log_level), "Default") {
-#endif
-    m_session_options.SetIntraOpNumThreads(1);
-
+    , m_shared(std::move(shared)) {
     if (model.m_bytes != nullptr) {
         try {
-            m_session = std::make_unique<Ort::Session>(m_env,
+            m_session = std::make_unique<Ort::Session>(m_shared->m_env,
                                                        model.m_bytes,
                                                        model.m_num_bytes,
-                                                       m_session_options);
+                                                       m_shared->m_options);
         } catch (const Ort::Exception& e) {
             throw StatusError(ANIRA_ERROR_MODEL_LOAD,
                               model_file::message(k_engine, model_file::k_memory, e.what()));
@@ -212,7 +221,9 @@ Instance::Instance(const Model& model)
         const std::string& ort_path = modelpath;
 #endif
         try {
-            m_session = std::make_unique<Ort::Session>(m_env, ort_path.c_str(), m_session_options);
+            m_session = std::make_unique<Ort::Session>(m_shared->m_env,
+                                                       ort_path.c_str(),
+                                                       m_shared->m_options);
         } catch (const Ort::Exception& e) {
             throw StatusError(ANIRA_ERROR_MODEL_LOAD,
                               model_file::message(k_engine, modelpath, e.what()));
@@ -344,7 +355,7 @@ void Instance::warm_up(uint32_t iterations) {
     }
 }
 
-anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
+anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
     try {
         run(ctx);
         return ANIRA_OK;
@@ -363,49 +374,48 @@ anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
     }
 }
 
-class OnnxRuntimeAdapter final : public Adapter {
+/// The loaded model: the environment handle and the options every executor shares
+/// (SharedEnvironment), the binding read off a probe session (every session loads the same
+/// file), the probe the executor of shared slot 0 or, for a record without a shared slot, the
+/// spare of the first exclusive session; every executor a session of its own.
+class OnnxRuntimeLoaded final : public ExecutorLoaded {
 protected:
-    void do_prepare(const Model& model) override {
+    void do_load(const Model& model) override {
         require_f32(model, k_engine);
         throw_if_foreign_onnxruntime();
-        m_instances.clear();
-        const uint32_t count = model.m_instances > 0 ? model.m_instances : 1U;
-        for (uint32_t i = 0; i < count; ++i) {
-            m_instances.push_back(std::make_unique<Instance>(model));
-        }
-        // The binding rule and the check over the first instance's graph (every instance
-        // loaded the same file), then the same binding on every instance.
-        Instance& first = *m_instances.front();
-        const std::vector<EngineTensor> inputs = first.inputs();
-        const std::vector<EngineTensor> outputs = first.outputs();
-        const std::vector<SlotBinding> input_bindings =
+        m_shared = std::make_shared<const SharedEnvironment>(model);
+        auto probe = std::make_unique<Instance>(m_shared, model);
+        const std::vector<EngineTensor> inputs = probe->inputs();
+        const std::vector<EngineTensor> outputs = probe->outputs();
+        m_input_bindings =
             bind_side(model.m_inputs, inputs, inputs.size(), ExtentRule::Exact, k_engine, "input");
-        const std::vector<SlotBinding> output_bindings = bind_side(model.m_outputs,
-                                                                   outputs,
-                                                                   outputs.size(),
-                                                                   ExtentRule::Exact,
-                                                                   k_engine,
-                                                                   "output");
-        for (const std::unique_ptr<Instance>& instance : m_instances) {
-            instance->bind(model, input_bindings, output_bindings);
-            instance->warm_up(model.m_warm_up);
-        }
-        set_bindings(bindings_of(input_bindings, output_bindings));
+        m_output_bindings = bind_side(model.m_outputs,
+                                      outputs,
+                                      outputs.size(),
+                                      ExtentRule::Exact,
+                                      k_engine,
+                                      "output");
+        probe->bind(model, m_input_bindings, m_output_bindings);
+        set_bindings(bindings_of(m_input_bindings, m_output_bindings));
+        adopt(std::move(probe));
     }
 
-    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept override {
-        if (ctx.instance >= m_instances.size()) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-        return m_instances[ctx.instance]->process(ctx);
+    std::unique_ptr<Executor> make_executor() override {
+        auto executor = std::make_unique<Instance>(m_shared, model());
+        executor->bind(model(), m_input_bindings, m_output_bindings);
+        return executor;
     }
 
 private:
-    std::vector<std::unique_ptr<Instance>> m_instances;
+    std::shared_ptr<const SharedEnvironment> m_shared;  ///< freed with the last executor over it
+    std::vector<SlotBinding> m_input_bindings;
+    std::vector<SlotBinding> m_output_bindings;
 };
 
 }  // namespace
 
-std::shared_ptr<Adapter> make_onnxruntime_adapter() {
-    return std::make_shared<OnnxRuntimeAdapter>();
+std::shared_ptr<Loaded> make_onnxruntime_loaded() {
+    return std::make_shared<OnnxRuntimeLoaded>();
 }
 
 }  // namespace anira::backend

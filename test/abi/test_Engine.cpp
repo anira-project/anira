@@ -1,9 +1,12 @@
 // anira/abi/engine.h: the custom engine as an object (anira_custom_engine_create) added to
 // pipelines under ids (anira_pipeline_add_engine), the lifetime of its carrier, the stage's
-// twin, sharing across pipelines, and the engine at run time: a model entry naming an added id
-// is a plan the C handler prepares
-// through the engine's prepare, runs through its process on every inference and resets at a
-// stream boundary, on every leg of the build (a registered engine needs no built-in one).
+// twin, sharing across pipelines, and the engine at run time through the three levels of its
+// lifecycle (anira/abi/lifecycle.h): a model entry naming an added id is a plan the C handler
+// runs through the engine's init (once per object, at the first prepare that reaches it), its
+// load (once per pooled model, a stateful one too), its prepare (once per handler, with the
+// stage's record), its process on every inference (an exclusive handler's calls flagged, on
+// what its prepare built) and its reset at a stream boundary, on every leg of the build (a
+// registered engine needs no built-in one).
 #include <anira/abi/build_info.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
@@ -11,6 +14,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -52,6 +56,9 @@ constexpr size_t k_hop = anira_test::k_block;
 /// What an engine's callbacks count on its user_data.
 struct EngineLife {
     int m_released = 0;
+    int m_inited = 0;
+    int m_loaded = 0;
+    int m_unloaded = 0;
     int m_prepared = 0;
     int m_unprepared = 0;
     int m_processed = 0;
@@ -68,7 +75,24 @@ void ANIRA_CALL engine_reset(const anira_engine_ctx* /*ctx*/,
                              void* /*prepared*/,
                              void* /*user_data*/) {}
 
-anira_status ANIRA_CALL engine_prepare(const anira_engine_prepare_info* /*info*/,
+anira_status ANIRA_CALL engine_init(const anira_init_info* /*info*/, void* user_data) {
+    ++static_cast<EngineLife*>(user_data)->m_inited;
+    return ANIRA_OK;
+}
+
+anira_status ANIRA_CALL engine_load(const anira_engine_load_info* /*info*/,
+                                    void* user_data,
+                                    void** /*out_loaded*/) {
+    ++static_cast<EngineLife*>(user_data)->m_loaded;
+    return ANIRA_OK;
+}
+
+void ANIRA_CALL engine_unload(void* /*loaded*/, void* user_data) {
+    ++static_cast<EngineLife*>(user_data)->m_unloaded;
+}
+
+anira_status ANIRA_CALL engine_prepare(const anira_prepare_info* /*info*/,
+                                       void* /*loaded*/,
                                        void* user_data,
                                        void** /*out_prepared*/) {
     ++static_cast<EngineLife*>(user_data)->m_prepared;
@@ -91,6 +115,9 @@ anira_engine_desc full_engine(EngineLife& life) {
     engine.reset = engine_reset;
     engine.prepare = engine_prepare;
     engine.unprepare = engine_unprepare;
+    engine.load = engine_load;
+    engine.unload = engine_unload;
+    engine.init = engine_init;
     engine.release = engine_release;
     return engine;
 }
@@ -181,7 +208,10 @@ struct Pipe {
 /// What one prepare of the gain engine kept: the record's facts and the templates, read
 /// through the prepared pointer on every process call (the control thread writes it once, the
 /// inference threads read it).
-struct GainPrepared {
+/// What the gain engine's load kept of its record: the row's facts through the config getters
+/// on the variant, the shared call slots, the templates and the names; and how many prepared
+/// handles over it are out (an unload must find none).
+struct GainLoaded {
     uint32_t m_row = 0;
     std::string m_path;
     std::string m_engine_id;
@@ -190,43 +220,80 @@ struct GainPrepared {
     std::vector<anira_tensor> m_outputs;
     std::vector<std::string> m_input_names;
     std::vector<std::string> m_output_names;
+    int m_live_prepared = 0;
+};
+
+/// What the gain engine's prepare kept of one handler: the loaded model it runs on, whether
+/// the handler is exclusive (ANIRA_PREPARE_EXCLUSIVE), the handler and its entry count.
+struct GainPrepared {
+    GainLoaded* m_loaded = nullptr;
+    bool m_exclusive = false;
+    const anira_handler* m_handler = nullptr;
+    uint32_t m_num_entries = 0;
 };
 
 /// A C engine that multiplies its first input into its first output by `m_gain`, checking
-/// every call against the record its prepare kept. What the callbacks count and keep on the
-/// registration: process and reset run on the inference threads, so they touch atomics only;
-/// prepare, unprepare and release run on the control thread.
+/// every call against the records its load and its prepare kept. What the callbacks count and
+/// keep on the registration: process and reset run on the inference threads, so they touch
+/// atomics only; init, load, unload, prepare, unprepare and release run on the control thread.
 struct GainEngine {
     float m_gain = 1.0F;
     /// The status the next process call returns in place of ANIRA_OK, once.
     std::atomic<anira_status> m_fail_next{ANIRA_OK};
-    /// Whether prepare refuses (its status) instead of preparing.
+    /// Whether init, load or prepare refuses (its status) instead of doing its work.
+    anira_status m_refuse_init = ANIRA_OK;
+    anira_status m_refuse_load = ANIRA_OK;
     anira_status m_refuse_prepare = ANIRA_OK;
 
     std::atomic<int> m_processed{0};
     std::atomic<int> m_resets{0};
+    int m_inited = 0;
+    int m_loaded = 0;
+    int m_unloaded = 0;
     int m_prepared = 0;
     int m_unprepared = 0;
     int m_released = 0;
+    std::vector<void*> m_loaded_out;         ///< every loaded pointer load handed back
+    std::vector<void*> m_loaded_back;        ///< every loaded pointer unload received
     std::vector<void*> m_handed_out;         ///< every prepared pointer prepare handed back
     std::vector<void*> m_handed_back;        ///< every prepared pointer unprepare received
-    std::vector<uint32_t> m_instances_seen;  ///< info.instances of every prepare
+    std::vector<uint32_t> m_instances_seen;  ///< info.instances of every load
+    std::vector<uint32_t> m_flags_seen;      ///< info.flags of every prepare
+    int m_bad_prepare_record = 0;            ///< a prepare record or loaded pointer that is off
+    int m_unload_before_unprepare = 0;       ///< an unload with a prepared handle still out
+    // What init saw.
+    uint32_t m_init_struct_size = 0;
+    uint32_t m_init_log_level = 0;
+    uint32_t m_init_num_threads = 0;
+    const anira_context* m_init_context = nullptr;
 
     // What process saw: the descriptors against the templates, the scalars of the context.
     std::atomic<uint32_t> m_bad_tensors{0};   ///< a descriptor unlike its template
     std::atomic<uint32_t> m_bad_counts{0};    ///< num_inputs / num_outputs unlike the record's
-    std::atomic<uint32_t> m_bad_scalars{0};   ///< a ticket, a flag or a reserved slot set
+    std::atomic<uint32_t> m_bad_scalars{0};   ///< a ticket, a flag, an instance or a reserved slot
+                                              ///< off
     std::atomic<uint32_t> m_bad_prepared{0};  ///< a prepared pointer that is no GainPrepared
+    std::atomic<uint32_t> m_bad_loaded{0};    ///< ctx->loaded unlike the handle's loaded model
+    std::atomic<uint32_t> m_shared_calls{0};  ///< calls without ANIRA_ENGINE_CALL_EXCLUSIVE
+    std::atomic<uint32_t> m_exclusive_calls{0};  ///< calls with it
     std::atomic<uint32_t> m_max_instance{0};
     std::atomic<uint32_t> m_max_entry{0};
     // The reset boundary: the context reset saw, and whether the process that followed saw
-    // the same one.
+    // the same one; a reset of a handle that is not exclusive.
     std::atomic<const anira_engine_ctx*> m_pending_reset_ctx{nullptr};
     std::atomic<int> m_process_after_reset_same_ctx{0};
     std::atomic<int> m_process_after_reset_other_ctx{0};
     std::atomic<uint32_t> m_reset_num_inputs{0};
     std::atomic<uint32_t> m_reset_entry{0};
+    std::atomic<uint32_t> m_reset_on_shared{0};
 };
+
+/// Whether `loaded` is a pointer load handed back that unload has not received (the counts,
+/// since the allocator may hand a freed address out again).
+bool loaded_is_live(const GainEngine& engine, void* loaded) {
+    return std::ranges::count(engine.m_loaded_out, loaded) >
+           std::ranges::count(engine.m_loaded_back, loaded);
+}
 
 /// Whether `tensor` is `expected` in dtype, rank and extents.
 bool same_shape(const anira_tensor& tensor, const anira_tensor& expected) {
@@ -237,34 +304,84 @@ bool same_shape(const anira_tensor& tensor, const anira_tensor& expected) {
     return true;
 }
 
-anira_status ANIRA_CALL gain_prepare(const anira_engine_prepare_info* info,
+anira_status ANIRA_CALL gain_init(const anira_init_info* info, void* user_data) {
+    auto* engine = static_cast<GainEngine*>(user_data);
+    ++engine->m_inited;
+    if (engine->m_refuse_init != ANIRA_OK) { return engine->m_refuse_init; }
+    if (info == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    engine->m_init_struct_size = info->struct_size;
+    engine->m_init_log_level = info->log_level;
+    engine->m_init_num_threads = info->num_threads;
+    engine->m_init_context = info->context;
+    return ANIRA_OK;
+}
+
+anira_status ANIRA_CALL gain_load(const anira_engine_load_info* info,
+                                  void* user_data,
+                                  void** out_loaded) {
+    auto* engine = static_cast<GainEngine*>(user_data);
+    ++engine->m_loaded;
+    if (engine->m_refuse_load != ANIRA_OK) { return engine->m_refuse_load; }
+    if (info == nullptr || info->struct_size != sizeof(anira_engine_load_info) ||
+        info->model == nullptr || out_loaded == nullptr || *out_loaded != nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    auto loaded = std::make_unique<GainLoaded>();
+    loaded->m_row = info->row;
+    // The row's facts through the config getters on the variant: the engine's own way to the
+    // model, which anira never opened.
+    const char* path = anira_model_config_model_path(info->model, info->row);
+    const char* id = anira_model_config_model_engine_id(info->model, info->row);
+    loaded->m_path = path != nullptr ? path : "";
+    loaded->m_engine_id = id != nullptr ? id : "";
+    loaded->m_instances = info->instances;
+    for (uint32_t i = 0; i < info->num_inputs; ++i) {
+        loaded->m_inputs.push_back(info->inputs[i]);
+        loaded->m_input_names.emplace_back(info->input_names[i]);
+    }
+    for (uint32_t i = 0; i < info->num_outputs; ++i) {
+        loaded->m_outputs.push_back(info->outputs[i]);
+        loaded->m_output_names.emplace_back(info->output_names[i]);
+    }
+    engine->m_instances_seen.push_back(info->instances);
+    *out_loaded = loaded.release();
+    engine->m_loaded_out.push_back(*out_loaded);
+    return ANIRA_OK;
+}
+
+void ANIRA_CALL gain_unload(void* loaded, void* user_data) {
+    auto* engine = static_cast<GainEngine*>(user_data);
+    ++engine->m_unloaded;
+    engine->m_loaded_back.push_back(loaded);
+    auto* kept = static_cast<GainLoaded*>(loaded);
+    if (kept != nullptr && kept->m_live_prepared != 0) { ++engine->m_unload_before_unprepare; }
+    delete kept;
+}
+
+anira_status ANIRA_CALL gain_prepare(const anira_prepare_info* info,
+                                     void* loaded,
                                      void* user_data,
                                      void** out_prepared) {
     auto* engine = static_cast<GainEngine*>(user_data);
     ++engine->m_prepared;
     if (engine->m_refuse_prepare != ANIRA_OK) { return engine->m_refuse_prepare; }
-    if (info == nullptr || info->struct_size != sizeof(anira_engine_prepare_info) ||
-        info->model == nullptr || out_prepared == nullptr || *out_prepared != nullptr) {
+    // The record is the stage's (the handler, its report), the loaded pointer one load handed
+    // back and unload has not received, and the record's lists are the load record's.
+    auto* kept = static_cast<GainLoaded*>(loaded);
+    if (info == nullptr || info->struct_size != sizeof(anira_prepare_info) ||
+        info->handler == nullptr || info->report == nullptr || out_prepared == nullptr ||
+        *out_prepared != nullptr || !loaded_is_live(*engine, loaded) ||
+        info->num_inputs != kept->m_inputs.size() || info->num_outputs != kept->m_outputs.size()) {
+        ++engine->m_bad_prepare_record;
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     auto prepared = std::make_unique<GainPrepared>();
-    prepared->m_row = info->row;
-    // The row's facts through the config getters on the variant: the engine's own way to the
-    // model, which anira never opened.
-    const char* path = anira_model_config_model_path(info->model, info->row);
-    const char* id = anira_model_config_model_engine_id(info->model, info->row);
-    prepared->m_path = path != nullptr ? path : "";
-    prepared->m_engine_id = id != nullptr ? id : "";
-    prepared->m_instances = info->instances;
-    for (uint32_t i = 0; i < info->num_inputs; ++i) {
-        prepared->m_inputs.push_back(info->inputs[i]);
-        prepared->m_input_names.emplace_back(info->input_names[i]);
-    }
-    for (uint32_t i = 0; i < info->num_outputs; ++i) {
-        prepared->m_outputs.push_back(info->outputs[i]);
-        prepared->m_output_names.emplace_back(info->output_names[i]);
-    }
-    engine->m_instances_seen.push_back(info->instances);
+    prepared->m_loaded = kept;
+    prepared->m_exclusive = (info->flags & ANIRA_PREPARE_EXCLUSIVE) != 0U;
+    prepared->m_handler = info->handler;
+    prepared->m_num_entries = info->num_entries;
+    ++kept->m_live_prepared;
+    engine->m_flags_seen.push_back(info->flags);
     *out_prepared = prepared.release();
     engine->m_handed_out.push_back(*out_prepared);
     return ANIRA_OK;
@@ -273,11 +390,13 @@ anira_status ANIRA_CALL gain_prepare(const anira_engine_prepare_info* info,
 anira_status ANIRA_CALL gain_process(const anira_engine_ctx* ctx, void* prepared, void* user_data) {
     auto* engine = static_cast<GainEngine*>(user_data);
     engine->m_processed.fetch_add(1);
-    const auto* kept = static_cast<const GainPrepared*>(prepared);
-    if (kept == nullptr) {
+    const auto* handle = static_cast<const GainPrepared*>(prepared);
+    if (handle == nullptr || handle->m_loaded == nullptr) {
         engine->m_bad_prepared.fetch_add(1);
         return ANIRA_ERROR_INTERNAL;
     }
+    const GainLoaded* kept = handle->m_loaded;
+    if (ctx->loaded != kept) { engine->m_bad_loaded.fetch_add(1); }
     // The reset boundary: the process right behind a reset runs on the reset's context.
     if (const anira_engine_ctx* reset_ctx = engine->m_pending_reset_ctx.exchange(nullptr)) {
         if (reset_ctx == ctx) {
@@ -299,9 +418,20 @@ anira_status ANIRA_CALL gain_process(const anira_engine_ctx* ctx, void* prepared
             engine->m_bad_tensors.fetch_add(1);
         }
     }
-    if (ctx->ticket != ANIRA_TICKET_INVALID || ctx->flags != 0 || ctx->reserved0 != 0 ||
-        ctx->reserved1 != 0 || ctx->reserved_ptr0 != nullptr || ctx->reserved_ptr1 != nullptr ||
-        ctx->instance >= kept->m_instances) {
+    // The scalars: no ticket, nothing reserved; an exclusive handle's call carries the flag
+    // and instance 0 (it claimed no shared slot), a shared handle's carries no flag and a slot
+    // below the loaded model's count.
+    const bool exclusive_call = (ctx->flags & ANIRA_ENGINE_CALL_EXCLUSIVE) != 0U;
+    if (exclusive_call) {
+        engine->m_exclusive_calls.fetch_add(1);
+    } else {
+        engine->m_shared_calls.fetch_add(1);
+    }
+    const bool instance_ok = exclusive_call
+                                 ? ctx->flags == ANIRA_ENGINE_CALL_EXCLUSIVE && ctx->instance == 0
+                                 : ctx->flags == 0 && ctx->instance < kept->m_instances;
+    if (ctx->ticket != ANIRA_TICKET_INVALID || ctx->reserved0 != 0 || ctx->reserved1 != 0 ||
+        ctx->reserved_ptr1 != nullptr || exclusive_call != handle->m_exclusive || !instance_ok) {
         engine->m_bad_scalars.fetch_add(1);
     }
     uint32_t seen = engine->m_max_instance.load();
@@ -320,10 +450,12 @@ anira_status ANIRA_CALL gain_process(const anira_engine_ctx* ctx, void* prepared
     return engine->m_fail_next.exchange(ANIRA_OK);
 }
 
-void ANIRA_CALL gain_reset(const anira_engine_ctx* ctx, void* /*prepared*/, void* user_data) {
+void ANIRA_CALL gain_reset(const anira_engine_ctx* ctx, void* prepared, void* user_data) {
     auto* engine = static_cast<GainEngine*>(user_data);
     engine->m_resets.fetch_add(1);
     engine->m_pending_reset_ctx.store(ctx);
+    const auto* handle = static_cast<const GainPrepared*>(prepared);
+    if (handle == nullptr || !handle->m_exclusive) { engine->m_reset_on_shared.fetch_add(1); }
     if (ctx != nullptr) {
         engine->m_reset_num_inputs.store(ctx->num_inputs);
         engine->m_reset_entry.store(ctx->entry);
@@ -334,7 +466,12 @@ void ANIRA_CALL gain_unprepare(void* prepared, void* user_data) {
     auto* engine = static_cast<GainEngine*>(user_data);
     ++engine->m_unprepared;
     engine->m_handed_back.push_back(prepared);
-    delete static_cast<GainPrepared*>(prepared);
+    const std::unique_ptr<GainPrepared> handle(static_cast<GainPrepared*>(prepared));
+    // The loaded model outlives its prepared handles: still out, so it may be touched (an
+    // unload that came first was counted there).
+    if (handle != nullptr && loaded_is_live(*engine, handle->m_loaded)) {
+        --handle->m_loaded->m_live_prepared;
+    }
 }
 
 void ANIRA_CALL gain_release(void* user_data) {
@@ -350,12 +487,20 @@ anira_engine_desc gain_desc(GainEngine& engine, uint32_t flags = 0) {
     desc.reset = gain_reset;
     desc.prepare = gain_prepare;
     desc.unprepare = gain_unprepare;
+    desc.load = gain_load;
+    desc.unload = gain_unload;
+    desc.init = gain_init;
     desc.release = gain_release;
     return desc;
 }
 
-/// The prepared record behind a handed-out pointer.
-const GainPrepared& kept_of(const GainEngine& engine, size_t index = 0) {
+/// The load record behind a handed-out loaded pointer.
+const GainLoaded& kept_of(const GainEngine& engine, size_t index = 0) {
+    return *static_cast<const GainLoaded*>(engine.m_loaded_out.at(index));
+}
+
+/// The prepared handle behind a handed-out prepared pointer.
+const GainPrepared& handle_of(const GainEngine& engine, size_t index = 0) {
     return *static_cast<const GainPrepared*>(engine.m_handed_out.at(index));
 }
 
@@ -537,8 +682,8 @@ TEST(AbiEngine, AddRefusals) {
 
 // A caller compiled against a header that ends after process hands over the slots up to it:
 // the rest reads as ANIRA_ENGINE_DESC_INIT, so the carrier's engine has no reset, no prepare,
-// no unprepare and no release, whatever the memory beyond struct_size holds; the kinds are
-// copied, and the pipeline owns the id.
+// no unprepare, no load, no unload, no init and no release, whatever the memory beyond
+// struct_size holds; the kinds are copied, and the pipeline owns the id.
 TEST(AbiEngine, AShortDescriptorReadsAsTheDefaults) {
     Pipe pipe;
     EngineLife life;
@@ -565,6 +710,9 @@ TEST(AbiEngine, AShortDescriptorReadsAsTheDefaults) {
     EXPECT_EQ(kept.reset, nullptr);
     EXPECT_EQ(kept.prepare, nullptr);
     EXPECT_EQ(kept.unprepare, nullptr);
+    EXPECT_EQ(kept.load, nullptr);
+    EXPECT_EQ(kept.unload, nullptr);
+    EXPECT_EQ(kept.init, nullptr);
     EXPECT_EQ(kept.release, nullptr);
     ASSERT_EQ(carrier.consumed_kinds().size(), 1U);
     EXPECT_EQ(carrier.consumed_kinds()[0], "model:entry");
@@ -657,12 +805,15 @@ TEST(AbiEngine, LegalBeforeAndAfterAddInference) {
     const anira_plan_report* report = anira_handler_plan_report(handler);
     ASSERT_NE(report, nullptr);
     EXPECT_EQ(anira_plan_report_num_plans(report), 1U) << "the custom row alone is a plan";
-    EXPECT_EQ(before.m_prepared + after.m_prepared, 0) << "no row names either engine";
+    EXPECT_EQ(before.m_inited + after.m_inited, 0) << "no row names either engine";
+    EXPECT_EQ(before.m_loaded + after.m_loaded, 0);
+    EXPECT_EQ(before.m_prepared + after.m_prepared, 0);
     anira_handler_destroy(handler);
     EXPECT_EQ(before.m_released + after.m_released, 0) << "the pipeline still holds them";
 
-    // A row naming a registered id, registered after the inference stage: the engine's
-    // prepare runs at prepare, its process on every inference, and the stream comes back.
+    // A row naming a registered id, registered after the inference stage: the engine's init,
+    // load and prepare run at prepare, its process on every inference, and the stream comes
+    // back.
     GainEngine gain;
     Pipe named;
     named.add_inference(stream_model("org.example.after", k_never_opened));
@@ -672,15 +823,18 @@ TEST(AbiEngine, LegalBeforeAndAfterAddInference) {
     ASSERT_EQ(named.create_handler(context, &runs), ANIRA_OK) << named.m_err.message;
     ASSERT_EQ(anira_handler_prepare(runs, contract.native(), &err), ANIRA_OK) << err.message;
     EXPECT_EQ(anira_plan_report_num_plans(anira_handler_plan_report(runs)), 1U);
+    EXPECT_EQ(gain.m_inited, 1);
+    EXPECT_EQ(gain.m_loaded, 1);
     EXPECT_EQ(gain.m_prepared, 1);
     ASSERT_NO_FATAL_FAILURE(run_ramp(runs, 3));
     EXPECT_EQ(gain.m_processed.load(), 3);
     anira_handler_destroy(runs);
     EXPECT_EQ(gain.m_unprepared, 1);
+    EXPECT_EQ(gain.m_unloaded, 1);
     named.destroy();
     EXPECT_EQ(gain.m_released, 1);
     pipe.destroy();
-    EXPECT_EQ(before.m_released, 1);
+    EXPECT_EQ(before.m_released, 1) << "released without ever being initialised";
     EXPECT_EQ(after.m_released, 1);
 }
 
@@ -758,9 +912,27 @@ TEST(AbiEngine, PassthroughOnEveryLeg) {
     const anira::ContractHandle contract = explicit_contract();
     ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
 
+    // The three levels, once each: init with the facts of the core (the level, the pool of
+    // this context, the handler's context), load with the row's record, prepare with the
+    // stage's record and the loaded pointer.
+    ASSERT_EQ(gain.m_inited, 1);
+    ASSERT_EQ(gain.m_loaded, 1);
     ASSERT_EQ(gain.m_prepared, 1);
+    EXPECT_EQ(gain.m_init_struct_size, sizeof(anira_init_info));
+    EXPECT_EQ(gain.m_init_log_level, static_cast<uint32_t>(ANIRA_LOG_ERROR))
+        << "the context's level, the one in effect";
+    EXPECT_EQ(gain.m_init_num_threads, 2U) << "the pool of the context";
+    EXPECT_EQ(gain.m_init_context, context.m_context);
+    ASSERT_EQ(gain.m_loaded_out.size(), 1U);
     ASSERT_EQ(gain.m_handed_out.size(), 1U);
-    const GainPrepared& kept = kept_of(gain);
+    const GainLoaded& kept = kept_of(gain);
+    const GainPrepared& handle = handle_of(gain);
+    EXPECT_EQ(handle.m_loaded, &kept);
+    EXPECT_FALSE(handle.m_exclusive) << "a stateless model's handler";
+    EXPECT_EQ(handle.m_handler, handler);
+    EXPECT_EQ(handle.m_num_entries, anira_handler_num_entries(handler));
+    EXPECT_EQ(gain.m_bad_prepare_record, 0);
+    EXPECT_EQ(gain.m_flags_seen, (std::vector<uint32_t>{0}));
     EXPECT_EQ(kept.m_row, 0U);
     EXPECT_EQ(kept.m_path, k_never_opened) << "the engine reads the row; anira never opens it";
     EXPECT_EQ(kept.m_engine_id, k_gain_id);
@@ -787,10 +959,16 @@ TEST(AbiEngine, PassthroughOnEveryLeg) {
 
     ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 6, gain.m_gain));
     EXPECT_EQ(gain.m_processed.load(), 6);
+    EXPECT_EQ(gain.m_shared_calls.load(), 6U) << "a shared handle claims a slot per call";
+    EXPECT_EQ(gain.m_exclusive_calls.load(), 0U);
+    EXPECT_EQ(gain.m_bad_loaded.load(), 0U) << "ctx->loaded is what load handed back";
+    EXPECT_EQ(gain.m_bad_scalars.load(), 0U);
     EXPECT_EQ(gain.m_resets.load(), 0) << "a stateless model is never reset";
     EXPECT_EQ(anira_handler_rt_error(handler), ANIRA_OK);
     anira_handler_destroy(handler);
     EXPECT_EQ(gain.m_unprepared, 1);
+    EXPECT_EQ(gain.m_unloaded, 1) << "the last handler took the loaded model with it";
+    EXPECT_EQ(gain.m_unload_before_unprepare, 0) << "unprepare before unload";
     pipe.destroy();
     EXPECT_EQ(gain.m_released, 1);
 }
@@ -898,11 +1076,15 @@ TEST(AbiEngine, AMissingFileOnARealEngineIsModelLoadOrNoSuchFile) {
     }
 }
 
-// Two handlers of one pipeline over one model share one prepared model: the engine's prepare
-// runs once, with `instances` = the model's max_instances, and both handlers run on it. A
-// session-exclusive model (ANIRA_MODEL_STATEFUL) is prepared for each handler alone, with
-// `instances` = 1.
-TEST(AbiEngine, EqualConfigsShareOnePreparedModelAStatefulOneNever) {
+// Two handlers of one pipeline over one model share one loaded model: the engine's load runs
+// once, with `instances` = the model's max_instances, its prepare once per handler with the
+// stage's record and that loaded pointer, and both handlers run on it (shared calls, a slot
+// each). A stateful model is loaded once too: exclusivity is the handler's, not the model's,
+// so the load says 0 shared slots, each handler's prepare carries ANIRA_PREPARE_EXCLUSIVE and
+// builds what it runs on, and every call of theirs carries ANIRA_ENGINE_CALL_EXCLUSIVE with
+// instance 0. Either way unprepare runs per handler, unload once with the last of them, and
+// never before the handles are back.
+TEST(AbiEngine, EqualConfigsShareOneLoadedModelStatefulOrNot) {
     const Context context(2);
     const anira::ContractHandle contract = explicit_contract();
     {
@@ -919,20 +1101,35 @@ TEST(AbiEngine, EqualConfigsShareOnePreparedModelAStatefulOneNever) {
         anira_error err = ANIRA_ERROR_INIT;
         ASSERT_EQ(anira_handler_prepare(first, contract.native(), &err), ANIRA_OK) << err.message;
         ASSERT_EQ(anira_handler_prepare(second, contract.native(), &err), ANIRA_OK) << err.message;
-        EXPECT_EQ(gain.m_prepared, 1) << "one prepared model for two equal handlers";
+        EXPECT_EQ(gain.m_inited, 1) << "once per engine object";
+        EXPECT_EQ(gain.m_loaded, 1) << "one loaded model for two equal handlers";
+        EXPECT_EQ(gain.m_prepared, 2) << "a prepare per handler";
         EXPECT_EQ(gain.m_instances_seen, (std::vector<uint32_t>{2}));
-        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_adapter,
-                  anira_test::session_of(second)->m_plans.at(0).m_adapter)
-            << "the pooled adapter";
-        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_adapter->model().m_instances, 2U)
-            << "the record agrees with the prepare record";
+        EXPECT_EQ(gain.m_flags_seen, (std::vector<uint32_t>{0, 0}));
+        EXPECT_EQ(gain.m_bad_prepare_record, 0);
+        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_loaded,
+                  anira_test::session_of(second)->m_plans.at(0).m_loaded)
+            << "the pooled loaded model";
+        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_loaded->model().m_instances, 2U)
+            << "the record agrees with the load record";
+        ASSERT_EQ(gain.m_handed_out.size(), 2U);
+        EXPECT_EQ(handle_of(gain, 0).m_loaded, handle_of(gain, 1).m_loaded);
+        EXPECT_EQ(handle_of(gain, 0).m_handler, first);
+        EXPECT_EQ(handle_of(gain, 1).m_handler, second);
         ASSERT_NO_FATAL_FAILURE(run_ramp(first, 3));
         ASSERT_NO_FATAL_FAILURE(run_ramp(second, 3));
         EXPECT_EQ(gain.m_processed.load(), 6);
+        EXPECT_EQ(gain.m_shared_calls.load(), 6U);
+        EXPECT_EQ(gain.m_exclusive_calls.load(), 0U);
+        EXPECT_EQ(gain.m_bad_scalars.load(), 0U);
+        EXPECT_EQ(gain.m_bad_loaded.load(), 0U);
         anira_handler_destroy(first);
-        EXPECT_EQ(gain.m_unprepared, 0) << "the second handler still shares it";
+        EXPECT_EQ(gain.m_unprepared, 1) << "the first handler's handle went back";
+        EXPECT_EQ(gain.m_unloaded, 0) << "the second handler still shares the loaded model";
         anira_handler_destroy(second);
-        EXPECT_EQ(gain.m_unprepared, 1);
+        EXPECT_EQ(gain.m_unprepared, 2);
+        EXPECT_EQ(gain.m_unloaded, 1);
+        EXPECT_EQ(gain.m_unload_before_unprepare, 0);
         pipe.destroy();
         EXPECT_EQ(gain.m_released, 1);
     }
@@ -951,30 +1148,54 @@ TEST(AbiEngine, EqualConfigsShareOnePreparedModelAStatefulOneNever) {
         anira_error err = ANIRA_ERROR_INIT;
         ASSERT_EQ(anira_handler_prepare(first, contract.native(), &err), ANIRA_OK) << err.message;
         ASSERT_EQ(anira_handler_prepare(second, contract.native(), &err), ANIRA_OK) << err.message;
-        EXPECT_EQ(gain.m_prepared, 2) << "a session-exclusive model is never shared";
-        EXPECT_EQ(gain.m_instances_seen, (std::vector<uint32_t>{1, 1}));
-        EXPECT_NE(anira_test::session_of(first)->m_plans.at(0).m_adapter,
-                  anira_test::session_of(second)->m_plans.at(0).m_adapter);
+        EXPECT_EQ(gain.m_loaded, 1) << "a stateful model is loaded once too";
+        EXPECT_EQ(gain.m_prepared, 2) << "each handler builds its own executor at prepare";
+        EXPECT_EQ(gain.m_instances_seen, (std::vector<uint32_t>{0}))
+            << "no shared slot: the handlers run on what their prepare built";
+        EXPECT_EQ(gain.m_flags_seen,
+                  (std::vector<uint32_t>{ANIRA_PREPARE_EXCLUSIVE, ANIRA_PREPARE_EXCLUSIVE}));
+        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_loaded,
+                  anira_test::session_of(second)->m_plans.at(0).m_loaded)
+            << "pooled: exclusivity is not in the key";
         for (const anira_handler* handler : {first, second}) {
-            const anira::backend::Model& record =
-                anira_test::session_of(handler)->m_plans.at(0).m_adapter->model();
-            EXPECT_EQ(record.m_instances, 1U) << "the record agrees with the prepare record";
-            EXPECT_TRUE(record.m_session_exclusive);
+            const anira::SessionElement::PlanSlot& plan =
+                anira_test::session_of(handler)->m_plans.at(0);
+            EXPECT_EQ(plan.m_loaded->model().m_instances, 0U)
+                << "the record agrees with the load record";
+            ASSERT_NE(plan.m_prepared, nullptr);
+            EXPECT_TRUE(plan.m_prepared->exclusive());
         }
+        ASSERT_EQ(gain.m_handed_out.size(), 2U);
+        EXPECT_NE(gain.m_handed_out[0], gain.m_handed_out[1]);
+        EXPECT_TRUE(handle_of(gain, 0).m_exclusive && handle_of(gain, 1).m_exclusive);
+        ASSERT_NO_FATAL_FAILURE(run_ramp(first, 3));
+        ASSERT_NO_FATAL_FAILURE(run_ramp(second, 3));
+        EXPECT_EQ(gain.m_processed.load(), 6);
+        EXPECT_EQ(gain.m_exclusive_calls.load(), 6U)
+            << "an exclusive handle's calls carry the flag and instance 0";
+        EXPECT_EQ(gain.m_shared_calls.load(), 0U);
+        EXPECT_EQ(gain.m_bad_scalars.load(), 0U);
+        EXPECT_EQ(gain.m_bad_loaded.load(), 0U);
+        EXPECT_EQ(gain.m_resets.load(), 2) << "one stream start per handler";
+        EXPECT_EQ(gain.m_reset_on_shared.load(), 0U);
         anira_handler_destroy(first);
         EXPECT_EQ(gain.m_unprepared, 1);
+        EXPECT_EQ(gain.m_unloaded, 0);
         anira_handler_destroy(second);
         EXPECT_EQ(gain.m_unprepared, 2);
+        EXPECT_EQ(gain.m_unloaded, 1);
+        EXPECT_EQ(gain.m_unload_before_unprepare, 0);
         pipe.destroy();
         EXPECT_EQ(gain.m_released, 1);
     }
 }
 
-// The record of a session-exclusive prepared model says one instance whatever the model's
+// A session-exclusive handler's loaded model has no shared call slot whatever the model's
 // max_instances, on the registered engine's row and on the row of every built-in engine of the
-// build alike (the built-in adapters size their instances from the record, the registered
-// engine reads the same count in its prepare record): the two records agree.
-TEST(AbiEngine, ASessionExclusiveModelIsPreparedWithOneInstanceOnEveryEngine) {
+// build alike (the built-in engines size their shared executors from the record, the
+// registered engine reads the same count in its load record), and the handler's prepared
+// handle is exclusive on every plan: the records agree.
+TEST(AbiEngine, ASessionExclusiveHandlerHasNoSharedSlotOnAnyEngine) {
     const Context context(2);
     const anira::ContractHandle contract = explicit_contract();
     // The bundled gain model on every engine of the build plus the engine-free custom row.
@@ -991,18 +1212,21 @@ TEST(AbiEngine, ASessionExclusiveModelIsPreparedWithOneInstanceOnEveryEngine) {
     EXPECT_EQ(session->m_plans.size(), anira_test::oracle_engines().size() + 1)
         << "one plan per engine of the build, plus the custom row";
     for (const anira::SessionElement::PlanSlot& plan : session->m_plans) {
-        ASSERT_NE(plan.m_adapter, nullptr);
-        const anira::backend::Model& record = plan.m_adapter->model();
-        EXPECT_EQ(record.m_instances, 1U) << "the plan of engine " << plan.m_engine;
-        EXPECT_TRUE(record.m_session_exclusive) << "the plan of engine " << plan.m_engine;
+        ASSERT_NE(plan.m_loaded, nullptr);
+        EXPECT_EQ(plan.m_loaded->model().m_instances, 0U) << "the plan of engine " << plan.m_engine;
+        EXPECT_EQ(plan.m_loaded->num_instances(), 0U) << "the plan of engine " << plan.m_engine;
+        ASSERT_NE(plan.m_prepared, nullptr) << "the plan of engine " << plan.m_engine;
+        EXPECT_TRUE(plan.m_prepared->exclusive()) << "the plan of engine " << plan.m_engine;
     }
     anira_handler_destroy(handler);
 }
 
-// Three prepares of one handler are three prepared models: three prepares, three unprepares
-// (two at the re-prepares, one at destroy), each unprepare receiving the pointer its prepare
-// handed back, in order.
-TEST(AbiEngine, UnprepareOncePerPreparedModel) {
+// Three prepares of one handler are three prepared handles and, the handler being the only
+// holder, three loaded models: three prepares and three loads, three unprepares and three
+// unloads (two each at the re-prepares, one at destroy), each unprepare and unload receiving
+// the pointer its prepare or load handed back, in order, the handle before the model; init
+// runs once.
+TEST(AbiEngine, UnprepareAndUnloadOncePerPrepareAndLoad) {
     const Context context;
     GainEngine gain;
     Pipe pipe;
@@ -1014,14 +1238,21 @@ TEST(AbiEngine, UnprepareOncePerPreparedModel) {
     for (int prepare = 1; prepare <= 3; ++prepare) {
         anira_error err = ANIRA_ERROR_INIT;
         ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+        EXPECT_EQ(gain.m_inited, 1);
+        EXPECT_EQ(gain.m_loaded, prepare);
         EXPECT_EQ(gain.m_prepared, prepare);
-        EXPECT_EQ(gain.m_unprepared, prepare - 1) << "the previous prepared model went back";
+        EXPECT_EQ(gain.m_unprepared, prepare - 1) << "the previous handle went back";
+        EXPECT_EQ(gain.m_unloaded, prepare - 1) << "and the previous loaded model with it";
         ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 2));
     }
     anira_handler_destroy(handler);
     EXPECT_EQ(gain.m_prepared, 3);
     EXPECT_EQ(gain.m_unprepared, 3);
+    EXPECT_EQ(gain.m_loaded, 3);
+    EXPECT_EQ(gain.m_unloaded, 3);
     EXPECT_EQ(gain.m_handed_back, gain.m_handed_out);
+    EXPECT_EQ(gain.m_loaded_back, gain.m_loaded_out);
+    EXPECT_EQ(gain.m_unload_before_unprepare, 0);
     pipe.destroy();
     EXPECT_EQ(gain.m_released, 1);
 }
@@ -1029,8 +1260,8 @@ TEST(AbiEngine, UnprepareOncePerPreparedModel) {
 // unprepare is not deferred by an inference thread: while another handler keeps the core's
 // pool alive, the thread that ran the last inference of a handler lets go of that handler's
 // session with the job, so the re-prepare and the destroy of the handler unprepare its
-// prepared model before they return, whatever ran on it. (A session-exclusive model, so that
-// each handler has a prepared model of its own to watch.)
+// prepared handle before they return, whatever ran on it. (A session-exclusive model, so that
+// each handler has an executor of its own to watch; the loaded model is one, shared.)
 TEST(AbiEngine, UnprepareIsNotDeferredByAnInferenceThreadKeepingTheLastJob) {
     const Context context(2);
     const anira::ContractHandle contract = explicit_contract();
@@ -1050,17 +1281,23 @@ TEST(AbiEngine, UnprepareIsNotDeferredByAnInferenceThreadKeepingTheLastJob) {
     ASSERT_NO_FATAL_FAILURE(run_ramp(first, 3));
     ASSERT_NO_FATAL_FAILURE(run_ramp(second, 3));
     EXPECT_EQ(gain.m_unprepared, 0);
-    // The re-prepare of the first handler gives its prepared model back before it returns,
-    // the second handler (and with it the pool and its threads) staying alive.
+    EXPECT_EQ(gain.m_loaded, 1) << "one loaded model, stateful or not";
+    // The re-prepare of the first handler gives its prepared handle back before it returns,
+    // the second handler (and with it the pool, its threads and the loaded model) staying
+    // alive.
     ASSERT_EQ(anira_handler_prepare(first, contract.native(), &err), ANIRA_OK) << err.message;
     EXPECT_EQ(gain.m_unprepared, 1) << "unprepared at the re-prepare, not at a later dequeue";
     EXPECT_EQ(gain.m_prepared, 3);
+    EXPECT_EQ(gain.m_loaded, 1) << "the second handler held the loaded model throughout";
+    EXPECT_EQ(gain.m_unloaded, 0);
     ASSERT_NO_FATAL_FAILURE(run_ramp(first, 2));
     anira_handler_destroy(first);
     EXPECT_EQ(gain.m_unprepared, 2) << "unprepared at the destroy";
     ASSERT_NO_FATAL_FAILURE(run_ramp(second, 2, 1.0F, 4));
     anira_handler_destroy(second);
     EXPECT_EQ(gain.m_unprepared, 3);
+    EXPECT_EQ(gain.m_unloaded, 1) << "with the last handler";
+    EXPECT_EQ(gain.m_unload_before_unprepare, 0);
     // Every pointer handed out came back once (in the order of the re-prepare and the two
     // destroys, not of the prepares).
     std::vector<void*> handed_out = gain.m_handed_out;
@@ -1072,12 +1309,15 @@ TEST(AbiEngine, UnprepareIsNotDeferredByAnInferenceThreadKeepingTheLastJob) {
     EXPECT_EQ(gain.m_released, 1);
 }
 
-// A prepare the engine refuses fails anira_handler_prepare with the engine's status, naming the
-// engine; no unprepare is owed for it, and the handler stays unprepared.
-TEST(AbiEngine, ARefusedPrepareFailsThePrepareAndOwesNoUnprepare) {
+// A refusal at any level fails anira_handler_prepare with the engine's status, naming the
+// engine and the slot, and leaves the handler unprepared. A refused init leaves the engine
+// uninitialised (nothing is loaded behind it, and the next prepare calls init again); a
+// refused load owes no unload (nothing is prepared behind it); a refused prepare owes no
+// unprepare, and the loaded model the failed prepare had acquired goes back with the session
+// the failure releases.
+TEST(AbiEngine, ARefusalAtAnyLevelFailsThePrepareAndOwesNothing) {
     const Context context;
     GainEngine gain;
-    gain.m_refuse_prepare = ANIRA_ERROR_MODEL_LOAD;
     Pipe pipe;
     ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
     pipe.add_inference(gain_model());
@@ -1085,18 +1325,99 @@ TEST(AbiEngine, ARefusedPrepareFailsThePrepareAndOwesNoUnprepare) {
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
     anira_error err = ANIRA_ERROR_INIT;
     const anira::ContractHandle contract = explicit_contract();
+
+    gain.m_refuse_init = ANIRA_ERROR_NOT_SUPPORTED;
+    EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_ERROR_NOT_SUPPORTED);
+    EXPECT_NE(std::strstr(err.message, k_gain_id), nullptr) << err.message;
+    EXPECT_NE(std::strstr(err.message, "refused init"), nullptr) << err.message;
+    EXPECT_EQ(anira_handler_plan_report(handler), nullptr);
+    EXPECT_EQ(gain.m_inited, 1);
+    EXPECT_EQ(gain.m_loaded, 0) << "nothing loaded behind a refused init";
+    EXPECT_EQ(gain.m_prepared, 0);
+    gain.m_refuse_init = ANIRA_OK;
+
+    gain.m_refuse_load = ANIRA_ERROR_MODEL_LOAD;
+    EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_ERROR_MODEL_LOAD);
+    EXPECT_NE(std::strstr(err.message, k_gain_id), nullptr) << err.message;
+    EXPECT_NE(std::strstr(err.message, "refused load"), nullptr) << err.message;
+    EXPECT_EQ(anira_handler_plan_report(handler), nullptr);
+    EXPECT_EQ(gain.m_inited, 2) << "init again, since the first was refused";
+    EXPECT_EQ(gain.m_loaded, 1);
+    EXPECT_EQ(gain.m_unloaded, 0) << "no unload for a refused load";
+    EXPECT_EQ(gain.m_prepared, 0) << "nothing prepared behind a refused load";
+    gain.m_refuse_load = ANIRA_OK;
+
+    gain.m_refuse_prepare = ANIRA_ERROR_MODEL_LOAD;
     EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_ERROR_MODEL_LOAD);
     EXPECT_NE(std::strstr(err.message, k_gain_id), nullptr) << err.message;
     EXPECT_NE(std::strstr(err.message, "refused prepare"), nullptr) << err.message;
     EXPECT_EQ(anira_handler_plan_report(handler), nullptr);
+    EXPECT_EQ(gain.m_inited, 2) << "initialised: not again";
+    EXPECT_EQ(gain.m_loaded, 2);
+    EXPECT_EQ(gain.m_unloaded, 1) << "the failed prepare released its session's loaded model";
     EXPECT_EQ(gain.m_prepared, 1);
-    // The engine relents: the next prepare succeeds, and destroy unprepares that one alone.
+    EXPECT_EQ(gain.m_unprepared, 0) << "no unprepare for a refused prepare";
+    // The engine relents: the next prepare succeeds, and destroy gives that one's handle and
+    // loaded model back alone.
     gain.m_refuse_prepare = ANIRA_OK;
     ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
-    anira_handler_destroy(handler);
+    EXPECT_EQ(gain.m_loaded, 3);
     EXPECT_EQ(gain.m_prepared, 2);
+    anira_handler_destroy(handler);
     EXPECT_EQ(gain.m_unprepared, 1);
+    EXPECT_EQ(gain.m_unloaded, 2);
+    EXPECT_EQ(gain.m_unload_before_unprepare, 0);
     pipe.destroy();
+    EXPECT_EQ(gain.m_released, 1);
+}
+
+// init runs once per engine object, at the first anira_handler_prepare that reaches it (a row
+// of the engine survives validation), with the facts of the core in effect: the level, the
+// pool of the context, the context of that handler; a second handler, a re-prepare and a
+// second pipeline over the same object do not run it again, and the object is released once,
+// after everything.
+TEST(AbiEngine, InitOncePerEngineObjectAtTheFirstPrepareThatReachesIt) {
+    const Context context(2);
+    const anira::ContractHandle contract = explicit_contract();
+    GainEngine gain;
+    const anira_engine_desc desc = gain_desc(gain);
+    anira_custom_engine* engine = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_custom_engine_create(&desc, &engine, &err), ANIRA_OK) << err.message;
+    Pipe first;
+    Pipe second;
+    ASSERT_EQ(first.add_engine(k_gain_id, engine), ANIRA_OK) << first.m_err.message;
+    ASSERT_EQ(second.add_engine(k_gain_id, engine), ANIRA_OK) << second.m_err.message;
+    anira_custom_engine_destroy(engine);
+    const ModelConfig model = gain_model();
+    first.add_inference(model);
+    second.add_inference(model);
+    anira_handler* first_handler = nullptr;
+    anira_handler* second_handler = nullptr;
+    ASSERT_EQ(first.create_handler(context, &first_handler), ANIRA_OK) << first.m_err.message;
+    ASSERT_EQ(second.create_handler(context, &second_handler), ANIRA_OK) << second.m_err.message;
+    EXPECT_EQ(gain.m_inited, 0) << "init belongs to the first prepare";
+    ASSERT_EQ(anira_handler_prepare(first_handler, contract.native(), &err), ANIRA_OK)
+        << err.message;
+    EXPECT_EQ(gain.m_inited, 1);
+    EXPECT_EQ(gain.m_init_struct_size, sizeof(anira_init_info));
+    EXPECT_EQ(gain.m_init_log_level, static_cast<uint32_t>(ANIRA_LOG_ERROR))
+        << "the context's level, the one in effect";
+    EXPECT_EQ(gain.m_init_num_threads, 2U) << "the pool of the context";
+    EXPECT_EQ(gain.m_init_context, context.m_context);
+    ASSERT_EQ(anira_handler_prepare(second_handler, contract.native(), &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(anira_handler_prepare(first_handler, contract.native(), &err), ANIRA_OK)
+        << err.message;
+    EXPECT_EQ(gain.m_inited, 1) << "once, whichever pipeline's handler comes next";
+    EXPECT_EQ(gain.m_loaded, 1) << "one engine, one model, two pipelines: one loaded model";
+    EXPECT_EQ(gain.m_prepared, 3);
+    anira_handler_destroy(first_handler);
+    anira_handler_destroy(second_handler);
+    first.destroy();
+    second.destroy();
+    EXPECT_EQ(gain.m_inited, 1);
+    EXPECT_EQ(gain.m_unloaded, 1);
     EXPECT_EQ(gain.m_released, 1);
 }
 
@@ -1135,6 +1456,9 @@ TEST(AbiEngine, ResetIsCalledAtTheFirstInferenceOfANewGeneration) {
         ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
         ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 2));
         EXPECT_EQ(gain.m_resets.load(), 3);
+        EXPECT_EQ(gain.m_reset_on_shared.load(), 0U) << "every reset on the exclusive handle";
+        EXPECT_EQ(gain.m_exclusive_calls.load(), 8U);
+        EXPECT_EQ(gain.m_shared_calls.load(), 0U);
         anira_handler_destroy(handler);
     }
     {
@@ -1149,8 +1473,10 @@ TEST(AbiEngine, ResetIsCalledAtTheFirstInferenceOfANewGeneration) {
         ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 3));
         anira_handler_reset(handler);
         ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 3));
-        EXPECT_EQ(gain.m_resets.load(), 0) << "a shared prepared model is never reset";
+        EXPECT_EQ(gain.m_resets.load(), 0) << "a shared handle is never reset";
         EXPECT_EQ(gain.m_processed.load(), 6);
+        EXPECT_EQ(gain.m_shared_calls.load(), 6U);
+        EXPECT_EQ(gain.m_exclusive_calls.load(), 0U);
         anira_handler_destroy(handler);
     }
 }
@@ -1274,12 +1600,13 @@ TEST(AbiEngine, ProcessSeesTheSpecsDtypeAndShapeEveryCall) {
     anira_error err = ANIRA_ERROR_INIT;
     const anira::ContractHandle contract = explicit_contract();
     ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
-    ASSERT_EQ(gain.m_handed_out.size(), 1U);
+    ASSERT_EQ(gain.m_loaded_out.size(), 1U);
     EXPECT_EQ(kept_of(gain).m_input_names, (std::vector<std::string>{"in"}));
     EXPECT_EQ(kept_of(gain).m_output_names, (std::vector<std::string>{"y_out"}));
     ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 8));
     EXPECT_EQ(gain.m_processed.load(), 8);
     EXPECT_EQ(gain.m_bad_prepared.load(), 0U);
+    EXPECT_EQ(gain.m_bad_loaded.load(), 0U);
     EXPECT_EQ(gain.m_bad_counts.load(), 0U);
     EXPECT_EQ(gain.m_bad_tensors.load(), 0U);
     EXPECT_EQ(gain.m_bad_scalars.load(), 0U);
@@ -1352,6 +1679,7 @@ TEST(AbiEngine, ARegisteredEngineNoRowNamesIsNotAPlan) {
     EXPECT_EQ(anira_plan_report_num_plans(anira_handler_plan_report(handler)), 1U);
     EXPECT_EQ(named.m_prepared, 1);
     EXPECT_EQ(idle.m_prepared, 0);
+    EXPECT_EQ(idle.m_inited, 0) << "never reached by a prepare: never initialised";
     ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 2));
     EXPECT_EQ(idle.m_processed.load(), 0);
     anira_handler_destroy(handler);
@@ -1361,8 +1689,8 @@ TEST(AbiEngine, ARegisteredEngineNoRowNamesIsNotAPlan) {
 }
 
 // The carrier is in the pool's key: two engine objects (two creates, even over equal
-// descriptors) under one id in two pipelines over one model share nothing, each engine's prepare
-// and unprepare run once, and the two handlers run on two adapters.
+// descriptors) under one id in two pipelines over one model share nothing, each engine's init,
+// load, prepare, unprepare and unload run once, and the two handlers run on two loaded models.
 TEST(AbiEngine, TwoEngineObjectsUnderOneIdShareNothing) {
     const Context context;
     GainEngine first_engine;
@@ -1386,10 +1714,14 @@ TEST(AbiEngine, TwoEngineObjectsUnderOneIdShareNothing) {
         << err.message;
     ASSERT_EQ(anira_handler_prepare(second_handler, contract.native(), &err), ANIRA_OK)
         << err.message;
+    EXPECT_EQ(first_engine.m_inited, 1);
+    EXPECT_EQ(second_engine.m_inited, 1);
+    EXPECT_EQ(first_engine.m_loaded, 1);
+    EXPECT_EQ(second_engine.m_loaded, 1);
     EXPECT_EQ(first_engine.m_prepared, 1);
     EXPECT_EQ(second_engine.m_prepared, 1);
-    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0).m_adapter,
-              anira_test::session_of(second_handler)->m_plans.at(0).m_adapter);
+    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0).m_loaded,
+              anira_test::session_of(second_handler)->m_plans.at(0).m_loaded);
     ASSERT_NO_FATAL_FAILURE(run_ramp(first_handler, 2));
     ASSERT_NO_FATAL_FAILURE(run_ramp(second_handler, 2));
     EXPECT_EQ(first_engine.m_processed.load(), 2);
@@ -1398,6 +1730,8 @@ TEST(AbiEngine, TwoEngineObjectsUnderOneIdShareNothing) {
     anira_handler_destroy(second_handler);
     EXPECT_EQ(first_engine.m_unprepared, 1);
     EXPECT_EQ(second_engine.m_unprepared, 1);
+    EXPECT_EQ(first_engine.m_unloaded, 1);
+    EXPECT_EQ(second_engine.m_unloaded, 1);
     first.destroy();
     second.destroy();
     EXPECT_EQ(first_engine.m_released, 1);
@@ -1406,9 +1740,10 @@ TEST(AbiEngine, TwoEngineObjectsUnderOneIdShareNothing) {
 
 // The engine object is the pool's key, not the pipeline: one engine added to two pipelines
 // (under different ids, the handle destroyed right after the additions) over equal model
-// configurations gives two handlers one prepared model: one prepare, one adapter, one unprepare
-// with the last handler; release fires once, when the pipelines and the handlers are all gone.
-TEST(AbiEngine, OneEngineInTwoPipelinesSharesOnePreparedModel) {
+// configurations gives two handlers one loaded model: one init, one load, a prepare per
+// handler, one unload with the last handler; release fires once, when the pipelines and the
+// handlers are all gone.
+TEST(AbiEngine, OneEngineInTwoPipelinesSharesOneLoadedModel) {
     const Context context;
     GainEngine gain;
     const anira_engine_desc desc = gain_desc(gain);
@@ -1431,18 +1766,21 @@ TEST(AbiEngine, OneEngineInTwoPipelinesSharesOnePreparedModel) {
     EXPECT_EQ(gain.m_released, 0) << "the handlers hold it";
     const anira::ContractHandle contract = explicit_contract();
     // The ids differ, and with them the variants' texts: only an equal variant shares, so the
-    // second pipeline names the engine under the first's id below. Here: two prepared models.
+    // second pipeline names the engine under the first's id below. Here: two loaded models.
     ASSERT_EQ(anira_handler_prepare(first_handler, contract.native(), &err), ANIRA_OK)
         << err.message;
     ASSERT_EQ(anira_handler_prepare(second_handler, contract.native(), &err), ANIRA_OK)
         << err.message;
-    EXPECT_EQ(gain.m_prepared, 2) << "the variants name the engine by different ids";
+    EXPECT_EQ(gain.m_inited, 1) << "one engine object: one init";
+    EXPECT_EQ(gain.m_loaded, 2) << "the variants name the engine by different ids";
+    EXPECT_EQ(gain.m_prepared, 2);
     anira_handler_destroy(second_handler);
     anira_handler_destroy(first_handler);
     EXPECT_EQ(gain.m_unprepared, 2);
+    EXPECT_EQ(gain.m_unloaded, 2);
     EXPECT_EQ(gain.m_released, 1);
 
-    // Under one id over one model: one prepared model for both handlers.
+    // Under one id over one model: one loaded model for both handlers.
     GainEngine shared;
     const anira_engine_desc shared_desc = gain_desc(shared);
     ASSERT_EQ(anira_custom_engine_create(&shared_desc, &engine, &err), ANIRA_OK) << err.message;
@@ -1462,24 +1800,27 @@ TEST(AbiEngine, OneEngineInTwoPipelinesSharesOnePreparedModel) {
         << err.message;
     ASSERT_EQ(anira_handler_prepare(second_handler, contract.native(), &err), ANIRA_OK)
         << err.message;
-    EXPECT_EQ(shared.m_prepared, 1) << "one engine, one model: one prepare";
-    EXPECT_EQ(anira_test::session_of(first_handler)->m_plans.at(0).m_adapter,
-              anira_test::session_of(second_handler)->m_plans.at(0).m_adapter);
+    EXPECT_EQ(shared.m_loaded, 1) << "one engine, one model: one load";
+    EXPECT_EQ(shared.m_prepared, 2) << "a prepare per handler";
+    EXPECT_EQ(anira_test::session_of(first_handler)->m_plans.at(0).m_loaded,
+              anira_test::session_of(second_handler)->m_plans.at(0).m_loaded);
     ASSERT_NO_FATAL_FAILURE(run_ramp(first_handler, 2));
     ASSERT_NO_FATAL_FAILURE(run_ramp(second_handler, 2));
     EXPECT_EQ(shared.m_processed.load(), 4);
     anira_handler_destroy(first_handler);
-    EXPECT_EQ(shared.m_unprepared, 0) << "the second handler still runs on it";
+    EXPECT_EQ(shared.m_unprepared, 1) << "the first handler's handle";
+    EXPECT_EQ(shared.m_unloaded, 0) << "the second handler still runs on the loaded model";
     EXPECT_EQ(shared.m_released, 0);
     anira_handler_destroy(second_handler);
-    EXPECT_EQ(shared.m_unprepared, 1);
+    EXPECT_EQ(shared.m_unprepared, 2);
+    EXPECT_EQ(shared.m_unloaded, 1);
     EXPECT_EQ(shared.m_released, 1);
 }
 
-// The whole variant is in the pool's key of a custom engine, since its prepare may read any of
+// The whole variant is in the pool's key of a custom engine, since its load may read any of
 // it: one engine in two pipelines over models that differ in an entry the record does not
-// carry (a second row, the engine-free pass-through's) prepares twice.
-TEST(AbiEngine, OneEngineOverTwoVariantsPreparesTwice) {
+// carry (a second row, the engine-free pass-through's) loads twice.
+TEST(AbiEngine, OneEngineOverTwoVariantsLoadsTwice) {
     const Context context;
     GainEngine gain;
     const anira_engine_desc desc = gain_desc(gain);
@@ -1505,14 +1846,16 @@ TEST(AbiEngine, OneEngineOverTwoVariantsPreparesTwice) {
         << err.message;
     ASSERT_EQ(anira_handler_prepare(second_handler, contract.native(), &err), ANIRA_OK)
         << err.message;
+    EXPECT_EQ(gain.m_loaded, 2);
     EXPECT_EQ(gain.m_prepared, 2);
-    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0).m_adapter,
-              anira_test::session_of(second_handler)->m_plans.at(0).m_adapter);
+    EXPECT_NE(anira_test::session_of(first_handler)->m_plans.at(0).m_loaded,
+              anira_test::session_of(second_handler)->m_plans.at(0).m_loaded);
     anira_handler_destroy(first_handler);
     anira_handler_destroy(second_handler);
     first.destroy();
     second.destroy();
     EXPECT_EQ(gain.m_unprepared, 2);
+    EXPECT_EQ(gain.m_unloaded, 2);
     EXPECT_EQ(gain.m_released, 1);
 }
 

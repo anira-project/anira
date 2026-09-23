@@ -2,6 +2,7 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
@@ -95,30 +96,32 @@ struct Core::State {
                                     k_max_num_implicit_producers};
 
     /**
-     * @brief One prepared model of the pool: the record it was prepared from, the carrier of
-     * a registered engine (NULL for a built-in one) and the adapter itself
+     * @brief One loaded model of the pool: the record it was loaded from, the carrier of a
+     * registered engine (NULL for a built-in one) and the loaded model itself
      *
      * The key is the record and the carrier: two sessions whose plans describe the same
-     * model for the same engine with the same tensors, instances, warm-up and entry share
-     * the entry's adapter (per-slot dims, dtype, the path or the bytes' identity are in the
-     * record, so two handlers with different resolved windows never share); a
-     * session-exclusive model, a 2.x custom backend and the roundtrip are never entered.
-     * prepare runs once per entry; the bytes owner of the record keeps borrowed bytes
-     * alive. An entry stays while the plan table of any registered session holds its
-     * adapter and is erased with the last of them (release_adapters_locked), after which the
-     * adapter dies with its last holder and frees what its prepare loaded.
+     * model for the same engine with the same tensors, shared slots, warm-up and entry share
+     * the entry's loaded model (per-slot dims, dtype, the path or the bytes' identity are in
+     * the record, so two handlers with different resolved windows never share), exclusive
+     * sessions included (their record says no shared slot, and each keeps an executor of
+     * its own in its prepared handle); a 2.x custom backend and the roundtrip are never
+     * entered. load runs once per entry; the bytes owner of the record keeps borrowed bytes
+     * alive. An entry stays while the plan table of any registered session holds its loaded
+     * model and is erased with the last of them (release_loaded_locked), after which the
+     * loaded model dies with its last holder and frees what its load loaded.
      *
-     * The teardown invariant: an adapter is destroyed only when no registered session's
-     * plan table holds it and no inference thread can be inside its run (the session's
-     * release drained its in-flight work first); a shared engine environment, when one
-     * arrives, must outlive every adapter of its engine.
+     * The teardown invariant: a loaded model is destroyed only when no registered session's
+     * plan table holds it, every prepared handle over it was given back and no inference
+     * thread can be inside its run (the session's release drained its in-flight work
+     * first); a shared engine environment, when one arrives, must outlive every loaded model
+     * of its engine.
      */
     struct PoolEntry {
         backend::Model m_model;
         const void* m_carrier = nullptr;
-        std::shared_ptr<backend::Adapter> m_adapter;
+        std::shared_ptr<backend::Loaded> m_loaded;
     };
-    std::vector<PoolEntry> m_adapters;  ///< The pool of prepared models
+    std::vector<PoolEntry> m_loaded_models;  ///< The pool of loaded models
 };
 
 namespace {
@@ -176,12 +179,12 @@ const char* drain_word(anira_log_drain drain) {
     return drain == ANIRA_LOG_DRAIN_MANUAL ? "manual" : "thread";
 }
 
-// Whether the plan table of any session of `sessions` holds `adapter`.
+// Whether the plan table of any session of `sessions` holds `loaded`.
 bool any_plan_holds(const std::vector<std::shared_ptr<SessionElement>>& sessions,
-                    const std::shared_ptr<backend::Adapter>& adapter) {
-    return std::ranges::any_of(sessions, [&adapter](const std::shared_ptr<SessionElement>& s) {
-        return std::ranges::any_of(s->m_plans, [&adapter](const SessionElement::PlanSlot& slot) {
-            return slot.m_adapter == adapter;
+                    const std::shared_ptr<backend::Loaded>& loaded) {
+    return std::ranges::any_of(sessions, [&loaded](const std::shared_ptr<SessionElement>& s) {
+        return std::ranges::any_of(s->m_plans, [&loaded](const SessionElement::PlanSlot& slot) {
+            return slot.m_loaded == loaded;
         });
     });
 }
@@ -555,9 +558,9 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
         }
     }
 
-    // A pooled prepared model stays while another registered session shares it — which is
+    // A pooled loaded model stays while another registered session shares it — which is
     // why the session was removed from the registry first.
-    release_adapters_locked(state, session);
+    release_loaded_locked(state, session);
 
     // The pool policy: inference threads exist exactly while sessions exist. Stopping
     // and joining them here, inside the critical section that emptied the registry,
@@ -576,7 +579,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     }
     State& state = get_state();
     // Whole function locked: applies or reconciles the configuration, hands out shared
-    // prepared models from the pool, builds the thread pool for a first session and
+    // loaded models from the pool, builds the thread pool for a first session and
     // registers the session — one decision, one critical section.
     const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
     const anira_context_config config = sanitize_config(context_config);
@@ -587,7 +590,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
 
     // The pool is built at registration (the last step), so clamp against the size it
     // will have. An empty pool means the caller brings its own threads: no clamp. The
-    // instance count of every requested model takes the same clamp: no prepared model
+    // instance count of every requested model takes the same clamp: no loaded model
     // runs more calls at once than the pool has threads.
     const size_t pool_size = prospective_pool_size_locked(state, config);
     if (pool_size > 0 && inference_config.m_num_parallel_processors > pool_size) {
@@ -620,16 +623,25 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
 
     // Everything that can fail — an engine that cannot load its model, a custom
     // backend's prepare(), the pool build — happens before the session is registered.
-    // On failure, undo the only shared state touched so far (the prepared models the
+    // On failure, undo the only shared state touched so far (the loaded models the
     // half-built session acquired) and leave the registry, the pool and the configuration
     // exactly as they were: nothing leaks, and a later session starts from a clean slate.
     try {
-        // The plan table: one plan per request, in order, each on its prepared model.
+        // The plan table: one plan per request, in order, each on its loaded model, with this
+        // session's prepared handle over it. A registered engine's handle is the C handler's
+        // to make, once the plan report exists (the engine's prepare reads it); every other
+        // plan's is made here, with no record (a built-in engine and a 2.x backend read none).
         bool has_custom_backend = false;
         session->m_plans.reserve(requests.size());
         for (const backend::PlanRequest& request : requests) {
             SessionElement::PlanSlot slot;
-            slot.m_adapter = acquire_adapter_locked(state, request, inference_config);
+            slot.m_loaded = acquire_loaded_locked(state, request, inference_config, pool_size);
+            slot.m_registered = request.m_source == backend::Source::Registered;
+            if (!slot.m_registered) {
+                slot.m_prepared = slot.m_loaded->prepare(backend::PrepareRequest{
+                    .m_exclusive = inference_config.m_session_exclusive_processor,
+                    .m_info = nullptr});
+            }
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_provider;
             slot.m_engine_id = request.m_model.m_engine_id;
@@ -646,7 +658,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
             session->select_plan(*custom);
         }
 
-        // Default the active plan to the first plan with a prepared model of an engine,
+        // Default the active plan to the first plan with a loaded model of an engine,
         // instead of the CUSTOM roundtrip. Sessions used to start on CUSTOM until
         // set_inference_backend() — forgetting that call silently passed audio through. A
         // caller-provided custom backend keeps CUSTOM active: running it is why it was
@@ -666,53 +678,54 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
         apply_or_compare_config_locked(state, config, /*builds_pool=*/true);
         register_session_locked(state, session);
     } catch (...) {
-        // The session is not registered, so the "another session shares this prepared
-        // model" check sees only the sessions that really exist.
-        release_adapters_locked(state, session);
+        // The session is not registered, so the "another session shares this loaded model"
+        // check sees only the sessions that really exist. The prepared handles made so far
+        // go back first (nothing ran on them), then the loaded models.
+        for (SessionElement::PlanSlot& slot : session->m_plans) { slot.m_prepared.reset(); }
+        release_loaded_locked(state, session);
         throw;
     }
 
     return session;
 }
 
-std::shared_ptr<backend::Adapter> Core::acquire_adapter_locked(State& state,
-                                                               const backend::PlanRequest& request,
-                                                               InferenceConfig& inference_config) {
+std::shared_ptr<backend::Loaded> Core::acquire_loaded_locked(State& state,
+                                                             const backend::PlanRequest& request,
+                                                             InferenceConfig& inference_config,
+                                                             size_t pool_size) {
     switch (request.m_source) {
         case backend::Source::Legacy: {
-            // A caller's 2.x backend: this session's alone, prepared through the adapter.
+            // A caller's 2.x backend: this session's alone, loaded through the adapter.
             if (request.m_backend == nullptr) {
                 throw StatusError(ANIRA_ERROR_INTERNAL,
                                   "Core::create_session: a Legacy plan request without a "
                                   "backend");
             }
-            auto adapter = std::make_shared<backend::LegacyAdapter>(*request.m_backend);
-            adapter->prepare(request.m_model);
-            return adapter;
+            auto loaded = std::make_shared<backend::LegacyLoaded>(*request.m_backend);
+            loaded->load(request.m_model);
+            return loaded;
         }
         case backend::Source::Roundtrip: {
             // The 2.x default processor over this session's configuration: its own.
-            auto adapter = std::make_shared<backend::LegacyAdapter>(inference_config);
-            adapter->prepare(request.m_model);
-            return adapter;
+            auto loaded = std::make_shared<backend::LegacyLoaded>(inference_config);
+            loaded->load(request.m_model);
+            return loaded;
         }
         case backend::Source::BuiltIn:
         case backend::Source::Registered: break;
     }
 
+    // Shared: the entry whose record equals the request's on the same carrier.
     const void* const carrier = request.m_carrier.get();
-    if (!request.m_model.m_session_exclusive) {
-        // Shared: the entry whose record equals the request's on the same carrier.
-        for (const State::PoolEntry& entry : state.m_adapters) {
-            if (entry.m_carrier == carrier && entry.m_model == request.m_model) {
-                return entry.m_adapter;
-            }
+    for (const State::PoolEntry& entry : state.m_loaded_models) {
+        if (entry.m_carrier == carrier && entry.m_model == request.m_model) {
+            return entry.m_loaded;
         }
     }
-    std::shared_ptr<backend::Adapter> adapter;
+    std::shared_ptr<backend::Loaded> loaded;
     if (request.m_source == backend::Source::BuiltIn) {
-        adapter = backend::make_builtin_adapter(request.m_model.m_engine);
-        if (adapter == nullptr) {
+        loaded = backend::make_builtin_loaded(request.m_model.m_engine);
+        if (loaded == nullptr) {
             // A built-in engine this build does not carry. The C path refuses it at create.
             throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
                               "Core::create_session: no adapter runs engine " +
@@ -720,33 +733,39 @@ std::shared_ptr<backend::Adapter> Core::acquire_adapter_locked(State& state,
                                   " in this build");
         }
     } else {
-        // A registered engine: the request brought its adapter over the carrier's descriptor.
-        adapter = request.m_adapter;
-        if (adapter == nullptr) {
+        // A registered engine: the request brought its loaded model over the carrier's
+        // descriptor.
+        loaded = request.m_loaded;
+        if (loaded == nullptr) {
             throw StatusError(ANIRA_ERROR_INTERNAL,
                               "Core::create_session: a Registered plan request for engine '" +
-                                  request.m_model.m_engine_id + "' without an adapter");
+                                  request.m_model.m_engine_id + "' without a loaded model");
         }
     }
-    // prepare once per prepared model; a throw leaves the pool untouched.
-    adapter->prepare(request.m_model);
-    if (!request.m_model.m_session_exclusive) {
-        state.m_adapters.push_back(State::PoolEntry{.m_model = request.m_model,
-                                                    .m_carrier = carrier,
-                                                    .m_adapter = adapter});
-    }
-    return adapter;
+    // The engine's init (a registered engine's, once per engine object), with the facts of the
+    // core in effect: the level applied above, the pool the session will run on, the context
+    // of the handler asking. Then load once per loaded model; a throw leaves the pool
+    // untouched.
+    anira_init_info init = ANIRA_INIT_INFO_INIT;
+    init.log_level = static_cast<uint32_t>(get_log_level());
+    init.num_threads = static_cast<uint32_t>(pool_size);
+    init.context = request.m_context;
+    loaded->init(init);
+    loaded->load(request.m_model);
+    state.m_loaded_models.push_back(
+        State::PoolEntry{.m_model = request.m_model, .m_carrier = carrier, .m_loaded = loaded});
+    return loaded;
 }
 
-void Core::release_adapters_locked(State& state, const std::shared_ptr<SessionElement>& session) {
+void Core::release_loaded_locked(State& state, const std::shared_ptr<SessionElement>& session) {
     for (const SessionElement::PlanSlot& slot : session->m_plans) {
-        if (slot.m_adapter == nullptr) { continue; }
+        if (slot.m_loaded == nullptr) { continue; }
         // The pool entry stays while the plan table of another registered session holds
-        // the adapter (the releasing session left the registry already, or never entered
-        // it); the check is by pointer identity, never by the record.
-        if (any_plan_holds(state.m_sessions, slot.m_adapter)) { continue; }
-        std::erase_if(state.m_adapters, [&slot](const State::PoolEntry& entry) {
-            return entry.m_adapter == slot.m_adapter;
+        // the loaded model (the releasing session left the registry already, or never
+        // entered it); the check is by pointer identity, never by the record.
+        if (any_plan_holds(state.m_sessions, slot.m_loaded)) { continue; }
+        std::erase_if(state.m_loaded_models, [&slot](const State::PoolEntry& entry) {
+            return entry.m_loaded == slot.m_loaded;
         });
     }
 }
@@ -757,6 +776,11 @@ void Core::release_session(const std::shared_ptr<SessionElement>& session) {
     session->m_initialized.store(false, std::memory_order::seq_cst);
 
     drain_inference_queue(session);
+
+    // The session's prepared handles go back now, on this thread, after its in-flight
+    // inferences drained and before its loaded models are released (a registered engine's
+    // unprepare runs here, ahead of any unload): nothing runs on them any more.
+    for (SessionElement::PlanSlot& slot : session->m_plans) { slot.m_prepared.reset(); }
 
     // Everything above only touches this session (the drain waits on its own
     // in-flight inferences), so it runs unlocked. From here on we mutate the

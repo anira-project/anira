@@ -1,11 +1,18 @@
 /*
- * The ExecuTorch adapter: one loaded program per instance with its entry method, the slots
- * bound to the method's inputs and outputs by position (the method meta carries no tensor
- * names) and checked against its tensor metas at prepare (the meta reports the planned upper
- * bound of every axis and marks no axis dynamic, so an extent at or below the bound matches),
- * every input of a call copied into the instance's staging tensors (the program's inputs are
- * the runtime's own) and every memory-planned output copied out into the descriptor's memory.
- * File-local over anira::backend::Model: nothing of ExecuTorch enters a public header.
+ * The ExecuTorch adapter: one data loader and one program (the .pte parsed once) per loaded
+ * model, shared by every executor, and one Module over that program with its own loaded entry
+ * method per executor (the runtime's Module is not thread-safe; its constructor over a shared
+ * program is the documented way to run one program from several), the slots bound to the
+ * method's inputs and outputs by position (the method meta carries no tensor names) and
+ * checked against its tensor metas at load (the meta reports the planned upper bound of every
+ * axis and marks no axis dynamic, so an extent at or below the bound matches), every input of
+ * a call copied into the executor's staging tensors (the program's inputs are the runtime's
+ * own) and every memory-planned output copied out into the descriptor's memory. The XNNPACK
+ * delegate of every method is loaded with its runtime options set to no shared workspace and
+ * no weight cache (the process-wide mutexes the prebuilt runtime otherwise takes around every
+ * call), and it captures its thread pool at that load under NoThreadPoolGuard, so every call
+ * runs inline on the inference thread that made it. File-local over anira::backend::Model:
+ * nothing of ExecuTorch enters a public header.
  */
 #ifdef USE_EXECUTORCH
 
@@ -19,7 +26,6 @@
 #include <cstring>
 #include <exception>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -32,16 +38,21 @@
 // IWYU pragma: begin_keep — the ExecuTorch headers are compiled as SYSTEM includes,
 // where misc-include-cleaner cannot attribute the used symbols to their providers.
 #include "executorch/extension/data_loader/buffer_data_loader.h"
+#include "executorch/extension/data_loader/file_data_loader.h"
 #include "executorch/extension/module/module.h"
 #include "executorch/extension/tensor/tensor_ptr.h"
 #include "executorch/extension/tensor/tensor_ptr_maker.h"
-#include "executorch/extension/threadpool/threadpool.h"
+#include "executorch/extension/threadpool/threadpool_guard.h"
+#include "executorch/runtime/backend/backend_options_map.h"
+#include "executorch/runtime/backend/options.h"
+#include "executorch/runtime/core/data_loader.h"
 #include "executorch/runtime/core/error.h"
 #include "executorch/runtime/core/evalue.h"
 #include "executorch/runtime/core/exec_aten/exec_aten.h"
 #include "executorch/runtime/core/result.h"
 #include "executorch/runtime/core/tag.h"
 #include "executorch/runtime/executor/method_meta.h"
+#include "executorch/runtime/executor/program.h"
 // IWYU pragma: end_keep
 
 namespace anira::backend {
@@ -49,6 +60,18 @@ namespace anira::backend {
 namespace {
 
 constexpr const char* k_engine = "executorch";
+
+// The XNNPACK delegate's backend id and its workspace sharing mode "disabled", as
+// backends/xnnpack/runtime/XNNPACKBackend.h of the pinned release spells them (the prebuilt
+// package ships no header of the delegate; the option keys are string literals below, since
+// BackendOptions::set_option takes an array). The delegate reads both options at its init,
+// from the map the method is loaded with: the sharing mode (0: a workspace per delegate
+// instance; 1: one per model; 2: one per process) and whether the weights are unpacked into
+// the process-wide cache. Both off, two executors never meet on the mutexes the shared
+// workspace and the cache take around every call, at the price of a workspace and an unpacked
+// copy of the weights per executor.
+constexpr const char* k_xnnpack_backend = "XnnpackBackend";
+constexpr int k_xnnpack_workspace_per_instance = 0;
 
 // Every fallible ExecuTorch call returns a runtime::Error (or a Result carrying one). A failure
 // here means a setup or runtime problem, so it becomes a StatusError with the failing call and
@@ -65,27 +88,6 @@ void executorch_check(executorch::runtime::Error error,
         throw StatusError(failure,
                           model_file::message(k_engine, where.empty() ? what : where, text));
     }
-}
-
-// Pin ExecuTorch's process-wide XNNPACK threadpool to a single thread, to match the
-// other backends (anira gets its parallelism from running multiple adapter instances, and
-// worker-pool fan-out is unwanted on real-time audio systems). The threadpool is a
-// process-global singleton, so this is done once, not per instance.
-void pin_threadpool_to_one_thread() {
-    static std::once_flag once;
-    std::call_once(once, [] {
-        auto* threadpool = executorch::extension::threadpool::get_threadpool();
-        // _unsafe_reset_threadpool is deprecated but remains the only exported way to
-        // size the pool permanently: the suggested UseNThreadsThreadPoolGuard is a
-        // scoped, Meta-internal API. Resizing here is safe — no inference has run yet,
-        // so no threadpool pointer is held anywhere.
-        // NOLINTNEXTLINE(clang-diagnostic-deprecated-declarations)
-        if (threadpool == nullptr || !threadpool->_unsafe_reset_threadpool(1)) {
-            ANIRA_LOG_WARNING(log_group::k_backend_executorch,
-                              "could not pin the XNNPACK threadpool to "
-                              "a single thread.");
-        }
-    });
 }
 
 // The anira dtype of an ExecuTorch scalar type; 0 for one anira has no code for.
@@ -120,14 +122,52 @@ EngineTensor engine_tensor_of(
     return tensor;
 }
 
-/// One loaded program with its entry method: what one instance of the adapter runs on. Loads
-/// at construction (a file or the bytes of the record, which the record's owner keeps alive
-/// for the adapter's life); binds afterwards; runs every inference over the context's
-/// descriptors through its own staging tensors.
-class Instance {
+/// What one load shares between its executors: the data loader over the file or the bytes of
+/// the record (which the record's owner keeps alive for the loaded model's life) and the
+/// program parsed from it, immutable once loaded; the runtime asks that the loader outlive the
+/// program, and every Module over the program (Module's constructor over a shared program)
+/// dies before this does. Held by the loaded model and by every executor, freed with the last
+/// of them.
+struct SharedProgram {
+    explicit SharedProgram(const Model& model);
+    ~SharedProgram() = default;
+    SharedProgram(const SharedProgram&) = delete;
+    SharedProgram& operator=(const SharedProgram&) = delete;
+    SharedProgram(SharedProgram&&) = delete;
+    SharedProgram& operator=(SharedProgram&&) = delete;
+
+    std::string m_where;  ///< the model path or "memory", for the failure messages
+    std::unique_ptr<executorch::runtime::DataLoader> m_loader;  ///< declared first: dies last
+    std::shared_ptr<executorch::runtime::Program> m_program;
+};
+
+SharedProgram::SharedProgram(const Model& model) {
+    if (model.m_bytes != nullptr) {
+        // BufferDataLoader keeps a pointer into the caller's buffer.
+        m_where = model_file::k_memory;
+        m_loader = std::make_unique<executorch::extension::BufferDataLoader>(model.m_bytes,
+                                                                             model.m_num_bytes);
+    } else {
+        m_where = model_file::require_readable(model.m_path, k_engine);
+        auto loader = executorch::extension::FileDataLoader::from(m_where.c_str());
+        executorch_check(loader.error(), "FileDataLoader::from", ANIRA_ERROR_MODEL_LOAD, m_where);
+        m_loader = std::make_unique<executorch::extension::FileDataLoader>(std::move(loader.get()));
+    }
+    // The program: parsed and verified once, shared by every Module over it.
+    auto program = executorch::runtime::Program::load(m_loader.get());
+    executorch_check(program.error(), "Program::load", ANIRA_ERROR_MODEL_LOAD, m_where);
+    m_program = std::make_shared<executorch::runtime::Program>(std::move(program.get()));
+}
+
+/// One Module over the shared program with its own loaded entry method: what one executor of
+/// the adapter runs on. Loads the method at construction (the delegates initialised with the
+/// runtime options above, under the thread-pool guard; the planned memory allocated); binds
+/// afterwards; runs every inference over the context's descriptors through its own staging
+/// tensors.
+class Instance final : public Executor {
 public:
-    explicit Instance(const Model& model);
-    ~Instance() = default;
+    Instance(std::shared_ptr<const SharedProgram> shared, const Model& model);
+    ~Instance() override = default;
     Instance(const Instance&) = delete;
     Instance& operator=(const Instance&) = delete;
     Instance(Instance&&) = delete;
@@ -145,21 +185,26 @@ public:
 
     /// The FIXED warm-up of the record over the staging tensors (zeros); a failing execute is
     /// StatusError(ANIRA_ERROR_ENGINE) with the error named.
-    void warm_up(uint32_t iterations);
+    void warm_up(uint32_t iterations) override;
 
     /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
     /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing
     /// execute or a result of another shape than the record's.
-    anira_status process(const anira_engine_ctx& ctx) noexcept;
+    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override;
 
 private:
     /// Copies every input descriptor into its staging tensor, executes and copies every result
     /// into its output descriptor; throws StatusError.
     void run(const anira_engine_ctx& ctx);
 
-    std::unique_ptr<executorch::extension::Module> m_module;  ///< the loaded .pte program
+    std::shared_ptr<const SharedProgram> m_shared;            ///< the program, shared
+    std::unique_ptr<executorch::extension::Module> m_module;  ///< this executor's, over it
     std::string m_method;  ///< the method executed per inference: the record's entry, else forward
-    std::string m_where;   ///< the model path or "memory", for the failure messages
+    std::string m_execute_label;  ///< what a failing execute is named after, built once
+    /// The XNNPACK delegate's runtime options and the map that hands them to the method's
+    /// load, keyed by the delegate's id (the map keeps a view of the options: both members).
+    executorch::runtime::BackendOptions<2> m_xnnpack_options;
+    executorch::runtime::LoadBackendOptionsMap m_backend_options;
 
     std::vector<std::vector<float>> m_input_data;  ///< instance-owned host memory behind the
                                                    ///< input tensors, per input slot
@@ -171,34 +216,39 @@ private:
     std::vector<size_t> m_output_elements;
 };
 
-Instance::Instance(const Model& model) {
-    pin_threadpool_to_one_thread();
-
-    if (model.m_bytes != nullptr) {
-        // BufferDataLoader keeps a pointer into the caller's buffer; the record's owner keeps
-        // the bytes alive for the adapter's life.
-        m_where = model_file::k_memory;
-        m_module = std::make_unique<executorch::extension::Module>(
-            std::make_unique<executorch::extension::BufferDataLoader>(model.m_bytes,
-                                                                      model.m_num_bytes));
-    } else {
-        m_where = model_file::require_readable(model.m_path, k_engine);
-        m_module = std::make_unique<executorch::extension::Module>(m_where);
-    }
-
-    // Load the program and the selected method up front: this parses the .pte, initializes
-    // the delegates and allocates the planned memory, none of which may happen lazily on
-    // the inference thread.
+Instance::Instance(std::shared_ptr<const SharedProgram> shared, const Model& model)
+    : m_shared(std::move(shared))
+    , m_module(std::make_unique<executorch::extension::Module>(m_shared->m_program)) {
     m_method = model.m_entry.empty() ? "forward" : model.m_entry;
-    executorch_check(m_module->load_method(m_method),
+    m_execute_label = "Module::execute(\"" + m_method + "\")";
+
+    // The delegate's runtime options, read at its init (the method's load below): no shared
+    // workspace, no weight cache.
+    executorch_check(
+        m_xnnpack_options.set_option("workspace_sharing_mode", k_xnnpack_workspace_per_instance),
+        "BackendOptions::set_option(\"workspace_sharing_mode\")");
+    executorch_check(m_xnnpack_options.set_option("weight_cache_enabled", false),
+                     "BackendOptions::set_option(\"weight_cache_enabled\")");
+    executorch_check(m_backend_options.set_options(k_xnnpack_backend, m_xnnpack_options.view()),
+                     "LoadBackendOptionsMap::set_options");
+
+    // The selected method up front: this initialises the delegates (the XNNPACK runtime
+    // captures the thread pool it will run on here, and under the guard it captures none, so
+    // its calls run inline on the calling thread, as the other engines' do) and allocates the
+    // planned memory, none of which may happen lazily on the inference thread.
+    const executorch::extension::threadpool::NoThreadPoolGuard no_threadpool;
+    executorch_check(m_module->load_method(m_method, nullptr, nullptr, &m_backend_options),
                      ("Module::load_method(\"" + m_method + "\")").c_str(),
                      ANIRA_ERROR_MODEL_LOAD,
-                     m_where);
+                     m_shared->m_where);
 }
 
 std::vector<EngineTensor> Instance::inputs() {
     auto meta = m_module->method_meta(m_method);
-    executorch_check(meta.error(), "Module::method_meta", ANIRA_ERROR_MODEL_LOAD, m_where);
+    executorch_check(meta.error(),
+                     "Module::method_meta",
+                     ANIRA_ERROR_MODEL_LOAD,
+                     m_shared->m_where);
     std::vector<EngineTensor> tensors;
     for (size_t i = 0; i < meta->num_inputs(); ++i) {
         const auto tag = meta->input_tag(i);
@@ -210,7 +260,10 @@ std::vector<EngineTensor> Instance::inputs() {
 
 std::vector<EngineTensor> Instance::outputs() {
     auto meta = m_module->method_meta(m_method);
-    executorch_check(meta.error(), "Module::method_meta", ANIRA_ERROR_MODEL_LOAD, m_where);
+    executorch_check(meta.error(),
+                     "Module::method_meta",
+                     ANIRA_ERROR_MODEL_LOAD,
+                     m_shared->m_where);
     std::vector<EngineTensor> tensors;
     for (size_t i = 0; i < meta->num_outputs(); ++i) {
         const auto tag = meta->output_tag(i);
@@ -248,10 +301,10 @@ void Instance::bind(const Model& model,
 }
 
 void Instance::warm_up(uint32_t iterations) {
+    const executorch::extension::threadpool::NoThreadPoolGuard no_threadpool;
     for (uint32_t i = 0; i < iterations; ++i) {
         const auto result = m_module->execute(m_method, m_input_values);
-        executorch_check(result.error(),
-                         ("Module::execute(\"" + m_method + "\") (warm-up)").c_str());
+        executorch_check(result.error(), (m_execute_label + " (warm-up)").c_str());
     }
 }
 
@@ -278,8 +331,11 @@ void Instance::run(const anira_engine_ctx& ctx) {
         std::memcpy(m_input_data[slot].data(), data, m_input_elements[slot] * sizeof(float));
     }
 
+    // Inline on this thread: the guard keeps every operator that asks for the thread pool
+    // per call on it (the delegate captured none at its load).
+    const executorch::extension::threadpool::NoThreadPoolGuard no_threadpool;
     const auto result = m_module->execute(m_method, m_input_values);
-    executorch_check(result.error(), ("Module::execute(\"" + m_method + "\")").c_str());
+    executorch_check(result.error(), m_execute_label.c_str());
     const std::vector<executorch::runtime::EValue>& outputs = result.get();
 
     // Out of the memory-planned results, one copy each into the descriptor's memory.
@@ -314,7 +370,7 @@ void Instance::run(const anira_engine_ctx& ctx) {
     }
 }
 
-anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
+anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
     try {
         run(ctx);
         return ANIRA_OK;
@@ -331,52 +387,52 @@ anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
     }
 }
 
-class ExecuTorchAdapter final : public Adapter {
+/// The loaded model: the program every executor shares (SharedProgram, parsed once), positional
+/// on both sides (the meta carries no names), checked against a probe's metas: the planned
+/// upper bound of every axis, an extent at or below it matching; the probe is the executor of
+/// shared slot 0 or, for a record without a shared slot, the spare of the first exclusive
+/// session.
+class ExecuTorchLoaded final : public ExecutorLoaded {
 protected:
-    void do_prepare(const Model& model) override {
+    void do_load(const Model& model) override {
         require_f32(model, k_engine);
-        m_instances.clear();
-        const uint32_t count = model.m_instances > 0 ? model.m_instances : 1U;
-        for (uint32_t i = 0; i < count; ++i) {
-            m_instances.push_back(std::make_unique<Instance>(model));
-        }
-        // Positional on both sides (the meta carries no names), checked against the metas:
-        // the planned upper bound of every axis, an extent at or below it matching.
-        Instance& first = *m_instances.front();
-        const std::vector<EngineTensor> inputs = first.inputs();
-        const std::vector<EngineTensor> outputs = first.outputs();
-        const std::vector<SlotBinding> input_bindings = bind_side(model.m_inputs,
-                                                                  inputs,
-                                                                  inputs.size(),
-                                                                  ExtentRule::UpperBound,
-                                                                  k_engine,
-                                                                  "input");
-        const std::vector<SlotBinding> output_bindings = bind_side(model.m_outputs,
-                                                                   outputs,
-                                                                   outputs.size(),
-                                                                   ExtentRule::UpperBound,
-                                                                   k_engine,
-                                                                   "output");
-        for (const std::unique_ptr<Instance>& instance : m_instances) {
-            instance->bind(model, input_bindings, output_bindings);
-            instance->warm_up(model.m_warm_up);
-        }
-        set_bindings(bindings_of(input_bindings, output_bindings));
+        m_shared = std::make_shared<const SharedProgram>(model);
+        auto probe = std::make_unique<Instance>(m_shared, model);
+        const std::vector<EngineTensor> inputs = probe->inputs();
+        const std::vector<EngineTensor> outputs = probe->outputs();
+        m_input_bindings = bind_side(model.m_inputs,
+                                     inputs,
+                                     inputs.size(),
+                                     ExtentRule::UpperBound,
+                                     k_engine,
+                                     "input");
+        m_output_bindings = bind_side(model.m_outputs,
+                                      outputs,
+                                      outputs.size(),
+                                      ExtentRule::UpperBound,
+                                      k_engine,
+                                      "output");
+        probe->bind(model, m_input_bindings, m_output_bindings);
+        set_bindings(bindings_of(m_input_bindings, m_output_bindings));
+        adopt(std::move(probe));
     }
 
-    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept override {
-        if (ctx.instance >= m_instances.size()) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-        return m_instances[ctx.instance]->process(ctx);
+    std::unique_ptr<Executor> make_executor() override {
+        auto executor = std::make_unique<Instance>(m_shared, model());
+        executor->bind(model(), m_input_bindings, m_output_bindings);
+        return executor;
     }
 
 private:
-    std::vector<std::unique_ptr<Instance>> m_instances;
+    std::shared_ptr<const SharedProgram> m_shared;  ///< freed with the last executor over it
+    std::vector<SlotBinding> m_input_bindings;
+    std::vector<SlotBinding> m_output_bindings;
 };
 
 }  // namespace
 
-std::shared_ptr<Adapter> make_executorch_adapter() {
-    return std::make_shared<ExecuTorchAdapter>();
+std::shared_ptr<Loaded> make_executorch_loaded() {
+    return std::make_shared<ExecuTorchLoaded>();
 }
 
 }  // namespace anira::backend

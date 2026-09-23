@@ -146,8 +146,8 @@ typedef struct anira_plan_slot {
      * anira_binding: how this plan bound the slot to the engine's tensor, by name where the
      * engine's side has names (the entry's tensors record, else the canonical name) and by
      * position otherwise, checked against the spec's shape and dtype at prepare either way;
-     * ANIRA_BINDING_ENGINE for a registered engine, which received the names in its prepare
-     * record and bound itself. A tail field: a caller whose header ends before it gets its rows
+     * ANIRA_BINDING_ENGINE for a registered engine, which received the names in its load record
+     * and bound itself. A tail field: a caller whose header ends before it gets its rows
      * without it.
      */
     uint32_t binding;
@@ -281,15 +281,17 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* p
  * which the pipeline and every handler created from it share, and release fires exactly
  * once, when the last of them is destroyed, after every unprepare. One registration,
  * prepared per handler: every anira_handler_prepare calls the stage's prepare with an
- * anira_stage_prepare_info and keeps the prepared pointer it hands back for that
- * handler, which its phase calls, its reset and its unprepare receive beside user_data
- * (two handlers of one pipeline never share a prepared pointer; user_data they do). A
+ * anira_prepare_info and keeps the prepared pointer it hands back for that handler,
+ * which its phase calls, its reset and its unprepare receive beside user_data (two
+ * handlers of one pipeline never share a prepared pointer; user_data they do). A
  * pipeline holds at most one stage, and the stage owns every phase it fills for every
  * slot (it composes what it does not handle itself by calling the default bodies); a
  * second call is refused. The order relative to anira_pipeline_add_inference means
  * nothing. A refused call creates no carrier and never calls release. The descriptor is
- * 96 bytes on LP64 and 56 on ILP32 without implicit padding; its slots, in order: the
- * four phases, reset, prepare, unprepare, release.
+ * 104 bytes on LP64 and 60 on ILP32 without implicit padding; its slots, from the
+ * innermost level out: the four phases, reset, prepare, unprepare, init, release; init
+ * runs once per registration, at the first anira_handler_prepare of a handler of the
+ * pipeline, with an anira_init_info.
  * @param pipeline The pipeline.
  * @param desc The stage; min(struct_size, sizeof(anira_stage_desc)) bytes are copied, with the
  *        consumed kinds, so the record and its strings may die when the call returns. The
@@ -447,11 +449,11 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * anira.capi: the counts and the selected plan, then one record per plan, per slot and
  * per consumed extension) re-arms the real-time latches, logging the count of failures
  * suppressed since the last prepare or reset, and last calls the stage's prepare
- * function, when the pipeline has a stage with one, with an anira_stage_prepare_info
- * (the handler, the report, the entry count, a template of the model end of every slot
- * and the canonical names) and keeps the prepared pointer it hands back for this handler
- * (a status other than ANIRA_OK fails this call with it, and unprepare is not called for
- * a refused prepare). A second prepare replaces the previous session whole: the stage's
+ * function, when the pipeline has a stage with one, with an anira_prepare_info (the
+ * handler, the report, the entry count, a template of the model end of every slot and
+ * the canonical names) and keeps the prepared pointer it hands back for this handler (a
+ * status other than ANIRA_OK fails this call with it, and unprepare is not called for a
+ * refused prepare). A second prepare replaces the previous session whole: the stage's
  * unprepare of the previous prepare runs once the old session is released, before the
  * new prepare. A failed prepare leaves the handler unprepared, the previous prepare's
  * unprepare called all the same. Refused in this pre-release: an Async contract,
@@ -503,9 +505,9 @@ ANIRA_API const anira_plan_report* ANIRA_CALL anira_handler_plan_report(const an
  * holding one chunk from its pre_process to its post_process. anira_stage_ctx.entry
  * names one of them, 0 .. num_entries - 1, in every phase callback: the size of a
  * stage's per-chunk scratch, allocated in its prepare function (the handler counts as
- * prepared there, and anira_stage_prepare_info.num_entries carries the same count) and
- * indexed by the entry at run time. Fixed by anira_handler_prepare for the life of the
- * session; the next prepare may change it.
+ * prepared there, and anira_prepare_info.num_entries carries the same count) and indexed
+ * by the entry at run time. Fixed by anira_handler_prepare for the life of the session;
+ * the next prepare may change it.
  * @param handler A prepared handler.
  * @return The count; 0 for a NULL or unprepared handler.
  * @par Thread contract

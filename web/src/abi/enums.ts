@@ -318,6 +318,9 @@ export const anira_stage_phase = {
   ANIRA_PHASE_RELEASE: 6,
   ANIRA_PHASE_RESET: 7,
   ANIRA_PHASE_UNPREPARE: 8,
+  ANIRA_PHASE_INIT: 9,
+  ANIRA_PHASE_LOAD: 10,
+  ANIRA_PHASE_UNLOAD: 11,
 } as const
 export type anira_stage_phase = (typeof anira_stage_phase)[keyof typeof anira_stage_phase]
 
@@ -362,5 +365,7 @@ export const ANIRA_STAGE_FLAG_REALTIME_HOOKS = 2
 export const ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL = 1
 export const ANIRA_ENGINE_FLAG_REALTIME_SAFE = 2
 export const ANIRA_ENGINE_FLAG_DYNAMIC_TIME = 4
+export const ANIRA_PREPARE_EXCLUSIVE = 1
+export const ANIRA_ENGINE_CALL_EXCLUSIVE = 1
 export const ANIRA_LOG_RECORD_REALTIME = 1
 export const ANIRA_LOG_RECORD_CONTRACT_VIOLATION = 2

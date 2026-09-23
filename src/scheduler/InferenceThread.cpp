@@ -448,9 +448,9 @@ void InferenceThread::do_inference(
 anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& session,
                                         uint32_t plan,
                                         SessionElement::ThreadSafeStruct& chunk) {
-    // One index, one plan: exactly one prepared model runs per call. The session's atomic is
-    // not read here (it used to be re-read per engine block, so a switch landing between two
-    // reads ran two engines for one chunk, or none). A stamp is always in range; the check
+    // One index, one plan: exactly one plan's prepared handle runs per call. The session's
+    // atomic is not read here (it used to be re-read per engine block, so a switch landing between
+    // two reads ran two engines for one chunk, or none). A stamp is always in range; the check
     // keeps a defect from reading past the table.
     if (plan >= session->m_plans.size()) { return ANIRA_ERROR_INTERNAL; }
     const SessionElement::PlanSlot& slot = session->m_plans[plan];
@@ -466,8 +466,8 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
 
     // The engine context of the chunk, on this stack for the duration of the call: the
     // struct's descriptor arrays in slot order (State tensors included), the chunk's entry,
-    // no ticket under the Hard contract, no per-call flags; the adapter writes the claimed
-    // instance into its own copy.
+    // no ticket under the Hard contract, no per-call flags; the prepared handle writes the
+    // loaded pointer, the claimed slot and the exclusive bit into its own copy.
     anira_engine_ctx ctx{};
     ctx.instance = 0;
     ctx.entry = chunk.m_entry;
@@ -491,11 +491,13 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
         reset_first = true;
     }
 
-    // The struct's 2.x buffers, what a legacy adapter's 2.x virtual takes; an adapter of the
-    // descriptor shape reads the context alone.
+    // The struct's 2.x buffers, what a legacy adapter's 2.x virtual takes; an executor of the
+    // descriptor shape reads the context alone. A plan without a prepared handle (a registered
+    // engine's whose handler never prepared it) is anira's own bug: the chunk fails.
     backend::ChunkBuffers buffers{.m_inputs = &chunk.m_tensor_input_data,
                                   .m_outputs = &chunk.m_tensor_output_data};
-    return slot.m_adapter->run(ctx, &buffers, reset_first);
+    if (slot.m_prepared == nullptr) { return ANIRA_ERROR_INTERNAL; }
+    return slot.m_prepared->run(ctx, &buffers, reset_first);
 }
 
 }  // namespace anira

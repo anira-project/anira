@@ -27,6 +27,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/log.h>
 #include <anira/abi/stage.h>
 #include <anira/abi/status.h>
@@ -478,7 +479,7 @@ struct SlotProbe {
 
 // A stage asks what each tensor is before it runs: the role of every slot, from the report its
 // prepare record carries.
-anira_status ANIRA_CALL probe_roles(const anira_stage_prepare_info* info,
+anira_status ANIRA_CALL probe_roles(const anira_prepare_info* info,
                                     void* user_data,
                                     void** /*out_prepared*/) {
     auto* probe = static_cast<SlotProbe*>(user_data);
@@ -1797,13 +1798,14 @@ TEST(AbiState, TheSetterRefusals) {
 // ------------------------------------------------------------------------
 
 /// The accumulator as a registered C engine over the descriptors (anira/abi/engine.h): the
-/// function of AccumulatorBackend, its slots found by the canonical names of its prepare record
-/// (so the specs may stand in any order), the state in the spec's dtype (float32, or int32),
-/// the stream float32. It keeps nothing between two calls, so whatever carries over travelled
-/// through the pair's two buffers. process runs on the inference thread: atomics and the
-/// tensors alone.
+/// function of AccumulatorBackend, its slots found by the canonical names of its load record
+/// (so the specs may stand in any order) and read back through ctx->loaded, the state in the
+/// spec's dtype (float32, or int32), the stream float32. Its prepare hands back nothing (a
+/// NULL prepared is legal: the engine keeps nothing per handler), and it keeps nothing between
+/// two calls, so whatever carries over travelled through the pair's two buffers. process runs
+/// on the inference thread: atomics and the tensors alone.
 struct AccumulatorEngine {
-    struct Prepared {
+    struct Loaded {
         uint32_t m_state_in = 0;
         uint32_t m_data = 0;
         uint32_t m_processed = 0;
@@ -1812,6 +1814,9 @@ struct AccumulatorEngine {
     static constexpr size_t k_capacity = 64;
     std::atomic<int> m_calls{0};
     std::atomic<anira_status> m_fail_next{ANIRA_OK};  ///< what the next process returns, once
+    std::atomic<int> m_bad_prepared{0};               ///< a process with a prepared pointer
+    int m_loaded = 0;
+    int m_unloaded = 0;
     int m_prepared = 0;
     int m_unprepared = 0;
     int m_released = 0;
@@ -1821,11 +1826,11 @@ struct AccumulatorEngine {
     std::array<std::atomic<float>, k_capacity> m_write_first{};
 };
 
-anira_status ANIRA_CALL accumulator_prepare(const anira_engine_prepare_info* info,
-                                            void* user_data,
-                                            void** out_prepared) {
+anira_status ANIRA_CALL accumulator_load(const anira_engine_load_info* info,
+                                         void* user_data,
+                                         void** out_loaded) {
     auto* engine = static_cast<AccumulatorEngine*>(user_data);
-    ++engine->m_prepared;
+    ++engine->m_loaded;
     const auto find =
         [](const char* const* names, uint32_t count, std::string_view wanted, uint32_t& slot) {
             for (uint32_t i = 0; i < count; ++i) {
@@ -1836,14 +1841,32 @@ anira_status ANIRA_CALL accumulator_prepare(const anira_engine_prepare_info* inf
             }
             return false;
         };
-    auto prepared = std::make_unique<AccumulatorEngine::Prepared>();
-    if (!find(info->input_names, info->num_inputs, "state_in", prepared->m_state_in) ||
-        !find(info->input_names, info->num_inputs, "data", prepared->m_data) ||
-        !find(info->output_names, info->num_outputs, "processed_data", prepared->m_processed) ||
-        !find(info->output_names, info->num_outputs, "state_out", prepared->m_state_out)) {
+    auto loaded = std::make_unique<AccumulatorEngine::Loaded>();
+    if (!find(info->input_names, info->num_inputs, "state_in", loaded->m_state_in) ||
+        !find(info->input_names, info->num_inputs, "data", loaded->m_data) ||
+        !find(info->output_names, info->num_outputs, "processed_data", loaded->m_processed) ||
+        !find(info->output_names, info->num_outputs, "state_out", loaded->m_state_out)) {
         return ANIRA_ERROR_CONFIG;
     }
-    *out_prepared = prepared.release();
+    *out_loaded = loaded.release();
+    return ANIRA_OK;
+}
+
+void ANIRA_CALL accumulator_unload(void* loaded, void* user_data) {
+    ++static_cast<AccumulatorEngine*>(user_data)->m_unloaded;
+    delete static_cast<AccumulatorEngine::Loaded*>(loaded);
+}
+
+anira_status ANIRA_CALL accumulator_prepare(const anira_prepare_info* info,
+                                            void* loaded,
+                                            void* user_data,
+                                            void** out_prepared) {
+    auto* engine = static_cast<AccumulatorEngine*>(user_data);
+    ++engine->m_prepared;
+    if (info == nullptr || loaded == nullptr || out_prepared == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    *out_prepared = nullptr;  // nothing per handler: process finds its slots in ctx->loaded
     return ANIRA_OK;
 }
 
@@ -1871,7 +1894,9 @@ anira_status ANIRA_CALL accumulator_process(const anira_engine_ctx* ctx,
                                             void* prepared,
                                             void* user_data) {
     auto* engine = static_cast<AccumulatorEngine*>(user_data);
-    const auto* slots = static_cast<const AccumulatorEngine::Prepared*>(prepared);
+    if (prepared != nullptr) { engine->m_bad_prepared.fetch_add(1); }
+    const auto* slots = static_cast<const AccumulatorEngine::Loaded*>(ctx->loaded);
+    if (slots == nullptr) { return ANIRA_ERROR_INTERNAL; }
     const auto call = static_cast<size_t>(engine->m_calls.fetch_add(1));
     const anira_tensor& state_in = ctx->inputs[slots->m_state_in];
     const anira_tensor& data = ctx->inputs[slots->m_data];
@@ -1905,9 +1930,8 @@ anira_status ANIRA_CALL accumulator_process(const anira_engine_ctx* ctx,
     return engine->m_fail_next.exchange(ANIRA_OK);
 }
 
-void ANIRA_CALL accumulator_unprepare(void* prepared, void* user_data) {
+void ANIRA_CALL accumulator_unprepare(void* /*prepared*/, void* user_data) {
     ++static_cast<AccumulatorEngine*>(user_data)->m_unprepared;
-    delete static_cast<AccumulatorEngine::Prepared*>(prepared);
 }
 
 void ANIRA_CALL accumulator_release(void* user_data) {
@@ -1920,6 +1944,8 @@ anira_engine_desc accumulator_desc(AccumulatorEngine& engine) {
     desc.process = accumulator_process;
     desc.prepare = accumulator_prepare;
     desc.unprepare = accumulator_unprepare;
+    desc.load = accumulator_load;
+    desc.unload = accumulator_unload;
     desc.release = accumulator_release;
     return desc;
 }

@@ -27,21 +27,25 @@ size_t elements_of(const anira::BufferF& buffer) noexcept {
 
 }  // namespace
 
-LegacyAdapter::LegacyAdapter(anira::BackendBase& backend) : m_backend(&backend) {}
+LegacyLoaded::LegacyLoaded(anira::BackendBase& backend) : m_backend(&backend) {}
 
-LegacyAdapter::LegacyAdapter(anira::InferenceConfig& config)
+LegacyLoaded::LegacyLoaded(anira::InferenceConfig& config)
     : m_owned(std::make_unique<anira::BackendBase>(config)), m_backend(m_owned.get()) {}
 
-LegacyAdapter::~LegacyAdapter() = default;
+LegacyLoaded::~LegacyLoaded() = default;
 
-void LegacyAdapter::do_prepare(const Model& model) {
+void LegacyLoaded::do_load(const Model& model) {
     // A caller's backend and the roundtrip carry their own copy of the configuration; the
     // record's tensors are the struct's buffers they run over.
     static_cast<void>(model);
     m_backend->prepare();
 }
 
-anira_status LegacyAdapter::process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept {
+std::unique_ptr<Prepared> LegacyLoaded::do_prepare(const PrepareRequest& request) {
+    return std::make_unique<LegacyPrepared>(*this, request.m_exclusive);
+}
+
+anira_status LegacyPrepared::process(const anira_engine_ctx& call, ChunkBuffers* chunk) noexcept {
     if (m_backend == nullptr || chunk == nullptr || chunk->m_inputs == nullptr ||
         chunk->m_outputs == nullptr) {
         return ANIRA_ERROR_INVALID_STATE;
@@ -52,10 +56,11 @@ anira_status LegacyAdapter::process(const anira_engine_ctx& ctx, ChunkBuffers* c
     // A descriptor over other memory than the struct's buffer (a State half) is copied into
     // the buffer the 2.x virtual reads; a descriptor the adapter cannot read as the buffer's
     // packed block is anira's own bug, and the chunk fails rather than running on stale data.
-    for (uint32_t slot = 0; ctx.inputs != nullptr && slot < ctx.num_inputs && slot < inputs.size();
+    for (uint32_t slot = 0;
+         call.inputs != nullptr && slot < call.num_inputs && slot < inputs.size();
          ++slot) {
         const size_t elements = elements_of(inputs[slot]);
-        const float* data = host_f32_packed(ctx.inputs[slot], elements);
+        const float* data = host_f32_packed(call.inputs[slot], elements);
         if (data == nullptr) { return ANIRA_ERROR_INTERNAL; }
         if (data == inputs[slot].data()) { continue; }
         std::memcpy(inputs[slot].data(), data, elements * sizeof(float));
@@ -80,10 +85,10 @@ anira_status LegacyAdapter::process(const anira_engine_ctx& ctx, ChunkBuffers* c
 
     // What the 2.x virtual wrote into a buffer whose descriptor names other memory goes there.
     for (uint32_t slot = 0;
-         ctx.outputs != nullptr && slot < ctx.num_outputs && slot < outputs.size();
+         call.outputs != nullptr && slot < call.num_outputs && slot < outputs.size();
          ++slot) {
         const size_t elements = elements_of(outputs[slot]);
-        float* data = host_f32_packed(ctx.outputs[slot], elements);
+        float* data = host_f32_packed(call.outputs[slot], elements);
         if (data == nullptr) { return ANIRA_ERROR_INTERNAL; }
         if (data == outputs[slot].data()) { continue; }
         std::memcpy(data, outputs[slot].data(), elements * sizeof(float));

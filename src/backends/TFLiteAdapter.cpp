@@ -1,15 +1,16 @@
 /*
- * The TensorFlow Lite adapter: one interpreter per instance, run through the model's first
- * signature (TfLiteSignatureRunner) when the file has one and through the interpreter itself
- * otherwise, the slots bound to the signature's inputs and outputs by name where the entry's
- * tensors record or the canonical name matches a key (a tensor name for a file without
- * signatures) and by the signature's index order (the interpreter's order) otherwise, the
- * inputs resized to the record's engine dims where the file's differ, every tensor checked
- * against its allocated dims at prepare, and every block copied from and into the descriptors'
- * memory with TfLiteTensorCopyFromBuffer / CopyToBuffer per call (the interpreter's tensors
- * need TFLite's own alignment; binding anira's memory in place waits for the aligned chunk
- * storage). reset re-initialises the model's variable tensors. File-local over
- * anira::backend::Model: nothing of TensorFlow Lite enters a public header.
+ * The TensorFlow Lite adapter: one model (the flatbuffer parsed once) and one options object
+ * per loaded model, shared by every executor, and one interpreter per executor, run through
+ * the model's first signature (TfLiteSignatureRunner) when the file has one and through the
+ * interpreter itself otherwise, the slots bound to the signature's inputs and outputs by name
+ * where the entry's tensors record or the canonical name matches a key (a tensor name for a
+ * file without signatures) and by the signature's index order (the interpreter's order)
+ * otherwise, the inputs resized to the record's engine dims where the file's differ, every
+ * tensor checked against its allocated dims at load, and every block copied from and into the
+ * descriptors' memory with TfLiteTensorCopyFromBuffer / CopyToBuffer per call (the
+ * interpreter's tensors need TFLite's own alignment; binding anira's memory in place waits
+ * for the aligned chunk storage). reset re-initialises the interpreter's variable tensors.
+ * File-local over anira::backend::Model: nothing of TensorFlow Lite enters a public header.
  */
 #ifdef USE_TFLITE
 
@@ -26,6 +27,7 @@
 #include <exception>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../utils/ModelFile.h"
@@ -111,66 +113,24 @@ EngineTensor engine_tensor_of(const TfLiteTensor* tensor, const std::string& nam
     return engine_tensor;
 }
 
-/// One interpreter over the model, with the signature runner of the file's first signature
-/// when it has one: what one instance of the adapter runs on. Loads at construction (a file
-/// or the bytes of the record); resizes, allocates and binds at bind; runs every inference
-/// over the context's descriptors.
-class Instance {
-public:
-    explicit Instance(const Model& model);
-    ~Instance();
-    Instance(const Instance&) = delete;
-    Instance& operator=(const Instance&) = delete;
-    Instance(Instance&&) = delete;
-    Instance& operator=(Instance&&) = delete;
-
-    /// The names of either side, in the signature's index order (the runner's keys), or the
-    /// interpreter's order with the tensor names for a file without a signature.
-    std::vector<std::string> input_names() const;
-    std::vector<std::string> output_names() const;
-
-    /// Resizes every input the record's engine dims differ from (a dynamic extent of the file
-    /// takes the pinned window's), allocates the tensors, keeps per slot the tensor it copies
-    /// from or into, and checks every tensor's allocated dims and type against the record
-    /// (the check of the binding rule: StatusError(ANIRA_ERROR_CONFIG) naming both shapes).
-    void bind(const Model& model,
-              const std::vector<SlotBinding>& inputs,
-              const std::vector<SlotBinding>& outputs);
-
-    /// The FIXED warm-up of the record (zeros in); a failing invoke is
-    /// StatusError(ANIRA_ERROR_ENGINE).
-    void warm_up(uint32_t iterations);
-
-    /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
-    /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing call.
-    anira_status process(const anira_engine_ctx& ctx) noexcept;
-
-    /// Re-initialises the model's variable tensors (the state a stateful export keeps between
-    /// invocations); logged, unlatched, when the interpreter refuses.
-    void reset() noexcept;
-
-private:
-    bool has_signature() const noexcept { return m_runner != nullptr; }
-    TfLiteTensor* input_tensor(const std::string& name, size_t index);
-    const TfLiteTensor* output_tensor(const std::string& name, size_t index);
-    TfLiteStatus resize_input(const std::string& name, size_t index, const std::vector<int>& dims);
-    TfLiteStatus invoke();
-    /// Copies every input descriptor into its tensor, invokes, copies every output tensor into
-    /// its descriptor; throws StatusError.
-    void run(const anira_engine_ctx& ctx);
+/// What one load shares between its executors: the model (the flatbuffer parsed once; the C
+/// API leaves it to the caller once an interpreter was created over it, so every interpreter
+/// is created over the one) and the interpreter options (one thread). Immutable after load,
+/// held by the loaded model and by every executor, freed with the last of them; the bytes a
+/// record loads from stay the record's owner's for the loaded model's life, as TFLite asks.
+struct SharedModel {
+    explicit SharedModel(const Model& model);
+    ~SharedModel();
+    SharedModel(const SharedModel&) = delete;
+    SharedModel& operator=(const SharedModel&) = delete;
+    SharedModel(SharedModel&&) = delete;
+    SharedModel& operator=(SharedModel&&) = delete;
 
     TfLiteModel* m_model = nullptr;
     TfLiteInterpreterOptions* m_options = nullptr;
-    TfLiteInterpreter* m_interpreter = nullptr;
-    TfLiteSignatureRunner* m_runner = nullptr;  ///< the first signature's; NULL without one
-
-    std::vector<TfLiteTensor*> m_inputs;         ///< per input slot: the tensor it fills
-    std::vector<const TfLiteTensor*> m_outputs;  ///< per output slot: the tensor it reads
-    std::vector<size_t> m_input_elements;
-    std::vector<size_t> m_output_elements;
 };
 
-Instance::Instance(const Model& model) {
+SharedModel::SharedModel(const Model& model) {
     // Note: the log level cannot be forwarded to this engine. TFLite logs through its
     // internal MinimalLogger, and the prebuilt TFLite C library does not export any symbol
     // to adjust its severity (checked libtensorflowlite_c.so 2.17).
@@ -194,10 +154,75 @@ Instance::Instance(const Model& model) {
                                                   "a TensorFlow Lite flatbuffer)"));
         }
     }
-
     m_options = TfLiteInterpreterOptionsCreate();
     TfLiteInterpreterOptionsSetNumThreads(m_options, 1);
-    m_interpreter = TfLiteInterpreterCreate(m_model, m_options);
+}
+
+SharedModel::~SharedModel() {
+    if (m_options != nullptr) { TfLiteInterpreterOptionsDelete(m_options); }
+    if (m_model != nullptr) { TfLiteModelDelete(m_model); }
+}
+
+/// One interpreter over the shared model, with the signature runner of the file's first
+/// signature when it has one: what one executor of the adapter runs on. Created over the
+/// shared model at construction; resizes, allocates and binds at bind; runs every inference
+/// over the context's descriptors.
+class Instance final : public Executor {
+public:
+    explicit Instance(std::shared_ptr<const SharedModel> shared);
+    ~Instance() override;
+    Instance(const Instance&) = delete;
+    Instance& operator=(const Instance&) = delete;
+    Instance(Instance&&) = delete;
+    Instance& operator=(Instance&&) = delete;
+
+    /// The names of either side, in the signature's index order (the runner's keys), or the
+    /// interpreter's order with the tensor names for a file without a signature.
+    std::vector<std::string> input_names() const;
+    std::vector<std::string> output_names() const;
+
+    /// Resizes every input the record's engine dims differ from (a dynamic extent of the file
+    /// takes the pinned window's), allocates the tensors, keeps per slot the tensor it copies
+    /// from or into, and checks every tensor's allocated dims and type against the record
+    /// (the check of the binding rule: StatusError(ANIRA_ERROR_CONFIG) naming both shapes).
+    void bind(const Model& model,
+              const std::vector<SlotBinding>& inputs,
+              const std::vector<SlotBinding>& outputs);
+
+    /// The FIXED warm-up of the record (zeros in); a failing invoke is
+    /// StatusError(ANIRA_ERROR_ENGINE).
+    void warm_up(uint32_t iterations) override;
+
+    /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
+    /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing call.
+    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override;
+
+    /// Re-initialises the model's variable tensors (the state a stateful export keeps between
+    /// invocations); logged, unlatched, when the interpreter refuses.
+    void reset(const anira_engine_ctx& ctx) noexcept override;
+
+private:
+    bool has_signature() const noexcept { return m_runner != nullptr; }
+    TfLiteTensor* input_tensor(const std::string& name, size_t index);
+    const TfLiteTensor* output_tensor(const std::string& name, size_t index);
+    TfLiteStatus resize_input(const std::string& name, size_t index, const std::vector<int>& dims);
+    TfLiteStatus invoke();
+    /// Copies every input descriptor into its tensor, invokes, copies every output tensor into
+    /// its descriptor; throws StatusError.
+    void run(const anira_engine_ctx& ctx);
+
+    std::shared_ptr<const SharedModel> m_shared;  ///< the model and the options, shared
+    TfLiteInterpreter* m_interpreter = nullptr;
+    TfLiteSignatureRunner* m_runner = nullptr;  ///< the first signature's; NULL without one
+
+    std::vector<TfLiteTensor*> m_inputs;         ///< per input slot: the tensor it fills
+    std::vector<const TfLiteTensor*> m_outputs;  ///< per output slot: the tensor it reads
+    std::vector<size_t> m_input_elements;
+    std::vector<size_t> m_output_elements;
+};
+
+Instance::Instance(std::shared_ptr<const SharedModel> shared) : m_shared(std::move(shared)) {
+    m_interpreter = TfLiteInterpreterCreate(m_shared->m_model, m_shared->m_options);
     if (m_interpreter == nullptr) {
         throw StatusError(ANIRA_ERROR_ENGINE,
                           model_file::message(k_engine,
@@ -210,6 +235,8 @@ Instance::Instance(const Model& model) {
         const char* key = TfLiteInterpreterGetSignatureKey(m_interpreter, 0);
         m_runner = TfLiteInterpreterGetSignatureRunner(m_interpreter, key);
         if (m_runner == nullptr) {
+            TfLiteInterpreterDelete(m_interpreter);  // no destructor runs for a throw from here
+            m_interpreter = nullptr;
             throw StatusError(ANIRA_ERROR_ENGINE,
                               model_file::message(k_engine,
                                                   "TfLiteInterpreterGetSignatureRunner",
@@ -222,8 +249,6 @@ Instance::Instance(const Model& model) {
 Instance::~Instance() {
     if (m_runner != nullptr) { TfLiteSignatureRunnerDelete(m_runner); }
     if (m_interpreter != nullptr) { TfLiteInterpreterDelete(m_interpreter); }
-    if (m_options != nullptr) { TfLiteInterpreterOptionsDelete(m_options); }
-    if (m_model != nullptr) { TfLiteModelDelete(m_model); }
 }
 
 std::vector<std::string> Instance::input_names() const {
@@ -411,7 +436,7 @@ void Instance::run(const anira_engine_ctx& ctx) {
     }
 }
 
-anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
+anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
     try {
         run(ctx);
         return ANIRA_OK;
@@ -428,7 +453,7 @@ anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
     }
 }
 
-void Instance::reset() noexcept {
+void Instance::reset(const anira_engine_ctx& /*ctx*/) noexcept {
     if (TfLiteInterpreterResetVariableTensors(m_interpreter) != kTfLiteOk) {
         ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite,
                            "TfLiteInterpreterResetVariableTensors failed; the model's variable "
@@ -436,49 +461,43 @@ void Instance::reset() noexcept {
     }
 }
 
-class TFLiteAdapter final : public Adapter {
+/// The loaded model: the model and the options every executor shares (SharedModel, loaded
+/// once), the names of a probe interpreter over them bind the slots, the check against the
+/// dims runs in bind, after the resize and the allocation, on every executor; the probe is
+/// the executor of shared slot 0 or, for a record without a shared slot, the spare of the
+/// first exclusive session.
+class TFLiteLoaded final : public ExecutorLoaded {
 protected:
-    void do_prepare(const Model& model) override {
+    void do_load(const Model& model) override {
         require_f32(model, k_engine);
-        m_instances.clear();
-        const uint32_t count = model.m_instances > 0 ? model.m_instances : 1U;
-        for (uint32_t i = 0; i < count; ++i) {
-            m_instances.push_back(std::make_unique<Instance>(model));
-        }
-        // The names of the first instance (every instance loaded the same file) bind the
-        // slots; the check against the dims runs in bind, after the resize and the
-        // allocation, on every instance.
-        const Instance& first = *m_instances.front();
-        const std::vector<std::string> in_names = first.input_names();
-        const std::vector<std::string> out_names = first.output_names();
-        const std::vector<SlotBinding> input_bindings =
-            bind_slots(model.m_inputs, in_names, in_names.size(), k_engine, "input");
-        const std::vector<SlotBinding> output_bindings =
+        m_shared = std::make_shared<const SharedModel>(model);
+        auto probe = std::make_unique<Instance>(m_shared);
+        const std::vector<std::string> in_names = probe->input_names();
+        const std::vector<std::string> out_names = probe->output_names();
+        m_input_bindings = bind_slots(model.m_inputs, in_names, in_names.size(), k_engine, "input");
+        m_output_bindings =
             bind_slots(model.m_outputs, out_names, out_names.size(), k_engine, "output");
-        for (const std::unique_ptr<Instance>& instance : m_instances) {
-            instance->bind(model, input_bindings, output_bindings);
-            instance->warm_up(model.m_warm_up);
-        }
-        set_bindings(bindings_of(input_bindings, output_bindings));
+        probe->bind(model, m_input_bindings, m_output_bindings);
+        set_bindings(bindings_of(m_input_bindings, m_output_bindings));
+        adopt(std::move(probe));
     }
 
-    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept override {
-        if (ctx.instance >= m_instances.size()) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-        return m_instances[ctx.instance]->process(ctx);
-    }
-
-    void reset(const anira_engine_ctx& ctx) noexcept override {
-        if (ctx.instance < m_instances.size()) { m_instances[ctx.instance]->reset(); }
+    std::unique_ptr<Executor> make_executor() override {
+        auto executor = std::make_unique<Instance>(m_shared);
+        executor->bind(model(), m_input_bindings, m_output_bindings);
+        return executor;
     }
 
 private:
-    std::vector<std::unique_ptr<Instance>> m_instances;
+    std::shared_ptr<const SharedModel> m_shared;  ///< freed with the last executor over it
+    std::vector<SlotBinding> m_input_bindings;
+    std::vector<SlotBinding> m_output_bindings;
 };
 
 }  // namespace
 
-std::shared_ptr<Adapter> make_tflite_adapter() {
-    return std::make_shared<TFLiteAdapter>();
+std::shared_ptr<Loaded> make_tflite_loaded() {
+    return std::make_shared<TFLiteLoaded>();
 }
 
 }  // namespace anira::backend

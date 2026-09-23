@@ -7,6 +7,7 @@
 #ifdef USE_EXECUTORCH
 
 #include <anira/InferenceConfig.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -18,6 +19,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "backend_test_support.h"
@@ -30,7 +32,6 @@ namespace {
 
 constexpr size_t k_size = 64;
 
-using anira::backend::Adapter;
 using anira::backend::Model;
 using anira_test::context_of;
 using anira_test::descriptors_of;
@@ -48,11 +49,39 @@ std::string gain_model_path() {
         "/model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono.pte";
 }
 
-std::shared_ptr<Adapter> executorch_adapter() {
-    std::shared_ptr<Adapter> adapter =
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_EXECUTORCH);
-    EXPECT_NE(adapter, nullptr);
-    return adapter;
+/// A loaded model and one prepared handle over it, driven directly (no core, no session): the
+/// shape the inference thread runs. prepare loads the record and prepares one session on it,
+/// exclusive when the record has no shared slot (a session-exclusive configuration).
+class Rig {
+public:
+    explicit Rig(std::shared_ptr<anira::backend::Loaded> loaded) : m_loaded(std::move(loaded)) {}
+
+    void prepare(const anira::backend::Model& model) {
+        m_prepared.reset();
+        m_loaded->load(model);
+        m_prepared =
+            m_loaded->prepare(anira::backend::PrepareRequest{.m_exclusive = model.m_instances == 0,
+                                                             .m_info = nullptr});
+    }
+    bool prepared() const noexcept { return m_loaded->loaded() && m_prepared != nullptr; }
+    const anira::backend::Model& model() const noexcept { return m_loaded->model(); }
+    const anira::backend::Bindings& bindings() const noexcept { return m_loaded->bindings(); }
+    anira_status run(const anira_engine_ctx& ctx,
+                     anira::backend::ChunkBuffers* chunk,
+                     bool reset_first) noexcept {
+        return m_prepared->run(ctx, chunk, reset_first);
+    }
+
+private:
+    std::shared_ptr<anira::backend::Loaded> m_loaded;
+    std::unique_ptr<anira::backend::Prepared> m_prepared;
+};
+
+std::shared_ptr<Rig> executorch_adapter() {
+    std::shared_ptr<anira::backend::Loaded> loaded =
+        anira::backend::make_builtin_loaded(ANIRA_ENGINE_EXECUTORCH);
+    EXPECT_NE(loaded, nullptr);
+    return std::make_shared<Rig>(std::move(loaded));
 }
 
 }  // namespace
@@ -80,7 +109,7 @@ TEST(ExecuTorchProcessor, BinaryModelDataLoadsFromMemory) {
     ASSERT_NE(model.m_bytes, nullptr);
     ASSERT_EQ(model.m_entry, "gain2");
 
-    const std::shared_ptr<Adapter> adapter = executorch_adapter();
+    const std::shared_ptr<Rig> adapter = executorch_adapter();
     adapter->prepare(model);
     EXPECT_EQ(adapter->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
     EXPECT_EQ(adapter->bindings().m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
@@ -104,7 +133,7 @@ TEST(ExecuTorchProcessor, UnloadableModelThrowsRuntimeError) {
         5.0F,
         /*warm_up=*/0,
         /*session_exclusive_processor=*/true);
-    const std::shared_ptr<Adapter> adapter = executorch_adapter();
+    const std::shared_ptr<Rig> adapter = executorch_adapter();
     EXPECT_THROW(
         adapter->prepare(anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH)),
         std::runtime_error);
@@ -123,7 +152,7 @@ TEST(ExecuTorchProcessor, UnknownModelFunctionThrowsRuntimeError) {
         5.0F,
         /*warm_up=*/0,
         /*session_exclusive_processor=*/true);
-    const std::shared_ptr<Adapter> adapter = executorch_adapter();
+    const std::shared_ptr<Rig> adapter = executorch_adapter();
     try {
         adapter->prepare(anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH));
         FAIL() << "a missing method loaded";
@@ -146,7 +175,7 @@ TEST(ExecuTorchProcessor, TheMethodMetasPlannedBoundsAreTheCheck) {
             /*warm_up=*/0,
             /*session_exclusive_processor=*/true);
     };
-    const std::shared_ptr<Adapter> adapter = executorch_adapter();
+    const std::shared_ptr<Rig> adapter = executorch_adapter();
     adapter->prepare(
         anira::backend::model_of(config_of({1, 1, 512}), anira::InferenceBackend::EXECUTORCH));
     EXPECT_TRUE(adapter->prepared());

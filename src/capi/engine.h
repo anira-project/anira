@@ -7,14 +7,17 @@
  * (anira_pipeline_add_engine); and what the pipeline's engines mean to the validator
  * (engine_facts, the twin of stage_facts). Private to src/capi (and the tests through the src/
  * include directory): nothing here enters the ABI. What runs a custom engine is the engine
- * room's DescriptorAdapter (src/backends/DescriptorAdapter.h) over the carrier, one per
- * prepared model, pooled by the core like a built-in engine's adapter with the carrier in the
- * key: the carrier is the engine's identity, the id only how one pipeline names it.
+ * room's DescriptorLoaded (src/backends/DescriptorAdapter.h) over the carrier, one per
+ * loaded model, pooled by the core like a built-in engine's with the carrier in the key: the
+ * carrier is the engine's identity, the id only how one pipeline names it.
  */
 #include <anira/abi/engine.h>
+#include <anira/abi/lifecycle.h>
+#include <anira/abi/status.h>
 #include <anira/system/Exports.h>
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -24,8 +27,8 @@ namespace anira::capi {
 
 /// One custom engine: the descriptor copied by anira_custom_engine_create, with the strings it
 /// names owned here. The handle, every pipeline the engine was added to, every handler copy of
-/// those pipelines and every prepared model that ran on it share the carrier; release fires
-/// once, when the last of them dies, after every unprepare of those prepared models.
+/// those pipelines and every loaded model that ran on it share the carrier; release fires
+/// once, when the last of them dies, after every unload of those models.
 class ANIRA_API EngineCarrier {
 public:
     /// `desc` is already the library's own record (copied within the caller's struct_size over
@@ -41,10 +44,19 @@ public:
     const anira_engine_desc& desc() const noexcept { return m_desc; }
     const std::vector<std::string>& consumed_kinds() const noexcept { return m_kinds; }
 
+    /// The engine's init slot, once per engine object, with the facts of the core in effect:
+    /// the first call runs init and remembers a success, every later call answers ANIRA_OK at
+    /// once; a refused init is not remembered, so the next call runs it again. ANIRA_OK without
+    /// an init slot. Serialised by a mutex of the carrier: two handlers of two pipelines may
+    /// reach one engine object from two threads.
+    anira_status ensure_init(const anira_init_info& info) const;
+
 private:
     anira_engine_desc m_desc;
     std::vector<std::string> m_kinds;
     std::vector<const char*> m_kind_pointers;
+    mutable std::mutex m_init_mutex;
+    mutable bool m_initialised = false;
 };
 
 /// One engine of a pipeline (anira_pipeline_add_engine): the id its model entries name it by,

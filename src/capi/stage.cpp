@@ -18,6 +18,7 @@
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -33,6 +34,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <variant>
 #include <vector>
@@ -516,8 +518,20 @@ StageCarrier::StageCarrier(const anira_stage_desc& desc) : m_desc(desc) {
 }
 
 StageCarrier::~StageCarrier() {
-    // Exactly once: the carrier dies with the last pipeline or handler that shares it.
+    // Exactly once: the carrier dies with the last pipeline or handler that shares it, whether
+    // or not init ever ran.
     if (m_desc.release != nullptr) { m_desc.release(m_desc.user_data); }
+}
+
+anira_status StageCarrier::ensure_init(const anira_init_info& info) const {
+    const std::scoped_lock<std::mutex> lock(m_init_mutex);
+    if (m_initialised) { return ANIRA_OK; }
+    if (m_desc.init != nullptr) {
+        const anira_status status = m_desc.init(&info, m_desc.user_data);
+        if (status != ANIRA_OK) { return status; }
+    }
+    m_initialised = true;
+    return ANIRA_OK;
 }
 
 StageFacts stage_facts(const StageCarrier* stage) {

@@ -2,6 +2,7 @@
 
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 
@@ -36,7 +37,7 @@ std::vector<anira_tensor> templates_of(const std::vector<TensorInfo>& slots) {
 }
 
 // The name each slot of one side binds to: the entry's tensors record where it names the
-// slot, else the canonical name. Pointers into the record, which outlives the prepare call.
+// slot, else the canonical name. Pointers into the record, which outlives the load call.
 std::vector<const char*> names_of(const std::vector<TensorInfo>& slots) {
     std::vector<const char*> names;
     names.reserve(slots.size());
@@ -47,34 +48,47 @@ std::vector<const char*> names_of(const std::vector<TensorInfo>& slots) {
     return names;
 }
 
-}  // namespace
-
-DescriptorAdapter::DescriptorAdapter(std::shared_ptr<const anira::capi::EngineCarrier> carrier,
-                                     std::string id,
-                                     uint32_t row,
-                                     std::shared_ptr<const anira_model_config> model)
-    : m_carrier(std::move(carrier)), m_id(std::move(id)), m_row(row), m_model(std::move(model)) {}
-
-DescriptorAdapter::~DescriptorAdapter() {
-    unprepare();
+// "the engine 'x' refused load: it returned 5 (ANIRA_ERROR_MODEL_LOAD)".
+std::string refused(const std::string& id, const char* what, anira_status status) {
+    return "the engine '" + id + "' refused " + what + ": it returned " +
+           std::to_string(static_cast<int>(status)) + " (" + anira_status_string(status) + ")";
 }
 
-uint32_t DescriptorAdapter::flags() const noexcept {
+}  // namespace
+
+// ---- DescriptorLoaded -----------------------------------------------------------------------
+
+DescriptorLoaded::DescriptorLoaded(std::shared_ptr<const anira::capi::EngineCarrier> carrier,
+                                   std::string id,
+                                   uint32_t row,
+                                   std::shared_ptr<const anira_model_config> model)
+    : m_carrier(std::move(carrier)), m_id(std::move(id)), m_row(row), m_model(std::move(model)) {}
+
+DescriptorLoaded::~DescriptorLoaded() {
+    unload();
+}
+
+void DescriptorLoaded::init(const anira_init_info& info) {
+    const anira_status status = m_carrier->ensure_init(info);
+    if (status != ANIRA_OK) { throw StatusError(status, refused(m_id, "init", status)); }
+}
+
+uint32_t DescriptorLoaded::flags() const noexcept {
     return m_carrier->desc().flags;
 }
 
-void DescriptorAdapter::unprepare() noexcept {
-    if (!m_unprepare_owed) { return; }
-    m_unprepare_owed = false;
+void DescriptorLoaded::unload() noexcept {
+    if (!m_unload_owed) { return; }
+    m_unload_owed = false;
     const anira_engine_desc& desc = m_carrier->desc();
-    if (desc.unprepare != nullptr) { desc.unprepare(m_prepared, desc.user_data); }
-    m_prepared = nullptr;
+    if (desc.unload != nullptr) { desc.unload(m_loaded_pointer, desc.user_data); }
+    m_loaded_pointer = nullptr;
 }
 
-void DescriptorAdapter::do_prepare(const Model& model) {
-    // A second prepare starts over: what the first one loaded goes back to the engine first.
-    unprepare();
-    m_prepared = nullptr;
+void DescriptorLoaded::do_load(const Model& model) {
+    // A second load starts over: what the first one loaded goes back to the engine first.
+    unload();
+    m_loaded_pointer = nullptr;
     // The engine received the names and binds the slots itself.
     Bindings bindings;
     bindings.m_inputs.assign(model.m_inputs.size(), ANIRA_BINDING_ENGINE);
@@ -82,13 +96,13 @@ void DescriptorAdapter::do_prepare(const Model& model) {
     set_bindings(std::move(bindings));
 
     const anira_engine_desc& desc = m_carrier->desc();
-    if (desc.prepare == nullptr) { return; }  // nothing to prepare: prepared stays NULL
+    if (desc.load == nullptr) { return; }  // nothing to load: loaded stays NULL
 
     const std::vector<anira_tensor> inputs = templates_of(model.m_inputs);
     const std::vector<anira_tensor> outputs = templates_of(model.m_outputs);
     const std::vector<const char*> input_names = names_of(model.m_inputs);
     const std::vector<const char*> output_names = names_of(model.m_outputs);
-    anira_engine_prepare_info info = ANIRA_ENGINE_PREPARE_INFO_INIT;
+    anira_engine_load_info info = ANIRA_ENGINE_LOAD_INFO_INIT;
     info.row = m_row;
     info.model = m_model.get();
     info.inputs = inputs.data();
@@ -97,33 +111,61 @@ void DescriptorAdapter::do_prepare(const Model& model) {
     info.output_names = output_names.data();
     info.num_inputs = static_cast<uint32_t>(inputs.size());
     info.num_outputs = static_cast<uint32_t>(outputs.size());
-    // A session-exclusive prepared model runs one inference at a time (the dispatch gate), so
-    // one instance is all its process calls ever claim; a shared one takes the record's count.
-    info.instances =
-        model.m_session_exclusive ? 1U : (model.m_instances > 0 ? model.m_instances : 1U);
+    // The shared call slots: the record's count, 0 for a model run by exclusive sessions alone
+    // (their calls run on what their prepare builds and claim no slot).
+    info.instances = model.m_instances;
 
-    void* prepared = nullptr;
-    const anira_status status = desc.prepare(&info, desc.user_data, &prepared);
-    if (status != ANIRA_OK) {
-        // The refused prepare owes no unprepare.
-        throw StatusError(status,
-                          "the engine '" + m_id + "' refused prepare: it returned " +
-                              std::to_string(static_cast<int>(status)) + " (" +
-                              anira_status_string(status) + ")");
+    void* loaded = nullptr;
+    const anira_status status = desc.load(&info, desc.user_data, &loaded);
+    // The refused load owes no unload.
+    if (status != ANIRA_OK) { throw StatusError(status, refused(m_id, "load", status)); }
+    m_loaded_pointer = loaded;
+    m_unload_owed = true;
+}
+
+std::unique_ptr<Prepared> DescriptorLoaded::do_prepare(const PrepareRequest& request) {
+    return std::make_unique<DescriptorPrepared>(*this, request);
+}
+
+// ---- DescriptorPrepared ---------------------------------------------------------------------
+
+DescriptorPrepared::DescriptorPrepared(DescriptorLoaded& loaded, const PrepareRequest& request)
+    : Prepared(loaded, request.m_exclusive), m_carrier(&loaded.carrier()) {
+    const anira_engine_desc& desc = m_carrier->desc();
+    if (desc.prepare == nullptr) { return; }  // nothing to prepare: prepared stays NULL
+    if (request.m_info == nullptr) {
+        // A custom engine is prepared by the C handler with its record; the 2.x path adds no
+        // engine, so a request without one is anira's own bug.
+        throw StatusError(ANIRA_ERROR_INTERNAL,
+                          "the engine '" + loaded.id() +
+                              "' was asked to prepare a session without a prepare record");
     }
+    void* prepared = nullptr;
+    const anira_status status =
+        desc.prepare(request.m_info, loaded.engine_loaded(), desc.user_data, &prepared);
+    // The refused prepare owes no unprepare.
+    if (status != ANIRA_OK) { throw StatusError(status, refused(loaded.id(), "prepare", status)); }
     m_prepared = prepared;
     m_unprepare_owed = true;
 }
 
-anira_status DescriptorAdapter::process(const anira_engine_ctx& ctx,
-                                        ChunkBuffers* /*chunk*/) noexcept {
+DescriptorPrepared::~DescriptorPrepared() {
+    if (!m_unprepare_owed) { return; }
+    m_unprepare_owed = false;
     const anira_engine_desc& desc = m_carrier->desc();
-    return desc.process(&ctx, m_prepared, desc.user_data);
+    if (desc.unprepare != nullptr) { desc.unprepare(m_prepared, desc.user_data); }
+    m_prepared = nullptr;
 }
 
-void DescriptorAdapter::reset(const anira_engine_ctx& ctx) noexcept {
+anira_status DescriptorPrepared::process(const anira_engine_ctx& call,
+                                         ChunkBuffers* /*chunk*/) noexcept {
     const anira_engine_desc& desc = m_carrier->desc();
-    if (desc.reset != nullptr) { desc.reset(&ctx, m_prepared, desc.user_data); }
+    return desc.process(&call, m_prepared, desc.user_data);
+}
+
+void DescriptorPrepared::reset(const anira_engine_ctx& call) noexcept {
+    const anira_engine_desc& desc = m_carrier->desc();
+    if (desc.reset != nullptr) { desc.reset(&call, m_prepared, desc.user_data); }
 }
 
 }  // namespace anira::backend

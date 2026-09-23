@@ -11,7 +11,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../utils/StatusError.h"
@@ -24,46 +26,119 @@ bool Model::operator==(const Model& other) const {
            m_path == other.m_path && m_bytes == other.m_bytes && m_num_bytes == other.m_num_bytes &&
            m_entry == other.m_entry && m_variant == other.m_variant && m_inputs == other.m_inputs &&
            m_outputs == other.m_outputs && m_instances == other.m_instances &&
-           m_warm_up == other.m_warm_up && m_session_exclusive == other.m_session_exclusive;
+           m_warm_up == other.m_warm_up;
 }
 
-void Adapter::prepare(const Model& model) {
-    // A second prepare starts over: nothing of a failed or earlier one is kept.
+// ---- Loaded ---------------------------------------------------------------------------------
+
+void Loaded::load(const Model& model) {
+    // A second load starts over: nothing of a failed or earlier one is kept.
+    m_loaded = false;
     m_num_instances = 0;
     m_busy.clear();
     m_model = model;
-    // By position for every slot until do_prepare says otherwise (set_bindings).
+    // By position for every slot until do_load says otherwise (set_bindings).
     m_bindings.m_inputs.assign(m_model.m_inputs.size(), ANIRA_BINDING_POSITION);
     m_bindings.m_outputs.assign(m_model.m_outputs.size(), ANIRA_BINDING_POSITION);
-    do_prepare(m_model);
-    const uint32_t instances = m_model.m_instances > 0 ? m_model.m_instances : 1U;
+    do_load(m_model);
     // Value-initialised: every flag starts clear. Sized once here and never grown (an atomic
-    // cannot be moved).
-    m_busy = std::vector<std::atomic<bool>>(instances);
-    m_num_instances = instances;
+    // cannot be moved). A model run by exclusive sessions alone has no shared slot.
+    m_busy = std::vector<std::atomic<bool>>(m_model.m_instances);
+    m_num_instances = m_model.m_instances;
+    m_loaded = true;
 }
 
-anira_status Adapter::run(const anira_engine_ctx& ctx,
-                          ChunkBuffers* chunk,
-                          bool reset_first) noexcept {
-    if (m_num_instances == 0) { return ANIRA_ERROR_INVALID_STATE; }
-    anira_engine_ctx call = ctx;
+std::unique_ptr<Prepared> Loaded::prepare(const PrepareRequest& request) {
+    if (!m_loaded) {
+        throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                          "the model was never loaded: nothing to prepare a session on");
+    }
+    return do_prepare(request);
+}
+
+anira_status Loaded::claim_and_run(Prepared& prepared,
+                                   anira_engine_ctx& call,
+                                   ChunkBuffers* chunk) noexcept {
     if (!claims_instances()) {
         call.instance = 0;
-        if (reset_first) { reset(call); }
-        return process(call, chunk);
+        return prepared.process(call, chunk);
     }
-    // The spin-and-claim loop of the 2.x processors: the first instance whose busy flag was
-    // clear runs this call, and the flag is released on every path out of it.
+    // A shared call on a model without a shared slot (loaded for exclusive sessions alone) is
+    // anira's own bug: the chunk fails rather than running on nothing.
+    if (m_num_instances == 0) { return ANIRA_ERROR_INVALID_STATE; }
+    // The spin-and-claim loop of the 2.x processors: the first slot whose busy flag was clear
+    // runs this call, and the flag is released on every path out of it.
     while (true) {
         for (uint32_t i = 0; i < m_num_instances; ++i) {
             if (m_busy[i].exchange(true)) { continue; }
             const detail::ProcessingGuard guard(m_busy[i]);
             call.instance = i;
-            if (reset_first) { reset(call); }
-            return process(call, chunk);
+            return prepared.process(call, chunk);
         }
     }
+}
+
+// ---- Prepared -------------------------------------------------------------------------------
+
+anira_status Prepared::run(const anira_engine_ctx& ctx,
+                           ChunkBuffers* chunk,
+                           bool reset_first) noexcept {
+    if (!m_loaded->m_loaded) { return ANIRA_ERROR_INVALID_STATE; }
+    anira_engine_ctx call = ctx;
+    call.loaded = m_loaded->engine_loaded();
+    if (m_exclusive) {
+        // The dispatch gate is the claim: one call of this session at a time, on what the
+        // session keeps.
+        call.instance = 0;
+        call.flags |= ANIRA_ENGINE_CALL_EXCLUSIVE;
+        if (reset_first) { reset(call); }
+        return process(call, chunk);
+    }
+    return m_loaded->claim_and_run(*this, call, chunk);
+}
+
+// ---- ExecutorLoaded -------------------------------------------------------------------------
+
+void ExecutorLoaded::adopt(std::unique_ptr<Executor> probe) {
+    m_shared.clear();
+    m_spare.reset();
+    if (model().m_instances == 0) {
+        // No shared slot: the probe waits for the first exclusive session.
+        m_spare = std::move(probe);
+        m_spare->warm_up(model().m_warm_up);
+        return;
+    }
+    m_shared.reserve(model().m_instances);
+    m_shared.push_back(std::move(probe));
+    for (uint32_t i = 1; i < model().m_instances; ++i) { m_shared.push_back(make_executor()); }
+    for (const std::unique_ptr<Executor>& executor : m_shared) {
+        executor->warm_up(model().m_warm_up);
+    }
+}
+
+std::unique_ptr<Prepared> ExecutorLoaded::do_prepare(const PrepareRequest& request) {
+    std::unique_ptr<Executor> own;
+    if (request.m_exclusive) {
+        // The session's own executor: the spare of load when one is left, else one more over
+        // the loaded object, warmed up here (the spare was at load).
+        if (m_spare != nullptr) {
+            own = std::move(m_spare);
+        } else {
+            own = make_executor();
+            own->warm_up(model().m_warm_up);
+        }
+    }
+    return std::make_unique<ExecutorPrepared>(*this, request.m_exclusive, std::move(own));
+}
+
+anira_status ExecutorPrepared::process(const anira_engine_ctx& call, ChunkBuffers* chunk) noexcept {
+    if (m_own != nullptr) { return m_own->process(call, chunk); }
+    if (call.instance >= m_loaded->num_instances()) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    return m_loaded->executor(call.instance).process(call, chunk);
+}
+
+void ExecutorPrepared::reset(const anira_engine_ctx& call) noexcept {
+    if (m_own != nullptr) { m_own->reset(call); }
 }
 
 float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept {

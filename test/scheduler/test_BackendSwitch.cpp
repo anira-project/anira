@@ -362,9 +362,9 @@ TEST(BackendSwitch, ThePlanTableIsTheSessionsFromCreate) {
     ASSERT_EQ(session->m_plans.size(), 2U);
     EXPECT_EQ(session->m_plans[0].m_legacy_backend, InferenceBackend::CUSTOM);
     EXPECT_EQ(session->m_plans[1].m_legacy_backend, InferenceBackend::CUSTOM);
-    EXPECT_NE(session->m_plans[0].m_adapter, nullptr);
-    EXPECT_NE(session->m_plans[0].m_adapter, session->m_plans[1].m_adapter)
-        << "a 2.x backend gets a legacy adapter per plan, never pooled";
+    EXPECT_NE(session->m_plans[0].m_loaded, nullptr);
+    EXPECT_NE(session->m_plans[0].m_loaded, session->m_plans[1].m_loaded)
+        << "a 2.x backend gets a legacy loaded model per plan, never pooled";
 }
 
 // The 2.x selection by backend on a table that names no plan for it (a 3.x handler's table

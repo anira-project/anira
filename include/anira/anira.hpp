@@ -11,10 +11,11 @@
  * Scope at this pre-release: the configuration half (tensor specs, model, context and
  * contract configuration, job options), the Context over the core, the pipeline half of
  * section 6 (Pipeline, stage::Inference, stage::Custom and PlanReport), the stages and the
- * custom engines of section 7 (Stage, Stage::Prepared, StagePrepareInfo, StageContext and
- * RingView over anira/abi/stage.h; Engine, Engine::Prepared, EnginePrepareInfo and
+ * custom engines of section 7 (Stage, Stage::Prepared, StageContext and RingView over
+ * anira/abi/stage.h; Engine, Engine::Loaded, Engine::Prepared, EngineLoadInfo and
  * EngineContext over anira/abi/engine.h, registered through Pipeline::register_engine or
- * stage::Inference::engine) and the runtime tensor of section 1: Tensor and SyncToken, the C
+ * stage::Inference::engine; InitInfo and PrepareInfo, the records both share, over
+ * anira/abi/lifecycle.h) and the runtime tensor of section 1: Tensor and SyncToken, the C
  * structs of anira/abi/tensor.h with factories on them. The InferenceHandler class and the
  * _wait twins arrive with the runtime cut-over; until then a handler is driven through the C
  * entries of anira/abi/handler.h.
@@ -36,8 +37,9 @@
  * factories have no C++ spelling while unmeasured: call anira_tensor_init_metal(&tensor, ...)
  * on a Tensor); Stage is the registration and Stage::Prepared what its prepare returns per
  * handler, the C lifecycle's prepared pointer as a class on which the phases and reset run and
- * which anira deletes at unprepare; Stage::prepare takes a StagePrepareInfo, the C record as
- * views, whose handler is the anira_handler* (no handler class yet); a Stage states the phases
+ * which anira deletes at unprepare; Stage::init takes an InitInfo and Stage::prepare a
+ * PrepareInfo, the C records as views, whose handler is the anira_handler* (no handler class
+ * yet); a Stage states the phases
  * it fills in phases(), because the C descriptor tells a filled phase from a NULL one, and its
  * real-time promise in flags() (anira_stage_desc::flags); StageContext has
  * input_tensor / output_tensor filling a Tensor, the C accessors, in place of model_input /
@@ -47,9 +49,11 @@
  * domains and has no single-callable form (a stage works at the host end of every slot and never
  * crosses a domain), and a Pipeline holds at most one of them; the variant of Pipeline is named
  * Pipeline::AnyStage; a custom engine is anira::Engine (the document's BackendImpl), registered
- * under its id and shaped like Stage, with Engine::Prepared what its prepare returns per
- * prepared model, EnginePrepareInfo the record and EngineContext the per-call context, and the
- * enum alias of anira_engine is EngineKind, so that the class may carry the name.
+ * under its id and shaped like Stage with one level more, with Engine::Loaded what its load
+ * returns per loaded model (EngineLoadInfo the record), Engine::Prepared what the Loaded's
+ * prepare returns per handler (PrepareInfo the record, the stage's) and EngineContext the
+ * per-call context, and the enum alias of anira_engine is EngineKind, so that the class may
+ * carry the name.
  *
  * Requirements: C++20 with exceptions; std::filesystem, which on Apple platforms means a
  * deployment target of macOS 10.15 / iOS 13 or later.
@@ -91,6 +95,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>  // IWYU pragma: keep - the umbrella of the C headers
 #include <anira/abi/handler.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/log.h>
 #include <anira/abi/stage.h>
 #include <anira/abi/status.h>
@@ -1871,13 +1876,39 @@ private:
 };
 
 /**
- * @brief The record a Stage's prepare receives, anira_stage_prepare_info of anira/abi/stage.h as
- * views. Valid for the duration of prepare: the spans die with the call, the handler and the
- * report stay valid while the handler stays prepared.
+ * @brief The record a Stage's or an Engine's init receives, anira_init_info of
+ * anira/abi/lifecycle.h as views: the facts of the core in effect when the registration is
+ * first used, and the context it is used under. Valid for the duration of init.
  */
-class StagePrepareInfo {
+class InitInfo {
 public:
-    explicit StagePrepareInfo(const anira_stage_prepare_info* info) noexcept : m_info(info) {}
+    explicit InitInfo(const anira_init_info* info) noexcept : m_info(info) {}
+
+    /// The level in effect in this copy of anira (the core reconciles one per process).
+    anira_log_level log_level() const noexcept {
+        return static_cast<anira_log_level>(m_info->log_level);
+    }
+    /// The size of the inference-thread pool this copy of anira runs; 0 when the context
+    /// brought its own threads or on a target without threads.
+    uint32_t num_threads() const noexcept { return m_info->num_threads; }
+    /// The context of the handler whose prepare reached the registration first: its
+    /// capabilities are legal to query; valid until init returns, never kept.
+    const anira_context* context() const noexcept { return m_info->context; }
+
+    const anira_init_info* native() const noexcept { return m_info; }
+
+private:
+    const anira_init_info* m_info;
+};
+
+/**
+ * @brief The record a Stage's and an Engine::Loaded's prepare receives, anira_prepare_info of
+ * anira/abi/lifecycle.h as views. Valid for the duration of prepare: the spans die with the
+ * call, the handler and the report stay valid while the handler stays prepared.
+ */
+class PrepareInfo {
+public:
+    explicit PrepareInfo(const anira_prepare_info* info) noexcept : m_info(info) {}
 
     /// The handler being prepared: its getters and the two Static entries are legal, never
     /// prepare, destroy or a Hard entry.
@@ -1909,11 +1940,18 @@ public:
     std::span<const char* const> output_names() const noexcept {
         return {m_info->output_names, m_info->num_outputs};
     }
+    /// The flags of this prepare: ANIRA_PREPARE_EXCLUSIVE when the handler's inferences run one
+    /// at a time and in order (a model declared stateful or with a declared State pair), with a
+    /// reset at every stream start.
+    uint32_t flags() const noexcept { return m_info->flags; }
+    /// Whether ANIRA_PREPARE_EXCLUSIVE is set: an Engine::Loaded builds the session's own
+    /// executor in its Prepared then, since the session's calls claim no shared instance.
+    bool exclusive() const noexcept { return (m_info->flags & ANIRA_PREPARE_EXCLUSIVE) != 0U; }
 
-    const anira_stage_prepare_info* native() const noexcept { return m_info; }
+    const anira_prepare_info* native() const noexcept { return m_info; }
 
 private:
-    const anira_stage_prepare_info* m_info;
+    const anira_prepare_info* m_info;
 };
 
 /**
@@ -1922,14 +1960,16 @@ private:
  * functions in place of the function pointers, and the semantics are those of anira/abi/stage.h,
  * whose lifecycle it follows: the registration is one object shared by the pipeline and every
  * handler created from it (phases(), flags() and consumed_kinds() are read once, when the stage
- * is added), and prepare() is called once per anira_handler_prepare of each handler and returns
- * that handler's Stage::Prepared, the C lifecycle's prepared pointer as a class: the four phases
- * and reset run on it, so what a stage keeps per handler (its per-entry scratch, sized by
- * StagePrepareInfo::num_entries) is a member of the Prepared and never of the registration,
- * which two handlers of one pipeline share. anira owns the Prepared from prepare on and deletes
- * it at the C unprepare: at the next anira_handler_prepare of that handler, once the old session
- * is released, and at anira_handler_destroy, after the last phase call; release() runs once, when
- * the last carrier dies, after every Prepared was deleted.
+ * is added); init() is called once per registration, by the first anira_handler_prepare of a
+ * handler of the pipeline, with the facts of the core in effect (InitInfo); prepare() is called
+ * once per anira_handler_prepare of each handler and returns that handler's Stage::Prepared, the
+ * C lifecycle's prepared pointer as a class: the four phases and reset run on it, so what a
+ * stage keeps per handler (its per-entry scratch, sized by PrepareInfo::num_entries) is a member
+ * of the Prepared and never of the registration, which two handlers of one pipeline share.
+ * anira owns the Prepared from prepare on and deletes it at the C unprepare: at the next
+ * anira_handler_prepare of that handler, once the old session is released, and at
+ * anira_handler_destroy, after the last phase call; release() runs once, when the last carrier
+ * dies, after every Prepared was deleted, whether or not init ever ran.
  *
  * A Pipeline holds at most one stage, and the stage owns every phase it fills for every slot.
  * The phases of one chunk: pre_process takes the host end of every slot (the ring of a
@@ -2055,6 +2095,15 @@ public:
     /// walk. Read once, when the stage is added; the strings are copied.
     virtual std::span<const char* const> consumed_kinds() const noexcept { return {}; }
 
+    /// Called once per Pipeline::add of this stage, by the first anira_handler_prepare of a
+    /// handler of that pipeline, on its caller's thread ([main-thread]; it may allocate),
+    /// before that handler's prepare, with the facts of the core in effect (the level, the
+    /// thread count, the handler's context, whose capabilities are legal to query). What the
+    /// stage keeps for its whole registration (a lookup table, a thread of its own) is built
+    /// here, as a member of the object. It may throw, as prepare may: the status fails that
+    /// anira_handler_prepare, the registration counts as uninitialised, and the next prepare
+    /// calls init again. The base class does nothing.
+    virtual void init(const InitInfo& /*info*/) {}
     /// Called by anira_handler_prepare on its caller's thread after the plan report is built,
     /// once per prepare of each handler ([main-thread]; it may allocate): returns the Prepared
     /// that runs the phases for that handler, sized by the record (its num_entries for a
@@ -2066,11 +2115,11 @@ public:
     /// callback has no error record; a null return fails it with ANIRA_ERROR_INTERNAL, since
     /// nothing could run the phases. A refused prepare leaves the handler unprepared and
     /// deletes nothing that was not returned.
-    virtual std::unique_ptr<Prepared> prepare(const StagePrepareInfo& info) = 0;
+    virtual std::unique_ptr<Prepared> prepare(const PrepareInfo& info) = 0;
     /// Called once per Pipeline::add of this stage, when the last pipeline or handler that
     /// carries it dies, on the thread of that destroy ([main-thread]), after every Prepared of
-    /// it was deleted; no callback of that chain runs afterwards. The object itself lives as
-    /// long as a shared_ptr to it does.
+    /// it was deleted, whether or not init ever ran; no callback of that chain runs afterwards.
+    /// The object itself lives as long as a shared_ptr to it does.
     virtual void release() noexcept {}
 };
 
@@ -2125,15 +2174,35 @@ struct StageTrampolines {
         prepared_of(prepared).reset(context);
     }
 
+    /// A throw never crosses the C boundary: it becomes the status, and its text a log line.
+    static anira_status ANIRA_CALL init(const anira_init_info* info, void* user_data) noexcept {
+        try {
+            stage_of(user_data).init(InitInfo(info));
+            return ANIRA_OK;
+        } catch (const Error& error) {
+            log_throw("init", error.what());
+            return failed(error.status) ? error.status : ANIRA_ERROR_INTERNAL;
+        } catch (const std::bad_alloc& error) {
+            log_throw("init", error.what());
+            return ANIRA_ERROR_OUT_OF_MEMORY;
+        } catch (const std::exception& error) {
+            log_throw("init", error.what());
+            return ANIRA_ERROR_INTERNAL;
+        } catch (...) {
+            log_throw("init", "an exception that is no std::exception");
+            return ANIRA_ERROR_INTERNAL;
+        }
+    }
+
     /// A throw never crosses the C boundary: it becomes the status, and its text a log line. On
     /// success the Prepared leaves the unique_ptr for the C out_prepared, anira's from then on;
     /// a throw destroys nothing that was not returned, and a null return is ANIRA_ERROR_INTERNAL.
-    static anira_status ANIRA_CALL prepare(const anira_stage_prepare_info* info,
+    static anira_status ANIRA_CALL prepare(const anira_prepare_info* info,
                                            void* user_data,
                                            void** out_prepared) noexcept {
         Stage& stage = stage_of(user_data);
         try {
-            std::unique_ptr<Stage::Prepared> prepared = stage.prepare(StagePrepareInfo(info));
+            std::unique_ptr<Stage::Prepared> prepared = stage.prepare(PrepareInfo(info));
             if (prepared == nullptr) {
                 anira_log(ANIRA_LOG_ERROR,
                           "anira.hpp",
@@ -2143,16 +2212,16 @@ struct StageTrampolines {
             *out_prepared = prepared.release();
             return ANIRA_OK;
         } catch (const Error& error) {
-            log_throw(error.what());
+            log_throw("prepare", error.what());
             return failed(error.status) ? error.status : ANIRA_ERROR_INTERNAL;
         } catch (const std::bad_alloc& error) {
-            log_throw(error.what());
+            log_throw("prepare", error.what());
             return ANIRA_ERROR_OUT_OF_MEMORY;
         } catch (const std::exception& error) {
-            log_throw(error.what());
+            log_throw("prepare", error.what());
             return ANIRA_ERROR_INTERNAL;
         } catch (...) {
-            log_throw("an exception that is no std::exception");
+            log_throw("prepare", "an exception that is no std::exception");
             return ANIRA_ERROR_INTERNAL;
         }
     }
@@ -2171,9 +2240,9 @@ struct StageTrampolines {
 
 private:
     /// Formats into a fixed buffer: nothing here may throw inside the handler of a throw.
-    static void log_throw(const char* what) noexcept {
+    static void log_throw(const char* slot, const char* what) noexcept {
         std::array<char, ANIRA_ERROR_MESSAGE_CAPACITY> text{};
-        std::snprintf(text.data(), text.size(), "the stage's prepare threw: %s", what);
+        std::snprintf(text.data(), text.size(), "the stage's %s threw: %s", slot, what);
         anira_log(ANIRA_LOG_ERROR, "anira.hpp", text.data());
     }
 };
@@ -2183,14 +2252,14 @@ private:
 // ---- engines (section 7) -------------------------------------------------------------------
 
 /**
- * @brief The record an Engine's prepare receives, anira_engine_prepare_info of
- * anira/abi/engine.h as views. Valid for the duration of prepare: the spans and the model die
- * with the call, so an engine copies what it keeps (the templates, the names, what it loads
- * from the row's path or bytes).
+ * @brief The record an Engine's load receives, anira_engine_load_info of anira/abi/engine.h as
+ * views. Valid for the duration of load: the spans and the model die with the call, so an
+ * engine copies what it keeps (the templates, the names, what it loads from the row's path or
+ * bytes).
  */
-class EnginePrepareInfo {
+class EngineLoadInfo {
 public:
-    explicit EnginePrepareInfo(const anira_engine_prepare_info* info) noexcept : m_info(info) {}
+    explicit EngineLoadInfo(const anira_engine_load_info* info) noexcept : m_info(info) {}
 
     /// This engine's entry in the variant's model list: the row whose path or bytes the engine
     /// loads (model_path(row()), model_bytes(row())).
@@ -2247,7 +2316,7 @@ public:
     }
     /// The name each input slot binds to, in slot order: the entry's tensors record where it
     /// names the slot, else the canonical name. An engine whose side has names binds by these,
-    /// and refuses prepare for a name its side does not have.
+    /// and refuses load for a name its side does not have.
     std::span<const char* const> input_names() const noexcept {
         return {m_info->input_names, m_info->num_inputs};
     }
@@ -2255,15 +2324,17 @@ public:
     std::span<const char* const> output_names() const noexcept {
         return {m_info->output_names, m_info->num_outputs};
     }
-    /// The process calls that may run at once on this prepared model, each on its own instance
-    /// below this count (EngineContext::instance): 1 for a session-exclusive model, the model's
-    /// max_instances for a shared one.
+    /// The shared call slots of this loaded model: the process calls that may run at once on
+    /// them, each on its own instance below this count (EngineContext::instance), the model's
+    /// max_instances for a stateless model; 0 for a model declared stateful or with a declared
+    /// State pair, whose handlers are exclusive (PrepareInfo::exclusive at their prepare) and
+    /// run on what their Prepared builds, never on a shared slot.
     uint32_t instances() const noexcept { return m_info->instances; }
 
-    const anira_engine_prepare_info* native() const noexcept { return m_info; }
+    const anira_engine_load_info* native() const noexcept { return m_info; }
 
 private:
-    const anira_engine_prepare_info* m_info;
+    const anira_engine_load_info* m_info;
 };
 
 /**
@@ -2286,16 +2357,23 @@ public:
     /// Wraps the record a process or reset call received; never NULL (anira hands out none).
     explicit EngineContext(const anira_engine_ctx* ctx) noexcept : m_ctx(ctx) {}
 
-    /// The instance of the prepared model this call runs on, 0 .. EnginePrepareInfo::instances
-    /// - 1; never two calls at once on one instance.
+    /// The shared slot of the loaded model this call runs on, 0 .. EngineLoadInfo::instances
+    /// - 1; never two calls at once on one instance. 0 for an exclusive call, which claimed no
+    /// slot.
     uint32_t instance() const noexcept { return m_ctx->instance; }
     /// The chunk's position in the handler's inference queue (StageContext::entry of the same
     /// chunk).
     uint32_t entry() const noexcept { return m_ctx->entry; }
     /// ANIRA_TICKET_INVALID under a Hard contract; the job's ticket under an Async one.
     anira_ticket ticket() const noexcept { return m_ctx->ticket; }
-    /// Per-call flags; none is defined in this pre-release.
+    /// Per-call flags: ANIRA_ENGINE_CALL_EXCLUSIVE for a call of an exclusive handler.
     uint32_t flags() const noexcept { return m_ctx->flags; }
+    /// Whether ANIRA_ENGINE_CALL_EXCLUSIVE is set: the call is an exclusive handler's, runs on
+    /// what its Prepared built and claimed no shared slot.
+    bool exclusive() const noexcept { return (m_ctx->flags & ANIRA_ENGINE_CALL_EXCLUSIVE) != 0U; }
+    /// What this loaded model's load handed back (the C loaded pointer): for an anira::Engine
+    /// the Engine::Loaded the call runs on, which its Prepared holds already.
+    void* loaded() const noexcept { return m_ctx->loaded; }
     /// The model's input list, State tensors included: the descriptors over the memory the
     /// engine reads, the spec's dtype and the engine-side extents of the prepare record's
     /// templates, with the data.
@@ -2328,35 +2406,44 @@ struct EngineTrampolines;
  * ANIRA_ENGINE_NONE with the id wherever the engine-provider pair travels. It is
  * anira_engine_desc with virtual functions in place of the function pointers, and the
  * semantics are those of anira/abi/engine.h, whose lifecycle it follows, the stage's lifecycle
- * with the same words (Stage, Stage::Prepared). The object is the engine's identity, as an
- * anira_custom_engine is in C: the first Pipeline::register_engine of an object creates its C
- * engine (flags() and consumed_kinds() are read then, once), and every later registration of
- * the same object, on the same Pipeline or another, under the same id or another, adds that
- * same C engine for as long as a Pipeline holding it lives. prepare() is called once per
- * prepared model anira pools and returns that model's Engine::Prepared, the C lifecycle's
- * prepared pointer as a class: process and reset run on it, so what the engine loads and what
- * its instances need is a member of the Prepared and never of the Engine. Two handlers share
- * one Prepared and its instances when they run the same Engine object on an equal model
- * configuration resolved to equal tensors, whichever Pipelines they were created from (two
- * Engine objects never share); a session-exclusive model (ANIRA_MODEL_STATEFUL, a declared
- * State pair) is prepared for its handler alone. So instances of one plugin that share a model
- * load it once when they register one Engine object, kept by the plugin for the whole binary.
- * anira owns the Prepared from prepare on and deletes it at the C unprepare, when the last
- * handler sharing it is re-prepared or destroyed, on the thread of that entry, after its
- * in-flight inferences have drained; release() runs once per C engine, when the last reference
- * to it dies, after every Prepared was deleted.
+ * with one level more and the same words (Stage, Stage::Prepared). The object is the engine's
+ * identity, as an anira_custom_engine is in C: the first Pipeline::register_engine of an object
+ * creates its C engine (flags() and consumed_kinds() are read then, once), and every later
+ * registration of the same object, on the same Pipeline or another, under the same id or
+ * another, adds that same C engine for as long as a Pipeline holding it lives. The levels, from
+ * the outermost in: init() is called once per C engine, by the first anira_handler_prepare
+ * that reaches it, with the facts of the core in effect (InitInfo); load() is called once per
+ * loaded model anira pools and returns that model's Engine::Loaded, the C lifecycle's loaded
+ * pointer as a class: the weights live there, with the shared executors of its instances;
+ * Loaded::prepare() is called once per handler that runs the model and returns that handler's
+ * Engine::Prepared, the C prepared pointer as a class: process and reset run on it, so what an
+ * exclusive handler keeps per stream (its own executor, since its calls claim no shared
+ * instance) is a member of the Prepared, and what every handler shares a member of the Loaded;
+ * nothing an inference needs is a member of the Engine. Two handlers share one Loaded and its
+ * instances when they run the same Engine object on an equal model configuration resolved to
+ * equal tensors, whichever Pipelines they were created from (two Engine objects never share),
+ * a stateful model included: it is loaded once, with no shared instance, and every handler of
+ * it is exclusive (PrepareInfo::exclusive). So instances of one plugin that share a model load
+ * it once when they register one Engine object, kept by the plugin for the whole binary. anira
+ * owns the Prepared from prepare on and deletes it at the C unprepare (the handler's next
+ * prepare or its destroy, on the thread of that entry, after its in-flight inferences have
+ * drained), the Loaded from load on and deletes it at the C unload (when the last handler
+ * holding it is re-prepared or destroyed, after every Prepared over it); release() runs once
+ * per C engine, when the last reference to it dies, after every Loaded was deleted, whether or
+ * not init ever ran.
  *
- * anira never opens a registered row's path or reads its bytes: prepare does, through the
- * record (EnginePrepareInfo::model_path(row()), model_bytes(row()), the config getters on the
- * variant), and binds the slots by the names the record carries where its side has names, so
- * every slot of the plan reports ANIRA_BINDING_ENGINE. process runs on an inference thread, in
- * ANIRA_PHASE_INFERENCE, over an EngineContext, on the instance the context names; it may
- * block and must not allocate per call. reset runs for a session-exclusive prepared model at
- * the first inference of a new stream (after prepare, after anira_handler_reset), on the claimed
- * instance with that inference's context, right before its process; a shared prepared model is
- * never reset. A status other than ANIRA_OK from process fails the chunk: it lands in
- * anira_handler_rt_error with one latched record, anira zeroes the outputs, the chunk delivers
- * zeros at its stream position, a State pair keeps its last good value.
+ * anira never opens a registered row's path or reads its bytes: load does, through the record
+ * (EngineLoadInfo::model_path(row()), model_bytes(row()), the config getters on the variant),
+ * and binds the slots by the names the record carries where its side has names, so every slot
+ * of the plan reports ANIRA_BINDING_ENGINE. process runs on an inference thread, in
+ * ANIRA_PHASE_INFERENCE, over an EngineContext, on the shared instance the context names or,
+ * for an exclusive call (EngineContext::exclusive), on what the Prepared built; it may block
+ * and must not allocate per call. reset runs for an exclusive handler at the first inference
+ * of a new stream (after prepare, after anira_handler_reset), with that inference's context,
+ * right before its process; a handler whose model is stateless is never reset. A status other
+ * than ANIRA_OK from process fails the chunk: it lands in anira_handler_rt_error with one
+ * latched record, anira zeroes the outputs, the chunk delivers zeros at its stream position, a
+ * State pair keeps its last good value.
  *
  * flags() is the engine's promise (anira_engine_desc::flags): an OR of
  * ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE and
@@ -2367,21 +2454,22 @@ struct EngineTrampolines;
  * EngineContext and Tensor offer is nonblocking, so a body that keeps the promise is composed of
  * those calls and the engine's own real-time code.
  *
- * Why the ownership spelling: the Prepared is polymorphic and lives on the heap; prepare returns
- * a std::unique_ptr because anira is its one owner from then on (the trampoline releases it
- * into the C out_prepared on success; a refused prepare destroys nothing that was not
- * returned); the Engine is a std::shared_ptr because it IS shared, by every pipeline it is
- * registered on and every handler created from them: its C engine holds a copy until release.
+ * Why the ownership spelling: the Loaded and the Prepared are polymorphic and live on the heap;
+ * load and prepare return a std::unique_ptr because anira is their one owner from then on (the
+ * trampoline releases it into the C out pointer on success; a refused call destroys nothing
+ * that was not returned); the Engine is a std::shared_ptr because it IS shared, by every
+ * pipeline it is registered on and every handler created from them: its C engine holds a copy
+ * until release.
  */
 class Engine {
 public:
     /**
-     * @brief One prepared model of the engine: what Engine::prepare returns, the C prepared
-     * pointer as a class. process and reset run on it, on the instance the context names, and
-     * what the engine loaded and what its instances need lives here. Created by prepare on the
-     * main thread (it may allocate there), deleted by anira at the C unprepare (when the last
-     * handler sharing the prepared model is re-prepared or destroyed), after the last process;
-     * never copied, never moved.
+     * @brief One handler's prepared handle over a loaded model: what Engine::Loaded::prepare
+     * returns, the C prepared pointer as a class. process and reset run on it: a shared call on
+     * the instance the context names (the Loaded's), an exclusive call on what this object
+     * built at prepare (its own executor). Created by prepare on the main thread (it may
+     * allocate there), deleted by anira at the C unprepare (the handler's next prepare or its
+     * destroy), after the last process and before the Loaded; never copied, never moved.
      */
     class Prepared {
     public:
@@ -2393,16 +2481,47 @@ public:
         Prepared& operator=(Prepared&&) = delete;
 
         /// ANIRA_PHASE_INFERENCE, on an inference thread: one inference over the context's
-        /// tensors, on ctx.instance(). May block, must not allocate per call; every extent and
-        /// every memory handle from the context's tensors, never from prepare. Any status but
+        /// tensors, on ctx.instance() of the Loaded, or on this object's own executor when
+        /// ctx.exclusive(). May block, must not allocate per call; every extent and every
+        /// memory handle from the context's tensors, never from load or prepare. Any status but
         /// ANIRA_OK fails the chunk (zeros at its stream position, the status latched in
         /// anira_handler_rt_error).
         virtual anira_status process(EngineContext& ctx) noexcept = 0;
-        /// The first inference of a new stream on a session-exclusive prepared model (after
-        /// prepare, after anira_handler_reset), on the claimed instance, with that inference's
-        /// context, right before its process; never for a shared prepared model: the state the
-        /// engine keeps inside itself starts over. The base class does nothing.
+        /// The first inference of a new stream of an exclusive handler (after prepare, after
+        /// anira_handler_reset), with that inference's context, right before its process; never
+        /// for a handler whose model is stateless: the state this object keeps per stream starts
+        /// over. The base class does nothing.
         virtual void reset(EngineContext& /*ctx*/) noexcept {}
+    };
+
+    /**
+     * @brief One loaded model of the engine: what Engine::load returns, the C loaded pointer as
+     * a class. The weights and the executors of the shared instances (EngineLoadInfo::instances
+     * of them, never two calls at once on one) live here; prepare hands every handler that runs
+     * the model its Prepared. Created by load on the main thread under the core's lifecycle
+     * lock (it may allocate and read files there), deleted by anira at the C unload (when the
+     * last handler holding the model is re-prepared or destroyed), after every Prepared over it;
+     * never copied, never moved.
+     */
+    class Loaded {
+    public:
+        Loaded() = default;
+        virtual ~Loaded() = default;
+        Loaded(const Loaded&) = delete;
+        Loaded& operator=(const Loaded&) = delete;
+        Loaded(Loaded&&) = delete;
+        Loaded& operator=(Loaded&&) = delete;
+
+        /// Called by anira_handler_prepare on its caller's thread, once per handler that runs
+        /// this model ([main-thread]; it may allocate), after the plan report is built, with
+        /// the record the stage's prepare receives: returns the Prepared that runs the
+        /// handler's inferences, which anira owns from then on. Under PrepareInfo::exclusive
+        /// the handler's calls claim no shared instance, so the Prepared builds the executor
+        /// they run on (and what it keeps per stream); a stateless handler's Prepared routes
+        /// its calls to the shared instances. Of anira it may call the [callback-safe] entries,
+        /// the handler's getters and the two Static entries, never prepare, destroy or a Hard
+        /// entry. It may throw, as Engine::load may; a null return is ANIRA_ERROR_INTERNAL.
+        virtual std::unique_ptr<Prepared> prepare(const PrepareInfo& info) = 0;
     };
 
     Engine() = default;
@@ -2418,31 +2537,42 @@ public:
     /// anira/abi/enums.h does not define is refused at registration with
     /// ANIRA_ERROR_INVALID_ARGUMENT. Read once, when the engine is registered.
     virtual uint32_t flags() const noexcept { return 0; }
-    /// The extensions the engine reads at prepare, as "<host>:<kind>" strings (hosts:
+    /// The extensions the engine reads at load, as "<host>:<kind>" strings (hosts:
     /// tensor_spec, model, model_config, context, contract); they join the consumed-or-fail
     /// walk for the entries of this engine, keyed by its id. Read once, when the engine is
     /// registered; the strings are copied.
     virtual std::span<const char* const> consumed_kinds() const noexcept { return {}; }
 
-    /// Called by anira_handler_prepare on its caller's thread, once per prepared model anira
+    /// Called once per C engine of this object, by the first anira_handler_prepare that reaches
+    /// it (a row of the engine survives validation), under the core's lifecycle lock
+    /// ([main-thread]; it may allocate and log, and may query the context's capabilities, but
+    /// must not call an entry that takes that lock), before the engine's first load, with the
+    /// facts of the core in effect: the level, the thread count, the handler's context. What
+    /// the engine keeps for its whole life (a device context, a thread pool, a weights cache)
+    /// is built here, as a member of the object. It may throw, as load may: the status fails
+    /// that anira_handler_prepare, the C engine counts as uninitialised, and the next prepare
+    /// calls init again. The base class does nothing.
+    virtual void init(const InitInfo& /*info*/) {}
+    /// Called by anira_handler_prepare on its caller's thread, once per loaded model anira
     /// pools ([main-thread], under the core's lifecycle lock, so it may allocate, read files
     /// and log, but must not call an entry that takes that lock: context create and destroy,
     /// handler create, destroy and prepare, anira_inference_thread_create, anira_shutdown,
     /// anira_release_core_if_idle): loads the row's model out of the record, binds the slots
-    /// by the record's names and sizes what its instances need, and returns the Prepared that
-    /// runs the inferences, which anira owns from then on. It may throw: an anira::Error fails
-    /// the prepare with its status, std::bad_alloc with ANIRA_ERROR_OUT_OF_MEMORY, anything
-    /// else with ANIRA_ERROR_INTERNAL, and what() goes to the log (group "anira.hpp"), since
-    /// the C callback has no error record; a null return fails it with ANIRA_ERROR_INTERNAL,
-    /// since nothing could run the inference. The handler's prepare then fails with the
-    /// status, its message naming the engine, and unprepare is not called.
-    virtual std::unique_ptr<Prepared> prepare(const EnginePrepareInfo& info) = 0;
+    /// by the record's names and sizes the shared instances the record counts (none for a
+    /// model whose handlers are exclusive), and returns the Loaded, which anira owns from then
+    /// on. It may throw: an anira::Error fails the prepare with its status, std::bad_alloc with
+    /// ANIRA_ERROR_OUT_OF_MEMORY, anything else with ANIRA_ERROR_INTERNAL, and what() goes to
+    /// the log (group "anira.hpp"), since the C callback has no error record; a null return
+    /// fails it with ANIRA_ERROR_INTERNAL, since nothing could run the inference. The handler's
+    /// prepare then fails with the status, its message naming the engine, and unload is not
+    /// called.
+    virtual std::unique_ptr<Loaded> load(const EngineLoadInfo& info) = 0;
     /// Called once per C engine of this object, when the last reference to it dies (every
-    /// Pipeline that registered it, every handler created from them, every prepared model), on
-    /// the thread of that destroy ([main-thread]), after every Prepared of it was deleted; no
-    /// callback of that C engine runs afterwards. A registration after that creates a new C
-    /// engine, answered by a release of its own. The object itself lives as long as a
-    /// shared_ptr to it does.
+    /// Pipeline that registered it, every handler created from them, every loaded model), on
+    /// the thread of that destroy ([main-thread]), after every Loaded of it was deleted,
+    /// whether or not init ever ran; no callback of that C engine runs afterwards. A
+    /// registration after that creates a new C engine, answered by a release of its own. The
+    /// object itself lives as long as a shared_ptr to it does.
     virtual void release() noexcept {}
 
 private:
@@ -2477,14 +2607,15 @@ struct EngineHandle {
  * @brief The C callbacks of an Engine registered through Pipeline::register_engine, and the C
  * engine of an Engine object (handle_of). user_data is a heap-allocated std::shared_ptr<Engine>,
  * so the control block keeps the object alive for as long as the C engine exists; release
- * deletes it, exactly once per C engine. prepared is the Engine::Prepared of one prepared
- * model, released from prepare's unique_ptr into the C out_prepared and deleted at unprepare,
- * exactly once per successful prepare.
+ * deletes it, exactly once per C engine. loaded is the Engine::Loaded of one loaded model,
+ * released from load's unique_ptr into the C out_loaded and deleted at unload; prepared the
+ * Engine::Prepared of one handler on it, released from prepare's unique_ptr into the C
+ * out_prepared and deleted at unprepare, exactly once per successful call each.
  */
 struct EngineTrampolines {
     /// The C engine of `engine`: the one a living Pipeline already holds, else a new one
     /// (anira_custom_engine_create), whose descriptor is read from the object now: flags(),
-    /// consumed_kinds(), the five slots. @throws Error when the C entry refuses the descriptor
+    /// consumed_kinds(), the eight slots. @throws Error when the C entry refuses the descriptor
     /// (a flags() bit anira/abi/enums.h does not define); a refused create keeps no copy of the
     /// object and never calls its release.
     static std::shared_ptr<EngineHandle> handle_of(const std::shared_ptr<Engine>& engine) {
@@ -2495,12 +2626,16 @@ struct EngineTrampolines {
         desc.consumed_kinds = kinds.empty() ? nullptr : kinds.data();
         desc.num_consumed_kinds = static_cast<uint32_t>(kinds.size());
         desc.flags = engine->flags();  // the C entry refuses a bit it does not define
-        // The shared lifecycle, every slot filled: process and reset on the prepared model's
-        // Prepared, prepare returning it, unprepare deleting it, release for the C engine.
+        // The shared lifecycle, every slot filled: process and reset on the handler's Prepared,
+        // prepare returning it and unprepare deleting it, load returning the Loaded and unload
+        // deleting it, init and release for the C engine.
         desc.process = &process;
         desc.reset = &reset;
         desc.prepare = &prepare;
         desc.unprepare = &unprepare;
+        desc.load = &load;
+        desc.unload = &unload;
+        desc.init = &init;
         desc.release = &release;
         // The C engine owns the copy from a successful create on and deletes it in release; a
         // refused create never calls release, so the copy dies here with the throw. The handle
@@ -2518,13 +2653,17 @@ struct EngineTrampolines {
     static Engine& engine_of(void* user_data) noexcept {
         return **static_cast<std::shared_ptr<Engine>*>(user_data);
     }
+    static Engine::Loaded& loaded_of(void* loaded) noexcept {
+        return *static_cast<Engine::Loaded*>(loaded);
+    }
     static Engine::Prepared& prepared_of(void* prepared) noexcept {
         return *static_cast<Engine::Prepared*>(prepared);
     }
 
     // process and reset carry no real-time attribute, like the C typedefs: the promise is the
-    // engine's flags(), not a property of the type. They run on the prepared model's Prepared;
-    // the registration in user_data is not read on a per-inference path.
+    // engine's flags(), not a property of the type. They run on the handler's Prepared; the
+    // registration in user_data and the Loaded in the context are not read on a per-inference
+    // path.
     static anira_status ANIRA_CALL process(const anira_engine_ctx* ctx,
                                            void* prepared,
                                            void* /*user_data*/) noexcept {
@@ -2538,15 +2677,55 @@ struct EngineTrampolines {
         prepared_of(prepared).reset(context);
     }
 
-    /// A throw never crosses the C boundary: it becomes the status, and its text a log line. On
-    /// success the Prepared leaves the unique_ptr for the C out_prepared, anira's from then on;
+    /// A throw never crosses the C boundary: it becomes the status, and its text a log line.
+    static anira_status ANIRA_CALL init(const anira_init_info* info, void* user_data) noexcept {
+        return guarded("init", [&] {
+            engine_of(user_data).init(InitInfo(info));
+            return ANIRA_OK;
+        });
+    }
+
+    /// On success the Loaded leaves the unique_ptr for the C out_loaded, anira's from then on;
     /// a throw destroys nothing that was not returned, and a null return is ANIRA_ERROR_INTERNAL.
-    static anira_status ANIRA_CALL prepare(const anira_engine_prepare_info* info,
-                                           void* user_data,
+    static anira_status ANIRA_CALL load(const anira_engine_load_info* info,
+                                        void* user_data,
+                                        void** out_loaded) noexcept {
+        return guarded("load", [&] {
+            std::unique_ptr<Engine::Loaded> loaded =
+                engine_of(user_data).load(EngineLoadInfo(info));
+            if (loaded == nullptr) {
+                anira_log(ANIRA_LOG_ERROR,
+                          "anira.hpp",
+                          "the engine's load returned no Loaded: nothing can run the inference");
+                return ANIRA_ERROR_INTERNAL;
+            }
+            *out_loaded = loaded.release();
+            return ANIRA_OK;
+        });
+    }
+
+    /// The Loaded of one loaded model, back from the C lifecycle: deleted here, once.
+    static void ANIRA_CALL unload(void* loaded, void* /*user_data*/) noexcept {
+        std::unique_ptr<Engine::Loaded> holder(static_cast<Engine::Loaded*>(loaded));
+        holder.reset();
+    }
+
+    /// On success the Prepared leaves the unique_ptr for the C out_prepared, anira's from then
+    /// on; a throw destroys nothing that was not returned, and a null return is
+    /// ANIRA_ERROR_INTERNAL, as is a call without a Loaded (an Engine always loads one).
+    static anira_status ANIRA_CALL prepare(const anira_prepare_info* info,
+                                           void* loaded,
+                                           void* /*user_data*/,
                                            void** out_prepared) noexcept {
-        Engine& engine = engine_of(user_data);
-        try {
-            std::unique_ptr<Engine::Prepared> prepared = engine.prepare(EnginePrepareInfo(info));
+        return guarded("prepare", [&] {
+            if (loaded == nullptr) {
+                anira_log(ANIRA_LOG_ERROR,
+                          "anira.hpp",
+                          "the engine's prepare was called without a Loaded");
+                return ANIRA_ERROR_INTERNAL;
+            }
+            std::unique_ptr<Engine::Prepared> prepared =
+                loaded_of(loaded).prepare(PrepareInfo(info));
             if (prepared == nullptr) {
                 anira_log(ANIRA_LOG_ERROR,
                           "anira.hpp",
@@ -2556,22 +2735,10 @@ struct EngineTrampolines {
             }
             *out_prepared = prepared.release();
             return ANIRA_OK;
-        } catch (const Error& error) {
-            log_throw(error.what());
-            return failed(error.status) ? error.status : ANIRA_ERROR_INTERNAL;
-        } catch (const std::bad_alloc& error) {
-            log_throw(error.what());
-            return ANIRA_ERROR_OUT_OF_MEMORY;
-        } catch (const std::exception& error) {
-            log_throw(error.what());
-            return ANIRA_ERROR_INTERNAL;
-        } catch (...) {
-            log_throw("an exception that is no std::exception");
-            return ANIRA_ERROR_INTERNAL;
-        }
+        });
     }
 
-    /// The Prepared of one prepared model, back from the C lifecycle: deleted here, once.
+    /// The Prepared of one handler, back from the C lifecycle: deleted here, once.
     static void ANIRA_CALL unprepare(void* prepared, void* /*user_data*/) noexcept {
         std::unique_ptr<Engine::Prepared> holder(static_cast<Engine::Prepared*>(prepared));
         holder.reset();
@@ -2584,10 +2751,32 @@ struct EngineTrampolines {
     }
 
 private:
+    /// Runs `body` with the C boundary's rule: a throw becomes the status (an anira::Error its
+    /// own, std::bad_alloc ANIRA_ERROR_OUT_OF_MEMORY, anything else ANIRA_ERROR_INTERNAL) and
+    /// its text a log line naming the slot.
+    template <class Body>
+    static anira_status guarded(const char* slot, Body&& body) noexcept {
+        try {
+            return body();
+        } catch (const Error& error) {
+            log_throw(slot, error.what());
+            return failed(error.status) ? error.status : ANIRA_ERROR_INTERNAL;
+        } catch (const std::bad_alloc& error) {
+            log_throw(slot, error.what());
+            return ANIRA_ERROR_OUT_OF_MEMORY;
+        } catch (const std::exception& error) {
+            log_throw(slot, error.what());
+            return ANIRA_ERROR_INTERNAL;
+        } catch (...) {
+            log_throw(slot, "an exception that is no std::exception");
+            return ANIRA_ERROR_INTERNAL;
+        }
+    }
+
     /// Formats into a fixed buffer: nothing here may throw inside the handler of a throw.
-    static void log_throw(const char* what) noexcept {
+    static void log_throw(const char* slot, const char* what) noexcept {
         std::array<char, ANIRA_ERROR_MESSAGE_CAPACITY> text{};
-        std::snprintf(text.data(), text.size(), "the engine's prepare threw: %s", what);
+        std::snprintf(text.data(), text.size(), "the engine's %s threw: %s", slot, what);
         anira_log(ANIRA_LOG_ERROR, "anira.hpp", text.data());
     }
 };
@@ -2812,11 +3001,12 @@ private:
             desc.after_inference = &detail::StageTrampolines::after_inference;
         }
         // The shared lifecycle: reset on the handler's Prepared (always filled, the base body
-        // does nothing), prepare returning it, unprepare deleting it, release for the
+        // does nothing), prepare returning it, unprepare deleting it, init and release for the
         // registration.
         desc.reset = &detail::StageTrampolines::reset;
         desc.prepare = &detail::StageTrampolines::prepare;
         desc.unprepare = &detail::StageTrampolines::unprepare;
+        desc.init = &detail::StageTrampolines::init;
         desc.release = &detail::StageTrampolines::release;
         // The carrier owns the copy from a successful add on and deletes it in release; a
         // refused add never calls release, so the copy dies here with the throw.

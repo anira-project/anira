@@ -246,8 +246,8 @@ void check_spec(const anira_tensor_spec& spec,
     // chunk's buffer) is float32 until the typed storage arrives. A State tensor travels
     // through neither: its pair lives in the handler's two buffers in the spec's dtype (port.h),
     // which the engine is bound to as they are, so the rule does not stand on it (a built-in
-    // adapter refuses a model with a non-float32 tensor at prepare; a registered engine binds
-    // what its prepare accepts).
+    // engine refuses a model with a non-float32 tensor at load; a registered engine binds
+    // what its load accepts).
     if (spec.m_dtype != ANIRA_DTYPE_F32 && spec.m_role != ANIRA_ROLE_STATE) {
         not_supported(where + "dtype " + hex_dtype(spec.m_dtype) +
                       ": the queue stores float32 in this pre-release");

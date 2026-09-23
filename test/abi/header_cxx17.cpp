@@ -44,9 +44,22 @@ static_assert(ANIRA_PHASE_BEFORE_INFERENCE == 2 && ANIRA_PHASE_INFERENCE == 3 &&
                   ANIRA_PHASE_AFTER_INFERENCE == 4,
               "before < inference < after");
 static_assert(ANIRA_PHASE_PREPARE == 5 && ANIRA_PHASE_RELEASE == 6, "the lifecycle phases");
-// The two phases of the shared lifecycle, appended: the stage's reset slot and its unprepare.
+// The phases of the shared lifecycle, appended: the stage's reset slot and its unprepare,
+// then init (both descriptors), then the engine's model level, load and unload.
 static_assert(ANIRA_PHASE_RESET == 7 && ANIRA_PHASE_UNPREPARE == 8,
               "the phases of the shared lifecycle");
+static_assert(ANIRA_PHASE_INIT == 9 && ANIRA_PHASE_LOAD == 10 && ANIRA_PHASE_UNLOAD == 11,
+              "init, load and unload appended");
+// anira/abi/lifecycle.h: the two records both descriptors share, and the bits of a prepare and
+// of an engine call, bit 0 of their words (one assertion each: the operands of a joined one
+// would read as the same expression).
+constexpr uint32_t k_bit0 = 1u;
+static_assert(std::is_same_v<decltype(anira_prepare_info::flags), uint32_t>,
+              "the shared prepare record's flags");
+static_assert(std::is_same_v<decltype(anira_init_info::num_threads), uint32_t>,
+              "the shared init record's thread count");
+static_assert(ANIRA_PREPARE_EXCLUSIVE == k_bit0, "the exclusive bit of a prepare");
+static_assert(ANIRA_ENGINE_CALL_EXCLUSIVE == k_bit0, "the exclusive bit of an engine call");
 // anira/abi/stage.h: the stage context is frozen at 64 bytes, eight scalars and four pointer
 // slots (the frame and three reserved ones), and travels by value like the tensor.
 static_assert(sizeof(anira_stage_ctx) == 64 && alignof(anira_stage_ctx) == 8,
@@ -124,31 +137,38 @@ static_assert(std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
     checks += tensor.release == nullptr && tensor.ndim == 0u ? 1 : 0;
     checks += d3d12.device == nullptr && webgpu.exec == ANIRA_EXEC_WORKER ? 1 : 0;
     const anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;  // the initializer as C++17 braces it
-    const anira_stage_prepare_info info = ANIRA_STAGE_PREPARE_INFO_INIT;
+    // anira/abi/lifecycle.h: the two shared records as C++17 braces their initializers.
+    const anira_prepare_info info = ANIRA_PREPARE_INFO_INIT;
+    const anira_init_info init_info = ANIRA_INIT_INFO_INIT;
     anira_stage_ctx ctx{};
     ctx.ticket = ANIRA_TICKET_INVALID;
     checks += stage.struct_size == sizeof(anira_stage_desc) && stage.user_data == nullptr ? 1 : 0;
-    checks += stage.flags == 0U && stage.release == nullptr ? 1 : 0;
+    checks += stage.flags == 0U && stage.release == nullptr && stage.init == nullptr ? 1 : 0;
     checks += stage.reset == nullptr && stage.unprepare == nullptr ? 1 : 0;
-    checks += info.struct_size == sizeof(anira_stage_prepare_info) && info.handler == nullptr &&
-                      info.num_entries == 0U
-                  ? 1
-                  : 0;
-    checks += ctx.frame == nullptr && ctx.entry == 0U && ctx.reserved_ptr2_bits == 0u ? 1 : 0;
-    // anira/abi/engine.h: the two initializers as C++17 braces them, and the context.
-    const anira_engine_desc engine = ANIRA_ENGINE_DESC_INIT;
-    const anira_engine_prepare_info engine_info = ANIRA_ENGINE_PREPARE_INFO_INIT;
-    anira_engine_ctx engine_ctx{};
-    engine_ctx.ticket = ANIRA_TICKET_INVALID;
-    checks += engine.struct_size == sizeof(anira_engine_desc) && engine.process == nullptr &&
-                      engine.flags == 0U
+    checks += info.struct_size == sizeof(anira_prepare_info) && info.handler == nullptr &&
+                      info.num_entries == 0U && info.flags == 0U
                   ? 1
                   : 0;
     checks +=
-        engine_info.struct_size == sizeof(anira_engine_prepare_info) && engine_info.instances == 0U
-            ? 1
-            : 0;
-    checks += engine_ctx.inputs == nullptr && engine_ctx.outputs_bits == 0u ? 1 : 0;
+        init_info.struct_size == sizeof(anira_init_info) && init_info.context == nullptr ? 1 : 0;
+    checks += ctx.frame == nullptr && ctx.entry == 0U && ctx.reserved_ptr2_bits == 0u ? 1 : 0;
+    // anira/abi/engine.h: the two initializers as C++17 braces them, and the context with its
+    // loaded pointer.
+    const anira_engine_desc engine = ANIRA_ENGINE_DESC_INIT;
+    const anira_engine_load_info load_info = ANIRA_ENGINE_LOAD_INFO_INIT;
+    anira_engine_ctx engine_ctx{};
+    engine_ctx.ticket = ANIRA_TICKET_INVALID;
+    checks += engine.struct_size == sizeof(anira_engine_desc) && engine.process == nullptr &&
+                      engine.flags == 0U && engine.load == nullptr && engine.init == nullptr
+                  ? 1
+                  : 0;
+    checks += load_info.struct_size == sizeof(anira_engine_load_info) && load_info.instances == 0U
+                  ? 1
+                  : 0;
+    checks += engine_ctx.inputs == nullptr && engine_ctx.outputs_bits == 0u &&
+                      engine_ctx.loaded == nullptr
+                  ? 1
+                  : 0;
     return checks;
 }
 

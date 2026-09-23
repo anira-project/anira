@@ -375,7 +375,7 @@ export const anira_engine_ctx = {
     reserved1: { offset: 28, size: 4 },
     inputs: { offset: 32, size: 8, ptr: true },
     outputs: { offset: 40, size: 8, ptr: true },
-    reserved_ptr0: { offset: 48, size: 8, ptr: true },
+    loaded: { offset: 48, size: 8, ptr: true },
     reserved_ptr1: { offset: 56, size: 8, ptr: true },
   },
 } as const

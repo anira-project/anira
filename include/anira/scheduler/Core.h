@@ -23,9 +23,11 @@
 struct anira_context_config;
 
 namespace anira::backend {
-/// One plan a session asks for (src/backends/Adapters.h): where its adapter comes from and the
-/// record of its model. A parameter type here, complete in Core.cpp and at every caller.
+/// One plan a session asks for (src/backends/Adapters.h): where its loaded model comes from
+/// and the record of it. A parameter type here, complete in Core.cpp and at every caller.
 struct PlanRequest;
+/// The loaded model of a plan (src/backends/Adapter.h); a return type here, complete in Core.cpp.
+class Loaded;
 }  // namespace anira::backend
 
 namespace anira {
@@ -39,7 +41,7 @@ struct RtLatch;
 
 /**
  * @brief Process-wide inference core: session registry, inference thread pool, the pool of
- * prepared models and the global inference queue
+ * loaded models and the global inference queue
  *
  * The core coordinates every inference session in a process (or, for a plugin, in the
  * binary that embeds anira): it owns the shared inference thread pool, pools the prepared
@@ -107,15 +109,16 @@ public:
      * Applies or reconciles the given context config (see the class description), builds
      * the session with its preprocessing/postprocessing pipeline and inference
      * configuration, builds its plan table from the requests (one plan per request, in
-     * order: a built-in engine's prepared model is taken from the pool when an equal one
-     * exists there and prepared once else, a session-exclusive one is prepared for this
-     * session alone, a 2.x backend and the roundtrip get a legacy adapter of their own), and
-     * registers it. When this is the first session, the inference thread pool is built from
+     * order: a built-in or a registered engine's loaded model is taken from the pool when
+     * an equal one exists there and loaded once else, whether the session is exclusive or
+     * not, with this session's prepared handle over it; a 2.x backend and the roundtrip get
+     * a legacy loaded model of their own), and registers it. When this is the first
+     * session, the inference thread pool is built from
      * the configuration in effect (its threads are started by prepare_session()).
      *
      * Registration is the last step: if anything before it throws (typically an engine
      * that cannot load its model), the registry, the thread pool and the configuration are
-     * left exactly as they were and every prepared model this session acquired is released
+     * left exactly as they were and every loaded model this session acquired is released
      * again. Nothing leaks.
      *
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
@@ -844,42 +847,48 @@ private:
         ANIRA_BLOCKING;
 
     /**
-     * @brief The prepared model of one plan request, acquired for a session
+     * @brief The loaded model of one plan request, acquired for a session
      *
      * Called with the lifecycle lock held, from create_session(). A built-in or registered
-     * engine's model that is not session-exclusive is shared: the pool entry whose record
-     * equals the request's and whose carrier is the request's is returned, else a new
-     * adapter is created, prepared once and entered into the pool. A session-exclusive
-     * model is prepared for this session alone and never pooled. A 2.x backend and the
-     * roundtrip get a fresh legacy adapter per session, never pooled.
+     * engine's model is shared: the pool entry whose record equals the request's and whose
+     * carrier is the request's is returned, else a new loaded model is made, its engine
+     * initialised (a registered engine's init slot, once per engine object, with the facts
+     * of the core in effect and the request's context), loaded once and entered into the
+     * pool. Exclusivity is no part of the key: a stateful model is loaded once for every
+     * session that runs it, with no shared slot (the record says so). A 2.x backend and the
+     * roundtrip get a fresh legacy loaded model per session, never pooled.
      *
      * @param state The core's state
      * @param request The plan's request (its model's log level is the one in effect)
      * @param inference_config The session's configuration: what the roundtrip and the 2.x
      * processors of this line are built from
-     * @return The plan's adapter, prepared
-     * @throws anira::StatusError what the engine's prepare throws (MODEL_LOAD, NO_SUCH_FILE,
-     * ENGINE, CONFIG), NOT_SUPPORTED for an engine this build has no adapter for
+     * @param pool_size The size the inference-thread pool will have once this session's
+     * configuration is applied (0: the caller brings its own threads), what the init record
+     * of a registered engine names
+     * @return The plan's loaded model
+     * @throws anira::StatusError what the engine's init and load throw (MODEL_LOAD,
+     * NO_SUCH_FILE, ENGINE, CONFIG), NOT_SUPPORTED for an engine this build has no adapter
+     * for
      */
-    static std::shared_ptr<backend::Adapter> acquire_adapter_locked(
+    static std::shared_ptr<backend::Loaded> acquire_loaded_locked(
         State& state,
         const backend::PlanRequest& request,
-        InferenceConfig& inference_config);
+        InferenceConfig& inference_config,
+        size_t pool_size);
 
     /**
-     * @brief Releases the prepared models of a session's plan table
+     * @brief Releases the loaded models of a session's plan table
      *
      * Called with the lifecycle lock held, after the session left the registry (or never
-     * entered it: the rollback of create_session()). A pool entry stays while the plan table
-     * of any registered session holds its adapter (pointer identity, no record comparison),
-     * else it is erased; the adapter itself dies with its last holder, which frees what its
-     * prepare loaded.
+     * entered it: the rollback of create_session()) and after the session's prepared handles
+     * were given back. A pool entry stays while the plan table of any registered session
+     * holds its loaded model (pointer identity, no record comparison), else it is erased; the
+     * loaded model itself dies with its last holder, which frees what its load loaded.
      *
      * @param state The core's state
      * @param session The session whose plans are released
      */
-    static void release_adapters_locked(State& state,
-                                        const std::shared_ptr<SessionElement>& session);
+    static void release_loaded_locked(State& state, const std::shared_ptr<SessionElement>& session);
 
     static constexpr size_t k_min_capacity_inference_queue = 10000;  ///< Minimum pre-allocated
                                                                      ///< capacity of the inference

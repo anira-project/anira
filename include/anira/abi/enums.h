@@ -644,8 +644,9 @@ typedef enum anira_provider {
 /**
  * @brief The phase a stage callback runs in, and the engine call between two of them
  * (abi/stage.h, M2); pinned now. The three inference-thread phases are numbered in the
- * order they run; the two phases of the shared lifecycle, reset and unprepare, are
- * appended behind the lifecycle pair.
+ * order they run; the phases of the shared lifecycle (anira/abi/lifecycle.h) are
+ * appended behind the lifecycle pair: reset and unprepare, then init, then the engine's
+ * two model-level phases, load and unload.
  */
 typedef enum anira_stage_phase {
     ANIRA_PHASE_PRE_PROCESS = 0,  /**< Before the model inputs are formed. */
@@ -669,9 +670,26 @@ typedef enum anira_stage_phase {
     ANIRA_PHASE_RESET = 7,
     /**
      * At the next anira_handler_prepare and at anira_handler_destroy, after the last phase call
-     * of the handler: the stage's unprepare slot (anira_stage_unprepare_fn).
+     * of the handler: the stage's unprepare slot (anira_stage_unprepare_fn), and the engine's
+     * (anira_engine_unprepare_fn) for that handler.
      */
     ANIRA_PHASE_UNPREPARE = 8,
+    /**
+     * At the first anira_handler_prepare that reaches a stage's or an engine's carrier, once
+     * per carrier: the init slot (anira_stage_init_fn, anira_engine_init_fn) with an
+     * anira_init_info.
+     */
+    ANIRA_PHASE_INIT = 9,
+    /**
+     * At anira_handler_prepare, under the core's lifecycle lock, once per loaded model anira
+     * pools: an engine's load slot (anira_engine_load_fn) with an anira_engine_load_info.
+     */
+    ANIRA_PHASE_LOAD = 10,
+    /**
+     * When the last handler holding a loaded model is re-prepared or destroyed, after every
+     * unprepare of it: an engine's unload slot (anira_engine_unload_fn).
+     */
+    ANIRA_PHASE_UNLOAD = 11,
     ANIRA_STAGE_PHASE_FORCE32 = 0x7fffffff
 } anira_stage_phase;
 
@@ -710,17 +728,34 @@ typedef enum anira_stage_phase {
 
 /**
  * @brief anira_engine_desc.flags bit: the engine's process accepts a Time extent that varies
- * per call, at or below the template's of its prepare record; a Time extent below the
+ * per call, at or below the template's of its load record; a Time extent below the
  * template is legal only under this bit. Reported in anira_plan_info.engine_flags; no
  * built-in engine sets it.
  */
 #define ANIRA_ENGINE_FLAG_DYNAMIC_TIME 4u
 
 /**
+ * @brief anira_prepare_info.flags bit (anira/abi/lifecycle.h): the handler's inferences run one
+ * at a time and in order, under the dispatch gate of a model declared
+ * ANIRA_MODEL_STATEFUL or with a declared State pair, with a reset at every stream
+ * start. An engine builds what it keeps per stream at this prepare, its own executor
+ * included: its process calls for this handler carry ANIRA_ENGINE_CALL_EXCLUSIVE and
+ * claim no shared slot of the loaded model. For a stage the bit is informational.
+ */
+#define ANIRA_PREPARE_EXCLUSIVE 1u
+
+/**
+ * @brief anira_engine_ctx.flags bit: the call is an exclusive handler's
+ * (ANIRA_PREPARE_EXCLUSIVE at its prepare): it runs on what that handler's prepare
+ * built, no shared slot of the loaded model was claimed, and instance is 0.
+ */
+#define ANIRA_ENGINE_CALL_EXCLUSIVE 1u
+
+/**
  * @brief How a plan bound a slot to the engine's tensor (anira_plan_slot.binding): by name
  * where the engine's side has names, by position otherwise, checked against the spec's
  * shape and dtype at prepare either way; a registered engine received the names in its
- * prepare record and bound itself.
+ * load record and bound itself.
  */
 typedef enum anira_binding {
     /**
@@ -733,7 +768,7 @@ typedef enum anira_binding {
      */
     ANIRA_BINDING_NAME = 1,
     /**
-     * A registered engine: it received the names in its anira_engine_prepare_info and bound
+     * A registered engine: it received the names in its anira_engine_load_info and bound
      * itself.
      */
     ANIRA_BINDING_ENGINE = 2,

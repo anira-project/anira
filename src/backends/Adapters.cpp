@@ -47,22 +47,22 @@ PlanRequest legacy_request(const anira::InferenceConfig& config,
 
 }  // namespace
 
-std::shared_ptr<Adapter> make_builtin_adapter(anira_engine engine) {
+std::shared_ptr<Loaded> make_builtin_loaded(anira_engine engine) {
     switch (engine) {
 #ifdef USE_LIBTORCH
-        case ANIRA_ENGINE_LIBTORCH: return make_libtorch_adapter();
+        case ANIRA_ENGINE_LIBTORCH: return make_libtorch_loaded();
 #endif
 #ifdef USE_ONNXRUNTIME
-        case ANIRA_ENGINE_ONNXRUNTIME: return make_onnxruntime_adapter();
+        case ANIRA_ENGINE_ONNXRUNTIME: return make_onnxruntime_loaded();
 #endif
 #ifdef USE_TFLITE
-        case ANIRA_ENGINE_TFLITE: return make_tflite_adapter();
+        case ANIRA_ENGINE_TFLITE: return make_tflite_loaded();
 #endif
 #ifdef USE_LITERT
-        case ANIRA_ENGINE_LITERT: return make_litert_adapter();
+        case ANIRA_ENGINE_LITERT: return make_litert_loaded();
 #endif
 #ifdef USE_EXECUTORCH
-        case ANIRA_ENGINE_EXECUTORCH: return make_executorch_adapter();
+        case ANIRA_ENGINE_EXECUTORCH: return make_executorch_loaded();
 #endif
         default: return nullptr;
     }
@@ -116,10 +116,12 @@ Model model_of(const anira::InferenceConfig& config, anira::InferenceBackend bac
         tensor.m_num_elements = product_of(dims);
         model.m_outputs.push_back(std::move(tensor));
     }
-    model.m_instances = config.m_num_parallel_processors;
+    // The shared slots: none for a session-exclusive configuration (its calls run on an
+    // executor of the session's own), the configuration's parallel processors otherwise.
+    model.m_instances =
+        config.m_session_exclusive_processor ? 0U : config.m_num_parallel_processors;
     model.m_warm_up = config.m_warm_up;
     model.m_log_level = anira::get_log_level();
-    model.m_session_exclusive = config.m_session_exclusive_processor;
     return model;
 }
 

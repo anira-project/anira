@@ -16,6 +16,7 @@
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
 #include <anira/abi/thread.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/stage.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/handler.h>

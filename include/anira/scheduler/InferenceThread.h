@@ -196,8 +196,8 @@ private:
      *
      * Builds the anira_engine_ctx of the chunk on this stack (instance 0 until the adapter
      * claims one, the chunk's entry, the two descriptor arrays of the struct in slot order,
-     * ANIRA_TICKET_INVALID under the Hard contract, no flags) and runs the plan's adapter on
-     * it: exactly one prepared model runs per call, the one of @p plan, the index the chunk
+     * ANIRA_TICKET_INVALID under the Hard contract, no flags) and runs the plan's prepared
+     * handle on it: exactly one plan runs per call, the one of @p plan, the index the chunk
      * was stamped with in Core::pre_process; the session's m_current_plan is not read here.
      * On a session-exclusive session the chunk's dispatch stamp is compared with the
      * session's engine generation: a difference is the first inference of a new stream

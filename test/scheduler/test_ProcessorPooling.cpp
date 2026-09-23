@@ -36,11 +36,11 @@ using namespace anira;
 
 namespace {
 
-// One inference on `adapter` over buffers of its record's element counts, with descriptors
-// over them: what the inference thread hands the adapter, built by hand for a session that
-// was never prepared.
-anira_status run_once(backend::Adapter& adapter) {
-    const backend::Model& model = adapter.model();
+// One inference through `prepared` over buffers of its loaded model's element counts, with
+// descriptors over them: what the inference thread hands the prepared handle, built by hand
+// for a session that was never prepared.
+anira_status run_once(backend::Prepared& prepared) {
+    const backend::Model& model = prepared.loaded().model();
     std::vector<BufferF> inputs;
     std::vector<BufferF> outputs;
     std::vector<anira_tensor> input_tensors(model.m_inputs.size());
@@ -74,7 +74,7 @@ anira_status run_once(backend::Adapter& adapter) {
     ctx.inputs = input_tensors.data();
     ctx.outputs = output_tensors.data();
     backend::ChunkBuffers buffers{.m_inputs = &inputs, .m_outputs = &outputs};
-    return adapter.run(ctx, &buffers, false);
+    return prepared.run(ctx, &buffers, false);
 }
 
 }  // namespace
@@ -82,19 +82,19 @@ anira_status run_once(backend::Adapter& adapter) {
 // Regression test for issue #76 (use-after-free).
 //
 // Prepared models are pooled and shared between sessions whose plans describe the same model
-// (the default, m_session_exclusive_processor == false). A shared adapter can therefore
+// (the default, m_session_exclusive_processor == false). A shared loaded model can therefore
 // outlive the session that first created it. The host owns each session's InferenceConfig,
-// so releasing that first session destroys its config. If the pooled adapter held a
+// so releasing that first session destroys its config. If the pooled loaded model held a
 // reference into that config, the reference would dangle and the next inference on the
 // surviving session would dereference freed memory.
 //
 // This reproduces the scenario at the core level — two independently-owned configs with
-// equal values (e.g. two anira~ patches), sharing one pooled adapter, then the first is
+// equal values (e.g. two anira~ patches), sharing one pooled loaded model, then the first is
 // released and its config freed.
 //
-// The record the adapter keeps is compared by storage address with the released config
+// The record the loaded model keeps is compared by storage address with the released config
 // (the whole point of the bug is that dereferencing a dangling alias is undefined behaviour,
-// so the test detects it without triggering it), and then the adapter runs one inference on
+// so the test detects it without triggering it), and then the model runs one inference on
 // the surviving session's behalf: with a dangling alias that is the read ASan catches.
 TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
     // The defaults: AUTO threads (resolved by the core), SPIN_BACKOFF, WARNING.
@@ -118,32 +118,33 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
                                           backend::legacy_plan_requests(*config_b, nullptr),
                                           core_config);
 
-    // Precondition: equal configs must actually share one pooled adapter, otherwise the
+    // Precondition: equal configs must actually share one pooled loaded model, otherwise the
     // test would not exercise the bug at all.
     ASSERT_FALSE(session_a->m_plans.empty());
-    ASSERT_NE(session_a->m_plans[0].m_adapter, nullptr);
-    ASSERT_EQ(session_a->m_plans[0].m_adapter, session_b->m_plans[0].m_adapter)
-        << "Sessions with equal configs are expected to share one pooled adapter";
+    ASSERT_NE(session_a->m_plans[0].m_loaded, nullptr);
+    ASSERT_EQ(session_a->m_plans[0].m_loaded, session_b->m_plans[0].m_loaded)
+        << "Sessions with equal configs are expected to share one pooled loaded model";
 
-    // Keep the pooled adapter alive independently so it can be inspected after session A
+    // Keep the pooled loaded model alive independently so it can be inspected after session A
     // is gone (this is what the core's pool does internally).
-    const std::shared_ptr<backend::Adapter> pooled = session_b->m_plans[0].m_adapter;
+    const std::shared_ptr<backend::Loaded> pooled = session_b->m_plans[0].m_loaded;
     const void* released_config_storage = static_cast<const void*>(config_a);
 
     // Release session A and free its config — exactly as a host destroying one plugin
-    // instance would. Session B and the pooled adapter live on.
+    // instance would. Session B and the pooled loaded model live on.
     Core::release_session(session_a);
     session_a.reset();
     delete pp_a;
     delete config_a;  // Session A's InferenceConfig storage is now freed.
 
-    // The pooled adapter is still in use by session B. Its record must not sit in session
+    // The pooled loaded model is still in use by session B. Its record must not sit in session
     // A's freed storage, and an inference on it must read nothing of that storage.
     const void* record_storage = static_cast<const void*>(&pooled->model());
     EXPECT_NE(record_storage, released_config_storage)
-        << "Pooled adapter still aliases the released session's InferenceConfig "
+        << "Pooled loaded model still aliases the released session's InferenceConfig "
            "(use-after-free, issue #76)";
-    EXPECT_EQ(run_once(*pooled), ANIRA_OK);
+    ASSERT_NE(session_b->m_plans[0].m_prepared, nullptr);
+    EXPECT_EQ(run_once(*session_b->m_plans[0].m_prepared), ANIRA_OK);
 
     // Cleanup: releasing the last session tears the shared thread pool down.
     Core::release_session(session_b);

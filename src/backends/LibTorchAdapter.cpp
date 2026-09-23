@@ -1,12 +1,14 @@
 /*
- * The LibTorch adapter: one TorchScript module per instance, the entry method resolved at
- * prepare, the input slots bound to the method's arguments by name where the entry's tensors
- * record or the canonical name matches one and by argument position otherwise, the outputs to
- * the method's returns by position (a method returns unnamed tensors). Every input of a call
- * is a torch::from_blob view over the descriptor's memory (no deleter: the view owns nothing
- * and the struct's memory is never swapped away); the result tensors are the engine's own and
- * are copied into the output descriptors' memory. File-local over anira::backend::Model:
- * nothing of LibTorch enters a public header.
+ * The LibTorch adapter: one TorchScript module per executor (a module is not shareable between
+ * threads, so every executor loads its own, with its own copy of the weights; what one load
+ * shares is the record and the binding tables), the entry method resolved at load, the input
+ * slots bound to the method's arguments by name where the entry's tensors record or the
+ * canonical name matches one and by argument position otherwise, the outputs to the method's
+ * returns by position (a method returns unnamed tensors). Every input of a call is a
+ * torch::from_blob view over the descriptor's memory (no deleter: the view owns nothing and
+ * the struct's memory is never swapped away); the result tensors are the engine's own and are
+ * copied into the output descriptors' memory. File-local over anira::backend::Model: nothing
+ * of LibTorch enters a public header.
  */
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
@@ -113,13 +115,13 @@ struct Argument {
     bool m_defaulted = false;
 };
 
-/// One module of the model: what one instance of the adapter runs on. Loads at construction
+/// One module of the model: what one executor of the adapter runs on. Loads at construction
 /// (a file or the bytes of the record) and resolves the entry method; binds afterwards; runs
 /// every inference over the context's descriptors.
-class Instance {
+class Instance final : public Executor {
 public:
     explicit Instance(const Model& model);
-    ~Instance() = default;
+    ~Instance() override = default;
     Instance(const Instance&) = delete;
     Instance& operator=(const Instance&) = delete;
     Instance(Instance&&) = delete;
@@ -142,15 +144,15 @@ public:
 
     /// The FIXED warm-up of the record over this instance's own scratch memory, through the
     /// process path; the first result is checked against the record (the schema carries no
-    /// shapes: this is where an output's dtype and shape are known at prepare), a mismatch
+    /// shapes: this is where an output's dtype and shape are known at load), a mismatch
     /// StatusError(ANIRA_ERROR_CONFIG) naming the slot and both shapes, a failing inference
-    /// StatusError(ANIRA_ERROR_ENGINE) with LibTorch's text.
-    void warm_up(const Model& model);
+    /// StatusError(ANIRA_ERROR_ENGINE) with LibTorch's text. Nothing before bind.
+    void warm_up(uint32_t iterations) override;
 
     /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
     /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing run or
     /// a result of another dtype or shape than the record's.
-    anira_status process(const anira_engine_ctx& ctx) noexcept;
+    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override;
 
 private:
     /// Binds every input descriptor and runs the method; throws StatusError for a descriptor
@@ -168,6 +170,9 @@ private:
     std::vector<Argument> m_arguments;
     std::optional<size_t> m_num_returns;
     torch::TensorOptions m_tensor_options;
+    /// The record bind was given (the loaded model's, which outlives this executor): what the
+    /// warm-up checks the first result against.
+    const Model* m_record = nullptr;
 
     std::vector<c10::IValue> m_inputs;               ///< the call's arguments, in argument order
     std::vector<size_t> m_argument_of_slot;          ///< per input slot: the argument it feeds
@@ -239,6 +244,7 @@ Instance::Instance(const Model& model) {
 void Instance::bind(const Model& model,
                     const std::vector<SlotBinding>& inputs,
                     const std::vector<SlotBinding>& outputs) {
+    m_record = &model;
     m_inputs.assign(inputs.size(), c10::IValue());
     m_argument_of_slot.clear();
     m_input_dims.clear();
@@ -283,7 +289,7 @@ c10::IValue Instance::execute(const anira_engine_ctx& ctx) {
     }
     if (!m_method.has_value()) {
         throw StatusError(ANIRA_ERROR_INVALID_STATE,
-                          std::string(k_engine) + ": no entry method was resolved at prepare");
+                          std::string(k_engine) + ": no entry method was resolved at load");
     }
     const torch::NoGradGuard no_grad;
     return (*m_method)(m_inputs);
@@ -339,8 +345,9 @@ void Instance::deliver(const c10::IValue& result, const anira_engine_ctx& ctx) c
     }
 }
 
-void Instance::warm_up(const Model& model) {
-    if (model.m_warm_up == 0) { return; }
+void Instance::warm_up(uint32_t iterations) {
+    if (iterations == 0 || m_record == nullptr) { return; }
+    const Model& model = *m_record;
     std::vector<std::vector<float>> input_scratch(m_argument_of_slot.size());
     std::vector<std::vector<float>> output_scratch(m_result_of_slot.size());
     std::vector<anira_tensor> inputs(input_scratch.size());
@@ -367,7 +374,7 @@ void Instance::warm_up(const Model& model) {
     ctx.ticket = ANIRA_TICKET_INVALID;
     ctx.inputs = inputs.data();
     ctx.outputs = outputs.data();
-    for (uint32_t i = 0; i < model.m_warm_up; ++i) {
+    for (uint32_t i = 0; i < iterations; ++i) {
         c10::IValue result;
         try {
             result = execute(ctx);
@@ -379,7 +386,7 @@ void Instance::warm_up(const Model& model) {
         if (i == 0) {
             // The check of the binding rule on the output side, on the first result: the
             // schema carries no shapes, so this is where a result's dtype and shape meet the
-            // record at prepare.
+            // record, at load.
             for (size_t slot = 0; slot < m_result_of_slot.size(); ++slot) {
                 const at::Tensor tensor = result_of(result, slot);
                 const std::vector<int64_t> sizes(tensor.sizes().begin(), tensor.sizes().end());
@@ -398,7 +405,7 @@ void Instance::warm_up(const Model& model) {
     }
 }
 
-anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
+anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
     try {
         deliver(execute(ctx), ctx);
         return ANIRA_OK;
@@ -418,9 +425,13 @@ anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
     }
 }
 
-class LibTorchAdapter final : public Adapter {
+/// The loaded model: the binding read off a probe module (every module loads the same file),
+/// the probe the executor of shared slot 0 or, for a record without a shared slot, the spare of
+/// the first exclusive session; every executor loads its own module (its own functions and
+/// graph executors, and its own copy of the weights).
+class LibTorchLoaded final : public ExecutorLoaded {
 protected:
-    void do_prepare(const Model& model) override {
+    void do_load(const Model& model) override {
         require_f32(model, k_engine);
         torch::set_num_threads(1);
         // Forward anira's log level to c10's glog-style logging (INFO=0, WARNING=1,
@@ -428,12 +439,8 @@ protected:
         // map to INFO.
         FLAGS_caffe2_log_level = std::max(static_cast<int>(model.m_log_level) - 1, 0);
 
-        m_instances.clear();
-        const uint32_t count = model.m_instances > 0 ? model.m_instances : 1U;
-        for (uint32_t i = 0; i < count; ++i) {
-            m_instances.push_back(std::make_unique<Instance>(model));
-        }
-        const Instance& first = *m_instances.front();
+        auto probe = std::make_unique<Instance>(model);
+        const Instance& first = *probe;
 
         // The input side binds to the method's arguments after self: by name (the record's,
         // else the canonical) where one matches, by argument position otherwise; every
@@ -446,10 +453,9 @@ protected:
             names.push_back(argument.m_name);
             if (!argument.m_defaulted) { required = names.size(); }
         }
-        const std::vector<SlotBinding> input_bindings =
-            bind_slots(model.m_inputs, names, required, k_engine, "input");
-        for (size_t slot = 0; slot < input_bindings.size(); ++slot) {
-            const Argument& argument = first.arguments()[input_bindings[slot].m_index];
+        m_input_bindings = bind_slots(model.m_inputs, names, required, k_engine, "input");
+        for (size_t slot = 0; slot < m_input_bindings.size(); ++slot) {
+            const Argument& argument = first.arguments()[m_input_bindings[slot].m_index];
             if (!argument.m_tensor) {
                 throw StatusError(ANIRA_ERROR_CONFIG,
                                   std::string(k_engine) + ": input slot " + std::to_string(slot) +
@@ -457,13 +463,13 @@ protected:
                                       "' binds the method's argument '" + argument.m_name +
                                       "', which is not a tensor");
             }
-            if (input_bindings[slot].m_index >= input_bindings.size()) {
+            if (m_input_bindings[slot].m_index >= m_input_bindings.size()) {
                 throw StatusError(ANIRA_ERROR_CONFIG,
                                   std::string(k_engine) + ": input slot " + std::to_string(slot) +
                                       " '" + model.m_inputs[slot].m_name +
                                       "' binds the method's argument '" + argument.m_name +
-                                      "' (index " + std::to_string(input_bindings[slot].m_index) +
-                                      "), beyond the " + std::to_string(input_bindings.size()) +
+                                      "' (index " + std::to_string(m_input_bindings[slot].m_index) +
+                                      "), beyond the " + std::to_string(m_input_bindings.size()) +
                                       " leading arguments the model config's inputs fill; "
                                       "LibTorch is called with the method's leading arguments");
             }
@@ -471,32 +477,31 @@ protected:
         // The output side binds by position to the method's returns; their count is the
         // schema's where it says (a tuple, one tensor), else the first result's.
         const size_t num_outputs = first.num_returns().value_or(model.m_outputs.size());
-        const std::vector<SlotBinding> output_bindings =
-            bind_slots(model.m_outputs,
-                       std::vector<std::string>(num_outputs),
-                       num_outputs,
-                       k_engine,
-                       "output");
-        for (const std::unique_ptr<Instance>& instance : m_instances) {
-            instance->bind(model, input_bindings, output_bindings);
-            instance->warm_up(model);
-        }
-        set_bindings(bindings_of(input_bindings, output_bindings));
+        m_output_bindings = bind_slots(model.m_outputs,
+                                       std::vector<std::string>(num_outputs),
+                                       num_outputs,
+                                       k_engine,
+                                       "output");
+        probe->bind(model, m_input_bindings, m_output_bindings);
+        set_bindings(bindings_of(m_input_bindings, m_output_bindings));
+        adopt(std::move(probe));
     }
 
-    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept override {
-        if (ctx.instance >= m_instances.size()) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-        return m_instances[ctx.instance]->process(ctx);
+    std::unique_ptr<Executor> make_executor() override {
+        auto executor = std::make_unique<Instance>(model());
+        executor->bind(model(), m_input_bindings, m_output_bindings);
+        return executor;
     }
 
 private:
-    std::vector<std::unique_ptr<Instance>> m_instances;
+    std::vector<SlotBinding> m_input_bindings;
+    std::vector<SlotBinding> m_output_bindings;
 };
 
 }  // namespace
 
-std::shared_ptr<Adapter> make_libtorch_adapter() {
-    return std::make_shared<LibTorchAdapter>();
+std::shared_ptr<Loaded> make_libtorch_loaded() {
+    return std::make_shared<LibTorchLoaded>();
 }
 
 }  // namespace anira::backend

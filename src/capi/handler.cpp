@@ -39,6 +39,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -790,13 +791,13 @@ const anira::capi::PipelineEngine* registered_engine(const anira_pipeline& pipel
 }
 
 // The record of one row's model for the engine room (anira::backend::Model): the row's path
-// or its bytes (kept alive through the row's carrier for the adapter's life), the entry of
-// the row's "entry" extension, one TensorInfo per tensor of either side in slot order (the
+// or its bytes (kept alive through the row's carrier for the loaded model's life), the entry
+// of the row's "entry" extension, one TensorInfo per tensor of either side in slot order (the
 // canonical name; the export's name where the row's tensors record names the slot, else
-// empty, so that the adapter binds by the canonical name where its engine has one and by
+// empty, so that the load binds by the canonical name where its engine has one and by
 // position otherwise; the engine's extents under the row's layout; the spec's dtype), the
-// instances and the warm-up of the 2.x configuration, the exclusivity. Everything copied: a
-// pooled adapter never aliases this handler's configuration.
+// shared slots and the warm-up of the 2.x configuration. Everything copied: a pooled loaded
+// model never aliases this handler's configuration.
 anira::backend::Model model_of_row(const anira_model_config& model,
                                    const anira::capi::ModelEntry& row,
                                    const anira::capi::Derived& derived,
@@ -840,13 +841,16 @@ anira::backend::Model model_of_row(const anira_model_config& model,
     };
     record.m_inputs = tensors_of(model.m_inputs, derived.m_inputs);
     record.m_outputs = tensors_of(model.m_outputs, derived.m_outputs);
-    record.m_session_exclusive = config.m_session_exclusive_processor;
-    // A session-exclusive prepared model runs one inference at a time (the dispatch gate), so
-    // its record says one instance whatever the model's max_instances: the built-in adapters
-    // size their instances from it, and a registered engine's prepare record reads the same
-    // count (the 2.x InferenceConfig clamps its own count the same way; the record says so
-    // itself, so the rule does not hang on that constructor).
-    record.m_instances = record.m_session_exclusive ? 1U : config.m_num_parallel_processors;
+    // A session-exclusive handler runs one inference at a time (the dispatch gate) on what its
+    // own prepare builds, so its loaded model has no shared call slot whatever the model's
+    // max_instances: the built-in engines size their shared executors from the count, and a
+    // registered engine's load record reads the same count (0 says: the handlers of this model
+    // run on what their prepare builds). Exclusivity is the handler's, not the model's: the
+    // model config says whether its handlers are exclusive (a stateful model, a declared State
+    // pair), so every handler of one variant is of one kind and the pool shares one loaded
+    // model between them, prepared per handler.
+    record.m_instances =
+        config.m_session_exclusive_processor ? 0U : config.m_num_parallel_processors;
     record.m_warm_up = config.m_warm_up;
     record.m_log_level = anira::get_log_level();
     return record;
@@ -854,18 +858,19 @@ anira::backend::Model model_of_row(const anira_model_config& model,
 
 // The plans of this handler as the core takes them: one request per surviving row, in entry
 // order (the InferenceConfig's m_model_data order). A built-in engine's row asks for its
-// adapter (pooled by the record); a registered engine's row brings a DescriptorAdapter over
-// its carrier, the row and the variant (pooled by the record and the carrier; a
-// session-exclusive model gets its own); the anira.v2.custom row asks for the roundtrip, the C
-// path having no caller's backend (the test rigs replace that plan's adapter on the control
-// thread before the first block).
+// loaded model (pooled by the record); a registered engine's row brings a DescriptorLoaded
+// over its carrier, the row and the variant (pooled by the record and the carrier, whether
+// the handler is exclusive or not: exclusivity is the prepared handle's, not the model's),
+// with the handler's context for the engine's init; the anira.v2.custom row asks for the
+// roundtrip, the C path having no caller's backend (the test rigs replace that plan's loaded
+// model on the control thread before the first block).
 std::vector<anira::backend::PlanRequest> plan_requests(const anira_handler& handler,
                                                        const anira::capi::Derived& derived,
                                                        const anira::InferenceConfig& config) {
     const anira_model_config& model = handler.m_pipeline.m_variants[0];
-    // The variant a registered engine's prepare reads (the prepare record names it): anira's
-    // own copy, shared by the registered rows of this prepare and kept alive by their
-    // adapters, which may outlive this handler in the pool.
+    // The variant a registered engine's load reads (the load record names it): anira's own
+    // copy, shared by the registered rows of this prepare and kept alive by their loaded
+    // models, which may outlive this handler in the pool.
     std::shared_ptr<const anira_model_config> variant;
     std::string variant_json;
     std::vector<anira::backend::PlanRequest> requests;
@@ -883,18 +888,19 @@ std::vector<anira::backend::PlanRequest> plan_requests(const anira_handler& hand
                     anira::capi::clone_model_config(model));
                 variant_json = anira::capi::model_config_json(model);
             }
-            // The engine's prepare may read the whole variant (the prepare record names it), so
-            // two handlers share its prepared model only over an equal one: the pool compares
+            // The engine's load may read the whole variant (the load record names it), so
+            // two handlers share its loaded model only over an equal one: the pool compares
             // the text beside the record. The carrier is the other half of the key: the same
             // engine object, whichever pipeline it was added to and under whichever id.
             request.m_model.m_variant = variant_json;
             request.m_source = anira::backend::Source::Registered;
             request.m_carrier = engine->m_carrier;
-            request.m_adapter = std::make_shared<anira::backend::DescriptorAdapter>(
-                engine->m_carrier,
-                engine->m_id,
-                static_cast<uint32_t>(row_index),
-                variant);
+            request.m_context = handler.m_context;
+            request.m_loaded =
+                std::make_shared<anira::backend::DescriptorLoaded>(engine->m_carrier,
+                                                                   engine->m_id,
+                                                                   static_cast<uint32_t>(row_index),
+                                                                   variant);
         } else {
             request.m_source = request.m_legacy_backend == anira::InferenceBackend::CUSTOM
                                    ? anira::backend::Source::Roundtrip
@@ -957,7 +963,7 @@ void build_plans(anira_handler& handler,
 // the other, an input read from its host end into the engine and an output written from the
 // engine to its host end; zero-copy, since every engine of the 2.x runtime binds host memory
 // and validate refused any other declaration; the wait strategy the core runs; how the plan's
-// adapter bound the slot to the engine's tensor at prepare.
+// loaded model bound the slot to the engine's tensor at load.
 anira_plan_slot host_slot(uint32_t slot,
                           bool is_input,
                           anira_wait_strategy wait,
@@ -980,24 +986,24 @@ anira_plan_slot host_slot(uint32_t slot,
     return row;
 }
 
-// How the adapter of a plan bound one slot (anira::backend::Adapter::bindings), read off the
-// session's plan table under the plan's dense index; by position for a slot the adapter's
+// How the loaded model of a plan bound one slot (anira::backend::Loaded::bindings), read off
+// the session's plan table under the plan's dense index; by position for a slot the model's
 // report does not cover (a table shorter than the report is anira's own bug and stays
 // visible as such in the rows, never a crash).
 anira_binding binding_of(const anira::SessionElement& session,
                          size_t plan,
                          bool is_input,
                          uint32_t slot) noexcept {
-    if (plan >= session.m_plans.size() || session.m_plans[plan].m_adapter == nullptr) {
+    if (plan >= session.m_plans.size() || session.m_plans[plan].m_loaded == nullptr) {
         return ANIRA_BINDING_POSITION;
     }
-    const anira::backend::Bindings& bindings = session.m_plans[plan].m_adapter->bindings();
+    const anira::backend::Bindings& bindings = session.m_plans[plan].m_loaded->bindings();
     const std::vector<anira_binding>& side = is_input ? bindings.m_inputs : bindings.m_outputs;
     return slot < side.size() ? side[slot] : ANIRA_BINDING_POSITION;
 }
 
 // The plan report: the plan rows, the slots of every plan (their binding read off the
-// session's prepared adapters, under the same dense index) and the extensions each plan's
+// session's loaded models, under the same dense index) and the extensions each plan's
 // candidate consumes (`consumers` are the pipeline's: its stage and its registered engines,
 // whose rows read the engine's id); every string the rows point at is copied into the
 // report's store.
@@ -1285,8 +1291,8 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         state->m_generation = anira::capi::StatePort::k_no_generation;
     }
 
-    // The session: Core::create_session prepares every surviving row's model through its
-    // adapter (the FIXED warm-up runs there) and throws NO_SUCH_FILE / MODEL_LOAD / ENGINE,
+    // The session: Core::create_session loads every surviving row's model (the FIXED warm-up
+    // runs there) and throws NO_SUCH_FILE / MODEL_LOAD / ENGINE,
     // which the firewall classifies. The session records into the handler's latch from its
     // construction. The one processor the session sees is the stage processor, whether the
     // pipeline has a stage or not: without one it runs the default bodies, which are the 2.x
@@ -1375,15 +1381,12 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     }
     handler.m_prepared.store(true, std::memory_order_release);
 
-    // Last, the stage's prepare function, when it has one, with the record: the handler, the
-    // report that now exists, the entry count, a template of the model end of every slot and
-    // the canonical names, valid for the duration of the call. The handler counts as prepared
-    // while it runs, so its getters answer (the entry count among them); no driver thread runs
-    // (prepare overlaps no other entry). A status other than ANIRA_OK fails this prepare with
-    // it, and the caller unprepares the handler; the stage's unprepare is not owed for a
-    // refused prepare.
-    if (stage == nullptr || stage->desc().prepare == nullptr) { return; }
-    const anira_stage_desc& desc = stage->desc();
+    // The shared prepare record (anira/abi/lifecycle.h), the same for every registered engine
+    // of the plan table and for the stage: the handler, the report that now exists, the entry
+    // count, a template of the model end of every slot, the canonical names and the flags of
+    // this prepare, valid for the duration of the calls below. The handler counts as prepared
+    // while they run, so its getters answer (the entry count among them); no driver thread
+    // runs (prepare overlaps no other entry).
     const std::vector<anira_tensor> input_templates =
         model_end_templates(prepared.get_tensor_input_shape(),
                             model.m_inputs,
@@ -1394,7 +1397,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                             host_domains.m_outputs);
     const std::vector<const char*> input_names = canonical_names(model.m_inputs);
     const std::vector<const char*> output_names = canonical_names(model.m_outputs);
-    anira_stage_prepare_info info = ANIRA_STAGE_PREPARE_INFO_INIT;
+    anira_prepare_info info = ANIRA_PREPARE_INFO_INIT;
     info.num_entries = handler.m_num_entries;
     info.handler = &handler;
     info.report = &handler.m_report;
@@ -1404,6 +1407,41 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     info.output_names = output_names.data();
     info.num_inputs = static_cast<uint32_t>(input_templates.size());
     info.num_outputs = static_cast<uint32_t>(output_templates.size());
+    info.flags = prepared.m_session_exclusive_processor ? ANIRA_PREPARE_EXCLUSIVE : 0U;
+
+    // Every registered engine's plan gets this session's prepared handle now, with the record
+    // and the loaded pointer (the core made the other plans' at the session's create): the
+    // engine's prepare, on this thread. A refused prepare (a StatusError naming the engine)
+    // fails this prepare, and the caller unprepares the handler, which gives the handles made
+    // so far back with the session.
+    anira::SessionElement& session = handler.m_manager->session();
+    for (anira::SessionElement::PlanSlot& slot : session.m_plans) {
+        if (!slot.m_registered || slot.m_prepared != nullptr) { continue; }
+        slot.m_prepared = slot.m_loaded->prepare(
+            anira::backend::PrepareRequest{.m_exclusive = prepared.m_session_exclusive_processor,
+                                           .m_info = &info});
+    }
+
+    // Last, the stage: its init once per registration, at the first prepare of a handler of
+    // the pipeline (with the facts of the core in effect: the level, the pool, this handler's
+    // context; a refused init fails this prepare and is tried again by the next one), then its
+    // prepare function, when it has one, with the record. A status other than ANIRA_OK fails
+    // this prepare with it, and the caller unprepares the handler; the stage's unprepare is
+    // not owed for a refused prepare.
+    if (stage == nullptr) { return; }
+    anira_init_info init = ANIRA_INIT_INFO_INIT;
+    init.log_level = static_cast<uint32_t>(anira::get_log_level());
+    init.num_threads = static_cast<uint32_t>(anira::Core::get_thread_pool_size());
+    init.context = handler.m_context;
+    const anira_status init_status = stage->ensure_init(init);
+    if (init_status != ANIRA_OK) {
+        throw StatusError(init_status,
+                          std::string("the stage refused init: it returned ") +
+                              std::to_string(static_cast<int>(init_status)) + " (" +
+                              anira_status_string(init_status) + ")");
+    }
+    const anira_stage_desc& desc = stage->desc();
+    if (desc.prepare == nullptr) { return; }
     void* stage_prepared = nullptr;
     const anira_status status = desc.prepare(&info, desc.user_data, &stage_prepared);
     if (status != ANIRA_OK) {

@@ -11,67 +11,71 @@
  *
  * A stage is a descriptor, not a class: anira_stage_desc names up to four phase callbacks
  * (pre_process, post_process, before_inference, after_inference), a reset, a prepare, an
- * unprepare and a release function, one user_data slot and the real-time flags, and is handed
- * once to anira_pipeline_add_stage, which copies it into a refcounted carrier. A pipeline holds
- * at most one stage (a second anira_pipeline_add_stage is ANIRA_ERROR_INVALID_STATE): the stage
- * owns every phase it fills, for every slot, and composes what it does not handle itself by
- * calling the default bodies, explicitly, in its own code. The stage has no name: with one per
- * pipeline a name identifies nothing, so every record about it says "the stage" and the
- * consumer column of its anira_plan_ext rows reads "stage". The callbacks are the host's;
- * nothing about a stage is a vtable in the library. One registration serves every handler
- * created from the pipeline, and each handler is prepared on its own: anira_handler_prepare
- * calls the stage's prepare with an anira_stage_prepare_info (the handler, the plan report, the
- * entry count, a template of the model end of every slot and the canonical names) and keeps the
- * prepared pointer it hands back for that handler, which every phase call, the reset and the
- * unprepare of that handler receive beside the registration's user_data, as (ctx, prepared,
- * user_data). What a stage keeps per handler (its per-entry scratch, sized by num_entries)
- * lives behind prepared, never behind user_data, which two handlers of one pipeline share.
- * unprepare runs once per successful prepare, at the next anira_handler_prepare and at
- * anira_handler_destroy, after the last phase call; release once, when the last carrier dies.
- * The first chunk of a new stream (after prepare, after anira_handler_reset) calls the stage's
- * reset before its pre_process, on the thread that runs pre_process, with that chunk's context
- * in ANIRA_PHASE_RESET, where the accessors answer the role only and refuse a ring or a model
- * tensor: what the stage keeps between chunks (a resampler, an overlap buffer, a filter's
- * history) starts over there. The same lifecycle, with the same words, is the engine
- * descriptor's (anira/abi/engine.h). The phases of one chunk. pre_process runs on the thread
- * where the host end is produced (the thread that drives the Hard entries; under an Async
- * contract the inference thread) and takes the host end of every slot, the ring of a Streamed
- * tensor, to the MODEL tensor of that slot: the chunking and every conversion, a spectrogram
- * model's FFT included, live here, in the domain of the host end. Then, on an inference thread:
- * anira feeds the State inputs, before_inference runs, anira crosses the edge into the engine's
- * domain, the engine runs, anira crosses the edge back, after_inference runs, anira captures
- * the State outputs. Then post_process takes the model tensor of every output slot back to the
- * host end, on the thread where the host end is consumed. The edge sits directly before and
- * after the engine and is anira's: a stage never crosses a domain, and in this pre-release
- * every host end and every model tensor is host memory (ANIRA_DOMAIN_HOST, the host domain a
- * contract declares per tensor with anira_contract_set_host_domain), the model tensors of
- * ANIRA_DTYPE_F32. One pre_process call forms exactly one chunk; a host block that holds
- * several hops forms several chunks, one call each. Every phase callback receives an
- * anira_stage_ctx that anira fills on its own stack for the duration of the call: the phase,
- * the engine and provider of the plan the chunk was submitted under, the tensor counts of the
- * model's input and output lists, the entry the chunk occupies, and an opaque frame. The
- * tensors and the rings are not in the record: a stage asks per slot, the tensor's position in
- * the model configuration's input or output list (the order the engine binds, and the one
- * number every entry of anira_handler uses). Every accessor returns a status and fills an
- * out-parameter, reset on any status but ANIRA_OK: anira_stage_input_role and
- * anira_stage_output_role answer what the tensor is (the spec's anira_role);
- * anira_stage_input_ring and anira_stage_output_ring hand out the ring of a Streamed tensor in
- * the phase that moves it (pre_process for an input, post_process for an output);
- * anira_stage_input_tensor and anira_stage_output_tensor fill a descriptor of the model end of
- * the slot (the inputs in pre_process and before_inference, the outputs in after_inference and
- * post_process; in pre_process and post_process a State slot has no host end, in the two hooks
- * every slot answers). A slot always has a role. Asking for a ring or a model tensor the slot
- * does not have in this phase is a bug in the stage, not an answer: a stage knows what a slot
- * is, from its model config or by asking the role first, so the accessor answers
- * ANIRA_ERROR_INVALID_STATE and records it in anira_handler_rt_error with one latched record
- * per kind naming the entry, the slot and the phase, as a slot out of range is recorded
- * (ANIRA_ERROR_INVALID_ARGUMENT). The descriptor of a model end is built on every call over the
- * memory the tensor has right now (an engine may swap it between two inferences), so nothing
- * about it may be cached across calls. Further accessors may be appended in a later version;
- * the record's layout does not change for them. The rings stay inside anira: a stage moves
- * elements through the ten anira_ring accessors, which state the dtype they believe the ring
- * holds and move nothing when it is another one (nothing converts, in either direction). A NULL
- * phase slot of the descriptor means anira's default body runs for that phase
+ * unprepare, an init and a release function, one user_data slot and the real-time flags, and is
+ * handed once to anira_pipeline_add_stage, which copies it into a refcounted carrier. A
+ * pipeline holds at most one stage (a second anira_pipeline_add_stage is
+ * ANIRA_ERROR_INVALID_STATE): the stage owns every phase it fills, for every slot, and composes
+ * what it does not handle itself by calling the default bodies, explicitly, in its own code.
+ * The stage has no name: with one per pipeline a name identifies nothing, so every record about
+ * it says "the stage" and the consumer column of its anira_plan_ext rows reads "stage". The
+ * callbacks are the host's; nothing about a stage is a vtable in the library. One registration
+ * serves every handler created from the pipeline. init runs once per registration, at the first
+ * anira_handler_prepare of a handler of the pipeline, before that handler's prepare, with an
+ * anira_init_info (anira/abi/lifecycle.h: the log level and the thread count in effect, the
+ * handler's context); a refused init fails that prepare and the next one calls init again. Each
+ * handler is prepared on its own: anira_handler_prepare calls the stage's prepare with an
+ * anira_prepare_info (the same header: the handler, the plan report, the entry count, a
+ * template of the model end of every slot, the canonical names and the flags of the prepare)
+ * and keeps the prepared pointer it hands back for that handler, which every phase call, the
+ * reset and the unprepare of that handler receive beside the registration's user_data, as (ctx,
+ * prepared, user_data). What a stage keeps per handler (its per-entry scratch, sized by
+ * num_entries) lives behind prepared, never behind user_data, which two handlers of one
+ * pipeline share. unprepare runs once per successful prepare, at the next anira_handler_prepare
+ * and at anira_handler_destroy, after the last phase call; release once, when the last carrier
+ * dies, whether or not init ever ran. The first chunk of a new stream (after prepare, after
+ * anira_handler_reset) calls the stage's reset before its pre_process, on the thread that runs
+ * pre_process, with that chunk's context in ANIRA_PHASE_RESET, where the accessors answer the
+ * role only and refuse a ring or a model tensor: what the stage keeps between chunks (a
+ * resampler, an overlap buffer, a filter's history) starts over there. The same lifecycle, with
+ * the same words, is the engine descriptor's (anira/abi/engine.h). The phases of one chunk.
+ * pre_process runs on the thread where the host end is produced (the thread that drives the
+ * Hard entries; under an Async contract the inference thread) and takes the host end of every
+ * slot, the ring of a Streamed tensor, to the MODEL tensor of that slot: the chunking and every
+ * conversion, a spectrogram model's FFT included, live here, in the domain of the host end.
+ * Then, on an inference thread: anira feeds the State inputs, before_inference runs, anira
+ * crosses the edge into the engine's domain, the engine runs, anira crosses the edge back,
+ * after_inference runs, anira captures the State outputs. Then post_process takes the model
+ * tensor of every output slot back to the host end, on the thread where the host end is
+ * consumed. The edge sits directly before and after the engine and is anira's: a stage never
+ * crosses a domain, and in this pre-release every host end and every model tensor is host
+ * memory (ANIRA_DOMAIN_HOST, the host domain a contract declares per tensor with
+ * anira_contract_set_host_domain), the model tensors of ANIRA_DTYPE_F32. One pre_process call
+ * forms exactly one chunk; a host block that holds several hops forms several chunks, one call
+ * each. Every phase callback receives an anira_stage_ctx that anira fills on its own stack for
+ * the duration of the call: the phase, the engine and provider of the plan the chunk was
+ * submitted under, the tensor counts of the model's input and output lists, the entry the chunk
+ * occupies, and an opaque frame. The tensors and the rings are not in the record: a stage asks
+ * per slot, the tensor's position in the model configuration's input or output list (the order
+ * the engine binds, and the one number every entry of anira_handler uses). Every accessor
+ * returns a status and fills an out-parameter, reset on any status but ANIRA_OK:
+ * anira_stage_input_role and anira_stage_output_role answer what the tensor is (the spec's
+ * anira_role); anira_stage_input_ring and anira_stage_output_ring hand out the ring of a
+ * Streamed tensor in the phase that moves it (pre_process for an input, post_process for an
+ * output); anira_stage_input_tensor and anira_stage_output_tensor fill a descriptor of the
+ * model end of the slot (the inputs in pre_process and before_inference, the outputs in
+ * after_inference and post_process; in pre_process and post_process a State slot has no host
+ * end, in the two hooks every slot answers). A slot always has a role. Asking for a ring or a
+ * model tensor the slot does not have in this phase is a bug in the stage, not an answer: a
+ * stage knows what a slot is, from its model config or by asking the role first, so the
+ * accessor answers ANIRA_ERROR_INVALID_STATE and records it in anira_handler_rt_error with one
+ * latched record per kind naming the entry, the slot and the phase, as a slot out of range is
+ * recorded (ANIRA_ERROR_INVALID_ARGUMENT). The descriptor of a model end is built on every call
+ * over the memory the tensor has right now (an engine may swap it between two inferences), so
+ * nothing about it may be cached across calls. Further accessors may be appended in a later
+ * version; the record's layout does not change for them. The rings stay inside anira: a stage
+ * moves elements through the ten anira_ring accessors, which state the dtype they believe the
+ * ring holds and move nothing when it is another one (nothing converts, in either direction). A
+ * NULL phase slot of the descriptor means anira's default body runs for that phase
  * (anira_stage_default_pre_process pops one hop per Streamed input into its model tensor,
  * anira_stage_default_post_process pushes one hop per Streamed output; a Static slot is
  * materialised ahead of pre_process and captured behind post_process by anira itself). A filled
@@ -108,6 +112,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
+#include <anira/abi/lifecycle.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -346,11 +351,11 @@ typedef struct anira_stage_ctx {
     uint32_t ticket;
     /**
      * The chunk's position in the handler's inference queue: 0 .. anira_handler_num_entries() -
-     * 1 (anira_stage_prepare_info.num_entries), the same value in every phase of the chunk, its
-     * reset included, reused by a later chunk once this one has completed (under an Async
-     * contract the slot part of the ticket). Chunks of one handler may be in flight on several
-     * inference threads at once, and one entry holds one chunk at a time: the index of a
-     * per-chunk scratch the stage sized at prepare with anira_handler_num_entries, so that what
+     * 1 (anira_prepare_info.num_entries), the same value in every phase of the chunk, its reset
+     * included, reused by a later chunk once this one has completed (under an Async contract
+     * the slot part of the ticket). Chunks of one handler may be in flight on several inference
+     * threads at once, and one entry holds one chunk at a time: the index of a per-chunk
+     * scratch the stage sized at prepare with anira_handler_num_entries, so that what
      * pre_process pops or computes for a chunk is found again by before_inference, and what
      * before_inference keeps is found again by after_inference (the two halves of an
      * overlap-add, for one), without an allocation.
@@ -519,46 +524,22 @@ ANIRA_API anira_status ANIRA_CALL anira_stage_output_tensor(const anira_stage_ct
                                                             anira_tensor* out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
- * @brief What anira_stage_prepare_fn receives: the handler being prepared and what its chunks
- * will look like. Tier 2, struct_size first, no implicit padding (LP64 64 bytes, ILP32
- * 40); anira fills it, so it carries no struct_id. Valid for the duration of the call:
- * the stage copies what it keeps (the handler pointer and the report stay valid while
- * the handler stays prepared, the arrays do not).
+ * @brief The init function of a stage: called once per registration (per carrier), by the first
+ * anira_handler_prepare of a handler of the pipeline, on its caller's thread, before
+ * that handler's prepare, with the facts of the core in effect and the handler's
+ * context. It may allocate and log; of anira it may call the [callback-safe] entries and
+ * the context's capabilities, never an entry that takes the lifecycle lock. A status
+ * other than ANIRA_OK fails that anira_handler_prepare with it ("the stage refused
+ * init") and leaves the carrier uninitialised: the next prepare calls init again. NULL:
+ * nothing to init. What a stage keeps for its whole registration lives behind user_data,
+ * whether init filled it or the caller did before anira_pipeline_add_stage.
+ * @param info The record; valid until the callback returns.
+ * @param user_data The descriptor's user_data.
+ * @par Thread contract
+ * [main-thread]
  */
-typedef struct anira_stage_prepare_info {
-    uint32_t struct_size;  /**< sizeof(anira_stage_prepare_info) of the library. */
-    /**
-     * anira_handler_num_entries of this prepare: the chunks that can be in flight at once, one
-     * scratch slot per entry (anira_stage_ctx.entry, the chunk's position in the handler's
-     * inference queue).
-     */
-    uint32_t num_entries;
-    /**
-     * The handler being prepared: its getters and the two Static entries are legal, never
-     * prepare, destroy or a Hard entry.
-     */
-    anira_handler* handler;
-    /**
-     * This prepare's plan report; valid while the handler stays prepared.
-     */
-    const anira_plan_report* report;
-    /**
-     * num_inputs templates in slot order, State tensors included: the MODEL end of every input,
-     * the spec's dtype and shape at the pinned window, all-zero strides, the slot's host
-     * domain, no memory (never dereferenced). What anira_stage_input_tensor will fill, minus
-     * the data.
-     */
-    const anira_tensor* inputs;
-    const anira_tensor* outputs;  /**< num_outputs templates, likewise. */
-    const char* const* input_names;  /**< num_inputs canonical names, in slot order. */
-    const char* const* output_names;  /**< num_outputs canonical names. */
-    uint32_t num_inputs;  /**< The tensors of the model's input list, State tensors included. */
-    uint32_t num_outputs;  /**< The tensors of the model's output list, State tensors included. */
-} anira_stage_prepare_info;
-/**
- * @brief No handler: what a test fills by hand.
- */
-#define ANIRA_STAGE_PREPARE_INFO_INIT ANIRA_INIT(anira_stage_prepare_info, sizeof(anira_stage_prepare_info), 0u, NULL, NULL, NULL, NULL, NULL, NULL, 0u, 0u)
+typedef anira_status (ANIRA_CALL* anira_stage_init_fn)(const anira_init_info* info,
+                                                       void* user_data);
 
 /**
  * @brief The prepare function of a stage: called by anira_handler_prepare on its caller's
@@ -578,7 +559,7 @@ typedef struct anira_stage_prepare_info {
  * @par Thread contract
  * [main-thread]
  */
-typedef anira_status (ANIRA_CALL* anira_stage_prepare_fn)(const anira_stage_prepare_info* info,
+typedef anira_status (ANIRA_CALL* anira_stage_prepare_fn)(const anira_prepare_info* info,
                                                           void* user_data,
                                                           void** out_prepared);
 
@@ -648,8 +629,8 @@ typedef void (ANIRA_CALL* anira_stage_unprepare_fn)(void* prepared, void* user_d
 /**
  * @brief The release function of a stage: called exactly once, when the last carrier of the
  * descriptor dies, on the thread of that destroy (anira_pipeline_destroy or
- * anira_handler_destroy, whichever comes last), after every unprepare. No callback of
- * the stage runs afterwards.
+ * anira_handler_destroy, whichever comes last), after every unprepare, whether or not
+ * init ever ran. No callback of the stage runs afterwards.
  * @param user_data The descriptor's user_data.
  * @par Thread contract
  * [main-thread]
@@ -660,14 +641,16 @@ typedef void (ANIRA_CALL* anira_stage_release_fn)(void* user_data);
  * @brief The one stage of a pipeline, handed once to anira_pipeline_add_stage and copied within
  * struct_size into a refcounted carrier that the pipeline and every handler created from
  * it share. Tier 2: struct_size first, user_data third (its offset never moves), no
- * implicit padding (LP64 96 bytes, ILP32 56), growth at the tail. The slots, in order:
- * the four phases, reset, prepare, unprepare, release; every per-chunk slot receives
- * (ctx, prepared, user_data), prepare hands prepared back per handler and unprepare gets
- * it back, the shape the engine descriptor of anira/abi/engine.h shares. The stage has
- * no name: a pipeline holds one, so a name identifies nothing, and every record about it
- * says "the stage". A NULL phase slot means anira's default body runs for that phase; a
- * filled slot means the stage owns the phase for every slot with a host end and calls
- * the default itself for what it does not handle. The descriptor carries no domain: the
+ * implicit padding (LP64 104 bytes, ILP32 60), growth at the tail. The slots, from the
+ * innermost level out: the four phases, reset, prepare, unprepare, init, release; every
+ * per-chunk slot receives (ctx, prepared, user_data), prepare hands prepared back per
+ * handler and unprepare gets it back, init runs once per registration with the shared
+ * init record, the shape the engine descriptor of anira/abi/engine.h shares (with its
+ * model level, load and unload, between prepare and init). The stage has no name: a
+ * pipeline holds one, so a name identifies nothing, and every record about it says "the
+ * stage". A NULL phase slot means anira's default body runs for that phase; a filled
+ * slot means the stage owns the phase for every slot with a host end and calls the
+ * default itself for what it does not handle. The descriptor carries no domain: the
  * stage works at the host end of every slot, in the host domain the contract declares
  * for that tensor (anira_contract_set_host_domain), and never crosses one.
  */
@@ -742,6 +725,11 @@ typedef struct anira_stage_desc {
      */
     anira_stage_unprepare_fn unprepare;
     /**
+     * ANIRA_PHASE_INIT: called once per registration, by the first anira_handler_prepare of a
+     * handler of the pipeline, before that handler's prepare; NULL for none.
+     */
+    anira_stage_init_fn init;
+    /**
      * Called once, when the last carrier dies, after every unprepare; NULL for none.
      */
     anira_stage_release_fn release;
@@ -749,7 +737,7 @@ typedef struct anira_stage_desc {
 /**
  * @brief A stage without a callback and without a real-time promise (flags 0).
  */
-#define ANIRA_STAGE_DESC_INIT ANIRA_INIT(anira_stage_desc, sizeof(anira_stage_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+#define ANIRA_STAGE_DESC_INIT ANIRA_INIT(anira_stage_desc, sizeof(anira_stage_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
 
 /**
  * @brief The default pre_process, for a stage that wants it ("call super"): for every Streamed

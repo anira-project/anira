@@ -1,14 +1,15 @@
 /*
- * The LiteRT adapter: one compiled model per instance in its own environment, run through
- * the model's first signature (LiteRT synthesizes one for a file without signatures, keyed by
- * the tensor names), the slots bound to the signature's inputs and outputs by name where the
- * entry's tensors record or the canonical name matches a key and by the signature's index
- * order otherwise, checked against the signature tensors' ranked types at prepare, and one
- * managed host buffer per signature tensor in the signature's index order (what
- * LiteRtRunCompiledModel takes), filled from and read into the descriptors' memory through a
- * lock and a memcpy per call (the managed buffers need LiteRT's own alignment; binding
- * anira's memory in place waits for the aligned chunk storage). File-local over
- * anira::backend::Model: nothing of LiteRT enters a public header.
+ * The LiteRT adapter: one environment (carrying the log level), one model and one
+ * compilation options object per loaded model, shared by every executor, and one compiled
+ * model per executor, run through the model's first signature (LiteRT synthesizes one for a
+ * file without signatures, keyed by the tensor names), the slots bound to the signature's
+ * inputs and outputs by name where the entry's tensors record or the canonical name matches a
+ * key and by the signature's index order otherwise, checked against the signature tensors'
+ * ranked types at load, and one managed host buffer per signature tensor in the signature's
+ * index order (what LiteRtRunCompiledModel takes), filled from and read into the descriptors'
+ * memory through a lock and a memcpy per call (the managed buffers need LiteRT's own
+ * alignment; binding anira's memory in place waits for the aligned chunk storage). File-local
+ * over anira::backend::Model: nothing of LiteRT enters a public header.
  */
 #ifdef USE_LITERT
 
@@ -26,6 +27,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../utils/ModelFile.h"
@@ -144,60 +146,30 @@ EngineTensor engine_tensor_of(LiteRtSignature signature, const char* name, bool 
     return tensor;
 }
 
-/// One compiled model in its own environment: what one instance of the adapter runs on.
-/// Loads and compiles at construction (a file or the bytes of the record); creates its managed
-/// buffers at bind; runs every inference over the context's descriptors through them.
-class Instance {
-public:
-    explicit Instance(const Model& model);
-    ~Instance();
-    Instance(const Instance&) = delete;
-    Instance& operator=(const Instance&) = delete;
-    Instance(Instance&&) = delete;
-    Instance& operator=(Instance&&) = delete;
-
-    /// The first signature's tensors of either side, in the signature's index order.
-    std::vector<EngineTensor> inputs() { return side_of(true); }
-    std::vector<EngineTensor> outputs() { return side_of(false); }
-
-    /// Creates one managed host buffer per signature tensor, in the signature's index order,
-    /// typed with the record's engine dims of the slot bound to it; keeps per slot the buffer
-    /// it fills or reads.
-    void bind(const Model& model,
-              const std::vector<SlotBinding>& inputs,
-              const std::vector<SlotBinding>& outputs);
-
-    /// The FIXED warm-up of the record over the managed buffers (zeros in); a failing run is
-    /// StatusError(ANIRA_ERROR_ENGINE) with the status named.
-    void warm_up(uint32_t iterations);
-
-    /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
-    /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing call.
-    anira_status process(const anira_engine_ctx& ctx) noexcept;
-
-private:
-    std::vector<EngineTensor> side_of(bool inputs);
-    /// Copies every input descriptor into its buffer, runs, copies every output buffer into
-    /// its descriptor; throws StatusError.
-    void run(const anira_engine_ctx& ctx);
-    /// Destroys every LiteRT handle this instance owns (no-op on nulls): the destructor and
-    /// a throw during construction.
-    void release() noexcept;
+/// What one load shares between its executors: the environment (with anira's log level), the
+/// model (a file or the bytes of the record, which its owner keeps alive for the loaded
+/// model's life, as LiteRT asks) and the compilation options (the CPU, one thread), which the
+/// C API leaves to the caller once a compiled model was created over them. Immutable after
+/// load, held by the loaded model and by every executor, freed with the last of them.
+struct SharedModel {
+    explicit SharedModel(const Model& model);
+    ~SharedModel() { release(); }
+    SharedModel(const SharedModel&) = delete;
+    SharedModel& operator=(const SharedModel&) = delete;
+    SharedModel(SharedModel&&) = delete;
+    SharedModel& operator=(SharedModel&&) = delete;
 
     LiteRtEnvironment m_env = nullptr;
     LiteRtModel m_model = nullptr;
     LiteRtOptions m_options = nullptr;
-    LiteRtCompiledModel m_compiled_model = nullptr;
 
-    std::vector<LiteRtTensorBuffer> m_input_buffers;   ///< in the signature's index order
-    std::vector<LiteRtTensorBuffer> m_output_buffers;  ///< likewise
-    std::vector<size_t> m_buffer_of_input_slot;        ///< per input slot: its buffer's index
-    std::vector<size_t> m_buffer_of_output_slot;       ///< per output slot
-    std::vector<size_t> m_input_elements;              ///< per input slot
-    std::vector<size_t> m_output_elements;             ///< per output slot
+private:
+    /// Destroys the handles created so far (no-op on nulls): the destructor and a throw
+    /// during construction.
+    void release() noexcept;
 };
 
-Instance::Instance(const Model& model) {
+SharedModel::SharedModel(const Model& model) {
     // Any litert_check below can throw; if it does mid-construction the destructor never
     // runs, so release the handles created so far before propagating.
     try {
@@ -230,11 +202,11 @@ Instance::Instance(const Model& model) {
         }
 
         // CPU compilation, pinned to a single thread to match the other engines (anira gets
-        // its parallelism from running several adapter instances). The prebuilt LiteRT
-        // runtime does not export the LrtCpuOptions helper symbols, so the payload it would
-        // emit is built directly: an "xnnpack"-identified opaque-options blob carrying
-        // num_threads. This depends only on the core exported API
-        // (LiteRtCreateOpaqueOptions / AddOpaqueOptions).
+        // its parallelism from running several executors). The prebuilt LiteRT runtime does
+        // not export the LrtCpuOptions helper symbols, so the payload it would emit is built
+        // directly: an "xnnpack"-identified opaque-options blob carrying num_threads. This
+        // depends only on the core exported API (LiteRtCreateOpaqueOptions /
+        // AddOpaqueOptions).
         litert_check(LiteRtCreateOptions(&m_options), "LiteRtCreateOptions");
         litert_check(LiteRtSetOptionsHardwareAccelerators(m_options, kLiteRtHwAcceleratorCpu),
                      "LiteRtSetOptionsHardwareAccelerators");
@@ -263,13 +235,83 @@ Instance::Instance(const Model& model) {
             LiteRtDestroyOpaqueOptions(cpu_opaque);  // frees cpu_opaque + its payload
             throw std::runtime_error("[anira][LiteRT] LiteRtAddOpaqueOptions failed");
         }
-
-        litert_check(LiteRtCreateCompiledModel(m_env, m_model, m_options, &m_compiled_model),
-                     "LiteRtCreateCompiledModel");
     } catch (...) {
         release();
         throw;
     }
+}
+
+void SharedModel::release() noexcept {
+    if (m_options) {
+        LiteRtDestroyOptions(m_options);
+        m_options = nullptr;
+    }
+    if (m_model) {
+        LiteRtDestroyModel(m_model);
+        m_model = nullptr;
+    }
+    if (m_env) {
+        LiteRtDestroyEnvironment(m_env);
+        m_env = nullptr;
+    }
+}
+
+/// One compiled model over the shared environment, model and options: what one executor of
+/// the adapter runs on. Compiles at construction; creates its managed buffers at bind; runs
+/// every inference over the context's descriptors through them.
+class Instance final : public Executor {
+public:
+    explicit Instance(std::shared_ptr<const SharedModel> shared);
+    ~Instance() override;
+    Instance(const Instance&) = delete;
+    Instance& operator=(const Instance&) = delete;
+    Instance(Instance&&) = delete;
+    Instance& operator=(Instance&&) = delete;
+
+    /// The first signature's tensors of either side, in the signature's index order.
+    std::vector<EngineTensor> inputs() { return side_of(true); }
+    std::vector<EngineTensor> outputs() { return side_of(false); }
+
+    /// Creates one managed host buffer per signature tensor, in the signature's index order,
+    /// typed with the record's engine dims of the slot bound to it; keeps per slot the buffer
+    /// it fills or reads.
+    void bind(const Model& model,
+              const std::vector<SlotBinding>& inputs,
+              const std::vector<SlotBinding>& outputs);
+
+    /// The FIXED warm-up of the record over the managed buffers (zeros in); a failing run is
+    /// StatusError(ANIRA_ERROR_ENGINE) with the status named.
+    void warm_up(uint32_t iterations) override;
+
+    /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
+    /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing call.
+    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override;
+
+private:
+    std::vector<EngineTensor> side_of(bool inputs);
+    /// Copies every input descriptor into its buffer, runs, copies every output buffer into
+    /// its descriptor; throws StatusError.
+    void run(const anira_engine_ctx& ctx);
+    /// Destroys every LiteRT handle this executor owns (no-op on nulls).
+    void release() noexcept;
+
+    std::shared_ptr<const SharedModel> m_shared;  ///< the environment, the model, the options
+    LiteRtCompiledModel m_compiled_model = nullptr;
+
+    std::vector<LiteRtTensorBuffer> m_input_buffers;   ///< in the signature's index order
+    std::vector<LiteRtTensorBuffer> m_output_buffers;  ///< likewise
+    std::vector<size_t> m_buffer_of_input_slot;        ///< per input slot: its buffer's index
+    std::vector<size_t> m_buffer_of_output_slot;       ///< per output slot
+    std::vector<size_t> m_input_elements;              ///< per input slot
+    std::vector<size_t> m_output_elements;             ///< per output slot
+};
+
+Instance::Instance(std::shared_ptr<const SharedModel> shared) : m_shared(std::move(shared)) {
+    litert_check(LiteRtCreateCompiledModel(m_shared->m_env,
+                                           m_shared->m_model,
+                                           m_shared->m_options,
+                                           &m_compiled_model),
+                 "LiteRtCreateCompiledModel");
 }
 
 Instance::~Instance() {
@@ -289,23 +331,11 @@ void Instance::release() noexcept {
         LiteRtDestroyCompiledModel(m_compiled_model);
         m_compiled_model = nullptr;
     }
-    if (m_options) {
-        LiteRtDestroyOptions(m_options);
-        m_options = nullptr;
-    }
-    if (m_model) {
-        LiteRtDestroyModel(m_model);
-        m_model = nullptr;
-    }
-    if (m_env) {
-        LiteRtDestroyEnvironment(m_env);
-        m_env = nullptr;
-    }
 }
 
 std::vector<EngineTensor> Instance::side_of(bool inputs) {
     LiteRtSignature signature = nullptr;
-    litert_check(LiteRtGetModelSignature(m_model, 0, &signature),
+    litert_check(LiteRtGetModelSignature(m_shared->m_model, 0, &signature),
                  "LiteRtGetModelSignature",
                  ANIRA_ERROR_MODEL_LOAD);
     LiteRtParamIndex count = 0;
@@ -346,7 +376,7 @@ void Instance::bind(const Model& model,
     for (size_t slot = 0; slot < inputs.size(); ++slot) {
         const TensorInfo& tensor = model.m_inputs[slot];
         const LiteRtRankedTensorType type = float32_type_of(tensor.m_dims);
-        litert_check(LiteRtCreateManagedTensorBuffer(m_env,
+        litert_check(LiteRtCreateManagedTensorBuffer(m_shared->m_env,
                                                      kLiteRtTensorBufferTypeHostMemory,
                                                      &type,
                                                      tensor.m_num_elements * sizeof(float),
@@ -358,7 +388,7 @@ void Instance::bind(const Model& model,
     for (size_t slot = 0; slot < outputs.size(); ++slot) {
         const TensorInfo& tensor = model.m_outputs[slot];
         const LiteRtRankedTensorType type = float32_type_of(tensor.m_dims);
-        litert_check(LiteRtCreateManagedTensorBuffer(m_env,
+        litert_check(LiteRtCreateManagedTensorBuffer(m_shared->m_env,
                                                      kLiteRtTensorBufferTypeHostMemory,
                                                      &type,
                                                      tensor.m_num_elements * sizeof(float),
@@ -445,7 +475,7 @@ void Instance::run(const anira_engine_ctx& ctx) {
     }
 }
 
-anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
+anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
     try {
         run(ctx);
         return ANIRA_OK;
@@ -462,49 +492,48 @@ anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
     }
 }
 
-class LiteRtAdapter final : public Adapter {
+/// The loaded model: the environment, the model and the options every executor shares
+/// (SharedModel, loaded once), the binding rule over a probe's signature, checked against the
+/// signature tensors' ranked types (a dynamic extent of the file matches anything, a static
+/// one must be the record's); the probe is the executor of shared slot 0 or, for a record
+/// without a shared slot, the spare of the first exclusive session.
+class LiteRtLoaded final : public ExecutorLoaded {
 protected:
-    void do_prepare(const Model& model) override {
+    void do_load(const Model& model) override {
         require_f32(model, k_engine);
-        m_instances.clear();
-        const uint32_t count = model.m_instances > 0 ? model.m_instances : 1U;
-        for (uint32_t i = 0; i < count; ++i) {
-            m_instances.push_back(std::make_unique<Instance>(model));
-        }
-        // The binding rule over the first instance's signature (every instance loaded the
-        // same file), checked against the signature tensors' ranked types: a dynamic extent
-        // of the file matches anything, and a static one must be the record's.
-        Instance& first = *m_instances.front();
-        const std::vector<EngineTensor> inputs = first.inputs();
-        const std::vector<EngineTensor> outputs = first.outputs();
-        const std::vector<SlotBinding> input_bindings =
+        m_shared = std::make_shared<const SharedModel>(model);
+        auto probe = std::make_unique<Instance>(m_shared);
+        const std::vector<EngineTensor> inputs = probe->inputs();
+        const std::vector<EngineTensor> outputs = probe->outputs();
+        m_input_bindings =
             bind_side(model.m_inputs, inputs, inputs.size(), ExtentRule::Exact, k_engine, "input");
-        const std::vector<SlotBinding> output_bindings = bind_side(model.m_outputs,
-                                                                   outputs,
-                                                                   outputs.size(),
-                                                                   ExtentRule::Exact,
-                                                                   k_engine,
-                                                                   "output");
-        for (const std::unique_ptr<Instance>& instance : m_instances) {
-            instance->bind(model, input_bindings, output_bindings);
-            instance->warm_up(model.m_warm_up);
-        }
-        set_bindings(bindings_of(input_bindings, output_bindings));
+        m_output_bindings = bind_side(model.m_outputs,
+                                      outputs,
+                                      outputs.size(),
+                                      ExtentRule::Exact,
+                                      k_engine,
+                                      "output");
+        probe->bind(model, m_input_bindings, m_output_bindings);
+        set_bindings(bindings_of(m_input_bindings, m_output_bindings));
+        adopt(std::move(probe));
     }
 
-    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept override {
-        if (ctx.instance >= m_instances.size()) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-        return m_instances[ctx.instance]->process(ctx);
+    std::unique_ptr<Executor> make_executor() override {
+        auto executor = std::make_unique<Instance>(m_shared);
+        executor->bind(model(), m_input_bindings, m_output_bindings);
+        return executor;
     }
 
 private:
-    std::vector<std::unique_ptr<Instance>> m_instances;
+    std::shared_ptr<const SharedModel> m_shared;  ///< freed with the last executor over it
+    std::vector<SlotBinding> m_input_bindings;
+    std::vector<SlotBinding> m_output_bindings;
 };
 
 }  // namespace
 
-std::shared_ptr<Adapter> make_litert_adapter() {
-    return std::make_shared<LiteRtAdapter>();
+std::shared_ptr<Loaded> make_litert_loaded() {
+    return std::make_shared<LiteRtLoaded>();
 }
 
 }  // namespace anira::backend

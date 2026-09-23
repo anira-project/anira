@@ -1,7 +1,8 @@
-// The engine room's interface (src/backends/Adapter.h) and the legacy adapter over the 2.x
-// virtual, driven directly: no core, no session. The claim loop under several threads, the
-// float32 helpers of the built-in adapters, the 2.x plan table as requests, and the copies the
-// legacy adapter makes around a descriptor that names other memory than the struct's buffer.
+// The engine room's interface (src/backends/Adapter.h: Loaded, Prepared, Executor) and the
+// legacy adapter over the 2.x virtual, driven directly: no core, no session. The claim loop
+// under several threads, the exclusive path, the float32 helpers of the built-in adapters, the
+// 2.x plan table as requests, and the copies the legacy adapter makes around a descriptor that
+// names other memory than the struct's buffer.
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
@@ -33,13 +34,17 @@
 
 namespace {
 
-using anira::backend::Adapter;
 using anira::backend::Bindings;
 using anira::backend::ChunkBuffers;
 using anira::backend::EngineTensor;
+using anira::backend::Executor;
+using anira::backend::ExecutorLoaded;
 using anira::backend::ExtentRule;
+using anira::backend::Loaded;
 using anira::backend::Model;
 using anira::backend::PlanRequest;
+using anira::backend::Prepared;
+using anira::backend::PrepareRequest;
 using anira::backend::SlotBinding;
 using anira::backend::Source;
 using anira::backend::TensorInfo;
@@ -108,10 +113,10 @@ Model gain_model(uint32_t instances = 1) {
     return model;
 }
 
-// An adapter that records what run hands its process: the instance of every call, whether two
-// calls ever ran at once on one instance, and the reset calls.
-class RecordingAdapter final : public Adapter {
-public:
+/// What every executor of a RecordingLoaded records: the calls, whether two calls ever ran at
+/// once on one executor, the calls per shared slot, the calls out of range, the resets and the
+/// flags of the last call.
+struct Recording {
     static constexpr uint32_t k_max_instances = 8;
 
     std::atomic<uint32_t> m_calls{0};
@@ -119,33 +124,72 @@ public:
     std::atomic<uint32_t> m_out_of_range{0};
     std::atomic<uint32_t> m_resets{0};
     std::atomic<uint32_t> m_reset_instance{k_max_instances};
-    std::array<std::atomic<bool>, k_max_instances> m_in_use{};
+    std::atomic<uint32_t> m_last_flags{0};
+    std::atomic<uint32_t> m_own_calls{0};
+    std::atomic<uint32_t> m_executors_made{0};
     std::array<std::atomic<uint32_t>, k_max_instances> m_per_instance{};
     anira_status m_status = ANIRA_OK;
     std::chrono::microseconds m_hold{200};
+};
 
-protected:
-    void do_prepare(const Model& model) override { static_cast<void>(model); }
+/// One executor: records into the shared Recording; its own busy flag tells an overlap.
+class RecordingExecutor final : public Executor {
+public:
+    explicit RecordingExecutor(Recording& recording) : m_recording(&recording) {
+        m_recording->m_executors_made.fetch_add(1);
+    }
 
     anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override {
         static_cast<void>(chunk);
-        if (ctx.instance >= model().m_instances || ctx.instance >= k_max_instances) {
-            m_out_of_range.fetch_add(1);
-            return ANIRA_ERROR_INTERNAL;
+        if (m_in_use.exchange(true)) { m_recording->m_overlaps.fetch_add(1); }
+        std::this_thread::sleep_for(m_recording->m_hold);
+        m_recording->m_last_flags.store(ctx.flags);
+        if ((ctx.flags & ANIRA_ENGINE_CALL_EXCLUSIVE) != 0U) {
+            m_recording->m_own_calls.fetch_add(1);
+        } else if (ctx.instance >= Recording::k_max_instances) {
+            m_recording->m_out_of_range.fetch_add(1);
+        } else {
+            m_recording->m_per_instance.at(ctx.instance).fetch_add(1);
         }
-        if (m_in_use.at(ctx.instance).exchange(true)) { m_overlaps.fetch_add(1); }
-        std::this_thread::sleep_for(m_hold);
-        m_per_instance.at(ctx.instance).fetch_add(1);
-        m_calls.fetch_add(1);
-        m_in_use.at(ctx.instance).store(false);
-        return m_status;
+        m_recording->m_calls.fetch_add(1);
+        m_in_use.store(false);
+        return m_recording->m_status;
     }
 
     void reset(const anira_engine_ctx& ctx) noexcept override {
-        m_resets.fetch_add(1);
-        m_reset_instance.store(ctx.instance);
+        m_recording->m_resets.fetch_add(1);
+        m_recording->m_reset_instance.store(ctx.instance);
+    }
+
+private:
+    Recording* m_recording;
+    std::atomic<bool> m_in_use{false};
+};
+
+/// A loaded model of recording executors: the probe and every further one made over it.
+class RecordingLoaded final : public ExecutorLoaded {
+public:
+    Recording m_recording;
+
+protected:
+    void do_load(const Model& model) override {
+        static_cast<void>(model);
+        adopt(std::make_unique<RecordingExecutor>(m_recording));
+    }
+    std::unique_ptr<Executor> make_executor() override {
+        return std::make_unique<RecordingExecutor>(m_recording);
     }
 };
+
+/// A shared session's handle over `loaded` (no record: the 2.x path's shape).
+std::unique_ptr<Prepared> shared_session(Loaded& loaded) {
+    return loaded.prepare(PrepareRequest{.m_exclusive = false, .m_info = nullptr});
+}
+
+/// An exclusive session's handle over `loaded`.
+std::unique_ptr<Prepared> exclusive_session(Loaded& loaded) {
+    return loaded.prepare(PrepareRequest{.m_exclusive = true, .m_info = nullptr});
+}
 
 // A 2.x backend that records the first sample it was handed and passes the block through
 // (BackendBase::process), or throws.
@@ -262,73 +306,110 @@ std::vector<anira_tensor> descriptors_over(std::vector<anira::BufferF>& buffers)
 }  // namespace
 
 // ============================================================================================
-// The claim loop
+// The lifecycle and the claim loop
 // ============================================================================================
 
-TEST(Adapter, RunRefusesBeforePrepare) {
-    RecordingAdapter adapter;
-    EXPECT_FALSE(adapter.prepared());
-    const anira_engine_ctx ctx{};
-    EXPECT_EQ(adapter.run(ctx, nullptr, false), ANIRA_ERROR_INVALID_STATE);
-    EXPECT_EQ(adapter.m_calls.load(), 0U);
+TEST(Adapter, PrepareRefusesBeforeLoad) {
+    RecordingLoaded loaded;
+    EXPECT_FALSE(loaded.loaded());
+    EXPECT_EQ(loaded.num_instances(), 0U);
+    const anira::StatusError error = status_error_of([&] { shared_session(loaded); });
+    EXPECT_EQ(error.status(), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(loaded.m_recording.m_calls.load(), 0U);
 }
 
-TEST(Adapter, PrepareKeepsTheRecordAndSizesTheInstances) {
-    RecordingAdapter adapter;
+// load keeps the record, makes one executor per shared slot (the probe first) and warms each up
+// once; a record without a shared slot keeps its probe as the spare of the first exclusive
+// session, and a second exclusive session gets one more executor.
+TEST(Adapter, LoadKeepsTheRecordAndSizesTheSharedSlots) {
+    RecordingLoaded loaded;
     const Model model = gain_model(3);
-    adapter.prepare(model);
-    EXPECT_TRUE(adapter.prepared());
-    EXPECT_EQ(adapter.model(), model);
-    EXPECT_EQ(adapter.model().m_instances, 3U);
-    EXPECT_EQ(adapter.model().m_inputs.at(0).m_num_elements, k_block);
+    loaded.load(model);
+    EXPECT_TRUE(loaded.loaded());
+    EXPECT_EQ(loaded.model(), model);
+    EXPECT_EQ(loaded.num_instances(), 3U);
+    EXPECT_EQ(loaded.model().m_inputs.at(0).m_num_elements, k_block);
+    EXPECT_EQ(loaded.m_recording.m_executors_made.load(), 3U) << "one executor per shared slot";
+
+    RecordingLoaded stateful;
+    stateful.load(gain_model(0));
+    EXPECT_EQ(stateful.num_instances(), 0U);
+    EXPECT_EQ(stateful.m_recording.m_executors_made.load(), 1U) << "the probe, kept as the spare";
+    const std::unique_ptr<Prepared> first = exclusive_session(stateful);
+    EXPECT_EQ(stateful.m_recording.m_executors_made.load(), 1U) << "the first session takes it";
+    const std::unique_ptr<Prepared> second = exclusive_session(stateful);
+    EXPECT_EQ(stateful.m_recording.m_executors_made.load(), 2U) << "the second gets one more";
+    EXPECT_TRUE(first->exclusive() && second->exclusive());
+    EXPECT_EQ(&first->loaded(), &stateful);
 }
 
-// Every call gets an instance below the record's count, never two calls at once on one, and no
-// call starves: N threads x M calls on 3 instances all complete.
+// Every shared call gets a slot below the record's count, never two calls at once on one, and
+// no call starves: N threads x M calls of one session on 3 slots all complete; the caller's
+// context stays as it is.
 TEST(Adapter, TheClaimLoopHandsOutDistinctInstancesUnderThreads) {
-    RecordingAdapter adapter;
-    adapter.prepare(gain_model(3));
+    RecordingLoaded loaded;
+    loaded.load(gain_model(3));
+    const std::unique_ptr<Prepared> session = shared_session(loaded);
+    EXPECT_FALSE(session->exclusive());
     constexpr uint32_t k_threads = 6;
     constexpr uint32_t k_calls = 40;
     std::atomic<uint32_t> failures{0};
     std::vector<std::thread> threads;
     threads.reserve(k_threads);
     for (uint32_t t = 0; t < k_threads; ++t) {
-        threads.emplace_back([&adapter, &failures]() {
+        threads.emplace_back([&session, &failures]() {
             anira_engine_ctx ctx{};
             ctx.instance = 77;  // the caller's copy stays as it is
             for (uint32_t call = 0; call < k_calls; ++call) {
-                if (adapter.run(ctx, nullptr, false) != ANIRA_OK) { failures.fetch_add(1); }
+                if (session->run(ctx, nullptr, false) != ANIRA_OK) { failures.fetch_add(1); }
             }
-            if (ctx.instance != 77) { failures.fetch_add(1); }
+            if (ctx.instance != 77 || ctx.flags != 0U) { failures.fetch_add(1); }
         });
     }
     for (std::thread& thread : threads) { thread.join(); }
+    const Recording& recording = loaded.m_recording;
     EXPECT_EQ(failures.load(), 0U);
-    EXPECT_EQ(adapter.m_calls.load(), k_threads * k_calls);
-    EXPECT_EQ(adapter.m_overlaps.load(), 0U) << "two calls at once on one instance";
-    EXPECT_EQ(adapter.m_out_of_range.load(), 0U) << "an instance at or above the count";
+    EXPECT_EQ(recording.m_calls.load(), k_threads * k_calls);
+    EXPECT_EQ(recording.m_overlaps.load(), 0U) << "two calls at once on one executor";
+    EXPECT_EQ(recording.m_out_of_range.load(), 0U) << "a slot at or above the count";
+    EXPECT_EQ(recording.m_own_calls.load(), 0U) << "a shared session claims";
     uint32_t seen = 0;
-    for (uint32_t i = 0; i < 3; ++i) { seen += adapter.m_per_instance.at(i).load(); }
+    for (uint32_t i = 0; i < 3; ++i) { seen += recording.m_per_instance.at(i).load(); }
     EXPECT_EQ(seen, k_threads * k_calls);
-    EXPECT_GT(adapter.m_per_instance.at(1).load() + adapter.m_per_instance.at(2).load(), 0U)
-        << "six threads on three instances never used a second one";
+    EXPECT_GT(recording.m_per_instance.at(1).load() + recording.m_per_instance.at(2).load(), 0U)
+        << "six threads on three slots never used a second one";
 }
 
-// reset runs on the claimed instance right before that call's process, and only when asked;
-// the status process returns is run's.
-TEST(Adapter, ResetFirstRunsOnTheClaimedInstanceAndTheStatusIsProcesss) {
-    RecordingAdapter adapter;
-    adapter.prepare(gain_model(1));
+// An exclusive session claims nothing: its calls carry ANIRA_ENGINE_CALL_EXCLUSIVE with
+// instance 0 and run on its own executor, reset runs on it right before the call when asked,
+// and the status process returns is run's. A shared session is never reset.
+TEST(Adapter, AnExclusiveSessionRunsOnItsOwnExecutorAndResetsWhenAsked) {
+    RecordingLoaded loaded;
+    loaded.load(gain_model(0));
+    const std::unique_ptr<Prepared> session = exclusive_session(loaded);
+    Recording& recording = loaded.m_recording;
     const anira_engine_ctx ctx{};
-    EXPECT_EQ(adapter.run(ctx, nullptr, false), ANIRA_OK);
-    EXPECT_EQ(adapter.m_resets.load(), 0U);
-    EXPECT_EQ(adapter.run(ctx, nullptr, true), ANIRA_OK);
-    EXPECT_EQ(adapter.m_resets.load(), 1U);
-    EXPECT_EQ(adapter.m_reset_instance.load(), 0U);
-    adapter.m_status = ANIRA_ERROR_ENGINE;
-    EXPECT_EQ(adapter.run(ctx, nullptr, false), ANIRA_ERROR_ENGINE);
-    EXPECT_EQ(adapter.m_calls.load(), 3U);
+    EXPECT_EQ(session->run(ctx, nullptr, false), ANIRA_OK);
+    EXPECT_EQ(recording.m_resets.load(), 0U);
+    EXPECT_EQ(recording.m_own_calls.load(), 1U);
+    EXPECT_EQ(recording.m_last_flags.load() & ANIRA_ENGINE_CALL_EXCLUSIVE, 1U);
+    EXPECT_EQ(session->run(ctx, nullptr, true), ANIRA_OK);
+    EXPECT_EQ(recording.m_resets.load(), 1U);
+    EXPECT_EQ(recording.m_reset_instance.load(), 0U);
+    recording.m_status = ANIRA_ERROR_ENGINE;
+    EXPECT_EQ(session->run(ctx, nullptr, false), ANIRA_ERROR_ENGINE);
+    EXPECT_EQ(recording.m_calls.load(), 3U);
+
+    // A shared session over a model with slots: reset_first is never honoured (a shared
+    // model keeps nothing per stream), and a shared call on a model without a slot refuses.
+    RecordingLoaded shared;
+    shared.load(gain_model(1));
+    const std::unique_ptr<Prepared> shared_one = shared_session(shared);
+    EXPECT_EQ(shared_one->run(ctx, nullptr, true), ANIRA_OK);
+    EXPECT_EQ(shared.m_recording.m_resets.load(), 0U);
+    const std::unique_ptr<Prepared> shared_none = shared_session(loaded);
+    EXPECT_EQ(shared_none->run(ctx, nullptr, false), ANIRA_ERROR_INVALID_STATE)
+        << "no shared slot to claim";
 }
 
 // ============================================================================================
@@ -450,9 +531,8 @@ TEST(Adapter, ModelsCompareByWhatAnAdapterReads) {
     b = gain_model(2);
     b.m_warm_up = 3;
     EXPECT_NE(a, b) << "the warm-up is";
-    b = gain_model(2);
-    b.m_session_exclusive = true;
-    EXPECT_NE(a, b) << "the exclusivity is";
+    b = gain_model(0);
+    EXPECT_NE(a, b) << "a record without a shared slot (an exclusive session's) is another";
 }
 
 // ============================================================================================
@@ -478,7 +558,6 @@ TEST(Adapter, LegacyPlanRequestsOfACustomOnlyConfigMatchTheDefaultTable) {
         EXPECT_EQ(without[i].m_missing_model, i > 0) << "the custom row has its model";
         EXPECT_EQ(without[i].m_model.m_engine, anira::backend::engine_of(expected[i]));
         EXPECT_EQ(without[i].m_model.m_instances, 2U);
-        EXPECT_FALSE(without[i].m_model.m_session_exclusive);
         ASSERT_EQ(without[i].m_model.m_inputs.size(), 1U);
         EXPECT_EQ(without[i].m_model.m_inputs.at(0).m_dims, (std::vector<int64_t>{1, 1, k_block}));
         EXPECT_EQ(without[i].m_model.m_inputs.at(0).m_num_elements, k_block);
@@ -544,10 +623,12 @@ TEST(Adapter, LegacyPlanRequestsOfEveryEngineOfTheBuildMatchTheDefaultTable) {
 TEST(Adapter, LegacyAdapterPreparesItsBackendAndPassesTheStructsBuffersThrough) {
     anira::InferenceConfig config = custom_only_config();
     RecordingBackend backend(config);
-    anira::backend::LegacyAdapter adapter(backend);
-    EXPECT_EQ(adapter.wrapped(), &backend);
-    adapter.prepare(gain_model());
+    anira::backend::LegacyLoaded loaded(backend);
+    EXPECT_EQ(loaded.wrapped(), &backend);
+    loaded.load(gain_model());
     EXPECT_EQ(backend.m_prepares, 1);
+    const std::unique_ptr<Prepared> session = shared_session(loaded);
+    Prepared& adapter = *session;
 
     std::vector<anira::BufferF> inputs;
     inputs.emplace_back(1, 4);
@@ -575,8 +656,10 @@ TEST(Adapter, LegacyAdapterPreparesItsBackendAndPassesTheStructsBuffersThrough) 
 TEST(Adapter, LegacyAdapterCopiesAForeignSlotInAndOutAroundTheCall) {
     anira::InferenceConfig config = custom_only_config();
     RecordingBackend backend(config);
-    anira::backend::LegacyAdapter adapter(backend);
-    adapter.prepare(gain_model());
+    anira::backend::LegacyLoaded loaded(backend);
+    loaded.load(gain_model());
+    const std::unique_ptr<Prepared> session = shared_session(loaded);
+    Prepared& adapter = *session;
 
     std::vector<anira::BufferF> inputs;
     inputs.emplace_back(1, 4);
@@ -621,8 +704,10 @@ TEST(Adapter, LegacyAdapterCopiesAForeignSlotInAndOutAroundTheCall) {
 TEST(Adapter, LegacyAdapterFailsAChunkItCannotBindAndAThrowingBackend) {
     anira::InferenceConfig config = custom_only_config();
     RecordingBackend backend(config);
-    anira::backend::LegacyAdapter adapter(backend);
-    adapter.prepare(gain_model());
+    anira::backend::LegacyLoaded loaded(backend);
+    loaded.load(gain_model());
+    const std::unique_ptr<Prepared> session = shared_session(loaded);
+    Prepared& adapter = *session;
 
     std::vector<anira::BufferF> inputs;
     inputs.emplace_back(1, 4);
@@ -651,8 +736,10 @@ TEST(Adapter, LegacyAdapterFailsAChunkItCannotBindAndAThrowingBackend) {
 // by the adapter.
 TEST(Adapter, LegacyAdapterOverTheRoundtripPassesTheBlockThrough) {
     anira::InferenceConfig config = custom_only_config();
-    anira::backend::LegacyAdapter adapter(config);
-    adapter.prepare(gain_model());
+    anira::backend::LegacyLoaded loaded(config);
+    loaded.load(gain_model());
+    const std::unique_ptr<Prepared> session = shared_session(loaded);
+    Prepared& adapter = *session;
     std::vector<anira::BufferF> inputs;
     inputs.emplace_back(1, 4);
     std::vector<anira::BufferF> outputs;
@@ -669,13 +756,15 @@ TEST(Adapter, LegacyAdapterOverTheRoundtripPassesTheBlockThrough) {
 }
 
 // A 2.x backend is called as concurrently as the scheduler dispatches, as it always was: the
-// legacy adapter takes no instance claim, so two callers meet inside process on a record of
-// one instance.
+// legacy adapter takes no slot claim, so two callers meet inside process on a record of one
+// slot.
 TEST(Adapter, LegacyAdapterTakesNoInstanceClaim) {
     anira::InferenceConfig config = custom_only_config();
     MeetingBackend backend(config, 2);
-    anira::backend::LegacyAdapter adapter(backend);
-    adapter.prepare(gain_model(1));
+    anira::backend::LegacyLoaded loaded(backend);
+    loaded.load(gain_model(1));
+    const std::unique_ptr<Prepared> session = shared_session(loaded);
+    Prepared& adapter = *session;
     std::vector<anira::BufferF> inputs;
     inputs.emplace_back(1, 4);
     std::vector<anira::BufferF> outputs;
@@ -921,18 +1010,18 @@ TEST(Adapter, BindSideBindsThenChecksAndBindingsOfReports) {
     EXPECT_EQ(report.m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
 }
 
-// Every slot reports position until the adapter's prepare says otherwise: the legacy adapter's
+// Every slot reports position until the engine's load says otherwise: the legacy adapter's
 // 2.x backend binds by position.
-TEST(Adapter, PrepareReportsPositionForEverySlotUntilTheAdapterSaysOtherwise) {
-    RecordingAdapter adapter;
-    EXPECT_TRUE(adapter.bindings().m_inputs.empty());
-    adapter.prepare(gain_model());
-    EXPECT_EQ(adapter.bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
-    EXPECT_EQ(adapter.bindings().m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
+TEST(Adapter, LoadReportsPositionForEverySlotUntilTheEngineSaysOtherwise) {
+    RecordingLoaded loaded;
+    EXPECT_TRUE(loaded.bindings().m_inputs.empty());
+    loaded.load(gain_model());
+    EXPECT_EQ(loaded.bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
+    EXPECT_EQ(loaded.bindings().m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
     anira::InferenceConfig config = custom_only_config();
     RecordingBackend backend(config);
-    anira::backend::LegacyAdapter legacy(backend);
-    legacy.prepare(gain_model());
+    anira::backend::LegacyLoaded legacy(backend);
+    legacy.load(gain_model());
     EXPECT_EQ(legacy.bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
 }
 
@@ -940,23 +1029,59 @@ TEST(Adapter, PrepareReportsPositionForEverySlotUntilTheAdapterSaysOtherwise) {
 // The built-in adapters
 // ============================================================================================
 
-// Every engine of the build has an adapter (unprepared until prepare loads a model); an engine
-// the build does not carry, and the custom engine, have none.
-TEST(Adapter, MakeBuiltInAdapterAnswersTheEnginesOfTheBuild) {
-    EXPECT_EQ(anira::backend::make_builtin_adapter(ANIRA_ENGINE_NONE), nullptr);
+// Every engine of the build has an adapter (unloaded until load loads a model); an engine the
+// build does not carry, and the custom engine, have none.
+TEST(Adapter, MakeBuiltInLoadedAnswersTheEnginesOfTheBuild) {
+    EXPECT_EQ(anira::backend::make_builtin_loaded(ANIRA_ENGINE_NONE), nullptr);
     EXPECT_EQ(anira::backend::engine_of(anira::InferenceBackend::CUSTOM), ANIRA_ENGINE_NONE);
     for (const anira::InferenceBackend backend : every_backend()) {
         if (backend == anira::InferenceBackend::CUSTOM) { continue; }
         const anira_engine engine = anira::backend::engine_of(backend);
         ASSERT_NE(engine, ANIRA_ENGINE_NONE);
-        const std::shared_ptr<Adapter> adapter = anira::backend::make_builtin_adapter(engine);
-        ASSERT_NE(adapter, nullptr) << "engine " << static_cast<int>(engine);
-        EXPECT_FALSE(adapter->prepared());
+        const std::shared_ptr<Loaded> loaded = anira::backend::make_builtin_loaded(engine);
+        ASSERT_NE(loaded, nullptr) << "engine " << static_cast<int>(engine);
+        EXPECT_FALSE(loaded->loaded());
     }
 #ifndef USE_ONNXRUNTIME
-    EXPECT_EQ(anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME), nullptr);
+    EXPECT_EQ(anira::backend::make_builtin_loaded(ANIRA_ENGINE_ONNXRUNTIME), nullptr);
 #endif
 }
+
+namespace {
+
+/// A built-in engine's loaded model and one session's handle over it, driven directly: what
+/// the inference thread runs. prepare loads the record and prepares one session, exclusive when
+/// the record has no shared slot.
+class Rig {
+public:
+    explicit Rig(std::shared_ptr<Loaded> loaded) : m_loaded(std::move(loaded)) {}
+
+    void prepare(const Model& model) {
+        m_prepared.reset();
+        m_loaded->load(model);
+        m_prepared = m_loaded->prepare(
+            PrepareRequest{.m_exclusive = model.m_instances == 0, .m_info = nullptr});
+    }
+    bool prepared() const noexcept { return m_loaded->loaded() && m_prepared != nullptr; }
+    const Model& model() const noexcept { return m_loaded->model(); }
+    const Bindings& bindings() const noexcept { return m_loaded->bindings(); }
+    Loaded& loaded() const noexcept { return *m_loaded; }
+    anira_status run(const anira_engine_ctx& ctx, ChunkBuffers* chunk, bool reset_first) noexcept {
+        return m_prepared->run(ctx, chunk, reset_first);
+    }
+
+private:
+    std::shared_ptr<Loaded> m_loaded;
+    std::unique_ptr<Prepared> m_prepared;
+};
+
+/// The rig of a built-in engine of the build; a null loaded model for one it does not carry.
+std::shared_ptr<Rig> builtin_rig(anira_engine engine) {
+    std::shared_ptr<Loaded> loaded = anira::backend::make_builtin_loaded(engine);
+    return loaded == nullptr ? nullptr : std::make_shared<Rig>(std::move(loaded));
+}
+
+}  // namespace
 
 // ============================================================================================
 // ONNX Runtime
@@ -1011,8 +1136,7 @@ Model onnx_accumulator_model() {
 // processed_data and peak), the gain input by its canonical name; the check passes on the
 // graph's [1, 1, -1] and [1]; the run applies the gain over the descriptors' memory, in place.
 TEST(AdapterOnnxRuntime, TheGainBindsByPositionAndByNameAndRunsOverTheDescriptors) {
-    const std::shared_ptr<Adapter> adapter =
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
     ASSERT_NE(adapter, nullptr);
     adapter->prepare(onnx_gain_model());
     ASSERT_TRUE(adapter->prepared());
@@ -1045,8 +1169,7 @@ TEST(AdapterOnnxRuntime, TheAccumulatorBindsByNameOnEverySlotInAnyOrder) {
     Model model = onnx_accumulator_model();
     std::swap(model.m_inputs[0], model.m_inputs[1]);    // data first, state_in second
     std::swap(model.m_outputs[0], model.m_outputs[1]);  // state_out first
-    const std::shared_ptr<Adapter> adapter =
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
     adapter->prepare(model);
     EXPECT_EQ(adapter->bindings().m_inputs,
               (std::vector<anira_binding>{ANIRA_BINDING_NAME, ANIRA_BINDING_NAME}));
@@ -1081,8 +1204,7 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
     {
         Model model = onnx_gain_model();
         model.m_inputs[0].m_engine_name = "ghost";
-        const std::shared_ptr<Adapter> adapter =
-            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         const std::string message = error.what();
@@ -1096,8 +1218,7 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
     {
         Model model = onnx_gain_model();
         model.m_inputs[1] = f32_tensor("gain", {2});
-        const std::shared_ptr<Adapter> adapter =
-            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         const std::string message = error.what();
@@ -1110,8 +1231,7 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
     {
         Model model = onnx_gain_model();
         model.m_outputs[0] = f32_tensor("audio_out", {k_block});
-        const std::shared_ptr<Adapter> adapter =
-            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         EXPECT_NE(std::string(error.what()).find("the ranks differ"), std::string::npos)
@@ -1124,8 +1244,7 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
         model.m_path.clear();
         model.m_bytes = junk.data();
         model.m_num_bytes = junk.size();
-        const std::shared_ptr<Adapter> adapter =
-            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_MODEL_LOAD);
         EXPECT_NE(std::string(error.what()).find("onnxruntime: memory: "), std::string::npos)
@@ -1135,8 +1254,7 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
     {
         Model model = onnx_gain_model();
         model.m_path = "this/model/does/not/exist.onnx";
-        const std::shared_ptr<Adapter> adapter =
-            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_NO_SUCH_FILE);
     }
@@ -1145,8 +1263,7 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
         Model model = onnx_gain_model();
         model.m_path = "this/model/does/not/exist.onnx";
         model.m_inputs[0].m_dtype = ANIRA_DTYPE_I16;
-        const std::shared_ptr<Adapter> adapter =
-            anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+        const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         EXPECT_NE(std::string(error.what()).find("onnxruntime: input tensor 'audio_in'"),
@@ -1158,8 +1275,7 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
 // A descriptor the adapter cannot hand the engine fails the call with INVALID_ARGUMENT, and
 // nothing is written; a shorter or a foreign-typed block are the cases.
 TEST(AdapterOnnxRuntime, ADescriptorTheAdapterCannotBindFailsTheCall) {
-    const std::shared_ptr<Adapter> adapter =
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_ONNXRUNTIME);
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
     adapter->prepare(onnx_gain_model(0));
     std::vector<float> audio_in(k_block, 0.25F);
     std::vector<float> gain{0.5F};
@@ -1244,7 +1360,7 @@ Model tensorflow_accumulator_model(anira_engine engine) {
 }
 
 // One block of the gain through `adapter`: the ramp halved lands in the caller's memory.
-void expect_gain_of_one_half(Adapter& adapter) {
+void expect_gain_of_one_half(Rig& adapter) {
     std::vector<float> audio_in(k_block);
     for (size_t n = 0; n < k_block; ++n) { audio_in[n] = static_cast<float>(n) / k_block; }
     std::vector<float> gain{0.5F};
@@ -1262,7 +1378,7 @@ void expect_gain_of_one_half(Adapter& adapter) {
 }
 
 // One block of the accumulator on a zero state through `adapter`: the closed form of one block.
-void expect_accumulator_closed_form(Adapter& adapter) {
+void expect_accumulator_closed_form(Rig& adapter) {
     std::vector<float> data(128);
     for (size_t n = 0; n < data.size(); ++n) { data[n] = static_cast<float>(n % 7); }
     std::vector<float> state_in(4, 0.F);
@@ -1299,8 +1415,7 @@ void expect_accumulator_closed_form(Adapter& adapter) {
 // output_0 (the stream) and output_1 (the peak), the file's own order [peak, stream]
 // notwithstanding. Without the layout the rank-1 gain is refused against the export's rank 3.
 TEST(AdapterTFLite, TheGainBindsByPositionThroughTheSignatureRunner) {
-    const std::shared_ptr<Adapter> adapter =
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE);
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_TFLITE);
     ASSERT_NE(adapter, nullptr);
     adapter->prepare(tensorflow_gain_model(ANIRA_ENGINE_TFLITE));
     EXPECT_EQ(adapter->bindings().m_inputs,
@@ -1312,9 +1427,8 @@ TEST(AdapterTFLite, TheGainBindsByPositionThroughTheSignatureRunner) {
 
     Model rank_one = tensorflow_gain_model(ANIRA_ENGINE_TFLITE);
     rank_one.m_inputs[1] = f32_tensor("gain", {1});
-    const anira::StatusError error = status_error_of([&rank_one] {
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE)->prepare(rank_one);
-    });
+    const anira::StatusError error =
+        status_error_of([&rank_one] { builtin_rig(ANIRA_ENGINE_TFLITE)->prepare(rank_one); });
     EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
     const std::string message = error.what();
     EXPECT_NE(message.find("tflite: input tensor 'gain' bound to the model's 'args_0_1'"),
@@ -1328,8 +1442,7 @@ TEST(AdapterTFLite, TheGainBindsByPositionThroughTheSignatureRunner) {
 // which is the declared one, and follows the closed form; reset before the first inference
 // of a stream re-initialises the variable tensors, of which the export has none.
 TEST(AdapterTFLite, TheAccumulatorBindsByPositionThroughTheSignatureRunner) {
-    const std::shared_ptr<Adapter> adapter =
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE);
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_TFLITE);
     adapter->prepare(tensorflow_accumulator_model(ANIRA_ENGINE_TFLITE));
     EXPECT_EQ(adapter->bindings().m_outputs,
               (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
@@ -1339,8 +1452,7 @@ TEST(AdapterTFLite, TheAccumulatorBindsByPositionThroughTheSignatureRunner) {
     Model named = tensorflow_accumulator_model(ANIRA_ENGINE_TFLITE);
     named.m_outputs[0].m_engine_name = "output_0";
     named.m_outputs[1].m_engine_name = "output_1";
-    const std::shared_ptr<Adapter> by_name =
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE);
+    const std::shared_ptr<Rig> by_name = builtin_rig(ANIRA_ENGINE_TFLITE);
     by_name->prepare(named);
     EXPECT_EQ(by_name->bindings().m_outputs,
               (std::vector<anira_binding>{ANIRA_BINDING_NAME, ANIRA_BINDING_NAME}));
@@ -1348,8 +1460,8 @@ TEST(AdapterTFLite, TheAccumulatorBindsByPositionThroughTheSignatureRunner) {
 
     // A record naming a key the signature lacks: CONFIG listing the keys.
     named.m_outputs[0].m_engine_name = "ghost";
-    const anira::StatusError error = status_error_of(
-        [&named] { anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE)->prepare(named); });
+    const anira::StatusError error =
+        status_error_of([&named] { builtin_rig(ANIRA_ENGINE_TFLITE)->prepare(named); });
     EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
     EXPECT_NE(std::string(error.what()).find("'output_0', 'output_1'"), std::string::npos)
         << error.what();
@@ -1365,8 +1477,7 @@ TEST(AdapterTFLite, AFileWithoutASignatureRunsThroughTheInterpreter) {
     model.m_inputs.push_back(f32_tensor("audio_in", {256, 150, 1}));
     model.m_outputs.push_back(f32_tensor("audio_out", {256, 1}));
     model.m_warm_up = 1;
-    const std::shared_ptr<Adapter> adapter =
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE);
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_TFLITE);
     adapter->prepare(model);
     EXPECT_EQ(adapter->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
     std::vector<float> audio_in(256 * 150, 0.1F);
@@ -1381,8 +1492,7 @@ TEST(AdapterTFLite, AFileWithoutASignatureRunsThroughTheInterpreter) {
     Model named = model;
     named.m_inputs[0].m_engine_name = "args_0";
     named.m_outputs[0].m_engine_name = "Identity";
-    const std::shared_ptr<Adapter> by_name =
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE);
+    const std::shared_ptr<Rig> by_name = builtin_rig(ANIRA_ENGINE_TFLITE);
     by_name->prepare(named);
     EXPECT_EQ(by_name->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
     EXPECT_EQ(by_name->bindings().m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
@@ -1398,9 +1508,8 @@ TEST(AdapterTFLite, AFileWithoutASignatureRunsThroughTheInterpreter) {
 // litert row bind the two outputs to their keys, and the gain runs at the export's rank 3.
 TEST(AdapterLiteRt, TheGainNeedsItsOutputsNamedAndRunsAtTheExportsRank) {
     Model positional = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
-    const anira::StatusError error = status_error_of([&positional] {
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_LITERT)->prepare(positional);
-    });
+    const anira::StatusError error =
+        status_error_of([&positional] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(positional); });
     EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
     const std::string message = error.what();
     EXPECT_NE(message.find("litert: output tensor 'audio_out' bound to the model's 'output_1'"),
@@ -1412,8 +1521,7 @@ TEST(AdapterLiteRt, TheGainNeedsItsOutputsNamedAndRunsAtTheExportsRank) {
     Model named = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
     named.m_outputs[0].m_engine_name = "output_0";
     named.m_outputs[1].m_engine_name = "output_1";
-    const std::shared_ptr<Adapter> adapter =
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_LITERT);
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
     ASSERT_NE(adapter, nullptr);
     adapter->prepare(named);
     EXPECT_EQ(adapter->bindings().m_inputs,
@@ -1428,9 +1536,8 @@ TEST(AdapterLiteRt, TheGainNeedsItsOutputsNamedAndRunsAtTheExportsRank) {
 // bound by the keys of the file's litert row; the closed form holds.
 TEST(AdapterLiteRt, TheAccumulatorBindsItsOutputsByName) {
     Model positional = tensorflow_accumulator_model(ANIRA_ENGINE_LITERT);
-    const anira::StatusError error = status_error_of([&positional] {
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_LITERT)->prepare(positional);
-    });
+    const anira::StatusError error =
+        status_error_of([&positional] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(positional); });
     EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
     EXPECT_NE(std::string(error.what()).find("'processed_data' bound to the model's 'output_1'"),
               std::string::npos)
@@ -1439,8 +1546,7 @@ TEST(AdapterLiteRt, TheAccumulatorBindsItsOutputsByName) {
     Model named = tensorflow_accumulator_model(ANIRA_ENGINE_LITERT);
     named.m_outputs[0].m_engine_name = "output_0";
     named.m_outputs[1].m_engine_name = "output_1";
-    const std::shared_ptr<Adapter> adapter =
-        anira::backend::make_builtin_adapter(ANIRA_ENGINE_LITERT);
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
     adapter->prepare(named);
     EXPECT_EQ(adapter->bindings().m_inputs,
               (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
@@ -1450,8 +1556,8 @@ TEST(AdapterLiteRt, TheAccumulatorBindsItsOutputsByName) {
 
     // A record naming a key the signature lacks: CONFIG listing the keys in LiteRT's order.
     named.m_outputs[1].m_engine_name = "ghost";
-    const anira::StatusError missing = status_error_of(
-        [&named] { anira::backend::make_builtin_adapter(ANIRA_ENGINE_LITERT)->prepare(named); });
+    const anira::StatusError missing =
+        status_error_of([&named] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(named); });
     EXPECT_EQ(missing.status(), ANIRA_ERROR_CONFIG);
     EXPECT_NE(std::string(missing.what()).find("'output_1', 'output_0'"), std::string::npos)
         << missing.what();

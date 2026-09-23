@@ -1064,8 +1064,8 @@ private:
     float m_scale;
 };
 
-/// The registration: the mask, the promise, the kinds, what prepare does, and the counts of
-/// every Prepared it made, in prepare order.
+/// The registration: the mask, the promise, the kinds, what init and prepare do, and the
+/// counts of every Prepared it made, in prepare order.
 class CountingStage : public anira::Stage {
 public:
     explicit CountingStage(uint32_t mask) : m_mask(mask) {}
@@ -1075,7 +1075,15 @@ public:
     /// Hard contract takes a filled pre_process or post_process only with the promise.
     uint32_t flags() const noexcept override { return m_flags; }
 
-    std::unique_ptr<anira::Stage::Prepared> prepare(const anira::StagePrepareInfo& info) override {
+    void init(const anira::InitInfo& info) override {
+        ++m_inited;
+        m_init_log_level = info.log_level();
+        m_init_num_threads = info.num_threads();
+        m_init_context = info.context();
+        if (m_init_throws) { throw anira::Error(ANIRA_ERROR_NOT_SUPPORTED, "the stage refuses"); }
+    }
+
+    std::unique_ptr<anira::Stage::Prepared> prepare(const anira::PrepareInfo& info) override {
         ++m_prepared;
         auto counts = std::make_shared<PreparedCounts>();
         counts->m_handler = info.handler();
@@ -1121,9 +1129,14 @@ public:
     uint32_t m_flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS;
     float m_scale = 1.0F;
     bool m_consumes_entry = false;
+    bool m_init_throws = false;
     PrepareMode m_mode = PrepareMode::Ok;
     std::atomic<int> m_released{0};
+    int m_inited = 0;
     int m_prepared = 0;
+    anira_log_level m_init_log_level = ANIRA_LOG_DEBUG;
+    uint32_t m_init_num_threads = 0;
+    const anira_context* m_init_context = nullptr;
     std::vector<std::shared_ptr<PreparedCounts>> m_counts;  ///< one per prepare, in order
 };
 
@@ -1589,8 +1602,7 @@ class Int16InputStage final : public anira::Stage {
 public:
     uint32_t phases() const noexcept override { return k_pre_process; }
     uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
-    std::unique_ptr<anira::Stage::Prepared> prepare(
-        const anira::StagePrepareInfo& /*info*/) override {
+    std::unique_ptr<anira::Stage::Prepared> prepare(const anira::PrepareInfo& /*info*/) override {
         return std::make_unique<Int16InputPrepared>();
     }
 };
@@ -1757,10 +1769,9 @@ ModelConfig engine_stream_model() {
     return model;
 }
 
-/// What one prepared model of a CountingEngine saw and did, kept by the registration beyond
-/// the Prepared's life (anira deletes the Prepared at unprepare; the test reads afterwards).
-struct EngineCounts {
-    // The record, read at prepare.
+/// What one loaded model of a CountingEngine read at load, kept by the registration beyond the
+/// Loaded's life (anira deletes the Loaded at unload; the test reads afterwards).
+struct EngineLoadCounts {
     uint32_t m_row = 0;
     uint32_t m_model_count = 0;
     anira::EngineKind m_engine = ANIRA_ENGINE_FORCE32;
@@ -1772,10 +1783,23 @@ struct EngineCounts {
     std::vector<std::string> m_output_names;
     std::vector<Tensor> m_inputs;   ///< the templates
     std::vector<Tensor> m_outputs;  ///< the templates
+    std::atomic<bool> m_unloaded{false};
+};
+
+/// What one prepared handle of a CountingEngine saw at prepare and did on the inference
+/// threads, kept by the registration beyond the Prepared's life (anira deletes the Prepared at
+/// unprepare; the test reads afterwards).
+struct EnginePreparedCounts {
+    // The record, read at prepare: the stage's.
+    anira_handler* m_handler = nullptr;
+    uint32_t m_num_entries = 0;
+    bool m_exclusive = false;
+    std::size_t m_num_inputs = 0;
+    std::size_t m_num_outputs = 0;
     // What the inference threads saw.
     std::atomic<int> m_processed{0};
     std::atomic<int> m_resets{0};
-    std::atomic<int> m_broken{0};  ///< a context unlike the record promises
+    std::atomic<int> m_broken{0};  ///< a context unlike the records promise
     std::atomic<uint32_t> m_max_instance{0};
     std::atomic<bool> m_deleted{false};
     /// The context reset saw, cleared by the process that follows; whether that process ran on
@@ -1794,14 +1818,18 @@ bool same_shape(const anira_tensor& tensor, const anira_tensor& expected) {
     return true;
 }
 
-/// The Prepared of one prepared model: process multiplies the first input into the first
-/// output by `gain`, checking every call against the record its prepare kept; reset counts
-/// itself and notes its context, so that the process behind it can say whether it ran on the
-/// same one.
+/// The Prepared of one handler: process multiplies the first input into the first output by
+/// `gain`, checking every call against the records its load and its prepare kept (the loaded
+/// pointer of the context is the Loaded, an exclusive handle's calls carry the flag and
+/// instance 0, a shared handle's an instance below the count); reset counts itself and notes
+/// its context, so that the process behind it can say whether it ran on the same one.
 class GainPrepared final : public anira::Engine::Prepared {
 public:
-    GainPrepared(std::shared_ptr<EngineCounts> counts, float gain)
-        : m_counts(std::move(counts)), m_gain(gain) {}
+    GainPrepared(std::shared_ptr<EnginePreparedCounts> counts,
+                 std::shared_ptr<EngineLoadCounts> load,
+                 const anira::Engine::Loaded* loaded,
+                 float gain)
+        : m_counts(std::move(counts)), m_load(std::move(load)), m_loaded(loaded), m_gain(gain) {}
     ~GainPrepared() override { m_counts->m_deleted.store(true); }
     GainPrepared(const GainPrepared&) = delete;
     GainPrepared& operator=(const GainPrepared&) = delete;
@@ -1819,15 +1847,20 @@ public:
         }
         const std::span<const Tensor> inputs = ctx.inputs();
         const std::span<Tensor> outputs = ctx.outputs();
-        bool as_promised = ctx.instance() < m_counts->m_instances &&
-                           ctx.ticket() == ANIRA_TICKET_INVALID && ctx.flags() == 0 &&
-                           inputs.size() == m_counts->m_inputs.size() &&
-                           outputs.size() == m_counts->m_outputs.size() && ctx.native() != nullptr;
+        const bool exclusive = ctx.exclusive();
+        const bool instance_as_promised =
+            exclusive ? ctx.instance() == 0 && ctx.flags() == ANIRA_ENGINE_CALL_EXCLUSIVE
+                      : ctx.instance() < m_load->m_instances && ctx.flags() == 0;
+        bool as_promised = ctx.native() != nullptr && ctx.loaded() == m_loaded &&
+                           exclusive == m_counts->m_exclusive && instance_as_promised &&
+                           ctx.ticket() == ANIRA_TICKET_INVALID &&
+                           inputs.size() == m_load->m_inputs.size() &&
+                           outputs.size() == m_load->m_outputs.size();
         for (size_t i = 0; as_promised && i < inputs.size(); ++i) {
-            as_promised = same_shape(inputs[i], m_counts->m_inputs[i]);
+            as_promised = same_shape(inputs[i], m_load->m_inputs[i]);
         }
         for (size_t i = 0; as_promised && i < outputs.size(); ++i) {
-            as_promised = same_shape(outputs[i], m_counts->m_outputs[i]);
+            as_promised = same_shape(outputs[i], m_load->m_outputs[i]);
         }
         if (!as_promised) {
             m_counts->m_broken.fetch_add(1);
@@ -1848,17 +1881,46 @@ public:
     }
     void reset(anira::EngineContext& ctx) noexcept override {
         m_counts->m_resets.fetch_add(1);
-        if (ctx.inputs().size() != m_counts->m_inputs.size()) { m_counts->m_broken.fetch_add(1); }
+        if (ctx.inputs().size() != m_load->m_inputs.size() || !m_counts->m_exclusive ||
+            !ctx.exclusive()) {
+            m_counts->m_broken.fetch_add(1);
+        }
         m_counts->m_pending_reset.store(ctx.native());
     }
 
 private:
-    std::shared_ptr<EngineCounts> m_counts;
+    std::shared_ptr<EnginePreparedCounts> m_counts;
+    std::shared_ptr<EngineLoadCounts> m_load;
+    const anira::Engine::Loaded* m_loaded;
     float m_gain;
 };
 
-/// The registration: the promise, the kinds, what prepare does, and the counts of every
-/// Prepared it made, in prepare order.
+/// Where a CountingEngine applies its PrepareMode: at load (the registration's) or at prepare
+/// (the Loaded's).
+enum class ThrowAt : uint8_t { Load, Prepare };
+
+class CountingEngine;
+
+/// The Loaded of one loaded model: the record it read, and the Prepared it makes per handler.
+class CountingLoaded final : public anira::Engine::Loaded {
+public:
+    CountingLoaded(CountingEngine& engine, std::shared_ptr<EngineLoadCounts> counts)
+        : m_engine(&engine), m_counts(std::move(counts)) {}
+    ~CountingLoaded() override { m_counts->m_unloaded.store(true); }
+    CountingLoaded(const CountingLoaded&) = delete;
+    CountingLoaded& operator=(const CountingLoaded&) = delete;
+    CountingLoaded(CountingLoaded&&) = delete;
+    CountingLoaded& operator=(CountingLoaded&&) = delete;
+
+    std::unique_ptr<anira::Engine::Prepared> prepare(const anira::PrepareInfo& info) override;
+
+private:
+    CountingEngine* m_engine;
+    std::shared_ptr<EngineLoadCounts> m_counts;
+};
+
+/// The registration: the promise, the kinds, what init, load and prepare do, and the counts of
+/// every Loaded and every Prepared it made, in order.
 class CountingEngine : public anira::Engine {
 public:
     uint32_t flags() const noexcept override { return m_flags; }
@@ -1867,10 +1929,17 @@ public:
                                 : std::span<const char* const>{};
     }
 
-    std::unique_ptr<anira::Engine::Prepared> prepare(
-        const anira::EnginePrepareInfo& info) override {
-        ++m_prepared;
-        auto counts = std::make_shared<EngineCounts>();
+    void init(const anira::InitInfo& info) override {
+        ++m_inited;
+        m_init_log_level = info.log_level();
+        m_init_num_threads = info.num_threads();
+        m_init_context = info.context();
+        if (m_init_throws) { throw anira::Error(ANIRA_ERROR_NOT_SUPPORTED, "the engine refuses"); }
+    }
+
+    std::unique_ptr<anira::Engine::Loaded> load(const anira::EngineLoadInfo& info) override {
+        ++m_loaded;
+        auto counts = std::make_shared<EngineLoadCounts>();
         counts->m_row = info.row();
         counts->m_model_count = info.model_count();
         counts->m_engine = info.model_engine(info.row());
@@ -1882,7 +1951,14 @@ public:
         for (const char* name : info.output_names()) { counts->m_output_names.emplace_back(name); }
         counts->m_inputs.assign(info.inputs().begin(), info.inputs().end());
         counts->m_outputs.assign(info.outputs().begin(), info.outputs().end());
-        m_counts.push_back(counts);
+        m_loads.push_back(counts);
+        if (m_throw_at == ThrowAt::Load && refuse()) { return nullptr; }
+        return std::make_unique<CountingLoaded>(*this, counts);
+    }
+    void release() noexcept override { m_released.fetch_add(1); }
+
+    /// Applies m_mode: throws, or says whether to return null.
+    bool refuse() const {
         switch (m_mode) {
             case PrepareMode::ThrowError:
                 throw anira::Error(ANIRA_ERROR_CONFIG, "the engine refuses this model");
@@ -1892,36 +1968,58 @@ public:
                 throw 7;  // no std::exception: what the trampoline must survive too
             case PrepareMode::ThrowBadAlloc: throw std::bad_alloc();
             case PrepareMode::ThrowBudget: throw anira::Error(ANIRA_ERROR_BUDGET, "over budget");
-            case PrepareMode::ReturnNull: return nullptr;
+            case PrepareMode::ReturnNull: return true;
             case PrepareMode::Ok: break;
         }
-        return std::make_unique<GainPrepared>(counts, m_gain);
+        return false;
     }
-    void release() noexcept override { m_released.fetch_add(1); }
 
-    /// The counts of the latest prepare.
-    std::shared_ptr<EngineCounts> last() const { return m_counts.back(); }
+    /// The counts of the latest load, and of the latest prepare.
+    std::shared_ptr<EngineLoadCounts> last_load() const { return m_loads.back(); }
+    std::shared_ptr<EnginePreparedCounts> last() const { return m_counts.back(); }
 
     static constexpr std::array<const char*, 1> k_kinds{"model:entry"};
 
     uint32_t m_flags = 0;
     float m_gain = 1.0F;
     bool m_consumes_entry = false;
+    bool m_init_throws = false;
     PrepareMode m_mode = PrepareMode::Ok;
+    ThrowAt m_throw_at = ThrowAt::Prepare;
     std::atomic<int> m_released{0};
+    int m_inited = 0;
+    int m_loaded = 0;
     int m_prepared = 0;
-    std::vector<std::shared_ptr<EngineCounts>> m_counts;  ///< one per prepare, in order
+    anira_log_level m_init_log_level = ANIRA_LOG_DEBUG;
+    uint32_t m_init_num_threads = 0;
+    const anira_context* m_init_context = nullptr;
+    std::vector<std::shared_ptr<EngineLoadCounts>> m_loads;       ///< one per load, in order
+    std::vector<std::shared_ptr<EnginePreparedCounts>> m_counts;  ///< one per prepare, in order
 };
+
+std::unique_ptr<anira::Engine::Prepared> CountingLoaded::prepare(const anira::PrepareInfo& info) {
+    ++m_engine->m_prepared;
+    auto counts = std::make_shared<EnginePreparedCounts>();
+    counts->m_handler = info.handler();
+    counts->m_num_entries = info.num_entries();
+    counts->m_exclusive = info.exclusive();
+    counts->m_num_inputs = info.inputs().size();
+    counts->m_num_outputs = info.outputs().size();
+    m_engine->m_counts.push_back(counts);
+    if (m_engine->m_throw_at == ThrowAt::Prepare && m_engine->refuse()) { return nullptr; }
+    return std::make_unique<GainPrepared>(counts, m_counts, this, m_engine->m_gain);
+}
 
 }  // namespace
 
 // An Engine subclass end to end through a C-created handler: register_engine hands the
 // object's C engine a copy of the shared_ptr, a handler created from the pipeline carries it
-// on, prepare sees the record (the row, the variant's facts through the getters, the templates,
-// the names, one instance), every block goes through process with the context the record
-// promises, the flags and the consumed kinds reach the plan report under the engine's id, the
-// Prepared dies with the handler, and the shared_ptr is given back exactly once, when the last
-// reference to the C engine dies.
+// on, init sees the facts of the core, load sees its record (the row, the variant's facts
+// through the getters, the templates, the names, one instance), prepare sees the stage's
+// record (the handler, its entry count, not exclusive), every block goes through process with
+// the context the records promise, the flags and the consumed kinds reach the plan report under
+// the engine's id, the Prepared and the Loaded die with the handler, and the shared_ptr is
+// given back exactly once, when the last reference to the C engine dies.
 TEST(AbiCxx, AnEngineSubclassRunsThroughACHandler) {
     const anira_test::Context context;
     ModelConfig model = engine_stream_model();
@@ -1945,22 +2043,33 @@ TEST(AbiCxx, AnEngineSubclassRunsThroughACHandler) {
     EXPECT_EQ(engine->m_released.load(), 0);
 
     ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(engine->m_inited, 1);
+    EXPECT_EQ(engine->m_loaded, 1);
     EXPECT_EQ(engine->m_prepared, 1);
+    EXPECT_EQ(engine->m_init_num_threads, 2U) << "the pool of the context";
+    EXPECT_EQ(engine->m_init_context, context.m_context);
+    ASSERT_EQ(engine->m_loads.size(), 1U);
     ASSERT_EQ(engine->m_counts.size(), 1U);
-    const std::shared_ptr<EngineCounts> counts = engine->last();
-    EXPECT_EQ(counts->m_row, 0U);
-    EXPECT_EQ(counts->m_model_count, 1U);
-    EXPECT_EQ(counts->m_engine, ANIRA_ENGINE_NONE);
-    EXPECT_EQ(counts->m_engine_id, k_cxx_engine_id);
-    EXPECT_EQ(counts->m_path, k_cxx_never_opened)
+    const std::shared_ptr<EngineLoadCounts> loaded = engine->last_load();
+    const std::shared_ptr<EnginePreparedCounts> counts = engine->last();
+    EXPECT_EQ(loaded->m_row, 0U);
+    EXPECT_EQ(loaded->m_model_count, 1U);
+    EXPECT_EQ(loaded->m_engine, ANIRA_ENGINE_NONE);
+    EXPECT_EQ(loaded->m_engine_id, k_cxx_engine_id);
+    EXPECT_EQ(loaded->m_path, k_cxx_never_opened)
         << "the engine reads the row; anira never opens it";
-    EXPECT_EQ(counts->m_num_bytes, 0U) << "a path row has no bytes";
-    EXPECT_EQ(counts->m_instances, 1U);
-    EXPECT_EQ(counts->m_input_names, (std::vector<std::string>{"in"}));
-    EXPECT_EQ(counts->m_output_names, (std::vector<std::string>{"out"}));
-    ASSERT_EQ(counts->m_inputs.size(), 1U);
-    ASSERT_EQ(counts->m_outputs.size(), 1U);
-    for (const Tensor* tensor : {&counts->m_inputs[0], &counts->m_outputs[0]}) {
+    EXPECT_EQ(loaded->m_num_bytes, 0U) << "a path row has no bytes";
+    EXPECT_EQ(loaded->m_instances, 1U);
+    EXPECT_EQ(loaded->m_input_names, (std::vector<std::string>{"in"}));
+    EXPECT_EQ(loaded->m_output_names, (std::vector<std::string>{"out"}));
+    ASSERT_EQ(loaded->m_inputs.size(), 1U);
+    ASSERT_EQ(loaded->m_outputs.size(), 1U);
+    EXPECT_EQ(counts->m_handler, handler.m_handler);
+    EXPECT_EQ(counts->m_num_entries, anira_handler_num_entries(handler.m_handler));
+    EXPECT_FALSE(counts->m_exclusive) << "a stateless model's handler";
+    EXPECT_EQ(counts->m_num_inputs, 1U);
+    EXPECT_EQ(counts->m_num_outputs, 1U);
+    for (const Tensor* tensor : {&loaded->m_inputs[0], &loaded->m_outputs[0]}) {
         EXPECT_EQ(tensor->dtype, static_cast<anira_dtype>(ANIRA_DTYPE_F32));
         EXPECT_EQ(tensor->ndim, 3U);
         EXPECT_EQ(tensor->num_elements(), k_hop);
@@ -1992,77 +2101,183 @@ TEST(AbiCxx, AnEngineSubclassRunsThroughACHandler) {
     ASSERT_FALSE(HasFatalFailure());
     EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
     EXPECT_EQ(counts->m_processed.load(), 3);
-    EXPECT_EQ(counts->m_resets.load(), 0) << "a shared prepared model is never reset";
-    EXPECT_EQ(counts->m_broken.load(), 0) << "process saw another context than the record promises";
+    EXPECT_EQ(counts->m_resets.load(), 0) << "a shared handle is never reset";
+    EXPECT_EQ(counts->m_broken.load(), 0) << "process saw another context than the records promise";
     EXPECT_EQ(counts->m_max_instance.load(), 0U);
     expect_scaled_passthrough(handler.m_handler, in, out, 0.5F);
     EXPECT_FALSE(counts->m_deleted.load());
+    EXPECT_FALSE(loaded->m_unloaded.load());
 
     handler.destroy();
     EXPECT_TRUE(counts->m_deleted.load()) << "the Prepared died with its handler";
+    EXPECT_TRUE(loaded->m_unloaded.load()) << "and the Loaded with the last handler on it";
     EXPECT_EQ(engine->m_released.load(), 1);
     EXPECT_EQ(engine.use_count(), 1) << "release deleted the carrier's copy";
 }
 
-// A throw never crosses the C boundary: prepare of the handler fails with the status of an
-// anira::Error, with ANIRA_ERROR_OUT_OF_MEMORY for a std::bad_alloc and ANIRA_ERROR_INTERNAL
-// for anything else, the message names the engine, and what() reaches the log. A null Prepared
-// is ANIRA_ERROR_INTERNAL too: nothing could run the inference. A refused prepare deletes
-// nothing that was not returned, and unprepares nothing.
-TEST(AbiCxx, AThrowingEnginePrepareFailsTheHandlersPrepare) {
+// A throw never crosses the C boundary, at load or at prepare: prepare of the handler fails
+// with the status of an anira::Error, with ANIRA_ERROR_OUT_OF_MEMORY for a std::bad_alloc and
+// ANIRA_ERROR_INTERNAL for anything else, the message names the engine and the slot, and
+// what() reaches the log. A null Loaded or Prepared is ANIRA_ERROR_INTERNAL too: nothing could
+// run the inference. A refused load deletes nothing that was not returned and owes no unload;
+// a refused prepare owes no unprepare, and the Loaded the failed prepare ran on goes back with
+// the session the failure releases.
+TEST(AbiCxx, AThrowingEngineLoadOrPrepareFailsTheHandlersPrepare) {
     const anira_test::Context context;
     anira_test::RecordCollector collector;
     const ModelConfig model = engine_stream_model();
-    auto engine = std::make_shared<CountingEngine>();
-    anira::Pipeline pipe;
-    pipe.register_engine(k_cxx_engine_id, engine).inference(model);
-    CHandler handler(context, pipe);
-    ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     const anira::ContractHandle contract = anira_test::explicit_contract();
+    for (const ThrowAt where : {ThrowAt::Load, ThrowAt::Prepare}) {
+        const char* const slot = where == ThrowAt::Load ? "load" : "prepare";
+        SCOPED_TRACE(slot);
+        auto engine = std::make_shared<CountingEngine>();
+        engine->m_throw_at = where;
+        anira::Pipeline pipe;
+        pipe.register_engine(k_cxx_engine_id, engine).inference(model);
+        CHandler handler(context, pipe);
+        ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+        const std::string refused = std::string("the engine 'org.example.cxx' refused ") + slot;
 
-    engine->m_mode = PrepareMode::ThrowError;
-    EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
-    EXPECT_NE(std::string_view(handler.m_err.message)
-                  .find("the engine 'org.example.cxx' refused prepare"),
-              std::string_view::npos)
-        << handler.m_err.message;
-    EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
+        engine->m_mode = PrepareMode::ThrowError;
+        EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string_view(handler.m_err.message).find(refused), std::string_view::npos)
+            << handler.m_err.message;
+        EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
 
-    engine->m_mode = PrepareMode::ThrowRuntimeError;
-    EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_INTERNAL);
-    engine->m_mode = PrepareMode::ThrowInt;
-    EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_INTERNAL);
-    engine->m_mode = PrepareMode::ThrowBadAlloc;
-    EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_OUT_OF_MEMORY);
-    engine->m_mode = PrepareMode::ThrowBudget;
-    EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_BUDGET);
-    engine->m_mode = PrepareMode::ReturnNull;
-    EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_INTERNAL);
-    EXPECT_NE(std::string_view(handler.m_err.message)
-                  .find("the engine 'org.example.cxx' refused prepare"),
-              std::string_view::npos)
-        << handler.m_err.message;
+        engine->m_mode = PrepareMode::ThrowRuntimeError;
+        EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_INTERNAL);
+        engine->m_mode = PrepareMode::ThrowInt;
+        EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_INTERNAL);
+        engine->m_mode = PrepareMode::ThrowBadAlloc;
+        EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_OUT_OF_MEMORY);
+        engine->m_mode = PrepareMode::ThrowBudget;
+        EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_BUDGET);
+        engine->m_mode = PrepareMode::ReturnNull;
+        EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_INTERNAL);
+        EXPECT_NE(std::string_view(handler.m_err.message).find(refused), std::string_view::npos)
+            << handler.m_err.message;
 #ifdef ENABLE_LOGGING
-    EXPECT_TRUE(
-        collector.has("the engine's prepare threw: the engine refuses this model", "native"));
-    EXPECT_TRUE(collector.has("prepare threw: the engine ran out of luck", "native"));
-    EXPECT_TRUE(collector.has("an exception that is no std::exception", "native"));
-    EXPECT_TRUE(collector.has("the engine's prepare returned no Prepared", "native"));
+        const std::string threw = std::string("the engine's ") + slot + " threw: ";
+        EXPECT_TRUE(collector.has((threw + "the engine refuses this model").c_str(), "native"));
+        EXPECT_TRUE(collector.has((threw + "the engine ran out of luck").c_str(), "native"));
+        EXPECT_TRUE(collector.has("an exception that is no std::exception", "native"));
+        if (where == ThrowAt::Load) {
+            EXPECT_TRUE(collector.has("the engine's load returned no Loaded", "native"));
+        } else {
+            EXPECT_TRUE(collector.has("the engine's prepare returned no Prepared", "native"));
+        }
 #endif
-    // Six refusals: nothing was returned, so nothing was deleted or unprepared.
-    ASSERT_EQ(engine->m_counts.size(), 6U);
-    for (const std::shared_ptr<EngineCounts>& counts : engine->m_counts) {
-        EXPECT_FALSE(counts->m_deleted.load());
-    }
+        // Six refusals: nothing was returned at the refusing slot, so nothing was deleted there
+        // or given back; six loads either way (a failed prepare releases its session, and with
+        // it the Loaded the session had acquired, so the next prepare loads again).
+        ASSERT_EQ(engine->m_loads.size(), 6U);
+        if (where == ThrowAt::Load) {
+            EXPECT_EQ(engine->m_prepared, 0) << "nothing prepared behind a refused load";
+            for (const std::shared_ptr<EngineLoadCounts>& counts : engine->m_loads) {
+                EXPECT_FALSE(counts->m_unloaded.load()) << "a refused load owes no unload";
+            }
+        } else {
+            ASSERT_EQ(engine->m_counts.size(), 6U);
+            for (const std::shared_ptr<EnginePreparedCounts>& counts : engine->m_counts) {
+                EXPECT_FALSE(counts->m_deleted.load());
+            }
+            for (const std::shared_ptr<EngineLoadCounts>& counts : engine->m_loads) {
+                EXPECT_TRUE(counts->m_unloaded.load()) << "given back with the failed session";
+            }
+        }
 
-    engine->m_mode = PrepareMode::Ok;
-    ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
-    EXPECT_EQ(engine->m_prepared, 7);
-    std::vector<float> in;
-    std::vector<float> out;
-    drive(handler.m_handler, 2, in, out);
-    ASSERT_FALSE(HasFatalFailure());
-    expect_scaled_passthrough(handler.m_handler, in, out, 1.0F);
+        engine->m_mode = PrepareMode::Ok;
+        ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
+        EXPECT_EQ(engine->m_loaded, 7);
+        EXPECT_EQ(engine->m_prepared, where == ThrowAt::Load ? 1 : 7);
+        std::vector<float> in;
+        std::vector<float> out;
+        drive(handler.m_handler, 2, in, out);
+        ASSERT_FALSE(HasFatalFailure());
+        expect_scaled_passthrough(handler.m_handler, in, out, 1.0F);
+    }
+}
+
+// init runs once per registration (the stage's per Pipeline::add, the engine's per C engine),
+// at the first prepare of a handler that reaches it, with the facts of the core in effect (the
+// pool of the context, the context of that handler); a throw fails that prepare with its
+// status, the message names the slot, nothing is loaded or prepared behind it, and the next
+// prepare calls init again; release fires whether init ever ran or not.
+TEST(AbiCxx, InitRunsOncePerRegistrationAndAThrowFailsThePrepare) {
+    const anira_test::Context context(2);
+    const anira::ContractHandle contract = anira_test::explicit_contract();
+    const ModelConfig model = engine_stream_model();
+    auto engine = std::make_shared<CountingEngine>();
+    auto stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
+    engine->m_init_throws = true;
+    stage->m_init_throws = true;
+    {
+        const anira::Pipeline pipe{anira::stage::Inference(model).engine(k_cxx_engine_id, engine),
+                                   anira::stage::Custom(stage)};
+        CHandler first(context, pipe);
+        CHandler second(context, pipe);
+        ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
+        ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
+        EXPECT_EQ(engine->m_inited + stage->m_inited, 0) << "init belongs to the first prepare";
+
+        // The engine's init comes first (the session's create loads its model), so the stage's
+        // is not reached while the engine refuses.
+        EXPECT_EQ(first.prepare(contract), ANIRA_ERROR_NOT_SUPPORTED);
+        EXPECT_NE(
+            std::string_view(first.m_err.message).find("the engine 'org.example.cxx' refused init"),
+            std::string_view::npos)
+            << first.m_err.message;
+        EXPECT_EQ(engine->m_inited, 1);
+        EXPECT_EQ(engine->m_loaded, 0) << "nothing loaded behind a refused init";
+        EXPECT_EQ(stage->m_inited, 0) << "the session failed before the stage";
+        engine->m_init_throws = false;
+        EXPECT_EQ(first.prepare(contract), ANIRA_ERROR_NOT_SUPPORTED);
+        EXPECT_NE(std::string_view(first.m_err.message).find("the stage refused init"),
+                  std::string_view::npos)
+            << first.m_err.message;
+        EXPECT_EQ(engine->m_inited, 2) << "tried again";
+        EXPECT_EQ(engine->m_loaded, 1);
+        EXPECT_EQ(engine->m_prepared, 1);
+        EXPECT_EQ(stage->m_inited, 1);
+        EXPECT_EQ(stage->m_prepared, 0) << "the stage's prepare waits for its init";
+        EXPECT_EQ(anira_handler_plan_report(first.m_handler), nullptr);
+        stage->m_init_throws = false;
+        ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
+        EXPECT_EQ(engine->m_inited, 2) << "initialised: not again";
+        EXPECT_EQ(stage->m_inited, 2) << "tried again";
+        EXPECT_EQ(stage->m_prepared, 1);
+        ASSERT_EQ(second.prepare(contract), ANIRA_OK) << second.m_err.message;
+        ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
+        EXPECT_EQ(engine->m_inited, 2) << "once per C engine";
+        EXPECT_EQ(stage->m_inited, 2) << "once per add";
+        // The facts: the pool of the context and the context of the handler whose prepare
+        // reached the registrations.
+        EXPECT_EQ(engine->m_init_num_threads, 2U);
+        EXPECT_EQ(engine->m_init_context, context.m_context);
+        EXPECT_EQ(engine->m_init_log_level, ANIRA_LOG_ERROR) << "the context's level";
+        EXPECT_EQ(stage->m_init_num_threads, 2U);
+        EXPECT_EQ(stage->m_init_context, context.m_context);
+        EXPECT_EQ(stage->m_init_log_level, ANIRA_LOG_ERROR);
+        std::vector<float> in;
+        std::vector<float> out;
+        drive(first.m_handler, 2, in, out);
+        ASSERT_FALSE(HasFatalFailure());
+        expect_scaled_passthrough(first.m_handler, in, out, 1.0F);
+    }
+    EXPECT_EQ(engine->m_released.load(), 1);
+    EXPECT_EQ(stage->m_released.load(), 1);
+
+    // Never prepared: released, never initialised.
+    auto idle_engine = std::make_shared<CountingEngine>();
+    auto idle_stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
+    {
+        const anira::Pipeline unused{
+            anira::stage::Inference(model).engine(k_cxx_engine_id, idle_engine),
+            anira::stage::Custom(idle_stage)};
+    }
+    EXPECT_EQ(idle_engine->m_inited + idle_stage->m_inited, 0);
+    EXPECT_EQ(idle_engine->m_released.load(), 1) << "release owes nothing to init";
+    EXPECT_EQ(idle_stage->m_released.load(), 1);
 }
 
 // The inference stage brings its engines along: stage::Inference::engine in an initializer
@@ -2147,13 +2362,15 @@ TEST(AbiCxx, RegisterEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
     EXPECT_EQ(engine.use_count(), 2);
 }
 
-// One registration, one prepared model per handler of a session-exclusive model: prepare
-// returns a Prepared per handler, process and reset of a handler run on its own Prepared,
-// reset is seen at every new stream (after prepare, after anira_handler_reset, after a
-// re-prepare) on the context of the process that follows, and every Prepared is deleted
-// exactly once, at the re-prepare or the destroy of its handler; release fires after all of
-// them. Two handlers of a stateless model share one Prepared, deleted with the last of them.
-TEST(AbiCxx, APreparedPerPreparedModelDiesWithItsUnprepareAndResetSeesEveryNewStream) {
+// One registration, one loaded model, one Prepared per handler: a session-exclusive model is
+// loaded once with no shared instance, prepare returns an exclusive Prepared per handler
+// (whose calls carry the flag and instance 0), process and reset of a handler run on its own
+// Prepared, reset is seen at every new stream (after prepare, after anira_handler_reset, after
+// a re-prepare) on the context of the process that follows, every Prepared is deleted exactly
+// once, at the re-prepare or the destroy of its handler, and the Loaded with the last of
+// them; release fires after all of them. Two handlers of a stateless model share one Loaded
+// too, each on a Prepared of its own that claims the shared instance.
+TEST(AbiCxx, APreparedPerHandlerDiesWithItsUnprepareAndResetSeesEveryNewStream) {
     const anira_test::Context context;
     const anira::ContractHandle contract = anira_test::explicit_contract();
     {
@@ -2170,11 +2387,14 @@ TEST(AbiCxx, APreparedPerPreparedModelDiesWithItsUnprepareAndResetSeesEveryNewSt
         pipe.reset();
         ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
         ASSERT_EQ(second.prepare(contract), ANIRA_OK) << second.m_err.message;
-        ASSERT_EQ(engine->m_counts.size(), 2U) << "a session-exclusive model is never shared";
-        const std::shared_ptr<EngineCounts> of_first = engine->m_counts[0];
-        const std::shared_ptr<EngineCounts> of_second = engine->m_counts[1];
-        EXPECT_EQ(of_first->m_instances, 1U);
-        EXPECT_EQ(of_second->m_instances, 1U);
+        ASSERT_EQ(engine->m_loads.size(), 1U) << "a stateful model is loaded once too";
+        ASSERT_EQ(engine->m_counts.size(), 2U) << "a Prepared per handler";
+        const std::shared_ptr<EngineLoadCounts> loaded = engine->last_load();
+        const std::shared_ptr<EnginePreparedCounts> of_first = engine->m_counts[0];
+        const std::shared_ptr<EnginePreparedCounts> of_second = engine->m_counts[1];
+        EXPECT_EQ(loaded->m_instances, 0U) << "no shared instance: each handler builds its own";
+        EXPECT_TRUE(of_first->m_exclusive);
+        EXPECT_TRUE(of_second->m_exclusive);
 
         std::vector<float> in_first;
         std::vector<float> out_first;
@@ -2203,29 +2423,37 @@ TEST(AbiCxx, APreparedPerPreparedModelDiesWithItsUnprepareAndResetSeesEveryNewSt
         EXPECT_EQ(of_first->m_process_after_reset_same_ctx.load(), 2);
         EXPECT_EQ(of_second->m_resets.load(), 1);
         // A re-prepare of the first handler: its Prepared dies once and a new one takes over,
-        // with a reset of its own at its first inference; the second handler's lives on.
+        // with a reset of its own at its first inference; the second handler's lives on, and
+        // with it the Loaded.
         ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
+        ASSERT_EQ(engine->m_loads.size(), 1U) << "the second handler held the Loaded";
         ASSERT_EQ(engine->m_counts.size(), 3U);
         EXPECT_TRUE(of_first->m_deleted.load());
         EXPECT_FALSE(of_second->m_deleted.load());
         EXPECT_FALSE(engine->m_counts[2]->m_deleted.load());
+        EXPECT_FALSE(loaded->m_unloaded.load());
         drive(first.m_handler, 1, in_again, out_again);
         ASSERT_FALSE(HasFatalFailure());
         EXPECT_EQ(engine->m_counts[2]->m_resets.load(), 1);
         EXPECT_EQ(engine->m_prepared, 3);
-        // The destroy of each handler deletes its Prepared; release fires after the last.
+        EXPECT_EQ(engine->m_loaded, 1);
+        // The destroy of each handler deletes its Prepared, the last one the Loaded too;
+        // release fires after the last.
         first.destroy();
         EXPECT_TRUE(engine->m_counts[2]->m_deleted.load());
         EXPECT_FALSE(of_second->m_deleted.load());
+        EXPECT_FALSE(loaded->m_unloaded.load());
         EXPECT_EQ(engine->m_released.load(), 0);
         second.destroy();
         EXPECT_TRUE(of_second->m_deleted.load());
+        EXPECT_TRUE(loaded->m_unloaded.load());
         EXPECT_EQ(engine->m_released.load(), 1);
         EXPECT_EQ(engine.use_count(), 1);
     }
     {
-        // Stateless: two handlers of one pipeline share one prepared model (the pool), whose
-        // Prepared dies with the last handler sharing it.
+        // Stateless: two handlers of one pipeline share one loaded model (the pool), each on a
+        // Prepared of its own that claims the shared instance; the Loaded dies with the last
+        // handler sharing it.
         const ModelConfig model = engine_stream_model();
         auto engine = std::make_shared<CountingEngine>();
         anira::Pipeline pipe;
@@ -2236,29 +2464,38 @@ TEST(AbiCxx, APreparedPerPreparedModelDiesWithItsUnprepareAndResetSeesEveryNewSt
         ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
         ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
         ASSERT_EQ(second.prepare(contract), ANIRA_OK) << second.m_err.message;
-        ASSERT_EQ(engine->m_counts.size(), 1U) << "one prepared model for two equal handlers";
-        const std::shared_ptr<EngineCounts> shared = engine->last();
+        ASSERT_EQ(engine->m_loads.size(), 1U) << "one loaded model for two equal handlers";
+        ASSERT_EQ(engine->m_counts.size(), 2U) << "a Prepared per handler";
+        const std::shared_ptr<EngineLoadCounts> shared = engine->last_load();
+        EXPECT_EQ(shared->m_instances, 1U);
+        EXPECT_FALSE(engine->m_counts[0]->m_exclusive);
+        EXPECT_FALSE(engine->m_counts[1]->m_exclusive);
         std::vector<float> in;
         std::vector<float> out;
         drive(first.m_handler, 2, in, out);
         drive(second.m_handler, 2, in, out);
         ASSERT_FALSE(HasFatalFailure());
-        EXPECT_EQ(shared->m_processed.load(), 4);
-        EXPECT_EQ(shared->m_resets.load(), 0) << "a shared prepared model is never reset";
+        EXPECT_EQ(engine->m_counts[0]->m_processed.load(), 2);
+        EXPECT_EQ(engine->m_counts[1]->m_processed.load(), 2);
+        EXPECT_EQ(engine->m_counts[0]->m_broken.load() + engine->m_counts[1]->m_broken.load(), 0);
+        EXPECT_EQ(engine->m_counts[0]->m_resets.load() + engine->m_counts[1]->m_resets.load(), 0)
+            << "a shared handle is never reset";
         first.destroy();
-        EXPECT_FALSE(shared->m_deleted.load()) << "the second handler still shares it";
+        EXPECT_TRUE(engine->m_counts[0]->m_deleted.load());
+        EXPECT_FALSE(shared->m_unloaded.load()) << "the second handler still shares it";
         second.destroy();
-        EXPECT_TRUE(shared->m_deleted.load());
+        EXPECT_TRUE(engine->m_counts[1]->m_deleted.load());
+        EXPECT_TRUE(shared->m_unloaded.load());
         EXPECT_EQ(engine->m_released.load(), 0) << "the pipeline still carries the engine";
     }
 }
 
 // The Engine object is the engine's identity: one object registered on two Pipelines (the
 // plugin-instance idiom: one object per binary, one Pipeline per instance) gives one C engine,
-// so two handlers of equal configurations share one prepared model; release fires once. After
+// so two handlers of equal configurations share one loaded model; release fires once. After
 // every Pipeline holding it is gone, a registration creates a fresh C engine, answered by a
 // release of its own.
-TEST(AbiCxx, OneEngineObjectOnTwoPipelinesSharesOnePreparedModel) {
+TEST(AbiCxx, OneEngineObjectOnTwoPipelinesSharesOneLoadedModel) {
     const anira_test::Context context;
     const anira::ContractHandle contract = anira_test::explicit_contract();
     const ModelConfig model = engine_stream_model();
@@ -2279,17 +2516,20 @@ TEST(AbiCxx, OneEngineObjectOnTwoPipelinesSharesOnePreparedModel) {
         second_pipe.reset();
         ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
         ASSERT_EQ(second.prepare(contract), ANIRA_OK) << second.m_err.message;
-        EXPECT_EQ(engine->m_prepared, 1) << "one prepared model across the two pipelines";
+        EXPECT_EQ(engine->m_inited, 1) << "one C engine: one init";
+        EXPECT_EQ(engine->m_loaded, 1) << "one loaded model across the two pipelines";
+        EXPECT_EQ(engine->m_prepared, 2) << "a Prepared per handler";
         std::vector<float> in;
         std::vector<float> out;
         drive(first.m_handler, 2, in, out);
         drive(second.m_handler, 2, in, out);
         ASSERT_FALSE(HasFatalFailure());
-        EXPECT_EQ(engine->last()->m_processed.load(), 4);
+        EXPECT_EQ(engine->m_counts[0]->m_processed.load() + engine->m_counts[1]->m_processed.load(),
+                  4);
         first.destroy();
-        EXPECT_FALSE(engine->last()->m_deleted.load());
+        EXPECT_FALSE(engine->last_load()->m_unloaded.load());
         second.destroy();
-        EXPECT_TRUE(engine->last()->m_deleted.load());
+        EXPECT_TRUE(engine->last_load()->m_unloaded.load());
     }
     EXPECT_EQ(engine->m_released.load(), 1);
     EXPECT_EQ(engine.use_count(), 1);

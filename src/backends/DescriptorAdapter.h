@@ -1,15 +1,21 @@
 #ifndef ANIRA_BACKENDS_DESCRIPTORADAPTER_H
 #define ANIRA_BACKENDS_DESCRIPTORADAPTER_H
 /*
- * The adapter over a registered engine's descriptor (anira/abi/engine.h): what runs a custom
- * engine added to a pipeline under an id (anira_pipeline_add_engine). Private to
- * src/backends and the scheduler (and the tests through the src/ include directory). One
- * prepared model of one registered engine is one DescriptorAdapter: prepare builds the
- * engine's prepare record and calls its prepare slot once, every inference is one process
- * call with the context the scheduler built, the reset slot runs where the scheduler asks for
- * it, and the destructor gives the prepared pointer back to the engine's unprepare.
+ * The adapter over a custom engine's descriptor (anira/abi/engine.h): what runs a custom
+ * engine added to a pipeline under an id (anira_pipeline_add_engine). Private to src/backends
+ * and the scheduler (and the tests through the src/ include directory). The C lifecycle's
+ * levels are the engine room's: one loaded model of one custom engine is one
+ * DescriptorLoaded (init on the engine object once, before its first load; load builds the
+ * engine's load record and calls its load slot once, keeping the loaded pointer; the
+ * destructor gives it back to the engine's unload), and one session's handle over it is one
+ * DescriptorPrepared (prepare calls the engine's prepare slot with the shared prepare record
+ * and the loaded pointer, keeping the prepared pointer; every inference is one process call
+ * with the context the scheduler built, the loaded pointer in it; the reset slot runs where the
+ * scheduler asks for it; the destructor gives the prepared pointer back to the engine's
+ * unprepare).
  */
 #include <anira/abi/engine.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/system/Exports.h>
 
@@ -27,60 +33,100 @@ class EngineCarrier;
 
 namespace anira::backend {
 
-/// A custom engine behind the adapter interface. do_prepare fills an
-/// anira_engine_prepare_info (the row, the variant, the engine-side template of every slot
-/// of the record at the pinned window, the name each slot binds to, the instances) and calls
-/// the descriptor's prepare with it, keeping what it handed back as this prepared model's
-/// `prepared` pointer (NULL, and nothing called, for a descriptor without a prepare); a status
-/// other than ANIRA_OK is anira::StatusError with it, naming the engine. process is the
-/// descriptor's process over the context as (ctx, prepared, user_data), reset its reset when
-/// the slot is filled, and the destructor calls unprepare once for a successful prepare. The
-/// engine bound the slots itself out of the record's names, so every slot reports
-/// ANIRA_BINDING_ENGINE, and flags() are the descriptor's promises. The carrier is shared with
-/// the engine's handle, the pipelines it was added to and their handlers, and this adapter
-/// holds it too, so the descriptor and its release outlive every prepared model of the engine.
-class ANIRA_API DescriptorAdapter final : public Adapter {
+/// A custom engine's loaded model behind the engine room's interface. init(info) runs the
+/// engine's init slot once per engine object (the carrier remembers; a refused init throws and
+/// leaves the object uninitialised, so the next load's init tries again). do_load fills an
+/// anira_engine_load_info (the row, the variant, the engine-side template of every slot of the
+/// record at the pinned window, the name each slot binds to, the shared slots) and calls the
+/// descriptor's load with it, keeping what it handed back as this loaded model's loaded
+/// pointer (NULL, and nothing called, for a descriptor without a load); a status other than
+/// ANIRA_OK is anira::StatusError with it, naming the engine. The engine bound the slots
+/// itself out of the record's names, so every slot reports ANIRA_BINDING_ENGINE, and flags()
+/// are the descriptor's promises. The carrier is shared with the engine's handle, the pipelines
+/// it was added to and their handlers, and this loaded model holds it too, so the descriptor
+/// and its release outlive every loaded model of the engine.
+class ANIRA_API DescriptorLoaded final : public Loaded {
 public:
     /// `carrier` is the engine the row names, `id` the id the row names it by in its pipeline
     /// (what the messages say); `row` the entry's index in `model`, the variant (anira's own
-    /// copy, kept alive here: the prepare record names it, valid for the duration of the
-    /// engine's prepare, which copies what it keeps).
-    DescriptorAdapter(std::shared_ptr<const anira::capi::EngineCarrier> carrier,
-                      std::string id,
-                      uint32_t row,
-                      std::shared_ptr<const anira_model_config> model);
-    /// Calls the descriptor's unprepare with the prepared pointer, once, when a prepare
-    /// succeeded (the control thread, when the last session sharing this prepared model
-    /// released it or the pool let it go).
-    ~DescriptorAdapter() override;
-    DescriptorAdapter(const DescriptorAdapter&) = delete;
-    DescriptorAdapter& operator=(const DescriptorAdapter&) = delete;
-    DescriptorAdapter(DescriptorAdapter&&) = delete;
-    DescriptorAdapter& operator=(DescriptorAdapter&&) = delete;
+    /// copy, kept alive here: the load record names it, valid for the duration of the engine's
+    /// load, which copies what it keeps).
+    DescriptorLoaded(std::shared_ptr<const anira::capi::EngineCarrier> carrier,
+                     std::string id,
+                     uint32_t row,
+                     std::shared_ptr<const anira_model_config> model);
+    /// Calls the descriptor's unload with the loaded pointer, once, when a load succeeded (the
+    /// control thread, when the last session holding this loaded model released it and the
+    /// pool let it go).
+    ~DescriptorLoaded() override;
+    DescriptorLoaded(const DescriptorLoaded&) = delete;
+    DescriptorLoaded& operator=(const DescriptorLoaded&) = delete;
+    DescriptorLoaded(DescriptorLoaded&&) = delete;
+    DescriptorLoaded& operator=(DescriptorLoaded&&) = delete;
+
+    /// The engine's init slot, once per engine object, with the facts of the core in effect:
+    /// the core calls it before the first load of the object, under its lifecycle lock. A
+    /// status other than ANIRA_OK is anira::StatusError with it, naming the engine.
+    void init(const anira_init_info& info) override;
 
     /// The descriptor's flags: the engine's ANIRA_ENGINE_FLAG_* promises.
     uint32_t flags() const noexcept override;
 
-    /// The engine the adapter runs.
+    /// The engine the loaded model runs on.
     const anira::capi::EngineCarrier& carrier() const noexcept { return *m_carrier; }
 
-    /// What the engine's prepare handed back for this prepared model; NULL before prepare and
-    /// for a descriptor without a prepare.
-    void* engine_prepared() const noexcept { return m_prepared; }
+    /// The id the row names the engine by in its pipeline.
+    const std::string& id() const noexcept { return m_id; }
+
+    /// What the engine's load handed back for this loaded model: the loaded pointer every call
+    /// sees in anira_engine_ctx.loaded; NULL before load and for a descriptor without a load.
+    void* engine_loaded() const noexcept override { return m_loaded_pointer; }
 
 protected:
-    void do_prepare(const Model& model) override;
-    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override;
-    void reset(const anira_engine_ctx& ctx) noexcept override;
+    void do_load(const Model& model) override;
+    std::unique_ptr<Prepared> do_prepare(const PrepareRequest& request) override;
 
 private:
-    /// The unprepare of a successful prepare, once.
-    void unprepare() noexcept;
+    /// The unload of a successful load, once.
+    void unload() noexcept;
 
     std::shared_ptr<const anira::capi::EngineCarrier> m_carrier;
     std::string m_id;
     uint32_t m_row;
     std::shared_ptr<const anira_model_config> m_model;
+    void* m_loaded_pointer = nullptr;
+    bool m_unload_owed = false;  ///< a successful load is outstanding
+};
+
+/// One session's handle over a custom engine's loaded model: the constructor calls the
+/// descriptor's prepare with the shared record of the session's prepare (the C handler's, never
+/// NULL: the 2.x path adds no engine) and the loaded pointer, keeping what it handed back as
+/// this session's prepared pointer (NULL, and nothing called, for a descriptor without a
+/// prepare); a status other than ANIRA_OK is anira::StatusError with it, naming the engine.
+/// process is the descriptor's process over the call as (ctx, prepared, user_data), reset its
+/// reset when the slot is filled, and the destructor calls unprepare once for a successful
+/// prepare.
+class ANIRA_API DescriptorPrepared final : public Prepared {
+public:
+    DescriptorPrepared(DescriptorLoaded& loaded, const PrepareRequest& request);
+    /// Calls the descriptor's unprepare with the prepared pointer, once, when a prepare
+    /// succeeded (the control thread, when the session is released, before its loaded models).
+    ~DescriptorPrepared() override;
+    DescriptorPrepared(const DescriptorPrepared&) = delete;
+    DescriptorPrepared& operator=(const DescriptorPrepared&) = delete;
+    DescriptorPrepared(DescriptorPrepared&&) = delete;
+    DescriptorPrepared& operator=(DescriptorPrepared&&) = delete;
+
+    /// What the engine's prepare handed back for this session; NULL for a descriptor without a
+    /// prepare.
+    void* engine_prepared() const noexcept { return m_prepared; }
+
+protected:
+    anira_status process(const anira_engine_ctx& call, ChunkBuffers* chunk) noexcept override;
+    void reset(const anira_engine_ctx& call) noexcept override;
+
+private:
+    const anira::capi::EngineCarrier* m_carrier;
     void* m_prepared = nullptr;
     bool m_unprepare_owed = false;  ///< a successful prepare is outstanding
 };

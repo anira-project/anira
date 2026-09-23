@@ -34,6 +34,7 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/export.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -47,6 +48,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -79,10 +81,19 @@ public:
     const anira_stage_desc& desc() const noexcept { return m_desc; }
     const std::vector<std::string>& consumed_kinds() const noexcept { return m_kinds; }
 
+    /// The stage's init slot, once per registration (per carrier), with the facts of the core
+    /// in effect: the first call runs init and remembers a success, every later call answers
+    /// ANIRA_OK at once; a refused init is not remembered, so the next call runs it again.
+    /// ANIRA_OK without an init slot. Serialised by a mutex of the carrier: two handlers of one
+    /// pipeline may prepare from two threads.
+    anira_status ensure_init(const anira_init_info& info) const;
+
 private:
     anira_stage_desc m_desc;
     std::vector<std::string> m_kinds;
     std::vector<const char*> m_kind_pointers;
+    mutable std::mutex m_init_mutex;
+    mutable bool m_initialised = false;
 };
 
 /// What a pipeline's stage means to the validator: which ring-moving phases it fills, and the
