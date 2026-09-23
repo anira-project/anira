@@ -83,7 +83,7 @@ anira::StatusError status_error_of(Call&& call) {
         call();
     } catch (const anira::StatusError& error) { return error; }
     ADD_FAILURE() << "no StatusError was thrown";
-    return anira::StatusError(ANIRA_OK, "");
+    return {ANIRA_OK, ""};
 }
 
 // A descriptor over `data` as the packed float32 block of `dims`.
@@ -507,7 +507,7 @@ TEST(Adapter, LegacyPlanRequestsOfEveryEngineOfTheBuildMatchTheDefaultTable) {
         rows.emplace_back("model-" + std::to_string(static_cast<int>(backend)), backend);
     }
     if (rows.empty()) { GTEST_SKIP() << "an engine-free build: the custom-only case covers it"; }
-    anira::InferenceConfig config(
+    const anira::InferenceConfig config(
         rows,
         std::vector<anira::TensorShape>{anira::TensorShape({{1, 1, k_block}}, {{1, 1, k_block}})},
         anira::ProcessingSpec({1}, {1}, {k_block}, {k_block}),

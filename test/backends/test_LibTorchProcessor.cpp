@@ -8,7 +8,6 @@
 #ifdef USE_LIBTORCH
 
 #include <anira/InferenceConfig.h>
-#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -16,6 +15,7 @@
 #include <anira/utils/InferenceBackend.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -81,16 +81,16 @@ TEST(LibTorchProcessor, BinaryModelDataLoadsFromMemory) {
     const std::vector<char> bytes = read_model_file(rave_model_path());
     ASSERT_FALSE(bytes.empty()) << "fixture missing: " << rave_model_path();
 
-    anira::InferenceConfig config({anira::ModelData(const_cast<char*>(bytes.data()),
-                                                    bytes.size(),
-                                                    anira::InferenceBackend::LIBTORCH,
-                                                    "",
-                                                    /*is_binary=*/true)},
-                                  {anira::TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                                  anira::ProcessingSpec({1}, {1}, {2048}, {2048}, {2048}),
-                                  42.66F,
-                                  /*warm_up=*/0,
-                                  /*session_exclusive_processor=*/true);
+    const anira::InferenceConfig config({anira::ModelData(const_cast<char*>(bytes.data()),
+                                                          bytes.size(),
+                                                          anira::InferenceBackend::LIBTORCH,
+                                                          "",
+                                                          /*is_binary=*/true)},
+                                        {anira::TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+                                        anira::ProcessingSpec({1}, {1}, {2048}, {2048}, {2048}),
+                                        42.66F,
+                                        /*warm_up=*/0,
+                                        /*session_exclusive_processor=*/true);
     ASSERT_TRUE(config.is_model_binary(anira::InferenceBackend::LIBTORCH));
     const Model model = anira::backend::model_of(config, anira::InferenceBackend::LIBTORCH);
     ASSERT_NE(model.m_bytes, nullptr);
@@ -111,7 +111,7 @@ TEST(LibTorchProcessor, BinaryModelDataLoadsFromMemory) {
 // A named entry must be used for the warm-up inferences and for every later run, instead of
 // forward().
 TEST(LibTorchProcessor, NamedModelFunctionIsUsedForWarmUpAndProcessing) {
-    anira::InferenceConfig config(
+    const anira::InferenceConfig config(
         {anira::ModelData(rave_model_path(), anira::InferenceBackend::LIBTORCH, "encode")},
         {anira::TensorShape({{1, 1, 2048}}, {{1, 4, 1}})},
         anira::ProcessingSpec({1}, {4}),
@@ -138,7 +138,7 @@ TEST(LibTorchProcessor, NamedModelFunctionIsUsedForWarmUpAndProcessing) {
 // create_session() rolls back on (see test_CreateSessionFailure.cpp). Carrying on with an
 // empty module would let an engine-specific c10 exception escape instead.
 TEST(LibTorchProcessor, UnloadableModelThrowsRuntimeError) {
-    anira::InferenceConfig config(
+    const anira::InferenceConfig config(
         {anira::ModelData("this/model/does/not/exist.pt", anira::InferenceBackend::LIBTORCH)},
         {anira::TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
         anira::ProcessingSpec({1}, {1}, {512}, {512}),
@@ -152,7 +152,7 @@ TEST(LibTorchProcessor, UnloadableModelThrowsRuntimeError) {
     EXPECT_FALSE(adapter->prepared());
 
     // A method the module does not have fails the same way.
-    anira::InferenceConfig no_method(
+    const anira::InferenceConfig no_method(
         {anira::ModelData(gain_model_path(), anira::InferenceBackend::LIBTORCH, "no_such_method")},
         {anira::TensorShape({{1, 1, 512}, {1}}, {{1, 1, 512}, {1}})},
         anira::ProcessingSpec({1, 1}, {1, 1}, {512, 0}, {512, 0}),
@@ -197,7 +197,7 @@ TEST(LibTorchProcessor, MultiTensorOutputIsUnpacked) {
 // whatever the slot order; a record naming an argument the method lacks lists the arguments;
 // a record on an output side, which has no names, is refused too.
 TEST(LibTorchProcessor, InputsBindToTheMethodsArgumentsByName) {
-    anira::InferenceConfig config(
+    const anira::InferenceConfig config(
         {anira::ModelData(gain_model_path(), anira::InferenceBackend::LIBTORCH)},
         {anira::TensorShape({{1}, {1, 1, 512}}, {{1, 1, 512}, {1}})},
         anira::ProcessingSpec({1, 1}, {1, 1}, {0, 512}, {512, 0}),
@@ -246,7 +246,7 @@ TEST(LibTorchProcessor, InputsBindToTheMethodsArgumentsByName) {
 // RAVE's decode(z, from_forward: bool = False): one model input feeds the leading argument and
 // the defaulted one stays with its default, so the count check does not ask for it.
 TEST(LibTorchProcessor, AMethodWithADefaultedArgumentBindsItsLeadingArgument) {
-    anira::InferenceConfig config(
+    const anira::InferenceConfig config(
         {anira::ModelData(rave_model_path(), anira::InferenceBackend::LIBTORCH, "decode")},
         {anira::TensorShape({{1, 4, 1}}, {{1, 1, 2048}})},
         anira::ProcessingSpec({4}, {1}),
@@ -267,7 +267,7 @@ TEST(LibTorchProcessor, AMethodWithADefaultedArgumentBindsItsLeadingArgument) {
 // warm-up's first result at prepare (CONFIG naming both shapes), and, without a warm-up, at
 // the first run (the chunk fails with ENGINE; nothing is written).
 TEST(LibTorchProcessor, AnOutputOfAnotherShapeIsRefusedAtTheWarmUpOrFailsTheRun) {
-    anira::InferenceConfig config(
+    const anira::InferenceConfig config(
         {anira::ModelData(gain_model_path(), anira::InferenceBackend::LIBTORCH)},
         {anira::TensorShape({{1, 1, 512}, {1}}, {{1, 1, 512}, {2}})},
         anira::ProcessingSpec({1, 1}, {1, 1}, {512, 0}, {512, 0}),

@@ -7,9 +7,9 @@
 #ifdef USE_EXECUTORCH
 
 #include <anira/InferenceConfig.h>
-#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
 
@@ -64,16 +64,17 @@ TEST(ExecuTorchProcessor, BinaryModelDataLoadsFromMemory) {
     const std::vector<char> bytes = read_model_file(multifunction_model_path());
     ASSERT_FALSE(bytes.empty()) << "fixture missing: " << multifunction_model_path();
 
-    anira::InferenceConfig config({anira::ModelData(const_cast<char*>(bytes.data()),
-                                                    bytes.size(),
-                                                    anira::InferenceBackend::EXECUTORCH,
-                                                    "gain2",
-                                                    /*is_binary=*/true)},
-                                  {anira::TensorShape({{1, 1, static_cast<int64_t>(k_size)}},
-                                                      {{1, 1, static_cast<int64_t>(k_size)}})},
-                                  5.0F,
-                                  /*warm_up=*/1,
-                                  /*session_exclusive_processor=*/true);
+    const anira::InferenceConfig config(
+        {anira::ModelData(const_cast<char*>(bytes.data()),
+                          bytes.size(),
+                          anira::InferenceBackend::EXECUTORCH,
+                          "gain2",
+                          /*is_binary=*/true)},
+        {anira::TensorShape({{1, 1, static_cast<int64_t>(k_size)}},
+                            {{1, 1, static_cast<int64_t>(k_size)}})},
+        5.0F,
+        /*warm_up=*/1,
+        /*session_exclusive_processor=*/true);
     ASSERT_TRUE(config.is_model_binary(anira::InferenceBackend::EXECUTORCH));
     const Model model = anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH);
     ASSERT_NE(model.m_bytes, nullptr);
@@ -96,7 +97,7 @@ TEST(ExecuTorchProcessor, BinaryModelDataLoadsFromMemory) {
 
 // The contract create_session() rolls back on: a StatusError, which is a std::runtime_error.
 TEST(ExecuTorchProcessor, UnloadableModelThrowsRuntimeError) {
-    anira::InferenceConfig config(
+    const anira::InferenceConfig config(
         {anira::ModelData("this/model/does/not/exist.pte", anira::InferenceBackend::EXECUTORCH)},
         {anira::TensorShape({{1, 1, static_cast<int64_t>(k_size)}},
                             {{1, 1, static_cast<int64_t>(k_size)}})},
@@ -113,14 +114,15 @@ TEST(ExecuTorchProcessor, UnloadableModelThrowsRuntimeError) {
 // A method name the program does not carry must fail the same way rather than silently
 // falling back to forward().
 TEST(ExecuTorchProcessor, UnknownModelFunctionThrowsRuntimeError) {
-    anira::InferenceConfig config({anira::ModelData(multifunction_model_path(),
-                                                    anira::InferenceBackend::EXECUTORCH,
-                                                    "no_such_method")},
-                                  {anira::TensorShape({{1, 1, static_cast<int64_t>(k_size)}},
-                                                      {{1, 1, static_cast<int64_t>(k_size)}})},
-                                  5.0F,
-                                  /*warm_up=*/0,
-                                  /*session_exclusive_processor=*/true);
+    const anira::InferenceConfig config(
+        {anira::ModelData(multifunction_model_path(),
+                          anira::InferenceBackend::EXECUTORCH,
+                          "no_such_method")},
+        {anira::TensorShape({{1, 1, static_cast<int64_t>(k_size)}},
+                            {{1, 1, static_cast<int64_t>(k_size)}})},
+        5.0F,
+        /*warm_up=*/0,
+        /*session_exclusive_processor=*/true);
     const std::shared_ptr<Adapter> adapter = executorch_adapter();
     try {
         adapter->prepare(anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH));
@@ -136,7 +138,7 @@ TEST(ExecuTorchProcessor, UnknownModelFunctionThrowsRuntimeError) {
 // the bundled gain program plans [1, 1, 65536] for its block, so a record of 512 binds and one
 // above the bound, or of another rank, is CONFIG at prepare naming both shapes.
 TEST(ExecuTorchProcessor, TheMethodMetasPlannedBoundsAreTheCheck) {
-    const auto config_of = [](std::vector<int64_t> block) {
+    const auto config_of = [](const std::vector<int64_t>& block) {
         return anira::InferenceConfig(
             {anira::ModelData(gain_model_path(), anira::InferenceBackend::EXECUTORCH)},
             {anira::TensorShape({block, {1}}, {block, {1}})},
