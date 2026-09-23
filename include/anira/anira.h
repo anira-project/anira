@@ -5,8 +5,6 @@
 #include "InferenceHandler.h"
 #include "PrePostProcessor.h"
 #include "backends/BackendBase.h"
-#include "backends/LiteRtProcessor.h"
-#include "backends/TFLiteProcessor.h"
 #include "scheduler/Core.h"
 #include "scheduler/InferenceManager.h"
 #include "scheduler/InferenceThread.h"

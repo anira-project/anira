@@ -1769,15 +1769,18 @@ TEST(AbiState, TheSetterRefusals) {
 // ---- the bundled model on the engines
 // -------------------------------------------------------------
 
-#if defined(USE_ONNXRUNTIME) || defined(USE_LIBTORCH) || defined(USE_EXECUTORCH)
+#if defined(USE_ONNXRUNTIME) || defined(USE_LIBTORCH) || defined(USE_EXECUTORCH) || \
+    defined(USE_TFLITE) || defined(USE_LITERT)
 
 // stateful_accumulator.model.json: the stereo export of example-models' StatefulAccumulatorNetwork
 // (the model of the twin above, a [1, 2, 2] state around a [1, 2, 64] stream, the state first
-// in the inputs and last in the outputs) with rows for LibTorch, ONNX Runtime and ExecuTorch.
-// TFLite and LiteRT are left out on purpose: the TFLite export orders its outputs [state_out,
-// processed_data] (the README of example-models; the input side keeps the declared order), and
-// the engines bind tensors by position until they bind by name, so on those two the stream
-// would be captured as the state. The three engines here keep the export's order.
+// in the inputs and last in the outputs) with a row for every engine. The TFLite export orders
+// its outputs [state_out, processed_data] in the file (the README of example-models); its
+// signature keeps the declared mapping under the keys output_0 / output_1, which the tflite row
+// reaches by position (the signature runner lists them in key order) and the litert row by
+// name (LiteRT lists them in the file's order, so the row carries a tensors record). The
+// closed form below holds on every engine because the binding is checked against the shapes
+// at prepare: a swapped pair would be refused, not captured as the state.
 
 constexpr uint32_t k_file_hop = 64;      // the file's window (min = max = 64, no overlap)
 constexpr double k_file_rate = 48000.0;  // the host's rate; a contract file carries none
@@ -1788,7 +1791,8 @@ std::vector<anira_engine> file_engines() {
     for (const anira::BackendId& id : anira::enabled_backends()) {
         const auto engine = static_cast<anira_engine>(id.engine);
         if (engine == ANIRA_ENGINE_LIBTORCH || engine == ANIRA_ENGINE_ONNXRUNTIME ||
-            engine == ANIRA_ENGINE_EXECUTORCH) {
+            engine == ANIRA_ENGINE_EXECUTORCH || engine == ANIRA_ENGINE_TFLITE ||
+            engine == ANIRA_ENGINE_LITERT) {
             out.push_back(engine);
         }
     }
@@ -1800,6 +1804,8 @@ const char* engine_word(anira_engine engine) {
         case ANIRA_ENGINE_LIBTORCH: return "libtorch";
         case ANIRA_ENGINE_ONNXRUNTIME: return "onnxruntime";
         case ANIRA_ENGINE_EXECUTORCH: return "executorch";
+        case ANIRA_ENGINE_TFLITE: return "tflite";
+        case ANIRA_ENGINE_LITERT: return "litert";
         default: return "another engine";
     }
 }

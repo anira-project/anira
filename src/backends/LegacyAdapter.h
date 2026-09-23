@@ -32,25 +32,18 @@ namespace anira::backend {
 /// as it always was.
 class ANIRA_API LegacyAdapter final : public Adapter {
 public:
-    /// A 2.x processor of a built-in engine, built at prepare from the 2.x configuration of
-    /// the record (legacy_config_of) and owned by the adapter: the shape the built-in engines
-    /// ride until they have adapters of the descriptor shape.
-    using ProcessorFactory = std::unique_ptr<anira::BackendBase> (*)(anira::InferenceConfig&);
-
     /// Over a caller's backend, which outlives the adapter (the 2.x rule: a custom backend
     /// outlives the handler); prepare calls its prepare().
     explicit LegacyAdapter(anira::BackendBase& backend);
     /// The roundtrip: a BackendBase built from `config` (copied by it), owned here.
     explicit LegacyAdapter(anira::InferenceConfig& config);
-    /// Over the processor `factory` builds at prepare, owned here.
-    explicit LegacyAdapter(ProcessorFactory factory);
     ~LegacyAdapter() override;
     LegacyAdapter(const LegacyAdapter&) = delete;
     LegacyAdapter& operator=(const LegacyAdapter&) = delete;
     LegacyAdapter(LegacyAdapter&&) = delete;
     LegacyAdapter& operator=(LegacyAdapter&&) = delete;
 
-    /// The backend the 2.x call goes to; NULL before prepare on the factory shape.
+    /// The backend the 2.x call goes to.
     anira::BackendBase* backend() const noexcept { return m_backend; }
 
 protected:
@@ -59,10 +52,8 @@ protected:
     bool claims_instances() const noexcept override { return false; }
 
 private:
-    std::unique_ptr<anira::BackendBase> m_owned;  ///< the roundtrip or the factory's
-                                                  ///< processor; empty over a caller's
+    std::unique_ptr<anira::BackendBase> m_owned;  ///< the roundtrip; empty over a caller's
     anira::BackendBase* m_backend = nullptr;      ///< the one the 2.x call goes to
-    ProcessorFactory m_factory = nullptr;         ///< the factory shape's, else NULL
 };
 
 }  // namespace anira::backend

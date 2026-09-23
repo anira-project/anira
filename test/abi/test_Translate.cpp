@@ -511,7 +511,17 @@ TEST(AbiTranslate, UpgradedSimpleGainEqualsTheV2Fixture) {
         {dir + std::string("/simple_gain_network_mono.pte"), anira::InferenceBackend::EXECUTORCH},
 #endif
     };
+    // The TensorFlow export holds the static gain at rank 3: the two TensorFlow rows of the
+    // document say so, and the upgrade carries them as a layout the bridge turns back into a
+    // backend-qualified shape, listed before the universal one (the 2.x fixture header had [1]
+    // there, which the adapters' shape check refuses since anira 3).
     const std::vector<anira::TensorShape> tensor_shape = {
+#ifdef USE_TFLITE
+        {{{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, anira::InferenceBackend::TFLITE},
+#endif
+#ifdef USE_LITERT
+        {{{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, anira::InferenceBackend::LITERT},
+#endif
         {{{1, 1, 512}, {1}}, {{1, 1, 512}, {1}}},
     };
     const anira::ProcessingSpec processing_spec = {{1, 1}, {1, 1}, {512, 0}, {512, 0}};

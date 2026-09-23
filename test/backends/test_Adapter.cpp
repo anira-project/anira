@@ -1187,3 +1187,273 @@ TEST(AdapterOnnxRuntime, ADescriptorTheAdapterCannotBindFailsTheCall) {
 }
 
 #endif  // USE_ONNXRUNTIME
+
+// ============================================================================================
+// TensorFlow Lite and LiteRT: the bundled exports through their signatures
+// ============================================================================================
+
+#if defined(USE_TFLITE) || defined(USE_LITERT)
+
+namespace {
+
+std::string gain_tflite() {
+    return ANIRA_EXTRAS_MODELS_DIR
+        "/model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono.tflite";
+}
+
+std::string accumulator_tflite() {
+    return ANIRA_EXTRAS_MODELS_DIR
+        "/model-pool/example-models/StatefulAccumulatorNetwork/models/"
+        "stateful_accumulator_network_stereo.tflite";
+}
+
+std::string guitarlstm_tflite() {
+    return ANIRA_EXTRAS_MODELS_DIR
+        "/hybrid-nn/GuitarLSTM/tensorflow-version/models/model_0/GuitarLSTM-256.tflite";
+}
+
+// The bundled gain export as gain.model.json describes it for its TensorFlow rows: the static
+// gain re-viewed to the export's rank 3 by the row's layout (the engine dims here), no names.
+// The signature's keys are args_0 / args_0_1 / output_0 / output_1.
+Model tensorflow_gain_model(anira_engine engine, uint32_t warm_up = 1) {
+    Model model;
+    model.m_engine = engine;
+    model.m_path = gain_tflite();
+    model.m_inputs.push_back(f32_tensor("audio_in", {1, 1, k_block}));
+    model.m_inputs.push_back(f32_tensor("gain", {1, 1, 1}));
+    model.m_outputs.push_back(f32_tensor("audio_out", {1, 1, k_block}));
+    model.m_outputs.push_back(f32_tensor("gain_out", {1}));
+    model.m_warm_up = warm_up;
+    return model;
+}
+
+// The bundled accumulator export as stateful_accumulator.model.json describes it: the
+// canonical names (none a signature key), the state first in the inputs and last in the
+// outputs.
+Model tensorflow_accumulator_model(anira_engine engine) {
+    Model model;
+    model.m_engine = engine;
+    model.m_path = accumulator_tflite();
+    model.m_inputs.push_back(f32_tensor("state_in", {1, 2, 2}));
+    model.m_inputs.push_back(f32_tensor("data", {1, 2, 64}));
+    model.m_outputs.push_back(f32_tensor("processed_data", {1, 2, 64}));
+    model.m_outputs.push_back(f32_tensor("state_out", {1, 2, 2}));
+    model.m_warm_up = 1;
+    return model;
+}
+
+// One block of the gain through `adapter`: the ramp halved lands in the caller's memory.
+void expect_gain_of_one_half(Adapter& adapter) {
+    std::vector<float> audio_in(k_block);
+    for (size_t n = 0; n < k_block; ++n) { audio_in[n] = static_cast<float>(n) / k_block; }
+    std::vector<float> gain{0.5F};
+    std::vector<float> audio_out(k_block, -1.F);
+    std::vector<float> gain_out{-1.F};
+    const std::vector<anira_tensor> inputs{descriptor_over(audio_in, {1, 1, k_block}),
+                                           descriptor_over(gain, {1, 1, 1})};
+    std::vector<anira_tensor> outputs{descriptor_over(audio_out, {1, 1, k_block}),
+                                      descriptor_over(gain_out, {1})};
+    ASSERT_EQ(adapter.run(context_of(inputs, outputs), nullptr, false), ANIRA_OK);
+    for (size_t n = 0; n < k_block; ++n) {
+        ASSERT_EQ(audio_out[n], 0.5F * audio_in[n]) << "sample " << n;
+    }
+    EXPECT_GT(gain_out[0], 0.F) << "the peak landed in the caller's memory";
+}
+
+// One block of the accumulator on a zero state through `adapter`: the closed form of one block.
+void expect_accumulator_closed_form(Adapter& adapter) {
+    std::vector<float> data(128);
+    for (size_t n = 0; n < data.size(); ++n) { data[n] = static_cast<float>(n % 7); }
+    std::vector<float> state_in(4, 0.F);
+    std::vector<float> state_out(4, -1.F);
+    std::vector<float> processed(128, -1.F);
+    const std::vector<anira_tensor> inputs{descriptor_over(state_in, {1, 2, 2}),
+                                           descriptor_over(data, {1, 2, 64})};
+    std::vector<anira_tensor> outputs{descriptor_over(processed, {1, 2, 64}),
+                                      descriptor_over(state_out, {1, 2, 2})};
+    ASSERT_EQ(adapter.run(context_of(inputs, outputs), nullptr, true), ANIRA_OK)
+        << "the first inference of a stream: reset, then process";
+    for (size_t n = 0; n < data.size(); ++n) { ASSERT_EQ(processed[n], data[n]) << "sample " << n; }
+    float sum0 = 0.F;
+    float sum1 = 0.F;
+    for (size_t n = 0; n < 64; ++n) {
+        sum0 += data[n];
+        sum1 += data[64 + n];
+    }
+    EXPECT_EQ(state_out[0], sum0);
+    EXPECT_EQ(state_out[1], 1.F);
+    EXPECT_EQ(state_out[2], sum1);
+    EXPECT_EQ(state_out[3], 1.F);
+}
+
+}  // namespace
+
+#endif  // USE_TFLITE || USE_LITERT
+
+#ifdef USE_TFLITE
+
+// The gain through the signature runner: audio_in and gain bind by position to args_0 and
+// args_0_1 (the runner lists the keys in key order), the gain at the export's rank 3 through
+// the row's layout, args_0 resized to the pinned window; the outputs bind by position to
+// output_0 (the stream) and output_1 (the peak), the file's own order [peak, stream]
+// notwithstanding. Without the layout the rank-1 gain is refused against the export's rank 3.
+TEST(AdapterTFLite, TheGainBindsByPositionThroughTheSignatureRunner) {
+    const std::shared_ptr<Adapter> adapter =
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE);
+    ASSERT_NE(adapter, nullptr);
+    adapter->prepare(tensorflow_gain_model(ANIRA_ENGINE_TFLITE));
+    EXPECT_EQ(adapter->bindings().m_inputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
+    EXPECT_EQ(adapter->bindings().m_outputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
+    expect_gain_of_one_half(*adapter);
+    expect_gain_of_one_half(*adapter);
+
+    Model rank_one = tensorflow_gain_model(ANIRA_ENGINE_TFLITE);
+    rank_one.m_inputs[1] = f32_tensor("gain", {1});
+    const anira::StatusError error = status_error_of([&rank_one] {
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE)->prepare(rank_one);
+    });
+    EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+    const std::string message = error.what();
+    EXPECT_NE(message.find("tflite: input tensor 'gain' bound to the model's 'args_0_1'"),
+              std::string::npos)
+        << message;
+    EXPECT_NE(message.find("[1, 1, 1]"), std::string::npos) << message;
+    EXPECT_NE(message.find("the ranks differ"), std::string::npos) << message;
+}
+
+// The accumulator through the signature runner binds by position in the runner's key order,
+// which is the declared one, and follows the closed form; reset before the first inference
+// of a stream re-initialises the variable tensors, of which the export has none.
+TEST(AdapterTFLite, TheAccumulatorBindsByPositionThroughTheSignatureRunner) {
+    const std::shared_ptr<Adapter> adapter =
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE);
+    adapter->prepare(tensorflow_accumulator_model(ANIRA_ENGINE_TFLITE));
+    EXPECT_EQ(adapter->bindings().m_outputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
+    expect_accumulator_closed_form(*adapter);
+
+    // A record naming the keys binds the same slots by name.
+    Model named = tensorflow_accumulator_model(ANIRA_ENGINE_TFLITE);
+    named.m_outputs[0].m_engine_name = "output_0";
+    named.m_outputs[1].m_engine_name = "output_1";
+    const std::shared_ptr<Adapter> by_name =
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE);
+    by_name->prepare(named);
+    EXPECT_EQ(by_name->bindings().m_outputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_NAME, ANIRA_BINDING_NAME}));
+    expect_accumulator_closed_form(*by_name);
+
+    // A record naming a key the signature lacks: CONFIG listing the keys.
+    named.m_outputs[0].m_engine_name = "ghost";
+    const anira::StatusError error = status_error_of(
+        [&named] { anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE)->prepare(named); });
+    EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+    EXPECT_NE(std::string(error.what()).find("'output_0', 'output_1'"), std::string::npos)
+        << error.what();
+}
+
+// A file without a signature (the GuitarLSTM export) runs through the interpreter itself: the
+// slots bind by position in the interpreter's order, the tensor names (args_0, Identity) being
+// the names a record could use.
+TEST(AdapterTFLite, AFileWithoutASignatureRunsThroughTheInterpreter) {
+    Model model;
+    model.m_engine = ANIRA_ENGINE_TFLITE;
+    model.m_path = guitarlstm_tflite();
+    model.m_inputs.push_back(f32_tensor("audio_in", {256, 150, 1}));
+    model.m_outputs.push_back(f32_tensor("audio_out", {256, 1}));
+    model.m_warm_up = 1;
+    const std::shared_ptr<Adapter> adapter =
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE);
+    adapter->prepare(model);
+    EXPECT_EQ(adapter->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
+    std::vector<float> audio_in(256 * 150, 0.1F);
+    std::vector<float> audio_out(256, 0.F);
+    const std::vector<anira_tensor> inputs{descriptor_over(audio_in, {256, 150, 1})};
+    std::vector<anira_tensor> outputs{descriptor_over(audio_out, {256, 1})};
+    ASSERT_EQ(adapter->run(context_of(inputs, outputs), nullptr, false), ANIRA_OK);
+    bool written = false;
+    for (const float sample : audio_out) { written = written || sample != 0.F; }
+    EXPECT_TRUE(written);
+
+    Model named = model;
+    named.m_inputs[0].m_engine_name = "args_0";
+    named.m_outputs[0].m_engine_name = "Identity";
+    const std::shared_ptr<Adapter> by_name =
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_TFLITE);
+    by_name->prepare(named);
+    EXPECT_EQ(by_name->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
+    EXPECT_EQ(by_name->bindings().m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
+}
+
+#endif  // USE_TFLITE
+
+#ifdef USE_LITERT
+
+// LiteRT lists the gain export's signature outputs in the file's order, [output_1 (the peak),
+// output_0 (the stream)]: a positional binding of the declared order would put the stream on
+// the peak, which the shape check refuses at prepare with both shapes; the names of the file's
+// litert row bind the two outputs to their keys, and the gain runs at the export's rank 3.
+TEST(AdapterLiteRt, TheGainNeedsItsOutputsNamedAndRunsAtTheExportsRank) {
+    Model positional = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
+    const anira::StatusError error = status_error_of([&positional] {
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_LITERT)->prepare(positional);
+    });
+    EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+    const std::string message = error.what();
+    EXPECT_NE(message.find("litert: output tensor 'audio_out' bound to the model's 'output_1'"),
+              std::string::npos)
+        << message;
+    EXPECT_NE(message.find("[1]"), std::string::npos) << message;
+    EXPECT_NE(message.find("[1, 1, 512]"), std::string::npos) << message;
+
+    Model named = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
+    named.m_outputs[0].m_engine_name = "output_0";
+    named.m_outputs[1].m_engine_name = "output_1";
+    const std::shared_ptr<Adapter> adapter =
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_LITERT);
+    ASSERT_NE(adapter, nullptr);
+    adapter->prepare(named);
+    EXPECT_EQ(adapter->bindings().m_inputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
+    EXPECT_EQ(adapter->bindings().m_outputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_NAME, ANIRA_BINDING_NAME}));
+    expect_gain_of_one_half(*adapter);
+    expect_gain_of_one_half(*adapter);
+}
+
+// The accumulator on LiteRT: the same reversal on the output side, refused by position and
+// bound by the keys of the file's litert row; the closed form holds.
+TEST(AdapterLiteRt, TheAccumulatorBindsItsOutputsByName) {
+    Model positional = tensorflow_accumulator_model(ANIRA_ENGINE_LITERT);
+    const anira::StatusError error = status_error_of([&positional] {
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_LITERT)->prepare(positional);
+    });
+    EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+    EXPECT_NE(std::string(error.what()).find("'processed_data' bound to the model's 'output_1'"),
+              std::string::npos)
+        << error.what();
+
+    Model named = tensorflow_accumulator_model(ANIRA_ENGINE_LITERT);
+    named.m_outputs[0].m_engine_name = "output_0";
+    named.m_outputs[1].m_engine_name = "output_1";
+    const std::shared_ptr<Adapter> adapter =
+        anira::backend::make_builtin_adapter(ANIRA_ENGINE_LITERT);
+    adapter->prepare(named);
+    EXPECT_EQ(adapter->bindings().m_inputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
+    EXPECT_EQ(adapter->bindings().m_outputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_NAME, ANIRA_BINDING_NAME}));
+    expect_accumulator_closed_form(*adapter);
+
+    // A record naming a key the signature lacks: CONFIG listing the keys in LiteRT's order.
+    named.m_outputs[1].m_engine_name = "ghost";
+    const anira::StatusError missing = status_error_of(
+        [&named] { anira::backend::make_builtin_adapter(ANIRA_ENGINE_LITERT)->prepare(named); });
+    EXPECT_EQ(missing.status(), ANIRA_ERROR_CONFIG);
+    EXPECT_NE(std::string(missing.what()).find("'output_1', 'output_0'"), std::string::npos)
+        << missing.what();
+}
+
+#endif  // USE_LITERT

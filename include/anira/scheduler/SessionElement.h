@@ -217,10 +217,9 @@ public:
          * @brief Re-points every descriptor at its buffer's memory of the moment
          *
          * A field fill on the driving thread at every claim of the struct
-         * (Core::pre_process): a 2.x processor of this line may swap a buffer's memory with
-         * its own during an inference (TFLiteProcessor, until its adapter binds the
-         * descriptors), so a struct holds another block each time it comes round; the
-         * descriptors follow. Goes with the swap.
+         * (Core::pre_process). No adapter swaps a buffer's memory any more, so the fill
+         * re-points every descriptor at the memory it already names; it stays until the
+         * queue's storage is anira's own and described once (PR 10).
          */
         void rebind_tensors() noexcept;
 

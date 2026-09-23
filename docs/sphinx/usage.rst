@@ -1650,13 +1650,17 @@ its own), and a transposed layout on one (a view layout prepares). A Channel axi
 extent is legal, as on every non-Streamed spec.
 
 .. note::
-    The accumulator's model file names rows for LibTorch, ONNX Runtime and ExecuTorch and none
-    for TFLite or LiteRT: that export orders its outputs ``[state_out, processed_data]``, and
-    the engines of this pre-release bind tensors by position until they bind by name, so a
-    positional binding of the declared order would read the stream where the state is. The
-    2.x bridge (``anira::v3compat::to_inference_config``) refuses a model with a State spec
-    with ``ANIRA_ERROR_NOT_SUPPORTED``: the 2.x runtime feeds no state back, and the model
-    would run on a zero state without a word.
+    The accumulator's model file names a row for every engine. Its TFLite export orders the
+    outputs ``[state_out, processed_data]`` in the file, while the ``serving_default``
+    signature keeps the declared mapping under the keys ``args_0`` / ``args_0_1`` /
+    ``output_0`` / ``output_1``: the tflite row binds by position through the signature
+    runner, which lists the keys in key order, and the litert row carries a ``tensors`` record
+    naming ``processed_data`` as ``output_0`` and ``state_out`` as ``output_1``, since LiteRT
+    lists a signature's outputs in the file's order; either way the shape check at prepare
+    would refuse a swapped pair (``[1, 2, 64]`` against ``[1, 2, 2]``). The 2.x bridge
+    (``anira::v3compat::to_inference_config``) refuses a model with a State spec with
+    ``ANIRA_ERROR_NOT_SUPPORTED``: the 2.x runtime feeds no state back, and the model would
+    run on a zero state without a word.
 
 4. Get ready for Processing
 ---------------------------

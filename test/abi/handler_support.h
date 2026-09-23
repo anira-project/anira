@@ -98,10 +98,11 @@ inline anira::ModelConfig stereo_gain_with_custom(bool default_custom = true) {
     return model;
 }
 
-/// The engines of this build the bundled gain and CNN files run on. LiteRT is left out: its
-/// runtime refuses simple_gain_network_mono.tflite at the warm-up inference ("Cannot
-/// auto-resize tensor args_0_1: no dims_signature exists" -- the static gain scalar), a pair
-/// no other test loads; the oracle compares the plans that load on both sides.
+/// The engines of this build the bundled gain and CNN files run on, on both sides of the
+/// oracle. LiteRT is left out: its signature lists the gain export's outputs as [peak,
+/// processed], so the file's litert row names them (a tensors record), and the 2.x side of the
+/// oracle, whose InferenceConfig has no tensor names, binds them by position and fails the
+/// shape check at prepare; the oracle compares the plans that load on both sides.
 inline std::vector<anira_engine> oracle_engines() {
     std::vector<anira_engine> out;
     for (const anira::BackendId& id : anira::enabled_backends()) {

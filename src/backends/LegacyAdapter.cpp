@@ -15,7 +15,6 @@
 #include <vector>
 
 #include "Adapter.h"
-#include "Adapters.h"
 
 namespace anira::backend {
 
@@ -33,20 +32,12 @@ LegacyAdapter::LegacyAdapter(anira::BackendBase& backend) : m_backend(&backend) 
 LegacyAdapter::LegacyAdapter(anira::InferenceConfig& config)
     : m_owned(std::make_unique<anira::BackendBase>(config)), m_backend(m_owned.get()) {}
 
-LegacyAdapter::LegacyAdapter(ProcessorFactory factory) : m_factory(factory) {}
-
 LegacyAdapter::~LegacyAdapter() = default;
 
 void LegacyAdapter::do_prepare(const Model& model) {
-    if (m_factory != nullptr) {
-        // The processor loads the model in its constructor (and throws StatusError when it
-        // cannot), from the 2.x configuration the record describes; it copies the
-        // configuration, so the local dies with this call.
-        anira::InferenceConfig config = legacy_config_of(model);
-        m_owned = m_factory(config);
-        m_backend = m_owned.get();
-    }
-    // A caller's backend and the roundtrip carry their own copy of the configuration.
+    // A caller's backend and the roundtrip carry their own copy of the configuration; the
+    // record's tensors are the struct's buffers they run over.
+    static_cast<void>(model);
     m_backend->prepare();
 }
 

@@ -45,7 +45,9 @@ inline std::string gain_v2_document() {
       { "model_path": "@MODELS@/model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono.pte",
         "inference_backend": "EXECUTORCH" }
     ],
-    "tensor_shape": [ { "input_shape": [[1, 1, 512], [1]], "output_shape": [[1, 1, 512], [1]] } ],
+    "tensor_shape": [ { "input_shape": [[1, 1, 512], [1, 1, 1]], "output_shape": [[1, 1, 512], [1]], "inference_backend": "TFLITE" },
+                      { "input_shape": [[1, 1, 512], [1, 1, 1]], "output_shape": [[1, 1, 512], [1]], "inference_backend": "LITERT" },
+                      { "input_shape": [[1, 1, 512], [1]], "output_shape": [[1, 1, 512], [1]] } ],
     "processing_spec": {
       "preprocess_input_channels": [1, 1],
       "postprocess_output_channels": [1, 1],

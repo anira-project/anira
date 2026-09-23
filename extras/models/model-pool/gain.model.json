@@ -10,11 +10,17 @@
     },
     {
       "engine": "tflite",
-      "path": "example-models/SimpleGainNetwork/models/simple_gain_network_mono.tflite"
+      "path": "example-models/SimpleGainNetwork/models/simple_gain_network_mono.tflite",
+      "tensors": { "gain": { "layout": [0, "insert", "insert"] } }
     },
     {
       "engine": "litert",
-      "path": "example-models/SimpleGainNetwork/models/simple_gain_network_mono.tflite"
+      "path": "example-models/SimpleGainNetwork/models/simple_gain_network_mono.tflite",
+      "tensors": {
+        "gain": { "layout": [0, "insert", "insert"] },
+        "audio_out": { "name": "output_0" },
+        "gain_out": { "name": "output_1" }
+      }
     },
     {
       "engine": "executorch",

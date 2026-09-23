@@ -133,12 +133,12 @@ endif()
 
 if(ANIRA_WITH_TFLITE)
     anira_setup_backend(tflite)
-    list(APPEND BACKEND_SOURCES src/backends/TFLiteProcessor.cpp)
+    list(APPEND BACKEND_SOURCES src/backends/TFLiteAdapter.cpp)
 endif()
 
 if(ANIRA_WITH_LITERT)
     anira_setup_backend(litert)
-    list(APPEND BACKEND_SOURCES src/backends/LiteRtProcessor.cpp)
+    list(APPEND BACKEND_SOURCES src/backends/LiteRtAdapter.cpp)
 endif()
 
 if(ANIRA_WITH_EXECUTORCH)

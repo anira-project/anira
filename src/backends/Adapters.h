@@ -64,31 +64,26 @@ struct PlanRequest {
 };
 
 /// The adapter of a built-in engine of this build, unprepared; NULL for an engine this build
-/// does not carry. An engine with an adapter of the descriptor shape gets it (the factories
-/// below); until every engine has one, the others ride behind a LegacyAdapter over the
-/// engine's 2.x processor, built at prepare from the 2.x configuration of the record
-/// (legacy_config_of), exactly as the core built the processor from the session's
-/// configuration before the plan table.
+/// does not carry (the factories below, one per engine).
 ANIRA_API std::shared_ptr<Adapter> make_builtin_adapter(anira_engine engine);
 
-/// The built-in adapters of the descriptor shape, one factory each, each defined in its own
-/// translation unit (<Engine>Adapter.cpp) where the engine's headers stay; unprepared.
+/// The built-in adapters, one factory each, each defined in its own translation unit
+/// (<Engine>Adapter.cpp) where the engine's headers stay; unprepared.
 #ifdef USE_ONNXRUNTIME
 ANIRA_API std::shared_ptr<Adapter> make_onnxruntime_adapter();
 #endif
 #ifdef USE_LIBTORCH
 ANIRA_API std::shared_ptr<Adapter> make_libtorch_adapter();
 #endif
+#ifdef USE_TFLITE
+ANIRA_API std::shared_ptr<Adapter> make_tflite_adapter();
+#endif
+#ifdef USE_LITERT
+ANIRA_API std::shared_ptr<Adapter> make_litert_adapter();
+#endif
 #ifdef USE_EXECUTORCH
 ANIRA_API std::shared_ptr<Adapter> make_executorch_adapter();
 #endif
-
-/// The 2.x configuration a record describes, what a 2.x processor of a built-in engine reads:
-/// one ModelData row on the engine's backend (the path or the bytes, the entry), one
-/// universal TensorShape of the record's dims (the engine's extents), the processing spec
-/// derived from it, the instances, the warm-up and the exclusivity. Everything else a 2.x
-/// processor never reads.
-ANIRA_API anira::InferenceConfig legacy_config_of(const Model& model);
 
 /// The plan table of a 2.x session: one request per configured model, in m_model_data order
 /// (BuiltIn for an engine of the build, the custom row on `custom` when one is given and the
