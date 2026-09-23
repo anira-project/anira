@@ -3404,7 +3404,7 @@ headers:
           - {type: void*, name: prepared, doc: "What the matching prepare handed back."}
           - {type: void*, name: user_data, doc: "The descriptor's user_data."}
         thread: main-thread
-        doc: "Frees what one prepare loaded: called under the lifecycle lock, once per successful prepare, when the last handler sharing the prepared model is re-prepared or destroyed; no process or reset runs afterwards. NULL: none."
+        doc: "Frees what one prepare loaded: called once per successful prepare, on the thread of the anira_handler_prepare or anira_handler_destroy that drops the last handler sharing the prepared model, after that handler's in-flight inferences have drained, so no process or reset of the prepared model runs afterwards. It may run under the core's lifecycle lock (it does when a later plan of the same prepare fails and the plans prepared before it are unprepared on the way out), so like prepare it must not call an entry that takes that lock. NULL: none."
       - kind: callback
         name: anira_engine_release_fn
         returns: void

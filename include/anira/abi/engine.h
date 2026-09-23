@@ -230,9 +230,13 @@ typedef void (ANIRA_CALL* anira_engine_reset_fn)(const anira_engine_ctx* ctx,
                                                  void* user_data);
 
 /**
- * @brief Frees what one prepare loaded: called under the lifecycle lock, once per successful
- * prepare, when the last handler sharing the prepared model is re-prepared or destroyed;
- * no process or reset runs afterwards. NULL: none.
+ * @brief Frees what one prepare loaded: called once per successful prepare, on the thread of
+ * the anira_handler_prepare or anira_handler_destroy that drops the last handler sharing
+ * the prepared model, after that handler's in-flight inferences have drained, so no
+ * process or reset of the prepared model runs afterwards. It may run under the core's
+ * lifecycle lock (it does when a later plan of the same prepare fails and the plans
+ * prepared before it are unprepared on the way out), so like prepare it must not call an
+ * entry that takes that lock. NULL: none.
  * @param prepared What the matching prepare handed back.
  * @param user_data The descriptor's user_data.
  * @par Thread contract

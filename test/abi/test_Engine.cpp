@@ -14,6 +14,7 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
+#include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -31,6 +32,7 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
+#include "backends/Adapter.h"
 #include "capi/engine.h"
 #include "float_face.h"
 #include "handler_support.h"
@@ -875,6 +877,8 @@ TEST(AbiEngine, EqualConfigsShareOnePreparedModelAStatefulOneNever) {
         EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_adapter,
                   anira_test::session_of(second)->m_plans.at(0).m_adapter)
             << "the pooled adapter";
+        EXPECT_EQ(anira_test::session_of(first)->m_plans.at(0).m_adapter->model().m_instances, 2U)
+            << "the record agrees with the prepare record";
         ASSERT_NO_FATAL_FAILURE(run_ramp(first, 3));
         ASSERT_NO_FATAL_FAILURE(run_ramp(second, 3));
         EXPECT_EQ(gain.m_processed.load(), 6);
@@ -904,6 +908,12 @@ TEST(AbiEngine, EqualConfigsShareOnePreparedModelAStatefulOneNever) {
         EXPECT_EQ(gain.m_instances_seen, (std::vector<uint32_t>{1, 1}));
         EXPECT_NE(anira_test::session_of(first)->m_plans.at(0).m_adapter,
                   anira_test::session_of(second)->m_plans.at(0).m_adapter);
+        for (const anira_handler* handler : {first, second}) {
+            const anira::backend::Model& record =
+                anira_test::session_of(handler)->m_plans.at(0).m_adapter->model();
+            EXPECT_EQ(record.m_instances, 1U) << "the record agrees with the prepare record";
+            EXPECT_TRUE(record.m_session_exclusive);
+        }
         anira_handler_destroy(first);
         EXPECT_EQ(gain.m_unprepared, 1);
         anira_handler_destroy(second);
@@ -911,6 +921,35 @@ TEST(AbiEngine, EqualConfigsShareOnePreparedModelAStatefulOneNever) {
         pipe.destroy();
         EXPECT_EQ(gain.m_released, 1);
     }
+}
+
+// The record of a session-exclusive prepared model says one instance whatever the model's
+// max_instances, on the registered engine's row and on the row of every built-in engine of the
+// build alike (the built-in adapters size their instances from the record, the registered
+// engine reads the same count in its prepare record): the two records agree.
+TEST(AbiEngine, ASessionExclusiveModelIsPreparedWithOneInstanceOnEveryEngine) {
+    const Context context(2);
+    const anira::ContractHandle contract = explicit_contract();
+    // The bundled gain model on every engine of the build plus the engine-free custom row.
+    ModelConfig model = anira_test::gain_with_custom(false);
+    model.state(ANIRA_MODEL_STATEFUL).max_instances(2);
+    Pipe pipe;
+    pipe.add_inference(model, anira_test::custom_candidates());
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(handler);
+    ASSERT_NE(session, nullptr);
+    EXPECT_EQ(session->m_plans.size(), anira_test::oracle_engines().size() + 1)
+        << "one plan per engine of the build, plus the custom row";
+    for (const anira::SessionElement::PlanSlot& plan : session->m_plans) {
+        ASSERT_NE(plan.m_adapter, nullptr);
+        const anira::backend::Model& record = plan.m_adapter->model();
+        EXPECT_EQ(record.m_instances, 1U) << "the plan of engine " << plan.m_engine;
+        EXPECT_TRUE(record.m_session_exclusive) << "the plan of engine " << plan.m_engine;
+    }
+    anira_handler_destroy(handler);
 }
 
 // Three prepares of one handler are three prepared models: three prepares, three unprepares

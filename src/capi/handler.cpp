@@ -841,10 +841,15 @@ anira::backend::Model model_of_row(const anira_model_config& model,
     };
     record.m_inputs = tensors_of(model.m_inputs, derived.m_inputs);
     record.m_outputs = tensors_of(model.m_outputs, derived.m_outputs);
-    record.m_instances = config.m_num_parallel_processors;
+    record.m_session_exclusive = config.m_session_exclusive_processor;
+    // A session-exclusive prepared model runs one inference at a time (the dispatch gate), so
+    // its record says one instance whatever the model's max_instances: the built-in adapters
+    // size their instances from it, and a registered engine's prepare record reads the same
+    // count (the 2.x InferenceConfig clamps its own count the same way; the record says so
+    // itself, so the rule does not hang on that constructor).
+    record.m_instances = record.m_session_exclusive ? 1U : config.m_num_parallel_processors;
     record.m_warm_up = config.m_warm_up;
     record.m_log_level = anira::get_log_level();
-    record.m_session_exclusive = config.m_session_exclusive_processor;
     return record;
 }
 
