@@ -47,7 +47,7 @@ jobs:
       # request with nothing to check skips everything that costs time. `work` is
       # true on a sweep (the queue, a dispatch, the pattern) and when the list
       # holds a .cpp path; a false positive only builds for nothing.
-      - uses: tanh-lab/ci-actions/changed-files@v0.3.14
+      - uses: tanh-lab/ci-actions/changed-files@v0.3.15
         id: changed
         with:
           FULL_SWEEP_PATTERN: ${{ env.TIDY_SWEEP_PATTERN }}
@@ -74,12 +74,12 @@ jobs:
             extras/models/third-party/ircam-acids/RAVE
           key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
           enableCrossOsArchive: true
-      - uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.14
+      - uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.15
         if: steps.plan.outputs.work == 'true'
       # clang-tidy needs a compile_commands.json, so the library is configured
       # and built first. The clang-tidy preset enables tests, the benchmark
       # fixture and all backends so every analysed translation unit compiles.
-      - uses: tanh-lab/ci-actions/cmake-build@v0.3.14
+      - uses: tanh-lab/ci-actions/cmake-build@v0.3.15
         if: steps.plan.outputs.work == 'true'
         with:
           PRESET: clang-tidy
@@ -90,7 +90,7 @@ jobs:
       # compile command here either, and clang-tidy would guess one from a nearby
       # test file, which lacks the engine include directory its engine consumer
       # needs (build_install is what checks it).
-      - uses: tanh-lab/ci-actions/clang-tidy-check@v0.3.14
+      - uses: tanh-lab/ci-actions/clang-tidy-check@v0.3.15
         if: steps.plan.outputs.work == 'true'
         with:
           PRESET: clang-tidy
